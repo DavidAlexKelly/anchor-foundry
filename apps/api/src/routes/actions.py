@@ -37,6 +37,7 @@ from ..services import datasets as dataset_service
 from ..lib.errors import ConflictError, NotFoundError
 from ..services import instance_store
 from ..services import notification_store
+from ..services import object_type_usage as usage_service
 from ..services import notifications as notifications_service
 from ..services import connections as conn_service
 from ..services import egress_store
@@ -193,6 +194,11 @@ class ActionRunOut(BaseModel):
 class ExecuteRequest(BaseModel):
     instance_id: UUID
     values: dict[str, Any] = Field(default_factory=dict, max_length=50)
+    #: Which application submitted this, for p.33's usage breakdown (§320).
+    #: Defaults to `action` rather than to nothing, because that is what an
+    #: unlabelled submission is: p.32 lists "an Action" first among the things
+    #: a write is recorded for.
+    application: str | None = Field(default=None, max_length=50)
 
 
 class TouchedObject(BaseModel):
@@ -1576,6 +1582,25 @@ async def execute_action(
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
+        # **p.32's write, counted once for the submission** (§320): "one write
+        # represents one edit request… Many objects edited in bulk at once will
+        # only be recorded as a single write." An action that modifies its
+        # subject and creates two more objects is one edit request, so it is
+        # one write against the subject's type.
+        #
+        # Only on success: p.32 records a write when an application "makes
+        # edits", and a refused action made none.
+        if ok:
+            try:
+                await usage_service.record(
+                    conn,
+                    object_type_id=object_type_id,
+                    user_id=access.auth.user_id,
+                    application=body.application or "action",
+                    writes=1,
+                )
+            except Exception:  # noqa: BLE001 - a metric never fails a write
+                pass
         # **Asked rather than assumed** (§319). The apply path has just written
         # everything an undo would need, so it is tempting to answer "yes" here
         # and save a read — but `refusal` is the one place p.154-156's

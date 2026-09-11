@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -51,6 +51,7 @@ from ..services import instances as instances_service
 from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
 from ..services import object_type_groups as groups_service
+from ..services import object_type_usage as usage_service
 from ..services import ontology_recent
 from ..services import ontology_search
 from ..services import interfaces as interfaces_service
@@ -967,11 +968,138 @@ async def clear_object_view(
 
 
 # ---- object instances (workspace-scoped browsing) ---------------------------
+# ---- usage metrics (`ontology-manager` p.32-34) ------------------------------
+#: Which application is asking, as p.33's "in which Foundry applications".
+#:
+#: **A query parameter rather than something inferred**, because it cannot be
+#: inferred: the same endpoint serves the Ontology Manager's object list and
+#: the Object Explorer's, and p.32 counts one and excludes the other. A caller
+#: that says nothing is an API caller, which is what it is.
+APPLICATION_QUERY = Query(default="api", max_length=50)
+
+
+async def _count_usage(
+    conn: Any,
+    *,
+    object_type_id: UUID,
+    user_id: UUID | None,
+    application: str,
+    reads: int = 0,
+    writes: int = 0,
+) -> None:
+    """Count one request, and never fail one.
+
+    **p.32's unit is the request**: "Many objects loaded or aggregated at once
+    will only be recorded as a single read", so callers pass 1 rather than the
+    number of rows they returned.
+
+    Errors are swallowed deliberately and this is the only place that does it:
+    a read that returned five hundred objects and then raised because a
+    counter row could not be written would have turned a working feature into
+    an outage for a number nobody is waiting on.
+    """
+    try:
+        await usage_service.record(
+            conn,
+            object_type_id=object_type_id,
+            user_id=user_id,
+            application=application,
+            reads=reads,
+            writes=writes,
+        )
+    except Exception:  # noqa: BLE001 - see the docstring
+        pass
+
+
+
+class UsageSummary(BaseModel):
+    """p.32's four numbers, over p.32's window.
+
+    **`window_days` travels with them.** Every one of these is "over the last
+    30 days", and a screen that hard-coded the sentence would keep saying it
+    after somebody changed the constant.
+    """
+
+    reads: int
+    writes: int
+    #: Reads plus writes (p.32's own definition). Computed rather than stored —
+    #: a third number free to disagree with the two it came from is §191's
+    #: mirrored copies in the shape where nothing can notice.
+    interactions: int
+    #: Unique people (p.32). **The number that changes the decision**: thirty
+    #: reads by one person and thirty by thirty people are the same `reads` and
+    #: a different answer to "can I rename this property".
+    active_users: int
+    window_days: int
+
+
+class UsageByApplication(BaseModel):
+    """p.33's "in which Foundry applications"."""
+
+    application: str
+    reads: int
+    writes: int
+    interactions: int
+    active_users: int
+
+
+class UsageByDay(BaseModel):
+    """p.33's "when". Days with no usage are absent rather than zero."""
+
+    day: date
+    reads: int
+    writes: int
+    interactions: int
+
+
+@router.get("/object-types/{type_id}/usage", response_model=UsageSummary)
+async def object_type_usage_summary(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> UsageSummary:
+    """p.32's reads, writes, interactions and active users.
+
+    Viewer, like everything else that reads the ontology's shape: this says how
+    much a type is used and nothing about what any object of it contains.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        return UsageSummary(**await usage_service.summary(conn, type_id))
+
+
+@router.get(
+    "/object-types/{type_id}/usage/by-application",
+    response_model=list[UsageByApplication],
+)
+async def object_type_usage_by_application(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[UsageByApplication]:
+    """p.33's "in which Foundry applications", biggest user first."""
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        rows = await usage_service.by_application(conn, type_id)
+    return [UsageByApplication(**r) for r in rows]
+
+
+@router.get("/object-types/{type_id}/usage/daily", response_model=list[UsageByDay])
+async def object_type_usage_daily(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[UsageByDay]:
+    """p.33's "when", oldest first — the order a graph draws them in."""
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        rows = await usage_service.daily(conn, type_id)
+    return [UsageByDay(**r) for r in rows]
+
+
 @router.get("/object-types/{type_id}/instances", response_model=InstancePage)
 async def list_instances(
     type_id: UUID,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    application: str = APPLICATION_QUERY,
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
 ) -> InstancePage:
     async with user_connection(access.auth.user_id) as conn:
@@ -979,6 +1107,11 @@ async def list_instances(
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         rows, total = await instance_store.store_for(conn).list_for_type(
             search_prefix=prefix, object_type_id=type_id, limit=limit, offset=offset
+        )
+        # **One read for the page, not one per object** (p.32).
+        await _count_usage(
+            conn, object_type_id=type_id, user_id=access.auth.user_id,
+            application=application, reads=1,
         )
     return InstancePage(
         items=[InstanceOut(**{**r, "properties": _jsonb(r["properties"])}) for r in rows],
@@ -992,10 +1125,15 @@ async def list_instances(
 async def get_instance(
     type_id: UUID,
     instance_id: UUID,
+    application: str = APPLICATION_QUERY,
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
 ) -> InstanceOut:
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.get_type(conn, access.workspace_id, type_id)
+        await _count_usage(
+            conn, object_type_id=type_id, user_id=access.auth.user_id,
+            application=application, reads=1,
+        )
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         row = await instance_store.store_for(conn).get_instance(
             search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id)
@@ -1242,6 +1380,7 @@ async def explore_instances(
     value: str | None = Query(default=None, max_length=500),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    application: str = APPLICATION_QUERY,
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
 ) -> ExplorerPage:
     """Search and browse every instance in the workspace at once (roadmap
@@ -1327,6 +1466,17 @@ async def explore_instances(
             conn, access.workspace_id, limit=None
         )
         types = {str(t["id"]): t for t in all_types}
+        # **One read per type this request asked about**, not one per row and
+        # not one for the request (p.32). A search across three types is one
+        # load request against each of them, and a type nobody narrowed to was
+        # not loaded — an explorer with no filter is a search of the *index*,
+        # and charging every type in the workspace for it would make the
+        # busiest type the one nobody had opened.
+        for narrowed in type_id or []:
+            await _count_usage(
+                conn, object_type_id=narrowed, user_id=access.auth.user_id,
+                application=application, reads=1,
+            )
     items = []
     for row in rows:
         meta = types.get(str(row["object_type_id"]))

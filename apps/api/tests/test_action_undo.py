@@ -19,6 +19,7 @@ import io
 import os
 import sys
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -29,6 +30,11 @@ from src.services.storage import LocalStorageGateway  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 from src.routes import datasets as ds_routes  # noqa: E402
+
+ADMIN_DSN = os.environ.get(
+    "TEST_ADMIN_DSN",
+    "postgresql://platform:devpass@localhost:5432/platform?sslmode=disable",
+)
 
 PEOPLE = b"person_id,name,email\np1,Ada Lovelace,ada@example.com\np2,Grace Hopper,grace@example.com\n"
 
@@ -409,7 +415,8 @@ def test_the_toggle_only_blocks_runs_that_existed_when_it_went_off(
     assert r.status_code == 200, r.text
     # Nothing was toggled off after this run was submitted, so it is undoable
     # now — under the mutant it was stamped on the way up and stays refused.
-    assert undo(client, fx, world, while_off["run_id"]).status_code == 200
+    r = undo(client, fx, world, while_off["run_id"])
+    assert r.status_code == 200, r.text
 
 
 def test_the_claim_on_a_run_can_only_be_won_once(
