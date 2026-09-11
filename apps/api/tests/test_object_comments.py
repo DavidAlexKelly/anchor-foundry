@@ -378,8 +378,106 @@ def test_a_client_cannot_name_the_people_to_notify(
               "mentions": [{"user_id": str(fx.viewer), "label": "Viewer",
                             "start": 0, "end": 1}]},
     )
-    assert r.status_code in (201, 422), r.text
-    if r.status_code == 201:
-        assert r.json()["mentions"] == []
+    # **422, not "either is fine".** The earlier version of this test accepted
+    # a 201 that ignored the field, and that tolerance is what let a mutant
+    # adding `mentions` to the request model survive: pydantic drops an unknown
+    # key silently, so "the server ignored your list" and "the server has no
+    # such field" were the same response. Refusing says which.
+    assert r.status_code == 422, r.text
     after = client.get("/api/notifications", headers=hdr(fx.viewer_sub)).json()
     assert len(after["items"]) == len(before["items"])
+
+
+def test_the_request_model_has_no_place_to_put_mentions(
+    client: TestClient, fx: Fixture, an_object: dict
+) -> None:
+    """The same claim one level in, where adding the field would start.
+
+    The test above checks a request carrying `mentions` is refused; this checks
+    the model has no such field to be wired up in the first place. A field
+    added and left unread passes the test above — nothing reads it, so nobody
+    is notified — and is one line away from being read.
+    """
+    from src.routes.objects import CommentIn
+
+    assert "mentions" not in CommentIn.model_fields, (
+        "mentions are found on the server from the text (db 0078); a field "
+        "here is a path for a caller to name who gets notified"
+    )
+
+
+def test_one_thread_is_one_object_s(
+    client: TestClient, fx: Fixture, an_object: dict
+) -> None:
+    """**Two objects of the same type**, which is the only pair that can catch
+    this.
+
+    A thread keyed on the type alone still returns exactly what was posted when
+    a test uses one object — the query is wrong and the answer is right. Two
+    instances make the two disagree: a conversation about one row would appear
+    under every other row of the same type, which is how a remark about the
+    wrong customer ends up on a customer's page.
+    """
+    other = {**an_object, "instance_id": str(uuid.uuid4())}
+    client.post(cbase(fx, an_object), headers=hdr(fx.editor_sub),
+                json={"body": "about the first"})
+    client.post(cbase(fx, other), headers=hdr(fx.editor_sub),
+                json={"body": "about the second"})
+
+    assert [c["body"] for c in
+            client.get(cbase(fx, an_object), headers=hdr(fx.viewer_sub)).json()
+            ] == ["about the first"]
+    assert [c["body"] for c in
+            client.get(cbase(fx, other), headers=hdr(fx.viewer_sub)).json()
+            ] == ["about the second"]
+
+
+def test_the_count_is_one_object_s_too(
+    client: TestClient, fx: Fixture, an_object: dict
+) -> None:
+    """The button's number, scoped the same way as the thread behind it.
+
+    Its own test rather than an assertion inside the one above, because it is a
+    second query: `count_for` and `thread` are two statements, and the one that
+    is cheap to get wrong is the one nobody reads the output of.
+    """
+    other = {**an_object, "instance_id": str(uuid.uuid4())}
+    for said in ("one", "two"):
+        client.post(cbase(fx, an_object), headers=hdr(fx.editor_sub),
+                    json={"body": said})
+    client.post(cbase(fx, other), headers=hdr(fx.editor_sub),
+                json={"body": "elsewhere"})
+
+    assert client.get(f"{cbase(fx, an_object)}/count",
+                      headers=hdr(fx.viewer_sub)).json()["count"] == 2
+    assert client.get(f"{cbase(fx, other)}/count",
+                      headers=hdr(fx.viewer_sub)).json()["count"] == 1
+
+
+def test_naming_somebody_twice_interrupts_them_once(
+    client: TestClient, fx: Fixture, an_object: dict
+) -> None:
+    """Saying a colleague's name twice in one remark is emphasis, not two
+    requests for their attention.
+
+    The parser is right to return both spans — they are both in the text, and
+    the panel highlights both — so the only place this can be got right is the
+    notifying, and the only way to see it is to count what arrived.
+    """
+    members = client.get(f"{wbase(fx)}/members", headers=hdr(fx.editor_sub)).json()
+    named = next(m for m in members
+                 if m.get("display_name") and str(m["user_id"]) == str(fx.viewer))
+    before = len(client.get("/api/notifications",
+                            headers=hdr(fx.viewer_sub)).json()["items"])
+
+    name = named["display_name"]
+    r = client.post(
+        cbase(fx, an_object), headers=hdr(fx.editor_sub),
+        json={"body": f"@{name} could you look — @{name} you own this"},
+    )
+    assert r.status_code == 201, r.text
+    # Both spans come back: the text really does name them twice.
+    assert len(r.json()["mentions"]) == 2
+    after = len(client.get("/api/notifications",
+                           headers=hdr(fx.viewer_sub)).json()["items"])
+    assert after - before == 1, "two spans, one person, one interruption"

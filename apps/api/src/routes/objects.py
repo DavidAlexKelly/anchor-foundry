@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 # documented query string to work around a local name clash.
 from fastapi import status as status_codes
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..lib.cron import next_run_after
 from ..lib.db import user_connection
@@ -1696,7 +1696,17 @@ class CommentIn(BaseModel):
     the text, against this workspace's own members — a client that could send
     a list of user ids could have a comment delivered to somebody who cannot
     see the object it is about.
+
+    **`extra="forbid"`, so that sentence is enforced rather than described.**
+    Pydantic's default is to drop an unknown key silently, which means a client
+    sending `mentions` gets a `201` and every appearance of having been obeyed
+    — and the one thing worse than a field that does the wrong thing is a field
+    that looks like it worked (§214). Refused outright, the caller is told the
+    field does not exist, and a future hand that adds it has to delete this
+    line and read why.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     body: str = Field(min_length=1, max_length=comments_service.MAX_BODY)
     attachments: list[AttachmentOut] = Field(

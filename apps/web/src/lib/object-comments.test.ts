@@ -121,9 +121,19 @@ describe("cutting a comment at its mentions", () => {
 
   it("drops a span that would slice the body into nonsense", () => {
     // Read back out of `jsonb`, so the shape is not guaranteed by a type. A
-    // range past the end, or one overlapping the run before it, is dropped
-    // rather than allowed to mangle what somebody said — and the body still
-    // rebuilds exactly.
+    // range past the end, one starting before the body, or one of no width is
+    // dropped rather than allowed to mangle what somebody said.
+    //
+    // **Both halves, and the second is the one that bites.** "The body still
+    // rebuilds exactly" is satisfied by a span that was dropped *and* by one
+    // that was kept: slicing 0..99 out of "short" gives back "short", and a
+    // zero-width span contributes the empty string. Either way the join is
+    // unchanged — so a check that only rebuilds the body cannot tell a
+    // rejected span from an accepted one, and it was letting both through.
+    //
+    // What a kept span actually does is put a mark on the screen: a highlight
+    // over the whole comment, or an invisible one over nothing, both claiming
+    // somebody was mentioned. That is what the count below is looking at.
     const body = "short";
     for (const bad of [
       { user_id: "u-2", label: "x", start: 0, end: 99 },
@@ -131,7 +141,9 @@ describe("cutting a comment at its mentions", () => {
       { user_id: "u-2", label: "x", start: 3, end: 3 },
     ]) {
       const parts = segments(comment({ body, mentions: [bad] }));
-      expect(parts.map((p) => p.text).join(""), JSON.stringify(bad)).toBe(body);
+      const why = JSON.stringify(bad);
+      expect(parts.map((p) => p.text).join(""), why).toBe(body);
+      expect(parts.filter((p) => p.kind === "mention"), why).toHaveLength(0);
     }
   });
 
