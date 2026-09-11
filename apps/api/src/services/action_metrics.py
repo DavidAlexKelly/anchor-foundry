@@ -107,7 +107,8 @@ async def summary(
 
     The P95 is over **finished** runs only, for the same reason: a run still
     going has no duration yet, and treating its elapsed time as one would make
-    the percentile fall as soon as anybody looked at it.
+    the percentile fall as soon as anybody looked at it. That falls out of the
+    arithmetic rather than being arranged for — see the note in the statement.
     """
     since = datetime.now(timezone.utc) - timedelta(days=METRICS_DAYS)
     row = await fetch_one(
@@ -121,9 +122,18 @@ async def summary(
             -- interpolates reports a duration no run ever took; p.164 wants
             -- "the upper range of execution times", and the honest answer to
             -- that is a time something actually took.
+            -- **No `FILTER (WHERE finished_at IS NOT NULL)`**, and its absence
+            -- is load-bearing rather than an oversight. A run still going has
+            -- `finished_at IS NULL`, so its duration is NULL — and an
+            -- ordered-set aggregate discards NULL inputs by definition, which
+            -- means the filter could never change an answer. The mutation
+            -- sweep removed it and nothing failed, which was correct: it was a
+            -- line a reader had to prove harmless (§213). The behaviour it
+            -- looked like it was protecting is asserted in
+            -- `test_a_running_run_is_neither_outcome`.
             percentile_disc(0.95) WITHIN GROUP (
                 ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))
-            ) FILTER (WHERE finished_at IS NOT NULL) AS p95_seconds
+            ) AS p95_seconds
           FROM action_runs
          WHERE action_type_id = :atid AND started_at >= :since
         """,
