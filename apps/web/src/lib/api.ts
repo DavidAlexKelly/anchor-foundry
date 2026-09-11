@@ -1443,6 +1443,33 @@ export const objects = {
     request<import("./types").OntologySearchHit[]>(
       `/workspaces/${wid}/ontology-search?q=${encodeURIComponent(q)}`,
     ),
+  /** p.137's comments on one object (§322).
+   *
+   * **No `mentions` in the body.** They are found on the server from the text,
+   * against the workspace's own members — a client that could send user ids
+   * could have a comment delivered to somebody who cannot see the object. */
+  comments: (wid: string, typeId: string, instanceId: string) =>
+    request<import("./types").ObjectComment[]>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/comments`,
+    ),
+  /** What p.137's View comments button needs before it is pressed. Its own
+   * call rather than the length of the thread: the header is drawn on a screen
+   * with no reason to have fetched the conversation. */
+  commentCount: (wid: string, typeId: string, instanceId: string) =>
+    request<{ count: number }>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/comments/count`,
+    ),
+  postComment: (
+    wid: string,
+    typeId: string,
+    instanceId: string,
+    body: string,
+    attachments: import("./types").AttachmentRef[] = [],
+  ) =>
+    request<import("./types").ObjectComment>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/comments`,
+      { method: "POST", body: JSON.stringify({ body, attachments }) },
+    ),
   /** p.32's usage metrics for one object type (§320).
    *
    * **`application` is passed by the caller, and the Ontology Manager passes

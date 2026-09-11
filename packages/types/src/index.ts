@@ -1644,6 +1644,39 @@ export type ValueFormat =
       timezone?: string;
     };
 
+/** One person named in a comment, and where (§322; `object-views` p.137).
+ *
+ * **The span comes from the server.** A browser re-finding the name would be
+ * §146's second matcher, free to disagree with the one that decided who was
+ * notified — and the disagreement shows as a highlight on the wrong word. */
+export interface CommentMention {
+  user_id: string;
+  /** The member's own spelling, not the typist's: the thread should read as
+   * the person is called. */
+  label: string;
+  start: number;
+  end: number;
+}
+
+/** One comment on an object (§322; `object-views` p.137). */
+export interface ObjectComment {
+  id: string;
+  object_type_id: string;
+  instance_id: string;
+  /** `null` when the author's account is gone. Somebody leaving does not unsay
+   * what they said, so the comment stays and the byline says so. */
+  author_id: string | null;
+  author_name: string | null;
+  author_email: string | null;
+  body: string;
+  mentions: CommentMention[];
+  /** p.137's "attach files and images", in the upload route's own shape — a
+   * storage key rather than a URL, exchanged for bytes by the download route
+   * after it checks the caller. */
+  attachments: AttachmentRef[];
+  created_at: string;
+}
+
 /** p.32's four numbers over p.32's window (§320; `ontology-manager` p.32-34).
  *
  * **`window_days` travels with them.** Every one of these is "over the last 30

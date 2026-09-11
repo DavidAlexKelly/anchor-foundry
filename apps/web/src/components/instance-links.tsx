@@ -341,8 +341,14 @@ export function LinkExplorerDialog({
   browseHref,
   start,
   onClose,
+  canComment = false,
 }: {
   workspaceId: string;
+  /** Whether this reader may add to p.137's conversation (§322). p.137 puts
+   * commenting in the Object Explorer, which is what reaches this dialog —
+   * and `false` by default so the two callers that have no notion of a role
+   * get the read-only panel rather than a composer that 403s. */
+  canComment?: boolean;
   /** Where "Browse all X" goes for a type reached by traversal. A function
    *  rather than a slug pair because traversal is no longer only reachable
    *  from inside a project: the Object Explorer (item 4.1) is workspace-wide
@@ -414,6 +420,7 @@ export function LinkExplorerDialog({
         workspaceId={workspaceId}
         typeId={here.typeId}
         instance={here.instance}
+        canComment={canComment}
       />
 
       <h3 className="sov-section">Linked objects</h3>

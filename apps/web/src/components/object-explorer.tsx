@@ -638,6 +638,9 @@ export function ObjectExplorer({
             return type ? `/r/${type.resource_id}` : null;
           }}
           start={openObject}
+          // p.137 puts commenting in the Object Explorer, and this is the
+          // dialog it opens an object into (§322).
+          canComment={canEdit}
           onClose={() => show(null)}
         />
       )}

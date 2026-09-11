@@ -355,3 +355,31 @@ def test_an_outsider_sees_nothing(
 ) -> None:
     r = client.get(cbase(fx, an_object), headers=hdr(fx.outsider_sub))
     assert r.status_code in (403, 404), r.text
+
+
+def test_a_client_cannot_name_the_people_to_notify(
+    client: TestClient, fx: Fixture, an_object: dict
+) -> None:
+    """**The security claim, asserted rather than argued for in a comment.**
+
+    Mentions are found on the server from the text. A client that could send a
+    list of user ids beside the body could have a comment delivered to somebody
+    who cannot see the object it is about — so a `mentions` field in the
+    request must do nothing at all, whether the endpoint rejects it or ignores
+    it.
+
+    Posted with a real user id, so the test would notice a route that took the
+    caller's word for it.
+    """
+    before = client.get("/api/notifications", headers=hdr(fx.viewer_sub)).json()
+    r = client.post(
+        cbase(fx, an_object), headers=hdr(fx.editor_sub),
+        json={"body": "nothing in this text names anybody",
+              "mentions": [{"user_id": str(fx.viewer), "label": "Viewer",
+                            "start": 0, "end": 1}]},
+    )
+    assert r.status_code in (201, 422), r.text
+    if r.status_code == 201:
+        assert r.json()["mentions"] == []
+    after = client.get("/api/notifications", headers=hdr(fx.viewer_sub)).json()
+    assert len(after["items"]) == len(before["items"])
