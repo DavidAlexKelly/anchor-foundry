@@ -1348,6 +1348,17 @@ button { font: inherit; cursor: pointer; }
   background: #fff; cursor: pointer;
 }
 .repo-tree-actions button:hover { border-color: var(--accent); }
+/* Moving several transforms into a repository at once (§289). */
+.move-together {
+  border: 1px solid var(--accent); border-left-width: 3px;
+  background: var(--accent-wash); border-radius: var(--radius);
+  padding: 12px 14px; margin-bottom: 14px;
+}
+.move-together select, .move-together input {
+  font: inherit; font-size: 12.5px; padding: 4px 8px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
+}
+
 /* p.14's File Changes helper (§287). */
 .repo-changes { display: grid; gap: 8px; margin-top: 10px; }
 .repo-changes-head { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
@@ -1373,6 +1384,31 @@ button { font: inherit; cursor: pointer; }
 
 /* p.14's Problems helper (§286). */
 .repo-problems { display: grid; gap: 8px; margin-top: 10px; }
+/* p.15's status bar (§307). Its own classes, for §296's reason. */
+.repo-status-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 6px 0; margin-top: 8px; border-top: 1px solid var(--line); font-size: 12px; }
+/* p.15 puts the checks on the right, so the CSS says so rather than the
+   component keeping an order in step with a sentence. */
+.repo-status-right { margin-left: auto; }
+/* p.15's SQL Scratchpad (§306). Its own classes, for §296's reason. */
+.repo-scratchpad { display: grid; gap: 8px; margin-top: 10px; }
+.repo-scratchpad-body { display: grid; gap: 8px; }
+.repo-scratchpad-tabs { display: flex; gap: 4px; }
+.repo-scratchpad-tabs .on { text-decoration: underline; }
+.repo-scratchpad-sql { min-height: 96px; font-family: var(--font-mono); font-size: 12.5px; width: 100%; }
+.repo-scratchpad-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.repo-scratchpad-list li { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.repo-scratchpad-recall { flex: 1; text-align: left; font-family: var(--font-mono); background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
+/* p.13's Explorer helper (§303). Its own classes rather than the Problems
+   panel's: §296 reused `.repo-check` for a second thing and an existing test
+   counting rows started counting two panels' worth. */
+.repo-explorer { display: grid; gap: 8px; margin-top: 10px; }
+.repo-explorer-body { display: grid; gap: 10px; }
+.repo-explorer-body h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; opacity: .7; }
+.repo-explorer-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.repo-explorer-list li { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.repo-explorer-name { font-family: var(--font-mono); }
+.repo-explorer-list li a { margin-left: auto; }
 .repo-problems-head { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
 .repo-problem-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 2px; }
 .repo-problem { border-left: 3px solid var(--line); border-radius: var(--radius); }
@@ -1397,6 +1433,10 @@ button { font: inherit; cursor: pointer; }
 .repo-checks-verdict.unknown .chip,
 .repo-checks-verdict.warning .chip { background: var(--brass-wash); color: var(--brass, #b07d2b); }
 .repo-check-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+/* The unit-test row on the Checks tab (§296) looks like a check and is not one
+   - a check belongs to a proposal, a test run to a branch and a working set.
+   Same styling, its own class, so counting checks still counts checks. */
+.repo-check-tests,
 .repo-check {
   border: 1px solid var(--line); border-left-width: 3px;
   border-radius: var(--radius); padding: 9px 12px;
@@ -1404,6 +1444,13 @@ button { font: inherit; cursor: pointer; }
 .repo-check.fail { border-left-color: var(--danger); }
 .repo-check.error, .repo-check.warn { border-left-color: var(--brass, #b07d2b); }
 .repo-check.pass { border-left-color: var(--accent); }
+/* The unit-test row's own words (§296): `passed` / `failed` / `pending` /
+   `none`, which are the vocabulary the checks list uses in the *verdict* line
+   rather than in a row. Mapped to the same three colours so the tab reads as
+   one thing. */
+.repo-check-tests.failed { border-left-color: var(--danger); }
+.repo-check-tests.pending { border-left-color: var(--brass, #b07d2b); }
+.repo-check-tests.passed { border-left-color: var(--accent); }
 .repo-check-head { display: flex; align-items: baseline; gap: 10px; font-size: 12.5px; }
 .repo-check-head code { font-family: var(--font-mono); font-weight: 600; }
 .repo-check-summary { margin: 5px 0; font-size: 12.5px; color: var(--ink-2); }

@@ -14,9 +14,9 @@
  * repository's review in front of somebody looking at this one.
  *
  * The typed-changes proposals belong to **no** repository, so they cannot be
- * shown here honestly — they stay on the Code page until adoption (§274) has
- * made them unnecessary, and `unrepositoried` is what lets a screen say so
- * rather than leaving them out silently.
+ * shown here honestly — they live on the Models screen beside the transforms
+ * they change (§290), and `unrepositoried` is what lets a screen say so rather
+ * than leaving them out silently.
  */
 import type { CodeProposal } from "./types";
 
@@ -32,7 +32,7 @@ export function forRepository(
  * Proposals in this project that name no repository at all.
  *
  * Not shown in the tab, and **counted rather than hidden**: they are the
- * typed-changes shape, they are still reviewable on the Code page, and a
+ * typed-changes shape, they are reviewable on the Models screen (§290), and a
  * reviewer who cannot find one they were told about is worse served by a tidy
  * list than by a sentence saying where it is.
  */
@@ -74,11 +74,41 @@ export function emptyReason(
       `No open proposals for this repository. ${elsewhere} in this project ` +
       `${elsewhere === 1 ? "changes a transform" : "change transforms"} directly ` +
       `rather than publishing a commit, and ${elsewhere === 1 ? "is" : "are"} ` +
-      `reviewed on the Code screen.`
+      `reviewed on the Models screen.`
     );
   }
   return (
     `No open proposals for this repository. ${elsewhere} in this project ` +
     `${elsewhere === 1 ? "belongs" : "belong"} to something else.`
+  );
+}
+
+/**
+ * What the Models screen says about proposals that name no repository (§290).
+ *
+ * **They have to be reachable somewhere before the Code pillar page can go.**
+ * §276 gave the repository application a Pull requests tab and deliberately
+ * left these out of it — a proposal that belongs to no repository cannot
+ * honestly be listed under one — and pointed at the Code screen instead, which
+ * B.1 deletes. So this is where they live: beside the transforms they change.
+ *
+ * **Nothing creates them any more** (§277, §289: the answer for a transform
+ * that is not in a repository is to move it into one). What is left is a
+ * finite set of open ones, and stranding those would be deleting somebody's
+ * review rather than a screen.
+ *
+ * There is **no sentence for a count of zero**, and there was one until the
+ * section that renders this became silent when the list is empty (§213: if
+ * another layer already makes the promise, the line here is one nobody can
+ * reach). A permanent empty section for a shape nothing creates is a section
+ * that teaches people to look past this part of the screen — so the caller
+ * renders nothing, and a note about nothing would be a string no reader could
+ * ever be shown and no test could honestly claim to check.
+ */
+export function unrepositoriedNote(count: number): string {
+  return (
+    `${count} open proposal${count === 1 ? "" : "s"} against transforms that are ` +
+    `not in a repository. ${count === 1 ? "It was" : "They were"} opened before ` +
+    "this project used repositories; new changes go through one."
   );
 }

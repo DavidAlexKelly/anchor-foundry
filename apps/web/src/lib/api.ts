@@ -129,6 +129,19 @@ export const repositories = {
     request<import("./types").Repository[]>(
       `/workspaces/${wid}/projects/${pid}/repositories`,
     ),
+  /** Make one. **This had no caller in `apps/web` until §291** — the route has
+   * existed since §94 and every repository in the product had been created by
+   * a script, which made the whole repository application reachable only by a
+   * `/r/{id}` link somebody already had. */
+  create: (
+    wid: string,
+    pid: string,
+    input: { name: string; description?: string; default_branch?: string },
+  ) =>
+    request<import("./types").Repository>(
+      `/workspaces/${wid}/projects/${pid}/repositories`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   get: (wid: string, pid: string, rid: string) =>
     request<import("./types").Repository>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}`,
@@ -254,6 +267,117 @@ export const repositories = {
   diff: (wid: string, pid: string, rid: string, toCommitId: string) =>
     request<import("./types").RepositoryDiff>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/diff?to_commit_id=${toCommitId}`,
+    ),
+  /** Every branch with p.16's two columns, in one request (§300). Twenty
+   * branches would otherwise be twenty round trips, which is how a column
+   * becomes something people wait for rather than glance at. */
+  branchSummary: (wid: string, pid: string, rid: string) =>
+    request<import("./types").RepositoryBranchSummary[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/branch-summary`,
+    ),
+  /** This repository's tags, newest first (§299; p.17). */
+  tags: (wid: string, pid: string, rid: string) =>
+    request<import("./types").RepositoryTag[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tags`,
+    ),
+  /** Pin a name to a commit. p.17: "from the current version of a branch, or
+   * from any arbitrary commit" - so one of `branch` or `commitId`, never both,
+   * which the server settles through the same `resolve_ref` every other route
+   * here uses. */
+  createTag: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { name: string; branch?: string; commit_id?: string; message?: string },
+  ) =>
+    request<import("./types").RepositoryTag>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tags`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  deleteTag: (wid: string, pid: string, rid: string, tagId: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tags/${tagId}`,
+      { method: "DELETE" },
+    ),
+  /** Ask for this repository's unit tests to be run over a working set (§294).
+   *
+   * **Returns a queued job, not a report.** Running unit tests is running
+   * customer Python, which decision 0004 confines to a process holding no
+   * platform credentials - so the API writes a row and the worker executes it.
+   * The panel polls `testRun`.
+   *
+   * `overrides` is the same delta the Problems panel sends: the server has the
+   * commit, so only the author's edits travel. */
+  runTests: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { branch?: string; overrides: Record<string, string | null> },
+  ) =>
+    request<import("./types").CodeTestRun>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tests`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  /** The Explorer's Insert (§304): this file with one more input declared.
+   *
+   * **A round trip for what looks like string manipulation, and that is the
+   * point.** The declaration syntax has exactly one writer — `render` in
+   * `transform_declarations.py`, which sits beside the reader because §272 was
+   * two things that had to agree kept in separate files. Doing it here would
+   * make this a second writer, in a different language, that disagrees the
+   * first time the format changes. Nothing is stored: the content is the
+   * editor's own unsaved working set. */
+  insertReference: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { path: string; content: string; alias: string; dataset: string },
+  ) =>
+    request<{ content: string }>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/reference`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  /** p.15's SQL helper: run an ad-hoc query over this project's datasets.
+   *
+   * Recorded in the history only once it has *run* — p.15's tab is "a history
+   * of queries ran in the SQL helper", and a history full of queries that were
+   * refused before reaching the engine is a list of typos. */
+  runScratchpad: (wid: string, pid: string, rid: string, sql: string) =>
+    request<import("./types").ScratchpadResult>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/scratchpad`,
+      { method: "POST", body: JSON.stringify({ sql }) },
+    ),
+  /** p.15's two tabs, as one request with one filter. Whose history it is
+   * never travels in the request: db 0073's policy pins it to the caller. */
+  scratchpadQueries: (wid: string, pid: string, rid: string, favourites: boolean) =>
+    request<import("./types").ScratchpadQuery[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/scratchpad/queries` +
+        (favourites ? "?favourites=true" : ""),
+    ),
+  favouriteScratchpadQuery: (
+    wid: string,
+    pid: string,
+    rid: string,
+    queryId: string,
+    favourite: boolean,
+  ) =>
+    request<import("./types").ScratchpadQuery>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/scratchpad/queries/${queryId}`,
+      { method: "PATCH", body: JSON.stringify({ favourite }) },
+    ),
+  forgetScratchpadQuery: (wid: string, pid: string, rid: string, queryId: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/scratchpad/queries/${queryId}`,
+      { method: "DELETE" },
+    ),
+  testRun: (wid: string, pid: string, rid: string, runId: string) =>
+    request<import("./types").CodeTestRun>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tests/${runId}`,
+    ),
+  testRuns: (wid: string, pid: string, rid: string, branch?: string) =>
+    request<import("./types").CodeTestRun[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tests` +
+        (branch ? `?branch=${encodeURIComponent(branch)}` : ""),
     ),
   /** Run one file's transform against a sample of its inputs, writing nothing.
    * `content` is the editor's buffer, so this answers "does what I just typed
@@ -745,6 +869,27 @@ export const models = {
    * than the browser deriving it: the server's rule runs the name through
    * `datasets.slugify`, and a second copy here is the mirrored-list problem
    * §191 found. The answer comes back in the response. */
+  /** Move several transforms into a repository as **one commit** (§289).
+   *
+   * What a change set becomes once the Code pillar page is gone: "these three
+   * moved together, for one reason" is what a commit says about files. All of
+   * them or none - a batch that moved four and refused two leaves the project
+   * in a state nobody asked for. */
+  adoptMany: (
+    wid: string,
+    pid: string,
+    input: {
+      model_ids: string[];
+      repository_id: string;
+      branch?: string;
+      paths?: Record<string, string>;
+      message?: string;
+    },
+  ) =>
+    request<import("./types").ModelAdoption[]>(
+      `/workspaces/${wid}/projects/${pid}/models/adopt`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   adopt: (
     wid: string,
     pid: string,
@@ -1475,6 +1620,12 @@ export const objects = {
     request<import("./types").ObjectInstancePage>(
       `/workspaces/${wid}/object-types/${typeId}/instances?limit=${limit}&offset=${offset}`,
     ),
+  /** One object, by type and instance.
+   *
+   * **Both ids, because the instance store is partitioned by type** — one
+   * index per object type — so there is no read that takes an instance id
+   * alone. That is why a link to an object carries both (§309,
+   * `object-links.ts`), and it is the reason a link cannot be made shorter. */
   getInstance: (wid: string, typeId: string, instanceId: string) =>
     request<import("./types").ObjectInstance>(
       `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}`,
@@ -1831,15 +1982,14 @@ export const canvas = {
  * transforms as a single edit through the same service the inline Models
  * editor calls. */
 export const code = {
-  tree: (wid: string, pid: string) =>
-    request<import("./types").CodeFile[]>(
-      `/workspaces/${wid}/projects/${pid}/code/tree`,
-    ),
-  file: (wid: string, pid: string, modelId: string, version?: number) =>
-    request<import("./types").CodeFileDetail>(
-      `/workspaces/${wid}/projects/${pid}/code/files/${modelId}` +
-        (version ? `?version=${version}` : ""),
-    ),
+  // **`tree` and `file` went with the page that called them (§291).** They
+  // were the project-wide transform tree and one transform's source, and the
+  // Models screen answers both: it lists every transform in the project, with
+  // the repository and path of each one that is in a repository, and its
+  // History dialog holds every saved definition. A client method with no
+  // caller is a second way to ask a question that has a first way, and the two
+  // drift. The routes stay - `GET /code/tree` is still the honest answer to
+  // "what transforms does this project have" for anything outside the browser.
   diff: (wid: string, pid: string, modelId: string, from: number | null, to?: number) =>
     request<import("./types").CodeDiff>(
       `/workspaces/${wid}/projects/${pid}/code/files/${modelId}/diff?` +
@@ -1957,17 +2107,13 @@ export const code = {
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/withdraw`,
       { method: "POST" },
     ),
-  saveChangeSet: (
-    wid: string,
-    pid: string,
-    input: {
-      summary: string;
-      description?: string;
-      changes: { model_id: string; code?: string }[];
-    },
-  ) =>
-    request<import("./types").CodeChangeSet>(
-      `/workspaces/${wid}/projects/${pid}/code/change-sets`,
-      { method: "POST", body: JSON.stringify(input) },
-    ),
+  // **`saveChangeSet` is gone with the screen that called it (§291).** It was
+  // decision 0001's "one genuinely new concept" - several transforms saved as
+  // one change - and §289 gave it a successor rather than a new home: move
+  // them into a repository together, and the commit says they belong together.
+  // The route still exists and `POST /code/change-sets` still works; what has
+  // no client is the *making* of one, because nothing in the product should
+  // now offer it. `changeSet` above stays: the ones already recorded are read
+  // by the Models screen's history dialog, and a log you cannot read is a log
+  // that may as well be deleted.
 };

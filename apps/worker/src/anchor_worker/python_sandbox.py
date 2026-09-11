@@ -50,12 +50,15 @@ import sys
 import tempfile
 from typing import Any
 
+from . import user_api
+from .limits import MAX_OUTPUT_ROWS, too_many_rows
 from .dataset_engine import ColumnSchema, DatasetEngineError
 
 DEFAULT_TIMEOUT_S = 300
 MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024  # 1 GB, flag: worker-tier day-one cap
 CPU_LIMIT_S = 120
-MAX_OUTPUT_ROWS = 5_000_000  # matches the SQL transform's day-one cap
+# The cap and its sentence are `limits.py`'s, imported by both runners (§298).
+# Re-exported here under the name callers already use.
 
 _RUNNER_TEMPLATE = """
 import json
@@ -70,31 +73,21 @@ for _alias, _path in _inputs.items():
         f"SELECT * FROM read_parquet({{_path!r}})"
     ).df()
 
-# **The decorator, defined so the declared shape can run at all.** It records
-# the function and returns it unchanged: importing this file must not be how
-# the declaration is read - that is `transform_declarations.py`'s job and
-# decision 0004's whole point - so nothing here parses or validates. It exists
-# because a file that says `@transform(...)` has to find a `transform`.
+# **The decorator, imported rather than defined** (§292). It used to be
+# written out here: a `transform` function and a shim `anchor` object built in
+# this template, so that a file saying `@transform(...)` could find one. That
+# was enough to *run* a transform and not enough to **import** one, which is a
+# unit test's first line - `import anchor` found no module, because there was
+# no such file anywhere on disk. So `user_api.py` is copied in beside the code
+# as `anchor.py` and this reads the same decorator the tests do.
 #
-# `anchor.transform` as well as bare `transform`, because the reader accepts
-# both spellings (`_decorator_name`), and a spelling that parses as a
-# declaration and then dies on NameError is the same defect in its second form.
-_declared = []
+# Both spellings, because the declaration reader accepts both
+# (`_decorator_name`), and a spelling that parses as a declaration and then
+# dies on NameError is the same defect in its second form.
+import anchor
 
-
-def transform(**_kwargs):
-    def _register(_fn):
-        _declared.append((_fn, _kwargs))
-        return _fn
-    return _register
-
-
-class _Anchor:
-    transform = staticmethod(transform)
-
-
-_namespace["transform"] = transform
-_namespace["anchor"] = _Anchor()
+_namespace["transform"] = anchor.transform
+_namespace["anchor"] = anchor
 
 with open({code_path!r}) as _f:
     _user_code = _f.read()
@@ -105,66 +98,17 @@ except Exception as exc:
     print(f"MODEL_ERROR: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
     sys.exit(1)
 
-# **A module-level `output` wins.** Not a precedence puzzle: a file with both
-# is a script that also happens to declare, and the script's assignment is the
-# thing that ran last. Checking it first also means the old shape reaches its
-# result without the decorator machinery being involved at all.
-_output = _namespace.get("output")
-if _output is None and len(_declared) > 1:
-    # The publisher refuses this too (§272), so reaching it means the file
-    # changed between publish and run. Refusing rather than picking the first
-    # keeps "what was declared" and "what ran" the same sentence.
-    print(
-        "MODEL_ERROR: this file declares more than one transform, so which one "
-        "produces the output is ambiguous",
-        file=sys.stderr,
-    )
+# **The shape rules live in `anchor`, not here** (§292). They used to be
+# written out in this template and again, differently and incompletely, in
+# `transform_runner.py` - the container that runs this in production, which
+# never bound `transform` at all. One implementation, imported by both.
+try:
+    _output = anchor.resolve_output(_namespace)
+except anchor.ShapeError as exc:
+    print(f"MODEL_ERROR: {{exc}}", file=sys.stderr)
     sys.exit(1)
-if _output is None and _declared:
-    _fn, _kwargs = _declared[0]
-    _aliases = dict(_kwargs.get("inputs") or {{}})
-    # **By keyword, never by position.** `@transform` itself refuses positional
-    # arguments so that the file says which name means what rather than relying
-    # on order; passing the inputs positionally here would put that back in
-    # through the other door, and a transform whose parameters were in a
-    # different order would silently read the wrong dataset.
-    _missing = [_a for _a in _aliases if _a not in _namespace]
-    if _missing:
-        print(
-            "MODEL_ERROR: this transform declares inputs that were not provided: "
-            + ", ".join(sorted(_missing)),
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    try:
-        _output = _fn(**{{_a: _namespace[_a] for _a in _aliases}})
-    except TypeError as exc:
-        # The common mistake, and a raw TypeError names the function rather
-        # than the mismatch: a parameter list that does not match the declared
-        # aliases.
-        print(
-            f"MODEL_ERROR: {{_fn.__name__}} does not take the inputs it declares "
-            f"({{', '.join(sorted(_aliases)) or 'none'}}): {{exc}}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    except Exception as exc:
-        print(f"MODEL_ERROR: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
-        sys.exit(1)
-    if _output is None:
-        print(
-            f"MODEL_ERROR: {{_fn.__name__}} returned nothing - a declared "
-            "transform returns the table it produces",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-if _output is None:
-    print(
-        "MODEL_ERROR: this file neither set a variable named `output` nor "
-        "declared a transform with @transform",
-        file=sys.stderr,
-    )
+except Exception as exc:
+    print(f"MODEL_ERROR: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
     sys.exit(1)
 
 _con = duckdb.connect()
@@ -197,6 +141,7 @@ def run_python_transform(
 ) -> tuple[list[ColumnSchema], int]:
     os.makedirs(os.path.dirname(dest_parquet), exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
+        user_api.write_into(tmp)
         code_path = os.path.join(tmp, "model.py")
         with open(code_path, "w") as f:
             f.write(code)
@@ -237,9 +182,133 @@ def run_python_transform(
 
     row_count = int(payload["row_count"])
     if row_count > MAX_OUTPUT_ROWS:
-        raise DatasetEngineError(
-            f"the transform produced {row_count:,} rows - above this build's "
-            f"{MAX_OUTPUT_ROWS:,} row limit"
-        )
+        raise DatasetEngineError(too_many_rows(row_count, MAX_OUTPUT_ROWS))
     schema = [ColumnSchema(name=c["name"], data_type=c["data_type"]) for c in payload["schema"]]
     return schema, row_count
+
+
+# ---- unit tests (§293; code-repositories.md §8, p.13-14) ---------------------
+TEST_TIMEOUT_S = 300
+
+#: pytest's own discovery rule, and deliberately not a new one. A repository's
+#: authors already know it, `--junitxml` reports against it, and a second rule
+#: here would mean a file this platform called a test and pytest did not - or
+#: the reverse, which is worse, because it runs.
+TEST_FILE_PREFIX = "test_"
+TEST_FILE_SUFFIX = "_test.py"
+
+
+def is_test_file(path: str) -> bool:
+    """Whether pytest would collect this file, by pytest's rule."""
+    if not path.endswith(".py"):
+        return False
+    name = path.rsplit("/", 1)[-1]
+    return name.startswith(TEST_FILE_PREFIX) or name.endswith(TEST_FILE_SUFFIX)
+
+
+def run_python_tests(
+    files: dict[str, str],
+    timeout_s: int = TEST_TIMEOUT_S,
+) -> "unit_test_report.TestReport":
+    """Run a repository's unit tests over the files it was given.
+
+    **The working set, not a commit** - the same choice §286's Problems panel
+    made, and for the same reason: the question an author asks is "does what I
+    just typed pass", and a runner that could only answer for committed code
+    would be answering a different one.
+
+    The directory holds the repository's files, `anchor.py`, and nothing else.
+    `PYTHONPATH` is that directory, so a test imports the transform under test
+    by the path it has in the repository - `from src.daily import build` - which
+    is what the author would write and what a checkout would do.
+
+    Failures of the *tests* come back in the report. Failures of the *run* -
+    pytest missing, a timeout, an unreadable report - are raised, because a
+    caller that showed them as "your tests failed" would send the wrong person
+    looking. That is `transform_runner.py`'s result-file distinction, in the
+    shape this function has.
+    """
+    from . import unit_test_report
+
+    with tempfile.TemporaryDirectory() as tmp:
+        user_api.write_into(tmp)
+        for path, content in files.items():
+            target = os.path.join(tmp, path)
+            os.makedirs(os.path.dirname(target) or tmp, exist_ok=True)
+            with open(target, "w") as handle:
+                handle.write(content)
+
+        # **The configuration this run obeys, and the reason it is a file
+        # rather than a flag.**
+        #
+        # pytest looks for an ini in the directory it was given and then
+        # *upwards*, so without one here it finds whatever sits above the
+        # working directory and applies it. `TMPDIR` is the user's to set, so
+        # "above" can perfectly well be a checkout of this repository - at
+        # which point our own settings reach a customer's tests. A file in this
+        # directory is found first and ends the search.
+        #
+        # Two flags were tried before this and neither was the mechanism, which
+        # two surviving mutants are what proved (§293). `--rootdir` moves
+        # pytest's *rootdir* and not its *inifile*, so it walked up anyway;
+        # `-c` pointed at this same file and so said nothing the file's
+        # existence did not already say. One mechanism, and it is this one.
+        #
+        # Written only when the repository did not bring its own: a repository
+        # with a `pytest.ini` means it, a checkout would honour it, and
+        # overwriting theirs would be this platform quietly disagreeing with a
+        # file they wrote.
+        config_path = os.path.join(tmp, "pytest.ini")
+        if not os.path.exists(config_path):
+            with open(config_path, "w") as handle:
+                handle.write("[pytest]\n")
+
+        report_path = os.path.join(tmp, "_report.xml")
+        # **No `PYTHONPATH`, and a mutant is why.** It used to be set to `tmp`
+        # so that a test could import the transform under test by its
+        # repository path, and deleting it changed nothing: `python -m pytest`
+        # already puts the invocation directory first on `sys.path`, and the
+        # invocation directory is `cwd` below. Two mechanisms for one promise
+        # is how they come to disagree (§213), so the one that is load-bearing
+        # is named where it lives - see `cwd`.
+        env = {"PATH": "/usr/bin:/bin", "HOME": tmp,
+               "PYTHONDONTWRITEBYTECODE": "1"}
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q", "--no-header",
+                 "-p", "no:cacheprovider",
+                 # **`xunit1`, for `file` and `line`.** pytest 8's default
+                 # family writes a dotted `classname` and nothing else, so the
+                 # only way back to a path is to guess that dots are slashes -
+                 # which is wrong the moment a test lives in a class. A panel
+                 # whose job is to open the failing test needs the file it is
+                 # in, so ask for the format that says.
+                 "-o", "junit_family=xunit1",
+                 f"--junitxml={report_path}", tmp],
+                # **Load-bearing, not tidiness.** `python -m pytest` prepends
+                # the invocation directory to `sys.path`, so this is what makes
+                # `from src.daily import build` resolve to the repository's own
+                # file. A change here breaks every test that imports the
+                # transform it is testing.
+                cwd=tmp,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                preexec_fn=_limit_resources if os.name == "posix" else None,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise DatasetEngineError(
+                f"the tests exceeded the {timeout_s}s time limit"
+            ) from exc
+
+        if not os.path.exists(report_path):
+            # pytest itself could not run, or died before writing. Its own
+            # stderr is the useful sentence - "No module named pytest" names
+            # the problem and "your tests failed" does not.
+            tail = (result.stderr or result.stdout or "").strip().splitlines()
+            raise DatasetEngineError(
+                "the test run produced no report: " + (tail[-1] if tail else "no output")
+            )
+        with open(report_path) as handle:
+            return unit_test_report.parse_junit(handle.read())

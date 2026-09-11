@@ -25,11 +25,17 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from anchor_worker import transform_runner as runner  # noqa: E402
+from anchor_worker import user_api  # noqa: E402
 
 
 def stage(tmp_path, code: str, inputs: dict[str, str] | None = None, **job) -> str:
     """Write a job the way the caller would, and return the working directory."""
     work = str(tmp_path)
+    # **`anchor.py` too, because `dispatch.stage` writes it** (§292). The runner
+    # reaches nothing outside this directory, so the module customer code
+    # imports has to be in it - and a helper that staged a job the caller would
+    # not recognise would test a contract nobody implements.
+    user_api.write_into(work)
     with open(os.path.join(work, "transform.py"), "w") as handle:
         handle.write(textwrap.dedent(code))
     payload = {"code_path": "transform.py", "output_path": "output.parquet",
@@ -148,3 +154,68 @@ def test_the_runner_imports_no_aws_or_database_client() -> None:
     completed = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "", f"imported: {completed.stdout.strip()}"
+
+
+# ---- the declared shape, which this path could not run at all (§292) ----------
+def test_a_declared_transform_runs_here_too(tmp_path) -> None:
+    """**The production bug this unit found.**
+
+    `python_sandbox.py` bound `transform` before executing the file; this
+    module never did. So the shape `docs/decisions/0004-running-customer-code.md`
+    documents - and that §272 made work, and that every repository-authored
+    Python transform is written in - died here on `NameError: name 'transform'
+    is not defined`.
+
+    **In production only.** Development runs the subprocess path, which was
+    right, so the suite was green and the deployment was broken. §272's own
+    finding a second time, in the half nobody re-checked: no test on this path
+    had ever used a decorator.
+    """
+    work = stage(
+        tmp_path,
+        """
+        import anchor
+
+        @anchor.transform(output="northern", inputs={"orders": "raw_orders"})
+        def build(orders):
+            return orders[orders["region"] == "north"]
+        """,
+        inputs={"orders": "orders.parquet"},
+    )
+    make_parquet(work, "orders.parquet",
+                 [{"id": 1, "region": "north"}, {"id": 2, "region": "south"}])
+    os.environ[runner.WORK_DIR_ENV] = work
+    assert runner.main() == 0
+    assert result(work)["row_count"] == 1
+    assert os.path.exists(os.path.join(work, "output.parquet"))
+
+
+def test_the_bare_spelling_of_the_decorator_works_here_too(tmp_path) -> None:
+    """The declaration reader accepts `@transform` as well as
+    `@anchor.transform`, and a spelling that parses as a declaration and then
+    dies on NameError is the same defect in its second form."""
+    work = stage(
+        tmp_path,
+        """
+        @transform(output="all_orders", inputs={"orders": "raw_orders"})
+        def build(orders):
+            return orders
+        """,
+        inputs={"orders": "orders.parquet"},
+    )
+    make_parquet(work, "orders.parquet", [{"id": 1, "region": "north"}])
+    os.environ[runner.WORK_DIR_ENV] = work
+    assert runner.main() == 0
+    assert result(work)["row_count"] == 1
+
+
+def test_a_run_staged_without_anchor_is_infrastructure_not_the_transform(tmp_path) -> None:
+    """The distinction this module exists to keep. A caller that forgot to
+    stage `anchor.py` wrote a broken run; the author's code is fine, and
+    telling them their transform failed would send the wrong person looking."""
+    work = stage(tmp_path, "output = 1\n")
+    os.remove(os.path.join(work, "anchor.py"))
+    os.environ[runner.WORK_DIR_ENV] = work
+    with pytest.raises(RuntimeError, match="anchor.py was not staged"):
+        runner.main()
+    assert not os.path.exists(os.path.join(work, runner.RESULT_FILE))

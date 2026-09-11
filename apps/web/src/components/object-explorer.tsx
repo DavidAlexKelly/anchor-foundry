@@ -38,6 +38,12 @@ import { useState } from "react";
 import { ApiError, objects as objApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
+import {
+  OBJECT_PARAM,
+  decodeObject,
+  encodeObject,
+  missingNote,
+} from "@/lib/object-links";
 import { displayValue } from "@/components/object-value";
 import { CopyLinkButton, useUrlState } from "@/components/use-url-state";
 import { memberFirst } from "@/lib/object-type-groups";
@@ -166,7 +172,44 @@ export function ObjectExplorer({
   const [draft, setDraft] = useState(() => criteria.q);
   const [typeFilter, setTypeFilter] = useState("");
   const [saving, setSaving] = useState<Criteria | null>(null);
-  const [exploring, setExploring] = useState<LinkStop | null>(null);
+  // **The open object lives in the URL, not in `useState`** (§309). The
+  // *search* has been linkable since saved searches were built — "send me the
+  // link to that" is the reason they exist — and the object you open from that
+  // search was not, so a reader who found something could send the search and
+  // a sentence saying which row.
+  const openRef = decodeObject(url.get(OBJECT_PARAM));
+
+  // **The URL is the only state, and the instance comes from one place.**
+  //
+  // This went through two shapes before arriving here, and both were killed by
+  // the same mutation run. First the open object was a `useState` beside the
+  // URL, preferred when the two agreed — and the agreement check could not be
+  // made to fail, because the only writer of the parameter sets both at once.
+  // Then the row's instance was seeded into this query's cache to save the
+  // round trip, and *that* survived too: filing it under the wrong key changes
+  // nothing a test can see, because a cache miss is simply a fetch.
+  //
+  // So there is one path. Clicking Explore costs one small read the dialog was
+  // about to make several more alongside, and in exchange a stale instance is
+  // unrepresentable rather than guarded against — the key **is** the object's
+  // identity.
+  const linked = useQuery({
+    queryKey: ["explorer-object", workspaceId, openRef?.typeId, openRef?.instanceId],
+    queryFn: () => objApi.getInstance(workspaceId, openRef!.typeId, openRef!.instanceId),
+    enabled: openRef !== null,
+    // A link to a deleted object is an ordinary thing to be sent, not a
+    // failure worth retrying three times before saying so.
+    retry: false,
+  });
+
+  function show(stop: LinkStop | null) {
+    url.set({
+      [OBJECT_PARAM]: stop
+        ? encodeObject({ typeId: stop.typeId, instanceId: stop.instance.id })
+        : undefined,
+    });
+  }
+
 
   // **A page, searched on the server** (§256). This used to fetch every object
   // type in the workspace and filter the result in the browser, which was
@@ -195,6 +238,18 @@ export function ObjectExplorer({
   const byId = new Map(
     [...(chosen.data?.items ?? []), ...(types.data?.items ?? [])].map((t) => [t.id, t]),
   );
+
+  // Below `byId` because it reads it: the link carries the type's id and the
+  // dialog wants its name.
+  const linkedType = byId.get(openRef?.typeId ?? "");
+  const openObject: LinkStop | null =
+    openRef && linked.data && linkedType
+      ? {
+          typeId: openRef.typeId,
+          typeName: linkedType.display_name,
+          instance: linked.data,
+        }
+      : null;
 
   const page = useQuery({
     queryKey: ["object-explorer", workspaceId, applied, offset],
@@ -516,7 +571,7 @@ export function ObjectExplorer({
                             className="btn quiet"
                             style={{ padding: "3px 9px", fontSize: 12 }}
                             onClick={() =>
-                              setExploring({
+                              show({
                                 typeId: i.object_type_id,
                                 typeName: i.object_type_display_name,
                                 instance: i,
@@ -555,7 +610,7 @@ export function ObjectExplorer({
         )}
       </div>
 
-      {exploring && (
+      {openObject && (
         <LinkExplorerDialog
           workspaceSlug={workspaceSlug}
           workspaceId={workspaceId}
@@ -563,9 +618,20 @@ export function ObjectExplorer({
             const type = byId.get(typeId);
             return type ? `/r/${type.resource_id}` : null;
           }}
-          start={exploring}
-          onClose={() => setExploring(null)}
+          start={openObject}
+          onClose={() => show(null)}
         />
+      )}
+      {/* A link to an object that is not there. Ordinary rather than
+          exceptional: links get truncated on the way through a chat client,
+          and objects get deleted between somebody sending one and somebody
+          following it — so this says which, and leaves the search underneath
+          rather than replacing the page. */}
+      {openRef !== null && linked.isError && (
+        <p className="ox-note" data-testid="object-link-missing">{missingNote(true)}</p>
+      )}
+      {url.get(OBJECT_PARAM) !== null && openRef === null && (
+        <p className="ox-note" data-testid="object-link-missing">{missingNote(false)}</p>
       )}
 
       {saving && (

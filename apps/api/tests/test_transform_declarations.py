@@ -19,12 +19,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.services.transform_declarations import (  # noqa: E402
     COMMENT_PREFIX,
     DeclarationError,
+    InsertRefused,
     UnwritableDeclaration,
     _block_patterns,
     read,
     read_repository,
     render,
     unwritable,
+    with_input,
 )
 
 
@@ -521,3 +523,181 @@ def test_an_alias_is_held_to_a_stricter_rule_than_a_dataset_name() -> None:
     assert unwritable("daily", {"orders": "raw-orders"}) == []
     problems = unwritable("daily", {"raw-orders": "raw_orders"})
     assert len(problems) == 1 and "variable" in problems[0], problems
+
+
+# --- Inserting a reference (§304) -------------------------------------------
+#
+# The Explorer's Insert button. These are here rather than in a file of their
+# own for the module docstring's reason: `render` lives beside `read` because
+# two things that must agree, kept apart, is how §272 broke. A splicer that has
+# to produce text `read` accepts is the same hazard one step out, and the tests
+# that hold it are the ones that read the result back.
+
+
+def test_an_inserted_reference_reads_back_as_a_declaration() -> None:
+    """**The property, not the bytes.** Anything can append a line that looks
+    right; what matters is that the reader agrees, and that is what a copy of
+    the syntax living in the browser would eventually stop doing."""
+    after = with_input("t.sql", "-- output: daily\nSELECT 1\n",
+                       alias="o", dataset="orders")
+    declaration = read("t.sql", after)
+    assert declaration is not None
+    assert declaration.output == "daily"
+    assert declaration.inputs == {"o": "orders"}
+
+
+def test_an_existing_input_is_kept() -> None:
+    """Inserting a second reference does not lose the first."""
+    after = with_input("t.sql", "-- output: daily\n-- input: b = bees\nSELECT 1\n",
+                       alias="o", dataset="orders")
+    declaration = read("t.sql", after)
+    assert declaration is not None
+    assert declaration.inputs == {"b": "bees", "o": "orders"}
+
+
+def test_the_body_of_the_file_is_untouched() -> None:
+    """Only the declaration block moves. A splice that reformatted the query
+    would make Insert a thing people stop using.
+
+    **The comment in the body is one that would match**, and it has to be. The
+    first version of this test used a note the pattern could not match anyway —
+    so removing the splice's stopping rule broke nothing, and a mutation run
+    said so. `-- output: total` inside a query is `read`'s own documented case:
+    somebody explaining a column, not declaring a transform. The splice stops
+    where the reader stops, or Insert silently edits the query.
+    """
+    body = "SELECT\n  id,\n  -- output: total\n  total\nFROM x\n"
+    after = with_input("t.sql", f"-- output: daily\n{body}", alias="o", dataset="orders")
+    assert after.endswith(body), after
+    # And the file still declares exactly one output, which is what the note
+    # inside the query never was.
+    declaration = read("t.sql", after)
+    assert declaration is not None and declaration.output == "daily"
+
+
+def test_a_comment_above_the_declaration_stays_above_it() -> None:
+    """The block is re-rendered in place, not appended to the end of it."""
+    after = with_input(
+        "t.sql", "-- What this builds, and why\n-- output: daily\nSELECT 1\n",
+        alias="o", dataset="orders",
+    )
+    assert after.startswith("-- What this builds, and why\n-- output: daily\n")
+
+
+def test_python_declares_behind_a_hash() -> None:
+    """The one asymmetry between the languages, and the whole of it (§273)."""
+    after = with_input("t.py", "# output: daily\nprint(1)\n", alias="o", dataset="orders")
+    assert "# input: o = orders\n" in after
+    declaration = read("t.py", after)
+    assert declaration is not None and declaration.inputs == {"o": "orders"}
+
+
+def test_the_block_comes_back_in_the_order_render_writes() -> None:
+    """Re-rendered rather than appended, so an out-of-order block is
+    normalised - and an inserted reference and an adopted model produce the
+    same bytes, which is what makes a diff of an unchanged declaration empty."""
+    after = with_input(
+        "t.sql", "-- input: z = zebras\n-- output: daily\nSELECT 1\n",
+        alias="a", dataset="apples",
+    )
+    assert after == (
+        "-- output: daily\n-- input: a = apples\n-- input: z = zebras\nSELECT 1\n"
+    )
+
+
+def test_a_file_that_declares_nothing_is_refused_and_says_what_comes_first() -> None:
+    """A transform names what it *builds* before it can read anything.
+
+    Refused rather than invented: writing an input with no output produces a
+    file the reader refuses as "inputs but no output", so guessing an output
+    here would be this module handing itself a problem two lines later.
+    """
+    with pytest.raises(InsertRefused) as raised:
+        with_input("t.sql", "SELECT 1\n", alias="o", dataset="orders")
+    assert "output" in str(raised.value)
+
+
+def test_the_decorator_form_is_refused_and_the_message_says_what_to_do() -> None:
+    """**A boundary, not a missing case.** A `@transform(...)` call's inputs
+    are code; rewriting them means printing an AST back over a file somebody
+    wrote. A comment line can be inserted without touching anything else."""
+    source = (
+        "from transforms import transform\n\n"
+        "@transform(output='daily')\n"
+        "def build():\n    pass\n"
+    )
+    with pytest.raises(InsertRefused) as raised:
+        with_input("t.py", source, alias="o", dataset="orders")
+    said = str(raised.value)
+    assert "decorator" in said
+    # And it names both halves of what to type, because the remedy is manual.
+    assert "orders" in said and "o " in said
+
+
+def test_the_word_transform_in_a_string_is_not_a_decorator() -> None:
+    """Parsed rather than searched for.
+
+    A script that *mentions* `@transform` - in a docstring, in a comment, in a
+    string it prints - declares behind a `#` like any other script, and a
+    search for the word would refuse it with a message about a decorator it
+    does not have.
+
+    The declaration is the file's first line, which is `read`'s existing rule
+    rather than anything this test chose: `_read_comment_block` reads the
+    *leading* block only, so a docstring above it ends the block before it
+    starts. The first draft of this test put the docstring first and was
+    refused for having no declaration at all - a wrong premise, not a bug.
+    """
+    source = (
+        "# output: daily\n"
+        '"""Uses @transform elsewhere."""\n'
+        "# @transform is also mentioned here\n"
+        "print(1)\n"
+    )
+    after = with_input(source=source, path="t.py", alias="o", dataset="orders")
+    assert "# input: o = orders\n" in after
+    declaration = read("t.py", after)
+    assert declaration is not None and declaration.inputs == {"o": "orders"}
+
+
+def test_a_file_that_is_neither_sql_nor_python_is_refused() -> None:
+    with pytest.raises(InsertRefused) as raised:
+        with_input("notes.md", "# output: daily\n", alias="o", dataset="orders")
+    assert ".sql" in str(raised.value)
+
+
+def test_the_same_alias_twice_is_refused_and_names_what_it_already_reads() -> None:
+    """The reader raises "input 'o' is declared twice", so producing one would
+    be writing a file this platform refuses. The refusal is more useful here,
+    where the dataset it already points at is the reader's next question."""
+    with pytest.raises(InsertRefused) as raised:
+        with_input("t.sql", "-- output: daily\n-- input: o = bees\nSELECT 1\n",
+                   alias="o", dataset="orders")
+    assert "bees" in str(raised.value)
+
+
+def test_the_same_dataset_under_a_second_alias_is_refused() -> None:
+    """Two aliases for one dataset is legal and almost always Insert clicked
+    twice. The refusal names the alias that exists, so the fix is to use it."""
+    with pytest.raises(InsertRefused) as raised:
+        with_input("t.sql", "-- output: daily\n-- input: existing = orders\nSELECT 1\n",
+                   alias="another", dataset="orders")
+    assert "existing" in str(raised.value)
+
+
+def test_an_unwritable_name_is_refused_by_the_writer_that_already_refuses_it() -> None:
+    """Not a second validation. `render` refuses a dataset name holding a
+    space because - measured against the reader - such a file parses
+    successfully *with no inputs at all*, and would publish as a transform that
+    reads nothing."""
+    with pytest.raises(UnwritableDeclaration):
+        with_input("t.sql", "-- output: daily\nSELECT 1\n",
+                   alias="o", dataset="raw orders")
+
+
+def test_a_file_that_does_not_parse_as_python_reports_the_line() -> None:
+    """The refusal comes from `read`, which names the line, rather than from
+    the decorator check quietly deciding there is no decorator."""
+    with pytest.raises(DeclarationError) as raised:
+        with_input("t.py", "# output: daily\ndef (\n", alias="o", dataset="orders")
+    assert "line" in str(raised.value)

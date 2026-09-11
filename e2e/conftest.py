@@ -308,6 +308,16 @@ def eventually(read, matches, *, what: str, timeout_ms: int | None = None):
     earlier. `page.wait_for_url(...)` is the waiter for that, and the same
     caution applies to anything else that is a cached property rather than a
     fresh read: this is for values *derived* from the DOM or fetched over HTTP.
+
+    **And a caution about the opposite shape** (§291, found by a survivor):
+    `expect(locator).to_have_count(0)` passes the instant it is called if the
+    thing has not rendered yet, so an absence asserted straight after opening a
+    dialog or navigating is a check that cannot fail. Nothing is absent more
+    convincingly than something that has not arrived. Wait for a *sibling* that
+    must be there — the row above it, the panel's heading — and then assert the
+    absence, so the assertion is about the product rather than about timing.
+    `stays(...)` below is the other answer, for absences that must hold over
+    time rather than at one moment.
     """
     deadline = time.monotonic() + (timeout_ms or SETTLE_MS) / 1000
     last = None

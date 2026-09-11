@@ -611,3 +611,80 @@ async def adopt_into_repository(
             user_agent=request.headers.get("user-agent"),
         )
         return AdoptOut(**result)
+
+
+class AdoptManyIn(BaseModel):
+    """Several transforms into one repository, as one commit (§289).
+
+    A path per model rather than a single directory: two models whose names
+    slugify the same way need somewhere to differ, and the batch is where that
+    collision becomes visible at all.
+    """
+    #: No `min_length`: the service refuses an empty list, and a second rule
+    #: here would be a second message (§213).
+    model_ids: list[UUID] = Field(max_length=200)
+    repository_id: UUID
+    branch: str = Field(default="main", min_length=1, max_length=200)
+    #: `model_id -> path`, for the ones the caller wants to place itself.
+    #: Absent means "derive one from the model's name".
+    paths: dict[UUID, str] = Field(default_factory=dict)
+    #: What the commit says. Omitted means one derived from the names, which is
+    #: what makes the move recognisable in a log.
+    message: str | None = Field(default=None, max_length=4000)
+
+
+@router.post("/adopt", response_model=list[AdoptOut])
+async def adopt_many_into_repository(
+    body: AdoptManyIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> list[AdoptOut]:
+    """Move several transforms into a repository as **one commit**.
+
+    **This is what a change set becomes** once `code/page.tsx` is gone.
+    Decision 0001 called the change set "the one genuinely new concept" -
+    "these three transforms changed together, for one reason" - and a commit
+    says the same thing about a repository's files. The successor only works if
+    adopting is *together*: six adoptions are six commits and six unrelated
+    moves in the history.
+
+    Editor, like the singular route, and for the same reason: adoption copies
+    the code through unchanged, so it is a change to where a definition is
+    edited from rather than to what it computes.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        results = await adoption_service.adopt_many(
+            conn,
+            project_id=access.project_id,
+            workspace_id=access.workspace_id,
+            models=[(mid, body.paths.get(mid)) for mid in body.model_ids],
+            repo_id=body.repository_id,
+            branch=body.branch,
+            actor_id=access.auth.user_id,
+            message=body.message,
+        )
+        # **One audit entry per model, not one for the batch.** The question
+        # somebody asks of an audit log is "what happened to this transform",
+        # and an entry naming six of them answers it for none. They share a
+        # commit id, which is what says they moved together.
+        for result in results:
+            await audit.record(
+                conn,
+                organisation_id=access.auth.organisation_id,
+                user_id=access.auth.user_id,
+                action="model.adopt",
+                resource_type="model",
+                resource_id=UUID(str(result["model_id"])),
+                workspace_id=access.workspace_id,
+                project_id=access.project_id,
+                metadata={
+                    "repository_id": result["repository_id"],
+                    "branch": result["branch"],
+                    "path": result["path"],
+                    "commit_id": result["commit_id"],
+                    "moved_with": len(results) - 1,
+                },
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+        return [AdoptOut(**r) for r in results]

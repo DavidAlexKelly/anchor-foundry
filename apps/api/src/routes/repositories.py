@@ -33,9 +33,13 @@ from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import code as code_service
 from ..services import code_checks as check_service
+from ..services import code_tags as tag_service
+from ..services import code_test_runs as test_run_service
 from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import repositories as repo_service
+from ..services import scratchpad
+from ..services import scratchpad_queries
 from ..services import transform_declarations as declarations
 from ..services import transform_problems as problem_service
 from ..services import transform_publish as publish_service
@@ -585,6 +589,345 @@ async def find_problems(
     return ProblemsOut(problems=[ProblemOut(**p) for p in found])
 
 
+class TestRunIn(BaseModel):
+    branch: str | None = None
+    #: The same delta the Problems panel sends (§286): uncommitted edits laid
+    #: over the committed tree, `null` for a file the author has deleted. The
+    #: server already has the commit, and shipping five hundred files to test
+    #: the three that changed would make the button too expensive to press.
+    overrides: dict[str, str | None] = Field(default_factory=dict)
+
+
+class TestOutcomeOut(BaseModel):
+    #: `tests/test_daily.py::test_drops_zero_totals` - what you would type to
+    #: run it again.
+    id: str
+    outcome: str
+    duration_ms: int
+    file: str | None = None
+    line: int | None = None
+    message: str | None = None
+    detail: str | None = None
+
+
+class TestRunOut(BaseModel):
+    id: UUID
+    repo_id: UUID
+    branch: str
+    #: queued | running | succeeded | failed | errored. **`failed` and
+    #: `errored` are different answers** (db 0071): the first is about the
+    #: author's tests, the second about the run not happening.
+    status: str
+    outcomes: list[TestOutcomeOut] | None = None
+    error: str | None = None
+    queued_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+def _run_out(row: dict[str, Any]) -> TestRunOut:
+    raw = row.get("outcomes")
+    return TestRunOut(
+        **{k: v for k, v in row.items() if k != "outcomes"},
+        outcomes=None if raw is None else [TestOutcomeOut(**o) for o in raw],
+    )
+
+
+@router.post("/{repo_id}/tests", response_model=TestRunOut,
+             status_code=status.HTTP_202_ACCEPTED)
+async def run_tests(
+    repo_id: UUID,
+    body: TestRunIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> TestRunOut:
+    """p.13's "run all unit tests", p.14's Tests helper: queue a run over this
+    working set.
+
+    **202, not 200**, because nothing has run yet. Decision 0004 confines
+    customer Python to a process holding no platform credentials, so this
+    writes a job and the worker executes it - the same answer the Python
+    preview refusal gives one route above.
+
+    **Editor, unlike Problems.** A test is code the caller supplied and it
+    *executes*, which is the line `preview_transform` draws: the floor matches
+    who may write the file, not who may read it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        repo = await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        branch = body.branch or str(repo["default_branch"])
+        ref = await repo_service.resolve_ref(
+            conn, repo_id=repo_id, branch=branch, commit_id=None,
+            allow_missing_branch=True,
+        )
+        committed = (
+            {} if ref is None
+            else await repo_service.read_tree(
+                conn, workspace_id=access.workspace_id, commit_id=ref
+            )
+        )
+        working = dict(committed)
+        for path, content in body.overrides.items():
+            if content is None:
+                working.pop(path, None)
+            else:
+                working[repo_service.normalise_path(path)] = content
+        row = await test_run_service.request(
+            conn, repo_id=repo_id, branch=branch, files=working,
+            requested_by=access.auth.user_id,
+        )
+    return _run_out(row)
+
+
+class ReferenceIn(BaseModel):
+    """The file as it stands, and the dataset to add to it."""
+
+    path: str
+    content: str
+    alias: str
+    dataset: str
+
+
+class ReferenceOut(BaseModel):
+    content: str
+
+
+@router.post("/{repo_id}/reference", response_model=ReferenceOut)
+async def insert_reference(
+    repo_id: UUID,
+    body: ReferenceIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ReferenceOut:
+    """The Explorer's Insert (§304): this file, with one more input declared.
+
+    **A round trip for a pure function, deliberately.** The declaration syntax
+    has exactly one writer - `transform_declarations.render`, which lives
+    beside the reader for §272's reason - and a copy of it in the browser,
+    where the button is, would be a second writer that disagrees the first time
+    the format changes. The file goes there and comes back.
+
+    Nothing is stored. The content is the caller's own working set, which the
+    editor holds unsaved; writing it here would be committing on their behalf.
+    Editor rather than viewer for §214's reason: a viewer cannot save what this
+    hands back, and a control offered to somebody who would be refused is worse
+    than one that is absent. `repo_id` is in the path and checked, because the
+    project is what the role is about.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+    try:
+        content = declarations.with_input(
+            body.path, body.content, alias=body.alias, dataset=body.dataset
+        )
+    except declarations.DeclarationError as exc:
+        # 422 for the reason the preview route gives one route over: the file
+        # is the request body and it is the thing that is wrong. The message is
+        # already phrased for whoever wrote it.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    return ReferenceOut(content=content)
+
+
+@router.get("/{repo_id}/tests/{run_id}", response_model=TestRunOut)
+async def read_test_run(
+    repo_id: UUID,
+    run_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> TestRunOut:
+    """What happened to a run. Viewer: asking for tests to run executes code,
+    reading what they said does not."""
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        row = await test_run_service.get(conn, repo_id=repo_id, run_id=run_id)
+    return _run_out(row)
+
+
+@router.get("/{repo_id}/tests", response_model=list[TestRunOut])
+async def list_test_runs(
+    repo_id: UUID,
+    branch: str | None = Query(default=None),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[TestRunOut]:
+    """Recent runs, newest first - what the panel opens on."""
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await test_run_service.latest(conn, repo_id=repo_id, branch=branch)
+    return [_run_out(r) for r in rows]
+
+
+class BranchSummaryOut(BaseModel):
+    id: UUID
+    name: str
+    head_commit_id: UUID | None = None
+    #: passed | failed | none. **`none` is not `passed`** - "nothing failed" and
+    #: "everything passed" are the same number, and a green tick over a branch
+    #: nothing has run against is the lie §295 refuses about a test suite.
+    checks: str
+    #: The open proposal over this branch's *head commit*, if there is one.
+    #: p.16 puts a "Propose changes" button where there is not - the browser
+    #: draws that from the absence rather than from a second field.
+    proposal_id: UUID | None = None
+    proposal_state: str | None = None
+    proposal_summary: str | None = None
+
+
+@router.get("/{repo_id}/branch-summary", response_model=list[BranchSummaryOut])
+async def branch_summary(
+    repo_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[BranchSummaryOut]:
+    """p.16's Checks and Pull request columns, in one request.
+
+    A repository with twenty branches would otherwise open the tab with twenty
+    round trips, which is how a column becomes something people wait for rather
+    than glance at.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await repo_service.branch_summary(conn, repo_id=repo_id)
+    return [BranchSummaryOut(**r) for r in rows]
+
+
+class TagIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    #: p.17: "from the current version of a branch, or from any arbitrary
+    #: commit". Both, and never both at once - `resolve_ref` is what settles
+    #: that, and it already refuses the ambiguity for every other route here.
+    branch: str | None = None
+    commit_id: UUID | None = None
+    message: str | None = Field(default=None, max_length=1000)
+
+
+class TagOut(BaseModel):
+    id: UUID
+    repo_id: UUID
+    name: str
+    commit_id: UUID
+    message: str | None = None
+    created_at: datetime
+    created_by: UUID | None = None
+    created_by_email: str | None = None
+    #: The commit's own message, so a tags list says what was cut and not only
+    #: when. A list of version numbers and dates makes you open each one.
+    commit_message: str | None = None
+
+
+@router.get("/{repo_id}/tags", response_model=list[TagOut])
+async def list_tags(
+    repo_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[TagOut]:
+    """p.17's tags section of the Branches tab."""
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await tag_service.listing(conn, repo_id=repo_id)
+    return [TagOut(**r) for r in rows]
+
+
+@router.post("/{repo_id}/tags", response_model=TagOut, status_code=status.HTTP_201_CREATED)
+async def create_tag(
+    repo_id: UUID,
+    body: TagIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> TagOut:
+    """p.17: "A tag can be created from the current version of a branch, or from
+    any arbitrary commit."
+
+    **Editor, not owner.** A tag marks a version; it changes no code and moves
+    no branch, and `code_tags`' trigger means it cannot later be pointed
+    somewhere else. Whoever may commit may say which commit mattered.
+
+    The repository's own naming convention comes from `repoSettings.json` at the
+    commit being tagged - see `code_tags.check_name` and p.17's
+    `tagNameValidation`.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        repo = await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        ref = await repo_service.resolve_ref(
+            conn,
+            repo_id=repo_id,
+            branch=body.branch or (None if body.commit_id else str(repo["default_branch"])),
+            commit_id=body.commit_id,
+            allow_missing_branch=body.branch is None and body.commit_id is None,
+        )
+        if ref is None:
+            # A repository with no commits has no version to mark, and a tag
+            # pointing at nothing is the state db 0072 refuses outright.
+            raise ConflictError(
+                "there is nothing committed on this branch yet, so there is no "
+                "version to tag"
+            )
+        files = await repo_service.read_tree(
+            conn, workspace_id=access.workspace_id, commit_id=ref
+        )
+        try:
+            row = await tag_service.create(
+                conn,
+                repo_id=repo_id,
+                name=body.name,
+                commit_id=ref,
+                settings=tag_service.read_settings(files),
+                message=body.message,
+                created_by=access.auth.user_id,
+            )
+        except tag_service.TagNameRefused as exc:
+            # 422: the name is the request body and it is the thing that is
+            # wrong. The message is the repository's own where it set one.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="repository.tag",
+            resource_type="code_repo",
+            resource_id=repo_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"tag": body.name, "commit_id": str(ref)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return TagOut(**row, created_by_email=None, commit_message=None)
+
+
+@router.delete("/{repo_id}/tags/{tag_id}", status_code=status.HTTP_204_NO_CONTENT,
+               response_model=None)
+async def delete_tag(
+    repo_id: UUID,
+    tag_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> None:
+    """A mistyped name has to be removable.
+
+    Deleting takes nothing with it - db 0072 keeps `ON DELETE RESTRICT` on the
+    commit, so the code is exactly as safe afterwards. That is why p.17's
+    warning about deleting *branches* ("this can result in lost work for
+    others") has no counterpart here.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        await tag_service.remove(conn, repo_id=repo_id, tag_id=tag_id)
+
+
 @router.post("/{repo_id}/commits", response_model=CommitOut, status_code=status.HTTP_201_CREATED)
 async def create_commit(
     repo_id: UUID,
@@ -873,6 +1216,226 @@ async def publish_transforms(
         steps=[PublishStepOut(**{**s, "model_id": s["model_id"]}) for s in steps],
         orphaned=[OrphanOut(**{k: o[k] for k in ("id", "name", "source_path")}) for o in left],
     )
+
+
+# ---- SQL Scratchpad (§305; p.15) ---------------------------------------------
+class ScratchpadIn(BaseModel):
+    sql: str
+
+
+class ScratchpadOut(BaseModel):
+    columns: list[dict[str, str]]
+    rows: list[list[Any]]
+    row_count: int
+    truncated: bool
+    sampled: bool
+    inputs: list[PreviewedInputOut]
+    #: What the query was rewritten to. Shown rather than hidden: backticks are
+    #: Foundry's engine and not ours, so somebody who typed p.15's syntax and
+    #: got an error from DuckDB should be able to see what DuckDB was given.
+    ran: str
+
+
+@router.post("/{repo_id}/scratchpad", response_model=ScratchpadOut)
+async def run_scratchpad(
+    repo_id: UUID,
+    body: ScratchpadIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ScratchpadOut:
+    """p.15's SQL helper: run an ad-hoc query over this project's datasets.
+
+    **The difference from Preview, one route below, is where the inputs come
+    from.** A transform declares its inputs and gets aliases; a scratchpad
+    query has no declaration, so the names *in the query* are the references —
+    which is why `scratchpad.py` exists and why the query is rewritten before
+    it reaches the engine.
+
+    Editor for the same reason Preview is: this executes SQL the caller
+    supplied against datasets in the project, and the floor matches who may
+    write rather than who may read.
+
+    Sampled, like Preview, and it says so. A scratchpad is for finding out
+    what is in a dataset, and running the real thing over every row of a large
+    one is a way to make the panel unusable rather than accurate.
+    """
+    try:
+        rewritten, found = scratchpad.bind(body.sql)
+    except scratchpad.ScratchpadError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await ds_service.list_for_project(conn, access.project_id)
+        by_name = {str(row["name"]): row for row in rows}
+
+    missing = scratchpad.unresolved(found, set(by_name))
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "this query reads "
+                + ", ".join(missing)
+                + ", which this project does not have"
+            ),
+        )
+    if not found:
+        # A query that names no dataset runs against nothing, and DuckDB would
+        # answer `SELECT 1` happily. Refused instead, because a scratchpad with
+        # no inputs is almost always a query whose references did not parse -
+        # and returning 1 teaches somebody their backticks worked.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "this query names no dataset. A scratchpad query reads one "
+                "between backticks, as in SELECT * FROM `/path/to/dataset`"
+            ),
+        )
+
+    storage = _dataset_storage()
+    paths: dict[str, str] = {}
+    for reference in found:
+        if reference.name in paths:
+            continue
+        paths[reference.name] = await anyio.to_thread.run_sync(
+            storage.local_path, str(by_name[reference.name]["s3_location"])
+        )
+
+    try:
+        result, previewed = await anyio.to_thread.run_sync(
+            engine.preview_transform, paths, rewritten
+        )
+    except DatasetEngineError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except FileNotFoundError as exc:
+        raise ConflictError(
+            "one of the datasets this query reads has no stored data yet, so "
+            "there is nothing to run against"
+        ) from exc
+
+    # **Recorded only once it has run** (§306; p.15's history tab is "a history
+    # of queries ran in the SQL helper"). A history full of queries that were
+    # refused before reaching the engine is a list of typos, and the one you
+    # want back is never in it.
+    async with user_connection(access.auth.user_id) as conn:
+        await scratchpad_queries.record(
+            conn, repo_id=repo_id, author_id=access.auth.user_id, sql=body.sql
+        )
+
+    return ScratchpadOut(
+        columns=[c.as_dict() for c in result.columns],
+        rows=result.rows,
+        row_count=result.total_rows,
+        truncated=result.truncated,
+        sampled=any(p.sampled for p in previewed),
+        inputs=[
+            PreviewedInputOut(
+                # **Alias and dataset are the same word here, and that is the
+                # syntax rather than a shortcut.** A transform aliases its
+                # inputs because it declares them; a scratchpad query names
+                # the dataset in the query, so there is nothing else it could
+                # be called.
+                alias=p.alias,
+                dataset=p.alias,
+                dataset_id=by_name[p.alias]["id"],
+                rows_available=p.rows_available,
+                rows_used=p.rows_used,
+                sampled=p.sampled,
+            )
+            for p in previewed
+        ],
+        ran=rewritten,
+    )
+
+
+# ---- Scratchpad history and favourites (§306; db 0073; p.15) -----------------
+class ScratchpadQueryOut(BaseModel):
+    id: UUID
+    repo_id: UUID
+    sql: str
+    favourite: bool
+    run_count: int
+    first_ran_at: datetime
+    last_ran_at: datetime
+
+
+class FavouriteIn(BaseModel):
+    favourite: bool
+
+
+@router.get("/{repo_id}/scratchpad/queries", response_model=list[ScratchpadQueryOut])
+async def list_scratchpad_queries(
+    repo_id: UUID,
+    favourites: bool = Query(default=False),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[ScratchpadQueryOut]:
+    """p.15's two tabs, as one route with one filter.
+
+    **Viewer, unlike running a query.** Reading your own history executes
+    nothing; the editor floor on `run_scratchpad` is about who may execute SQL
+    against the project's data, and it would be a strange rule that let
+    somebody run a query and then not see that they had.
+
+    Whose history it is never travels in the request. db 0073's policy pins it
+    to the caller, so there is no parameter here that could be changed to
+    somebody else's.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await scratchpad_queries.listing(
+            conn, repo_id=repo_id, author_id=access.auth.user_id,
+            favourites_only=favourites,
+        )
+    return [ScratchpadQueryOut(**row) for row in rows]
+
+
+@router.patch("/{repo_id}/scratchpad/queries/{query_id}",
+              response_model=ScratchpadQueryOut)
+async def favourite_scratchpad_query(
+    repo_id: UUID,
+    query_id: UUID,
+    body: FavouriteIn,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> ScratchpadQueryOut:
+    """p.15's star.
+
+    A star is a note to yourself about your own history, so it takes the same
+    floor as reading it: viewer. Nothing about the project changes.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        row = await scratchpad_queries.set_favourite(
+            conn, repo_id=repo_id, author_id=access.auth.user_id,
+            query_id=query_id, favourite=body.favourite,
+        )
+    return ScratchpadQueryOut(**row)
+
+
+@router.delete("/{repo_id}/scratchpad/queries/{query_id}",
+               status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def forget_scratchpad_query(
+    repo_id: UUID,
+    query_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> None:
+    """A scratchpad accumulates mistakes, and a history you cannot clear is one
+    people stop opening."""
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        await scratchpad_queries.remove(
+            conn, repo_id=repo_id, author_id=access.auth.user_id, query_id=query_id
+        )
 
 
 # ---- preview (ROADMAP.md phase 2, item 2.6) ----------------------------------

@@ -4388,6 +4388,572 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 293. Running a repository's unit tests (this session)
+
+Item 6's first part, on the mechanism §292 unblocked. `run_python_tests` takes
+the **working set** — the same choice §286's Problems panel made, because the
+question an author asks is "does what I just typed pass", and a runner that
+could only answer for committed code would answer a different one — writes the
+files and `anchor.py` into a directory, runs pytest over it, and reads the
+result out of pytest's own `--junitxml` report.
+
+**A run with no tests is not a pass**, and that is the assertion the rest hangs
+off. "Nothing failed" and "everything passed" are the same number, and
+`code-repositories.md` §10 names this feature specifically: *"a failing test is
+reported as failing. A test suite that cannot fail is the exact thing this repo
+does not accept."* `TestReport.ok` is `bool(outcomes) and failed == 0`, so a
+repository nobody has written a test in reads as what it is.
+
+**A failing test and a broken run are different problems**, and only the first
+is the author's. Failures come back in the report; pytest missing, a timeout, a
+report that will not parse — those are raised. Same distinction
+`transform_runner.py` keeps with `result.json`, and it decides who goes looking.
+
+**`xunit1`, for `file` and `line`.** pytest 8's default report family writes a
+dotted `classname` and nothing else, so the only route back to a path is to
+guess that dots are slashes — wrong the moment a test lives in a class. A panel
+whose job is to open the failing test needs the file, so the run asks for the
+format that says. The line is converted to 1-based at the parse, because every
+editor counts from 1 and pytest's report does not; converting at the boundary
+means the panel is not a second place that knows.
+
+**`--rootdir`, which is not decoration.** Without it pytest walks upwards
+looking for a config file, and a temp directory on a developer machine sits
+under this repository — so it can find *our* `pytest.ini` and run our suite
+inside a customer's, an outcome no message would explain.
+
+**And pytest moved into the worker's runtime pins.** The Dockerfile installs
+`requirements.txt` alone and the transform runner task uses that same image
+(`infra/cdk/src/constructs/services.ts`), so left in `requirements-dev.txt` this
+would have worked in every development run and failed in every deployment with
+"No module named pytest" — the exact shape §292 had just finished fixing one
+floor down.
+
+That move broke `test_dependency_pins.py`, and the break was worth having:
+its presence check was `len(pins(path)) >= 2`, a heuristic standing in for "the
+regex still works", and the worker's dev file honestly has one requirement now.
+Counting pins against the requirement *lines* in the file says the same thing
+exactly, and says more — a single unpinned line now fails there, where before it
+could hide behind two that parsed.
+
+**One naming fix worth recording**, because it was our own suite doing the thing
+this unit is about: the parser was `test_report.py`, so pytest collected our
+*source module* as a test file and warned that it could not collect
+`TestOutcome`. Renamed `unit_test_report.py`.
+
+### 300. The Branches tab's two columns, and item 7 closed (this session)
+
+p.16's Checks and Pull request columns.
+
+**The Pull request column is a rule, not a display.** p.16–17: *"If you don't
+see the button to create a new Pull request, it means that a Pull request
+already exists for a branch."* The button and the state occupy one slot, and
+which of them is there is how you know which situation you are in — so a screen
+showing both would be answering a question the reader did not have to ask.
+
+That has a consequence worth stating: the default branch's button is **disabled
+with the reason on it rather than hidden**. Applying a proposal lands its commit
+on the default branch (§283), so proposing that branch into itself is a review
+of nothing — but hiding the button for that second reason would make p.16's
+sentence untrue.
+
+**Both columns are about the branch's head commit, which is a divergence.**
+Foundry's pull request tracks a branch; ours names an immutable commit (db
+0039), and §285 already recorded the same difference about checks. So "this
+branch's pull request" means a proposal over the commit the branch is currently
+on — exactly what "Propose changes" would create — and it stops being the
+branch's PR the moment somebody commits again. That is the honest reading of our
+model rather than an approximation of Foundry's, and an API test asserts the
+disappearance rather than leaving it described.
+
+**Our three states are translated into p.17's three**: `applied` shows as
+**Merged**, `withdrawn` as **Closed**. Renaming rather than showing ours,
+because on a screen whose shape is borrowed from p.17 the platform's own
+vocabulary would make the two harder to compare, not easier.
+
+**`not run` is never a tick**, which is the third screen this session to need
+that sentence — after the Tests panel and the Checks tab. It is the column
+somebody glances at before merging, and it is the one most likely to be trusted
+without opening anything.
+
+**One request for every branch.** A repository with twenty branches would
+otherwise open the tab with twenty round trips, which is how a column becomes
+something people wait for rather than glance at. And nothing is drawn while it
+is in flight: a column that guessed "not run" and corrected itself would be
+worse than one that arrives a moment later, because the guess is what somebody
+acts on.
+
+Build-order item 7 is closed.
+
+### 299. Tags, and the first reading of repoSettings.json (this session)
+
+Item 7's largest piece. p.17: tags are *"like immutable branches"*, marking a
+significant version *"for future reference"*, created from a branch's current
+version or from any arbitrary commit.
+
+**"Immutable" is the whole design, and it is a trigger rather than a service
+rule.** A branch is a name whose commit moves; a tag is a name whose commit does
+not, and that is the entire difference. `code_tags.create` could have refused to
+move one — and the next writer of an UPDATE would not have met that refusal: a
+migration, a repair script, a feature nobody has thought of. A tag whose commit
+moved is a lie discovered by whoever resolves it, possibly a year later. So db
+0072 puts the check where every writer has to pass, and an API test drives a raw
+UPDATE from outside the service to prove it.
+
+The name is fixed too — renaming and re-creating are the same act from a
+reader's point of view, except that renaming silently breaks the references that
+already exist. `message` may be corrected: a sentence about *why* is not what
+anything resolves.
+
+**`repoSettings.json` is read for the first time here.** p.17 puts tag-name
+validation in that file, with a regex and the repository's own `errorMessage`,
+and implementing Foundry's mechanism was the right call over a settings table:
+the rule is about a repository's *contents*, so it travels with them — a branch
+that adds it, a commit that relaxes it, and a history that says who changed the
+convention and when. A column in `code_repos` would have none of that.
+
+Three decisions inside it, each written where it is made:
+
+- **The repository's sentence, not ours.** `"Tag name must have the format x.x.x
+  or x.x.x-rcx."` was written by somebody for their colleagues, and replacing it
+  with "invalid tag name" throws away the only part of the refusal that helps.
+- **A settings file that will not parse is ignored, not fatal.** It is a
+  convention, not a permission, and failing closed would stop every tag in the
+  repository until somebody fixed it — while the person blocked is rarely the
+  person who broke it. The same for a regex that will not compile.
+- **`fullmatch`, not `search`.** p.17's example is anchored and most people's
+  will be; one that is not would otherwise accept `v1.4.0-wip-DO-NOT-USE`
+  because `1.4.0` appears inside it, which is the opposite of what somebody
+  writing a convention meant.
+
+**And the browser does not carry a copy of that regex.** It refuses only the
+floor db 0072 puts on the column, so an impossible name costs no round trip —
+but the convention lives in a file the browser has not read, and a second copy
+would disagree with it the first time somebody edited the file.
+
+**Deleting a tag says what is *not* at risk.** p.17 warns about deleting
+branches because that can lose work; a tag cannot, since `ON DELETE RESTRICT`
+holds the commit. A confirmation that did not say so would borrow the branch
+warning's weight for a much smaller act.
+
+### 298. The two runners, asked the same questions (this session)
+
+Borrowed from the Bun team's Zig-to-Rust rewrite, on the user's suggestion. The
+mechanism worth copying is **differential testing**: feed two implementations
+the same input and compare what comes back. Agreement proves neither is right;
+it is *disagreement* that is the point, and it arrives as a list of which cases
+rather than as a bug report months later.
+
+**We have exactly the pair that calls for it.** `python_sandbox.py` runs a
+transform in a subprocess and is what development uses; `transform_runner.py`
+runs one inside the no-egress container and is what a deployment uses. §292
+found the second had never supported the declared `@transform` shape at all —
+so a repository-authored Python transform ran locally and answered `NameError`
+when deployed, with every suite green, because no test on the container path had
+ever used a decorator. §292 fixed that one disagreement by moving the shape
+rules into a module both import; nothing was watching for the next.
+
+**It found one on its first tightening.** The output row cap was declared twice
+and refused in two different sentences:
+
+    the transform produced 3 rows - above this build's 2 row limit
+    the transform produced 3 rows, over the 2 limit
+
+One rule, two wordings, and which one a person saw depended on whether the
+platform was running with ECS configured — which the author of a transform
+neither knows nor should have to. The cap and its sentence are `limits.py` now,
+imported by both.
+
+**Its own module rather than `user_api.py`**, and the distinction is worth
+keeping: that file is copied into the directory customer code runs in and is
+imported *by* their transform. A cap the platform enforces is not part of the
+API a transform is written against, and putting it there would offer it to be
+read, compared against, and eventually worked around.
+
+**The allowed divergence is written down rather than left open.** The container
+appends a traceback to an error raised by the author's own code and the
+subprocess does not, deliberately: a container's run is asynchronous and cannot
+be re-run by pressing a button. So the test asserts the *first line* agrees —
+the sentence a person reads — and separately asserts the traceback really is
+there, so the exemption cannot quietly become the rule.
+
+**What the harness caught, and what it could not.** Two findings, and both were
+about the test rather than the product.
+
+The comparison itself survived being switched off. `assert True or sandbox ==
+container` left every case passing, because each also asserts on the dict it
+returns and that dict is the subprocess answer — so the one thing the module
+exists for was a check nothing could make fail. Every real case agrees, which is
+exactly the problem: a guard with no case in the tree that fires it can be
+deleted with nothing noticing (§293 hit that shape twice). The file now
+manufactures a divergence — the cap lowered on one runner and not the other —
+and asserts the comparison sees it and names both answers.
+
+And **a differential test is blind to a change in a rule both sides share**,
+which is the technique's own boundary. My first two attempts to demonstrate that
+were wrong: disabling `resolve_output`'s neither-shape branch makes the container
+crash outright, and lowering the cap to 1 breaks the success cases — both caught,
+by a route the harness had not predicted. A mutant that genuinely tests the limit
+has to leave both runners self-consistent *and* satisfy every other assertion,
+which means changing a shared **wording**. That one survived — and in surviving
+showed that nothing pinned the refusal's wording anywhere, so the sentence an
+author reads when a join loses its condition was unchecked. The answer was not a
+cleverer comparison but `tests/test_limits.py`: test the rule where the rule
+lives. The two files together say the runners agree with each other, and that
+they agree with the rule.
+
+So the ordering stands: mutation testing is the stronger discipline and this is
+an addition to it, not a replacement. What it adds is the one thing a
+single-implementation mutation run cannot see — that the *other* implementation
+was never asked the same question.
+
+### 297. The two things CI caught that the local suites could not (this session)
+
+The browser job went red on eleven tests. Both causes were mine, both are
+shapes this session has been finding all along, and neither could have been
+found by running the suites locally - which is the point of having CI at all.
+
+**Eight tests: `No module named 'dagster'`.** §295's browser suite drives the
+worker's own op, because the dev stack runs no Dagster daemon and a queued test
+run would otherwise sit in the table for ever. The browser job installs
+`apps/api`'s requirements and nothing else. It passed locally because the shared
+virtualenv had dagster installed by hand — which is, word for word, the failure
+`apps/api/requirements-dev.txt`'s own comment records about playwright: *"the
+suite ran locally because a venv had it installed by hand, and a fresh checkout
+could not have run it at all."*
+
+`work_the_queue`'s docstring even said it imported inside the function *"so a
+machine without the worker's dependencies fails on the test that needs them,
+naming the import"* — written in anticipation of exactly this and then not acted
+on. The job now installs the worker's runtime requirements, and
+`test_dependency_pins.py` asserts it: whatever `e2e/` imports across an app
+boundary, the browser job has to install. Checked by reading both files rather
+than by remembering.
+
+**Three tests: `.repo-check` counted three where two were expected.** §296's
+unit-test row on the Checks tab reused the proposal check's CSS class, so three
+of §285's tests started counting it. **They were right and the class was the
+bug**: a unit test run is not a proposal check — different scope, different
+origin (db 0071) — and sharing the class made "how many checks ran on this
+branch" answer a different question by one. It has `repo-check-tests` now, with
+the styling shared deliberately and the identity not.
+
+### 296. Test output in the Checks tab, and item 6 closed (this session)
+
+p.19: *"The Checks tab will also include the output of any unit tests that have
+been defined for your repo."*
+
+**The two lists on that tab are not the same kind of thing here, and the tab
+says so.** §285 recorded the first half of that divergence: our checks belong to
+a *proposal*, because a schema check asks what the code would do to this
+project's datasets and a commit nobody has proposed has not said which change it
+means. A test run is different again — it belongs to a **branch and a working
+set** (db 0071), because the question it answers is "does what I just typed
+pass". Two queries rather than one response, because folding them together
+would make the API claim a scope neither has.
+
+**The most recent run, not a history.** The tab answers "what is the state of
+this branch"; every run somebody pressed the button on is a different question
+with its own home, and a list here would grow without bound on exactly the
+branch whose state matters most.
+
+**Named failures, capped at five.** "3 failed" sends you to the panel;
+`tests/test_daily.py::test_totals` sends you to the test. Capped because a
+branch where two hundred tests fail has one problem, not two hundred, and a tab
+that listed them all would bury the proposal checks beside it.
+
+**And the same assertion again, on the third screen that could get it wrong**:
+an empty run is `failed`, not `passed`. A green row for a repository nobody has
+written a test in is the suite-that-cannot-fail, and a Checks tab is exactly
+where somebody would trust it.
+
+**One vocabulary, deliberately.** `passed` / `failed` / `pending` — the words
+the proposal checks already use — because the two kinds of row sit in one list
+under one heading, and a reader made to learn two sets of words for them would
+learn neither.
+
+Build-order item 6 is closed: unit tests (§292–§293), the Tests panel (§294–
+§295), and this.
+
+### 295. The Tests panel (this session)
+
+p.14's Tests helper, and its whole specification is one sentence: *"When your
+repository contains unit tests, the Tests Helper lets you run those tests and
+displays their results."*
+
+**It polls, and that is not laziness.** §286's Problems panel answers from one
+request because it parses and reads names; a test run is a job (§294), so the
+only way to learn it finished is to ask. `shouldPoll` is a named rule rather
+than an inline comparison because it going false is the only thing that ever
+stops the asking.
+
+**A run with no tests is reported as having none**, in the verdict and in the
+colour. "Nothing failed" and "everything passed" are the same number, and a
+green tick over a repository nobody has written a test in is the
+suite-that-cannot-fail this repo does not accept, wearing the wrong colour.
+
+**Failures first, then errors, then the rest in the order they ran.** Two
+hundred tests and one failure is the ordinary case, and a panel that made you
+scroll for it is one people stop opening. Within a severity the file order is
+kept, because it is the only order a reader can predict.
+
+**A row that cannot say where to jump does not jump.** pytest names no file for
+a collection error, and a row that went somewhere plausible and wrong is worse
+than one that does nothing, because the reader believes it.
+
+**Two things this unit got wrong first, both found by writing the test.**
+
+`canRun` was `!readOnly`, taken from the editor. `readOnly` is about a *pinned
+commit*, and the panel only renders when the commit is not pinned - so the
+check was always true: a control offered to a viewer the server would refuse
+(§214), dressed as a guard. It is `canEditProject(role)` now, which is the
+route's actual floor, on the query key the Settings tab already uses so it is
+one cached answer rather than a second request.
+
+And the browser test for that rule is **gone rather than fixed**. This suite
+signs in as one user and cannot be a viewer, so the assertion could only ever
+have been about something else - which is exactly what the first version did,
+asserting branch protection, a different rule that does not hide the button at
+all. The real rule has three layers that can each be made to fail: the unit
+test, the API's 403, and the route's dependency. What replaced it is a check
+that *is* reachable here: the button reports progress and is disabled while a
+run is in flight, because the server refuses a fourth queued run and a button
+still saying "Run tests" would walk people into that refusal.
+
+**The browser suite drives the worker's op itself**, and says so. The dev stack
+starts Postgres, the API and Next, and no Dagster daemon, so a queued run would
+sit in the table for ever. The op called is the one the deployed schedule
+calls, on the same row - what is skipped is the cron, not the work. A test that
+faked the result would prove the panel can render a fixture.
+
+### 294. A test run is a job, not a request (this session)
+
+Item 6's second part, and the shape was decided years earlier.
+`routes/repositories.py` has refused to preview a Python transform since §69,
+with the reason in the message: *"they run in an isolated task rather than in
+the API, which takes long enough to need a job you can watch rather than a
+request that waits."* Running a repository's unit tests is the same act, so it
+is the same answer.
+
+db 0071 is the thing you watch. The API writes a queued row and answers **202**,
+the worker claims it on the same one-minute poll queued model runs use, and the
+panel reads it back.
+
+**The files travel and are stored**, which is unlike every other job in this
+schema: they all name a resource and read its current state. A test run is over
+the author's *uncommitted* working set, because the question is "does what I
+just typed pass" - the same choice §286 made - and there is nowhere else that
+working set exists. So the row is a snapshot, and a run always reports on the
+code it actually ran rather than on whatever the file says by the time somebody
+reads the answer.
+
+**`failed` and `errored` are different statuses**, and that is
+`transform_runner.py`'s result-file rule arriving in the schema. Tests that ran
+and did not pass are `failed`, with their outcomes; a run that could not happen
+is `errored`, with a sentence about the platform. A CHECK constraint stops a
+terminal row claiming success with no answer at all - the
+green-suite-that-ran-nothing failure, arriving through the database instead of
+through the report.
+
+**The claim is the `status = 'queued'` in the UPDATE's WHERE**, so two workers
+polling the same minute cannot both run it and both write an answer.
+
+One real bug, found by its own test: the unfiltered listing passed a bare NULL
+to `:branch IS NULL`, which Postgres cannot type - `AmbiguousParameter`. Cast at
+the query.
+
+### 292. The module customer code imports, and the runner that could not run it (this session)
+
+Build-order item 6 is "unit tests, then the Tests panel, then test output in the
+Checks tab". §216's rule — open what a line cites before building on it — turned
+the first word into a prerequisite nobody had scoped, and then into a production
+bug.
+
+**A unit test's first line is an import, and the declared shape was not
+importable.** `docs/decisions/0004-running-customer-code.md` documents
+
+    @transform(output="daily_orders", inputs={"orders": "raw_orders"})
+
+and `python_sandbox.py` made it work by defining `transform` as a local in the
+namespace it `exec`s the file into. That is enough to *run* a transform and not
+enough to import one: `from src.daily import build` raises `NameError` before
+any test runs, and `import anchor` raises `ModuleNotFoundError`, because no such
+module existed on disk anywhere. The decorator was a convention enforced by one
+exec namespace, not a contract.
+
+**And the other runner had never had it at all.** `transform_runner.py` is the
+container entrypoint decision 0004 gates — the thing that runs customer Python
+*in production*. It bound no `transform`, handled only the script shape, and
+answered a declared transform with `NameError: name 'transform' is not defined`.
+Development takes the subprocess path, which was right, so the suite was green
+and the deployment was broken. **This is §272's own finding a second time**, in
+the half nobody re-checked: two contracts for one thing, each right about
+itself, and no test on the container path had ever used a decorator.
+
+So `user_api.py` is one decorator and one `resolve_output`, copied into every
+directory customer code runs in as `anchor.py` and imported by both runners.
+The rules used to be written out twice — once as a string in a runner template,
+once incompletely in the container — which is how they came to disagree.
+
+**Staged, not baked into the image.** The runner reaches nothing outside its
+working directory, so `dispatch.stage` writes `anchor.py` beside the code. An
+image-baked copy would drift from the development one the first time either
+changed, which is the shape this whole unit removes.
+
+**And loaded by file path rather than by `import`.** The container runs one job
+and exits, so module caching would never bite in production — which is exactly
+why relying on it would have been wrong. Two tests caught it immediately: a
+second declared transform in one process read as "ambiguous" because the
+registry persisted, and a run staged *without* `anchor.py` imported the previous
+run's. A fresh module object per run is what a fresh container already is, and
+now the tests run against the rule the deployment does.
+
+What remains of item 6: running pytest over a repository's files, then the
+panel, then the Checks tab. Worth recording about the specification itself —
+**the Unit tests chapter is a pointer, not a spec.** p.56 says Code Repositories
+"support discovering and running unit tests through an integrated helper" and
+links to per-language docs absent from `docs/pal/`. Three lines elsewhere are
+the whole buildable specification: p.13, p.14 and p.19.
+
+### 291. The deletion, and the hole under it (this session)
+
+Build-order item 1, closed. `code-repositories.md` opened by asking for
+`code/page.tsx` to be deleted — *"463 lines duplicating this, worse"* — and
+§278 stopped that one grep short of being wrong: five capabilities lived there
+and nowhere else. §279 took the review gate, §280 the change history, §289
+succeeded the change set with a commit, §290 gave the typed-changes proposals a
+home. This is the deletion, and `apps/api/tests/test_one_editor.py` is §10's own
+acceptance test — *"grep for `textarea` under `app/(platform)`"* — finally run.
+
+**The sixth row moved too, quietly.** §278's table listed `changeSet` + `diff`
+together and §280 moved only the first: the history dialog could show what a
+version *is* and not what it *changed*. That is the question a history is
+usually opened to answer, and deleting the page would have taken it from every
+transform outside a repository without erroring. It is a **Changes** button
+beside **Code** now, not offered on v1 because a diff of everything against
+nothing is the file.
+
+**And emptying the page exposed a hole the same size as the one it filled.**
+The file opened with *"There is no 'new repository' button, and its absence is
+the design"* — true when decision 0001 made the pillar a view over
+`model_versions`, and false since §94 gave the project real `code_repos`.
+Grepping for the create call turns up **nothing in `apps/web` at all**: every
+repository in the product had been made by a script, none could be listed
+anywhere, and this whole application — seven tabs, thirteen sections of work —
+was reachable only by a `/r/{id}` link somebody already had.
+
+**§275's adopt dialog had already been caught by it and nobody noticed.** "This
+project has no repositories yet. Create one on the Code screen, then move this
+transform into it" — a screen with no such control. §290's shape exactly: a
+pointer at a place that cannot do what it says, invisible because every test of
+it asserts its wording. It is a link now, which is what makes the two testable
+together rather than two sentences somebody has to keep in agreement by hand.
+
+So the pillar is **replaced rather than deleted**: the project's repositories,
+each opening into the application by resource id — never a slug path, because a
+link built from a workspace and project slug stops working the moment somebody
+renames either, which is exactly when a shared link is most likely to be
+clicked.
+
+**And the badge beside it was counting the wrong thing.** `resource_counts.code`
+counted `models`, under a comment saying `code_repos` "has never had a row
+written to it" — true when it was written, false since §94. A project with one
+repository and forty transforms showed 40 beside a list of one. The test is
+written as a *difference* — create a transform, the badge does not move; create
+a repository, it does — because an absolute number would pass on a module-scoped
+fixture whose other tests happen to leave the two counts equal.
+
+**Three client methods went with the page** (`tree`, `file`, `saveChangeSet`).
+The routes stay: `POST /code/change-sets` still works and the change sets
+already recorded are still read by the history dialog — a log you cannot read is
+a log that may as well be deleted. What has no client is the *making* of one,
+because nothing in the product should now offer it.
+
+### 290. A home for the reviews the deleted page would have stranded (this session)
+
+The last thing standing between build-order item 1 and the deletion, and it was
+found by reading a sentence rather than by looking for a gap. §276's Pull
+requests tab has an empty state that says where the *other* proposals are, and
+one of its three answers was: these ones "are reviewed on the **Code screen**".
+That is the page B.1 deletes. Nothing would have errored; the tab would simply
+have gone on directing people to a URL that 404s, and no test would have
+noticed, because every test of that sentence asserted its wording and none
+asserted that the place it names exists.
+
+**A proposal whose `source_repo_id` is null belongs to no repository** (db
+0039), which is why §276 deliberately left it out of the tab — listing it under
+one would be a lie, and a review with two homes that disagree about what
+applying it does is worse than one with none (§283: the tab shows which branch
+applying moves, and this shape moves none). So they live on the **Models
+screen**, beside the transforms they change.
+
+**The plan this replaces.** `docs/parity/README.md` said what remained was
+*moving* typed-changes proposal creation into the application. That was the
+wrong answer: it would have kept the second shape alive for the sake of
+transforms whose real problem is that they are not files yet. Creation is
+**withdrawn**, not moved — §274 made a transform into a file, §289 made that a
+batch, and the answer for a transform outside a repository is to move it into
+one and change the file. The path holds in a review-required project too, which
+is the case that made this a blocker at all: adopting into a protected default
+branch is refused by §284's rule with the remedy in the message, so the move
+goes onto a sandbox and the commit is proposed like any other.
+
+**Which makes the surviving set finite**, and that is the whole design of the
+section. Nothing creates more, every one of them ends, and when the last is
+decided the section goes with it — so it is **absent when empty rather than
+empty**. A permanent empty box for a shape the product no longer has is a box
+that teaches people to look past that part of the screen.
+
+**And that decision deleted a tested sentence.** `unrepositoriedNote(0)` existed
+and had a test asserting its wording. Once the caller renders nothing for an
+empty list, it was a string no reader could ever be shown — a check that could
+not fail in any way a person would notice. Both are gone, with the reasoning in
+their place (§213).
+
+### 289. Adopting several at once, and what a change set becomes (this session)
+
+Build-order item 1 has been blocked since §278 found five capabilities living
+only on the page B.1 deletes. Four are re-homed or redundant; this one is
+`saveChangeSet` — the row §278 called decision 0001's "one genuinely new
+concept": *"these three transforms changed together, for one reason."*
+
+**A commit says the same thing about a repository's files**, so the successor is
+*adopt them together, then commit together*. That is only a successor if
+adopting **is** together. Six adoptions are six commits and six unrelated moves
+in the history — and a migration costing six clicks per transform is one a
+project with forty of them will not do, which strands them in practice even
+though nothing refused. So the unit is bulk adoption, and the shape of it is the
+argument for it.
+
+**All of them or none.** A batch that adopted four and refused two leaves the
+project in a state nobody asked for, and the person then has to work out which
+four. Every model is checked before any file is written, and every refusal names
+the model it is about — in a batch the whole point of the message is which of
+the six it concerns.
+
+**`adopt` is now `adopt_many` with a list of one.** It keeps its own route and
+its own screen, but a second implementation would be a second set of refusals
+and the two would drift the first time either was improved.
+
+**And the batch found an edge the single case never could.** `default_path`
+slugifies the model's name, and slugify lowercases — so `Daily_Orders_x` and
+`daily_orders_x` are two names a declaration accepts as different and one file.
+Adopted one at a time the second collides with the *tree* and is refused;
+adopted together there is no tree between them, and without a check the second
+would silently overwrite the first: one file, two models pointing at it, and a
+publish that renames one of them.
+
+**A test that skipped was a test that never ran.** The audit assertion reached
+for `/workspaces/{id}/audit?action=…`, which does not exist, and skipped itself
+with a plausible message — the audit endpoint is `/org/audit`, org-admin only
+and unfiltered. A skip that reads as a capability check and is really a typo is
+the worst kind, because it looks like diligence.
+
+**And a harness fact worth keeping.** Playwright's `has_text` matches
+case-insensitively, so a row filter on `daily_orders_x` selects the row for
+`Daily_Orders_x` too — which is exactly the pair the collision test needs. The
+checkbox's `aria-label` carries the name verbatim and matches exactly.
+
 ### 288. Reset, and the draft it has to take with it (this session)
 
 `code-repositories.md` §2.2's Reset row, p.13: *"Reset the contents of all files
@@ -10581,8 +11147,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 
 ## What's not started
 
-- **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
-- **`code_repos`** (migration 0003, spec §16) — a table with no writer and, since §45, no future one. Left in place because the schema verifier asserts the spec's tables and dropping it is a claim about the spec rather than about a feature; the project nav no longer counts it (§46). Drop it if the spec is ever revised to match the decision
+- **Code** — ~~all four items are done (§45–§47)~~. **This bullet described a pillar that no longer exists**, and it is corrected rather than deleted because being wrong for a hundred sections is the interesting part: §291 deleted the Code pillar page, the repository application replaced it, and `docs/parity/code-repositories.md` is where this is now tracked — all nine of its build-order items are closed as of §307. Two things §45–§47 declined are still declined for the same reasons: the git *mirror* to a remote the customer owns, and branch-to-environment mapping (this platform now has branches; it still has no environments)
+- ~~**`code_repos`** — a table with no writer and, since §45, no future one~~. **False since the repository application was built**, and it stayed on this list unread the whole time. `code_repos` is now the table behind every repository, branch, commit, proposal, tag and test run in the product, and `services/projects.py` counts it in the project's `code` resource count (§291). Kept here as a correction rather than removed, because a bullet that was confidently wrong for that long is worth leaving visible — it is the same rot `apps/api/tests/test_parity_marks.py` was written for (§302), on a document that has no such check
 - **Canvas widget palette** (see §15, §40, §41, §42, §43): Container, Text, Filter, Dataset table, Object table, Chart, Map, Action form. No configurable tile source for the map (§43 ships country outlines in the bundle and names this as the extension point), and no cross-widget interactivity beyond parameters (e.g. a table row selection driving another widget's detail view — `MapCanvas` already takes an `onSelect` nothing passes yet) — both additions to the same resolver/widget pattern, just not built yet. Reordering placed widgets is done (§44), by buttons as well as by drag
 - **Sharing an app outside the platform** (a public or token-scoped link) — `ROADMAP.md` Canvas item 7, explicitly a stretch: it needs an auth model for an unauthenticated or token-authenticated viewer, which is a bigger question than any widget. §44's viewer route is the in-platform half and stops at the workspace boundary
 - **Canvas apps don't appear on the workspace-wide "published apps" nav anywhere yet** — the `GET .../published-canvas-apps` read path exists and is tested (§15) but no frontend page lists it; today a workspace member reaches a published app only if handed its direct URL

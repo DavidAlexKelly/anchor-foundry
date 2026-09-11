@@ -38,11 +38,13 @@ import {
   pruneTabs,
   tabLabel,
 } from "@/lib/editor-tabs";
+import Link from "next/link";
 import {
   ApiError,
   api as platformApi,
   code as codeApi,
   repositories as repoApi,
+  resources as resourceApi,
 } from "@/lib/api";
 import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
 import { describe as describeProposal, emptyReason, forRepository } from "@/lib/pull-requests";
@@ -61,6 +63,83 @@ import {
   revealLine,
   summary as problemsSummary,
 } from "@/lib/problems";
+// Aliased, because `branch-checks.ts` next door exports a `verdict` and a
+// `worstFirst` of its own. The two modules answer the same *shape* of question
+// about different things - a branch's checks, a run's tests - so the collision
+// is a sign the naming is right rather than a sign one of them should move.
+// Aliased where they collide with this file's other vocabulary: `subtitle` and
+// `emptyReason` are words several of these modules use about their own subject.
+import {
+  checksAreAProblem,
+  checksLabel,
+  proposalStateLabel,
+  proposeProblem,
+  pullRequestSlot,
+} from "@/lib/branch-columns";
+import {
+  EXPLORER_KINDS,
+  canInsert,
+  emptyReason as explorerEmptyReason,
+  insertLabel,
+  needsWorkspaceLevel,
+  openHref as explorerHref,
+  sections as explorerSections,
+  shouldSearch,
+  subtitle as explorerSubtitle,
+  suggestedAlias,
+} from "@/lib/explorer";
+import type { RepositoryCheck, ScratchpadResult } from "@/lib/types";
+import {
+  assistDetail,
+  assistIsAProblem,
+  assistLabel,
+  assistState,
+  checksAreAProblem as statusChecksAreAProblem,
+  checksLabel as statusChecksLabel,
+  problemsAreAProblem,
+  problemsLabel,
+  savingDetail,
+  savingIsAProblem,
+  savingLabel,
+} from "@/lib/status-bar";
+import {
+  canRun,
+  emptyReason as scratchpadEmptyReason,
+  oneLine,
+  ranNote,
+  sampleWarning,
+  showRewritten,
+  starLabel,
+  tabLabel as scratchpadTabLabel,
+  type ScratchpadTab,
+} from "@/lib/sql-scratchpad";
+import {
+  canCreate as canCreateTag,
+  deleteQuestion as tagDeleteQuestion,
+  emptyReason as tagsEmptyReason,
+  nameProblem as tagNameProblem,
+  subtitle as tagSubtitle,
+  willPin,
+} from "@/lib/tags";
+import {
+  andMore,
+  mostRecent,
+  namedFailures,
+  // Aliased for the same reason the `test-runs` imports above are: this tab
+  // already has a `verdict` and a `status` from `branch-checks.ts`.
+  status as testStatusOf,
+  summary as testSummary,
+} from "@/lib/test-runs-in-checks";
+import {
+  canEditProject,
+  durationLabel as testDuration,
+  isAProblem as testsAreAProblem,
+  runLabel,
+  shouldPoll,
+  target as testTarget,
+  verdict as testVerdict,
+  worstFirst as worstTestsFirst,
+} from "@/lib/test-runs";
 import {
   checkTarget,
   emptyReason as checksEmptyReason,
@@ -82,6 +161,7 @@ import {
 import type {
   PublishPlan,
   RepositoryBranch,
+  RepositoryBranchSummary,
   RepositoryComparison,
   RepositoryFileChanges,
   RepositoryFileVersion,
@@ -260,6 +340,15 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
           onSwitch={(name) =>
             setParams({ branch: name, commit: undefined, file: undefined, tab: "files" })
           }
+          onOpenProposal={(id) => setParams({ tab: "pulls", proposal: id })}
+          onSwitchToPublish={(name) =>
+            // p.16's "Propose changes". The publish tab is where a proposal is
+            // made here, so the button takes you there on that branch rather
+            // than creating one from a list row - a proposal needs a summary,
+            // and a button that made one without asking would put an empty
+            // review in front of somebody.
+            setParams({ branch: name, tab: "publish", commit: undefined })
+          }
         />
       )}
     </div>
@@ -409,6 +498,17 @@ function FilesTab({
   // round trip, and one on every keystroke would be a panel that costs more
   // than it tells you. The button says when the answer was last true.
   const [problemsOpen, setProblemsOpen] = useState(false);
+  // **p.15's status bar needs the editor's own readiness** (§307). Monaco is a
+  // dynamic import, and "the editor is loading" is the first thing the bar has
+  // to be able to say.
+  const [editorReady, setEditorReady] = useState(false);
+  // The branch's checks, on the **same key the Checks tab uses**, so this is
+  // the same cached answer rather than a second request that could disagree
+  // with it (§296).
+  const statusChecks = useQuery({
+    queryKey: ["repo-checks", rid, branch],
+    queryFn: () => repoApi.branchChecks(wid, pid, rid, branch),
+  });
   const [reveal, setReveal] = useState<{ line: number } | undefined>();
   const problems = useQuery({
     queryKey: ["repo-problems", rid, branch, edits],
@@ -608,6 +708,7 @@ function FilesTab({
                   value={source}
                   readOnly={readOnly}
                   reveal={reveal}
+                  onReady={() => setEditorReady(true)}
                   onChange={(next) => setEdits((c) => ({ ...c, [selected]: next }))}
                 />
               </div>
@@ -624,6 +725,21 @@ function FilesTab({
                     // A new object every time, so clicking the same problem
                     // twice scrolls back to it (§286).
                     setReveal(line === undefined ? undefined : { line });
+                  }}
+                />
+              )}
+              {!pinned && (
+                <TestsPanel
+                  wid={wid}
+                  pid={pid}
+                  rid={rid}
+                  branch={branch}
+                  working={working}
+                  onOpen={(path, line) => {
+                    openFile(path);
+                    // A new object every time, so clicking the same failing
+                    // test twice scrolls back to it (§286).
+                    setReveal({ line });
                   }}
                 />
               )}
@@ -653,6 +769,37 @@ function FilesTab({
           ) : (
             <p className="state">{emptyViewerNote(paths.length, readOnly)}</p>
           )}
+          {/* **Outside the "is a file open" branch, unlike every panel above
+              it**, and that is the difference rather than an oversight. Those
+              four answer questions *about the current file* — its problems,
+              its tests, what changed in it, what it produces — so without one
+              they have no subject. The Explorer's subject is the project, and
+              the moment it is most useful is before there is a file: you open
+              it to find out what to write. An empty repository showing no way
+              to see what the project contains would be the panel missing
+              exactly when it was wanted.
+
+              Offered to a viewer too, unlike Problems, Tests and File Changes:
+              it reads a listing and writes nothing, so there is no control
+              here that a viewer would be refused (§214). */}
+          <ExplorerPanel
+            wid={wid}
+            pid={pid}
+            rid={rid}
+            path={selected}
+            content={source}
+            readOnly={readOnly}
+            onInsert={(next) =>
+              selected !== undefined &&
+              setEdits((c) => ({ ...c, [selected]: next }))
+            }
+          />
+          {/* p.15's SQL helper, beside the Explorer and outside the "is a file
+              open" branch for the same reason: a scratchpad query names its own
+              datasets, so it has a subject whether or not a file is selected —
+              and asking what is in a dataset is most often what you do *before*
+              writing the transform that reads it. */}
+          <ScratchpadPanel wid={wid} pid={pid} rid={rid} readOnly={readOnly} />
         </div>
       </div>
 
@@ -724,6 +871,19 @@ function FilesTab({
       {draftWarning && (
         <p className="state error" data-testid="draft-warning">{draftWarning}</p>
       )}
+      {/* p.15's status bar (§307), under the editor and above the commit bar:
+          it reports on the editor and on the branch, and the commit bar is the
+          thing you press *after* reading it. */}
+      <StatusBar
+        editorReady={editorReady}
+        analysing={problems.isFetching}
+        analysisFailed={problems.error !== null}
+        problemCount={problems.data?.problems.length}
+        checks={statusChecks.data?.checks}
+        changedFiles={Object.keys(edits).length}
+        draftWarning={draftWarning}
+        onOpenProblems={() => setProblemsOpen(true)}
+      />
       {failure && <p className="state error">{failure}</p>}
     </div>
   );
@@ -978,6 +1138,8 @@ function BranchesTab({
   branches,
   pending,
   onSwitch,
+  onOpenProposal,
+  onSwitchToPublish,
 }: {
   wid: string;
   pid: string;
@@ -987,6 +1149,8 @@ function BranchesTab({
   branches: RepositoryBranch[] | undefined;
   pending: boolean;
   onSwitch: (name: string) => void;
+  onOpenProposal: (id: string) => void;
+  onSwitchToPublish: (name: string) => void;
 }) {
   const queryClient = useQueryClient();
   const known = useMemo(() => branches ?? [], [branches]);
@@ -997,6 +1161,15 @@ function BranchesTab({
   // of this tab's state that describes a *question* rather than a form being
   // filled in. The branch being created is not - a half-typed name is not
   // something to share, and neither is a note about what just happened.
+  const summaries = useQuery({
+    queryKey: ["repo-branch-summary", rid],
+    queryFn: () => repoApi.branchSummary(wid, pid, rid),
+  });
+  const columns = useMemo(
+    () => new Map((summaries.data ?? []).map((row) => [row.name, row])),
+    [summaries.data],
+  );
+
   const url = useUrlState();
   const base = url.get("base") ?? defaultBranch;
   const head = url.get("head") ?? "";
@@ -1091,6 +1264,16 @@ function BranchesTab({
               <code className="repo-sha">
                 {b.head_commit_id ? b.head_commit_id.slice(0, 8) : "no commits"}
               </code>
+              {/* p.16's two columns. Rendered from one request rather than one
+                  per branch - twenty branches would otherwise be twenty round
+                  trips, which is how a column becomes something people wait for
+                  rather than glance at. */}
+              <BranchColumns
+                summary={columns.get(b.name)}
+                defaultBranch={defaultBranch}
+                onOpenProposal={onOpenProposal}
+                onPropose={onSwitchToPublish}
+              />
               <button
                 type="button"
                 className="repo-branch-delete"
@@ -1228,9 +1411,223 @@ function BranchesTab({
         )}
       </section>
 
+      {/* p.17: "The branches tab also lets you access a list of tags." Here
+          rather than as a tab of its own, because that is where the
+          specification puts it and because a tag is a name for a commit on one
+          of the branches above - the two are read together. */}
+      <TagsSection
+        wid={wid}
+        pid={pid}
+        rid={rid}
+        branch={current}
+        hasCommits={known.some((b) => b.head_commit_id !== null)}
+      />
+
       {note && <p className="state">{note}</p>}
       {failure && <p className="state error">{failure}</p>}
     </div>
+  );
+}
+
+
+/** p.16's Checks and Pull request columns, for one branch row (§300).
+ *
+ *     "If you don't see the button to create a new Pull request, it means that
+ *      a Pull request already exists for a branch." (p.16-17)
+ *
+ * That is a rule rather than a description: the button and the state occupy the
+ * same slot, and which one is there says which situation you are in. The
+ * wording rules are in `lib/branch-columns.ts`.
+ */
+function BranchColumns({
+  summary,
+  defaultBranch,
+  onOpenProposal,
+  onPropose,
+}: {
+  summary: RepositoryBranchSummary | undefined;
+  defaultBranch: string;
+  onOpenProposal: (id: string) => void;
+  onPropose: (branch: string) => void;
+}) {
+  // Absent while the one request is in flight, and nothing is drawn: a column
+  // that guessed "not run" and then corrected itself would be worse than one
+  // that arrives a moment later, because the guess is the answer somebody acts
+  // on.
+  if (summary === undefined) return null;
+
+  const slot = pullRequestSlot(summary);
+  const blocked = proposeProblem(summary, defaultBranch);
+  return (
+    <>
+      <span
+        className={checksAreAProblem(summary) ? "chip brass" : "soft"}
+        data-testid={`branch-checks-${summary.name}`}
+      >
+        {checksLabel(summary)}
+      </span>
+      {slot.kind === "open" && (
+        <button
+          type="button"
+          className="btn quiet"
+          style={{ padding: "2px 8px", fontSize: 11 }}
+          data-testid={`branch-pr-${summary.name}`}
+          title={slot.summary}
+          onClick={() => onOpenProposal(slot.id)}
+        >
+          {proposalStateLabel(slot.state)}
+        </button>
+      )}
+      {slot.kind === "propose" && (
+        <button
+          type="button"
+          className="btn quiet"
+          style={{ padding: "2px 8px", fontSize: 11 }}
+          data-testid={`branch-propose-${summary.name}`}
+          // Titled rather than hidden: p.16 makes the *absence* of this button
+          // mean "a pull request already exists", so hiding it for a second
+          // reason would make that sentence untrue. Disabled with the reason on
+          // it says no and says why.
+          title={blocked ?? undefined}
+          disabled={blocked !== null}
+          onClick={() => onPropose(summary.name)}
+        >
+          Propose changes
+        </button>
+      )}
+    </>
+  );
+}
+
+
+/** p.17's tags: "like immutable branches".
+ *
+ *     "A tag can be used to mark a significant version of the code for future
+ *      reference by giving it a version number or name… A tag can be created
+ *      from the current version of a branch, or from any arbitrary commit."
+ *
+ * **The immutability is the database's** (db 0072's trigger), and the naming
+ * convention is the repository's own `repoSettings.json` read at the commit
+ * being tagged - so this offers, and refuses nothing the server would not.
+ * The wording rules are in `lib/tags.ts`.
+ */
+function TagsSection({
+  wid,
+  pid,
+  rid,
+  branch,
+  hasCommits,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  branch: string;
+  hasCommits: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const [message, setMessage] = useState("");
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const tags = useQuery({
+    queryKey: ["repo-tags", rid],
+    queryFn: () => repoApi.tags(wid, pid, rid),
+  });
+
+  const create = useMutation({
+    mutationFn: () =>
+      repoApi.createTag(wid, pid, rid, {
+        name: name.trim(),
+        branch,
+        message: message.trim() || undefined,
+      }),
+    onSuccess: () => {
+      setName("");
+      setMessage("");
+      setFailure(null);
+      queryClient.invalidateQueries({ queryKey: ["repo-tags", rid] });
+    },
+    // **The server's own sentence, unchanged.** When a repository set an
+    // `errorMessage` in `repoSettings.json` that is what arrives here, and it
+    // was written by somebody for their colleagues (p.17).
+    onError: (e: Error) => setFailure(e instanceof ApiError ? e.message : String(e)),
+  });
+
+  const remove = useMutation({
+    mutationFn: (tagId: string) => repoApi.deleteTag(wid, pid, rid, tagId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["repo-tags", rid] }),
+    onError: (e: Error) => setFailure(e instanceof ApiError ? e.message : String(e)),
+  });
+
+  const rows = tags.data ?? [];
+  const problem = tagNameProblem(name);
+  const empty = tags.isSuccess ? tagsEmptyReason(rows.length, hasCommits) : null;
+
+  return (
+    <section className="repo-branch-list" data-testid="tags-section">
+      <h3>Tags</h3>
+      {empty && <p className="state" data-testid="tags-empty">{empty}</p>}
+      {rows.length > 0 && (
+        <ul data-testid="tags-list">
+          {rows.map((t) => (
+            <li key={t.id}>
+              <span className="repo-branch-name" data-testid={`tag-${t.name}`}>{t.name}</span>
+              <code className="repo-sha">{tagSubtitle(t)}</code>
+              <button
+                type="button"
+                className="repo-branch-delete"
+                data-testid={`tag-delete-${t.name}`}
+                onClick={() => {
+                  // It asks, and it says what is *not* at risk: p.17 warns
+                  // about deleting branches because that can lose work, and a
+                  // tag cannot.
+                  if (window.confirm(tagDeleteQuestion(t))) remove.mutate(t.id);
+                }}
+              >
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {hasCommits && (
+        <form
+          className="repo-branch-new"
+          onSubmit={(e) => {
+            e.preventDefault();
+            create.mutate();
+          }}
+        >
+          <input
+            type="text"
+            value={name}
+            placeholder="1.4.0"
+            data-testid="tag-name"
+            onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            type="text"
+            value={message}
+            placeholder="why this version matters (optional)"
+            data-testid="tag-message"
+            onChange={(e) => setMessage(e.target.value)}
+          />
+          <button
+            type="submit"
+            data-testid="tag-create"
+            disabled={!canCreateTag(name) || create.isPending}
+          >
+            New Tag
+          </button>
+          {/* A tag can never be moved, so this is the one moment it can be got
+              right - a form that did not say which commit would be asking for
+              a permanent decision blind. */}
+          <span className="soft" data-testid="tag-will-pin">{willPin(branch, undefined)}</span>
+        </form>
+      )}
+      {problem && <p className="state error" data-testid="tag-name-problem">{problem}</p>}
+      {failure && <p className="state error" data-testid="tag-failure">{failure}</p>}
+    </section>
   );
 }
 
@@ -1769,6 +2166,18 @@ function ChecksTab({
     queryKey: ["repo-checks", rid, branch],
     queryFn: () => repoApi.branchChecks(wid, pid, rid, branch),
   });
+  // **p.19: "The Checks tab will also include the output of any unit tests
+  // that have been defined for your repo."** (§296.)
+  //
+  // A second query rather than a second field on the first, because the two
+  // are not the same kind of thing here: a check belongs to a *proposal*
+  // (§285) and a test run belongs to a *branch and a working set* (db 0071).
+  // Folding them into one response would make the API claim a scope neither
+  // has.
+  const testRuns = useQuery({
+    queryKey: ["repo-test-runs", rid, branch],
+    queryFn: () => repoApi.testRuns(wid, pid, rid, branch),
+  });
 
   if (checks.isPending) return <p className="state">Loading checks…</p>;
   if (checks.error) return <p className="state error">{(checks.error as Error).message}</p>;
@@ -1776,6 +2185,8 @@ function ChecksTab({
   const data = checks.data!;
   const rows = worstFirst(data.checks);
   const state = verdict(rows);
+  const latestRun = mostRecent(testRuns.data ?? []);
+  const testStatus = testStatusOf(latestRun);
 
   return (
     <section className="repo-checks" data-testid="checks-tab">
@@ -1790,6 +2201,36 @@ function ChecksTab({
         them per commit; ours ask what the code would do to this project&apos;s
         datasets, which a commit nobody has proposed has not said.
       </p>
+
+      {/* **The unit tests, and labelled as what they are.** They sit above the
+          proposal checks because they are about this branch as it stands,
+          which is the question somebody opening this tab has first - and they
+          carry their own scope line for the same reason the checks do. */}
+      {/* **`repo-check-tests`, not `repo-check`.** The first version reused the
+          proposal check's class and three of §285's tests went red counting
+          `.repo-check`: they were right, and the class was the bug. A unit
+          test run is not a proposal check - different scope, different origin
+          (db 0071) - and sharing the class made "how many checks ran on this
+          branch" answer a different question by one. The styling is shared
+          deliberately; the identity is not. */}
+      <div className={`repo-check-tests ${testStatus}`} data-testid="checks-tests">
+        <div className="repo-check-head">
+          <span className="chip">{testStatus === "none" ? "not run" : testStatus}</span>
+          <code>unit tests</code>
+          <span className="soft">on {branch}</span>
+        </div>
+        <p className="repo-check-summary" data-testid="checks-tests-summary">
+          {testSummary(latestRun)}
+        </p>
+        {namedFailures(latestRun).length > 0 && (
+          <ul className="repo-check-detail" data-testid="checks-tests-failures">
+            {namedFailures(latestRun).map((id) => (
+              <li key={id}><code>{id}</code></li>
+            ))}
+            {andMore(latestRun) && <li className="soft">{andMore(latestRun)}</li>}
+          </ul>
+        )}
+      </div>
 
       {rows.length === 0 ? (
         <p className="state">
@@ -1896,6 +2337,623 @@ function ProblemsPanel({
   );
 }
 
+
+/** p.14's Tests helper (§295; `code-repositories.md` §8).
+ *
+ * "When your repository contains unit tests, the Tests Helper lets you run
+ * those tests and displays their results."
+ *
+ * **Asked for, and then watched.** Unlike Problems next door, this cannot
+ * answer from one request: running unit tests is running customer Python, and
+ * decision 0004 confines that to a process holding no platform credentials. So
+ * pressing the button queues a job (db 0071) and the panel polls until it has
+ * an answer - which is why `shouldPoll` is a named rule rather than an inline
+ * comparison, since it going false is the only thing that ever stops it.
+ *
+ * The wording rules are in `lib/test-runs.ts`. What is here is the seam.
+ */
+function TestsPanel({
+  wid,
+  pid,
+  rid,
+  branch,
+  working,
+  onOpen,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  branch: string;
+  working: Record<string, string>;
+  onOpen: (path: string, line: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  // **The route's floor, asked for rather than inferred.** Running tests
+  // executes code the caller supplied, so `POST /tests` is editor-level - the
+  // line `preview_transform` draws. The first version of this took `!readOnly`
+  // from the editor, which is about a *pinned commit* and is therefore always
+  // true inside this panel: a control offered to a viewer who would be refused
+  // (§214), dressed as a check. On the key the Settings tab already uses, so
+  // this is the same cached answer rather than a second request.
+  const project = useQuery({
+    queryKey: ["project", wid, pid],
+    queryFn: () => platformApi.project(wid, pid),
+    enabled: open,
+  });
+  const canRun = canEditProject(project.data?.effective_role ?? "viewer");
+  const [runId, setRunId] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const run = useQuery({
+    queryKey: ["repo-test-run", rid, runId],
+    queryFn: () => repoApi.testRun(wid, pid, rid, runId!),
+    enabled: open && runId !== null,
+    // **The panel polls because there is nothing to push to it.** A job's
+    // answer arrives in a table, and this is the only way to learn it landed.
+    // `false` once settled, so a finished run stops asking rather than
+    // polling for the life of the page.
+    refetchInterval: (query) => (shouldPoll(query.state.data) ? 1500 : false),
+  });
+
+  const start = useMutation({
+    mutationFn: () =>
+      // **The whole working set, not a delta.** Problems sends `edits` over a
+      // commit the server already has; here the *files themselves* are what
+      // gets stored and run (db 0071), and the server lays these over the
+      // branch. Sending only the edits would run the committed version of
+      // every file somebody had not touched, which is the right answer to a
+      // question nobody asked.
+      repoApi.runTests(wid, pid, rid, { branch, overrides: working }),
+    onSuccess: (made) => {
+      setFailure(null);
+      setRunId(made.id);
+    },
+    onError: (error) => setFailure((error as Error).message),
+  });
+
+  const current = run.data;
+  return (
+    <section className="repo-problems" data-testid="tests-panel">
+      <div className="repo-problems-head">
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="tests-toggle"
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? "Hide tests" : "Tests"}
+        </button>
+        {open && canRun && (
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="tests-run"
+            disabled={start.isPending || shouldPoll(current)}
+            onClick={() => start.mutate()}
+          >
+            {runLabel(current)}
+          </button>
+        )}
+        {open && (
+          <span
+            className={testsAreAProblem(current) ? "chip brass" : "soft"}
+            data-testid="tests-verdict"
+          >
+            {testVerdict(current)}
+          </span>
+        )}
+      </div>
+      {open && failure && (
+        <p className="state error" data-testid="tests-error">{failure}</p>
+      )}
+      {open && current?.outcomes && current.outcomes.length > 0 && (
+        <ul className="repo-problem-list" data-testid="tests-list">
+          {worstTestsFirst(current.outcomes).map((o) => {
+            const jump = testTarget(o);
+            const took = testDuration(o);
+            return (
+              <li key={o.id} className={`repo-problem ${o.outcome}`}>
+                <button
+                  type="button"
+                  className="repo-problem-open"
+                  data-testid={`test-${o.outcome}`}
+                  // **Disabled rather than inert when there is nowhere to go.**
+                  // pytest names no file for a collection error, and a row that
+                  // jumped somewhere plausible and wrong is worse than one that
+                  // does not jump.
+                  disabled={jump === null}
+                  onClick={() => jump && onOpen(jump.path, jump.line)}
+                >
+                  <span className="chip">{o.outcome}</span>
+                  <code>{o.id}</code>
+                  {o.message && <span>{o.message}</span>}
+                  {took && <span className="soft">{took}</span>}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+
+/** p.15's status bar (§307; `code-repositories.md` §2.5).
+ *
+ * Four indicators: Code Assist, Problems on the left, Checks on the right, and
+ * file saving. **It reports and does not decide** — `verdict` in
+ * `branch-checks.ts` says what a branch's checks amount to, the Problems panel
+ * counts problems, `editor-drafts.ts` says what happened to a save. A status
+ * bar that recomputed any of them would be a second answer to a question
+ * already answered one panel away, and §296 is what that costs.
+ *
+ * Built last, because it is meaningless before the things it reports on exist.
+ */
+function StatusBar({
+  editorReady,
+  analysing,
+  analysisFailed,
+  problemCount,
+  checks,
+  changedFiles,
+  draftWarning,
+  onOpenProblems,
+}: {
+  editorReady: boolean;
+  analysing: boolean;
+  analysisFailed: boolean;
+  problemCount: number | undefined;
+  checks: RepositoryCheck[] | undefined;
+  changedFiles: number;
+  draftWarning: string | null;
+  onOpenProblems: () => void;
+}) {
+  const assist = assistState({
+    editorReady,
+    analysing,
+    failed: analysisFailed,
+    answered: problemCount !== undefined,
+  });
+  const problems = problemsLabel(problemCount);
+  const checksSays = statusChecksLabel(checks);
+
+  return (
+    <div className="repo-status-bar" data-testid="status-bar">
+      <span
+        className={assistIsAProblem(assist) ? "chip brass" : "soft"}
+        title={assistDetail(assist)}
+        data-testid="status-assist"
+      >
+        {assistLabel(assist)}
+      </span>
+      {/* p.15: "an indication appears on the left side… Click on the
+          indication to open the Problems helper." A button rather than a
+          label, because the click is what p.15 specifies. */}
+      {problems && (
+        <button
+          type="button"
+          className={problemsAreAProblem(problemCount) ? "chip brass" : "btn quiet"}
+          data-testid="status-problems"
+          onClick={onOpenProblems}
+        >
+          {problems}
+        </button>
+      )}
+      <span
+        className={savingIsAProblem(draftWarning) ? "chip brass" : "soft"}
+        title={savingDetail(changedFiles, draftWarning)}
+        data-testid="status-saving"
+      >
+        {savingLabel(changedFiles, draftWarning)}
+      </span>
+      {/* p.15 puts the checks on the right. `margin-left: auto` in the CSS,
+          rather than an order this component has to keep in step with a
+          sentence. */}
+      {checksSays && (
+        <span
+          className={
+            statusChecksAreAProblem(checks) ? "chip brass repo-status-right" : "soft repo-status-right"
+          }
+          data-testid="status-checks"
+        >
+          {checksSays}
+        </span>
+      )}
+    </div>
+  );
+}
+
+
+/** p.15's SQL Scratchpad (§305-§306; `code-repositories.md` §2.4).
+ *
+ * "The SQL helper lets you quickly test out SQL queries… To view queries
+ *  marked as favorites, go to the [star] tab. To view a history of queries ran
+ *  in the SQL helper, go to the [clock] tab."
+ *
+ * **The Explorer's opposite number.** That panel says what the project holds;
+ * this one asks it a question. A scratchpad query names datasets in the query
+ * itself — `scratchpad.py` is the one reader of that syntax, and nothing here
+ * parses SQL, for §304's reason.
+ *
+ * Sampled, like Preview, and it says so: a scratchpad is for finding out what
+ * is in a dataset, and running the real thing over every row of a large one
+ * makes the panel unusable rather than accurate.
+ */
+function ScratchpadPanel({
+  wid,
+  pid,
+  rid,
+  readOnly,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  readOnly: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<ScratchpadTab>("query");
+  const [sql, setSql] = useState("");
+  const [refused, setRefused] = useState<string | null>(null);
+  const [result, setResult] = useState<ScratchpadResult | null>(null);
+  // What produced `result`, so the rewritten query is compared against the
+  // text that was actually sent rather than against whatever is in the box now.
+  const [ranSql, setRanSql] = useState("");
+  const client = useQueryClient();
+
+  const history = useQuery({
+    queryKey: ["scratchpad-queries", rid, false],
+    queryFn: () => repoApi.scratchpadQueries(wid, pid, rid, false),
+    enabled: open,
+  });
+  const favourites = useQuery({
+    queryKey: ["scratchpad-queries", rid, true],
+    queryFn: () => repoApi.scratchpadQueries(wid, pid, rid, true),
+    enabled: open,
+  });
+
+  function refresh() {
+    void client.invalidateQueries({ queryKey: ["scratchpad-queries", rid] });
+  }
+
+  const run = useMutation({
+    mutationFn: () => repoApi.runScratchpad(wid, pid, rid, sql),
+    onSuccess: (answer) => {
+      setRefused(null);
+      setResult(answer);
+      setRanSql(sql);
+      // The history only gains a row once the query has *run*, so it is
+      // refreshed here rather than on every press.
+      refresh();
+    },
+    onError: (error) => {
+      setRefused((error as Error).message);
+      setResult(null);
+    },
+  });
+
+  const star = useMutation({
+    mutationFn: (q: { id: string; favourite: boolean }) =>
+      repoApi.favouriteScratchpadQuery(wid, pid, rid, q.id, !q.favourite),
+    onSuccess: refresh,
+  });
+  const forget = useMutation({
+    mutationFn: (id: string) => repoApi.forgetScratchpadQuery(wid, pid, rid, id),
+    onSuccess: refresh,
+  });
+
+  const shown = tab === "favourites" ? favourites.data ?? [] : history.data ?? [];
+  const nothing = scratchpadEmptyReason(tab, history.data?.length ?? 0);
+
+  return (
+    <section className="repo-scratchpad" data-testid="scratchpad-panel">
+      <div className="repo-problems-head">
+        <button
+          type="button"
+          className="btn quiet"
+          onClick={() => setOpen((v) => !v)}
+          data-testid="scratchpad-toggle"
+        >
+          {open ? "Hide SQL" : "SQL"}
+        </button>
+      </div>
+      {open && (
+        <div className="repo-scratchpad-body">
+          <div className="repo-scratchpad-tabs" role="tablist">
+            {(["query", "history", "favourites"] as ScratchpadTab[]).map((each) => (
+              <button
+                key={each}
+                type="button"
+                role="tab"
+                aria-selected={tab === each}
+                className={tab === each ? "btn quiet on" : "btn quiet"}
+                data-testid={`scratchpad-tab-${each}`}
+                onClick={() => setTab(each)}
+              >
+                {scratchpadTabLabel(
+                  each,
+                  each === "favourites"
+                    ? favourites.data?.length ?? 0
+                    : history.data?.length ?? 0,
+                )}
+              </button>
+            ))}
+          </div>
+
+          {tab === "query" ? (
+            <>
+              <textarea
+                className="repo-scratchpad-sql"
+                aria-label="SQL query"
+                data-testid="scratchpad-sql"
+                value={sql}
+                onChange={(e) => setSql(e.target.value)}
+                placeholder="SELECT * FROM `/path/to/dataset`"
+              />
+              <button
+                type="button"
+                className="btn"
+                data-testid="scratchpad-run"
+                disabled={!canRun(sql) || run.isPending || readOnly}
+                onClick={() => run.mutate()}
+              >
+                {run.isPending ? "Running…" : "Run"}
+              </button>
+              {refused && (
+                <p className="state error" data-testid="scratchpad-refused">
+                  {refused}
+                </p>
+              )}
+              {result && (
+                <>
+                  {sampleWarning(result) && (
+                    <p className="repo-preview-warning" data-testid="scratchpad-sampled">
+                      {sampleWarning(result)}
+                    </p>
+                  )}
+                  {showRewritten(ranSql, result) && (
+                    <p className="soft" data-testid="scratchpad-ran">
+                      Ran as <code>{result.ran}</code>
+                    </p>
+                  )}
+                  <div className="repo-preview-table" data-testid="scratchpad-result">
+                    <table>
+                      <thead>
+                        <tr>
+                          {result.columns.map((c) => (
+                            <th key={c.name}>{c.name}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.rows.map((row, i) => (
+                          <tr key={i}>
+                            {row.map((cell, j) => (
+                              <td key={j}>{cell === null ? "" : String(cell)}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </>
+          ) : nothing && shown.length === 0 ? (
+            <p className="state" data-testid="scratchpad-empty">
+              {nothing}
+            </p>
+          ) : (
+            <ul className="repo-scratchpad-list">
+              {shown.map((q) => (
+                <li key={q.id} data-testid={`scratchpad-query-${q.id}`}>
+                  <button
+                    type="button"
+                    className="repo-scratchpad-recall"
+                    data-testid={`scratchpad-recall-${q.id}`}
+                    onClick={() => {
+                      setSql(q.sql);
+                      setTab("query");
+                    }}
+                  >
+                    {oneLine(q.sql)}
+                  </button>
+                  {ranNote(q) && <span className="soft">{ranNote(q)}</span>}
+                  <button
+                    type="button"
+                    className="btn quiet"
+                    aria-label={starLabel(q)}
+                    data-testid={`scratchpad-star-${q.id}`}
+                    onClick={() => star.mutate({ id: q.id, favourite: q.favourite })}
+                  >
+                    {q.favourite ? "★" : "☆"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn quiet"
+                    aria-label={`Forget ${oneLine(q.sql, 40)}`}
+                    data-testid={`scratchpad-forget-${q.id}`}
+                    onClick={() => forget.mutate(q.id)}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+
+/** p.13's Foundry Explorer helper (§303; `code-repositories.md` §2.4).
+ *
+ * "The Foundry Explorer helper is a file navigation interface that lets you
+ *  quickly browse all files and folders. Once you select a specific dataset,
+ *  you can click 'Open' to view the full dataset."
+ *
+ * **Ours browses the platform, not the repository**, and the reason is in
+ * `explorer.ts`: the Files tab beside this one is already a file tree, and a
+ * second one would be a second answer to what is in this repository. What the
+ * editor cannot see is everything *outside* it — which is precisely what a
+ * transform reads and writes.
+ *
+ * Collapsed until asked for, like every panel in this column. It is a round
+ * trip, and this one is over a listing that does not change while you type.
+ */
+function ExplorerPanel({
+  wid,
+  pid,
+  rid,
+  path,
+  content,
+  readOnly,
+  onInsert,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  /** The open file, or undefined when there is none. */
+  path?: string;
+  content?: string;
+  readOnly: boolean;
+  onInsert: (next: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  // **The refusal is shown, not predicted.** Everything the server refuses
+  // beyond the file's suffix — no output declared yet, a decorator whose
+  // inputs are code, an alias already taken — needs the declaration read, and
+  // reading it here would be a second parser disagreeing with the one that
+  // matters (§304).
+  const [refused, setRefused] = useState<string | null>(null);
+
+  const insert = useMutation({
+    mutationFn: (row: { name: string }) =>
+      repoApi.insertReference(wid, pid, rid, {
+        path: path!,
+        content: content!,
+        alias: suggestedAlias(row.name),
+        dataset: row.name,
+      }),
+    onSuccess: (answer) => {
+      setRefused(null);
+      onInsert(answer.content);
+    },
+    onError: (error) => setRefused((error as Error).message),
+  });
+
+  // **The query is part of the key, but only once it is a query.** Below the
+  // threshold `shouldSearch` sends nothing, so keying on the raw text would
+  // fetch an identical unfiltered listing again for every character typed and
+  // filed under a different key — a cache that grows and never hits.
+  const search = shouldSearch(query) ? query.trim() : "";
+  const listing = useQuery({
+    queryKey: ["repo-explorer", wid, pid, search],
+    queryFn: () =>
+      resourceApi.list(wid, pid, {
+        kind: EXPLORER_KINDS,
+        search: search || undefined,
+        // Object types belong to the workspace rather than to a project, so
+        // without this their section is empty in every project forever.
+        includeWorkspaceLevel: needsWorkspaceLevel(EXPLORER_KINDS),
+        limit: 100,
+      }),
+    enabled: open,
+  });
+
+  const found = listing.data?.resources ?? [];
+  const nothing = explorerEmptyReason(found.length, query);
+
+  return (
+    <section className="repo-explorer" data-testid="explorer-panel">
+      <div className="repo-problems-head">
+        <button
+          type="button"
+          className="btn quiet"
+          onClick={() => setOpen((v) => !v)}
+          data-testid="explorer-toggle"
+        >
+          {open ? "Hide explorer" : "Explorer"}
+        </button>
+      </div>
+      {open && (
+        <div className="repo-explorer-body">
+          <input
+            type="search"
+            aria-label="Search datasets and object types"
+            data-testid="explorer-search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search"
+          />
+          {refused && (
+            <p className="state error" data-testid="explorer-refused">
+              {refused}
+            </p>
+          )}
+          {listing.isPending ? (
+            <p className="state">Looking…</p>
+          ) : listing.error ? (
+            <p className="state error">{(listing.error as Error).message}</p>
+          ) : nothing ? (
+            <p className="state" data-testid="explorer-empty">
+              {nothing}
+            </p>
+          ) : (
+            explorerSections(found).map((section) => (
+              <div key={section.kind} data-testid={`explorer-${section.kind}`}>
+                <h4>{section.label}</h4>
+                {section.rows.length === 0 ? (
+                  // Drawn rather than skipped: "this project has none" and
+                  // "this panel does not do those" look identical when the
+                  // heading is missing, and only one is actionable.
+                  <p className="state soft">None in this project.</p>
+                ) : (
+                  <ul className="repo-explorer-list">
+                    {section.rows.map((row) => (
+                      <li key={row.id}>
+                        <span className="repo-explorer-name">{row.name}</span>
+                        {explorerSubtitle(row) && (
+                          <span className="soft">{explorerSubtitle(row)}</span>
+                        )}
+                        {/* **Datasets only.** p.13's Explorer is about
+                            opening a dataset; a transform declares the
+                            datasets it reads, and an object type is not one
+                            of those — it is what a dataset becomes after the
+                            ontology is pointed at it, and there is no
+                            declaration syntax that names one. */}
+                        {section.kind === "dataset" &&
+                          canInsert(path) &&
+                          !readOnly && (
+                            <button
+                              type="button"
+                              className="btn quiet"
+                              data-testid={`explorer-insert-${row.name}`}
+                              title={insertLabel(suggestedAlias(row.name), path)}
+                              disabled={insert.isPending}
+                              onClick={() => insert.mutate({ name: row.name })}
+                            >
+                              {insertLabel(suggestedAlias(row.name), path)}
+                            </button>
+                          )}
+                        <Link href={explorerHref(row)} data-testid={`explorer-open-${row.name}`}>
+                          Open
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 
 /** p.14's File Changes helper (§287; `code-repositories.md` §2.4).
  *

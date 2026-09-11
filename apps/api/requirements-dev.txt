@@ -10,3 +10,10 @@ moto[server]==5.0.13
 # workflow was read against the repo: the suite ran locally because a venv had
 # it installed by hand, and a fresh checkout could not have run it at all.
 playwright==1.61.0
+
+# Reading `docs/pal/`. `test_parity_marks.py` resolves the page numbers the
+# parity specifications cite against the PDFs they cite them from, and a page
+# count is a fact about a file rather than about text - so it needs a reader.
+# Declared here for the reason the block above records: it was in a venv by
+# hand, and a check that vanishes on a fresh checkout is not a check.
+pypdf==6.16.2

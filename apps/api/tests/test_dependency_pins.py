@@ -24,6 +24,8 @@ from __future__ import annotations
 import os
 import re
 
+import pytest
+
 #: The repo root: this file is `<root>/apps/api/tests/`, so four levels up.
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
@@ -56,26 +58,86 @@ NOT_RUN = {
 PIN = re.compile(r"^([A-Za-z0-9_.\-]+)(\[[^\]]*\])?==([^\s;]+)")
 
 
-def pins(path: str) -> dict[str, str]:
+def pins_in(text: str) -> dict[str, str]:
+    """The pins in a requirements file's *text*.
+
+    Split from the file-reading wrapper so the rules below can be checked
+    against a file that does not exist (§293): every requirements file in this
+    repository is correctly pinned, so a guard against an unpinned one has no
+    case in the tree to fire on and could be deleted with nothing noticing.
+    """
     found: dict[str, str] = {}
-    with open(os.path.join(ROOT, path), encoding="utf-8") as handle:
-        for line in handle:
-            match = PIN.match(line.split("#")[0].strip())
-            if match:
-                found[match.group(1).lower().replace("_", "-")] = match.group(3)
+    for line in text.splitlines():
+        match = PIN.match(line.split("#")[0].strip())
+        if match:
+            found[match.group(1).lower().replace("_", "-")] = match.group(3)
     return found
 
 
-def test_every_requirements_file_pins_something() -> None:
+def requirement_lines_in(text: str) -> list[str]:
+    """Every line that is asking for a package.
+
+    Comments, blank lines and `-r` includes are not requirements; anything else
+    is, whether or not `PIN` can read it.
+    """
+    lines = []
+    for raw in text.splitlines():
+        line = raw.split("#")[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _text(path: str) -> str:
+    with open(os.path.join(ROOT, path), encoding="utf-8") as handle:
+        return handle.read()
+
+
+def pins(path: str) -> dict[str, str]:
+    return pins_in(_text(path))
+
+
+def requirement_lines(path: str) -> list[str]:
+    return requirement_lines_in(_text(path))
+
+
+def assert_fully_pinned(label: str, text: str) -> None:
+    """Every requirement in this text is pinned, and the parser can see them.
+
+    **A function rather than an inline assertion**, so the rule can be checked
+    against text as well as against the files (§293). Every requirements file
+    in this repository is correctly pinned, so inlined here the comparison had
+    no case in the tree that would fail it - a mutation loosened `==` to `<=`
+    and nothing noticed.
+    """
+    asked = requirement_lines_in(text)
+    assert asked, f"{label} asks for nothing at all - is it still a requirements file?"
+    found = pins_in(text)
+    assert len(found) == len(asked), (
+        f"{label} has {len(asked)} requirements and {len(found)} parsed as pinned - "
+        "either something is unpinned or the regex has gone stale"
+    )
+
+
+def test_every_requirements_file_pins_everything_it_asks_for() -> None:
     """The presence half, and not a formality.
 
     Every assertion below compares parsed files, and a comparison between two
     empty dicts passes. A regex gone stale — a reformatted file, a switch to
     `>=` — would make this module vacuous while it reported green, which is
     §198's shape exactly.
+
+    **Counted exactly, rather than "at least two" (§293).** That was the
+    original guard and it was a heuristic standing in for "the regex still
+    works": it broke the moment a file honestly had one requirement, when
+    `pytest` moved out of the worker's dev pins and into its runtime ones. A
+    count against the requirement lines actually in the file says the same
+    thing without the guess, and says more — a *single* unpinned line now fails
+    here, where before it could hide behind two that parsed.
     """
     for path in SHARED:
-        assert len(pins(path)) >= 2, f"{path} parsed to no pins - the regex has gone stale"
+        assert_fully_pinned(path, _text(path))
 
 
 def test_the_shared_venv_is_possible() -> None:
@@ -173,3 +235,94 @@ def test_setup_installs_what_this_file_compares() -> None:
         f"scripts/setup.sh does not install {missing}, so a fresh checkout "
         "cannot run the suite it belongs to"
     )
+
+
+def test_an_unpinned_requirement_is_caught() -> None:
+    """**The guard above, on a case this repository does not contain.**
+
+    Every requirements file here is correctly pinned, so the comparison in
+    `test_every_requirements_file_pins_everything_it_asks_for` never sees a
+    file that would fail it — which made it a check that could be weakened
+    with nothing noticing. A mutation survived exactly that way (§293). These
+    are the same two functions, over text.
+    """
+    assert_fully_pinned("a good file", "pytest==8.3.3\nmoto[server]==5.0.13\n")
+
+    # A range, the ordinary way a pin stops being one - and the case the real
+    # files cannot supply, which is the whole reason this test exists.
+    with pytest.raises(AssertionError, match="unpinned or the regex"):
+        assert_fully_pinned("a loose file", "pytest==8.3.3\nrequests>=2.0\n")
+
+    # And an empty file is its own answer, not a vacuous pass.
+    with pytest.raises(AssertionError, match="asks for nothing at all"):
+        assert_fully_pinned("an empty file", "# only a comment\n")
+
+    # Comments and includes are not requirements and must not be counted as
+    # unpinned ones, or the guard fails on every file that has either.
+    noise = "# a comment\n\n-r requirements.txt\npytest==8.3.3  # trailing\n"
+    assert requirement_lines_in(noise) == ["pytest==8.3.3"]
+    assert pins_in(noise) == {"pytest": "8.3.3"}
+
+
+def test_the_worker_image_carries_what_it_runs_customer_tests_with() -> None:
+    """**A runtime pin, not a test-only one, and the distinction is deployment
+    shaped.**
+
+    `apps/worker/Dockerfile` installs `requirements.txt` alone, and the
+    transform runner task uses that same image
+    (`infra/cdk/src/constructs/services.ts`). Running a repository's unit tests
+    is a product feature (`code-repositories.md` §8), so pytest has to be in the
+    image — left in `requirements-dev.txt` it would work in every development
+    run and fail in every deployment with "No module named pytest", which is
+    the shape §292 had just finished fixing one floor down.
+    """
+    assert "pytest" in pins("apps/worker/requirements.txt"), (
+        "the runner task runs customer unit tests with pytest and installs "
+        "requirements.txt only"
+    )
+
+
+#: The CI workflow, read as text. Structural checks about what a job installs
+#: belong beside the ones about what a virtualenv can hold.
+WORKFLOW = ".github/workflows/ci.yml"
+
+#: Which app each `e2e/` import belongs to, and the requirements file the
+#: browser job must install to satisfy it.
+CROSS_APP_IMPORTS = {
+    "anchor_worker": "apps/worker/requirements.txt",
+}
+
+
+def test_the_browser_job_installs_what_the_browser_suite_imports() -> None:
+    """**A suite that cannot run in a fresh checkout is a suite that is not
+    run**, and this file exists because that happened twice already.
+
+    §295's browser tests drive the worker's own op — the dev stack runs no
+    Dagster daemon, so a queued test run would sit in the table for ever — and
+    the browser job installed only `apps/api`'s requirements. Eight tests went
+    red on CI with `No module named 'dagster'` after passing locally, because
+    the shared virtualenv had it installed by hand. That is word for word the
+    failure `apps/api/requirements-dev.txt`'s own comment describes about
+    playwright.
+
+    So: whatever `e2e/` imports across an app boundary, the browser job has to
+    install. Checked by reading both, rather than by remembering.
+    """
+    e2e = os.path.join(ROOT, "e2e")
+    workflow = open(os.path.join(ROOT, WORKFLOW), encoding="utf-8").read()
+
+    imported = set()
+    for name in os.listdir(e2e):
+        if not name.endswith(".py"):
+            continue
+        source = open(os.path.join(e2e, name), encoding="utf-8").read()
+        for package, requirement in CROSS_APP_IMPORTS.items():
+            if re.search(rf"^\s*(from|import)\s+{re.escape(package)}\b", source, re.M):
+                imported.add((package, requirement, name))
+
+    for package, requirement, name in sorted(imported):
+        assert requirement in workflow, (
+            f"e2e/{name} imports {package}, so the browser job in {WORKFLOW} has to "
+            f"install {requirement} - without it the suite fails on a fresh checkout "
+            "and passes on any machine whose virtualenv happens to have it"
+        )

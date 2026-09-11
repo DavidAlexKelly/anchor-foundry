@@ -94,7 +94,7 @@ Parity is a large target, so the order matters more than usual. Four principles:
 | Stage | Contents | Why here |
 |---|---|---|
 | **0** | ~~Make CI actually run~~ — **done, PR #52; the guarantee re-earned in §271** | It had already been running, and had been **red for nineteen consecutive runs** on a single cause: CI never set `PLATFORM_APP_PASSWORD`, so `platform_app` kept its placeholder password while everything connected as it with `devpass`. Four jobs now green — and "now" has a date on it, because between §258 and §271 the browser job was red on `main` for ten consecutive merges with an identical 28-failure set, and this row went on claiming otherwise. §271 fixed all 28. **A green-CI claim is a claim about the last run, not a property of the repo**, so read this row as saying what was true when it was last checked. |
-| **1** | Navigation (phase-3 §A) — Workshop onto `/r/{id}`, pillar pages become filtered views, delete the duplicate editor **(blocked, see below)** | Mostly deletion. Everything after lands in a cleaner shape, and it answers the original complaint about screens. |
+| **1** | Navigation (phase-3 §A) — Workshop onto `/r/{id}`, pillar pages become filtered views, ~~delete the duplicate editor~~ **(done, §291)** | "Mostly deletion" was wrong twice over, and the record below says how. The editor is gone; the page it lived on became the project's repositories, because emptying it exposed that nothing in the product could create or list one. |
 
 #### Stage 1 progress
 
@@ -107,7 +107,7 @@ Parity is a large target, so the order matters more than usual. Four principles:
   remaining half, and it is not uniform: `dataset`, `object_type`,
   `canvas_app` and `code_repo` have applications to open into, while `model`
   and `connection` do not yet, so their pages cannot become pure lists.
-- **Delete the duplicate editor** — blocked, below.
+- **Delete the duplicate editor** — **done (§291)**. It was blocked for thirteen sections; the record below is what the blocker actually was, and what deleting it turned up.
 
 #### Stage 1 is not as deletable as it looked
 
@@ -147,8 +147,30 @@ editor is — had no way to declare, so it could not live in a repository under
 any name (§273). §274 built **adoption**: a model becomes a file, one
 transaction, with the declaration written from what the model already says.
 
-What remains before the deletion is moving typed-changes proposal creation into
-the application, so the two shapes of proposal live in one place.
+**The blocker is cleared, and not the way this paragraph predicted (§289–§290).**
+It said what remained was *moving* typed-changes proposal creation into the
+application. That turned out to be the wrong answer: it would have kept a second
+shape of proposal alive — one that names no repository, so it lands on no
+branch and can say nothing about what applying it moves (§283) — for the sake of
+transforms whose real problem is that they are not files yet.
+
+So creation is **withdrawn** rather than moved. §274 made a transform into a
+file, §289 made that a batch (which is what the change set becomes: *these six
+changed together, for one reason*), and the answer for a transform outside a
+repository is now to move it into one and change the file. The path holds in a
+review-required project too, which is the case that made this a blocker:
+adopting into a protected default branch is refused by §284's rule and the
+message names the remedy, so the move goes onto a sandbox branch and the commit
+is proposed like any other.
+
+What §290 then had to do was **not** strand the proposals that already exist.
+They are reviewed on the Models screen, beside the transforms they change —
+`e2e/test_direct_proposals.py` — because a proposal belonging to no repository
+cannot honestly be listed under one, and the Pull requests tab's empty state
+literally said they were "reviewed on the Code screen", a sentence the deletion
+would have turned into a lie with nothing to notice.
+
+What remains before the deletion is the deletion.
 
 #### Stage 2 progress
 
@@ -203,7 +225,7 @@ the application, so the two shapes of proposal live in one place.
   model: two heads of one module, and a rule for what a conflict is.
 | **2** | Workshop structural: the three config tabs, six section layouts, vertical header, ~~external IDs~~ **done, §116**, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
 | **3** | Ontology depth: property types and formatting, link types, action types, Object Views | Upstream of Workshop's object widgets. Object Views are the highest value per unit of work in the whole set. |
-| **4** | Code Repositories: five tabs, sandbox branches, multi-file tabs, the nine helper panels | Self-contained; can run in parallel with 2–3 if there is a second pair of hands. |
+| **4** | ~~Code Repositories: five tabs, sandbox branches, multi-file tabs, the nine helper panels~~ — **its nine-item build order is finished (§307)** — which is not the same as the application being finished, and the difference is worth keeping visible: **43 rows in `code-repositories.md` are still ○ or ◑**, each with its reason. §10 lists what each closed item was checked with | Self-contained, and being self-contained is what let it run to completion while stages 2–3 sat still. Nine items, closed in the order that document set: the last two were the Explorer and the SQL Scratchpad (§303–§306), then the status bar (§307) — **last on purpose, because it reports on the other eight and building it last is what let it reuse their answers rather than recompute them.** Four of the nine helper panels stay ○ with reasons on their rows: Debugger and Build assume Foundry's own transform-debugging and build orchestration, Docs is language reference in-product, and Preview is ◑ pending Python. |
 | **5** | Widget library, in the priority order given in `workshop.md` | Long, cheap, parallel, and it should never block. |
 | **6** | Datasets and Lineage, then Data Connection | Lowest felt urgency; Data Connection is mostly plumbing users rarely see. |
 
@@ -219,3 +241,23 @@ Each spec ends with the acceptance tests for its area. Two rules for all of them
 
 - A widget is not done because it renders. It is done when its **documented configuration options** work, and when a test drives one of them and fails if it is removed.
 - A feature that Foundry documents as refusing something is not done until **our version refuses it too**, with a test that removes the refusal and goes red.
+
+### And the same standard applied to these documents (§302)
+
+The rule above was held over the code and not over the pages holding the code to it. Five specifications, 204 rows marked ✅, 837 page citations into `docs/pal/` — and **nothing had ever opened one**. A test could be renamed, a PDF replaced with a longer edition, a page number mistyped, and every table would go on saying exactly what it said before.
+
+`apps/api/tests/test_parity_marks.py` resolves what is resolvable, on every run of the API suite:
+
+- a backticked path on a ✅ row is a file that exists;
+- the page counts these headers declare are the PDFs' real lengths;
+- every cited page exists in a source the citing document names.
+
+It found one: `ontology.md` cited p.582 and p.583 against a source set whose longest PDF is 274 pages. The pages are real and the sentence about them is right — they are `foundry_workshop.pdf`'s, and they do name Map, Metric Card and Object Table — but a reader following the citation as written would have opened a 274-page PDF and found nothing. Qualified, and the source named in the header so it resolves.
+
+**Three limits, stated rather than discovered later.** It checks *names*, not behaviour: a row citing `e2e/test_tags.py` is checked as far as the file being there, and whether it tests tags was §299's mutation run to answer. An unqualified citation in a multi-source document only has to fit that document's *longest* source, which is why the qualified form exists and why `ontology.md`'s header asks for it. And **`§NNN` is deliberately not checked** — a section number is a reference into a narrative, eleven of the ones cited by finished rows appear in no source file and eight in no commit message either, and enforcing it would mean grandfathering those eight. A grandfather list is the thing a check rots into before someone deletes it.
+
+**The rot runs both ways, and only one way is checkable.** §307 found two rows in `code-repositories.md` marked ○ for features that had been built for eleven and twelve units — test output in the Checks tab (§296) and unit tests themselves (§292–§296). Four other places in that same document cited §296 for the first of them the whole time.
+
+`test_parity_marks.py` cannot catch this and never will: it resolves what a *finished* row cites, and a row claiming a feature is absent cites nothing to resolve. A ✅ that is not true has a citation to check; a ○ that is not true has nothing. So the asymmetry is worth stating rather than being surprised by twice: **a row that says something is missing is the kind that goes quietly wrong**, because nobody re-reads a row about work they are not doing — and the cost is real, since these rows are what decides what gets built next. The remedy is not another check, it is re-reading the ○ rows of a section when it closes, which is what §307 did. **The rest of them were then read too** — every ○ row in `ontology.md`, `datasets-lineage.md` and `data-connection.md`, against the code — and nothing else was stale. Where a row's words appear in the codebase it is a different feature wearing the same word: `histogram` is object aggregation and a canvas widget, not the lineage graph's panel; `writeback` is a webhook rule, not Foundry's writeback dataset; `favourite` is §306's scratchpad, not a starred object. So the count is three, and it is bounded rather than open.
+
+A ✅ row should say what made it true. Not every one does — the earliest predate the convention — so the rule is a floor rather than a requirement, and the floor is what stops the habit quietly ending.

@@ -233,3 +233,178 @@ def test_an_empty_history_tells_the_two_empties_apart(page, api) -> None:
     expect(page.get_by_test_id("project-history-empty")).to_contain_text(
         "No transforms in this project"
     )
+
+
+# ---- moving several at once (§289) -------------------------------------------
+# **What a change set becomes.** Decision 0001 called the change set "the one
+# genuinely new concept" — "these three transforms changed together, for one
+# reason" — and B.1 deletes the only screen that can make one. A commit says the
+# same about a repository's files, so the successor is to adopt them together
+# and commit together. That is only a successor if adopting *is* together: six
+# adoptions are six commits and six unrelated moves in the history.
+def pick(page, name: str) -> None:
+    """Tick the checkbox for this transform, **by its label rather than by its
+    row**.
+
+    `row()` filters with `has_text`, which Playwright matches
+    case-insensitively - so `daily_orders_x` selects the row for
+    `Daily_Orders_x` as well, and the two names that differ only in case are
+    exactly the pair the collision test needs. The checkbox's `aria-label`
+    carries the name verbatim and matches exactly.
+    """
+    page.get_by_role(
+        "checkbox", name=f"Move {name} into a repository", exact=True
+    ).check()
+
+
+def test_several_transforms_move_together_as_one_commit(page, api) -> None:
+    """The whole unit: choose three, name a repository, one commit."""
+    mod = project(api, "Move together")
+    names = [f"together{n}_{uuid.uuid4().hex[:6]}" for n in range(3)]
+    for name in names:
+        make_model(mod, name=name)
+    repo = make_repository(mod, f"Transforms {mod.tag}")
+
+    models_screen(page, mod)
+    for name in names:
+        pick(page, name)
+
+    bar = page.get_by_test_id("move-together")
+    expect(bar).to_be_visible()
+    expect(page.get_by_test_id("move-confirm")).to_contain_text("Move 3 transforms")
+    page.get_by_test_id("move-repository").select_option(value=repo["id"])
+    page.get_by_test_id("move-confirm").click()
+
+    # Every one of them is now authored in the repository, and they share a
+    # commit - which is what says they moved together.
+    for name in names:
+        expect(row(page, name).get_by_test_id("model-authored-in")).to_be_visible(
+            timeout=30000
+        )
+    commits = mod.api.call("GET", f"{mod.base}/repositories/{repo['id']}/commits")
+    assert len(commits) == 1, commits
+    tree = mod.api.call("GET", f"{mod.base}/repositories/{repo['id']}/tree")["files"]
+    assert len(tree) == 3, sorted(tree)
+
+
+def test_a_transform_already_in_a_repository_offers_no_checkbox(page, api) -> None:
+    """**Empty rather than disabled.** A greyed checkbox invites the question
+    "why not"; nothing there says the row is not part of this, and the row
+    already says why."""
+    mod = project(api, "Move already")
+    name = f"already_{uuid.uuid4().hex[:6]}"
+    model = make_model(mod, name=name)
+    repo = make_repository(mod, f"Transforms {mod.tag}")
+    mod.api.call("POST", f"{mod.base}/models/{model['id']}/adopt",
+                 {"repository_id": repo["id"], "branch": "main"})
+
+    models_screen(page, mod)
+    expect(row(page, name).get_by_test_id("model-pick")).to_have_count(0)
+
+
+def test_the_commit_message_can_be_given_and_is_otherwise_derived(page, api) -> None:
+    """Prefilled as a placeholder rather than as a value: leaving it alone
+    sends nothing and the server writes the sentence, so the browser is not a
+    second implementation of the rule."""
+    mod = project(api, "Move message")
+    names = [f"msg{n}_{uuid.uuid4().hex[:6]}" for n in range(2)]
+    for name in names:
+        make_model(mod, name=name)
+    repo = make_repository(mod, f"Transforms {mod.tag}")
+
+    models_screen(page, mod)
+    for name in names:
+        pick(page, name)
+    # The suggestion is visible before anybody types, so what will be recorded
+    # is readable rather than a surprise in the log.
+    expect(page.get_by_test_id("move-message")).to_have_attribute(
+        "placeholder", f"Move {names[0]}, {names[1]} into this repository"
+    )
+
+    page.get_by_test_id("move-repository").select_option(value=repo["id"])
+    page.get_by_test_id("move-message").fill("Ahead of the Q3 rebuild")
+    page.get_by_test_id("move-confirm").click()
+
+    expect(row(page, names[0]).get_by_test_id("model-authored-in")).to_be_visible(
+        timeout=30000
+    )
+    commits = mod.api.call("GET", f"{mod.base}/repositories/{repo['id']}/commits")
+    assert commits[0]["message"] == "Ahead of the Q3 rebuild", commits[0]
+
+
+def test_a_project_with_no_repositories_says_there_is_nowhere_to_go(page, api) -> None:
+    """The one absence that is a reason to go and do something else."""
+    mod = project(api, "Move nowhere")
+    name = f"nowhere_{uuid.uuid4().hex[:6]}"
+    make_model(mod, name=name)
+
+    models_screen(page, mod)
+    pick(page, name)
+    expect(page.get_by_test_id("move-no-repositories")).to_be_visible()
+    expect(page.get_by_test_id("move-confirm")).to_be_disabled()
+
+
+def test_a_refused_batch_moves_none_of_them_and_says_why(page, api) -> None:
+    """**All of them or none**, and the refusal names the transform it is
+    about - in a batch the whole point of the message is which one."""
+    mod = project(api, "Move refused")
+    tag = uuid.uuid4().hex[:6]
+    # Two names that slugify the same way: one file, two models.
+    first, second = f"daily_orders_{tag}", f"Daily_Orders_{tag}"
+    make_model(mod, name=first)
+    make_model(mod, name=second)
+    repo = make_repository(mod, f"Transforms {mod.tag}")
+
+    models_screen(page, mod)
+    pick(page, first)
+    pick(page, second)
+    page.get_by_test_id("move-repository").select_option(value=repo["id"])
+    page.get_by_test_id("move-confirm").click()
+
+    error = page.get_by_test_id("move-error")
+    expect(error).to_be_visible(timeout=20000)
+    expect(error).to_contain_text("would both be written to")
+    # And neither moved: the repository is still empty.
+    commits = mod.api.call("GET", f"{mod.base}/repositories/{repo['id']}/commits")
+    assert commits == [], commits
+
+
+# ---- what a version changed (§291) -------------------------------------------
+def test_a_versions_diff_survived_the_deletion_of_the_code_page(page, api) -> None:
+    """**The last row of §278's table, and the one §280 half-moved.**
+
+    That table listed `changeSet` + `diff` together; §280 moved the change-set
+    contents onto this screen and left the *diffs* on the page B.1 deletes. So
+    the history dialog could show what a version **is** and not what it
+    **changed** - which is the question a history is usually opened to answer.
+    Deleting the page without this would have taken it away from every
+    transform outside a repository, silently, which is the exact failure §278
+    stopped.
+    """
+    mod = project(api, "Version diff")
+    name = f"diffme_{uuid.uuid4().hex[:6]}"
+    made = make_model(mod, name=name, code="SELECT 1 AS id")
+    mod.api.call("PATCH", f"{mod.base}/models/{made['id']}",
+                 {"code": "SELECT 1 AS id, 2 AS total"})
+
+    models_screen(page, mod)
+    row(page, name).get_by_role("button", name="History").click()
+
+    # **The wait comes first, and a mutant is what proved it has to.**
+    # `to_have_count(0)` on the v1 button passed while the dialog was still
+    # loading its versions - nothing is absent more convincingly than something
+    # that has not arrived - so the check survived a mutant that offered every
+    # version a diff. Asserting the v2 button is *there* is what makes the
+    # assertion below about v1 rather than about timing.
+    expect(page.get_by_test_id("version-2-changes")).to_be_visible(timeout=30000)
+    # v1 has nothing before it, so it is not offered a diff: a diff of
+    # everything against nothing is the file, which the Code button shows.
+    expect(page.get_by_test_id("version-1-changes")).to_have_count(0)
+
+    page.get_by_test_id("version-2-changes").click()
+    shown = page.get_by_test_id("version-2-diff")
+    expect(shown).to_be_visible(timeout=30000)
+    # The added column, as an addition rather than as the whole file - which is
+    # what separates this from the Code button next to it.
+    expect(shown).to_contain_text("+SELECT 1 AS id, 2 AS total")
+    expect(shown).to_contain_text("-SELECT 1 AS id")

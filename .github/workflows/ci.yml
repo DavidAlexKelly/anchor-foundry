@@ -207,7 +207,19 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-      - run: pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt
+      # **The worker's requirements too, since §295.** `e2e/test_tests_panel.py`
+      # drives the worker's own op - the dev stack runs no Dagster daemon, so a
+      # queued test run would sit in the table for ever - and without these the
+      # whole file fails on `No module named 'dagster'`. It passed locally
+      # because the shared virtualenv had it, which is the exact sentence
+      # `apps/api/requirements-dev.txt` already carries about playwright:
+      # "the suite ran locally because a venv had it installed by hand, and a
+      # fresh checkout could not have run it at all".
+      # `test_dependency_pins.py::test_the_shared_venv_is_possible` is what
+      # makes installing both into one interpreter safe to do.
+      - run: >
+          pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt
+          -r apps/worker/requirements.txt
       - run: npm ci
       # The package is pinned in requirements-dev.txt; this fetches the
       # browser binary, which pip cannot.

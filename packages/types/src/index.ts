@@ -2553,3 +2553,137 @@ export interface CodeProposalDetail extends CodeProposal {
   lands_on: string | null;
   landing: string | null;
 }
+
+/** One test in a run's report (db 0071; §294).
+ *
+ * `id` is what you would type to run it again — `tests/test_daily.py::test_x`
+ * — rather than pytest's dotted `classname`, which is a module path. `file`
+ * and `line` are what let a panel open the failing test rather than describe
+ * it; the line is 1-based, converted at the parse because every editor counts
+ * from 1 and pytest's report does not.
+ */
+export interface CodeTestOutcome {
+  id: string;
+  /** passed | failed | error | skipped. **`error` is not `failed`**: an
+   * assertion that did not hold is the author's answer, and a fixture that
+   * blew up is a different problem with a different first thing to look at. */
+  outcome: string;
+  duration_ms: number;
+  file: string | null;
+  line: number | null;
+  /** The failure's first line, for the row. The whole traceback is `detail`. */
+  message: string | null;
+  detail: string | null;
+}
+
+/** A run of a repository's unit tests (db 0071; §294).
+ *
+ * A job rather than a request: running unit tests is running customer Python,
+ * which decision 0004 confines to a process holding no platform credentials.
+ * The panel asks for one and then watches it.
+ */
+export interface CodeTestRun {
+  id: string;
+  repo_id: string;
+  branch: string;
+  /** queued | running | succeeded | failed | errored. **`failed` and `errored`
+   * are different answers**: the first is about the author's tests, the second
+   * about the run not having happened. */
+  status: string;
+  /** Null until the run has an answer. An empty array is a real answer and a
+   * different one: the repository has no tests, which is why such a run ends
+   * `failed` rather than `succeeded`. */
+  outcomes: CodeTestOutcome[] | null;
+  /** Set only when `status` is `errored`, and never a test's failure message. */
+  error: string | null;
+  queued_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** A name pinned to a commit that never moves (db 0072; §299; p.17).
+ *
+ * "Like immutable branches" — a branch is a name whose commit moves, a tag is
+ * a name whose commit does not, and that is the entire difference. The
+ * immutability is a database trigger rather than a service rule, so there is
+ * no shape of update this type could describe.
+ */
+export interface RepositoryTag {
+  id: string;
+  repo_id: string;
+  name: string;
+  commit_id: string;
+  /** Why this version mattered, or null. p.17's dialog has no such field; ours
+   * does because "1.4.0" says what it is and not why, and the one moment
+   * somebody knows why is the moment they type it. */
+  message: string | null;
+  created_at: string;
+  created_by: string | null;
+  created_by_email: string | null;
+  /** The tagged commit's own message, so a list says what was cut and not only
+   * when. Null on the row returned by creating one — the list is where it is
+   * read. */
+  commit_message: string | null;
+}
+
+/** A branch, with what p.16's Checks and Pull request columns need (§300).
+ *
+ * **Both columns are about the branch's *head commit*.** Foundry's pull request
+ * tracks a branch; ours names an immutable commit (db 0039), so "this branch's
+ * pull request" means a proposal over the commit it is currently on — which is
+ * exactly what "Propose changes" would create, and which stops being the
+ * branch's PR the moment somebody commits again.
+ */
+export interface RepositoryBranchSummary {
+  id: string;
+  name: string;
+  head_commit_id: string | null;
+  /** passed | failed | none. **`none` is not `passed`**: a green tick over a
+   * branch nothing has run against is the lie §295 refuses about a test suite
+   * that ran nothing. */
+  checks: string;
+  proposal_id: string | null;
+  proposal_state: string | null;
+  proposal_summary: string | null;
+}
+
+/** One entry in the SQL Scratchpad's history (§306; db 0073; p.15).
+ *
+ * **p.15's two tabs are one of these with one filter.** A favourite is a
+ * history entry somebody starred, not a second copy — which is also why the
+ * row is per *distinct query text* rather than per run: with a row per run, a
+ * star would be left behind the moment you pressed the button again.
+ */
+export interface ScratchpadQuery {
+  id: string;
+  repo_id: string;
+  sql: string;
+  favourite: boolean;
+  /** What a per-run table would have told you, without being one. */
+  run_count: number;
+  /** Deliberately not moved on a re-run: "I wrote this on Tuesday and I am
+   * still running it" is a different fact from when it last ran. */
+  first_ran_at: string;
+  last_ran_at: string;
+}
+
+/** What running a scratchpad query returns (§305; p.15). */
+export interface ScratchpadResult {
+  columns: { name: string; data_type: string }[];
+  rows: unknown[][];
+  row_count: number;
+  truncated: boolean;
+  sampled: boolean;
+  inputs: {
+    alias: string;
+    dataset: string;
+    dataset_id: string;
+    rows_available: number;
+    rows_used: number;
+    sampled: boolean;
+  }[];
+  /** What the query was rewritten to. Shown rather than hidden: backticks are
+   * Foundry's engine and not ours, so somebody who typed p.15's syntax and got
+   * an error from DuckDB should be able to see what DuckDB was given. */
+  ran: string;
+}
