@@ -504,7 +504,7 @@ def test_applying_an_action_counts_a_write(
 
 
 def test_an_action_that_did_not_succeed_is_not_a_write(
-    client: TestClient, fx: Fixture, with_objects: str
+    client: TestClient, fx: Fixture, with_objects: str, monkeypatch
 ) -> None:
     """p.32 records a write when an application "makes edits". A refused action
     made none.
@@ -526,12 +526,25 @@ def test_an_action_that_did_not_succeed_is_not_a_write(
     instance_id = r.json()["items"][0]["id"]
 
     before = summary(client, fx, with_objects)["writes"]
-    # A property the action does not declare as editable: refused before
-    # anything is written.
+
+    # **The write has to fail where `ok` is decided, not before it.** The first
+    # version of this test submitted an undeclared property, which is refused
+    # with a 422 before the run is even opened — so the branch under test was
+    # never reached and the mutant survived a test named after it. A dataset
+    # engine failure is the real shape: the run opens, the write is attempted,
+    # and the endpoint answers 200 with `ok: false`.
+    from src.services import dataset_engine as engine
+    from src.services.dataset_engine import DatasetEngineError
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise DatasetEngineError("the parquet could not be written")
+
+    monkeypatch.setattr(engine, "write_rows", boom)
     r = client.post(
         f"/api/workspaces/{fx.workspace}/projects/{fx.project}/actions/{action_id}/execute",
         headers=hdr(fx.editor_sub),
-        json={"instance_id": instance_id, "values": {"nonexistent": "x"}},
+        json={"instance_id": instance_id, "values": {"name": "never lands"}},
     )
-    assert r.status_code == 422, r.text
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False, r.json()
     assert summary(client, fx, with_objects)["writes"] == before
