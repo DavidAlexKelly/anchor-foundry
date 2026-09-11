@@ -267,3 +267,47 @@ def test_another_types_failure_is_not_reported_on_this_one(
     mine = summary(client, fx, a_type)
     assert mine["failing_source_count"] == 0
     assert mine["source_error"] is None
+
+
+def test_a_stale_error_on_a_healthy_source_is_not_reported(
+    client: TestClient, fx: Fixture, a_type: str, a_dataset: str
+) -> None:
+    """**The clause that says "from a source that is *currently* failing".**
+
+    Nothing ties `sync_status` to `last_error` — there is no constraint, and
+    `mark_source_synced` clearing the message on recovery is a convention of
+    one function rather than a property of the column. So a source that is
+    `ok` while still carrying the words of an old failure is a state the
+    database allows, and a `source_error` picked without checking the status
+    would report it: a healthy type quietly carrying a dead complaint in a
+    public field.
+
+    §313's mutation run is what found this. Removing the status clause broke
+    no test, because every route that heals a source happens to clear the
+    message too — so the guard was correct and unchecked, which is the state
+    just before it gets deleted by somebody tidying.
+
+    Written through the database, because no route produces the combination.
+    """
+    import psycopg
+
+    source = a_source(client, fx, a_type, a_dataset)
+    break_the_source(fx, source, "an old complaint")
+    assert summary(client, fx, a_type)["source_error"] == "an old complaint"
+
+    # Healthy again, but the message left behind.
+    with psycopg.connect(
+        os.environ.get(
+            "TEST_ADMIN_DSN",
+            "postgresql://platform:devpass@localhost:5432/platform?sslmode=disable",
+        ),
+        autocommit=True,
+    ) as c:
+        c.execute(
+            "UPDATE object_type_sources SET sync_status = 'ok' WHERE id = %s",
+            (source,),
+        )
+
+    row = summary(client, fx, a_type)
+    assert row["failing_source_count"] == 0
+    assert row["source_error"] is None, "a healthy source's old words are not an issue"
