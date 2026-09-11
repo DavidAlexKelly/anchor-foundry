@@ -471,6 +471,41 @@ async def list_published(conn: AsyncConnection, workspace_id: UUID) -> list[dict
     return [dict(r) for r in rows]
 
 
+async def get_saved(conn: AsyncConnection, workspace_id: UUID, app_id: UUID) -> dict[str, Any]:
+    """The app as its *author* last saved it (§314; `workshop` p.166).
+
+        "For testing purposes, you can change the `/latest/` to `/dev/` in the
+         URL, and the link will now redirect to the last saved version of the
+         Workshop application instead of the last published version."
+
+    **The live definition, which is what `published_version` exists to hide.**
+    `get_published` reads the pinned version because publishing is an act
+    rather than a checkbox; this is the other half of that decision, and it is
+    only useful *because* the two can differ. An app whose author has not saved
+    since publishing gives the same answer either way, which is the honest
+    result rather than a special case.
+
+    **No `publish_scope` clause, deliberately.** `get_published` has one because
+    a private app has no viewers; this is not for viewers. Whether the caller
+    may see unpublished work is a permission question and it is answered where
+    permissions are — the route — rather than by a WHERE clause that would
+    make the refusal look like a missing row.
+    """
+    row = await fetch_one(
+        conn,
+        f"""
+        SELECT {_columns("a")}, a.definition AS definition
+          FROM canvas_apps a
+         WHERE a.id = :aid
+           AND rls_project_workspace_id(a.project_id) = :wid
+        """,
+        {"aid": str(app_id), "wid": str(workspace_id)},
+    )
+    if row is None:
+        raise NotFoundError("canvas app")
+    return dict(row)
+
+
 async def get_published(conn: AsyncConnection, workspace_id: UUID, app_id: UUID) -> dict[str, Any]:
     """A published app as its viewers see it: the *published* version's
     definition, not the live one (roadmap 1.7).

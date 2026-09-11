@@ -2003,6 +2003,13 @@ export const canvas = {
     request<import("./types").CanvasApp[]>(`/workspaces/${wid}/published-canvas-apps`),
   getPublished: (wid: string, appId: string) =>
     request<import("./types").CanvasAppDetail>(`/workspaces/${wid}/published-canvas-apps/${appId}`),
+  /** p.166's `/dev/`: the app as its author last **saved** it (§314).
+   *
+   * Refused with a 404 to anybody who may not edit the project, because "for
+   * testing purposes" means unpublished work and a 403 would confirm there is
+   * some. */
+  getSaved: (wid: string, appId: string) =>
+    request<import("./types").CanvasAppDetail>(`/workspaces/${wid}/saved-canvas-apps/${appId}`),
 };
 
 /** The Code pillar's repository surface (ROADMAP Code item 2). Reads render
