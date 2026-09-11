@@ -145,3 +145,78 @@ def test_a_type_nobody_has_sourced_says_so_without_being_an_error(page, api) -> 
     eventually(lambda: cell.get_attribute("title"),
                lambda t: t is not None and "Add a source" in t,
                what="the hover to say what to do")
+
+
+# --- p.29's third home-page filter (§315) ------------------------------------
+
+
+def test_the_issue_filter_narrows_to_types_that_need_attention(page, api) -> None:
+    """p.29: "filtering object types … based on their visibility, development
+    status, and **indexing issues**".
+
+    **Its own workspace**, which is the only way to assert a *filtered list*
+    rather than the presence of one row. The shared workspace holds over a
+    thousand types and any number of them may be broken, so "the filter found
+    my type" would pass against a filter that found everything.
+    """
+    mod = Module(api, "Issue filter")
+    mod.object_type(columns=["id", "town"], rows=[{"id": "1", "town": "Ely"}],
+                    key="id", title="town")
+    healthy = f"seed_{mod.tag}"
+
+    # A second type in the same workspace, with nothing mapped to it.
+    bare_tag = uuid.uuid4().hex[:8]
+    api.call(
+        "POST", f"/workspaces/{mod.workspace_id}/object-types",
+        {"api_name": f"bare_{bare_tag}", "display_name": f"Bare {bare_tag}",
+         "properties": [{"api_name": "code", "display_name": "Code",
+                         "data_type": "string", "required": True}]},
+    )
+
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/objects")
+    chooser = page.get_by_test_id("issue-filter")
+    expect(chooser).to_be_visible(timeout=30000)
+    chooser.select_option("unsourced")
+
+    # **Per-type ids and a search, not `tbody tr` and a count.** Two traps,
+    # both met here.
+    #
+    # This page has four tables — object types, link types, action types and
+    # dataset mappings — and `tbody tr` matches rows in all of them. The
+    # mappings table carries the seeded dataset's name, which is the tagged
+    # string this test looks for, so the first version read a different table
+    # and reported the filter as broken while it was working.
+    #
+    # And the listing is a *page* (§256). `Module` builds into a shared
+    # workspace that every run adds to, so "the filter returned two rows" is a
+    # claim about how many other types happen to match — the search box is what
+    # makes each assertion about one row. It also puts the and-ing of the two
+    # controls under test, which is the shape p.29's filters already have.
+    def shows(api_name: str, issue: str) -> int:
+        chooser.select_option(issue)
+        box = page.get_by_test_id("type-search")
+        box.fill("")
+        box.fill(api_name)
+        return page.get_by_test_id(f"select-{api_name}").count()
+
+    # Unsourced: the bare one is in, the healthy one is out. Both directions,
+    # because a filter that returned everything satisfies the first alone.
+    eventually(lambda: shows(f"bare_{bare_tag}", "unsourced"), lambda n: n == 1,
+               what="the unsourced type")
+    eventually(lambda: shows(healthy, "unsourced"), lambda n: n == 0,
+               what="the healthy type to be filtered out")
+
+    # Failing: a broken source, not an absent one — which is why these are two
+    # values rather than one.
+    break_the_source(mod.object_type_id, "the dataset went away")
+    eventually(lambda: shows(healthy, "failing"), lambda n: n == 1,
+               what="the failing type")
+    eventually(lambda: shows(f"bare_{bare_tag}", "failing"), lambda n: n == 0,
+               what="the unsourced type to be filtered out")
+
+    # `any` is both, which is the question somebody opening this is asking.
+    eventually(lambda: shows(healthy, "any"), lambda n: n == 1,
+               what="the failing type under `any`")
+    eventually(lambda: shows(f"bare_{bare_tag}", "any"), lambda n: n == 1,
+               what="the unsourced type under `any`")
+    heal_the_source(mod.object_type_id)

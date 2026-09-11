@@ -311,3 +311,194 @@ def test_a_stale_error_on_a_healthy_source_is_not_reported(
     row = summary(client, fx, a_type)
     assert row["failing_source_count"] == 0
     assert row["source_error"] is None, "a healthy source's old words are not an issue"
+
+
+# --- p.29's third home-page filter (§315) ------------------------------------
+#
+#     "These pages allow for filtering object types and link types based on
+#      their visibility, development status, and indexing issues." (p.29)
+#
+# The row in `ontology.md` said this wanted "indexing state the sync path does
+# not record". §313 showed that was wrong — `object_type_sources` has recorded
+# it since db 0003 — so the blocker was never real and the filter is a WHERE
+# clause over the same two conditions the column reports.
+
+
+def listed(client, fx, **params) -> list[dict]:
+    r = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub),
+                   params={"limit": 200, **params})
+    assert r.status_code == 200, r.text
+    return r.json()["items"]
+
+
+def test_filtering_by_failing_finds_only_broken_types(
+    client: TestClient, fx: Fixture, a_type: str, a_dataset: str
+) -> None:
+    """p.29's filter, over the same condition §313's column reports.
+
+    Asserted as *both* directions — the broken one is in and a healthy one is
+    out — because a filter that returned everything would satisfy the first
+    assertion on its own.
+    """
+    healthy = a_type
+    a_source(client, fx, healthy, a_dataset)
+
+    broken = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"broken_{uuid.uuid4().hex[:8]}",
+              "display_name": f"Broken {uuid.uuid4().hex[:6]}",
+              "properties": [{"api_name": "code", "display_name": "Code",
+                              "data_type": "string", "required": True}],
+              "title_property": "code"},
+    ).json()["id"]
+    break_the_source(fx, a_source(client, fx, broken, a_dataset), "it broke")
+
+    ids = {t["id"] for t in listed(client, fx, issue="failing")}
+    assert broken in ids
+    assert healthy not in ids
+
+
+def test_filtering_by_unsourced_finds_types_nobody_pointed_at_data(
+    client: TestClient, fx: Fixture, a_type: str, a_dataset: str
+) -> None:
+    """p.29's other condition, and it is **not** the same set.
+
+    A type with a broken source is not unsourced, which is the whole reason
+    these are two values rather than one.
+    """
+    bare = a_type
+
+    broken = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"withsrc_{uuid.uuid4().hex[:8]}",
+              "display_name": f"With source {uuid.uuid4().hex[:6]}",
+              "properties": [{"api_name": "code", "display_name": "Code",
+                              "data_type": "string", "required": True}],
+              "title_property": "code"},
+    ).json()["id"]
+    break_the_source(fx, a_source(client, fx, broken, a_dataset), "it broke")
+
+    ids = {t["id"] for t in listed(client, fx, issue="unsourced")}
+    assert bare in ids
+    assert broken not in ids, "a type with a broken source has a source"
+
+
+def test_any_finds_both_kinds(client: TestClient, fx: Fixture, a_type: str,
+                              a_dataset: str) -> None:
+    """"Show me everything that needs attention" is the question somebody
+    opening this filter is actually asking."""
+    bare = a_type
+    broken = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"anyk_{uuid.uuid4().hex[:8]}",
+              "display_name": f"Any kind {uuid.uuid4().hex[:6]}",
+              "properties": [{"api_name": "code", "display_name": "Code",
+                              "data_type": "string", "required": True}],
+              "title_property": "code"},
+    ).json()["id"]
+    break_the_source(fx, a_source(client, fx, broken, a_dataset), "it broke")
+
+    ids = {t["id"] for t in listed(client, fx, issue="any")}
+    assert bare in ids and broken in ids
+
+
+def test_a_healthy_type_is_in_none_of_the_three(
+    client: TestClient, fx: Fixture, a_type: str, a_dataset: str
+) -> None:
+    """The assertion that keeps the other three meaning something."""
+    a_source(client, fx, a_type, a_dataset)
+    for value in ("failing", "unsourced", "any"):
+        ids = {t["id"] for t in listed(client, fx, issue=value)}
+        assert a_type not in ids, f"a working type matched {value!r}"
+
+
+def test_an_unknown_issue_is_refused_rather_than_ignored(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The same choice the two filters beside it make: a typo in a URL that
+    quietly shows everything is worse than no filter, because the reader
+    believes the list."""
+    r = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub),
+                   params={"issue": "broken"})
+    assert r.status_code == 422, r.text
+    assert "failing" in r.text and "unsourced" in r.text
+
+
+def test_the_filter_combines_with_the_others_rather_than_replacing_them(
+    client: TestClient, fx: Fixture, a_type: str, a_dataset: str
+) -> None:
+    """And-ed, which is the shape the group and status controls already have.
+
+    A filter that replaced the others would make two controls that cannot be
+    used together, and nothing on the screen would say so.
+    """
+    break_the_source(fx, a_source(client, fx, a_type, a_dataset), "broken")
+    assert a_type in {t["id"] for t in listed(client, fx, issue="failing")}
+    # The same type, filtered to a status it does not have.
+    assert a_type not in {
+        t["id"] for t in listed(client, fx, issue="failing", status="deprecated")
+    }
+
+
+# --- The browser's copy of the vocabulary (§315) ------------------------------
+
+
+#: Four levels: tests -> api -> apps -> the repository root.
+ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+ISSUES_TS = os.path.join(
+    ROOT, "apps", "web", "src", "lib", "object-type-issues.ts"
+)
+
+
+def offered_values() -> list[str]:
+    """The `value:` of every option in `ISSUE_FILTER_OPTIONS`.
+
+    Read out of the source rather than executed, for the reason
+    `test_response_type_drift` reads `index.ts`: the two languages have no
+    runtime in common, and a check that needed one would not be a check that
+    runs here.
+    """
+    import re
+
+    text = open(ISSUES_TS, encoding="utf-8").read()
+    start = text.index("ISSUE_FILTER_OPTIONS")
+    body = text[start : text.index("];", start)]
+    return re.findall(r"value:\s*\"([^\"]*)\"", body)
+
+
+def test_the_chooser_offers_exactly_what_the_server_accepts() -> None:
+    """**The drift `test_response_type_drift` was written about, one list over.**
+
+    `TYPE_ISSUES` and the browser's option list are two copies of one
+    vocabulary, and neither language can see the other. A value the chooser
+    gained and the server did not is a control that 422s on click; one the
+    server gained and the chooser did not is a filter nobody can reach — and
+    `tsc` and pytest are each internally happy in both cases.
+    """
+    from src.services.ontology import TYPE_ISSUES
+
+    offered = offered_values()
+    assert "" in offered, (
+        "the chooser has no unfiltered option, so a reader who narrows the "
+        "list cannot widen it again"
+    )
+    assert sorted(v for v in offered if v) == sorted(TYPE_ISSUES)
+
+
+def test_every_offered_value_is_one_the_endpoint_takes(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The test above compares two lists; this one asks the endpoint.
+
+    A vocabulary can agree with itself and still be refused — the route reads
+    the query parameter, and nothing above proves the route passes it through
+    rather than dropping it on the floor.
+    """
+    for value in offered_values():
+        r = client.get(
+            f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub),
+            params={"issue": value} if value else {},
+        )
+        assert r.status_code == 200, f"{value!r}: {r.text}"

@@ -2710,3 +2710,9 @@ export interface ObjectFavourite {
   label: string;
   created_at: string;
 }
+
+/** p.29's indexing-issue filter (§315). Two values rather than one, because
+ * p.29 names two things that can be wrong — "unregistered *or* have failed to
+ * reindex" — and they have different remedies. `any` is what somebody opening
+ * the filter is usually asking for. */
+export type TypeIssueFilter = "failing" | "unsourced" | "any";

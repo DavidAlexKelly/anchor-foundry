@@ -13,7 +13,7 @@
  *
  * The server counts; this decides what the count *says*.
  */
-import type { ObjectTypeSummary } from "./types";
+import type { ObjectTypeSummary, TypeIssueFilter } from "./types";
 
 /** p.29's two conditions, which are two problems rather than one. */
 export type Issue = "none" | "unsourced" | "failing";
@@ -83,3 +83,28 @@ export function issueDetail(type: ObjectTypeSummary): string | null {
       return null;
   }
 }
+
+/**
+ * The filter beside the column (§315), as a list rather than four inline
+ * `<option>`s.
+ *
+ * **The unfiltered option is named for the dimension, not with the word its
+ * neighbour uses.** The two controls to its left read "Any status" and "Any
+ * visibility", where "Any X" means *do not filter on X* — but "Any issue" in
+ * that family also reads as *has any issue*, which is exactly what the `any`
+ * value one line below actually does. Two adjacent options a reader can swap
+ * without noticing is §214's control that looks like it works, and the reader
+ * who picks the wrong one gets a plausible list and no sign of the mistake.
+ *
+ * So the unfiltered one says what it is not filtering on, and the filtering
+ * ones say what they find.
+ */
+export const ISSUE_FILTER_OPTIONS: readonly {
+  value: "" | TypeIssueFilter;
+  label: string;
+}[] = [
+  { value: "", label: "Any issue state" },
+  { value: "any", label: "Needs attention" },
+  { value: "failing", label: "Source failing" },
+  { value: "unsourced", label: "No source" },
+];

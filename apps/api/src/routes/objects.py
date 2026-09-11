@@ -490,6 +490,9 @@ async def list_object_types(
     group_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None),
     visibility: str | None = Query(default=None),
+    #: p.29's third home-page filter (§315): `failing`, `unsourced` or
+    #: `any`. Refused rather than ignored, like the two beside it.
+    issue: str | None = Query(default=None),
     q: str | None = Query(default=None),
     #: Exactly these types. A screen that has already chosen some has to be
     #: able to read them back now that the listing is a page - see the service.
@@ -505,9 +508,10 @@ async def list_object_types(
     based on their visibility, development status, and indexing issues".
 
     **Free-form here and checked in the service**, unlike the patterns on the
-    property models above, because these two are the service's own vocabulary -
-    `ontology_status.STATUSES` and `PROPERTY_VISIBILITIES` - and a pattern
-    built here would be a second copy of a list that already refuses.
+    property models above, because these three are the service's own vocabulary
+    - `ontology_status.STATUSES`, `PROPERTY_VISIBILITIES` and `TYPE_ISSUES` -
+    and a pattern built here would be a second copy of a list that already
+    refuses.
 
     **`limit` has no `None`.** The service accepts one, for the three internal
     callers answering a question about the whole ontology; this route does not
@@ -524,7 +528,7 @@ async def list_object_types(
         try:
             rows, total = await ontology_service.list_types(
                 conn, access.workspace_id, group_id=group_id,
-                status=status, visibility=visibility, q=q,
+                status=status, visibility=visibility, issue=issue, q=q,
                 ids=[str(i) for i in ids] if ids else None,
                 limit=limit, offset=offset,
             )

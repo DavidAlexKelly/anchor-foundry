@@ -123,6 +123,17 @@ DEFAULT_TYPE_PAGE = 50
 MAX_TYPE_QUERY = 200
 
 
+#: p.29's third home-page filter (§315): "filtering object types and link types
+#: based on their visibility, development status, and **indexing issues**".
+#:
+#: **Two values, matching §313's two conditions**, because p.29 names two
+#: things that can be wrong — "unregistered *or* have failed to reindex" — and
+#: a single "has an issue" would collapse the one distinction the column beside
+#: it exists to draw. `any` is there because "show me everything that needs
+#: attention" is the question somebody opening this filter is actually asking.
+TYPE_ISSUES = ("failing", "unsourced", "any")
+
+
 async def list_types(
     conn: AsyncConnection,
     workspace_id: UUID,
@@ -130,6 +141,7 @@ async def list_types(
     group_id: UUID | None = None,
     status: str | None = None,
     visibility: str | None = None,
+    issue: str | None = None,
     q: str | None = None,
     #: Exactly these types, whatever else is set. The listing is a page since
     #: this unit, and a screen that has *already chosen* some types has to be
@@ -156,12 +168,19 @@ async def list_types(
     or not, so "there are more" is never something a screen can fail to know.
 
     `group_id` is p.262's "The table of object types in Ontology Manager
-    supports displaying and filtering by group". `status` and `visibility` are
-    `ontology-manager` **p.29**: "These pages allow for filtering object types
-    and link types based on their visibility, development status, and indexing
-    issues." The third of those three is not here and is not forgotten - an
-    indexing issue is state the sync path does not record, so there is nothing
-    to filter on; the row in `ontology.md` says so.
+    supports displaying and filtering by group". `status`, `visibility` and
+    `issue` are `ontology-manager` **p.29**: "These pages allow for filtering
+    object types and link types based on their visibility, development status,
+    and indexing issues."
+
+    The third of those three stood here for fifteen units as a paragraph saying
+    it could not be built - "an indexing issue is state the sync path does not
+    record, so there is nothing to filter on". That was wrong when it was
+    written: `object_type_sources.sync_status` has recorded it since db 0003.
+    §313 read it to draw p.29's issue column and §315 filters on the same two
+    conditions, deliberately - a filter written against its own idea of "has a
+    problem" could show a row the column beside it calls healthy, which is
+    worse than either alone.
 
     **Filtering here rather than in the caller** because an ontology is the
     thing being narrowed - a client that fetched everything and dropped rows
@@ -195,6 +214,10 @@ async def list_types(
         raise ValueError(
             f"unknown visibility {visibility!r}; expected one of "
             + ", ".join(PROPERTY_VISIBILITIES)
+        )
+    if issue is not None and issue not in TYPE_ISSUES:
+        raise ValueError(
+            f"unknown issue {issue!r}; expected one of " + ", ".join(TYPE_ISSUES)
         )
     if q is not None and len(q) > MAX_TYPE_QUERY:
         raise ValueError(
@@ -262,6 +285,24 @@ async def list_types(
            -- casefolds - somebody looking for `Vehicle` types `vehicle`.
            AND (:needle = '' OR position(lower(:needle) in lower(ot.display_name)) > 0
                              OR position(lower(:needle) in lower(ot.api_name)) > 0)
+           -- p.29's indexing-issue filter (§315). Written against the same
+           -- two conditions the issue column reports, rather than against a
+           -- flag computed somewhere else: a filter that disagreed with the
+           -- column beside it would be the worst of both, showing a row the
+           -- column calls healthy.
+           AND (CAST(:issue AS text) IS NULL
+                OR (:issue = 'failing' AND EXISTS (
+                        SELECT 1 FROM object_type_sources s
+                         WHERE s.object_type_id = ot.id AND s.sync_status = 'error'))
+                OR (:issue = 'unsourced' AND NOT EXISTS (
+                        SELECT 1 FROM object_type_sources s
+                         WHERE s.object_type_id = ot.id))
+                OR (:issue = 'any' AND (
+                        EXISTS (SELECT 1 FROM object_type_sources s
+                                 WHERE s.object_type_id = ot.id
+                                   AND s.sync_status = 'error')
+                     OR NOT EXISTS (SELECT 1 FROM object_type_sources s
+                                     WHERE s.object_type_id = ot.id))))
            AND (CAST(:ids AS uuid[]) IS NULL OR ot.id = ANY(CAST(:ids AS uuid[])))
          ORDER BY ot.display_name
          LIMIT CAST(:limit AS integer) OFFSET :offset
@@ -271,6 +312,7 @@ async def list_types(
             "gid": str(group_id) if group_id else None,
             "status": status,
             "vis": visibility,
+            "issue": issue,
             "needle": needle,
             "ids": ids,
             # `LIMIT NULL` is every row in Postgres, which is exactly what

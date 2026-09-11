@@ -1290,9 +1290,9 @@ export const objects = {
    * ontology. */
   /** The object types page's table, and every type picker in the product.
    *
-   * Three filters, all optional and all and-ed: p.262's group and
+   * Four filters, all optional and all and-ed: p.262's group and
    * `ontology-manager` p.29's "visibility, development status, and indexing
-   * issues" — less the third, which is state the sync path does not record.
+   * issues" — all three of p.29's since §315.
    *
    * Built as a `URLSearchParams` rather than by concatenating, because with
    * three optional parameters the string-building version has a `?`-versus-`&`
@@ -1303,6 +1303,10 @@ export const objects = {
     filters?: {
       status?: import("./types").OntologyStatus | null;
       visibility?: import("./types").PropertyVisibility | null;
+      /** p.29's third home-page filter (§315): `failing`, `unsourced` or
+       * `any`. Two values rather than one, because p.29 names two things that
+       * can be wrong and they have different remedies. */
+      issue?: import("./types").TypeIssueFilter | null;
       /** Matched against the display name and the api name. The reason this
        * endpoint has a search at all is that it also has a `limit`: a picker
        * that can only show fifty types has to be able to find the fifty-first.
@@ -1319,6 +1323,7 @@ export const objects = {
     if (groupId) query.set("group_id", groupId);
     if (filters?.status) query.set("status", filters.status);
     if (filters?.visibility) query.set("visibility", filters.visibility);
+    if (filters?.issue) query.set("issue", filters.issue);
     if (filters?.q) query.set("q", filters.q);
     for (const id of filters?.ids ?? []) query.append("ids", id);
     if (filters?.limit !== undefined) query.set("limit", String(filters.limit));

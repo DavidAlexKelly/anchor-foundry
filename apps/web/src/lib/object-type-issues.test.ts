@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ISSUE_FILTER_OPTIONS,
   issue,
   issueDetail,
   issueIsAnError,
@@ -86,5 +87,52 @@ describe("the hover", () => {
 
   it("tells an unsourced type what to do about it", () => {
     expect(issueDetail(type({ source_count: 0 }))).toContain("Add a source");
+  });
+});
+
+describe("the filter beside the column", () => {
+  it("offers the server's whole vocabulary and nothing else", () => {
+    // `TYPE_ISSUES` in `ontology.py` refuses anything outside these three, so
+    // an option this list gained and the server did not is a control that
+    // returns a 422 — and one the server gained and this did not is a filter
+    // nobody can reach.
+    expect(ISSUE_FILTER_OPTIONS.map((o) => o.value)).toEqual([
+      "",
+      "any",
+      "failing",
+      "unsourced",
+    ]);
+  });
+
+  it("starts unfiltered", () => {
+    // The first option is what the page opens on, and a filter that starts
+    // narrowed hides rows from somebody who never chose to hide them.
+    expect(ISSUE_FILTER_OPTIONS[0]!.value).toBe("");
+  });
+
+  it("does not name the unfiltered option with the word `any` uses", () => {
+    // **The bug this list exists to prevent.** Beside "Any status" and "Any
+    // visibility", the natural fourth is "Any issue" — which reads both as
+    // *do not filter* and as *has any issue*, and the second of those is what
+    // the option below it does. The reader who picks the wrong one gets a
+    // plausible list and no sign of the mistake.
+    const unfiltered = ISSUE_FILTER_OPTIONS[0]!.label;
+    const any = ISSUE_FILTER_OPTIONS.find((o) => o.value === "any")!.label;
+    expect(unfiltered).not.toBe("Any issue");
+    expect(any.toLowerCase()).not.toContain("any");
+  });
+
+  it("gives every option its own label", () => {
+    // Two options a chooser draws identically are one option and a bug.
+    const labels = ISSUE_FILTER_OPTIONS.map((o) => o.label);
+    expect(new Set(labels).size).toBe(labels.length);
+    for (const label of labels) expect(label.trim()).not.toBe("");
+  });
+
+  it("calls the unsourced state what the column calls it", () => {
+    // Somebody filters by what they read in the cell. A filter whose wording
+    // drifts from the column's is one people have to learn twice.
+    const unsourced = ISSUE_FILTER_OPTIONS.find((o) => o.value === "unsourced")!;
+    expect(unsourced.label).toBe(issueLabel(type({ source_count: 0 })));
   });
 });

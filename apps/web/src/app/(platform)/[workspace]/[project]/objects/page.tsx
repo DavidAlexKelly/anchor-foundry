@@ -16,6 +16,7 @@ import { ObjectViewEditor } from "@/components/object-view-editor";
 import { InterfacesPanel } from "@/components/interfaces-panel";
 import { OntologySearch } from "@/components/ontology-search";
 import {
+  ISSUE_FILTER_OPTIONS,
   issueDetail,
   issueIsAnError,
   issueLabel,
@@ -49,6 +50,7 @@ import {
   type ObjectTypeSummary,
   type OntologyStatus,
   type PropertyVisibility,
+  type TypeIssueFilter,
   type ObjectTypeSuggestion,
 } from "@/lib/types";
 
@@ -931,6 +933,7 @@ export default function ObjectsPage() {
   const [statusFilter, setStatusFilter] = useState<OntologyStatus | null>(null);
   const [visibilityFilter, setVisibilityFilter] =
     useState<PropertyVisibility | null>(null);
+  const [issueFilter, setIssueFilter] = useState<TypeIssueFilter | null>(null);
   /** Whether the table is showing a narrowed ontology rather than the whole one.
    *
    * **Read by the empty state, and that is why it is a value rather than three
@@ -946,7 +949,7 @@ export default function ObjectsPage() {
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const filtered = Boolean(
-    groupFilter || statusFilter || visibilityFilter || search.trim(),
+    groupFilter || statusFilter || visibilityFilter || issueFilter || search.trim(),
   );
   const clearFilters = () => {
     setGroupFilter(null);
@@ -977,12 +980,13 @@ export default function ObjectsPage() {
   const types = useQuery({
     queryKey: [
       "object-types", workspace?.id, groupFilter, statusFilter,
-      visibilityFilter, search, offset,
+      visibilityFilter, issueFilter, search, offset,
     ],
     queryFn: () =>
       objApi.listTypes(workspace!.id, groupFilter, {
         status: statusFilter,
         visibility: visibilityFilter,
+        issue: issueFilter,
         q: search.trim() || null,
         offset,
       }),
@@ -1246,6 +1250,28 @@ export default function ObjectsPage() {
             <option value="">Any visibility</option>
             {PROPERTY_VISIBILITIES.map((v) => (
               <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+          {/* p.29's third home-page filter (§315). The row for it said it
+              wanted "indexing state the sync path does not record", and §313
+              showed that was wrong — `object_type_sources` has recorded it
+              since db 0003, so the blocker was never real.
+
+              Two values rather than one, matching the column beside it: p.29
+              names two things that can be wrong and they have different
+              remedies. `any` is there because "show me everything that needs
+              attention" is what somebody opening this filter is asking. */}
+          <select
+            data-testid="issue-filter"
+            aria-label="Filter object types by issue"
+            value={issueFilter ?? ""}
+            onChange={(e) => {
+              setIssueFilter((e.target.value || null) as TypeIssueFilter | null);
+              setOffset(0);
+            }}
+          >
+            {ISSUE_FILTER_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
         </div>
