@@ -5,7 +5,6 @@ import {
   decodeObject,
   encodeObject,
   missingNote,
-  sameObject,
 } from "./object-links";
 
 const TYPE = "3f2a1b9c-1111-4222-8333-444455556666";
@@ -64,39 +63,6 @@ describe("a link that does not name an object", () => {
     const ref = decodeObject(`${TYPE.toUpperCase()}:${INSTANCE}`);
     expect(ref).not.toBeNull();
     expect(ref!.typeId).toBe(TYPE.toUpperCase());
-  });
-});
-
-describe("whether two links mean the same object", () => {
-  it("says yes for the same pair", () => {
-    expect(
-      sameObject({ typeId: TYPE, instanceId: INSTANCE }, { typeId: TYPE, instanceId: INSTANCE }),
-    ).toBe(true);
-  });
-
-  it("ignores case, because a pasted UUID may be upper-cased", () => {
-    // Comparing the encoded strings would work and would be wrong here.
-    expect(
-      sameObject(
-        { typeId: TYPE, instanceId: INSTANCE },
-        { typeId: TYPE.toUpperCase(), instanceId: INSTANCE.toUpperCase() },
-      ),
-    ).toBe(true);
-  });
-
-  it("says no when either half differs", () => {
-    expect(
-      sameObject({ typeId: TYPE, instanceId: INSTANCE }, { typeId: INSTANCE, instanceId: INSTANCE }),
-    ).toBe(false);
-    expect(
-      sameObject({ typeId: TYPE, instanceId: INSTANCE }, { typeId: TYPE, instanceId: TYPE }),
-    ).toBe(false);
-  });
-
-  it("treats nothing and something as different, and nothing as itself", () => {
-    expect(sameObject(null, { typeId: TYPE, instanceId: INSTANCE })).toBe(false);
-    expect(sameObject({ typeId: TYPE, instanceId: INSTANCE }, null)).toBe(false);
-    expect(sameObject(null, null)).toBe(true);
   });
 });
 

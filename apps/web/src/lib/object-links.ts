@@ -57,29 +57,32 @@ export function encodeObject(ref: ObjectRef): string {
  */
 export function decodeObject(raw: string | null): ObjectRef | null {
   if (!raw) return null;
+  // **No separate check that the separator is there and not first**, and
+  // §309's mutation run is why: `if (at <= 0) return null` survived every
+  // mutation of it, because the UUID test below already refuses everything it
+  // was refusing. With no colon, `slice(0, -1)` and `slice(0)` differ by one
+  // character, so they cannot both be 36-character UUIDs; with a leading
+  // colon, the first half is empty. The guard read like caution and was
+  // arithmetic that could not come out any other way.
   const at = raw.indexOf(":");
-  if (at <= 0) return null;
   const typeId = raw.slice(0, at);
   const instanceId = raw.slice(at + 1);
   if (!UUID.test(typeId) || !UUID.test(instanceId)) return null;
   return { typeId, instanceId };
 }
 
-/**
- * Whether two references are the same object.
+/* `sameObject` lived here and is gone (§309).
  *
- * Used to decide whether an open object needs re-fetching when the URL
- * changes. Comparing the encoded strings would work too and would be wrong
- * the first time either half's case differed — a UUID pasted from somewhere
- * that upper-cases them is the same object.
+ * It compared two references case-insensitively, so that an open object and
+ * the URL could be checked against each other — and the mutation run showed
+ * that check was unreachable: the only writer of the parameter sets both at
+ * once, so they could not disagree. The component now seeds the query cache
+ * under the object's own key instead, which makes a stale instance
+ * unrepresentable rather than checked for, and left this with no caller.
+ *
+ * Deleted rather than kept for a future caller: an exported function nothing
+ * calls is one whose tests pass forever regardless of whether it is right.
  */
-export function sameObject(a: ObjectRef | null, b: ObjectRef | null): boolean {
-  if (a === null || b === null) return a === b;
-  return (
-    a.typeId.toLowerCase() === b.typeId.toLowerCase() &&
-    a.instanceId.toLowerCase() === b.instanceId.toLowerCase()
-  );
-}
 
 /**
  * What to say when a link names an object that is not there.

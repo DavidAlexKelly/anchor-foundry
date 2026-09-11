@@ -43,7 +43,6 @@ import {
   decodeObject,
   encodeObject,
   missingNote,
-  sameObject,
 } from "@/lib/object-links";
 import { displayValue } from "@/components/object-value";
 import { CopyLinkButton, useUrlState } from "@/components/use-url-state";
@@ -156,6 +155,7 @@ export function ObjectExplorer({
   // exist, so the surface they were built for has to be linkable too, and one
   // source of truth is how it stays that way through a paste or a reload.
   const url = useUrlState();
+  const explorerClient = useQueryClient();
   const criteria: Criteria = {
     q: url.get("q") ?? "",
     typeIds: url.all("type"),
@@ -179,32 +179,37 @@ export function ObjectExplorer({
   // search was not, so a reader who found something could send the search and
   // a sentence saying which row.
   const openRef = decodeObject(url.get(OBJECT_PARAM));
-  // **A cache, not the state.** The URL decides which object is open; this
-  // holds the instance the row already had, so clicking Explore costs no round
-  // trip. Keeping it as the state instead would mean two sources of truth, and
-  // the browser's Back button is where they would first disagree — the
-  // parameter would go and the dialog would stay.
-  const [cached, setCached] = useState<LinkStop | null>(null);
 
-  // The object the link names, fetched when this browser did not just open it.
-  // Skipped when the cache already holds it, so clicking Explore costs no
-  // round trip: the row is on screen and carries the whole instance.
+  // **The URL is the only state, and the instance comes from one place.**
+  //
+  // Clicking Explore should not cost a round trip — the row on screen already
+  // carries the whole instance — so the first version of this kept it in a
+  // `useState` beside the URL and preferred it when the two agreed. §309's
+  // mutation run killed that: the agreement check was correct and *unreachable*,
+  // because the only writer of the parameter is `show`, which sets both at
+  // once. A guard nothing can make fail is a guard the next person deletes.
+  //
+  // Seeding this query's cache instead removes the question rather than
+  // answering it. The key **is** the object's identity, so a stale instance is
+  // not a bug to be checked for, it is unrepresentable.
   const linked = useQuery({
     queryKey: ["explorer-object", workspaceId, openRef?.typeId, openRef?.instanceId],
     queryFn: () => objApi.getInstance(workspaceId, openRef!.typeId, openRef!.instanceId),
-    enabled:
-      openRef !== null &&
-      !(
-        cached !== null &&
-        sameObject(openRef, { typeId: cached.typeId, instanceId: cached.instance.id })
-      ),
+    enabled: openRef !== null,
     // A link to a deleted object is an ordinary thing to be sent, not a
     // failure worth retrying three times before saying so.
     retry: false,
   });
 
   function show(stop: LinkStop | null) {
-    setCached(stop);
+    if (stop) {
+      // The row's instance, filed under the key the query will ask for, so the
+      // fetch below is a cache hit rather than a request.
+      explorerClient.setQueryData(
+        ["explorer-object", workspaceId, stop.typeId, stop.instance.id],
+        stop.instance,
+      );
+    }
     url.set({
       [OBJECT_PARAM]: stop
         ? encodeObject({ typeId: stop.typeId, instanceId: stop.instance.id })
@@ -244,20 +249,14 @@ export function ObjectExplorer({
   // Below `byId` because it reads it: the link carries the type's id and the
   // dialog wants its name.
   const linkedType = byId.get(openRef?.typeId ?? "");
-  const cacheHit =
-    cached !== null &&
-    sameObject(openRef, { typeId: cached.typeId, instanceId: cached.instance.id });
-  const openObject: LinkStop | null = !openRef
-    ? null
-    : cacheHit
-      ? cached
-      : linked.data && linkedType
-        ? {
-            typeId: openRef.typeId,
-            typeName: linkedType.display_name,
-            instance: linked.data,
-          }
-        : null;
+  const openObject: LinkStop | null =
+    openRef && linked.data && linkedType
+      ? {
+          typeId: openRef.typeId,
+          typeName: linkedType.display_name,
+          instance: linked.data,
+        }
+      : null;
 
   const page = useQuery({
     queryKey: ["object-explorer", workspaceId, applied, offset],
