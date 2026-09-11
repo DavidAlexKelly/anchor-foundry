@@ -1828,6 +1828,11 @@ class BatchRequest(BaseModel):
     edits: list[InlineEdit] = Field(
         min_length=1, max_length=actions_service.INLINE_EDIT_ROW_LIMIT
     )
+    #: Which application submitted this, for p.33's usage breakdown (§320,
+    #: §324). The same field `ExecuteRequest` carries, and for the same reason:
+    #: the Object Table and the Object Explorer reach this route identically,
+    #: so the label is the only thing that tells them apart.
+    application: str | None = Field(default=None, max_length=50)
 
 
 class BatchResult(BaseModel):
@@ -2083,6 +2088,27 @@ async def execute_batch(
                 dataset_version=dataset_versions.get(str(row["source"]["dataset_id"])),
                 error=error,
             )
+        # **One write for the submission, not one per row** (§324;
+        # `ontology-manager` p.32: "Many objects edited in bulk at once will
+        # only be recorded as a single write"). This route recorded *none*
+        # until §324 — every count in §320's panel came from `execute_action`,
+        # so a hundred rows saved from an Object Table moved nothing, and the
+        # writes column was a number about one of the two write paths.
+        #
+        # Only on success, matching `execute_action`: p.32 records a write when
+        # an application "makes edits", and a batch that failed made none —
+        # p.138 makes it whole or nothing, so there is no half to count.
+        if ok:
+            try:
+                await usage_service.record(
+                    conn,
+                    object_type_id=object_type_id,
+                    user_id=access.auth.user_id,
+                    application=body.application or "workshop",
+                    writes=1,
+                )
+            except Exception:  # noqa: BLE001 - a metric never fails a write
+                pass
         # **One audit entry for the submission**, matching what the reader did:
         # they pressed Submit once. The per-object record is the runs, which is
         # what `batch_id` exists to let somebody read back.

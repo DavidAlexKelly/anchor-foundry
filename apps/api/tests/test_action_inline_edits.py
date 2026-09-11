@@ -773,3 +773,138 @@ def test_a_viewer_cannot_submit_a_batch(
         json={"edits": [{"instance_id": instances["1"], "values": {"status": "x"}}]},
     )
     assert r.status_code == 403, r.text
+
+
+# ---- what a bulk edit does to the usage numbers (§324; p.32) ------------------
+def usage_of(client: TestClient, fx: Fixture, type_id: str) -> dict:
+    r = client.get(f"{wbase(fx)}/object-types/{type_id}/usage",
+                   headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def by_application(client: TestClient, fx: Fixture, type_id: str) -> dict[str, dict]:
+    r = client.get(f"{wbase(fx)}/object-types/{type_id}/usage/by-application",
+                   headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return {row["application"]: row for row in r.json()}
+
+
+def test_a_bulk_edit_is_one_write_and_not_one_per_row(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str]
+) -> None:
+    """`ontology-manager` p.32, and a hole §320 left open.
+
+        "Note that one write represents one edit request sent to Object Storage
+         v1 (Phonograph). **Many objects edited in bulk at once will only be
+         recorded as a single write.**" (p.32)
+
+    This route recorded **no** writes at all until §324 — every number in
+    §320's panel came from `execute_action`, so a hundred rows saved from an
+    Object Table moved nothing, and the writes column was a figure about one of
+    the two write paths while claiming to be about the type.
+
+    Three rows and one write is the assertion that says which rule is in force:
+    a per-row count would give three, and is what somebody would write without
+    reading the sentence.
+    """
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    before = usage_of(client, fx, ticket_type_id)["writes"]
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"edits": [
+            {"instance_id": instances["1"], "values": {"priority": "bulk1"}},
+            {"instance_id": instances["2"], "values": {"priority": "bulk2"}},
+            {"instance_id": instances["3"], "values": {"priority": "bulk3"}},
+        ]},
+    )
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+    assert usage_of(client, fx, ticket_type_id)["writes"] == before + 1, (
+        "three rows edited at once is one write, not three"
+    )
+
+
+def test_a_bulk_edit_is_counted_against_the_surface_that_sent_it(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str]
+) -> None:
+    """p.32 lists "direct Object Explorer edit" and a Workshop table as
+    different sources of the same kind of write, and §320's panel breaks the
+    numbers down by application.
+
+    The two surfaces reach this route identically, so the label is the only
+    thing that tells them apart — which is exactly the shape §320's
+    `ONTOLOGY_MANAGER` exclusion has, and the reason it is a value the recorder
+    recognises rather than a caller that happens not to call.
+    """
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    before = by_application(client, fx, ticket_type_id)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"application": "explorer",
+              "edits": [{"instance_id": instances["1"],
+                         "values": {"priority": "from-the-explorer"}}]},
+    )
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+
+    after = by_application(client, fx, ticket_type_id)
+    assert after["explorer"]["writes"] == before.get(
+        "explorer", {"writes": 0}
+    )["writes"] + 1
+    # And it did not land under the other surface's name. Without this the test
+    # passes for a route that labels every batch "explorer".
+    assert after.get("workshop", {"writes": 0})["writes"] == before.get(
+        "workshop", {"writes": 0}
+    )["writes"]
+
+
+def test_an_unlabelled_batch_is_the_object_table(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str]
+) -> None:
+    """The default, which is not an arbitrary choice.
+
+    `execute-batch` exists for `workshop` p.242's staged edits and had exactly
+    one caller before §324, so a submission that names no application is that
+    caller — and defaulting to `"api"` would move every existing Object Table's
+    writes into a column about something else the day this field shipped.
+    """
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    before = by_application(client, fx, ticket_type_id)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"edits": [{"instance_id": instances["2"],
+                         "values": {"priority": "unlabelled"}}]},
+    )
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+    after = by_application(client, fx, ticket_type_id)
+    assert after["workshop"]["writes"] == before.get(
+        "workshop", {"writes": 0}
+    )["writes"] + 1
+
+
+def test_a_refused_batch_writes_nothing_and_counts_nothing(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str]
+) -> None:
+    """p.32 records a write when an application "makes edits", and p.138 makes
+    a batch whole or nothing — so a refused submission made none.
+
+    Refused by naming the same object twice, which p.138 calls out by name and
+    which is refused *before* anything is written, so the count has nothing to
+    be charged for.
+    """
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    before = usage_of(client, fx, ticket_type_id)["writes"]
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"edits": [
+            {"instance_id": instances["1"], "values": {"priority": "once"}},
+            {"instance_id": instances["1"], "values": {"priority": "twice"}},
+        ]},
+    )
+    assert r.status_code == 422, r.text
+    assert usage_of(client, fx, ticket_type_id)["writes"] == before, (
+        "a submission that wrote nothing is not a write"
+    )

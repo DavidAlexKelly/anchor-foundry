@@ -1906,10 +1906,18 @@ export const actions = {
     pid: string,
     actionTypeId: string,
     edits: { instance_id: string; values: Record<string, unknown> }[],
+    /** Which surface sent this, for p.32's usage breakdown (§324). The Object
+     * Table and the Object Explorer reach this route identically, so the label
+     * is the only thing that tells them apart. Omitted means the Object Table,
+     * which is the caller this route was written for. */
+    application?: string,
   ) =>
     request<import("./types").ActionBatchResult>(
       `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/execute-batch`,
-      { method: "POST", body: JSON.stringify({ edits }) },
+      {
+        method: "POST",
+        body: JSON.stringify(application ? { edits, application } : { edits }),
+      },
     ),
   getType: (wid: string, actionTypeId: string) =>
     request<import("./types").ActionType>(
