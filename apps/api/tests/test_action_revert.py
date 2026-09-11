@@ -266,3 +266,4 @@ def test_a_run_that_did_several_of_them_still_gets_one_sentence(kinds: dict) -> 
     said = action_revert.unsupported_reason(**kinds)  # type: ignore[arg-type]
     assert said is not None
     assert said.count(".") == 1
+

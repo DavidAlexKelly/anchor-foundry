@@ -121,6 +121,25 @@ def an_object(client: TestClient, fx: Fixture, world: dict, name: str) -> dict:
     return next(i for i in r.json()["items"] if i["properties"]["name"] == name)
 
 
+def by_key(client: TestClient, fx: Fixture, world: dict, key: str) -> dict:
+    """One object by its **primary key**, which is the only handle that holds.
+
+    `an_object` matches on `name`, and `name` is a property these tests edit —
+    so a test that runs after one whose undo was refused looks for a person who
+    no longer has that name and raises `StopIteration` from a `next()` four
+    frames away. Found exactly that way. The module-scoped fixture is the
+    reason: this suite's own house rule is that a test which writes gets its
+    own module, and the cheap version of that rule is to address rows by the
+    one field nothing here changes.
+    """
+    r = client.get(
+        f"{wbase(fx)}/object-types/{world['type_id']}/instances",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    return next(i for i in r.json()["items"] if i["primary_key"] == key)
+
+
 def apply(client: TestClient, fx: Fixture, world: dict, instance_id: str,
           values: dict, sub: str | None = None) -> dict:
     r = client.post(
@@ -281,6 +300,17 @@ def test_turning_the_toggle_off_takes_undo_away_and_turning_it_on_does_not_retur
     )
     assert r.status_code == 200, r.text
     assert r.json()["allow_revert"] is False
+
+    # **The apply has to be able to say no**, and nothing here asserted that
+    # until a surviving mutant pointed it out: `can_undo=True` hard-coded
+    # passed every test in this file, because all of them checked the happy
+    # answer. p.155's toast is the reader's only opportunity, so a server that
+    # always claims one is a button that always 409s.
+    grace2 = by_key(client, fx, world, "p2")
+    while_off = apply(client, fx, world, grace2["id"], {"email": "grace@off.test"})
+    assert while_off["can_undo"] is False
+    assert while_off["undo_refusal"] and "switched off" in while_off["undo_refusal"]
+
     blocked = undo(client, fx, world, result["run_id"])
     assert blocked.status_code == 409, blocked.text
     assert "switched off" in blocked.text
@@ -340,3 +370,90 @@ def test_a_viewer_cannot_undo(
     result = apply(client, fx, world, ada["id"], {"name": "Ada Viewer"})
     r = undo(client, fx, world, result["run_id"], sub=fx.viewer_sub)
     assert r.status_code == 403, r.text
+
+
+def test_the_toggle_only_blocks_runs_that_existed_when_it_went_off(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """**p.155's rule is about the order, and a surviving mutant found that
+    nothing here checked it.**
+
+    "An action cannot be reverted if action reverts has been toggled off
+     **after action submission**, even if action reverts have been toggled on
+     again."
+
+    So the stamp belongs to the runs that were outstanding at the moment the
+    toggle went off. A run submitted *while* it was off has had no toggle-off
+    after its submission — and when the toggle comes back on, it becomes
+    undoable like any other.
+
+    The mutant that survived stamped on the way **up** instead of the way down.
+    Every test in this file passed, because both implementations refuse the
+    same runs with the same sentence in every sequence those tests tried: the
+    only case that separates them is a run applied while the toggle is off.
+    """
+    r = client.patch(
+        f"{wbase(fx)}/action-types/{world['action_id']}", headers=hdr(fx.editor_sub),
+        json={"allow_revert": False},
+    )
+    assert r.status_code == 200, r.text
+
+    ada = by_key(client, fx, world, "p1")
+    while_off = apply(client, fx, world, ada["id"], {"name": "Ada While Off"})
+    assert while_off["can_undo"] is False
+
+    r = client.patch(
+        f"{wbase(fx)}/action-types/{world['action_id']}", headers=hdr(fx.editor_sub),
+        json={"allow_revert": True},
+    )
+    assert r.status_code == 200, r.text
+    # Nothing was toggled off after this run was submitted, so it is undoable
+    # now — under the mutant it was stamped on the way up and stays refused.
+    assert undo(client, fx, world, while_off["run_id"]).status_code == 200
+
+
+def test_the_claim_on_a_run_can_only_be_won_once(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """**A guard the endpoint's own sequence cannot reach**, which is why a
+    mutant that removed it survived eleven end-to-end tests.
+
+    `refusal` already turns away a second undo — `reverted_at` is set by then —
+    so every *sequential* press is stopped before `mark_reverted` is called at
+    all. The clause exists for presses that arrive together: both pass the
+    refusal, and only one may write. p.155 calls the toast "your only
+    opportunity", and two winners would mean the second putting the old values
+    over what the first had just restored.
+
+    **Calls the service**, not a copy of its SQL. The first version of this
+    test wrote the `UPDATE` out by hand and asserted that *it* behaved — which
+    would have passed with the clause deleted from the service, and is the
+    shape of vacuous check this repo keeps finding.
+    """
+    import asyncio
+    from uuid import UUID as Uuid
+
+    from src.lib.db import user_connection
+    from src.services import actions as actions_service
+
+    ada = by_key(client, fx, world, "p1")
+    applied = apply(client, fx, world, ada["id"], {"name": "Ada Claimed"})
+    run_id = Uuid(applied["run_id"])
+    actor = Uuid(str(fx.editor))
+
+    async def claim_twice() -> tuple[bool, bool]:
+        async with user_connection(actor) as conn:
+            first = await actions_service.mark_reverted(
+                conn, run_id, by=actor, revert_run_id=run_id
+            )
+            second = await actions_service.mark_reverted(
+                conn, run_id, by=actor, revert_run_id=run_id
+            )
+        return first, second
+
+    won, lost = asyncio.run(claim_twice())
+    assert won is True, "the first caller must be told to go ahead"
+    assert lost is False, (
+        "a second caller was also told to go ahead, so both would write the "
+        "old values"
+    )
