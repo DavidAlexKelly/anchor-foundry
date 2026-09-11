@@ -28,6 +28,7 @@ import {
   idleMessage,
   isIdle,
   needsAttention,
+  runAuthor,
   runSummary,
   successText,
 } from "@/lib/action-metrics";
@@ -55,10 +56,34 @@ export function ActionMetricsSection({
 }) {
   const [chosen, setChosen] = useState(actionTypes[0]?.id ?? "");
   const active = actionTypes.find((a) => a.id === chosen) ?? actionTypes[0];
-  // Absent entirely when there is nothing to measure — and this is also
-  // what narrows `active`, which an empty list leaves undefined.
-  if (!active) return null;
 
+  // **The slot is always here; what goes in it is not.** An early `return null`
+  // leaves nothing for a test to point at, so "no panel is drawn" could only be
+  // checked as the absence of the panel's own test id — which a stray heading,
+  // a spinner or a placeholder would all satisfy while being visible on the
+  // page. A mutant replacing the null with a line of text survived the browser
+  // sweep on exactly that. With an empty slot the claim is positive: this
+  // region is empty.
+  return (
+    <div data-testid="action-metrics-slot">
+      {active && <ActionMetricsFor active={active} actionTypes={actionTypes}
+                                   workspaceId={workspaceId}
+                                   onChoose={setChosen} />}
+    </div>
+  );
+}
+
+function ActionMetricsFor({
+  active,
+  actionTypes,
+  workspaceId,
+  onChoose,
+}: {
+  active: { id: string; display_name: string };
+  actionTypes: readonly { id: string; display_name: string }[];
+  workspaceId: string;
+  onChoose: (id: string) => void;
+}) {
   return (
     <section data-testid="action-metrics-section" style={{ marginTop: 24 }}>
       {actionTypes.length > 1 && (
@@ -67,7 +92,7 @@ export function ActionMetricsSection({
           <select
             data-testid="metrics-action-picker"
             value={active.id}
-            onChange={(e) => setChosen(e.target.value)}
+            onChange={(e) => onChoose(e.target.value)}
           >
             {actionTypes.map((a) => (
               <option key={a.id} value={a.id}>{a.display_name}</option>
@@ -223,8 +248,10 @@ export function ActionMetricsPanel({
                 <td className="count">{durationText(run.seconds)}</td>
                 {/* A run whose author has left the workspace still happened,
                     and a blank cell would read as a bug in the page rather
-                    than a fact about the person (§322's `authorLabel`). */}
-                <td>{run.requested_by_name ?? "Former member"}</td>
+                    than a fact about the person (§322's `authorLabel`). The
+                    rule is in the lib, where a departed author can be written
+                    down rather than arranged for. */}
+                <td>{runAuthor(run)}</td>
               </tr>
             ))}
           </tbody>

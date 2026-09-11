@@ -30,6 +30,7 @@ from __future__ import annotations
 import io
 import os
 import sys
+import uuid
 
 import psycopg
 import pytest
@@ -64,6 +65,13 @@ def test_a_collision_is_p166_s_conflict() -> None:
         'duplicate key value violates unique constraint "x_pkey"',
         "Constraint Error: object already exists",
         "concurrent update detected",
+        # **Shouted, which is how a lot of engines say it.** The marks are
+        # written in lower case and the message is folded before they are
+        # looked for; without a capitalised case here, a classifier that
+        # dropped the fold would answer correctly on every string this suite
+        # had and wrongly on half the ones a real engine sends.
+        "DUPLICATE KEY value violates unique constraint",
+        "Constraint Error: object ALREADY EXISTS",
     ):
         assert action_metrics.classify_engine_error(said) == "conflict", said
 
@@ -503,3 +511,291 @@ def test_an_engine_failure_is_classified_when_it_is_caught(
 
     now = failures_of(metrics(client, fx, world).json())
     assert now.get("conflict", 0) == before.get("conflict", 0) + 1
+
+
+# ---- the states a handful of real runs cannot produce -------------------------
+#
+# **Seeded straight into `action_runs`, and that is the point.** What the tests
+# below check is arithmetic in one SQL statement — a window boundary, a
+# percentile over a distribution, a status that is neither outcome, a page limit
+# — and none of them can be reached by applying an action a few times: a real
+# run always finishes, always finishes now, and always takes about the same
+# fraction of a second. Twenty applications would be twenty durations clustered
+# inside a tenth of a second, which is a distribution no percentile can be wrong
+# about.
+#
+# The mutation sweep is what said so. `percentile_disc` → `percentile_cont`,
+# thirty days → nine hundred, a `running` run counted as a failure, and a
+# history with no `LIMIT` all survived a suite of real applications: every
+# assertion in it was true, and none of them reached the branch it was about.
+
+
+def seed(action_id: str, user_id, rows: list[dict]) -> None:
+    """Write runs with the durations, ages and statuses a test chooses.
+
+    Offsets in seconds rather than timestamps, so a row reads as "began forty
+    days ago and took three seconds" instead of as two absolute times the
+    reader has to subtract.
+    """
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        for row in rows:
+            began = row["began_secs_ago"]
+            took = row.get("took_secs")
+            conn.execute(
+                "INSERT INTO action_runs (action_type_id, requested_by, status, "
+                "       failure_category, started_at, finished_at) "
+                "VALUES (%s, %s, %s, %s, now() - make_interval(secs => %s), "
+                "        CASE WHEN %s::float IS NULL THEN NULL "
+                "             ELSE now() - make_interval(secs => %s) END)",
+                (action_id, str(user_id), row["status"], row.get("category"),
+                 began, took, began - (took or 0)),
+            )
+
+
+def a_spare_action(client: TestClient, fx: Fixture, world: dict) -> str:
+    """Another action type on the same object type, for seeded runs.
+
+    **Its own, every time.** Every number here is a count over one action type,
+    and these rows are chosen to put a percentile in a known place — seeding
+    them onto a shared action would move what the tests above assert, and
+    sharing one between the tests below would make each depend on the order the
+    others ran in.
+    """
+    r = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": world["type_id"],
+              "api_name": f"seeded_{uuid.uuid4().hex[:8]}",
+              "display_name": "Seeded runs", "editable_properties": ["name"]},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def metrics_of(client: TestClient, fx: Fixture, action_id: str) -> dict:
+    r = client.get(f"{wbase(fx)}/action-types/{action_id}/metrics",
+                   headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def history_of(client: TestClient, fx: Fixture, action_id: str) -> list[dict]:
+    r = client.get(f"{wbase(fx)}/action-types/{action_id}/history",
+                   headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+DAY = 24 * 60 * 60
+
+
+def test_a_run_older_than_the_window_is_not_counted(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.164's window is "the last 30 days", which is a claim about what is
+    **left out**.
+
+    A suite whose runs all happened moments ago cannot tell a thirty-day window
+    from a thirty-year one — every assertion is true under both. So one run is
+    placed outside it and the count is asserted to have ignored it.
+    """
+    action = a_spare_action(client, fx, world)
+    seed(action, fx.editor, [
+        {"began_secs_ago": 2 * DAY, "took_secs": 1, "status": "succeeded"},
+        {"began_secs_ago": 60 * DAY, "took_secs": 1, "status": "succeeded"},
+    ])
+    body = metrics_of(client, fx, action)
+    assert body["succeeded"] == 1, "the sixty-day-old run is outside p.164's window"
+    assert body["total"] == 1
+
+
+def test_a_running_run_is_neither_outcome(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """**The third state, which no real run in this suite stays in.**
+
+    An action here finishes inside the request that started it, so `running` is
+    a status the other tests can never observe — and a mutant folding it into
+    the failures survived every one of them. Counted as itself, it also stays
+    out of the P95: a run still going has no duration, and treating its elapsed
+    time as one would make the percentile fall as soon as anybody looked.
+    """
+    action = a_spare_action(client, fx, world)
+    seed(action, fx.editor, [
+        {"began_secs_ago": 90, "took_secs": 5, "status": "succeeded"},
+        {"began_secs_ago": 30, "took_secs": None, "status": "running"},
+    ])
+    body = metrics_of(client, fx, action)
+
+    assert body["running"] == 1
+    assert body["failed"] == 0, "a run still going has not failed"
+    assert body["succeeded"] == 1, "nor has it succeeded"
+    assert body["total"] == 2
+    assert body["p95_seconds"] == 5, (
+        "an unfinished run has no duration to put in the percentile — its "
+        "elapsed time is not one"
+    )
+
+
+def test_the_p95_is_the_95th_percentile_of_durations_that_happened(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.164's P95, over a distribution wide enough to be wrong about.
+
+    **Two claims, and each kills a different mutant.** That it is a *discrete*
+    percentile — the answer is a duration some run actually took, not one
+    interpolated between two that did, which is the honest reading of p.164's
+    "upper range of execution times". And that it is the ninety-fifth rather
+    than the fiftieth: twenty runs of one to twenty seconds have a median of
+    ten and a P95 of nineteen, and a suite whose runs all take the same
+    fraction of a second cannot tell those apart.
+    """
+    action = a_spare_action(client, fx, world)
+    seed(action, fx.editor,
+         [{"began_secs_ago": 3600, "took_secs": n, "status": "succeeded"}
+          for n in range(1, 21)])
+    body = metrics_of(client, fx, action)
+
+    assert body["succeeded"] == 20
+    p95 = body["p95_seconds"]
+    # A whole number of seconds: every run took one, so an interpolating
+    # percentile — 19.05 over this set — is a duration nothing took.
+    assert p95 == int(p95), f"P95 {p95} falls between two runs rather than on one"
+    assert 1 <= p95 <= 20
+    # And it is the upper range rather than the middle of it.
+    assert p95 > 10, f"P95 {p95} is a median, not a 95th percentile"
+
+
+def test_a_failure_recorded_before_db_0079_is_still_counted(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """**The rows that predate the column**, of which this build's development
+    database holds 515.
+
+    `failure_category` is nullable and every failure written since db 0079 has
+    one, so nothing this suite does produces a `NULL` — and a query that
+    dropped those rows would give a breakdown adding up to less than the
+    failure count printed above it. `COALESCE` puts them in p.166's own last
+    category, which is what "unclassified" is for.
+    """
+    action = a_spare_action(client, fx, world)
+    seed(action, fx.editor, [
+        {"began_secs_ago": 60, "took_secs": 1, "status": "failed", "category": None},
+        {"began_secs_ago": 50, "took_secs": 1, "status": "failed",
+         "category": "conflict"},
+    ])
+    body = metrics_of(client, fx, action)
+
+    counted = {f["category"]: f["failures"] for f in body["failures"]}
+    assert body["failed"] == 2
+    # **And no success was invented.** Two failures and nothing else is the one
+    # shape that tells `status = 'succeeded'` from `status IN ('succeeded',
+    # 'failed')` — every test above this one asserted `succeeded` while there
+    # were no failures yet, where the two spellings agree.
+    assert body["succeeded"] == 0, "a failure is not a success"
+    assert counted == {"unclassified": 1, "conflict": 1}
+    assert sum(counted.values()) == body["failed"], (
+        "a breakdown that drops rows adds up to less than the count above it"
+    )
+
+
+def test_the_breakdown_is_biggest_first(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """The order, which needs two categories of **different** sizes to exist.
+
+    Every other test here reads the breakdown into a dict, which throws the
+    order away — so a query sorting ascending was indistinguishable from one
+    sorting descending. Somebody opening this list is looking for the biggest
+    cause of failure, and finding it last is finding it after reading the rest.
+    """
+    action = a_spare_action(client, fx, world)
+    seed(action, fx.editor,
+         [{"began_secs_ago": 60, "took_secs": 1, "status": "failed",
+           "category": "conflict"}]
+         + [{"began_secs_ago": 50, "took_secs": 1, "status": "failed",
+             "category": "invalid_parameter"} for _ in range(3)])
+    body = metrics_of(client, fx, action)
+
+    assert [f["category"] for f in body["failures"]] == [
+        "invalid_parameter", "conflict",
+    ]
+    assert [f["failures"] for f in body["failures"]] == [3, 1]
+
+
+def test_the_history_is_one_action_type_s(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """**Two action types, which is the only pair that can disagree.**
+
+    A history keyed on nothing still returns exactly the runs a test made when
+    the test made all of them — the query is wrong and the answer is right.
+    Two actions make the two differ: the other action's failures would appear
+    under this one, and somebody diagnosing a broken action would be reading
+    about a different one.
+    """
+    mine = a_spare_action(client, fx, world)
+    theirs = a_spare_action(client, fx, world)
+    seed(mine, fx.editor, [{"began_secs_ago": 60, "took_secs": 1,
+                            "status": "succeeded"}])
+    seed(theirs, fx.editor, [{"began_secs_ago": 60, "took_secs": 1,
+                              "status": "failed", "category": "conflict"}])
+
+    rows = history_of(client, fx, mine)
+    assert [r["status"] for r in rows] == ["succeeded"]
+    assert history_of(client, fx, theirs) and [
+        r["status"] for r in history_of(client, fx, theirs)
+    ] == ["failed"]
+
+
+def test_the_history_is_a_page_rather_than_everything(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.164 says "complete", and seven days of a busy action is not a list
+    anybody reads — so the window is the promise and `HISTORY_LIMIT` is the
+    page (§256).
+
+    Seeded past the limit because nothing else here comes near it: a suite that
+    makes four runs cannot tell a limit of two hundred from no limit at all,
+    and the mutant removing the `LIMIT` survived every test in this file.
+    """
+    action = a_spare_action(client, fx, world)
+    over = action_metrics.HISTORY_LIMIT + 1
+    seed(action, fx.editor,
+         [{"began_secs_ago": 100 + n, "took_secs": 1, "status": "succeeded"}
+          for n in range(over)])
+
+    rows = history_of(client, fx, action)
+    assert len(rows) == action_metrics.HISTORY_LIMIT, (
+        f"seeded {over} runs and the history returned {len(rows)}"
+    )
+    # Newest first, so the page that is returned is the recent end of the list
+    # rather than an arbitrary slice of it.
+    times = [r["started_at"] for r in rows]
+    assert times == sorted(times, reverse=True)
+
+
+def test_a_category_this_platform_cannot_produce_is_refused(
+) -> None:
+    """The guard on `record_refusal`, which nothing else reaches.
+
+    db 0079's CHECK would reject the row anyway — but it would reject it as a
+    database error inside a request already unwinding from a refusal, which is
+    a failure to record a failure and would surface as a 500 over a 422. The
+    guard names the mistake where somebody can read it.
+
+    Run with `asyncio.run` because the check happens **before** the connection
+    is opened, which is also the claim: a bad category costs nothing.
+    """
+    import asyncio
+
+    with pytest.raises(ValueError) as refused:
+        asyncio.run(action_metrics.record_refusal(
+            action_type_id=uuid.uuid4(), instance_id=None, dataset_id=None,
+            requested_by=uuid.uuid4(), submitted_values={},
+            category="function", message="a function that does not exist failed",
+        ))
+    # p.166's two function categories are the realistic mistake — they are on
+    # the page, and absent here on purpose — so the message names what is
+    # allowed rather than only what was wrong.
+    assert "function" in str(refused.value)
+    assert "invalid_parameter" in str(refused.value)

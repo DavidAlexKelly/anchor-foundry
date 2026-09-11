@@ -127,7 +127,12 @@ export function successText(metrics: ActionMetrics): string {
  * the wrong moment, so this asks both and takes the union.
  */
 export function needsAttention(metrics: ActionMetrics): boolean {
-  if (metrics.failed === 0) return false;
+  // There was an `if (metrics.failed === 0) return false;` here, and the
+  // mutation sweep was right to survive without it: with no failures the rate
+  // is either 100% (nothing failed out of something) or `null` (nothing
+  // finished), so both clauses below are already false. It said nothing the
+  // next two lines did not, and a guard that cannot change an answer is a line
+  // a reader has to prove harmless (§213).
   const rate = successRate(metrics);
   return metrics.failed >= 10 || (rate !== null && rate < 95);
 }
@@ -179,6 +184,21 @@ export function breakdown(
  * message is the engine's or the criterion's own words and can be a paragraph,
  * and the history is a list somebody scans. The message is still there to open.
  */
+/**
+ * Who submitted a run, as the history names them.
+ *
+ * **A pure function rather than a `??` in the table** (§322's `authorLabel`).
+ * A run whose author has left the workspace comes back with no name, and no
+ * browser test can produce one — deleting a person mid-suite to check a fallback
+ * is a test about the fixture. Here it is one line and one assertion.
+ *
+ * Named as gone rather than left blank: the run still happened, and an empty
+ * cell reads as a bug in the page rather than as a fact about the person.
+ */
+export function runAuthor(run: { requested_by_name: string | null }): string {
+  return run.requested_by_name || "Former member";
+}
+
 export function runSummary(run: {
   status: string;
   failure_category: string | null;

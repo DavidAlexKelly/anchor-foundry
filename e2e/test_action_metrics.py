@@ -202,4 +202,13 @@ def test_a_type_with_no_actions_has_no_metrics_panel(page, api) -> None:
     # The usage panel is on the same page and does render, so this is a page
     # that got as far as drawing its panels.
     expect(page.get_by_test_id("usage-panel")).to_be_visible(timeout=30000)
+    # **The slot is empty, which is a stronger claim than "the panel is
+    # missing".** Asserting only that `action-metrics-section` is absent is
+    # satisfied by anything at all rendering in its place — a heading with no
+    # numbers under it, a spinner that never resolves, a stray line of text —
+    # and a mutant that put one there survived on exactly that. An empty slot
+    # says nothing is drawn here, which is what §214 is about.
+    slot = page.get_by_test_id("action-metrics-slot")
+    expect(slot).to_have_count(1)
+    expect(slot).to_be_empty()
     expect(page.get_by_test_id("action-metrics-section")).to_have_count(0)

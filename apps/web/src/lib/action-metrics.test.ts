@@ -15,6 +15,7 @@ import {
   idleMessage,
   isIdle,
   needsAttention,
+  runAuthor,
   runSummary,
   successRate,
   successText,
@@ -206,6 +207,18 @@ describe("one run in the history", () => {
     // not — "Failed" is the honest answer, and dropping the row would make the
     // list disagree with the count above it.
     expect(runSummary({ status: "failed", failure_category: null })).toBe("Failed");
+  });
+
+  it("names an author who has left rather than leaving the cell blank", () => {
+    // **The case a browser test cannot make.** Producing a run whose author has
+    // been deleted means deleting a person mid-suite, which is a test about the
+    // fixture; the mutant dropping this fallback survived the browser sweep for
+    // exactly that reason, because every run in it had a living author.
+    expect(runAuthor({ requested_by_name: null })).toBe("Former member");
+    // An empty string is the same fact arriving differently — a user row with
+    // no display name — and reads the same way in the cell.
+    expect(runAuthor({ requested_by_name: "" })).toBe("Former member");
+    expect(runAuthor({ requested_by_name: "Ada Lovelace" })).toBe("Ada Lovelace");
   });
 
   it("distinguishes a run that is still going from one that worked", () => {
