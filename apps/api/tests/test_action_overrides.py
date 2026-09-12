@@ -22,6 +22,7 @@ went near a screen, or the rule only exists where somebody drew it.
 """
 from __future__ import annotations
 
+import io
 import os
 import sys
 import uuid
@@ -380,13 +381,21 @@ def action(client: TestClient, fx: Fixture) -> str:
     return r.json()["id"]
 
 
-def define(client: TestClient, fx: Fixture, action: str, parameters, sub=None):
+def define(client: TestClient, fx: Fixture, action: str, parameters, sub=None,
+           writes=("status",)):
+    """Save a definition whose rules write the properties named in `writes`.
+
+    The rules are a parameter of this helper rather than a constant, because a
+    test about an overridden *default* has to watch the value land in the
+    object — and it cannot if no rule writes the parameter carrying it.
+    """
     return client.put(
         f"{wbase(fx)}/action-types/{action}/definition",
         headers=hdr(sub or fx.editor_sub),
         json={"parameters": parameters,
               "rules": [{"kind": "modify_object",
-                         "config": {"property": "status", "parameter": "status"}}],
+                         "config": {"property": name, "parameter": name}}
+                        for name in writes],
               "criteria": []},
     )
 
@@ -538,3 +547,190 @@ def test_a_viewer_may_ask_what_the_form_would_ask(
     r = client.post(f"{wbase(fx)}/action-types/{action}/effective-parameters",
                     headers=hdr(fx.outsider_sub), json={"values": {}})
     assert r.status_code in (403, 404), r.text
+
+
+def test_a_block_can_make_a_parameter_optional(
+    client: TestClient, fx: Fixture, action: str
+) -> None:
+    """**p.43's other side, which nothing asked about.**
+
+    "required and visible for managers, while it is hidden and optional for the
+    assignee" — the assignee half is `set_required: False`, and a sweep found
+    that `is not None` and truthiness behaved identically for every block these
+    tests wrote, because none of them ever set a field to false.
+    """
+    r = define(client, fx, action, [
+        parameter("status"),
+        parameter("justification", required=True, overrides=[
+            block(set_required=False),
+        ]),
+    ])
+    assert r.status_code == 200, r.text
+    stored = read(client, fx, action)["justification"]
+    assert stored["required"] is True, "the parameter itself is unchanged"
+    relaxed = effective(client, fx, action, {"status": "closed"})["justification"]
+    assert relaxed["required"] is False
+    strict = effective(client, fx, action, {"status": "open"})["justification"]
+    assert strict["required"] is True
+
+
+def test_the_blocks_come_back_in_the_order_they_were_written(
+    client: TestClient, fx: Fixture, action: str
+) -> None:
+    """The order *is* p.45's rule, so it has to survive the round trip — and a
+    sweep that wrote every block at position zero left every other test green,
+    because `effective` had been checked only against lists built in memory."""
+    define(client, fx, action, [
+        parameter("status"),
+        parameter("justification", overrides=[
+            block(set_hidden=False),
+            block(set_required=True),
+        ]),
+    ]).raise_for_status()
+    saved = read(client, fx, action)["justification"]["overrides"]
+    assert [b["set_hidden"] for b in saved] == [False, None]
+    assert [b["set_required"] for b in saved] == [None, True]
+    # And the first-match rule reads that order: the second block's `required`
+    # is never applied, because the first one holds.
+    resolved = effective(client, fx, action, {"status": "closed"})["justification"]
+    assert resolved["hidden"] is False
+    assert resolved["required"] is False
+
+
+# ---- the half that is not about a form ----------------------------------------
+@pytest.fixture(scope="module")
+def executable(client: TestClient, fx: Fixture):
+    """An action over a real object, so a submission can actually be refused.
+
+    **The tests below are the point of the unit.** Everything above asks what
+    the form would be told; these ask what happens to a submission that never
+    went near a form, which is the difference between an override and a
+    section.
+    """
+    tag = uuid.uuid4().hex[:8]
+    made = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"exec_{tag}", "display_name": f"Exec {tag}",
+              "properties": [
+                  {"api_name": "ticket_id", "data_type": "string"},
+                  {"api_name": "status", "data_type": "string"},
+                  {"api_name": "justification", "data_type": "string"},
+              ]},
+    )
+    assert made.status_code == 201, made.text
+    type_id = made.json()["id"]
+    csv = b"ticket_id,status,justification\n1,open,\n"
+    dataset = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub), data={"name": f"Exec {tag}"},
+        files={"file": ("t.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert dataset.status_code == 201, dataset.text
+    source = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={"object_type_id": type_id, "dataset_id": dataset.json()["id"],
+              "primary_key_column": "ticket_id",
+              "column_mappings": {"status": "status",
+                                  "justification": "justification"}},
+    )
+    assert source.status_code == 201, source.text
+    synced = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/object-type-sources/{source.json()['id']}/sync",
+        headers=hdr(fx.editor_sub),
+    )
+    assert synced.status_code == 200, synced.text
+    instances = client.get(f"{wbase(fx)}/object-types/{type_id}/instances",
+                           headers=hdr(fx.editor_sub)).json()["items"]
+    action = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": type_id, "api_name": f"close_{tag}",
+              "display_name": "Close",
+              "editable_properties": ["status", "justification"]},
+    )
+    assert action.status_code == 201, action.text
+    return {"action": action.json()["id"], "instance": instances[0]["id"],
+            "type": type_id}
+
+
+def run(client: TestClient, fx: Fixture, executable, values, sub=None):
+    return client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/actions/{executable['action']}/execute",
+        headers=hdr(sub or fx.editor_sub),
+        json={"instance_id": executable["instance"], "values": values},
+    )
+
+
+def test_an_override_refuses_a_submission_that_never_saw_a_form(
+    client: TestClient, fx: Fixture, executable
+) -> None:
+    """**The claim the whole unit rests on, on the path with no screen.**
+
+    If p.43's rule were applied for drawing only, this submission would be
+    accepted — the stored parameter is optional, and only the block makes it
+    required. A sweep that removed the resolution from `bind_parameters` left
+    every other test in this file green, because they all ask the *form* what
+    it would be told.
+    """
+    define(client, fx, executable["action"], [
+        parameter("status"),
+        parameter("justification", overrides=[block(set_required=True)]),
+    ]).raise_for_status()
+
+    refused = run(client, fx, executable, {"status": "closed"})
+    assert refused.status_code == 422, refused.text
+    assert "justification" in refused.text
+
+    # And the same submission with the block not holding, which is what makes
+    # the refusal about the override rather than about a required parameter.
+    allowed = run(client, fx, executable, {"status": "open"})
+    assert allowed.status_code == 200, allowed.text
+
+
+def test_an_override_applies_its_default_to_a_submission(
+    client: TestClient, fx: Fixture, executable
+) -> None:
+    """p.45 lists default values among what a block may change, and
+    `bind_parameters` takes a default for a parameter the caller did not
+    supply. The written row is the observable, because a default that only
+    reached the form would be a different feature."""
+    define(client, fx, executable["action"], [
+        parameter("status"),
+        parameter("justification", overrides=[block(set_default="see the ticket")]),
+    ], writes=("status", "justification")).raise_for_status()
+
+    assert run(client, fx, executable, {"status": "closed"}).status_code == 200
+    items = client.get(f"{wbase(fx)}/object-types/{executable['type']}/instances",
+                       headers=hdr(fx.editor_sub)).json()["items"]
+    assert items[0]["properties"]["justification"] == "see the ticket"
+
+
+def test_who_is_submitting_reaches_the_block(
+    client: TestClient, fx: Fixture, executable
+) -> None:
+    """p.43's example is two people submitting the same form, and p.50's second
+    condition template is how a block asks which one.
+
+    A sweep that passed an empty user through `bind_parameters` survived
+    everything else here: the *form* endpoint fetches the caller itself, so
+    only a submission can tell whether the executor does too.
+    """
+    mine = {"left": {"kind": "current_user", "attribute": "id"},
+            "operator": "is", "right": {"kind": "value", "value": str(fx.editor)}}
+    define(client, fx, executable["action"], [
+        parameter("status"),
+        parameter("justification", overrides=[
+            {**block(set_required=True), "conditions": [mine]},
+        ]),
+    ]).raise_for_status()
+
+    refused = run(client, fx, executable, {"status": "open"})
+    assert refused.status_code == 422, refused.text
+    assert "justification" in refused.text
+
+    # The owner is a different person, and the block does not name them — so
+    # the parameter stays optional and the same submission is accepted.
+    allowed = run(client, fx, executable, {"status": "open"}, sub=fx.owner_sub)
+    assert allowed.status_code == 200, allowed.text

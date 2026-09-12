@@ -2523,7 +2523,7 @@ async def set_definition(
     # saved without its blocks would be a different parameter for one request.
     # The blocks reference parameters by api_name, so they can only be written
     # once the rows above exist, which is why this is a second loop.
-    from .action_overrides import replace_overrides
+    from .action_overrides import write_overrides
 
     for parameter in parameters:
         blocks = parameter.get("overrides") or []
@@ -2536,7 +2536,7 @@ async def set_definition(
             {"aid": str(action_type_id), "api": str(parameter["api_name"])},
         )
         assert row is not None
-        await replace_overrides(conn, UUID(str(row["id"])), blocks)
+        await write_overrides(conn, UUID(str(row["id"])), blocks)
     for order, rule in enumerate(rules):
         await conn.execute(
             text(

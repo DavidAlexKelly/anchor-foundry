@@ -86,7 +86,11 @@ class OverrideBlockOut(BaseModel):
 class OverrideBlockIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    conditions: list[dict[str, Any]] = Field(min_length=1, max_length=20)
+    #: p.45's "if". **No `min_length`, deliberately**: the service refuses a
+    #: block with no conditions by naming which block it is, and a bound here
+    #: would answer first with a field-path list nobody can act on — and make
+    #: the service's check unreachable, which a sweep duly reported.
+    conditions: list[dict[str, Any]] = Field(max_length=20)
     set_hidden: bool | None = None
     set_required: bool | None = None
     set_default: Any | None = None
