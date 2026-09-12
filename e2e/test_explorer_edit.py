@@ -94,9 +94,21 @@ def test_a_cell_typed_into_changes_the_object(page, api, editable) -> None:
     cell.fill(said)
 
     save = page.get_by_test_id("explorer-edit-save")
-    expect(save).to_be_enabled()
+    # The label counts what is about to change, so this is also the check that
+    # exactly one row is staged.
+    expect(save).to_have_text("Save 1 object")
     save.click()
-    expect(page.get_by_test_id("explorer-edit-saved")).to_be_visible(timeout=30000)
+    saved = page.get_by_test_id("explorer-edit-saved")
+    expect(saved).to_be_visible(timeout=30000)
+    # **And the server agrees about how many.** This is the assertion that
+    # catches a submission sending every visible row rather than the staged
+    # ones — a mutant doing exactly that survived the first sweep, because
+    # p.135 makes every parameter default to the object's existing value, so an
+    # untouched row submitted with no values changes nothing and the
+    # "unchanged" assertion below stays true. What it *does* change is the
+    # record: a run is opened for an object nobody edited, and p.242's cap is
+    # counted against rows that were never staged.
+    expect(saved).to_have_text("Saved 1 object.")
 
     # **Read back from the server, not from the table.** The table is the thing
     # that was just typed into, so asking it what the object says is asking the
@@ -108,10 +120,23 @@ def test_a_cell_typed_into_changes_the_object(page, api, editable) -> None:
     changed = next(i for i in instances if i["primary_key"] == "e1")
     assert changed["properties"]["status"] == said, changed["properties"]
 
-    # And the row nobody touched is untouched: p.138 submits what was staged,
-    # and a batch that wrote every visible row would pass every assertion above.
+    # And the row nobody touched is untouched.
     untouched = next(i for i in instances if i["primary_key"] == "e2")
     assert untouched["properties"]["status"] == "open", untouched["properties"]
+
+    # **One run, for the one object that was edited.** The property check above
+    # cannot see the difference — an untouched row submitted with no values
+    # writes its existing value back — so the count of runs is what says the
+    # submission carried what was staged and nothing else.
+    runs = api.call(
+        "GET", f"/workspaces/{editable.workspace_id}"
+                f"/action-types/{editable.action_id}/runs",
+    )
+    latest = max(runs, key=lambda r: r["started_at"])
+    same_batch = [r for r in runs if r["batch_id"] == latest["batch_id"]]
+    assert len(same_batch) == 1, (
+        f"one row was staged; the submission opened {len(same_batch)} runs"
+    )
 
 
 def test_undo_takes_a_row_back_out_of_the_submission(page, api, editable) -> None:

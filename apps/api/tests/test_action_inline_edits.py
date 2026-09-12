@@ -884,15 +884,17 @@ def test_an_unlabelled_batch_is_the_object_table(
     )["writes"] + 1
 
 
-def test_a_refused_batch_writes_nothing_and_counts_nothing(
+def test_a_submission_refused_before_it_starts_counts_nothing(
     client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str]
 ) -> None:
-    """p.32 records a write when an application "makes edits", and p.138 makes
-    a batch whole or nothing — so a refused submission made none.
+    """p.32 records a write when an application "makes edits", and a submission
+    refused for naming the same object twice (p.138) made none.
 
-    Refused by naming the same object twice, which p.138 calls out by name and
-    which is refused *before* anything is written, so the count has nothing to
-    be charged for.
+    **This one cannot reach the counting block at all**, and that is worth
+    saying rather than leaving for somebody to discover: the refusal raises
+    before the write is attempted, so the whole handler unwinds. It is a real
+    claim — nothing is counted — and it is *not* a test of the `if ok:` guard,
+    which is what the test below is for.
     """
     action = make_action(client, fx, ticket_type_id, ["priority"])
     before = usage_of(client, fx, ticket_type_id)["writes"]
@@ -908,6 +910,125 @@ def test_a_refused_batch_writes_nothing_and_counts_nothing(
     assert usage_of(client, fx, ticket_type_id)["writes"] == before, (
         "a submission that wrote nothing is not a write"
     )
+
+
+def test_a_submission_that_failed_while_writing_counts_nothing(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**The `if ok:` guard, and the only way to reach it.**
+
+    The mutation sweep found this: a mutant making the count unconditional
+    survived every test in this file, because every refusal here is raised
+    *before* the write is attempted and so unwinds the handler long before the
+    guard is read. The same defect §320 found in its sixth survivor and §323
+    found again — a check placed after a branch nothing in the suite takes.
+
+    So the failure has to happen where p.138 says it can: in the dataset write
+    itself, which answers 200 with `ok: false` rather than raising. Forced,
+    because provoking a real engine failure needs a broken dataset and what is
+    being checked is the guard rather than the engine.
+    """
+    from src.routes import actions as action_routes
+    from src.services.dataset_engine import DatasetEngineError
+
+    def boom(*a, **k):
+        raise DatasetEngineError("the write could not be completed")
+
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    before = usage_of(client, fx, ticket_type_id)["writes"]
+    monkeypatch.setattr(action_routes.engine, "write_rows", boom)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"edits": [{"instance_id": instances["1"],
+                         "values": {"priority": "doomed"}}]},
+    )
+    # The submission opened and failed, which is a 200 reporting failure rather
+    # than a refusal — so the counting block really was reached this time.
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False, r.json()
+    assert usage_of(client, fx, ticket_type_id)["writes"] == before, (
+        "p.32 counts a write when an application makes edits, and this made none"
+    )
+
+
+def test_two_projects_behind_one_type_come_back_in_a_stated_order(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Two projects, which is the only pair that can disagree** (§324).
+
+    A type mapped in one project reads the same however the rows are ordered,
+    so the `ORDER BY` was a clause no test could reach — and the Explorer names
+    the projects in its refusal, where an order that wandered between reads
+    would make the same ambiguity read as a different one each time.
+
+    By name, because that is what the reader sees: an order by id would be
+    stable and arbitrary, which is stable in the way a hash is.
+    """
+    # **Its own object type**, because mapping a second project onto the shared
+    # one would leave every other test in this file looking at an ambiguous
+    # type. Found exactly that way: the two tests above went red on the first
+    # run of this one.
+    declared = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"twoproj_{uuid.uuid4().hex[:8]}",
+              "display_name": "Two projects",
+              "properties": [{"api_name": "status", "data_type": "string"},
+                             {"api_name": "priority", "data_type": "string"}]},
+    )
+    assert declared.status_code == 201, declared.text
+    ticket_type_id = declared.json()["id"]
+
+    made = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.editor_sub),
+        json={"name": f"AAA tickets {uuid.uuid4().hex[:6]}"},
+    )
+    assert made.status_code == 201, made.text
+    other = made.json()["id"]
+
+    uploaded = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{other}/datasets/upload",
+        headers=hdr(fx.editor_sub),
+        data={"name": f"OtherTickets {uuid.uuid4().hex[:6]}"},
+        files={"file": ("other.csv", io.BytesIO(TICKETS), "text/csv")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    mapped = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{other}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={"object_type_id": ticket_type_id, "dataset_id": uploaded.json()["id"],
+              "primary_key_column": "ticket_id",
+              "column_mappings": {"status": "status", "priority": "priority"}},
+    )
+    assert mapped.status_code == 201, mapped.text
+
+    here = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub),
+        data={"name": f"HereTickets {uuid.uuid4().hex[:6]}"},
+        files={"file": ("here.csv", io.BytesIO(TICKETS), "text/csv")},
+    )
+    assert here.status_code == 201, here.text
+    also = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={"object_type_id": ticket_type_id, "dataset_id": here.json()["id"],
+              "primary_key_column": "ticket_id",
+              "column_mappings": {"status": "status", "priority": "priority"}},
+    )
+    assert also.status_code == 201, also.text
+
+    rows = editing_projects(client, fx, ticket_type_id)
+    assert len(rows) == 2, rows
+    assert [p["name"] for p in rows] == sorted(p["name"] for p in rows), (
+        "the Explorer names these in its refusal; an order that wandered "
+        "would make one ambiguity read as a different one on every refresh"
+    )
+    # The new project's name starts with A, so it is first — which is the
+    # assertion that fails if the ordering is dropped and the rows arrive in
+    # insertion order instead.
+    assert rows[0]["id"] == other, rows
 
 
 # ---- where an edit from the Explorer would land (§324; p.135) ----------------

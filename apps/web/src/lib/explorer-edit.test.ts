@@ -143,12 +143,18 @@ describe("asking per column, the way a row asks", () => {
     expect(editsColumn({ status: "status" }, "priority")).toBeNull();
   });
 
-  it("picks the same parameter every time when two point at one column", () => {
+  it("picks the same parameter however the mapping was built", () => {
     // Two parameters onto one column is a configuration nothing prevents, and
-    // an arbitrary winner would draw a different editor on each render.
-    const twice = { zulu: "status", alpha: "status" };
-    expect(editsColumn(twice, "status")).toBe("alpha");
-    expect(editsColumn(twice, "status")).toBe("alpha");
+    // an arbitrary winner would draw a different editor for the same document.
+    //
+    // **Both insertion orders, and that is the whole test.** The first version
+    // asserted one object twice and expected "alpha" — which `sort()` and
+    // `reverse()` both answer for keys inserted zulu-then-alpha, so a mutant
+    // swapping them survived. Object key order *is* insertion order, so the
+    // only way to see an ordering rule is to feed it two orders and demand one
+    // answer.
+    expect(editsColumn({ zulu: "status", alpha: "status" }, "status")).toBe("alpha");
+    expect(editsColumn({ alpha: "status", zulu: "status" }, "status")).toBe("alpha");
   });
 });
 
