@@ -53,6 +53,7 @@ from ..services import ontology as ontology_service
 from ..services import object_type_groups as groups_service
 from ..services import notification_store
 from ..services import object_comments as comments_service
+from ..services import ontology_cleanup as cleanup_service
 from ..services import workspaces as workspaces_service
 from ..services import object_type_usage as usage_service
 from ..services import ontology_recent
@@ -1053,6 +1054,120 @@ class UsageByDay(BaseModel):
     reads: int
     writes: int
     interactions: int
+
+
+# ---- the Ontology cleanup queue (§325; `ontology-manager` p.68-74) -----------
+class CleanupCandidate(BaseModel):
+    """One object type the cleanup tool thinks is worth a look (p.69).
+
+    **The flags, not a verdict.** p.68 says the tool "aims to help Ontology
+    editors determine the safety of deleting an object type" — so this reports
+    what is true about the type and leaves p.71's three actions to the person
+    reading it. A `safe_to_delete` boolean would be this platform deciding on
+    somebody's behalf, from signals it knows are incomplete.
+    """
+
+    id: UUID
+    api_name: str
+    display_name: str
+    status: str
+    description: str
+    deprecation: dict[str, Any] | None
+    #: db 0077's thirty-day count, sent because it is the evidence behind the
+    #: `unused` flag and a reader deciding to delete something wants the number
+    #: rather than the adjective.
+    interactions: int
+    flags: list[str]
+    #: p.70's "highest priority among the flags that an object type triggers",
+    #: as a rank — lower is more urgent. Sent rather than re-derived, so a
+    #: screen sorting the list cannot disagree with the list's own order.
+    priority: int
+    snoozed_until: datetime | None
+
+
+class SnoozeIn(BaseModel):
+    """p.71's snooze: "Hide object types from your cleanup queue for a
+    configurable amount of time."
+    """
+
+    days: int = Field(default=cleanup_service.DEFAULT_SNOOZE_DAYS, ge=1, le=365)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class SnoozeOut(BaseModel):
+    object_type_id: UUID
+    until: datetime
+    note: str | None
+
+
+@router.get("/ontology-cleanup", response_model=list[CleanupCandidate])
+async def ontology_cleanup(
+    flag: str | None = Query(default=None, max_length=50),
+    include_snoozed: bool = Query(default=False),
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> list[CleanupCandidate]:
+    """p.69's cleanup queue, worst first.
+
+    **`editor`, not `viewer`**, and it is the one read in this file with that
+    floor. Every other listing says what the ontology *is*; this one says which
+    types somebody should consider deleting, and it exists to be acted on — p.68
+    calls its audience "Ontology editors" and p.71's three buttons are all
+    writes. A viewer given the list could act on none of it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await cleanup_service.candidates(
+            conn, access.workspace_id,
+            user_id=access.auth.user_id,
+            flag=flag, include_snoozed=include_snoozed,
+        )
+    return [CleanupCandidate(**row) for row in rows]
+
+
+@router.put(
+    "/object-types/{type_id}/cleanup-snooze", response_model=SnoozeOut,
+    status_code=status.HTTP_200_OK,
+)
+async def snooze_object_type(
+    type_id: UUID,
+    body: SnoozeIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> SnoozeOut:
+    """p.71's snooze. **Yours alone** — "an action that will affect only the
+    user that performs it" — which db 0080's row policy enforces rather than
+    this handler.
+
+    `PUT` because snoozing something already snoozed is asking for longer
+    rather than a conflict: the second press moving the date is what a button
+    saying "remind me later" means.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        row = await cleanup_service.snooze(
+            conn, type_id, user_id=access.auth.user_id,
+            days=body.days, note=body.note,
+        )
+    return SnoozeOut(**row)
+
+
+@router.delete(
+    "/object-types/{type_id}/cleanup-snooze",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def wake_object_type(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> None:
+    """Bring a snoozed type back to your queue now.
+
+    404 when there was no snooze, rather than a 204 that did nothing: "it is
+    back" and "it was never away" are different answers, and a control that
+    reports success for both is one somebody presses twice (§214).
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        if not await cleanup_service.wake(conn, type_id, user_id=access.auth.user_id):
+            raise NotFoundError("snooze")
 
 
 # ---- which project an edit from the Explorer belongs to (§324) ---------------
