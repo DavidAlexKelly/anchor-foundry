@@ -62,9 +62,20 @@ export function editingUnavailable(
     // **Named rather than counted.** "Editing is unavailable" sends somebody
     // looking for a permission problem; naming the two projects tells them the
     // type is mapped twice, which is a thing they can go and change (§214).
+    //
+    // **Sorted here rather than trusted from the server**, and the mutation
+    // sweep is the reason. `editing_projects` has an `ORDER BY p.name`, and no
+    // test could be made to fail without it: two rows come back in whatever
+    // order the plan produces, which coincides with alphabetical about half
+    // the time, so the check passed or failed by luck rather than by rule.
+    // A probabilistically-flaky test is worse than none. The order somebody
+    // *reads* is wording, wording belongs here, and here it can be pinned
+    // exactly — which leaves the server's clause as the belt to this braces
+    // rather than the only copy.
+    const named = [...projects].map((p) => p.name).sort();
     return (
       `${onlyType.display_name} is mapped in ${projects.length} projects ` +
-      `(${projects.map((p) => p.name).join(", ")}), so an edit here has no ` +
+      `(${named.join(", ")}), so an edit here has no ` +
       "single place to go. Open the object to edit it."
     );
   }

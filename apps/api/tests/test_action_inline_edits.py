@@ -953,18 +953,22 @@ def test_a_submission_that_failed_while_writing_counts_nothing(
     )
 
 
-def test_two_projects_behind_one_type_come_back_in_a_stated_order(
+def test_a_type_mapped_in_two_projects_names_both(
     client: TestClient, fx: Fixture
 ) -> None:
     """**Two projects, which is the only pair that can disagree** (§324).
 
-    A type mapped in one project reads the same however the rows are ordered,
-    so the `ORDER BY` was a clause no test could reach — and the Explorer names
-    the projects in its refusal, where an order that wandered between reads
-    would make the same ambiguity read as a different one each time.
+    A type mapped in one project reads the same whatever the query does, so
+    this is the shape that says `editing_projects` returns all of them rather
+    than the first — which is what the Explorer's refusal is built on: it names
+    the projects so somebody can go and unmap one.
 
-    By name, because that is what the reader sees: an order by id would be
-    stable and arbitrary, which is stable in the way a hash is.
+    **The order is asserted in `explorer-edit.test.ts`, not here**, and that is
+    a deliberate split rather than an omission. Two rows out of Postgres arrive
+    in whatever order the plan produces, which coincides with alphabetical
+    about half the time — so a test pinning the order here would pass or fail
+    by luck, which is worse than not testing it. The order a reader sees is
+    wording, the wording is sorted in the lib, and there it is exact.
     """
     # **Its own object type**, because mapping a second project onto the shared
     # one would leave every other test in this file looking at an ambiguous
@@ -1020,15 +1024,11 @@ def test_two_projects_behind_one_type_come_back_in_a_stated_order(
     assert also.status_code == 201, also.text
 
     rows = editing_projects(client, fx, ticket_type_id)
-    assert len(rows) == 2, rows
-    assert [p["name"] for p in rows] == sorted(p["name"] for p in rows), (
-        "the Explorer names these in its refusal; an order that wandered "
-        "would make one ambiguity read as a different one on every refresh"
-    )
-    # The new project's name starts with A, so it is first — which is the
-    # assertion that fails if the ordering is dropped and the rows arrive in
-    # insertion order instead.
-    assert rows[0]["id"] == other, rows
+    assert {p["id"] for p in rows} == {other, str(fx.project)}, rows
+    # Both are named, because the refusal quotes them: "mapped in 2 projects
+    # (Billing, Support)" is a sentence somebody can act on and "mapped in 2
+    # projects" is not (§214).
+    assert all(p["name"] for p in rows), rows
 
 
 # ---- where an edit from the Explorer would land (§324; p.135) ----------------

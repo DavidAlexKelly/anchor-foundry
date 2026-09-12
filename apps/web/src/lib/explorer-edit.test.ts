@@ -59,6 +59,21 @@ describe("why the Explorer is not offering an editor", () => {
     expect(why).toContain("Ticket");
   });
 
+  it("names the projects in a stated order however they arrive", () => {
+    // **The claim the server's `ORDER BY` could not be tested for.** Two rows
+    // from Postgres come back in whatever order the plan produces, which
+    // coincides with alphabetical about half the time — so a test asserting
+    // the order passed or failed by luck. Here it is exact: the same two
+    // projects in either order give one sentence, and a reader refreshing the
+    // page sees the same ambiguity rather than a different-looking one.
+    const forwards = editingUnavailable(TICKETS, [action()], true,
+      [{ name: "Billing" }, { name: "Support" }]);
+    const backwards = editingUnavailable(TICKETS, [action()], true,
+      [{ name: "Support" }, { name: "Billing" }]);
+    expect(forwards).toBe(backwards);
+    expect(forwards).toContain("(Billing, Support)");
+  });
+
   it("refuses to choose between two projects, and names them", () => {
     // **The Explorer is workspace-scoped and a write is not** (§324). An
     // instance comes from a mapping, a mapping names a dataset, and a dataset
