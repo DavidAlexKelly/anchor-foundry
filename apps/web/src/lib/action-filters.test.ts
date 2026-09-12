@@ -47,6 +47,21 @@ describe("filterParameters", () => {
     })])).toEqual([]);
   });
 
+  it("does not watch a value whose kind is not a parameter", () => {
+    // **The fourth unit in a row to need this exact check** (§328, §329, §331
+    // on the server, and here). Every value kind this build has either carries
+    // a `parameter` key or carries nothing, so the guard and "does it have a
+    // non-empty name" behave identically — until a document carries a kind
+    // this build does not have, which p.36's own third value kind will be the
+    // day somebody imports one.
+    expect(filterParameters([parameter({
+      dropdown_filters: [{
+        property: "region",
+        values: [{ kind: "object_property", parameter: "where" } as never],
+      }],
+    })])).toEqual([]);
+  });
+
   it("names what the filters read, across parameters and values", () => {
     expect(filterParameters([
       parameter({ dropdown_filters: [fromParameter("region", "where")] }),
