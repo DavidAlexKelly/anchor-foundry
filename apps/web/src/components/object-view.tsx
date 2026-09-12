@@ -38,6 +38,7 @@ import { Editor, Frame, useEditor } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { canvas as canvasApi, objects as objApi } from "@/lib/api";
+import { CommentsButton } from "@/components/comments-panel";
 import { canShowStar, starGlyph, starLabel } from "@/lib/favourites";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
@@ -230,10 +231,16 @@ export function ObjectView({
   initialStandard = false,
   allowToggle = true,
   hideHeader = false,
+  canComment = false,
 }: {
   workspaceId: string;
   typeId: string;
   instance: ObjectInstance;
+  /** Whether this reader may add to p.137's conversation (§322). The panel
+   * opens either way — cooperation is worth reading even when you cannot join
+   * it — and the composer is what is absent, with a sentence in its place
+   * rather than silently missing (§214). */
+  canComment?: boolean;
   /** Workshop p.261's Object View Mode, as the *starting* view. A preference,
    * not a guarantee: a type with no configured view opens on the standard one
    * whichever way this is set, which is what the query below decides. */
@@ -295,7 +302,20 @@ export function ObjectView({
           it existed for one kind of object and not the other. Here it is
           above both, which is where "next to its title" lands once the two
           renderings are the same feature. */}
-      <FavouriteStar workspaceId={workspaceId} typeId={typeId} instance={shown} />
+      <div className="object-view-header">
+        <FavouriteStar workspaceId={workspaceId} typeId={typeId} instance={shown} />
+        {/* **p.137's View comments button, in the header of any Object View**
+            (§322) — and above both renderings for §312's reason: the standard
+            view owns its own title and a configured view is somebody's
+            Workshop module with no title of ours, so a button placed inside
+            either would exist for one kind of object and not the other. */}
+        <CommentsButton
+          workspaceId={workspaceId}
+          typeId={typeId}
+          instanceId={shown.id}
+          canComment={canComment}
+        />
+      </div>
       {configured && allowToggle && (
         <div className="row-actions" style={{ justifyContent: "flex-end", marginBottom: 8 }}>
           {/* p.2's guarantee, as a control. Two buttons rather than a toggle so

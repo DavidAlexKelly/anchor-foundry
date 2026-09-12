@@ -25,8 +25,31 @@ export type EditAction = {
   api_name?: string | null;
   parameters?: readonly { api_name: string; display_name?: string | null }[];
   inline_edit_refusals?: readonly string[];
+  /** Parameters no surface offers as a column (§324; `action-types` p.137).
+   * Absent on a payload that predates §324, which `editableParameters` treats
+   * as "none hidden" — the honest reading, since before §324 an action with a
+   * hidden parameter was refused outright and so could never be mapped. */
+  inline_edit_hidden_parameters?: readonly string[];
   inline_edit_row_limit?: number;
 };
+
+/**
+ * The parameters a surface may offer as an editable column (§324).
+ *
+ * **The filter that used to be a refusal.** Until §324 an action with a hidden
+ * parameter was not eligible at all, so nothing downstream had to think about
+ * one; `action-types` p.137 says visibility "can be set", which makes a hidden
+ * parameter a column not offered rather than an action not used — and that
+ * decision has to be made here, because `automaticMapping` matches on name and
+ * a hidden parameter whose name matches a shown column would otherwise be
+ * mapped straight onto an editor.
+ */
+export function editableParameters(
+  action: EditAction | null | undefined,
+): readonly { api_name: string; display_name?: string | null }[] {
+  const hidden = new Set(action?.inline_edit_hidden_parameters ?? []);
+  return (action?.parameters ?? []).filter((p) => !hidden.has(p.api_name));
+}
 
 /** p.242's cap when the server has not said. **Not a second copy of the rule**
  * — the server sends `inline_edit_row_limit` on every action type, and this is
@@ -75,7 +98,7 @@ export function automaticMapping(
 ): Record<string, string> {
   const shown = new Set(columns);
   const out: Record<string, string> = {};
-  for (const parameter of action?.parameters ?? []) {
+  for (const parameter of editableParameters(action)) {
     if (shown.has(parameter.api_name)) out[parameter.api_name] = parameter.api_name;
   }
   return out;
@@ -94,7 +117,7 @@ export function mappingOf(
   action: EditAction | null | undefined,
   columns: readonly string[],
 ): Record<string, string> {
-  const declared = new Set((action?.parameters ?? []).map((p) => p.api_name));
+  const declared = new Set(editableParameters(action).map((p) => p.api_name));
   const shown = new Set(columns);
   const out: Record<string, string> = {};
   if (typeof raw !== "object" || raw === null) return out;

@@ -2267,3 +2267,40 @@ async def suggest_from_dataset(
         "suggested_title_property": title_guess,
         "properties": properties,
     }
+
+
+async def editing_projects(
+    conn: AsyncConnection, object_type_id: UUID
+) -> list[dict[str, Any]]:
+    """The projects whose datasets back this object type (§324).
+
+    **The Explorer is workspace-scoped and a write is not**, which is the whole
+    reason this exists. An object type is declared in a workspace, but the
+    instance behind a row comes from a mapping, a mapping names a dataset, and a
+    dataset lives in a project — so the project is a fact about the *source*
+    rather than about the type, and a type mapped from two datasets in two
+    projects genuinely has two.
+
+    Returned as a list rather than resolved to one here, because "which project
+    should this edit go to" is not a question this function can answer: the
+    caller's access decides it, and the honest behaviour when two remain is to
+    say so rather than to pick. `action-types` p.136 wants an inline edit to
+    "modify a single object of a single object type", and an edit that silently
+    chose one of two mappings would write to a dataset the reader never named.
+
+    RLS does the filtering: a project the caller cannot see is not in the
+    answer, so a type mapped into somebody else's project reads here as a type
+    with one project rather than as an ambiguity the reader cannot resolve.
+    """
+    return await fetch_all(
+        conn,
+        """
+        SELECT DISTINCT p.id, p.name, p.slug
+          FROM object_type_sources s
+          JOIN datasets d ON d.id = s.dataset_id
+          JOIN projects p ON p.id = d.project_id
+         WHERE s.object_type_id = :tid
+         ORDER BY p.name, p.id
+        """,
+        {"tid": str(object_type_id)},
+    )

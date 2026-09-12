@@ -1216,10 +1216,14 @@ export const objects = {
       value?: string;
       limit?: number;
       offset?: number;
+      /** Which application is asking, for p.32's usage counting (§320).
+       * Unset is counted as the API, which is what an unlabelled caller is. */
+      application?: string;
     },
   ) => {
     const search = new URLSearchParams();
     if (input.q) search.set("q", input.q);
+    if (input.application) search.set("application", input.application);
     for (const t of input.typeIds ?? []) search.append("type_id", t);
     if (input.property && input.value !== undefined) {
       search.set("property", input.property);
@@ -1439,6 +1443,83 @@ export const objects = {
     request<import("./types").OntologySearchHit[]>(
       `/workspaces/${wid}/ontology-search?q=${encodeURIComponent(q)}`,
     ),
+  /** p.137's comments on one object (§322).
+   *
+   * **No `mentions` in the body.** They are found on the server from the text,
+   * against the workspace's own members — a client that could send user ids
+   * could have a comment delivered to somebody who cannot see the object. */
+  comments: (wid: string, typeId: string, instanceId: string) =>
+    request<import("./types").ObjectComment[]>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/comments`,
+    ),
+  /** What p.137's View comments button needs before it is pressed. Its own
+   * call rather than the length of the thread: the header is drawn on a screen
+   * with no reason to have fetched the conversation. */
+  commentCount: (wid: string, typeId: string, instanceId: string) =>
+    request<{ count: number }>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/comments/count`,
+    ),
+  postComment: (
+    wid: string,
+    typeId: string,
+    instanceId: string,
+    body: string,
+    attachments: import("./types").AttachmentRef[] = [],
+  ) =>
+    request<import("./types").ObjectComment>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/comments`,
+      { method: "POST", body: JSON.stringify({ body, attachments }) },
+    ),
+  /** p.32's usage metrics for one object type (§320).
+   *
+   * **`application` is passed by the caller, and the Ontology Manager passes
+   * its own name so it is not counted** (p.32: "any object type or link type
+   * usage happening in Ontology Manager is not included"). The Manager and the
+   * Explorer list a type's objects through the same route, so nothing on the
+   * server can tell them apart — this is the only place the difference is
+   * known. */
+  usage: (wid: string, typeId: string) =>
+    request<import("./types").ObjectTypeUsage>(
+      `/workspaces/${wid}/object-types/${typeId}/usage`,
+    ),
+  /** p.69's cleanup queue, worst first (§325; `ontology-manager` p.68-74). */
+  cleanupQueue: (wid: string, opts?: { flag?: string; includeSnoozed?: boolean }) => {
+    const params = new URLSearchParams();
+    if (opts?.flag) params.set("flag", opts.flag);
+    if (opts?.includeSnoozed) params.set("include_snoozed", "true");
+    const q = params.toString();
+    return request<import("./types").CleanupCandidate[]>(
+      `/workspaces/${wid}/ontology-cleanup${q ? `?${q}` : ""}`,
+    );
+  },
+  /** p.71's snooze. **Yours alone** — "an action that will affect only the user
+   * that performs it" — which db 0080's row policy enforces. */
+  snoozeType: (wid: string, typeId: string, days: number, note?: string) =>
+    request<{ object_type_id: string; until: string; note: string | null }>(
+      `/workspaces/${wid}/object-types/${typeId}/cleanup-snooze`,
+      { method: "PUT", body: JSON.stringify({ days, note: note ?? null }) },
+    ),
+  wakeType: (wid: string, typeId: string) =>
+    request<void>(`/workspaces/${wid}/object-types/${typeId}/cleanup-snooze`, {
+      method: "DELETE",
+    }),
+  /** Where a write to this type would land (§324; `action-types` p.135).
+   *
+   * The Explorer is workspace-scoped and a write is not: an instance comes
+   * from a mapping, a mapping names a dataset, and a dataset lives in a
+   * project. Several means the Explorer says which rather than picking. */
+  editingProjects: (wid: string, typeId: string) =>
+    request<import("./types").EditingProject[]>(
+      `/workspaces/${wid}/object-types/${typeId}/editing-projects`,
+    ),
+  usageByApplication: (wid: string, typeId: string) =>
+    request<import("./types").ObjectTypeUsageByApplication[]>(
+      `/workspaces/${wid}/object-types/${typeId}/usage/by-application`,
+    ),
+  usageByDay: (wid: string, typeId: string) =>
+    request<import("./types").ObjectTypeUsageByDay[]>(
+      `/workspaces/${wid}/object-types/${typeId}/usage/daily`,
+    ),
   /** p.30's quick links to "recently edited object types, link types, and
    * action types". No `limit` here: the server's default is what a hover is
    * worth, and a caller passing its own number would be deciding how long a
@@ -1657,9 +1738,20 @@ export const objects = {
       `/workspaces/${wid}/projects/${pid}/object-type-sources/${sourceId}/schedule`,
       { method: "DELETE" },
     ),
-  listInstances: (wid: string, typeId: string, limit = 50, offset = 0) =>
+  /** A page of one type's objects.
+   *
+   * **`application` decides whether this counts as a read** (§320;
+   * `ontology-manager` p.32). The Ontology Manager and the Object Explorer
+   * both list a type's objects through this route, and p.32 counts one and
+   * excludes the other — so the caller says which it is. A caller that says
+   * nothing is counted as the API, which is what it is. */
+  listInstances: (
+    wid: string, typeId: string, limit = 50, offset = 0, application?: string,
+  ) =>
     request<import("./types").ObjectInstancePage>(
-      `/workspaces/${wid}/object-types/${typeId}/instances?limit=${limit}&offset=${offset}`,
+      `/workspaces/${wid}/object-types/${typeId}/instances?limit=${limit}` +
+        `&offset=${offset}` +
+        (application ? `&application=${encodeURIComponent(application)}` : ""),
     ),
   /** One object, by type and instance.
    *
@@ -1770,6 +1862,18 @@ export const actions = {
     }),
   removeType: (wid: string, actionTypeId: string) =>
     request<void>(`/workspaces/${wid}/action-types/${actionTypeId}`, { method: "DELETE" }),
+  /** p.164's action metrics, over the server's own thirty-day window (§323). */
+  metrics: (wid: string, actionTypeId: string) =>
+    request<import("./types").ActionMetrics>(
+      `/workspaces/${wid}/action-types/${actionTypeId}/metrics`,
+    ),
+  /** p.164's seven-day run history. **Its own call rather than a field on the
+   * metrics**, because the two windows differ and a reader who wanted the
+   * counts should not pay for two hundred rows they did not open. */
+  history: (wid: string, actionTypeId: string) =>
+    request<import("./types").ActionRunHistory[]>(
+      `/workspaces/${wid}/action-types/${actionTypeId}/history`,
+    ),
   /** p.256's status dropdown. Its own call rather than a field on
    * `setDefinition`, because that body is what the action *does* and a status
    * is how much anyone should rely on it — folding them together would make
@@ -1832,10 +1936,18 @@ export const actions = {
     pid: string,
     actionTypeId: string,
     edits: { instance_id: string; values: Record<string, unknown> }[],
+    /** Which surface sent this, for p.32's usage breakdown (§324). The Object
+     * Table and the Object Explorer reach this route identically, so the label
+     * is the only thing that tells them apart. Omitted means the Object Table,
+     * which is the caller this route was written for. */
+    application?: string,
   ) =>
     request<import("./types").ActionBatchResult>(
       `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/execute-batch`,
-      { method: "POST", body: JSON.stringify({ edits }) },
+      {
+        method: "POST",
+        body: JSON.stringify(application ? { edits, application } : { edits }),
+      },
     ),
   getType: (wid: string, actionTypeId: string) =>
     request<import("./types").ActionType>(

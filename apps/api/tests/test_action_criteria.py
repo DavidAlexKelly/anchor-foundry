@@ -347,12 +347,25 @@ def test_a_failed_criterion_refuses_the_action_and_writes_nothing(
     assert "Tickets cannot be closed from here." in r.text
 
     assert _version(client, fx, world) == before
-    # And no run was opened, so the history does not carry an attempt that
-    # never touched anything.
+    # **The run exists now, and that is §323 rather than a regression.**
+    #
+    # This used to assert `runs == []`, using "no run was opened" as a proxy
+    # for "nothing was written". The proxy has stopped holding: `action-types`
+    # p.165 says "unlike action logs, action metrics track failures", and a
+    # refusal that left no row was a failure the metric could never show — so
+    # a refused submission is now recorded as a run that opened and closed
+    # without touching anything.
+    #
+    # What decision 0007 actually claims is the line above: no new dataset
+    # version. Asserted here is the rest of it — the recorded run is a failure
+    # carrying the criterion's own message, and it wrote no version either, so
+    # nothing about it can be mistaken for a write that half-happened.
     runs = client.get(
         f"{world['base']}/action-types/{world['action_id']}/runs", headers=hdr(fx.viewer_sub)
     ).json()
-    assert runs == []
+    assert [r["status"] for r in runs] == ["failed"]
+    assert runs[0]["dataset_version"] is None
+    assert runs[0]["error"] == "Tickets cannot be closed from here."
 
 
 def test_the_same_action_still_runs_when_the_criterion_holds(

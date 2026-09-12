@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 # documented query string to work around a local name clash.
 from fastapi import status as status_codes
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..lib.cron import next_run_after
 from ..lib.db import user_connection
@@ -51,6 +51,12 @@ from ..services import instances as instances_service
 from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
 from ..services import object_type_groups as groups_service
+from ..services import notification_store
+from ..services import object_comments as comments_service
+from ..services import ontology_cleanup as cleanup_service
+from ..services import ontology_export as export_service
+from ..services import ontology_import as import_service
+from ..services import workspaces as workspaces_service
 from ..services import object_type_usage as usage_service
 from ..services import ontology_recent
 from ..services import ontology_search
@@ -1052,6 +1058,232 @@ class UsageByDay(BaseModel):
     interactions: int
 
 
+# ---- exporting the ontology (§326; `ontology-manager` p.65-67) ---------------
+@router.get("/ontology-export")
+async def export_ontology(
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> dict[str, Any]:
+    """p.66's Export: "Any changes you have in your working state will be
+    included in the export."
+
+    **`editor`, like the cleanup queue.** p.65 frames the file as something you
+    edit and import back — "make Ontology edits in code… bypass the Ontology
+    Manager interface" — so this is the read half of a write, and the whole
+    shape of a workspace's ontology in one document is more than a viewer needs
+    to read one type.
+
+    Returned as JSON rather than as a download: a caller who wants a file has
+    the bytes, and a route that forced an attachment would make the second
+    workflow — copying one ontology into another — go through somebody's
+    downloads folder.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        return await export_service.export_ontology(conn, access.workspace_id)
+
+
+class ImportIn(BaseModel):
+    """A previously exported ontology, as p.65's JSON.
+
+    **`document` rather than a file upload**, because p.65's premise is that
+    somebody edited the JSON in a text editor — the bytes are already in hand,
+    and a multipart upload would make the copy-one-ontology-to-another workflow
+    go through a downloads folder.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    document: dict[str, Any]
+
+
+@router.post("/ontology-import/plan")
+async def plan_ontology_import(
+    body: ImportIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> dict[str, Any]:
+    """p.66's "number of changes made in the file that need to be saved".
+
+    **Writes nothing**, which is the half of p.66 this platform has to build
+    for itself: Foundry stages the file into a working state and shows a count
+    of unsaved changes, and there is no working state here to stage into.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        return await import_service.plan(conn, access.workspace_id, body.document)
+
+
+@router.post("/ontology-import")
+async def apply_ontology_import(
+    body: ImportIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> dict[str, Any]:
+    """Apply what the plan described.
+
+    A separate call rather than a flag on the plan, so that "show me" and "do
+    it" cannot be the same request read two ways — this is the one route in the
+    ontology that can rewrite every type at once.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        return await import_service.apply(
+            conn, access.workspace_id, body.document,
+            actor_id=access.auth.user_id,
+        )
+
+
+# ---- the Ontology cleanup queue (§325; `ontology-manager` p.68-74) -----------
+class CleanupCandidate(BaseModel):
+    """One object type the cleanup tool thinks is worth a look (p.69).
+
+    **The flags, not a verdict.** p.68 says the tool "aims to help Ontology
+    editors determine the safety of deleting an object type" — so this reports
+    what is true about the type and leaves p.71's three actions to the person
+    reading it. A `safe_to_delete` boolean would be this platform deciding on
+    somebody's behalf, from signals it knows are incomplete.
+    """
+
+    id: UUID
+    api_name: str
+    display_name: str
+    status: str
+    description: str
+    deprecation: dict[str, Any] | None
+    #: db 0077's thirty-day count, sent because it is the evidence behind the
+    #: `unused` flag and a reader deciding to delete something wants the number
+    #: rather than the adjective.
+    interactions: int
+    flags: list[str]
+    #: p.70's "highest priority among the flags that an object type triggers",
+    #: as a rank — lower is more urgent. Sent rather than re-derived, so a
+    #: screen sorting the list cannot disagree with the list's own order.
+    priority: int
+    snoozed_until: datetime | None
+
+
+class SnoozeIn(BaseModel):
+    """p.71's snooze: "Hide object types from your cleanup queue for a
+    configurable amount of time."
+    """
+
+    days: int = Field(default=cleanup_service.DEFAULT_SNOOZE_DAYS, ge=1, le=365)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class SnoozeOut(BaseModel):
+    object_type_id: UUID
+    until: datetime
+    note: str | None
+
+
+@router.get("/ontology-cleanup", response_model=list[CleanupCandidate])
+async def ontology_cleanup(
+    flag: str | None = Query(default=None, max_length=50),
+    include_snoozed: bool = Query(default=False),
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> list[CleanupCandidate]:
+    """p.69's cleanup queue, worst first.
+
+    **`editor`, not `viewer`**, and it is the one read in this file with that
+    floor. Every other listing says what the ontology *is*; this one says which
+    types somebody should consider deleting, and it exists to be acted on — p.68
+    calls its audience "Ontology editors" and p.71's three buttons are all
+    writes. A viewer given the list could act on none of it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await cleanup_service.candidates(
+            conn, access.workspace_id,
+            user_id=access.auth.user_id,
+            flag=flag, include_snoozed=include_snoozed,
+        )
+    return [CleanupCandidate(**row) for row in rows]
+
+
+@router.put(
+    "/object-types/{type_id}/cleanup-snooze", response_model=SnoozeOut,
+    status_code=status.HTTP_200_OK,
+)
+async def snooze_object_type(
+    type_id: UUID,
+    body: SnoozeIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> SnoozeOut:
+    """p.71's snooze. **Yours alone** — "an action that will affect only the
+    user that performs it" — which db 0080's row policy enforces rather than
+    this handler.
+
+    `PUT` because snoozing something already snoozed is asking for longer
+    rather than a conflict: the second press moving the date is what a button
+    saying "remind me later" means.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        row = await cleanup_service.snooze(
+            conn, type_id, user_id=access.auth.user_id,
+            days=body.days, note=body.note,
+        )
+    return SnoozeOut(**row)
+
+
+@router.delete(
+    "/object-types/{type_id}/cleanup-snooze",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def wake_object_type(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> None:
+    """Bring a snoozed type back to your queue now.
+
+    404 when there was no snooze, rather than a 204 that did nothing: "it is
+    back" and "it was never away" are different answers, and a control that
+    reports success for both is one somebody presses twice (§214).
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        if not await cleanup_service.wake(conn, type_id, user_id=access.auth.user_id):
+            raise NotFoundError("snooze")
+
+
+# ---- which project an edit from the Explorer belongs to (§324) ---------------
+class EditingProject(BaseModel):
+    """A project whose dataset backs this object type.
+
+    Named as well as identified, because the Explorer has to be able to say
+    *which* projects when there is more than one — "this type is mapped in two
+    projects" is a sentence somebody can act on and "editing is unavailable" is
+    not (§214).
+    """
+
+    id: UUID
+    name: str
+    slug: str
+
+
+@router.get(
+    "/object-types/{type_id}/editing-projects",
+    response_model=list[EditingProject],
+)
+async def object_type_editing_projects(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[EditingProject]:
+    """Where a write to this type would go (§324; `action-types` p.135).
+
+    **The Object Explorer is workspace-scoped and a write is not.** p.135 puts
+    inline edits in the Explorer's results view, but an object type is declared
+    in a workspace while the instance behind a row comes from a mapping, and a
+    mapping names a dataset in a *project* — so the Explorer cannot submit an
+    edit without first learning where it would land.
+
+    `viewer`, because this says where a type is mapped and nothing about what
+    any object of it contains — the same reasoning as the usage routes below,
+    and the write itself is still refused for anyone below `editor` on the
+    project the answer names.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        rows = await ontology_service.editing_projects(conn, type_id)
+    return [EditingProject(**row) for row in rows]
+
+
 @router.get("/object-types/{type_id}/usage", response_model=UsageSummary)
 async def object_type_usage_summary(
     type_id: UUID,
@@ -1652,6 +1884,181 @@ async def download_attachment(
         },
     )
 
+
+
+# ---- comments on an object (`object-views` p.137) ----------------------------
+class CommentMention(BaseModel):
+    """One person named in a comment, and where.
+
+    **The span travels with it** so the thread marks exactly those characters.
+    A browser re-finding the name would be §146's second matcher, free to
+    disagree with the one that decided who was notified — and the disagreement
+    shows as a highlight on the wrong word.
+    """
+
+    user_id: UUID
+    label: str
+    start: int
+    end: int
+
+
+class CommentOut(BaseModel):
+    id: UUID
+    object_type_id: UUID
+    instance_id: UUID
+    #: `None` when the author's account is gone. Somebody leaving does not
+    #: unsay what they said, so the comment stays and the thread renders an
+    #: unknown author rather than dropping it.
+    author_id: UUID | None
+    author_name: str | None = None
+    author_email: str | None = None
+    body: str
+    mentions: list[CommentMention]
+    attachments: list[AttachmentOut]
+    created_at: datetime
+
+
+class CommentIn(BaseModel):
+    """What somebody says, and what they attach.
+
+    **No `mentions` field, deliberately.** They are found on the server from
+    the text, against this workspace's own members — a client that could send
+    a list of user ids could have a comment delivered to somebody who cannot
+    see the object it is about.
+
+    **`extra="forbid"`, so that sentence is enforced rather than described.**
+    Pydantic's default is to drop an unknown key silently, which means a client
+    sending `mentions` gets a `201` and every appearance of having been obeyed
+    — and the one thing worse than a field that does the wrong thing is a field
+    that looks like it worked (§214). Refused outright, the caller is told the
+    field does not exist, and a future hand that adds it has to delete this
+    line and read why.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    body: str = Field(min_length=1, max_length=comments_service.MAX_BODY)
+    attachments: list[AttachmentOut] = Field(
+        default_factory=list, max_length=comments_service.MAX_ATTACHMENTS
+    )
+
+
+@router.get(
+    "/object-types/{type_id}/instances/{instance_id}/comments",
+    response_model=list[CommentOut],
+)
+async def list_object_comments(
+    type_id: UUID,
+    instance_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[CommentOut]:
+    """p.137's thread, oldest first.
+
+    Viewer: reading the conversation about an object is reading the object's
+    context.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        rows = await comments_service.thread(
+            conn, object_type_id=type_id, instance_id=instance_id
+        )
+    return [
+        CommentOut(**{**r, "mentions": _jsonb(r["mentions"]),
+                      "attachments": _jsonb(r["attachments"])})
+        for r in rows
+    ]
+
+
+@router.get(
+    "/object-types/{type_id}/instances/{instance_id}/comments/count",
+    response_model=dict,
+)
+async def count_object_comments(
+    type_id: UUID,
+    instance_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> dict:
+    """What p.137's **View comments** button needs to know before it is pressed.
+
+    Its own endpoint rather than the length of the thread: the header is drawn
+    on a screen that has no reason to have fetched the conversation, and
+    fetching one to count it would make every object view pay for a panel
+    almost nobody opens.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        return {
+            "count": await comments_service.count_for(
+                conn, object_type_id=type_id, instance_id=instance_id
+            )
+        }
+
+
+@router.post(
+    "/object-types/{type_id}/instances/{instance_id}/comments",
+    response_model=CommentOut, status_code=status.HTTP_201_CREATED,
+)
+async def post_object_comment(
+    type_id: UUID,
+    instance_id: UUID,
+    body: CommentIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> CommentOut:
+    """p.137's "comment on an object", and the notification that makes a
+    mention worth writing.
+
+    `editor`, because adding to a conversation attached to workspace content is
+    a write. Reading it is `viewer`, one endpoint up.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        members = await workspaces_service.list_members(conn, access.workspace_id)
+        try:
+            row = await comments_service.post(
+                conn,
+                workspace_id=access.workspace_id,
+                object_type_id=type_id,
+                instance_id=instance_id,
+                author_id=access.auth.user_id,
+                body=body.body,
+                members=members,
+                attachments=[a.model_dump() for a in body.attachments],
+            )
+        except comments_service.CommentRefused as exc:
+            raise ValueError(str(exc)) from exc
+
+        mentions = _jsonb(row["mentions"])
+        # **The point of naming a colleague is that they find out.** A mention
+        # that only decorated the text would be a feature nobody could tell was
+        # working.
+        #
+        # Not the author, though: naming yourself in your own comment is a way
+        # of writing, not a request to be interrupted.
+        told: set[str] = set()
+        for mention in mentions:
+            user_id = str(mention["user_id"])
+            if user_id == str(access.auth.user_id) or user_id in told:
+                continue
+            told.add(user_id)
+            await notification_store.deliver(
+                conn,
+                workspace_id=access.workspace_id,
+                user_id=user_id,
+                actor_id=access.auth.user_id,
+                action_run_id=None,
+                content={
+                    "subject": "You were mentioned in a comment",
+                    # The comment itself, so the notification is worth reading
+                    # rather than a prompt to go and read something else.
+                    "body": row["body"][:500],
+                    # §309's object link: one key, both halves, so a half-copied
+                    # URL is malformed rather than plausibly a filter.
+                    "link_url": f"/explore?object={type_id}:{instance_id}",
+                    "link_text": "Open the object",
+                },
+            )
+    return CommentOut(**{**row, "mentions": mentions,
+                         "attachments": _jsonb(row["attachments"])})
 
 # ---- value types (workspace-scoped; `object-link-types` p.222-234) ----------
 class ValueTypeOut(BaseModel):

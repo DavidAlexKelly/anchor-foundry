@@ -53,6 +53,16 @@ export default function WorkspacePage() {
           <Link className="btn quiet" href={`/${params.workspace}/explore`}>
             Explore
           </Link>
+          {/* p.68's cleanup tool, beside the explorer because both are about
+              the workspace's ontology as a whole. Offered only to people who
+              could act on it: p.71's three buttons are all writes, and a link
+              to a page of controls somebody cannot press is §214's control
+              that looks like it works. */}
+          {workspace && workspace.effective_role !== "viewer" && (
+            <Link className="btn quiet" href={`/${params.workspace}/cleanup`}>
+              Cleanup
+            </Link>
+          )}
           <span className={`chip${workspace?.effective_role === "admin" ? " brass" : ""}`}>
             {workspace?.effective_role}
           </span>

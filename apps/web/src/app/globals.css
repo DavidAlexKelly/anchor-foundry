@@ -2931,3 +2931,57 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   font-size: 13px;
 }
 .toast .slug { flex: 1 1 auto; min-width: 0; }
+
+/* ---- p.33's usage figures (§320) ---------------------------------------- */
+/* Four numbers in a row, biggest-decision-first. A `<dl>` rather than a table:
+   these are labelled values, not rows of a list, and a table would promise a
+   sortable thing that is not one. */
+.stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin: 12px 0 16px;
+}
+.stat-row div { min-width: 90px; }
+.stat-row dt {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+.stat-row dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: 20px;
+  color: var(--ink);
+}
+
+/* ---- p.137's comments on an object (§322) -------------------------------- */
+/* The star and the comments button sit on one row above both renderings of an
+   object view — see `object-view.tsx` for why neither can live inside one. */
+.object-view-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.comments-panel {
+  margin: 8px 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.comment-list { list-style: none; margin: 0 0 12px; padding: 0; }
+.comment-list > li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.comment-list > li:last-child { border-bottom: 0; }
+.comment-body { margin: 4px 0 0; font-size: 13px; white-space: pre-wrap; }
+/* A mention is a name, not a search hit — the brass wash the issue column uses
+   would read as a warning. */
+.comment-body mark {
+  background: var(--accent-wash);
+  color: var(--accent-deep);
+  border-radius: 4px;
+  padding: 0 2px;
+}
+.comments-panel textarea { width: 100%; min-height: 64px; }

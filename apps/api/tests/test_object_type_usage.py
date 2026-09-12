@@ -185,12 +185,24 @@ def test_active_users_counts_people_not_requests(
     person and thirty by thirty people are the same `reads` and a completely
     different answer to "can I rename this property".
     """
+    # **One person across three rows**, which is the case the first version of
+    # this test could not see. It wrote two rows for two people, where
+    # `count(user_id)` and `count(DISTINCT user_id)` both answer 2 — so a
+    # mutant dropping the DISTINCT survived a test whose own name is "counts
+    # people not requests". A person who used this type on three days, or from
+    # three applications, is still one person.
     write_usage(a_type, user_id=str(fx.viewer), days_ago=1,
                 application="explorer", reads=20)
+    write_usage(a_type, user_id=str(fx.viewer), days_ago=2,
+                application="workshop", reads=5)
+    write_usage(a_type, user_id=str(fx.viewer), days_ago=3,
+                application="api", reads=5)
+    assert summary(client, fx, a_type)["active_users"] == 1
+
     write_usage(a_type, user_id=str(fx.editor), days_ago=2,
                 application="workshop", reads=1)
     said = summary(client, fx, a_type)
-    assert said["reads"] == 21
+    assert said["reads"] == 31
     assert said["active_users"] == 2
 
 
@@ -409,3 +421,130 @@ def test_a_failing_counter_does_not_fail_the_read(
     )
     assert r.status_code == 200, r.text
     assert len(r.json()["items"]) == 2
+
+
+def test_a_request_that_counted_nothing_writes_no_row(
+    client: TestClient, fx: Fixture, a_type: str
+) -> None:
+    """**A guard a surviving mutant found nothing was holding.**
+
+    `record` returns early when both counts are zero. Without it a caller that
+    passed `reads=0` would open a row per request — which is precisely the log
+    this table is shaped not to be, and it would show up as an application
+    appearing in p.33's breakdown having done nothing at all.
+
+    Driven against the service, because the endpoints never pass zero: the
+    guard exists for the caller who does, and a check that can only reach it
+    through a path that never takes it is not a check.
+    """
+    import asyncio
+    from uuid import UUID as Uuid
+
+    from src.lib.db import user_connection
+
+    async def call(reads: int, writes: int) -> bool:
+        async with user_connection(Uuid(str(fx.viewer))) as conn:
+            return await usage.record(
+                conn,
+                object_type_id=Uuid(a_type),
+                user_id=Uuid(str(fx.viewer)),
+                application="explorer",
+                reads=reads,
+                writes=writes,
+            )
+
+    assert asyncio.run(call(0, 0)) is False
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as c:
+        rows = c.execute(
+            "SELECT count(*) FROM object_type_usage WHERE object_type_id = %s",
+            (a_type,),
+        ).fetchone()
+    assert rows is not None and rows[0] == 0, "a zero-count call opened a row"
+    # And the guard is not simply "never write": a real count still lands.
+    assert asyncio.run(call(1, 0)) is True
+
+
+def test_applying_an_action_counts_a_write(
+    client: TestClient, fx: Fixture, with_objects: str
+) -> None:
+    """**p.32's writes, and nothing was checking them at all.**
+
+    "A write is recorded when an application makes edits to objects of this
+     type as the result of an Action…" — and two mutants proved it: removing
+    the recorder entirely, and counting a *failed* action as a write, both
+    survived a file of sixteen usage tests. Every one of them was about reads.
+    """
+    r = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": with_objects, "api_name": f"w_{uuid.uuid4().hex[:8]}",
+              "display_name": "Set name", "editable_properties": ["name"]},
+    )
+    assert r.status_code == 201, r.text
+    action_id = r.json()["id"]
+
+    r = client.get(
+        f"{wbase(fx)}/object-types/{with_objects}/instances"
+        f"?application={usage.ONTOLOGY_MANAGER}",
+        headers=hdr(fx.viewer_sub),
+    )
+    instance_id = r.json()["items"][0]["id"]
+
+    before = summary(client, fx, with_objects)["writes"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/actions/{action_id}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"name": "renamed"}},
+    )
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+    said = summary(client, fx, with_objects)
+    assert said["writes"] == before + 1
+    # p.32 defines interactions as reads plus writes, so a write moves it too —
+    # asserted here because every other test in this file moves only reads.
+    assert said["interactions"] == said["reads"] + said["writes"]
+
+
+def test_an_action_that_did_not_succeed_is_not_a_write(
+    client: TestClient, fx: Fixture, with_objects: str, monkeypatch
+) -> None:
+    """p.32 records a write when an application "makes edits". A refused action
+    made none.
+
+    The mutant is `if ok:` → `if True:`, and it survived because nothing here
+    ever submitted an action that failed.
+    """
+    r = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": with_objects, "api_name": f"f_{uuid.uuid4().hex[:8]}",
+              "display_name": "Set name", "editable_properties": ["name"]},
+    )
+    action_id = r.json()["id"]
+    r = client.get(
+        f"{wbase(fx)}/object-types/{with_objects}/instances"
+        f"?application={usage.ONTOLOGY_MANAGER}",
+        headers=hdr(fx.viewer_sub),
+    )
+    instance_id = r.json()["items"][0]["id"]
+
+    before = summary(client, fx, with_objects)["writes"]
+
+    # **The write has to fail where `ok` is decided, not before it.** The first
+    # version of this test submitted an undeclared property, which is refused
+    # with a 422 before the run is even opened — so the branch under test was
+    # never reached and the mutant survived a test named after it. A dataset
+    # engine failure is the real shape: the run opens, the write is attempted,
+    # and the endpoint answers 200 with `ok: false`.
+    from src.services import dataset_engine as engine
+    from src.services.dataset_engine import DatasetEngineError
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise DatasetEngineError("the parquet could not be written")
+
+    monkeypatch.setattr(engine, "write_rows", boom)
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/actions/{action_id}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"name": "never lands"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False, r.json()
+    assert summary(client, fx, with_objects)["writes"] == before

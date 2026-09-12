@@ -1644,6 +1644,76 @@ export type ValueFormat =
       timezone?: string;
     };
 
+/** One person named in a comment, and where (§322; `object-views` p.137).
+ *
+ * **The span comes from the server.** A browser re-finding the name would be
+ * §146's second matcher, free to disagree with the one that decided who was
+ * notified — and the disagreement shows as a highlight on the wrong word. */
+export interface CommentMention {
+  user_id: string;
+  /** The member's own spelling, not the typist's: the thread should read as
+   * the person is called. */
+  label: string;
+  start: number;
+  end: number;
+}
+
+/** One comment on an object (§322; `object-views` p.137). */
+export interface ObjectComment {
+  id: string;
+  object_type_id: string;
+  instance_id: string;
+  /** `null` when the author's account is gone. Somebody leaving does not unsay
+   * what they said, so the comment stays and the byline says so. */
+  author_id: string | null;
+  author_name: string | null;
+  author_email: string | null;
+  body: string;
+  mentions: CommentMention[];
+  /** p.137's "attach files and images", in the upload route's own shape — a
+   * storage key rather than a URL, exchanged for bytes by the download route
+   * after it checks the caller. */
+  attachments: AttachmentRef[];
+  created_at: string;
+}
+
+/** p.32's four numbers over p.32's window (§320; `ontology-manager` p.32-34).
+ *
+ * **`window_days` travels with them.** Every one of these is "over the last 30
+ * days", and a screen that hard-coded the sentence would go on saying it after
+ * somebody changed the constant. */
+export interface ObjectTypeUsage {
+  reads: number;
+  writes: number;
+  /** Reads plus writes — p.32's own definition, computed by the server rather
+   * than stored, so it cannot disagree with the two it came from. */
+  interactions: number;
+  /** Unique people. **The number that changes the decision**: thirty reads by
+   * one person and thirty by thirty people are the same `reads` and a
+   * different answer to "can I rename this property". */
+  active_users: number;
+  window_days: number;
+}
+
+/** One application's share of it (p.33's "in which Foundry applications"). */
+export interface ObjectTypeUsageByApplication {
+  application: string;
+  reads: number;
+  writes: number;
+  interactions: number;
+  active_users: number;
+}
+
+/** One day of it (p.33's "when"). Days with no usage are absent rather than
+ * zero — a server that manufactured thirty rows would be inventing data to
+ * make a chart easier. */
+export interface ObjectTypeUsageByDay {
+  day: string;
+  reads: number;
+  writes: number;
+  interactions: number;
+}
+
 export interface ObjectTypeSummary {
   id: string;
   api_name: string;
@@ -2270,6 +2340,12 @@ export interface ActionType {
    * in another language would be free to disagree with the endpoint that runs
    * them. */
   inline_edit_refusals: string[];
+  /** Parameters no surface should offer as an editable column (§324;
+   * `action-types` p.137, `workshop` p.241). **Not a refusal**: p.137 lists
+   * visibility among the requirements only to say it is allowed. One of these
+   * is seeded from the object and submitted unchanged, exactly like a column
+   * the reader did not type into (p.135). */
+  inline_edit_hidden_parameters: string[];
   /** p.242: "up to 200 rows at a time for actions that are not
    * function-backed". Sent so the table can stop a reader staging the two
    * hundred and first row before Submit, without a second copy of the number. */
@@ -2783,3 +2859,81 @@ export interface ObjectFavourite {
  * reindex" — and they have different remedies. `any` is what somebody opening
  * the filter is usually asking for. */
 export type TypeIssueFilter = "failing" | "unsourced" | "any";
+
+/** p.164's action metrics (§323; db 0079; `action-types` p.164-166).
+ *
+ *     "Action metrics display the near real-time usage of an action type over
+ *      the last 30 days… Success/failure metrics… P95 duration metric." (p.164)
+ */
+export interface ActionFailureCount {
+  category: string;
+  failures: number;
+}
+
+export interface ActionMetrics {
+  succeeded: number;
+  failed: number;
+  /** Neither, and reported as itself: a run still going is not evidence either
+   * way, and folding it into one side would make the two disagree with
+   * `total`. */
+  running: number;
+  total: number;
+  /** p.164's "95th percentile (P95) execution duration", in seconds. `null`
+   * when nothing has finished in the window — which is **not** nought: a P95
+   * of 0 says every run was instant. */
+  p95_seconds: number | null;
+  /** Sent rather than assumed, so a screen that hard-codes "30 days" is not
+   * one that lies the day the constant moves. */
+  window_days: number;
+  failures: ActionFailureCount[];
+}
+
+/** One row of p.164's seven-day run history. */
+export interface ActionRunHistory {
+  id: string;
+  status: string;
+  error: string | null;
+  /** One of p.165-166's categories, or `null` when the run did not fail. */
+  failure_category: string | null;
+  instance_id: string | null;
+  started_at: string;
+  finished_at: string | null;
+  seconds: number | null;
+  requested_by_name: string | null;
+}
+
+/** A project whose dataset backs an object type (§324; `action-types` p.135).
+ *
+ * The Object Explorer is workspace-scoped and a write is not: an instance comes
+ * from a mapping, a mapping names a dataset, and a dataset lives in a project.
+ * A type mapped from two datasets in two projects genuinely has two, and the
+ * Explorer says so rather than picking one. */
+export interface EditingProject {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+/** One object type the cleanup tool thinks is worth a look (§325; db 0080;
+ * `ontology-manager` p.68-74).
+ *
+ * **Flags, not a verdict.** p.68 says the tool "aims to help Ontology editors
+ * determine the safety of deleting an object type" — so this reports what is
+ * true and leaves p.71's three actions to the person reading it. */
+export interface CleanupCandidate {
+  id: string;
+  api_name: string;
+  display_name: string;
+  status: string;
+  description: string;
+  deprecation: { reason?: string; deadline?: string } | null;
+  /** db 0077's thirty-day count — the evidence behind the `unused` flag, and
+   * the one number that argues against deleting. */
+  interactions: number;
+  /** Already in p.70's priority order, worst first. A screen re-ranking them
+   * would be free to disagree with the order the list itself is in. */
+  flags: string[];
+  /** p.70's rank of the worst flag; lower is more urgent. */
+  priority: number;
+  snoozed_until: string | null;
+}

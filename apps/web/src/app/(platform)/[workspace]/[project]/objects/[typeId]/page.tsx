@@ -11,6 +11,8 @@ import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { UndoToast } from "@/components/undo-toast";
+import { ActionMetricsSection } from "@/components/action-metrics-panel";
+import { UsagePanel } from "@/components/usage-panel";
 import type {
   ActionExecuteResult,
   ActionType,
@@ -143,7 +145,15 @@ export default function ObjectInstancesPage() {
   });
   const instances = useQuery({
     queryKey: ["object-instances", params.typeId, page],
-    queryFn: () => objApi.listInstances(workspace!.id, params.typeId, PAGE_SIZE, page * PAGE_SIZE),
+    // **Named as the Ontology Manager, so this read is not counted** (§320;
+    // `ontology-manager` p.32: "any object type or link type usage happening
+    // in Ontology Manager is not included"). This page and the Object Explorer
+    // list a type's objects through the same route, so the label is the only
+    // thing that tells them apart — and somebody deciding whether to rename a
+    // property must not become the type's most active user for having looked.
+    queryFn: () => objApi.listInstances(
+      workspace!.id, params.typeId, PAGE_SIZE, page * PAGE_SIZE, "ontology_manager",
+    ),
     enabled: !!workspace,
   });
   const actionTypes = useQuery({
@@ -191,7 +201,14 @@ export default function ObjectInstancesPage() {
             {total.toLocaleString()} instance{total === 1 ? "" : "s"}
           </p>
           <div style={{ overflowX: "auto" }}>
-            <table className="table">
+            {/* **Named, because this page has two tables now** (§321). §320's
+                usage panel added a second, and `get_by_role("table")` in a
+                sibling suite went from unambiguous to a strict-mode violation
+                — four tests, red in CI, for a change that touched none of
+                them. A role is a claim about what an element *is*; a test id
+                is a claim about *which one*, and a page that grows a second of
+                anything needs the second kind. */}
+            <table className="table" data-testid="instances-table">
               <thead>
                 <tr>
                   <th>Primary key</th>
@@ -315,6 +332,20 @@ export default function ObjectInstancesPage() {
             queryClient.invalidateQueries({ queryKey: ["object-instances"] })
           }
           onDismiss={() => setApplied(null)}
+        />
+      )}
+      {/* p.33's usage summary, on the page about the type it is about. Last,
+          because it is what somebody consults *before* changing something
+          above it rather than something they came here to do. */}
+      {workspace && <UsagePanel workspaceId={workspace.id} typeId={params.typeId} />}
+      {/* p.164's action metrics, below the usage they belong beside: the usage
+          panel says who relies on this type, and this says whether the thing
+          they do to it is working. Both are consulted before changing
+          something above them rather than being why somebody came here. */}
+      {workspace && actionTypes.data && (
+        <ActionMetricsSection
+          workspaceId={workspace.id}
+          actionTypes={actionTypes.data}
         />
       )}
     </main>

@@ -221,14 +221,27 @@ def test_a_struct_parameter_is_refused_by_name(
     assert "'status'" not in refusals[0]
 
 
-def test_a_hidden_parameter_is_refused(
+def test_a_hidden_parameter_is_a_column_not_offered_rather_than_a_refusal(
     client: TestClient, fx: Fixture, ticket_type_id: str
 ) -> None:
-    """p.241: "Parameters' visibility options should not be set to 'hidden' (as
-    each parameter will be tied to a visible column with the table)."
+    """**This test used to assert the opposite, and the page is why it changed**
+    (§324).
 
-    A hidden parameter is one the form fills without showing; a table column is
-    the opposite arrangement, and a hidden one has no cell to be typed into.
+    It read `workshop` p.241 — "Parameters' visibility options should not be set
+    to 'hidden' (as each parameter will be tied to a visible column with the
+    table)" — as a hard rule, and refused the whole action type for it.
+    `action-types` p.137 lists visibility among the requirements an action must
+    meet only to say it is *allowed*:
+
+        "Visibility status and overrides can be set; however, they will be
+         ignored if the inline edit is used in Object Explorer and Object
+         Views."
+
+    So refusing was stricter than either page: one hidden parameter took an
+    otherwise eligible action out of inline editing entirely. It is safe to
+    ignore one, and p.135 says why — "every parameter is optional and defaults
+    to the existing value of the object" — so a parameter no column offers is
+    submitted unchanged, exactly like a column nobody typed into.
     """
     action = make_action(client, fx, ticket_type_id, ["status"])
     updated = define(client, fx, action["id"], {
@@ -241,9 +254,36 @@ def test_a_hidden_parameter_is_refused(
              "config": {"property": "status", "parameter": "status"}},
         ],
     })
-    assert any("hidden" in r for r in updated["inline_edit_refusals"]), updated[
-        "inline_edit_refusals"
-    ]
+    assert updated["inline_edit_refusals"] == [], (
+        "visibility is allowed by p.137; it is not an eligibility rule"
+    )
+    assert updated["inline_edit_hidden_parameters"] == ["status"], (
+        "but no surface should offer it as a column"
+    )
+
+
+def test_a_visible_parameter_is_not_named_as_hidden(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """The other direction, and what stops the list above meaning nothing.
+
+    Without it, "hidden parameters are named" is satisfied by a server that
+    names every parameter — which would leave a table with no columns at all
+    and an action that looks eligible.
+    """
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    updated = define(client, fx, action["id"], {
+        "parameters": [
+            {"api_name": "status", "display_name": "Status", "data_type": "string"},
+            {"api_name": "note", "display_name": "Note", "data_type": "string",
+             "hidden": True},
+        ],
+        "rules": [
+            {"kind": "modify_object",
+             "config": {"property": "status", "parameter": "status"}},
+        ],
+    })
+    assert updated["inline_edit_hidden_parameters"] == ["note"]
 
 
 def test_an_action_that_creates_an_object_is_refused(
@@ -733,3 +773,348 @@ def test_a_viewer_cannot_submit_a_batch(
         json={"edits": [{"instance_id": instances["1"], "values": {"status": "x"}}]},
     )
     assert r.status_code == 403, r.text
+
+
+# ---- what a bulk edit does to the usage numbers (§324; p.32) ------------------
+def usage_of(client: TestClient, fx: Fixture, type_id: str) -> dict:
+    r = client.get(f"{wbase(fx)}/object-types/{type_id}/usage",
+                   headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def by_application(client: TestClient, fx: Fixture, type_id: str) -> dict[str, dict]:
+    r = client.get(f"{wbase(fx)}/object-types/{type_id}/usage/by-application",
+                   headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return {row["application"]: row for row in r.json()}
+
+
+def test_a_bulk_edit_is_one_write_and_not_one_per_row(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str]
+) -> None:
+    """`ontology-manager` p.32, and a hole §320 left open.
+
+        "Note that one write represents one edit request sent to Object Storage
+         v1 (Phonograph). **Many objects edited in bulk at once will only be
+         recorded as a single write.**" (p.32)
+
+    This route recorded **no** writes at all until §324 — every number in
+    §320's panel came from `execute_action`, so a hundred rows saved from an
+    Object Table moved nothing, and the writes column was a figure about one of
+    the two write paths while claiming to be about the type.
+
+    Three rows and one write is the assertion that says which rule is in force:
+    a per-row count would give three, and is what somebody would write without
+    reading the sentence.
+    """
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    before = usage_of(client, fx, ticket_type_id)["writes"]
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"edits": [
+            {"instance_id": instances["1"], "values": {"priority": "bulk1"}},
+            {"instance_id": instances["2"], "values": {"priority": "bulk2"}},
+            {"instance_id": instances["3"], "values": {"priority": "bulk3"}},
+        ]},
+    )
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+    assert usage_of(client, fx, ticket_type_id)["writes"] == before + 1, (
+        "three rows edited at once is one write, not three"
+    )
+
+
+def test_a_bulk_edit_is_counted_against_the_surface_that_sent_it(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str]
+) -> None:
+    """p.32 lists "direct Object Explorer edit" and a Workshop table as
+    different sources of the same kind of write, and §320's panel breaks the
+    numbers down by application.
+
+    The two surfaces reach this route identically, so the label is the only
+    thing that tells them apart — which is exactly the shape §320's
+    `ONTOLOGY_MANAGER` exclusion has, and the reason it is a value the recorder
+    recognises rather than a caller that happens not to call.
+    """
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    before = by_application(client, fx, ticket_type_id)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"application": "explorer",
+              "edits": [{"instance_id": instances["1"],
+                         "values": {"priority": "from-the-explorer"}}]},
+    )
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+
+    after = by_application(client, fx, ticket_type_id)
+    assert after["explorer"]["writes"] == before.get(
+        "explorer", {"writes": 0}
+    )["writes"] + 1
+    # And it did not land under the other surface's name. Without this the test
+    # passes for a route that labels every batch "explorer".
+    assert after.get("workshop", {"writes": 0})["writes"] == before.get(
+        "workshop", {"writes": 0}
+    )["writes"]
+
+
+def test_an_unlabelled_batch_is_the_object_table(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str]
+) -> None:
+    """The default, which is not an arbitrary choice.
+
+    `execute-batch` exists for `workshop` p.242's staged edits and had exactly
+    one caller before §324, so a submission that names no application is that
+    caller — and defaulting to `"api"` would move every existing Object Table's
+    writes into a column about something else the day this field shipped.
+    """
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    before = by_application(client, fx, ticket_type_id)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"edits": [{"instance_id": instances["2"],
+                         "values": {"priority": "unlabelled"}}]},
+    )
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+    after = by_application(client, fx, ticket_type_id)
+    assert after["workshop"]["writes"] == before.get(
+        "workshop", {"writes": 0}
+    )["writes"] + 1
+
+
+def test_a_submission_refused_before_it_starts_counts_nothing(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str]
+) -> None:
+    """p.32 records a write when an application "makes edits", and a submission
+    refused for naming the same object twice (p.138) made none.
+
+    **This one cannot reach the counting block at all**, and that is worth
+    saying rather than leaving for somebody to discover: the refusal raises
+    before the write is attempted, so the whole handler unwinds. It is a real
+    claim — nothing is counted — and it is *not* a test of the `if ok:` guard,
+    which is what the test below is for.
+    """
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    before = usage_of(client, fx, ticket_type_id)["writes"]
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"edits": [
+            {"instance_id": instances["1"], "values": {"priority": "once"}},
+            {"instance_id": instances["1"], "values": {"priority": "twice"}},
+        ]},
+    )
+    assert r.status_code == 422, r.text
+    assert usage_of(client, fx, ticket_type_id)["writes"] == before, (
+        "a submission that wrote nothing is not a write"
+    )
+
+
+def test_a_submission_that_failed_while_writing_counts_nothing(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**The `if ok:` guard, and the only way to reach it.**
+
+    The mutation sweep found this: a mutant making the count unconditional
+    survived every test in this file, because every refusal here is raised
+    *before* the write is attempted and so unwinds the handler long before the
+    guard is read. The same defect §320 found in its sixth survivor and §323
+    found again — a check placed after a branch nothing in the suite takes.
+
+    So the failure has to happen where p.138 says it can: in the dataset write
+    itself, which answers 200 with `ok: false` rather than raising. Forced,
+    because provoking a real engine failure needs a broken dataset and what is
+    being checked is the guard rather than the engine.
+    """
+    from src.routes import actions as action_routes
+    from src.services.dataset_engine import DatasetEngineError
+
+    def boom(*a, **k):
+        raise DatasetEngineError("the write could not be completed")
+
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    before = usage_of(client, fx, ticket_type_id)["writes"]
+    monkeypatch.setattr(action_routes.engine, "write_rows", boom)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"edits": [{"instance_id": instances["1"],
+                         "values": {"priority": "doomed"}}]},
+    )
+    # The submission opened and failed, which is a 200 reporting failure rather
+    # than a refusal — so the counting block really was reached this time.
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False, r.json()
+    assert usage_of(client, fx, ticket_type_id)["writes"] == before, (
+        "p.32 counts a write when an application makes edits, and this made none"
+    )
+
+
+def test_a_type_mapped_in_two_projects_names_both(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Two projects, which is the only pair that can disagree** (§324).
+
+    A type mapped in one project reads the same whatever the query does, so
+    this is the shape that says `editing_projects` returns all of them rather
+    than the first — which is what the Explorer's refusal is built on: it names
+    the projects so somebody can go and unmap one.
+
+    **The order is asserted in `explorer-edit.test.ts`, not here**, and that is
+    a deliberate split rather than an omission. Two rows out of Postgres arrive
+    in whatever order the plan produces, which coincides with alphabetical
+    about half the time — so a test pinning the order here would pass or fail
+    by luck, which is worse than not testing it. The order a reader sees is
+    wording, the wording is sorted in the lib, and there it is exact.
+    """
+    # **Its own object type**, because mapping a second project onto the shared
+    # one would leave every other test in this file looking at an ambiguous
+    # type. Found exactly that way: the two tests above went red on the first
+    # run of this one.
+    declared = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"twoproj_{uuid.uuid4().hex[:8]}",
+              "display_name": "Two projects",
+              "properties": [{"api_name": "status", "data_type": "string"},
+                             {"api_name": "priority", "data_type": "string"}]},
+    )
+    assert declared.status_code == 201, declared.text
+    ticket_type_id = declared.json()["id"]
+
+    made = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.editor_sub),
+        json={"name": f"AAA tickets {uuid.uuid4().hex[:6]}"},
+    )
+    assert made.status_code == 201, made.text
+    other = made.json()["id"]
+
+    uploaded = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{other}/datasets/upload",
+        headers=hdr(fx.editor_sub),
+        data={"name": f"OtherTickets {uuid.uuid4().hex[:6]}"},
+        files={"file": ("other.csv", io.BytesIO(TICKETS), "text/csv")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    mapped = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{other}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={"object_type_id": ticket_type_id, "dataset_id": uploaded.json()["id"],
+              "primary_key_column": "ticket_id",
+              "column_mappings": {"status": "status", "priority": "priority"}},
+    )
+    assert mapped.status_code == 201, mapped.text
+
+    here = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub),
+        data={"name": f"HereTickets {uuid.uuid4().hex[:6]}"},
+        files={"file": ("here.csv", io.BytesIO(TICKETS), "text/csv")},
+    )
+    assert here.status_code == 201, here.text
+    also = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={"object_type_id": ticket_type_id, "dataset_id": here.json()["id"],
+              "primary_key_column": "ticket_id",
+              "column_mappings": {"status": "status", "priority": "priority"}},
+    )
+    assert also.status_code == 201, also.text
+
+    rows = editing_projects(client, fx, ticket_type_id)
+    assert {p["id"] for p in rows} == {other, str(fx.project)}, rows
+    # Both are named, because the refusal quotes them: "mapped in 2 projects
+    # (Billing, Support)" is a sentence somebody can act on and "mapped in 2
+    # projects" is not (§214).
+    assert all(p["name"] for p in rows), rows
+
+
+# ---- where an edit from the Explorer would land (§324; p.135) ----------------
+def editing_projects(client: TestClient, fx: Fixture, type_id: str, sub=None):
+    r = client.get(f"{wbase(fx)}/object-types/{type_id}/editing-projects",
+                   headers=hdr(sub or fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_mapped_type_names_the_project_its_edits_would_reach(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """**The Object Explorer is workspace-scoped and a write is not** (§324).
+
+    `action-types` p.135 puts inline edits in the Explorer's results view, but
+    an object type is declared in a workspace while the instance behind a row
+    comes from a mapping — and a mapping names a dataset in a *project*. So
+    before the Explorer can submit anything it has to learn where the write
+    would land, which is what this route is for.
+    """
+    rows = editing_projects(client, fx, ticket_type_id)
+    assert [p["id"] for p in rows] == [str(fx.project)], rows
+    # Named, not just identified: with more than one the Explorer has to be
+    # able to say which, and "editing is unavailable" is not a sentence
+    # somebody can act on (§214).
+    assert rows[0]["name"]
+    assert rows[0]["slug"]
+
+
+def test_a_type_nothing_maps_names_no_project(
+    client: TestClient, fx: Fixture
+) -> None:
+    """An unsourced type has nowhere for a write to go, and says so by being
+    empty rather than by naming a project that could not take one.
+
+    The Explorer reads this as "not editable here", which is the same answer it
+    gives for a type with no eligible action — and a different answer from the
+    ambiguity below.
+    """
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"unmapped_{uuid.uuid4().hex[:8]}",
+              "display_name": "Unmapped",
+              "properties": [{"api_name": "name", "data_type": "string"}]},
+    )
+    assert r.status_code == 201, r.text
+    assert editing_projects(client, fx, r.json()["id"]) == []
+
+
+def test_a_type_mapped_twice_in_one_project_still_names_it_once(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """**`DISTINCT` is doing work, and this is what says so.**
+
+    A type may be mapped from several datasets, and two datasets in the same
+    project are two sources with one destination. Without the `DISTINCT` the
+    Explorer would read two rows as an ambiguity and refuse to edit a type
+    whose writes have exactly one place to go.
+    """
+    second = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub),
+        data={"name": f"MoreTickets {uuid.uuid4().hex[:6]}"},
+        files={"file": ("more.csv", io.BytesIO(TICKETS), "text/csv")},
+    )
+    assert second.status_code == 201, second.text
+    mapped = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={"object_type_id": ticket_type_id, "dataset_id": second.json()["id"],
+              "primary_key_column": "ticket_id",
+              "column_mappings": {"status": "status", "priority": "priority"}},
+    )
+    assert mapped.status_code == 201, mapped.text
+
+    rows = editing_projects(client, fx, ticket_type_id)
+    assert [p["id"] for p in rows] == [str(fx.project)], (
+        "two datasets in one project is one destination, not an ambiguity"
+    )
+
+
+def test_an_outsider_is_told_nothing_about_where_a_type_is_mapped(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """Where a workspace's types are mapped is a fact about that workspace."""
+    r = client.get(f"{wbase(fx)}/object-types/{ticket_type_id}/editing-projects",
+                   headers=hdr(fx.outsider_sub))
+    assert r.status_code in (403, 404), r.text

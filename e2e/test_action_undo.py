@@ -60,18 +60,30 @@ def open_objects(page, module) -> None:
         f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}"
         f"/objects/{module.object_type_id}"
     )
-    expect(page.get_by_role("table")).to_be_visible(timeout=30000)
+    # **The instances table by name, not by role** (§321). §320 put a usage
+    # panel on this page with a table of its own, and `get_by_role("table")`
+    # stopped resolving to one element — four tests here went red in CI for a
+    # change that touched none of them.
+    expect(page.get_by_test_id("instances-table")).to_be_visible(timeout=30000)
 
 
 def row_for(page, ticket: str):
-    """The row for one ticket, matched on **an exact cell**.
+    """The row for one ticket: **inside the instances table, exact cell**.
 
-    `filter(has_text="1")` matches the other row too — its `updated_at` cell
+    Two traps, met in that order.
+
+    `filter(has_text="1")` matched the other row too — its `updated_at` cell
     reads "9/11/2026, 11:00:55", which contains a 1. A substring match against
-    a table containing timestamps is a locator that will find the wrong row
-    eventually and pass until it does.
+    a table of timestamps is a locator that finds the wrong row eventually and
+    passes until it does.
+
+    Exact-matching the cell fixed that and was still not enough (§321): §320
+    added a usage panel to this page whose People column also holds a "1", so
+    a page-wide row search matched a row in *that* table. A locator scoped to
+    the page is one that any element added later can break — so it is scoped to
+    the table the question is about.
     """
-    return page.get_by_role("row").filter(
+    return page.get_by_test_id("instances-table").get_by_role("row").filter(
         has=page.get_by_role("cell", name=ticket, exact=True)
     )
 
