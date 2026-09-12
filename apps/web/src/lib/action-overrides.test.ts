@@ -72,6 +72,24 @@ describe("conditionParameters", () => {
     })])).toEqual([]);
   });
 
+  it("does not watch a side whose kind is not a parameter", () => {
+    // The same check §328 had to come back for. Every side kind decision 0007
+    // actually has either carries a `parameter` key or carries nothing, so
+    // dropping the guard and relying on the key alone behaves identically —
+    // until a hand-edited document (p.65's premise) or one from a build with a
+    // kind this one lacks arrives. `_side` refuses an unknown kind, so the
+    // server leaves the parameter alone whatever the value is; watching it
+    // would re-ask on every keystroke of something that cannot change the
+    // answer.
+    expect(conditionParameters([parameter({
+      overrides: [block({ conditions: [{
+        left: { kind: "property", parameter: "status" },
+        operator: "is",
+        right: { kind: "value", value: 1 },
+      }] })],
+    })])).toEqual([]);
+  });
+
   it("reads both sides of a condition", () => {
     expect(conditionParameters([parameter({
       overrides: [block({ conditions: [{
