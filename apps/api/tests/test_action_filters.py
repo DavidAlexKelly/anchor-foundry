@@ -100,6 +100,43 @@ def test_a_filter_can_read_another_parameter() -> None:
     assert f.value == ["uk"]
 
 
+def test_a_filter_with_no_property_narrows_nothing_rather_than_everything() -> None:
+    """**A document that predates the save-time refusal.**
+
+    `check_filters` will not let one be written, so this is unreachable through
+    the API — but `resolve` reads what is *stored*, and an ontology import
+    (§326) or a hand-edited row can carry one. Compiling it would produce a
+    filter on the empty property, which matches nothing, and a form would go
+    blank for a reason nobody could see.
+
+    Tested against the function rather than through the door a caller uses,
+    because the door is the one thing that cannot deliver this input.
+    """
+    got = filters.resolve(
+        a_parameter(dropdown_filters=[
+            {"property": "", "values": [{"kind": "value", "value": "eu"}]},
+            static("region", "eu"),
+        ]),
+        bound={}, property_types={},
+    )
+    assert [f.property for f in got] == ["region"]
+
+
+def test_referenced_parameters_ignores_a_side_whose_kind_is_not_a_parameter() -> None:
+    """**The third unit in a row to need this exact check** (§328, §329, here).
+
+    Every side kind this build has either carries a `parameter` key or carries
+    nothing, so the guard and "does it have a non-empty name" behave
+    identically — until a document carries a kind this build does not have,
+    which p.36's own third value kind will be the day somebody imports one.
+    """
+    assert filters.referenced_parameters(a_parameter(dropdown_filters=[{
+        "property": "region",
+        "values": [{"kind": "object_property", "parameter": "where",
+                    "property": "region"}],
+    }])) == []
+
+
 def test_a_filter_reading_an_unsupplied_parameter_is_unresolved() -> None:
     """**Not "skip that value", and not "drop that filter".**
 
