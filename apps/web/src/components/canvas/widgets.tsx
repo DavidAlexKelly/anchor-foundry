@@ -11744,6 +11744,13 @@ export function CanvasActionForm({
     queryKey: ["action-parameter-choices", actionTypeId, watchingFilters],
     queryFn: () => actionApi.parameterChoices(workspaceId, actionTypeId!, values),
     enabled: !!actionTypeId,
+    // **The last list stays while the next one loads** (§331). Without this the
+    // data is `undefined` for the width of a round trip whenever a watched
+    // value changes, `offerFor` returns nothing, and the control flips from a
+    // dropdown to a text box and back on every keystroke in the box above it —
+    // which is worse than a stale list, because a text box will accept an id
+    // the filter excludes.
+    placeholderData: (previous) => previous,
   });
   const stored = (actionType?.parameters ?? []) as FormParameter[];
   const overridden = hasOverrides(actionType?.parameters ?? []);
