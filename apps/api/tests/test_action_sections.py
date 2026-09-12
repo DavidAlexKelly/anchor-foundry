@@ -460,3 +460,92 @@ def test_a_condition_about_the_current_user_reads_the_caller(
     ]).raise_for_status()
     assert len(visible(client, fx, action, {}, sub=fx.viewer_sub)) == 1
     assert visible(client, fx, action, {}, sub=fx.editor_sub) == []
+
+
+def test_a_definition_save_leaves_the_form_arranged(
+    client: TestClient, fx: Fixture, action: str
+) -> None:
+    """**The defect a unit of tests did not see.**
+
+    `set_definition` replaces every `action_parameters` row, so until §329 a
+    definition save silently emptied every section: the rows survived and their
+    contents did not. Nothing caught it because the only thing that saves a
+    definition is the editor, and the editor writes the form immediately
+    afterwards and put it all back — so the bug was invisible from the screen
+    and present for anybody using the API.
+
+    The section itself is asserted as well as its contents, because "the
+    parameters are still in it" would also pass for a save that deleted the
+    section and somehow left the membership behind.
+    """
+    put_sections(client, fx, action, [
+        {"title": "Details", "parameters": ["status", "reason"]},
+    ]).raise_for_status()
+    definition = client.get(f"{wbase(fx)}/action-types/{action}",
+                            headers=hdr(fx.editor_sub)).json()
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {k: p[k] for k in ("api_name", "display_name", "data_type",
+                                   "required", "default_value", "hidden")}
+                for p in definition["parameters"]
+            ],
+            "rules": [{"kind": x["kind"], "config": x["config"]}
+                      for x in definition["rules"]],
+            "criteria": [{"message": x["message"], "config": x["config"]}
+                         for x in definition["criteria"]],
+        },
+    )
+    assert r.status_code == 200, r.text
+    [section] = get_sections(client, fx, action)
+    assert section["title"] == "Details"
+    assert section["parameters"] == ["status", "reason"]
+
+
+def test_a_parameter_renamed_by_a_definition_save_leaves_its_section(
+    client: TestClient, fx: Fixture, action: str
+) -> None:
+    """**The half that is not carried, stated rather than discovered.**
+
+    Membership follows the api_name, because that is the only handle the
+    definition document carries: a rename arrives as one parameter appearing
+    and another vanishing, and guessing which pairing was meant is how an
+    arrangement ends up somewhere nobody chose. The editor carries renames
+    through the form itself and saves it afterwards, which is where a rename
+    keeps its place — so this is a fact about the API rather than about a
+    person, and it is asserted so that changing it is a decision.
+    """
+    put_sections(client, fx, action, [
+        {"title": "Details", "parameters": ["status", "reason"]},
+    ]).raise_for_status()
+    definition = client.get(f"{wbase(fx)}/action-types/{action}",
+                            headers=hdr(fx.editor_sub)).json()
+    parameters = [
+        {k: p[k] for k in ("api_name", "display_name", "data_type",
+                           "required", "default_value", "hidden")}
+        for p in definition["parameters"]
+    ]
+    for parameter in parameters:
+        if parameter["api_name"] == "reason":
+            parameter["api_name"] = "why"
+    # The rules follow the rename too, exactly as the dialog's `patchParameter`
+    # carries one — otherwise the save is refused for naming a parameter that
+    # no longer exists, which is a different refusal from the one under test.
+    rules = []
+    for rule in definition["rules"]:
+        config = dict(rule["config"])
+        if config.get("parameter") == "reason":
+            config["parameter"] = "why"
+        rules.append({"kind": rule["kind"], "config": config})
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action}/definition", headers=hdr(fx.editor_sub),
+        json={"parameters": parameters, "rules": rules,
+              "criteria": [{"message": x["message"], "config": x["config"]}
+                           for x in definition["criteria"]]},
+    )
+    assert r.status_code == 200, r.text
+    [section] = get_sections(client, fx, action)
+    assert section["parameters"] == ["status"], (
+        "the parameter that kept its name kept its place"
+    )
