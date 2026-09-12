@@ -2307,6 +2307,12 @@ export interface ActionParameter {
    * are exposed in the form or not". A hidden parameter is still applied. */
   hidden: boolean;
   sort_order: number;
+  /** db 0083: which object type this parameter's value is an instance of
+   * (§330). `null` on every non-object parameter, and on an object parameter
+   * written before §330 — whose type the action's rules still speak for, well
+   * enough to render a notification and not well enough to refuse a
+   * submission. */
+  object_type_id?: string | null;
   /** p.43-46's override blocks, in the order the first-match rule reads them.
    * Absent on a payload that predates §329, and empty for most parameters. */
   overrides?: ActionOverrideBlock[];

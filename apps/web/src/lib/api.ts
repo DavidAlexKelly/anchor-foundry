@@ -1838,6 +1838,9 @@ export interface ActionDefinitionInput {
     required?: boolean;
     default_value?: unknown;
     hidden?: boolean;
+    /** db 0083: which object type an `object` parameter holds (§330). Refused
+     * on any other type, because a type on a string is a claim nothing reads. */
+    object_type_id?: string | null;
     /** p.43-46's override blocks (§329). Part of the parameter rather than a
      * document of their own — unlike §328's sections, which are about the
      * form — because an override changes what the parameter *is* under a
@@ -1960,6 +1963,17 @@ export const actions = {
     request<string[]>(
       `/workspaces/${wid}/action-types/${actionTypeId}/visible-sections`,
       { method: "POST", body: JSON.stringify({ values }) },
+    ),
+  /** What each object parameter may be set to (§330; p.33-37).
+   *
+   * **Every object parameter in one call**, because a form asks this once when
+   * it opens and the alternative is a round trip per control on a screen that
+   * has not drawn anything yet. A parameter whose object type nobody declared
+   * is absent rather than empty: the form draws its text box, because offering
+   * a *guessed* list would be worse than offering none. */
+  parameterChoices: (wid: string, actionTypeId: string) =>
+    request<import("./action-choices").ParameterChoices[]>(
+      `/workspaces/${wid}/action-types/${actionTypeId}/parameter-choices`,
     ),
   /** The parameters as they stand for this caller and these values (§329;
    * p.43-46).
