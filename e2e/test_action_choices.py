@@ -176,6 +176,29 @@ def test_a_type_with_no_objects_says_so_rather_than_drawing_an_empty_list(page, 
     expect(page.get_by_test_id("choices-empty")).to_be_visible(timeout=30000)
 
 
+def test_a_dropdown_that_cannot_hold_everything_says_so(page, api):
+    """**§256's rule, one control down.**
+
+    A dropdown is not a listing: somebody picks from the rows it happened to
+    receive, so a control quietly holding the first fifty of a larger set would
+    leave them unable to learn the rest existed. The note names the count and
+    points at p.36's filter, which is the thing that would actually narrow it.
+
+    Seeds one more object than the cap, which is the store's own page size.
+    Every other fixture here has two, so a build that never reported truncation
+    survived the whole file — the same gap the service sweep found a layer
+    down, and it had to be closed in both places because the note is drawn in
+    one and decided in the other.
+    """
+    mod = build(api, "Choices truncated", typed=True, teams=51)
+    open_module(page, mod)
+    choose_the_ticket(page)
+    note = page.get_by_test_id("choices-truncated")
+    expect(note).to_be_visible(timeout=30000)
+    expect(note).to_contain_text("first 50")
+    expect(note).to_contain_text("filter")
+
+
 def test_the_dropdown_is_named_for_the_type_it_offers(page, api):
     """A form with two object parameters would otherwise have two identical
     "Choose…" rows and no way to tell which asked for what."""
