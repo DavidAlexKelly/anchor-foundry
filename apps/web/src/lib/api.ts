@@ -1482,6 +1482,25 @@ export const objects = {
     request<import("./types").ObjectTypeUsage>(
       `/workspaces/${wid}/object-types/${typeId}/usage`,
     ),
+  /** p.66's Export: the whole ontology as JSON (§326). */
+  exportOntology: (wid: string) =>
+    request<Record<string, unknown>>(`/workspaces/${wid}/ontology-export`),
+  /** p.66's count — what the file would change, writing nothing (§326). */
+  planOntologyImport: (wid: string, document: Record<string, unknown>) =>
+    request<import("./types").OntologyPlan>(
+      `/workspaces/${wid}/ontology-import/plan`,
+      { method: "POST", body: JSON.stringify({ document }) },
+    ),
+  applyOntologyImport: (wid: string, document: Record<string, unknown>) =>
+    request<{
+      added: string[];
+      updated: string[];
+      not_applied: { link_types: string[]; action_types: string[] };
+      absent_from_file: string[];
+    }>(`/workspaces/${wid}/ontology-import`, {
+      method: "POST",
+      body: JSON.stringify({ document }),
+    }),
   /** p.69's cleanup queue, worst first (§325; `ontology-manager` p.68-74). */
   cleanupQueue: (wid: string, opts?: { flag?: string; includeSnoozed?: boolean }) => {
     const params = new URLSearchParams();
