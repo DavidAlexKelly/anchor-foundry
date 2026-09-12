@@ -588,6 +588,12 @@ def test_the_blocks_come_back_in_the_order_they_were_written(
         ]),
     ]).raise_for_status()
     saved = read(client, fx, action)["justification"]["overrides"]
+    # **The positions, not only the sequence.** Reading the list in order is a
+    # coin flip against a build that writes every block at zero: the query
+    # breaks that tie on a random uuid, so the assertion below passed about
+    # half the time and a sweep duly reported the mutant as a survivor — on the
+    # run where it happened to come out right.
+    assert [b["sort_order"] for b in saved] == [0, 1]
     assert [b["set_hidden"] for b in saved] == [False, None]
     assert [b["set_required"] for b in saved] == [None, True]
     # And the first-match rule reads that order: the second block's `required`
