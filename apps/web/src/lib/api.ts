@@ -1838,6 +1838,12 @@ export interface ActionDefinitionInput {
     required?: boolean;
     default_value?: unknown;
     hidden?: boolean;
+    /** p.43-46's override blocks (§329). Part of the parameter rather than a
+     * document of their own — unlike §328's sections, which are about the
+     * form — because an override changes what the parameter *is* under a
+     * condition. Omitted means none, which is what every parameter written
+     * before §329 has. */
+    overrides?: import("./types").ActionOverrideBlock[];
   }[];
   rules: { kind: string; config: Record<string, unknown> }[];
   criteria: { message: string; config: Record<string, unknown> }[];
@@ -1955,12 +1961,50 @@ export const actions = {
       `/workspaces/${wid}/action-types/${actionTypeId}/visible-sections`,
       { method: "POST", body: JSON.stringify({ values }) },
     ),
+  /** The parameters as they stand for this caller and these values (§329;
+   * p.43-46).
+   *
+   * **Asked, not computed**, and the stakes are higher than §328's sections:
+   * an override decides whether a parameter is *required*, so a browser that
+   * evaluated p.45's conditions itself could ask somebody for the wrong things
+   * and then refuse what they sent. The same `resolve` runs inside
+   * `bind_parameters`. */
+  effectiveParameters: (
+    wid: string,
+    actionTypeId: string,
+    values: Record<string, unknown>,
+  ) =>
+    request<import("./types").ActionParameter[]>(
+      `/workspaces/${wid}/action-types/${actionTypeId}/effective-parameters`,
+      { method: "POST", body: JSON.stringify({ values }) },
+    ),
   /** Parameters, rules and criteria as one document (decision 0007). Whole
    * document because they constrain each other - see the route. */
   setDefinition: (wid: string, actionTypeId: string, input: ActionDefinitionInput) =>
     request<import("./types").ActionType>(
       `/workspaces/${wid}/action-types/${actionTypeId}/definition`,
-      { method: "PUT", body: JSON.stringify(input) },
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          ...input,
+          // **An override block goes back without its `id` or `sort_order`.**
+          // Both are the server's: the id names a row this whole-document save
+          // is about to replace, and the order is the position in the list
+          // (p.45's first-match rule), which the list itself already says. The
+          // request model forbids unknown fields, so sending them back is a
+          // 422 with no sentence in it — which is what the first version of
+          // this did, and the dialog could only say "Unprocessable Entity".
+          parameters: input.parameters.map((p) => ({
+            ...p,
+            overrides: (p.overrides ?? []).map((b) => ({
+              conditions: b.conditions,
+              set_hidden: b.set_hidden,
+              set_required: b.set_required,
+              set_default: b.set_default,
+            })),
+          })),
+        }),
+      },
     ),
   /** Would this submission be refused? (Workshop p.513.)
    *

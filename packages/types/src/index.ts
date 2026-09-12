@@ -2268,6 +2268,32 @@ export interface ObjectInstancePage {
 
 // ---- actions (write-back) ----------------------------------------------------
 /** An input the action declares (Foundry `action-types` p.25). */
+/** One of p.45's "if"/"then" override blocks on a parameter (§329; db 0082).
+ *
+ * > "An override block presents the basis for overrides. It defines both the
+ * > conditions (shown in the "if" part) and the overrides (shown in the "then"
+ * > part)… if more than one is true, only the first one will be executed."
+ * > (p.45)
+ *
+ * **Unlike a section (§328) this changes what the action asks for.** p.43's
+ * justification is required for a manager and optional for an assignee, so the
+ * same resolution that draws the form also decides whether a submission is
+ * refused — which is why the browser asks the server rather than evaluating
+ * the conditions itself.
+ */
+export interface ActionOverrideBlock {
+  id: string;
+  sort_order: number;
+  /** p.45's "if". decision 0007's conditions, **all** of which must hold. */
+  conditions: Record<string, unknown>[];
+  /** p.45's "then". **`null` is "leave this alone", not false** — p.43's block
+   * makes one parameter required *and* visible together, and a block that only
+   * hid something would otherwise un-require it as a side effect. */
+  set_hidden: boolean | null;
+  set_required: boolean | null;
+  set_default: unknown;
+}
+
 export interface ActionParameter {
   id: string;
   api_name: string;
@@ -2281,6 +2307,9 @@ export interface ActionParameter {
    * are exposed in the form or not". A hidden parameter is still applied. */
   hidden: boolean;
   sort_order: number;
+  /** p.43-46's override blocks, in the order the first-match rule reads them.
+   * Absent on a payload that predates §329, and empty for most parameters. */
+  overrides?: ActionOverrideBlock[];
 }
 
 /** What the action does with them (p.75). */
