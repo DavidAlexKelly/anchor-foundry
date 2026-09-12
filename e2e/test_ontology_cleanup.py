@@ -62,6 +62,30 @@ def row(page, module):
     return page.get_by_test_id(f"cleanup-{module.api_name}")
 
 
+def still_declared(api, module) -> bool:
+    """Whether the ontology still has this object type.
+
+    **Asked by id, because the listing is a page** (§256). Reading
+    `/object-types` and looking for the row was the shape both delete tests
+    started with, and it is worse than useless: this workspace has thousands of
+    types, the default page is a fraction of them ordered by display name, and
+    a type created moments ago is almost never on it. So "not in the list" was
+    true before the delete as well as after — the check could not fail, and the
+    one asserting the type *survived* a cancel failed for the same reason.
+
+    `ids` exists for exactly this, and the route says so: "A screen that has
+    already chosen some has to be able to read them back now that the listing
+    is a page."
+    """
+    page_of = api.call(
+        "GET",
+        f"/workspaces/{module.workspace_id}/object-types"
+        f"?ids={module.object_type_id}",
+    )
+    items = page_of["items"] if isinstance(page_of, dict) else page_of
+    return module.object_type_id in [t["id"] for t in items]
+
+
 def test_a_leftover_type_is_in_the_queue_with_a_reason(page, candidate) -> None:
     """p.69's list, and p.70's headline.
 
@@ -150,7 +174,7 @@ def test_a_snoozed_row_can_still_be_found_and_brought_back(page, candidate) -> N
     expect(row(page, candidate)).to_be_visible(timeout=30000)
 
 
-def test_a_delete_asks_first_and_says_what_goes_with_it(page, candidate) -> None:
+def test_a_delete_asks_first_and_says_what_goes_with_it(page, api, candidate) -> None:
     """p.71's third action, and the only one that cannot be undone.
 
     "Delete object types from the Ontology **and remove associated data from
@@ -174,6 +198,15 @@ def test_a_delete_asks_first_and_says_what_goes_with_it(page, candidate) -> None
     # deleted anyway is worse than no confirmation.
     page.get_by_test_id("cleanup-confirm-cancel").click()
     expect(page.get_by_test_id("cleanup-confirm")).to_have_count(0)
+
+    # **Asked of the ontology, not of the table.** The first version asserted
+    # the row was still visible right after the click — which is true for a
+    # moment even when Cancel deletes, because the request has not come back
+    # yet. A mutant wiring Cancel to the delete survived on exactly that race.
+    # The server cannot be early.
+    assert still_declared(api, candidate), (
+        "Cancel must leave the object type where it was"
+    )
     expect(row(page, candidate)).to_be_visible()
 
 
@@ -186,9 +219,7 @@ def test_confirming_the_delete_removes_the_type(page, api, candidate) -> None:
     eventually(lambda: row(page, candidate).count(), lambda n: n == 0,
                what="the deleted row to leave the queue")
 
-    types = api.call("GET", f"/workspaces/{candidate.workspace_id}/object-types")
-    items = types["items"] if isinstance(types, dict) else types
-    assert candidate.object_type_id not in [t["id"] for t in items], (
+    assert not still_declared(api, candidate), (
         "the type is gone from the ontology, not only from the table"
     )
 

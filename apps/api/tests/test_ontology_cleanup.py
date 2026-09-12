@@ -637,3 +637,85 @@ def test_the_unused_window_matches_the_usage_the_flag_reads() -> None:
     from src.services import object_type_usage
 
     assert cleanup.UNUSED_DAYS == object_type_usage.WINDOW_DAYS
+
+
+def test_a_healthy_type_is_not_in_the_queue_at_all(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The direction that stops the queue meaning nothing.**
+
+    Every other test here asks whether a flagged type appears. None asked
+    whether an unflagged one stays out — so a queue listing the entire ontology
+    would have passed all of them, and this is a screen whose buttons delete
+    things. The mutation sweep found exactly that.
+
+    A type is healthy when it has a description, a mapping that synced today,
+    and somebody reading it.
+    """
+    type_id = a_type(client, fx, description="A type somebody documented")
+    source_id = give_it_a_source(client, fx, type_id)
+    sql("UPDATE object_type_sources SET sync_status = 'ok', "
+        "last_synced_at = now() WHERE id = %s", (source_id,))
+    # One read through the ordinary route, which is what db 0077 counts.
+    assert client.get(
+        f"{wbase(fx)}/object-types/{type_id}/instances?application=explorer",
+        headers=hdr(fx.viewer_sub),
+    ).status_code == 200
+
+    assert entry(queue(client, fx), type_id) is None, (
+        "a type with a description, a fresh mapping and a reader is not a "
+        "cleanup candidate"
+    )
+
+
+def test_two_types_with_the_same_worst_flag_are_ordered_by_name(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The tie-break, which needs two rows of equal priority to exist.
+
+    p.70 orders by the worst flag; two types whose worst flag is the same would
+    otherwise arrive in whatever order the scan produced, and a queue whose rows
+    swap places between refreshes is one people stop trusting. A mutant dropping
+    the secondary sort survived every other test here, because no two of them
+    ever tied.
+    """
+    tag = uuid.uuid4().hex[:6]
+    # Same flags, so the same priority: both are unsourced, undescribed and
+    # unused. Only the names differ, and deliberately not in creation order.
+    later = a_type(client, fx, description="", display_name=f"zz tie {tag}")
+    earlier = a_type(client, fx, description="", display_name=f"aa tie {tag}")
+
+    rows = [c for c in queue(client, fx) if c["id"] in (earlier, later)]
+    assert [c["id"] for c in rows] == [earlier, later], (
+        [c["display_name"] for c in rows]
+    )
+
+
+def test_the_page_keeps_the_worst_rather_than_the_first_found(
+    client: TestClient, fx: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**The cap is applied after ranking**, which is the difference between a
+    page of a queue and a sample of one.
+
+    Forced to two rather than seeding two hundred types: what is being checked
+    is the order of two operations, and building a workspace big enough to trip
+    the real cap would make the test about the fixture. A mutant returning the
+    list uncut survived because nothing here comes near two hundred.
+    """
+    monkeypatch.setattr(cleanup, "MAX_CANDIDATES", 2)
+    # One type whose worst flag is the worst there is, created last so that an
+    # unranked cut would drop it.
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    worst = a_type(client, fx)
+    assert client.post(
+        f"{wbase(fx)}/object-types/bulk-status", headers=hdr(fx.editor_sub),
+        json={"object_type_ids": [worst], "status": "deprecated",
+              "deprecation": {"reason": "Gone", "deadline": yesterday}},
+    ).status_code == 200
+
+    rows = queue(client, fx)
+    assert len(rows) == 2, len(rows)
+    assert entry(rows, worst) is not None, (
+        "the cap kept the worst two, not the first two the scan happened to see"
+    )
+    assert rows[0]["priority"] == 0

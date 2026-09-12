@@ -193,6 +193,15 @@ async def candidates(
                ) AS name_looks_temporary
           FROM object_types ot
           LEFT JOIN usage u ON u.object_type_id = ot.id
+          -- **`s.user_id = :uid` is belt to db 0080's braces, and the sweep
+          -- could not make it matter.** The row policy already restricts this
+          -- table to `rls_current_user_id()`, so a join without the condition
+          -- selects the same rows — a mutant removing it survived, correctly.
+          -- Kept rather than deleted (unlike §323's redundant P95 filter,
+          -- which was a no-op by the aggregate's own semantics): this one is
+          -- redundant only because a *separate* mechanism gets there first,
+          -- and the day somebody reads this table from an admin connection it
+          -- is the difference between your queue and everybody's.
           LEFT JOIN object_type_snoozes s
                  ON s.object_type_id = ot.id AND s.user_id = :uid
          WHERE ot.workspace_id = :wid

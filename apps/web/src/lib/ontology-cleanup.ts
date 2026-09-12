@@ -104,7 +104,12 @@ export function alsoCount(candidate: CleanupCandidate): number {
 export function alsoText(candidate: CleanupCandidate): string {
   const more = alsoCount(candidate);
   if (more === 0) return "";
-  return more === 1 ? "and 1 more" : `and ${more} more`;
+  // There was a `more === 1 ? "and 1 more" : …` here and the sweep was right to
+  // survive without it: the template produces "and 1 more" for one anyway, so
+  // the branch could not change an answer. `snoozeText`'s plural *is* a real
+  // branch — "Back tomorrow" is a different sentence from "Back in 1 days" —
+  // which is why that one stayed and this one went (§213).
+  return `and ${more} more`;
 }
 
 /**

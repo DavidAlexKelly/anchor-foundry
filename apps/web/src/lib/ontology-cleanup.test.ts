@@ -92,7 +92,11 @@ describe("the rest of the flags", () => {
     expect(alsoText(candidate({ flags: ["a", "b", "c", "d"] }))).toBe("and 3 more");
   });
 
-  it("does not pluralise one", () => {
+  it("reads correctly for one", () => {
+    // **Not a plural branch**, and the sweep is what said so: "and ${1} more"
+    // is already "and 1 more", so a conditional here could not change an
+    // answer. The assertion stays because the *sentence* is the claim; the
+    // branch that used to produce it was deleted (§213).
     expect(alsoText(candidate({ flags: ["a", "b"] }))).toBe("and 1 more");
   });
 
