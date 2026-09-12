@@ -54,6 +54,7 @@ from ..services import object_type_groups as groups_service
 from ..services import notification_store
 from ..services import object_comments as comments_service
 from ..services import ontology_cleanup as cleanup_service
+from ..services import ontology_export as export_service
 from ..services import workspaces as workspaces_service
 from ..services import object_type_usage as usage_service
 from ..services import ontology_recent
@@ -1054,6 +1055,29 @@ class UsageByDay(BaseModel):
     reads: int
     writes: int
     interactions: int
+
+
+# ---- exporting the ontology (§326; `ontology-manager` p.65-67) ---------------
+@router.get("/ontology-export")
+async def export_ontology(
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> dict[str, Any]:
+    """p.66's Export: "Any changes you have in your working state will be
+    included in the export."
+
+    **`editor`, like the cleanup queue.** p.65 frames the file as something you
+    edit and import back — "make Ontology edits in code… bypass the Ontology
+    Manager interface" — so this is the read half of a write, and the whole
+    shape of a workspace's ontology in one document is more than a viewer needs
+    to read one type.
+
+    Returned as JSON rather than as a download: a caller who wants a file has
+    the bytes, and a route that forced an attachment would make the second
+    workflow — copying one ontology into another — go through somebody's
+    downloads folder.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        return await export_service.export_ontology(conn, access.workspace_id)
 
 
 # ---- the Ontology cleanup queue (§325; `ontology-manager` p.68-74) -----------
