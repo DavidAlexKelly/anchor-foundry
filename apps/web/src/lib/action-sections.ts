@@ -39,19 +39,12 @@
  * same action did different things depending on which boxes were on screen.
  */
 
-export interface FormSection {
-  id: string;
-  title: string;
-  description: string;
-  columns: number;
-  collapsible: boolean;
-  collapsed: boolean;
-  hidden: boolean;
-  /** decision 0007's condition, or `null` for a section that is always on. */
-  visible_when: Record<string, unknown> | null;
-  /** The parameters inside it, by `api_name`, in the order they are drawn. */
-  parameters: string[];
-}
+import type { ActionFormSection } from "@platform/types";
+
+/** The wire shape, which lives in the shared contract beside every other one
+ * (`packages/types`). Re-exported under the name this module uses throughout,
+ * because in here a section is only ever a thing to lay out. */
+export type FormSection = ActionFormSection;
 
 /** As much of an action's parameter as a form layout needs. */
 export interface FormParameter {

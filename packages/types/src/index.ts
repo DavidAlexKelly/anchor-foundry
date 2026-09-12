@@ -2966,3 +2966,41 @@ export interface OntologyPlan {
   };
   changes: number;
 }
+
+/** One section of an action form (§328; `action-types` p.122-124).
+ *
+ * p.122's "logical grouping of parameters to organize an action form", with
+ * p.123's one-or-two columns, its always-shown description, collapsing, and
+ * hiding both plain and conditional.
+ *
+ * **Nothing here changes what the action does.** An action with every section
+ * deleted submits exactly the same values from exactly the same parameters, so
+ * a hidden section's parameters are still declared, still defaulted and still
+ * validated — the layout in `apps/web/src/lib/action-sections.ts` decides what
+ * is *drawn* and never what is sent.
+ */
+export interface ActionFormSection {
+  id: string;
+  title: string;
+  /** p.123: "not stylized and, unlike parameter descriptions, will always be
+   * shown in the section itself, not in a tooltip." Empty means none. */
+  description: string;
+  /** p.123: "A section can be divided into one or two columns." */
+  columns: number;
+  /** Whether it *may* be folded — not whether it is, which is a fact about one
+   * reader in one moment and would fold the form for everybody if stored. */
+  collapsible: boolean;
+  /** And whether it starts folded, which only means anything when it can be
+   * unfolded. */
+  collapsed: boolean;
+  /** p.123's "can be hidden entirely" — always, regardless of the condition. */
+  hidden: boolean;
+  /** p.123's "hidden at first and only shown based on a prior parameter", in
+   * decision 0007's `{left, operator, right}` shape — the same one a
+   * submission criterion uses, so there is one condition grammar rather than
+   * two. `null` means no condition, which is not the same as a condition that
+   * happens to be true: only the first survives a parameter being renamed. */
+  visible_when: Record<string, unknown> | null;
+  /** The parameters inside it, by `api_name`, in the order they are drawn. */
+  parameters: string[];
+}

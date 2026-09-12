@@ -152,8 +152,48 @@ def test_a_section_holds_its_parameter_and_the_body_does_not(page, readonly):
     choose_the_ticket(page)
     expect(in_section(page, "Details", "status")).to_be_visible()
     expect(field(page, "status")).to_have_count(1)
-    section = page.locator("[data-section='Details']")
-    expect(section).to_have_attribute("data-columns", "2")
+
+
+def test_a_two_column_section_puts_two_fields_side_by_side(page, api):
+    """p.123: "A section can be divided into one or two columns."
+
+    **Measured rather than announced.** The first version of this read
+    `data-columns="2"` off the section — an attribute the component writes
+    about itself — and a mutant that kept the attribute while dropping the
+    grid drew a single column and survived. That is STATUS.md's standing
+    lesson about structural checks: what must be *visible* has to be asserted
+    as a fact about the rendered page.
+
+    Both layouts in one test, because "side by side" alone would pass for a
+    form that ignored the setting and always used two.
+    """
+    wide = build(api, "Two columns", sections=[
+        {"title": "Details", "columns": 2, "parameters": ["status", "reason"]},
+    ])
+    narrow = build(api, "One column", sections=[
+        {"title": "Details", "columns": 1, "parameters": ["status", "reason"]},
+    ])
+
+    def boxes(module):
+        open_module(page, module)
+        choose_the_ticket(page)
+        first = page.locator("[data-section='Details'] [data-parameter='status']")
+        second = page.locator("[data-section='Details'] [data-parameter='reason']")
+        expect(second).to_be_visible(timeout=30000)
+        return first.bounding_box(), second.bounding_box()
+
+    a, b = boxes(wide)
+    assert abs(a["y"] - b["y"]) < a["height"] / 2, (
+        f"two columns should put them on one row: {a} {b}"
+    )
+    assert b["x"] > a["x"] + a["width"] / 2, (
+        f"the second field should sit to the right of the first: {a} {b}"
+    )
+
+    a, b = boxes(narrow)
+    assert b["y"] > a["y"] + a["height"] / 2, (
+        f"one column should stack them: {a} {b}"
+    )
 
 
 def test_the_description_is_shown_in_the_section_rather_than_in_a_tooltip(
@@ -279,6 +319,49 @@ def test_a_conditional_sections_parameter_is_submitted_even_while_it_is_hidden(
     expect(page.get_by_test_id("action-form-refused")).to_have_count(0)
     expect(page.locator("form")).to_contain_text("Saved.")
     assert stored(api, mod)["reason"] == "because"
+
+
+def test_a_form_with_nothing_conditional_never_asks_the_server(page, api):
+    """**A claim about the network, which no assertion about the screen can
+    reach.**
+
+    p.123's conditional override is the server's to evaluate, so the form asks
+    — but a form whose sections carry no condition has nothing to ask about,
+    and asking anyway would put a round trip on every action form in the
+    product for an answer it does not read. A mutant that asked always drew an
+    identical page and survived every check here, which is §327's finding one
+    unit later: "was not sent" is about the request, so the request is the
+    observable.
+
+    **The conditional module afterwards is not decoration.** Without it,
+    "nothing was asked" would pass just as well for a listener attached to the
+    wrong thing, or a url that never matches — which is how two earlier
+    versions of §327's equivalent could not fail.
+    """
+    plain = build(api, "Plain sections",
+                  sections=[{"title": "Details", "parameters": ["status"]}])
+    conditional = build(api, "Conditional sections", sections=[
+        {"title": "Why", "visible_when": when("status", "closed"),
+         "parameters": ["reason"]},
+    ])
+
+    asked: list[str] = []
+    page.on("request", lambda r: asked.append(r.url)
+            if "visible-sections" in r.url else None)
+
+    open_module(page, plain)
+    choose_the_ticket(page)
+    expect(in_section(page, "Details", "status")).to_be_visible()
+    # And typing does not provoke one either: there is no condition to re-read.
+    field(page, "status").fill("closed")
+    expect(field(page, "status")).to_have_value("closed")
+    assert asked == [], asked
+
+    open_module(page, conditional)
+    choose_the_ticket(page)
+    field(page, "status").fill("closed")
+    expect(page.locator("[data-section='Why']")).to_be_visible(timeout=30000)
+    assert asked, "the listener never fired, so the assertion above said nothing"
 
 
 def test_a_form_with_no_sections_is_the_form_it_always_was(page, api):

@@ -1915,7 +1915,7 @@ export const actions = {
    * about how the form is *drawn* and every reader of an action's parameters
    * would otherwise pay for a layout they are not going to render. */
   sections: (wid: string, actionTypeId: string) =>
-    request<import("./action-sections").FormSection[]>(
+    request<import("./types").ActionFormSection[]>(
       `/workspaces/${wid}/action-types/${actionTypeId}/sections`,
     ),
   /** Replace the Form tab, whole (p.124). Granular edits would pass through
@@ -1924,9 +1924,9 @@ export const actions = {
   setSections: (
     wid: string,
     actionTypeId: string,
-    sections: import("./action-sections").FormSection[],
+    sections: import("./types").ActionFormSection[],
   ) =>
-    request<import("./action-sections").FormSection[]>(
+    request<import("./types").ActionFormSection[]>(
       `/workspaces/${wid}/action-types/${actionTypeId}/sections`,
       {
         method: "PUT",
