@@ -29,6 +29,7 @@ import { useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { NotifyRuleFields } from "@/components/notify-rule-fields";
 import { TypePicker } from "@/components/type-picker";
+import { untypedNote } from "@/lib/action-choices";
 import { NotifyConfig, blankNotifyConfig, problem as notifyProblem } from "@/lib/notify-rule";
 import { WebhookRuleFields } from "@/components/webhook-rule-fields";
 import {
@@ -150,6 +151,9 @@ export function ActionDefinitionEditor({
       required: p.required,
       default_value: p.default_value,
       hidden: p.hidden,
+      // db 0083: which object type this parameter holds (§330). Part of the
+      // parameter, like the blocks below.
+      object_type_id: p.object_type_id ?? null,
       // p.43-46's blocks travel with the parameter, so the dialog edits them
       // in the same document it already saves whole (§329).
       overrides: p.overrides ?? [],
@@ -849,6 +853,45 @@ export function ActionDefinitionEditor({
       >
         Add a criterion
       </button>
+
+      {/* p.25's object parameter, which until §330 was a box you typed a uuid
+          into. Its own block rather than a column in the table above, because
+          a `TypePicker` is a search control and the table is already seven
+          columns wide — and because this only exists for one of the ten
+          parameter types. */}
+      {parameters.some((p) => p.data_type === "object") && (
+        <>
+          <h3 className="field-label" style={{ marginTop: 24 }}>Object parameters</h3>
+          <p className="field-hint">
+            Which type each object parameter holds. Saying so gives the form a
+            dropdown of those objects instead of a box for an id, and has the
+            submitted value checked against the type before the action runs
+            (p.34). Leaving it unsaid keeps the parameter exactly as it is.
+          </p>
+          <div data-testid="object-parameter-types">
+            {parameters.map((p, i) => p.data_type !== "object" ? null : (
+              <div key={i} data-object-parameter={p.api_name} style={{ marginBottom: 8 }}>
+                <Field label={p.display_name || p.api_name}>
+                  <TypePicker
+                    workspaceId={workspaceId}
+                    value={p.object_type_id ?? ""}
+                    label={`Parameter ${i + 1} object type`}
+                    testId={`parameter-${i + 1}-object-type`}
+                    placeholder="Not said"
+                    onChange={(next) =>
+                      patchParameter(i, { object_type_id: next || null })}
+                  />
+                </Field>
+                {untypedNote(p) && (
+                  <p className="field-hint" data-testid="parameter-untyped">
+                    {untypedNote(p)}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <h3 className="field-label" style={{ marginTop: 24 }}>Overrides</h3>
       <p className="field-hint">

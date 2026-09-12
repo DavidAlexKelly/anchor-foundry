@@ -32,6 +32,7 @@ from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import action_metrics
 from ..services import action_revert
+from ..services import action_choices as choices_service
 from ..services import action_overrides as overrides_service
 from ..services import action_sections as sections_service
 from ..services import actions as actions_service
@@ -107,6 +108,10 @@ class ActionParameterOut(BaseModel):
     default_value: Any | None
     hidden: bool
     sort_order: int
+    #: db 0083: which object type this parameter's value is an instance of.
+    #: `None` on every non-object parameter, and on an object parameter written
+    #: before §330 — whose type the action's rules still say.
+    object_type_id: UUID | None = None
     #: p.43-46's override blocks, in the order the first-match rule reads them.
     #: **Sent with the parameter rather than fetched separately**, because a
     #: parameter without them is one whose `required` is true only for whoever
@@ -439,6 +444,9 @@ class ActionParameterIn(BaseModel):
     required: bool = False
     default_value: Any | None = None
     hidden: bool = False
+    #: db 0083's object type. Refused on a parameter that is not an `object`,
+    #: because a type on a string is a claim nothing reads.
+    object_type_id: UUID | None = None
     #: p.43-46's overrides, part of the parameter rather than a document of
     #: their own — unlike §328's sections, which are about the form. An
     #: omitted list means no blocks, which is what every parameter written
@@ -538,6 +546,101 @@ async def _form_order(conn, action_type: dict[str, Any]) -> list[str]:
         action_type["parameters"],
         await sections_service.list_sections(conn, UUID(str(action_type["id"]))),
     )
+
+# ---- object parameter choices (§330; db 0083; `action-types` p.25, p.33-37) --
+class ParameterChoice(BaseModel):
+    """One object a dropdown may offer."""
+
+    id: UUID
+    primary_key: str
+    #: What to call it on screen. The type's `title_property` when it has one,
+    #: and the primary key otherwise — which is what every other listing in
+    #: this platform shows when a type has no title.
+    label: str
+
+
+class ParameterChoices(BaseModel):
+    """What one object parameter offers, and what it is."""
+
+    parameter: str
+    object_type_id: UUID
+    object_type_name: str
+    items: list[ParameterChoice]
+    #: **Whether there are more than the control can hold.** Said rather than
+    #: silently omitted: a dropdown offering the first fifty of a thousand is
+    #: §256's trap one control down — somebody would pick from the rows the
+    #: control happened to receive and never learn the rest existed.
+    truncated: bool
+
+
+@router.get(
+    "/action-types/{action_type_id}/parameter-choices",
+    response_model=list[ParameterChoices],
+)
+async def action_parameter_choices(
+    action_type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ParameterChoices]:
+    """The objects each of this action's object parameters may be set to.
+
+    **The list p.33-37 assumes and this platform did not have.** An `object`
+    parameter has been a text box since db 0044, which asks the person
+    submitting to know a uuid — so the dropdown comes before the filters that
+    narrow it, because a filter over a list nobody can see is a setting with no
+    observable effect (§214).
+
+    `viewer`, and RLS does the rest: p.33 says the options "will be derived
+    from the set of objects that the user has permission to view", and reading
+    through the caller's own connection is that sentence rather than a check
+    implementing it.
+
+    Every object parameter in one response rather than one call per parameter:
+    a form asks this once when it opens, and the alternative is a round trip
+    per control on a screen that has not drawn anything yet.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        action_type = await actions_service.get_action_type(
+            conn, access.workspace_id, action_type_id
+        )
+        wanted: list[tuple[str, str]] = []
+        for parameter in choices_service.object_parameters(action_type["parameters"]):
+            type_id = choices_service.type_of(parameter)
+            if type_id is not None:
+                wanted.append((str(parameter["api_name"]), type_id))
+        types = await choices_service.types_by_id(conn, [t for _, t in wanted])
+
+        out: list[ParameterChoices] = []
+        for name, type_id in wanted:
+            object_type = types.get(type_id)
+            if object_type is None:
+                # A type the caller cannot see. Omitted rather than reported as
+                # empty: "no objects to choose from" and "not yours to look at"
+                # are different things, and the form draws nothing for a
+                # parameter it was told nothing about.
+                continue
+            rows, truncated = await choices_service.choices(
+                conn, workspace_id=access.workspace_id, object_type_id=UUID(type_id)
+            )
+            title = str(object_type.get("title_property") or "")
+            out.append(ParameterChoices(
+                parameter=name,
+                object_type_id=UUID(type_id),
+                object_type_name=str(object_type["display_name"]),
+                truncated=truncated,
+                items=[
+                    ParameterChoice(
+                        id=UUID(str(r["id"])),
+                        primary_key=str(r["primary_key"]),
+                        label=str(
+                            (_parse_json(r["properties"]) or {}).get(title)
+                            or r["primary_key"]
+                        ),
+                    )
+                    for r in rows
+                ],
+            ))
+    return out
+
 
 # ---- parameter overrides (§329; db 0082; `action-types` p.43-46) -------------
 class EffectiveParametersRequest(BaseModel):
@@ -1412,6 +1515,18 @@ async def execute_action(
                     parameters=action_type["parameters"],
                     user=await actions_service.criteria_user(conn, access.auth.user_id),
                     form_order=await _form_order(conn, action_type),
+                )
+                # p.34: "The value selected is **also validated** before the
+                # action is executed" (§330). The dropdown offering only
+                # matching objects is a convenience; this is the rule, and it
+                # is counted as p.165's invalid parameter because that is what
+                # it is — an object of the wrong type, or one the submitter
+                # cannot see.
+                await choices_service.check_object_values(
+                    conn,
+                    workspace_id=access.workspace_id,
+                    bound=bound,
+                    parameters=action_type["parameters"],
                 )
             # **Before the first rule runs, and before the run is even opened**
             # (p.49-50). "Refused" and "refused after writing half of it" look the

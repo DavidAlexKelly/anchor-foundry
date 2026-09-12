@@ -205,6 +205,10 @@ import {
   requiredElsewhere, unreachableNote, type FormParameter, type FormSection,
 } from "@/lib/action-sections";
 import { hasOverrides, overrideKey } from "@/lib/action-overrides";
+import {
+  emptyNote as noChoicesNote, labelOf as choiceLabel, offerFor,
+  truncationNote as choicesTruncatedNote,
+} from "@/lib/action-choices";
 import { interfaceQuery } from "./routing";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
@@ -11723,6 +11727,16 @@ export function CanvasActionForm({
   // Gated on `hasOverrides` rather than on "does a condition name a
   // parameter", because p.43's own example asks who is submitting and names
   // nothing — which is the defect §328 shipped and had to come back for.
+  // §330: what each object parameter may be set to. An `object` parameter has
+  // been a text box since db 0044 — it asks whoever submits to know a uuid —
+  // and this is the list p.33-37 assumes. Absent for a parameter whose type
+  // nobody declared, which keeps its text box: a *guessed* list would be worse
+  // than none, because a reader cannot tell a wrong list from a short one.
+  const offersQ = useQuery({
+    queryKey: ["action-parameter-choices", actionTypeId],
+    queryFn: () => actionApi.parameterChoices(workspaceId, actionTypeId!),
+    enabled: !!actionTypeId,
+  });
   const stored = (actionType?.parameters ?? []) as FormParameter[];
   const overridden = hasOverrides(actionType?.parameters ?? []);
   const watchingValues = overrideKey(actionType?.parameters ?? [], values);
@@ -11779,7 +11793,9 @@ export function CanvasActionForm({
   // "Priority is required" beside no Priority box is §214's shape, a control
   // that looks like it works.
   const unreachable = unreachableNote(requiredElsewhere(declared, sections, shown));
-  const field = (parameter: FormParameter) => (
+  const field = (parameter: FormParameter) => {
+    const offer = offerFor(parameter.api_name, offersQ.data);
+    return (
     <label className="field" key={parameter.api_name} data-parameter={parameter.api_name}>
       <span className="field-label">
         {parameterLabel(parameter)}
@@ -11793,9 +11809,34 @@ export function CanvasActionForm({
           about `boolean`, which now gets a three-state select. `disabled` stays
           here because it is about the *builder*, not the type. */}
       <fieldset disabled={!live} className="canvas-action-field">
-        {/* The layout hands back the very objects it was given, so the action
-            type's own `data_type` is still on the parameter — `FormParameter`
-            names only what an *arrangement* needs to know about one. */}
+        {/* p.33-37's dropdown, where the action says what the parameter holds
+            (§330). Drawn here rather than inside `PropertyInput` because that
+            component is about a *property's* type and these choices are about
+            an *action's* parameter — the inline-edit path shares it and has no
+            action to ask. **The refusal is the server's either way** (p.34's
+            second sentence), so this is a convenience over a rule rather than
+            the rule itself. */}
+        {offer ? (
+          <select
+            aria-label={parameterLabel(parameter)}
+            required={parameter.required}
+            value={values[parameter.api_name] === null
+              || values[parameter.api_name] === undefined
+              ? "" : String(values[parameter.api_name])}
+            onChange={(e) => {
+              setTyped((was) => ({ ...was, [parameter.api_name]: true }));
+              setValues({
+                ...values,
+                [parameter.api_name]: e.target.value === "" ? null : e.target.value,
+              });
+            }}
+          >
+            <option value="">Choose a {offer.object_type_name}…</option>
+            {offer.items.map((choice) => (
+              <option key={choice.id} value={choice.id}>{choiceLabel(choice)}</option>
+            ))}
+          </select>
+        ) : (
         <PropertyInput
           workspaceId={workspaceId}
           dataType={(parameter as { data_type?: string }).data_type as never}
@@ -11807,9 +11848,21 @@ export function CanvasActionForm({
           label={parameterLabel(parameter)}
           required={parameter.required}
         />
+        )}
+        {offer && noChoicesNote(offer) && (
+          <span className="field-hint" data-testid="choices-empty">
+            {noChoicesNote(offer)}
+          </span>
+        )}
+        {offer && choicesTruncatedNote(offer) && (
+          <span className="field-hint" data-testid="choices-truncated">
+            {choicesTruncatedNote(offer)}
+          </span>
+        )}
       </fieldset>
     </label>
-  );
+    );
+  };
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">

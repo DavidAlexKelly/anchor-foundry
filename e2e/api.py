@@ -337,9 +337,20 @@ class Module:
         rules: dict[str, list[dict]] | None = None,
         descriptions: dict[str, str] | None = None,
         struct_fields: dict[str, list[dict]] | None = None,
+        slug: str | None = None,
     ) -> str:
         """Upload, declare, map and sync - the whole way an object type gets
-        instances."""
+        instances.
+
+        `slug` names the dataset and the type, and exists so **one module can
+        have two of them**. Everything before §330 needed exactly one, so the
+        name was the module's tag and a second call collided on the dataset
+        slug; an action whose object parameter names a *different* type than
+        the action's own subject needs two, and a fixture where the two
+        coincided could not tell a working lookup from one that always used the
+        subject type.
+        """
+        slug = slug or f"seed_{self.tag}"
         # **Written with the csv module, not by joining on commas.** A
         # geopoint's value *is* "lat,lon", so the naive join produced a row with
         # more fields than the header and the upload came back "primary key
@@ -352,14 +363,21 @@ class Module:
             writer.writerow([str(row[c]) for c in columns])
         csv = buffer.getvalue().encode()
         dataset = self.api.upload_csv(
-            f"{self.base}/datasets/upload", f"seed_{self.tag}", csv
+            f"{self.base}/datasets/upload", slug, csv
         )
         declared = self.api.call(
             "POST",
             f"/workspaces/{self.workspace_id}/object-types",
             {
-                "api_name": f"seed_{self.tag}",
-                "display_name": f"Seed {self.tag}",
+                "api_name": slug,
+                # **`capitalize`, not `title`.** The default slug is
+                # `seed_<tag>` and the display name has always been
+                # `Seed <tag>` with the tag's hex left alone — thirteen tests
+                # across four suites assert on it. `title()` capitalises every
+                # word *segment*, so it turned `seed_dba00d` into
+                # `Seed Dba00D` and CI went red on a helper change, not on a
+                # product change.
+                "display_name": slug.replace("_", " ").capitalize(),
                 "properties": [
                     {
                         "api_name": c,
