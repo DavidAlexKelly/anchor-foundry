@@ -199,6 +199,11 @@ import {
   toEdits, undoRow, type Staged,
 } from "./inline-edit";
 import { outputClauses } from "./action-output";
+import {
+  collapsedInitially, columnsOf as sectionColumnsOf, conditionKey, formLayout,
+  labelOf as parameterLabel,
+  requiredElsewhere, unreachableNote, type FormParameter, type FormSection,
+} from "@/lib/action-sections";
 import { interfaceQuery } from "./routing";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
@@ -11398,6 +11403,62 @@ CanvasChart.craft = {
 };
 
 // ---- Action form (write-back) --------------------------------------------------
+/** One of p.122-124's sections, drawn around the parameters inside it.
+ *
+ * Its own component because folding is a fact about *a reader in a moment*: the
+ * database stores whether a section `collapsible` and whether it starts
+ * `collapsed`, and nothing else, so one person opening a section does not open
+ * it for everybody. A `useState` per section needs a component per section.
+ */
+function ActionFormSection({
+  section, children,
+}: { section: FormSection; children: React.ReactNode }) {
+  const [folded, setFolded] = useState(collapsedInitially(section));
+  const columns = sectionColumnsOf(section);
+  return (
+    <section
+      className="canvas-action-section"
+      data-testid="action-form-section"
+      data-section={section.title}
+      data-columns={columns}
+    >
+      {section.collapsible ? (
+        <button
+          type="button"
+          className="btn quiet"
+          aria-expanded={!folded}
+          data-testid="action-form-section-toggle"
+          onClick={() => setFolded(!folded)}
+        >
+          {folded ? "▸" : "▾"} {section.title}
+        </button>
+      ) : (
+        <h4 className="field-label" style={{ marginBottom: 4 }}>{section.title}</h4>
+      )}
+      {/* p.123: the description "is not stylized and, unlike parameter
+          descriptions, will always be shown in the section itself, not in a
+          tooltip" — so it is drawn beside the title rather than folded away
+          with the fields, which is what "always" leaves room for. */}
+      {section.description && (
+        <p className="field-hint" data-testid="action-form-section-description">
+          {section.description}
+        </p>
+      )}
+      {!folded && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: columns === 2 ? "1fr 1fr" : "1fr",
+            gap: 12,
+          }}
+        >
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function CanvasActionForm({
   actionTypeId = null,
   subjectVariable = null,
@@ -11605,10 +11666,80 @@ export function CanvasActionForm({
   });
   const valid = criteriaCheck.data ? criteriaCheck.data.ok : undefined;
   const visibleForm = formVisible({ invalidState, valid });
+
+  // §328: p.122-124's sections, which arrange this form and change nothing
+  // about what it submits. Their own read rather than a field on the action
+  // type, because every other reader of an action's parameters would otherwise
+  // pay for a layout it is not going to draw.
+  const sectionsQ = useQuery({
+    queryKey: ["action-sections", actionTypeId],
+    queryFn: () => actionApi.sections(workspaceId, actionTypeId!),
+    enabled: !!actionTypeId,
+  });
+  const sections: FormSection[] = sectionsQ.data ?? [];
+  // p.123's conditional override, **asked of the server**. The same argument
+  // the criteria check above makes: decision 0007's conditions are one grammar,
+  // and a form evaluating `{left, operator, right}` in TypeScript would be a
+  // second reading of the document the definition editor writes.
+  //
+  // Keyed on only the values some section's condition actually names, so typing
+  // in an ordinary field is not a round trip, and a form whose sections carry
+  // no condition never asks at all.
+  const watching = conditionKey(sections, values);
+  const shownQ = useQuery({
+    queryKey: ["action-visible-sections", actionTypeId, watching],
+    queryFn: () => actionApi.visibleSections(workspaceId, actionTypeId!, values),
+    enabled: !!actionTypeId && watching !== "",
+  });
+  // **An empty list, not "no answer yet", when nothing is conditional.** The
+  // two differ: `undefined` holds a conditional section back until the server
+  // has spoken (p.123's "hidden at first"), and a form with no conditions at
+  // all has nothing to wait for.
+  const shown = watching === "" ? [] : shownQ.data;
+
   // p.25: hidden parameters are supplied by the caller and never drawn. The
   // form still sends them - `values` carries every parameter it seeded.
-  const visible = (actionType?.parameters ?? []).filter((p) => !p.hidden);
+  const declared = (actionType?.parameters ?? []) as FormParameter[];
+  const layout = formLayout(declared, sections, shown);
+  const visible = [
+    ...layout.loose,
+    ...layout.sections.flatMap((drawn) => drawn.parameters),
+  ];
   const missingRequired = visible.filter((p) => p.required && !hasValue(values[p.api_name]));
+  // A required parameter inside a section this form is not showing. The server
+  // still requires it, so the submission would be refused — and saying
+  // "Priority is required" beside no Priority box is §214's shape, a control
+  // that looks like it works.
+  const unreachable = unreachableNote(requiredElsewhere(declared, sections, shown));
+  const field = (parameter: FormParameter) => (
+    <label className="field" key={parameter.api_name} data-parameter={parameter.api_name}>
+      <span className="field-label">
+        {parameterLabel(parameter)}
+        {parameter.required && <span aria-hidden> *</span>}
+      </span>
+      {/* **`PropertyInput`, not a local `<input>`** (§237). That component's
+          own docstring says it is "the input for one editable property in an
+          action form", and this form — the other action form — had its own
+          field instead. The two disagreed about `attachment`, where a text box
+          could never produce the reference `POST /attachments` returns, and
+          about `boolean`, which now gets a three-state select. `disabled` stays
+          here because it is about the *builder*, not the type. */}
+      <fieldset disabled={!live} className="canvas-action-field">
+        {/* The layout hands back the very objects it was given, so the action
+            type's own `data_type` is still on the parameter — `FormParameter`
+            names only what an *arrangement* needs to know about one. */}
+        <PropertyInput
+          workspaceId={workspaceId}
+          dataType={(parameter as { data_type?: string }).data_type as never}
+          value={values[parameter.api_name] ?? null}
+          onChange={(next) =>
+            setValues({ ...values, [parameter.api_name]: next })}
+          label={parameterLabel(parameter)}
+          required={parameter.required}
+        />
+      </fieldset>
+    </label>
+  );
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
@@ -11655,38 +11786,23 @@ export function CanvasActionForm({
               </select>
             </label>
           )}
-          {visible.map((parameter) => (
-            <label className="field" key={parameter.api_name} data-parameter={parameter.api_name}>
-              <span className="field-label">
-                {parameter.display_name || parameter.api_name}
-                {parameter.required && <span aria-hidden> *</span>}
-              </span>
-              {/* **`PropertyInput`, not a local `<input>`** (§237). That
-                  component's own docstring says it is "the input for one
-                  editable property in an action form", and this form — the
-                  other action form — had its own field instead. The two
-                  disagreed about `attachment`, where a text box could never
-                  produce the reference `POST /attachments` returns, and about
-                  `boolean`, which now gets a three-state select. `disabled`
-                  stays here because it is about the *builder*, not the type. */}
-              <fieldset disabled={!live} className="canvas-action-field">
-                <PropertyInput
-                  workspaceId={workspaceId}
-                  dataType={parameter.data_type as never}
-                  value={values[parameter.api_name] ?? null}
-                  onChange={(next) =>
-                    setValues({ ...values, [parameter.api_name]: next })}
-                  label={parameter.display_name || parameter.api_name}
-                  required={parameter.required}
-                />
-              </fieldset>
-            </label>
+          {/* p.124's form body: the parameters no section has claimed, in the
+              order the action declares them. */}
+          {layout.loose.map(field)}
+          {/* Then p.122's "logical grouping", in p.124's Form Content order.
+              The body first and the sections after, because this build stores
+              two orderings — a section's and a parameter's — and p.124's single
+              list over both is its own row in `docs/parity`. */}
+          {layout.sections.map((drawn) => (
+            <ActionFormSection key={drawn.section.id} section={drawn.section}>
+              {drawn.parameters.map(field)}
+            </ActionFormSection>
           ))}
           <button
             type="submit"
             className="btn"
             disabled={!live || !instanceId || execute.isPending
-              || missingRequired.length > 0 || valid === false}
+              || missingRequired.length > 0 || !!unreachable || valid === false}
           >
             {execute.isPending ? "Submitting…" : "Submit"}
           </button>
@@ -11700,7 +11816,16 @@ export function CanvasActionForm({
           )}
           {missingRequired.length > 0 && live && (
             <p className="canvas-widget-empty" data-testid="action-form-missing">
-              {missingRequired.map((p) => p.display_name || p.api_name).join(", ")} is required.
+              {missingRequired.map(parameterLabel).join(", ")} is required.
+            </p>
+          )}
+          {/* And the one nobody can act on from here, said to whoever can
+              (§328). A required parameter inside a section this form does not
+              show leaves the button disabled for a reason no box on screen
+              explains — which is the shape §214 refuses. */}
+          {unreachable && live && (
+            <p className="canvas-widget-empty" data-testid="action-form-unreachable">
+              {unreachable}
             </p>
           )}
           {!live && <p className="canvas-widget-empty">Submitting is disabled while editing - use Preview to try it.</p>}

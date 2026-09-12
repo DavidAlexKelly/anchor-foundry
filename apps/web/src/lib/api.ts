@@ -1909,6 +1909,52 @@ export const actions = {
       `/workspaces/${wid}/action-types/${actionTypeId}`,
       { method: "PATCH", body: JSON.stringify(input) },
     ),
+  /** p.124's Form Content order — the sections and what is inside them (§328).
+   *
+   * Its own call rather than a field on the action type, because a section is
+   * about how the form is *drawn* and every reader of an action's parameters
+   * would otherwise pay for a layout they are not going to render. */
+  sections: (wid: string, actionTypeId: string) =>
+    request<import("./action-sections").FormSection[]>(
+      `/workspaces/${wid}/action-types/${actionTypeId}/sections`,
+    ),
+  /** Replace the Form tab, whole (p.124). Granular edits would pass through
+   * forms that do not make sense — a parameter in two sections between two
+   * requests — and every one of them would have to be legal. */
+  setSections: (
+    wid: string,
+    actionTypeId: string,
+    sections: import("./action-sections").FormSection[],
+  ) =>
+    request<import("./action-sections").FormSection[]>(
+      `/workspaces/${wid}/action-types/${actionTypeId}/sections`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          sections: sections.map((s) => ({
+            title: s.title, description: s.description, columns: s.columns,
+            collapsible: s.collapsible, collapsed: s.collapsed, hidden: s.hidden,
+            visible_when: s.visible_when, parameters: s.parameters,
+          })),
+        }),
+      },
+    ),
+  /** Which of p.123's conditional sections to draw for these values.
+   *
+   * **Asked rather than answered here**, for the same reason `check` is: a
+   * section's condition is decision 0007's `{left, operator, right}`, and the
+   * browser evaluating it would be a second reading of the document the
+   * definition editor writes. Called only when a section actually carries a
+   * condition, and only when a value one of them names changes. */
+  visibleSections: (
+    wid: string,
+    actionTypeId: string,
+    values: Record<string, unknown>,
+  ) =>
+    request<string[]>(
+      `/workspaces/${wid}/action-types/${actionTypeId}/visible-sections`,
+      { method: "POST", body: JSON.stringify({ values }) },
+    ),
   /** Parameters, rules and criteria as one document (decision 0007). Whole
    * document because they constrain each other - see the route. */
   setDefinition: (wid: string, actionTypeId: string, input: ActionDefinitionInput) =>

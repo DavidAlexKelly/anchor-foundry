@@ -26,12 +26,13 @@ from uuid import UUID, uuid4
 
 import anyio
 from fastapi import APIRouter, Depends, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import action_metrics
 from ..services import action_revert
+from ..services import action_sections as sections_service
 from ..services import actions as actions_service
 from ..services import audit
 from ..services import dataset_engine as engine
@@ -484,6 +485,130 @@ async def action_runs(
         ActionRunOut(**{**r, "submitted_values": _parse_json(r["submitted_values"])})
         for r in rows
     ]
+
+
+# ---- form sections (§328; db 0081; `action-types` p.122-124) -----------------
+class SectionIn(BaseModel):
+    """One section of p.124's Form Content list."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=200)
+    #: p.123's "optionally write a user-facing description… always be shown in
+    #: the section itself, not in a tooltip".
+    description: str = Field(default="", max_length=2000)
+    #: p.123: "A section can be divided into one or two columns."
+    columns: int = Field(default=1, ge=1, le=2)
+    collapsible: bool = False
+    collapsed: bool = False
+    #: p.123's "can be hidden entirely" — the plain case, needing no condition.
+    hidden: bool = False
+    #: p.123's "hidden at first and only shown based on a prior parameter", in
+    #: the condition shape decision 0007 already stores.
+    visible_when: dict[str, Any] | None = None
+    #: The parameters inside it, by api_name, in the order they are drawn.
+    parameters: list[str] = Field(default_factory=list, max_length=100)
+
+
+class SectionOut(SectionIn):
+    id: UUID
+    sort_order: int
+
+
+class FormIn(BaseModel):
+    """The whole Form tab, written at once (p.124)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sections: list[SectionIn] = Field(default_factory=list, max_length=50)
+
+
+@router.get(
+    "/action-types/{action_type_id}/sections", response_model=list[SectionOut]
+)
+async def list_action_sections(
+    action_type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[SectionOut]:
+    """p.124's Form Content order.
+
+    `viewer`, because this is how the form is *drawn* and a viewer can already
+    read the action's parameters — a section is an arrangement of things they
+    can see, not a new thing to see.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
+        rows = await sections_service.list_sections(conn, action_type_id)
+    return [SectionOut(**row) for row in rows]
+
+
+class VisibleSectionsRequest(BaseModel):
+    """What has been filled in so far, as p.123's condition reads it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post(
+    "/action-types/{action_type_id}/visible-sections", response_model=list[UUID]
+)
+async def visible_action_sections(
+    action_type_id: UUID,
+    body: VisibleSectionsRequest,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[UUID]:
+    """Which of p.123's conditional sections are shown for these values.
+
+    **Asked rather than decided in the browser**, for the reason
+    `POST .../check` gives one screen along: decision 0007's conditions are one
+    grammar, and a form that evaluated `{left, operator, right}` in TypeScript
+    would be a second reading of the same document — free to disagree with the
+    one the definition editor writes and the one `check_criteria` runs.
+
+    Unlike `check`, this is `viewer` and workspace-wide: a section is an
+    arrangement of parameters somebody can already read, and p.123's hiding is
+    about asking for a value "under the appropriate circumstances" rather than
+    about who may act. It says nothing about whether the submission would be
+    refused, and a caller who wanted that still has to ask `check`.
+
+    The form only calls this when some section actually carries a condition,
+    and only when a value one of them names changes — a form of plain sections
+    never makes this round trip at all.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
+        rows = await sections_service.list_sections(conn, action_type_id)
+        user = await actions_service.criteria_user(conn, access.auth.user_id)
+    return [
+        UUID(str(row["id"]))
+        for row in rows
+        if sections_service.visibility(row, bound=body.values, user=user)
+    ]
+
+
+@router.put(
+    "/action-types/{action_type_id}/sections", response_model=list[SectionOut]
+)
+async def set_action_sections(
+    action_type_id: UUID,
+    body: FormIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> list[SectionOut]:
+    """Replace the Form tab.
+
+    A whole-document `PUT` rather than granular edits, for the reason decision
+    0007 gives about definitions: p.124 describes dragging parameters between
+    sections and reordering both, and a sequence of granular operations passes
+    through intermediate forms that do not make sense.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
+        await sections_service.replace_sections(
+            conn, action_type_id, [s.model_dump() for s in body.sections]
+        )
+        rows = await sections_service.list_sections(conn, action_type_id)
+    return [SectionOut(**row) for row in rows]
 
 
 # ---- action metrics (§323; `action-types` p.164-166) -------------------------
