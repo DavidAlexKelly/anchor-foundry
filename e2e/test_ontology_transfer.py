@@ -108,6 +108,20 @@ def test_a_file_that_is_not_json_is_refused_without_a_round_trip(
     at all is not an ontology question, and posting it would turn a typo into a
     round trip that comes back saying the same thing."""
     open_advanced(page, workspace)
+
+    # **The request itself is the observable**, because "was not sent" is a
+    # claim about the network rather than about the screen.
+    #
+    # Two earlier versions of this check could not fail. Asserting the plan is
+    # absent does not work — the server refuses an unreadable file too, so
+    # nothing is planned either way. Nor does asserting the server's refusal is
+    # absent: it arrives a round trip later than the page's own message, so
+    # reading it immediately after finds nothing whether or not the file was
+    # posted. That is §318's trap, walked into while citing §318.
+    posted: list[str] = []
+    page.on("request", lambda r: posted.append(r.url)
+            if "ontology-import" in r.url else None)
+
     page.get_by_test_id("ontology-import-file").set_input_files(files=[{
         "name": "notes.json",
         "mimeType": "application/json",
@@ -117,6 +131,15 @@ def test_a_file_that_is_not_json_is_refused_without_a_round_trip(
         timeout=30000
     )
     expect(page.get_by_test_id("ontology-plan")).to_have_count(0)
+
+    # A file the page *can* read, so this test also proves the listener works —
+    # without it, "nothing was posted" would pass for a listener attached to the
+    # wrong thing.
+    choose(page, {"format_version": 1, "workspace": {},
+                  "object_types": [], "link_types": [], "action_types": []})
+    expect(page.get_by_test_id("plan-headline")).to_be_visible(timeout=30000)
+
+    assert len([url for url in posted if "plan" in url]) == 1, posted
 
 
 def test_a_file_the_server_refuses_says_which_name_is_wrong(
