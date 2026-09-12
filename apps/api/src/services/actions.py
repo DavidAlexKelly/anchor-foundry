@@ -51,7 +51,11 @@ from .ontology import PROPERTY_TYPES as _ONTOLOGY_PROPERTY_TYPES  # noqa: E402
 
 
 def bind_parameters(
-    values: dict[str, Any], *, parameters: list[dict[str, Any]]
+    values: dict[str, Any],
+    *,
+    parameters: list[dict[str, Any]],
+    user: dict[str, Any] | None = None,
+    form_order: list[str] | None = None,
 ) -> dict[str, Any]:
     """What the caller supplied, checked against what the action declares.
 
@@ -66,7 +70,27 @@ def bind_parameters(
     bound, and a rule reading it does nothing - which is how a partial submit
     kept working across migration 0044. Required parameters are the exception
     and are refused by name.
+
+    **p.43-46's overrides are resolved here, before any of that** (§329). An
+    override changes a parameter's `required`, `hidden` or default under a
+    condition — p.43's justification is required for a manager and optional for
+    an assignee — so "is everything required present" cannot be answered from
+    the stored row alone. Resolving them anywhere later would mean the rule
+    existed only where somebody had already resolved it, and the screen would
+    be the only place it was true.
+
+    `user` and `form_order` are optional because two things are true at once:
+    every caller that executes an action has both, and a parameter with no
+    override blocks resolves to itself whatever they are. A caller that omits
+    them gets p.45's conditions evaluated against no user, which fails closed —
+    leaving the parameter as configured, which is the reading that ignores an
+    override rather than inventing one.
     """
+    from .action_overrides import resolve as _resolve_overrides
+
+    parameters = _resolve_overrides(
+        parameters, values=values, user=user or {}, order=form_order
+    )
     declared = {str(p["api_name"]): p for p in parameters}
     bound: dict[str, Any] = {}
     for name, value in values.items():
@@ -1179,9 +1203,20 @@ async def _parameters_for(
         "WHERE action_type_id = ANY(CAST(:ids AS uuid[])) ORDER BY sort_order, api_name",
         {"ids": action_type_ids},
     )
+    # p.43-46's override blocks travel with the parameter, for the reason the
+    # docstring above gives about the parameters themselves: a caller that
+    # fetched a parameter without them would get one whose `required` and
+    # `default_value` are true only for whoever has no override — and p.43's
+    # whole example is a parameter that is required for one person and optional
+    # for another (§329).
+    from .action_overrides import overrides_for
+
+    blocks = await overrides_for(conn, [str(r["id"]) for r in rows])
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        grouped.setdefault(str(row["action_type_id"]), []).append(dict(row))
+        parameter = dict(row)
+        parameter["overrides"] = blocks.get(str(row["id"]), [])
+        grouped.setdefault(str(row["action_type_id"]), []).append(parameter)
     return grouped
 
 
@@ -2387,6 +2422,17 @@ async def set_definition(
         p["api_name"]: p["data_type"]
         for p in await ontology_service.list_properties(conn, object_type_id)
     }
+    # p.45's one difference between an override condition and a submission
+    # criterion: "only parameters which appear above the current parameter in
+    # the form hierarchy can be referenced". The hierarchy is §328's form, so
+    # this needs the sections, which `_validate_definition` has no business
+    # fetching — it is a pure function over a document.
+    from . import action_sections as sections_service
+    from .action_overrides import check_references
+
+    check_references(
+        parameters, await sections_service.list_sections(conn, action_type_id)
+    )
     _validate_definition(
         parameters=parameters, rules=rules, criteria=criteria,
         property_types=property_types, object_type_id=object_type_id,
@@ -2470,6 +2516,27 @@ async def set_definition(
                 "section": placed.get(str(parameter["api_name"])),
             },
         )
+    # p.43-46's override blocks, written with the parameter that owns them
+    # (§329). **Part of this document rather than a call of their own**, unlike
+    # §328's sections: an override is a fact about what the parameter *is* — it
+    # changes `required` and the default under a condition — and a parameter
+    # saved without its blocks would be a different parameter for one request.
+    # The blocks reference parameters by api_name, so they can only be written
+    # once the rows above exist, which is why this is a second loop.
+    from .action_overrides import replace_overrides
+
+    for parameter in parameters:
+        blocks = parameter.get("overrides") or []
+        if not blocks:
+            continue
+        row = await fetch_one(
+            conn,
+            "SELECT id FROM action_parameters "
+            " WHERE action_type_id = :aid AND api_name = :api",
+            {"aid": str(action_type_id), "api": str(parameter["api_name"])},
+        )
+        assert row is not None
+        await replace_overrides(conn, UUID(str(row["id"])), blocks)
     for order, rule in enumerate(rules):
         await conn.execute(
             text(

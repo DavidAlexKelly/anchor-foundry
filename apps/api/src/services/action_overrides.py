@@ -199,7 +199,14 @@ def effective(
         if block.get("set_required") is not None:
             resolved["required"] = bool(block["set_required"])
         if block.get("set_default") is not None:
-            resolved["default_value"] = _json(block["set_default"])
+            # **Used as it comes, not re-parsed**, which is the trap
+            # `bind_parameters` documents one file over: the repo's defensive
+            # `json.loads(x) if isinstance(x, str)` is a no-op for a jsonb
+            # object and *wrong* for a jsonb scalar, because the driver already
+            # decoded `"see the ticket"` to a Python string and parsing that
+            # again fails at column 1. A default is the only jsonb here that is
+            # routinely a scalar — and an override's default is a second one.
+            resolved["default_value"] = block["set_default"]
         resolved["overridden_by"] = str(block.get("id") or "")
         return resolved
     return dict(parameter)
@@ -275,7 +282,9 @@ async def overrides_for(
     for row in rows:
         block = dict(row)
         block["conditions"] = _json(block["conditions"]) or []
-        block["set_default"] = _json(block["set_default"])
+        # `set_default` is deliberately not passed through `_json`: see
+        # `effective`. It arrives decoded and a scalar would not survive a
+        # second parse.
         grouped.setdefault(str(row["parameter_id"]), []).append(block)
     return grouped
 

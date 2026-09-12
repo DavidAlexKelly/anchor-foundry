@@ -32,6 +32,7 @@ from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import action_metrics
 from ..services import action_revert
+from ..services import action_overrides as overrides_service
 from ..services import action_sections as sections_service
 from ..services import actions as actions_service
 from ..services import audit
@@ -68,6 +69,29 @@ def _parse_json(value: Any) -> Any:
     return json.loads(value) if isinstance(value, str) else value
 
 
+class OverrideBlockOut(BaseModel):
+    """One of p.45's "if"/"then" blocks on a parameter (§329; db 0082)."""
+
+    id: UUID
+    sort_order: int
+    #: p.45's "if": decision 0007's conditions, all of which must hold.
+    conditions: list[dict[str, Any]] = Field(default_factory=list)
+    #: p.45's "then". **`None` is "leave this alone", not false** — p.43's
+    #: example makes one parameter required *and* visible in a single block.
+    set_hidden: bool | None = None
+    set_required: bool | None = None
+    set_default: Any | None = None
+
+
+class OverrideBlockIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conditions: list[dict[str, Any]] = Field(min_length=1, max_length=20)
+    set_hidden: bool | None = None
+    set_required: bool | None = None
+    set_default: Any | None = None
+
+
 class ActionParameterOut(BaseModel):
     """An input the action declares (Foundry `action-types` p.25)."""
 
@@ -79,6 +103,11 @@ class ActionParameterOut(BaseModel):
     default_value: Any | None
     hidden: bool
     sort_order: int
+    #: p.43-46's override blocks, in the order the first-match rule reads them.
+    #: **Sent with the parameter rather than fetched separately**, because a
+    #: parameter without them is one whose `required` is true only for whoever
+    #: has no override (§329).
+    overrides: list[OverrideBlockOut] = Field(default_factory=list)
 
 
 class ActionRuleOut(BaseModel):
@@ -406,6 +435,11 @@ class ActionParameterIn(BaseModel):
     required: bool = False
     default_value: Any | None = None
     hidden: bool = False
+    #: p.43-46's overrides, part of the parameter rather than a document of
+    #: their own — unlike §328's sections, which are about the form. An
+    #: omitted list means no blocks, which is what every parameter written
+    #: before §329 has.
+    overrides: list[OverrideBlockIn] = Field(default_factory=list, max_length=20)
 
 
 class ActionRuleIn(BaseModel):
@@ -484,6 +518,74 @@ async def action_runs(
     return [
         ActionRunOut(**{**r, "submitted_values": _parse_json(r["submitted_values"])})
         for r in rows
+    ]
+
+
+
+async def _form_order(conn, action_type: dict[str, Any]) -> list[str]:
+    """p.45's "form hierarchy" for this action — §328's order, which is what an
+    override condition is allowed to read above it (§329).
+
+    Its own fetch because sections are their own document: most actions have
+    none, and `list_sections` on an action without any is one cheap statement
+    against an index.
+    """
+    return overrides_service.form_order(
+        action_type["parameters"],
+        await sections_service.list_sections(conn, UUID(str(action_type["id"]))),
+    )
+
+# ---- parameter overrides (§329; db 0082; `action-types` p.43-46) -------------
+class EffectiveParametersRequest(BaseModel):
+    """What has been filled in so far, as p.45's conditions read it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post(
+    "/action-types/{action_type_id}/effective-parameters",
+    response_model=list[ActionParameterOut],
+)
+async def effective_action_parameters(
+    action_type_id: UUID,
+    body: EffectiveParametersRequest,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ActionParameterOut]:
+    """The parameters as they stand for this caller and these values (p.43-46).
+
+    **The same `resolve` the executor runs**, which is the whole reason this is
+    a round trip rather than a function in the browser: p.45's conditions are
+    decision 0007's grammar, and a form that evaluated them in TypeScript would
+    be a second reading of the document — free to disagree with the one that
+    decides whether the submission is refused. The argument `POST .../check`
+    made for criteria (§130) and `POST .../visible-sections` made for sections
+    (§328), for the case where being wrong is not cosmetic: get this wrong and
+    the form asks somebody for the wrong things and then refuses what they
+    send.
+
+    `viewer`, like the sections endpoint: this says what the form would ask
+    for, not whether a submission would be accepted. A caller who wants that
+    still has to ask `check`, which is `editor` because p.140 makes criteria a
+    permissions mechanism.
+
+    **The blocks themselves are not returned here.** What comes back is a
+    parameter, resolved — `overrides` stays empty rather than echoing the rules
+    that produced it, because a screen drawing this needs to know what to ask
+    for and a reader of the *definition* gets the blocks from the action type.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        action_type = await actions_service.get_action_type(
+            conn, access.workspace_id, action_type_id
+        )
+        user = await actions_service.criteria_user(conn, access.auth.user_id)
+        order = await _form_order(conn, action_type)
+    resolved = overrides_service.resolve(
+        action_type["parameters"], values=body.values, user=user, order=order
+    )
+    return [
+        ActionParameterOut(**{**row, "overrides": []}) for row in resolved
     ]
 
 
@@ -937,9 +1039,14 @@ async def check_action(
             conn, access.workspace_id, action_type_id
         )
         user = await actions_service.criteria_user(conn, access.auth.user_id)
+        # The same resolution the executor will do, for the same reason this
+        # endpoint exists: asking "would this be refused" against a different
+        # set of parameters than the one that decides is worse than not asking.
+        order = await _form_order(conn, action_type)
     try:
         bound = actions_service.bind_parameters(
-            body.values, parameters=action_type["parameters"]
+            body.values, parameters=action_type["parameters"],
+            user=user, form_order=order,
         )
         actions_service.check_criteria(
             bound, criteria=action_type["criteria"], user=user
@@ -1291,8 +1398,16 @@ async def execute_action(
             # p.165: "submitted with a parameter or parameters that are not valid
             # within the context of the action".
             async with _counted_as("invalid_parameter", into=noted, **refusal_of):
+                # **With the submitter and the form order**, because p.43-46's
+                # overrides are resolved inside this call and both are part of
+                # the question: p.43's justification is required for a manager
+                # and optional for an assignee, and p.45 lets a block read only
+                # the parameters above it (§329).
                 bound = actions_service.bind_parameters(
-                    body.values, parameters=action_type["parameters"]
+                    body.values,
+                    parameters=action_type["parameters"],
+                    user=await actions_service.criteria_user(conn, access.auth.user_id),
+                    form_order=await _form_order(conn, action_type),
                 )
             # **Before the first rule runs, and before the run is even opened**
             # (p.49-50). "Refused" and "refused after writing half of it" look the
@@ -2090,6 +2205,11 @@ async def execute_batch(
                 )
             return sources[source_id]
 
+        # Resolved once for the batch rather than per edit: p.43-46's overrides
+        # read the submitter and the form, and neither changes between two rows
+        # of one submission (§329).
+        editor = await actions_service.criteria_user(conn, access.auth.user_id)
+        edit_order = await _form_order(conn, action_type)
         planned: list[dict[str, Any]] = []
         for edit in body.edits:
             instance = await instance_store.store_for(conn).get_instance(
@@ -2109,6 +2229,8 @@ async def execute_batch(
                     rules=rules,
                 ),
                 parameters=action_type["parameters"],
+                user=editor,
+                form_order=edit_order,
             )
             actions_service.check_criteria(
                 bound, criteria=action_type["criteria"], user=user
