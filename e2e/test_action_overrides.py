@@ -36,13 +36,20 @@ def when(parameter: str, value: str) -> dict:
             "operator": "is", "right": {"kind": "value", "value": value}}
 
 
-def build(api, name: str, *, overrides: list[dict] | None = None) -> Module:
+def build(api, name: str, *, overrides: list[dict] | None = None,
+          tickets: int = 1) -> Module:
     """p.43's own example: a ticket whose status somebody changes, and a
-    justification that is required only under some circumstances."""
+    justification that is required only under some circumstances.
+
+    `tickets` is how many records the form's dropdown offers, which only one
+    test needs: switching between them is what proves the form forgets what was
+    typed against the last one.
+    """
     mod = Module(api, name)
     type_id = mod.object_type(
         columns=["ticket_id", "status", "justification"],
-        rows=[{"ticket_id": "1", "status": "open", "justification": ""}],
+        rows=[{"ticket_id": str(n + 1), "status": "open", "justification": ""}
+              for n in range(tickets)],
         key="ticket_id",
         title="ticket_id",
     )
@@ -249,6 +256,68 @@ def test_a_block_can_set_a_default_the_form_starts_at(page, api):
     )
 
 
+def test_an_overridden_default_does_not_overwrite_what_somebody_typed(page, api):
+    """**The guard that makes an overridden default safe to apply at all.**
+
+    p.45 lets a block change a default, and a block is re-resolved every time a
+    value it reads changes — so without knowing which boxes somebody has
+    actually typed in, the form would rewrite their sentence under them each
+    time they touched the field above it. That is worse than not applying the
+    default at all, because the work is already done when it disappears.
+
+    The value is typed *after* the default lands, so this is about overwriting
+    rather than about seeding order.
+    """
+    mod = build(api, "Override typed", overrides=[{
+        "conditions": [when("status", "closed")],
+        "set_hidden": False, "set_required": None,
+        "set_default": "see the ticket",
+    }])
+    open_module(page, mod)
+    choose_the_ticket(page)
+    field(page, "status").fill("closed")
+    expect(field(page, "justification")).to_have_value(
+        "see the ticket", timeout=30000)
+
+    field(page, "justification").fill("my own reason")
+    # Make the block stop holding and hold again, which re-resolves and would
+    # re-apply the default.
+    field(page, "status").fill("open")
+    expect(field(page, "justification")).to_have_count(0, timeout=30000)
+    field(page, "status").fill("closed")
+    expect(field(page, "justification")).to_be_visible(timeout=30000)
+    expect(field(page, "justification")).to_have_value("my own reason")
+
+
+def test_a_different_record_does_not_keep_the_last_ones_typing(page, api):
+    """The other half of that guard, and the half it would be easy to leave out.
+
+    "Somebody has typed here" is a fact about a form being filled in, not about
+    a parameter — so picking a different object has to forget it, or the second
+    object's form would decline to apply a default because of a sentence
+    written about the first.
+    """
+    mod = build(api, "Override two tickets", tickets=2, overrides=[{
+        "conditions": [when("status", "closed")],
+        "set_hidden": False, "set_required": None,
+        "set_default": "see the ticket",
+    }])
+    open_module(page, mod)
+    page.locator("form select").first.select_option(index=1)
+    expect(field(page, "status")).not_to_have_value("")
+    field(page, "status").fill("closed")
+    expect(field(page, "justification")).to_have_value(
+        "see the ticket", timeout=30000)
+    field(page, "justification").fill("about ticket one")
+
+    page.locator("form select").first.select_option(index=2)
+    expect(field(page, "justification")).to_have_count(0, timeout=30000)
+    field(page, "status").fill("closed")
+    expect(field(page, "justification")).to_have_value(
+        "see the ticket", timeout=30000
+    )
+
+
 def test_a_plain_form_does_not_ask_the_server_what_its_parameters_are(page, api):
     """**A claim about the network, which no assertion about the screen can
     reach** — §327's finding, and the shape §328's sweep caught twice.
@@ -376,6 +445,53 @@ def test_the_panel_warns_about_a_block_that_changes_nothing(page, api):
 
     page.get_by_label("justification override 1 visibility").select_option("false")
     expect(warning).to_have_count(0)
+
+
+def test_leaving_a_field_alone_is_saved_as_leaving_it_alone(page, api):
+    """**The distinction the whole "then" section rests on.**
+
+    `null` is "leave this alone" and `false` is "show it" — p.43's block makes
+    one parameter required *and* visible, and a control that could not say the
+    difference would have every block silently un-hide whatever it touched. The
+    select is changed and changed *back*, because a value nobody ever picked
+    would save as null whatever the handler does.
+    """
+    mod = build(api, "Override leave alone", overrides=[])
+    open_editor(page, mod)
+    page.get_by_label("Add an override to justification").click()
+    page.get_by_label("justification override 1 parameter").select_option("status")
+    page.get_by_label("justification override 1 value").fill("closed")
+    page.get_by_label("justification override 1 visibility").select_option("true")
+    page.get_by_label("justification override 1 visibility").select_option("")
+    page.get_by_label("justification override 1 requiredness").select_option("true")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    [saved] = definition(api, mod)["justification"]["overrides"]
+    assert saved["set_hidden"] is None, "left alone, not set to shown"
+    assert saved["set_required"] is True
+
+
+def test_opening_and_saving_the_dialog_keeps_the_blocks_it_did_not_touch(page, api):
+    """**The regression a builder would meet on their second visit.**
+
+    The blocks are part of the parameter, and the dialog saves the parameters
+    whole — so a dialog that did not load them would delete every override the
+    moment somebody opened it to fix a typo somewhere else. Nothing noticed,
+    because every other test here writes a block into an action that had none.
+    """
+    mod = build(api, "Override kept", overrides=WHEN_CLOSING)
+    open_editor(page, mod)
+    # An edit that has nothing to do with the overrides.
+    page.get_by_label("Parameter 1 label").fill("Status now")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    saved = definition(api, mod)
+    assert saved["status"]["display_name"] == "Status now"
+    [block] = saved["justification"]["overrides"]
+    assert block["set_required"] is True
+    assert block["set_hidden"] is False
 
 
 def test_the_panel_says_p45s_first_match_rule_only_where_it_can_happen(page, api):
