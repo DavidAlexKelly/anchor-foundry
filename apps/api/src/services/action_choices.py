@@ -34,6 +34,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all
+from . import action_filters
 from . import instance_store
 from . import instances as instances_service
 
@@ -88,6 +89,7 @@ async def choices(
     *,
     workspace_id: UUID,
     object_type_id: UUID,
+    filters: tuple[Any, ...] = (),
     limit: int = MAX_CHOICES,
 ) -> tuple[list[dict[str, Any]], bool]:
     """The objects this parameter may be set to, and whether there were more.
@@ -104,9 +106,13 @@ async def choices(
     names, one control down.
     """
     prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
-    rows, total = await instance_store.store_for(conn).list_for_type(
+    # p.36's filters, as the object set p.41 says Foundry compiles them into
+    # (§331). Unfiltered goes through the same call with an empty tuple rather
+    # than a different one, so there is one path for "what does this parameter
+    # offer" and no second place for the answer to be decided.
+    rows, total = await instance_store.store_for(conn).evaluate_object_set(
         search_prefix=prefix, object_type_id=object_type_id,
-        limit=limit, offset=0,
+        filters=filters, limit=limit, offset=0,
     )
     return [dict(r) for r in rows], total > len(rows)
 
@@ -135,7 +141,7 @@ async def check_object_values(
     A parameter nobody has declared a type for is not checked, because there is
     nothing to check it against that is not a guess — see `type_of`.
     """
-    wanted: dict[str, str] = {}
+    wanted: list[tuple[str, str, dict[str, Any]]] = []
     for parameter in object_parameters(parameters):
         name = str(parameter.get("api_name", ""))
         value = bound.get(name)
@@ -144,14 +150,14 @@ async def check_object_values(
         type_id = type_of(parameter)
         if type_id is None:
             continue
-        wanted[name] = type_id
+        wanted.append((name, type_id, parameter))
 
     if not wanted:
         return
 
     prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
     store = instance_store.store_for(conn)
-    for name, type_id in wanted.items():
+    for name, type_id, parameter in wanted:
         value = str(bound[name])
         row = await store.get_instance(
             search_prefix=prefix, object_type_id=type_id, instance_id=value,
@@ -159,6 +165,37 @@ async def check_object_values(
         if row is None:
             raise ValueError(
                 f"{value!r} is not an object of the type {name!r} asks for"
+            )
+        # p.34's second sentence, with p.36's filters in it (§331). The type is
+        # not the whole of "the value selected is also validated": a dropdown
+        # narrowed to three objects and a check that accepts any object of the
+        # type is a control that looks like it works.
+        declared = action_filters.filters_of(parameter)
+        if not declared:
+            continue
+        types = await property_types_of(conn, type_id)
+        try:
+            narrowing = action_filters.resolve(
+                parameter, bound=bound, property_types=types
+            )
+        except action_filters.Unresolved as missing:
+            # **Fails closed.** The filter reads a parameter nothing supplied,
+            # so whether this object is in the set is a question nobody can
+            # answer — and accepting on an unanswered question is how a value
+            # the filter exists to exclude gets written.
+            raise ValueError(
+                f"{name!r} is filtered on {missing.parameter!r}, which this "
+                "submission does not supply"
+            ) from missing
+        if not narrowing:
+            continue
+        matched, _ = await store.evaluate_object_set(
+            search_prefix=prefix, object_type_id=type_id,
+            filters=narrowing, limit=MAX_CHOICES, offset=0,
+        )
+        if not any(str(r["id"]) == value for r in matched):
+            raise ValueError(
+                f"{value!r} is not among the objects {name!r} offers"
             )
 
 
@@ -188,3 +225,21 @@ async def types_by_id(
         {"ids": list({str(t) for t in type_ids})},
     )
     return {str(r["id"]): dict(r) for r in rows}
+
+
+async def property_types_of(conn: AsyncConnection, object_type_id: str) -> dict[str, str]:
+    """`{api_name: data_type}` for one object type's properties.
+
+    What a filter's declared type comes from (§221's argument, carried on the
+    `Filter` rather than looked up again by each store). Its own small read
+    because the type a *parameter offers* is not the action's own, so the
+    property vocabulary a filter is written against is not one the action
+    already had in hand.
+    """
+    rows = await fetch_all(
+        conn,
+        "SELECT api_name, data_type FROM object_type_properties "
+        " WHERE object_type_id = CAST(:tid AS uuid)",
+        {"tid": str(object_type_id)},
+    )
+    return {str(r["api_name"]): str(r["data_type"]) for r in rows}

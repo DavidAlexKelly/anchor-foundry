@@ -33,6 +33,7 @@ from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_pro
 from ..services import action_metrics
 from ..services import action_revert
 from ..services import action_choices as choices_service
+from ..services import action_filters as filters_service
 from ..services import action_overrides as overrides_service
 from ..services import action_sections as sections_service
 from ..services import actions as actions_service
@@ -108,6 +109,12 @@ class ActionParameterOut(BaseModel):
     default_value: Any | None
     hidden: bool
     sort_order: int
+    #: p.36's object dropdown filters (§331; db 0084). **Empty for a caller
+    #: who may not edit the action type**, which is p.41's redaction: a static
+    #: filter value is readable by anyone who can read the definition, and
+    #: p.40's example is a filter naming an investigation shown to people who
+    #: cannot see a document in it.
+    dropdown_filters: list[dict[str, Any]] = Field(default_factory=list)
     #: db 0083: which object type this parameter's value is an instance of.
     #: `None` on every non-object parameter, and on an object parameter written
     #: before §330 — whose type the action's rules still say.
@@ -290,12 +297,31 @@ class ExecuteResult(BaseModel):
     undo_refusal: str | None = None
 
 
-def _action_type_out(row: dict[str, Any]) -> ActionTypeOut:
+def _may_edit(access: WorkspaceAccess) -> bool:
+    """Whether this caller may change the action type, and therefore whether
+    they are shown p.40-41's dropdown filters.
+
+    Named rather than written inline as a rank comparison: `access.rank()` is a
+    method and `>= 2` says nothing about which role rank two is, so the first
+    version of this silently compared a bound method to an integer.
+    """
+    return access.role in ("editor", "admin")
+
+
+def _action_type_out(row: dict[str, Any], *, may_edit: bool = True) -> ActionTypeOut:
     rules = [{**r, "config": _parse_json(r["config"])} for r in row["rules"]]
     # `default_value` is deliberately not run through `_parse_json` - see
     # `bind_parameters`: a jsonb scalar comes back already decoded, and parsing
     # it again raises.
     parameters = list(row["parameters"])
+    # p.40-41's redaction (§331). "Static value filters in object dropdown
+    # validations are exposed to all users who can view the action type. Use of
+    # these filters risks exposing property value combinations to users without
+    # permissions to view the filtered objects" — so a caller who may not edit
+    # the action does not receive them. They lose nothing by it: the form asks
+    # for the *objects* a filter leaves, never for the filter.
+    if not may_edit:
+        parameters = [filters_service.redact(p) for p in parameters]
     return ActionTypeOut(
         **{
             **row,
@@ -328,7 +354,10 @@ async def list_action_types(
         rows = await actions_service.list_action_types(
             conn, access.workspace_id, object_type_id=object_type_id
         )
-    return [_action_type_out(r) for r in rows]
+    # **The same redaction the single read does** (p.40-41; §331). A rule that
+    # held on one route and not the other would be no rule at all — and this is
+    # the route the Actions table actually calls.
+    return [_action_type_out(r, may_edit=_may_edit(access)) for r in rows]
 
 
 @router.post(
@@ -374,7 +403,7 @@ async def get_action_type(
 ) -> ActionTypeOut:
     async with user_connection(access.auth.user_id) as conn:
         row = await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
-    return _action_type_out(row)
+    return _action_type_out(row, may_edit=_may_edit(access))
 
 
 @router.patch("/action-types/{action_type_id}", response_model=ActionTypeOut)
@@ -447,6 +476,9 @@ class ActionParameterIn(BaseModel):
     #: db 0083's object type. Refused on a parameter that is not an `object`,
     #: because a type on a string is a claim nothing reads.
     object_type_id: UUID | None = None
+    #: p.36's filters: `{property, values: [{kind, ...}]}`, ANDed, each value
+    #: list read as an OR (§331).
+    dropdown_filters: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
     #: p.43-46's overrides, part of the parameter rather than a document of
     #: their own — unlike §328's sections, which are about the form. An
     #: omitted list means no blocks, which is what every parameter written
@@ -571,14 +603,28 @@ class ParameterChoices(BaseModel):
     #: §256's trap one control down — somebody would pick from the rows the
     #: control happened to receive and never learn the rest existed.
     truncated: bool
+    #: The parameter a filter reads that nothing has supplied yet (p.36; §331).
+    #: `None` when the list is simply what it is. **Named rather than left as
+    #: an empty list**, because "there is nothing to choose" and "fill in the
+    #: other box first" are different things to tell somebody.
+    waiting_for: str | None = None
 
 
-@router.get(
+class ParameterChoicesRequest(BaseModel):
+    """What has been filled in so far, which p.36's filters may read."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post(
     "/action-types/{action_type_id}/parameter-choices",
     response_model=list[ParameterChoices],
 )
 async def action_parameter_choices(
     action_type_id: UUID,
+    body: ParameterChoicesRequest,
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
 ) -> list[ParameterChoices]:
     """The objects each of this action's object parameters may be set to.
@@ -618,8 +664,34 @@ async def action_parameter_choices(
                 # are different things, and the form draws nothing for a
                 # parameter it was told nothing about.
                 continue
+            parameter = next(
+                p for p in action_type["parameters"]
+                if str(p["api_name"]) == name
+            )
+            try:
+                narrowing = filters_service.resolve(
+                    parameter,
+                    bound=body.values,
+                    property_types=await choices_service.property_types_of(
+                        conn, type_id
+                    ),
+                )
+            except filters_service.Unresolved as missing:
+                # p.36 lets a filter read another parameter, so a dropdown can
+                # depend on a box nobody has filled in. **Empty, and named**:
+                # offering every object would be offering exactly the ones the
+                # filter exists to exclude, and the submission would be refused
+                # a moment later.
+                out.append(ParameterChoices(
+                    parameter=name, object_type_id=UUID(type_id),
+                    object_type_name=str(object_type["display_name"]),
+                    items=[], truncated=False,
+                    waiting_for=missing.parameter,
+                ))
+                continue
             rows, truncated = await choices_service.choices(
-                conn, workspace_id=access.workspace_id, object_type_id=UUID(type_id)
+                conn, workspace_id=access.workspace_id, object_type_id=UUID(type_id),
+                filters=narrowing,
             )
             title = str(object_type.get("title_property") or "")
             out.append(ParameterChoices(
