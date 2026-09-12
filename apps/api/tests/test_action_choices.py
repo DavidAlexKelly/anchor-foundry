@@ -359,3 +359,51 @@ def test_a_viewer_may_ask_what_a_parameter_offers(
     r = client.get(f"{wbase(fx)}/action-types/{setup['action']}/parameter-choices",
                    headers=hdr(fx.outsider_sub))
     assert r.status_code in (403, 404), r.text
+
+
+def test_a_type_with_more_objects_than_the_control_holds_says_so(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**§256's rule, one control down.**
+
+    A dropdown is not a listing: somebody picks from the rows it happened to
+    receive, so a control that quietly held the first fifty of a larger set
+    would leave them unable to learn the rest existed. The cap is the store's
+    own page size, so this seeds one more object than that.
+
+    Nothing else here could catch it. Every other fixture has two objects, so
+    `total > len(rows)` and a hard-coded `False` agree — and a sweep that
+    removed the comparison altogether survived the whole file.
+    """
+    tag = uuid.uuid4().hex[:8]
+    many = choices.MAX_CHOICES + 1
+    crowded = a_type_with_rows(client, fx, f"many{tag}",
+                               [f"c{n:03d}" for n in range(many)])
+    ticket = a_type_with_rows(client, fx, f"one{tag}", ["t1"])
+    action = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": ticket, "api_name": f"pick_{tag}",
+              "display_name": "Pick", "editable_properties": ["name"]},
+    )
+    assert action.status_code == 201, action.text
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action.json()['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={"parameters": [
+                  {"api_name": "name", "display_name": "Name",
+                   "data_type": "string"},
+                  {"api_name": "team", "display_name": "Team",
+                   "data_type": "object", "object_type_id": crowded},
+              ],
+              "rules": [{"kind": "modify_object",
+                         "config": {"property": "name", "parameter": "name"}}],
+              "criteria": []},
+    )
+    assert r.status_code == 200, r.text
+
+    offer = client.get(
+        f"{wbase(fx)}/action-types/{action.json()['id']}/parameter-choices",
+        headers=hdr(fx.viewer_sub),
+    ).json()[0]
+    assert offer["truncated"] is True
+    assert len(offer["items"]) == choices.MAX_CHOICES
