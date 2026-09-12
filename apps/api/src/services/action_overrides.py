@@ -151,7 +151,7 @@ def applies(block: dict[str, Any], *, bound: dict[str, Any], user: dict[str, Any
     **All of them, and an empty block holds.** p.45 says "Each block can
     contain one or multiple conditions" and nothing about combining them any
     other way, which is how `check_criteria` reads its list too — one grammar,
-    one reading. `replace_overrides` refuses a block with no conditions, so the
+    one reading. `write_overrides` refuses a block with no conditions, so the
     vacuous case cannot be stored; it is `True` here because that is what "all
     of none" means and inventing a different answer for an input that cannot
     arrive would be a branch nothing can reach.
@@ -199,7 +199,14 @@ def effective(
         if block.get("set_required") is not None:
             resolved["required"] = bool(block["set_required"])
         if block.get("set_default") is not None:
-            resolved["default_value"] = _json(block["set_default"])
+            # **Used as it comes, not re-parsed**, which is the trap
+            # `bind_parameters` documents one file over: the repo's defensive
+            # `json.loads(x) if isinstance(x, str)` is a no-op for a jsonb
+            # object and *wrong* for a jsonb scalar, because the driver already
+            # decoded `"see the ticket"` to a Python string and parsing that
+            # again fails at column 1. A default is the only jsonb here that is
+            # routinely a scalar — and an override's default is a second one.
+            resolved["default_value"] = block["set_default"]
         resolved["overridden_by"] = str(block.get("id") or "")
         return resolved
     return dict(parameter)
@@ -275,24 +282,33 @@ async def overrides_for(
     for row in rows:
         block = dict(row)
         block["conditions"] = _json(block["conditions"]) or []
-        block["set_default"] = _json(block["set_default"])
+        # `set_default` is deliberately not passed through `_json`: see
+        # `effective`. It arrives decoded and a scalar would not survive a
+        # second parse.
         grouped.setdefault(str(row["parameter_id"]), []).append(block)
     return grouped
 
 
-async def replace_overrides(
+async def write_overrides(
     conn: AsyncConnection, parameter_id: UUID, blocks: list[dict[str, Any]]
 ) -> None:
-    """Write one parameter's blocks, whole.
+    """Write one parameter's blocks, in p.45's order.
 
-    The order is the rule (p.45-46's "only the first one will be executed"), so
-    a granular edit would pass through orders nobody asked for — and the block
-    that wins would change between two requests.
+    **Called only as part of `set_definition`, and named for what it does.**
+    The first draft was `replace_overrides` and began by deleting this
+    parameter's blocks — a statement that can never find a row, because
+    `set_definition` has already deleted every `action_parameters` row for the
+    action and `ON DELETE CASCADE` took the blocks with them. A sweep removed
+    the delete and nothing changed, which is §213's rule arriving from the
+    database rather than from another layer of Python.
 
-    Validated before the `DELETE` reads as the guarantee that a refused write
-    leaves the old blocks alone; it is not, and `user_connection`'s transaction
-    is. The order is how the function reads. (§328 learned this from a mutant
-    that moved the delete to the top and changed nothing observable.)
+    The order is the rule, not a presentation detail (p.45-46: "only the first
+    one will be executed"), which is why `sort_order` is the position in the
+    list rather than anything the caller has to keep consistent.
+
+    A refused write leaves the old blocks alone because `user_connection` is one
+    transaction per request — not because the checks come first. The checks
+    come first because that is how the function reads.
     """
     for index, block in enumerate(blocks, start=1):
         conditions = block.get("conditions") or []
@@ -305,10 +321,6 @@ async def replace_overrides(
         if all(block.get(f"set_{name}") is None for name in SETTABLE):
             raise ValueError(f"override {index} changes nothing")
 
-    await conn.exec_driver_sql(
-        "DELETE FROM action_parameter_overrides WHERE parameter_id = %s",
-        (str(parameter_id),),
-    )
     for index, block in enumerate(blocks):
         await fetch_one(
             conn,

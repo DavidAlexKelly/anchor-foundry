@@ -38,6 +38,12 @@ import {
 import { webhooks as webhookApi } from "@/lib/api";
 import { actions as actionApi, objects as objApi, type ActionDefinitionInput } from "@/lib/api";
 import {
+  CURRENT_USER, blankBlock, conditionDraft as overrideConditionDraft,
+  conditionValue as overrideConditionValue, formOrder, ifSummary, moveBlock,
+  orderNote, readableBefore, sameAsParameter, thenSummary,
+  type OverrideBlock,
+} from "@/lib/action-overrides";
+import {
   COLUMN_CHOICES, availableParameters, blankSection, collapsedInitially,
   conditionDraft, conditionValue, forgetParameters, moveSection, placeParameter,
   removeParameter, renameParameter, sectionSummary, type FormSection,
@@ -144,6 +150,9 @@ export function ActionDefinitionEditor({
       required: p.required,
       default_value: p.default_value,
       hidden: p.hidden,
+      // p.43-46's blocks travel with the parameter, so the dialog edits them
+      // in the same document it already saves whole (§329).
+      overrides: p.overrides ?? [],
     })),
   );
   const [rules, setRules] = useState<Rule[]>(
@@ -840,6 +849,171 @@ export function ActionDefinitionEditor({
       >
         Add a criterion
       </button>
+
+      <h3 className="field-label" style={{ marginTop: 24 }}>Overrides</h3>
+      <p className="field-hint">
+        p.43–46: change a parameter under specific circumstances, rather than
+        building a second action type that differs in one field. A block is an
+        “if” and a “then”; if more than one holds, only the first is applied. A
+        block’s conditions may only read parameters <em>above</em> it in the form
+        (p.45), which is what lets the server resolve the whole form in one pass.
+      </p>
+      <div data-testid="override-parameters">
+        {parameters.map((p, pi) => {
+          const blocks = p.overrides ?? [];
+          const above = readableBefore(
+            formOrder(parameters, sections ?? []), p.api_name,
+          );
+          const setBlocks = (next: OverrideBlock[]) =>
+            patchParameter(pi, { overrides: next });
+          return (
+            <div key={pi} data-override-parameter={p.api_name} style={{ marginBottom: 10 }}>
+              <div className="row-actions">
+                <span className="field-label">{p.display_name || p.api_name}</span>
+                <button
+                  className="btn quiet"
+                  aria-label={`Add an override to ${p.api_name}`}
+                  onClick={() => setBlocks([...blocks, blankBlock()])}
+                >
+                  Add override
+                </button>
+                {blocks.length > 0 && (
+                  <span className="field-hint" data-testid="override-count">
+                    {blocks.length === 1 ? "1 block" : `${blocks.length} blocks`}
+                  </span>
+                )}
+              </div>
+              {/* p.46's "if more than one block is true, only the first
+                  override is executed", said only where it can happen. */}
+              {orderNote(blocks) && (
+                <p className="field-hint" data-testid="override-order-note">
+                  {orderNote(blocks)}
+                </p>
+              )}
+              {blocks.map((b, bi) => {
+                const draft = overrideConditionDraft(b.conditions?.[0]);
+                const patch = (next: Partial<OverrideBlock>) =>
+                  setBlocks(blocks.map((x, j) => (j === bi ? { ...x, ...next } : x)));
+                const warning = sameAsParameter(b, {
+                  ...p, required: !!p.required, hidden: !!p.hidden,
+                } as never);
+                return (
+                  <div className="card" key={bi} data-override-block={bi}
+                       style={{ marginBottom: 8 }}>
+                    <span className="field-hint" data-testid="override-summary">
+                      If {ifSummary(b)}, {thenSummary(b)}.
+                    </span>
+                    <div className="row-actions">
+                      <span className="field-hint">If</span>
+                      <select
+                        value={draft.parameter}
+                        aria-label={`${p.api_name} override ${bi + 1} parameter`}
+                        onChange={(e) => patch({ conditions: [overrideConditionValue(
+                          { ...draft, parameter: e.target.value })] })}
+                      >
+                        <option value="">Choose…</option>
+                        {/* p.50's other template. Always available: who is
+                            submitting is not a parameter, so p.45's "above"
+                            rule has nothing to say about it — which is what
+                            makes an override on the *first* parameter in a
+                            form possible at all. */}
+                        <option value={CURRENT_USER}>the current user</option>
+                        {/* And p.45's rule, as a narrowing rather than a
+                            validation: the server refuses a block that reads
+                            below itself, and this is why nobody meets that
+                            refusal by the obvious route. */}
+                        {above.map((name) => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={draft.operator}
+                        aria-label={`${p.api_name} override ${bi + 1} operator`}
+                        onChange={(e) => patch({ conditions: [overrideConditionValue(
+                          { ...draft, operator: e.target.value })] })}
+                      >
+                        {OPERATORS.map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                      <input
+                        value={draft.value}
+                        aria-label={`${p.api_name} override ${bi + 1} value`}
+                        onChange={(e) => patch({ conditions: [overrideConditionValue(
+                          { ...draft, value: e.target.value })] })}
+                      />
+                    </div>
+                    <div className="row-actions">
+                      <span className="field-hint">Then</span>
+                      {/* **Three states, not a checkbox** — null is "leave this
+                          alone" and is not the same as false. p.43's block
+                          makes one parameter required *and* visible; one that
+                          only hid something would un-require it as a side
+                          effect if the control could not say "don't touch". */}
+                      <select
+                        value={b.set_hidden === null || b.set_hidden === undefined
+                          ? "" : String(b.set_hidden)}
+                        aria-label={`${p.api_name} override ${bi + 1} visibility`}
+                        onChange={(e) => patch({
+                          set_hidden: e.target.value === "" ? null : e.target.value === "true",
+                        })}
+                      >
+                        <option value="">leave visibility alone</option>
+                        <option value="false">show it</option>
+                        <option value="true">hide it</option>
+                      </select>
+                      <select
+                        value={b.set_required === null || b.set_required === undefined
+                          ? "" : String(b.set_required)}
+                        aria-label={`${p.api_name} override ${bi + 1} requiredness`}
+                        onChange={(e) => patch({
+                          set_required: e.target.value === "" ? null : e.target.value === "true",
+                        })}
+                      >
+                        <option value="">leave requiredness alone</option>
+                        <option value="true">require it</option>
+                        <option value="false">make it optional</option>
+                      </select>
+                      <input
+                        value={b.set_default === null || b.set_default === undefined
+                          ? "" : String(b.set_default)}
+                        placeholder="leave the default alone"
+                        aria-label={`${p.api_name} override ${bi + 1} default`}
+                        onChange={(e) => patch({
+                          set_default: e.target.value === "" ? null : e.target.value,
+                        })}
+                      />
+                    </div>
+                    {/* p.45: "If an override is configured to take on the same
+                        value as the default already set on the parameter, a
+                        warning will be shown on the override itself." A
+                        warning, not a refusal — the block is legal and simply
+                        does nothing. */}
+                    {warning && (
+                      <p className="field-hint" data-testid="override-same-as-default">
+                        {warning}
+                      </p>
+                    )}
+                    <div className="row-actions">
+                      <button className="btn quiet" disabled={bi === 0}
+                        aria-label={`Move ${p.api_name} override ${bi + 1} up`}
+                        onClick={() => setBlocks(moveBlock(blocks, bi, -1))}>Up</button>
+                      <button className="btn quiet" disabled={bi === blocks.length - 1}
+                        aria-label={`Move ${p.api_name} override ${bi + 1} down`}
+                        onClick={() => setBlocks(moveBlock(blocks, bi, 1))}>Down</button>
+                      <button className="btn quiet"
+                        aria-label={`Remove ${p.api_name} override ${bi + 1}`}
+                        onClick={() => setBlocks(blocks.filter((_, j) => j !== bi))}>
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
 
       <h3 className="field-label" style={{ marginTop: 24 }}>Form</h3>
       <p className="field-hint">

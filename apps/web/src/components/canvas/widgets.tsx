@@ -204,6 +204,7 @@ import {
   hasConditions, labelOf as parameterLabel,
   requiredElsewhere, unreachableNote, type FormParameter, type FormSection,
 } from "@/lib/action-sections";
+import { hasOverrides, overrideKey } from "@/lib/action-overrides";
 import { interfaceQuery } from "./routing";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
@@ -11546,8 +11547,17 @@ export function CanvasActionForm({
     : instancesQ.data?.items.find((i) => i.id === picked);
   const chosenKey = String(chosen?.id ?? "");
   const [seeded, setSeeded] = useState<string | null>(null);
+  // Which fields the reader has actually typed in. **The only thing that keeps
+  // p.45's overridden default from overwriting somebody's work** (§329): an
+  // override can change a parameter's default as another value changes, so the
+  // form has to be able to tell "this box still holds what we put in it" from
+  // "this box holds what somebody meant".
+  const [typed, setTyped] = useState<Record<string, true>>({});
   if (chosenKey !== seeded) {
     setSeeded(chosenKey);
+    // A different object is a different form. Anything typed against the last
+    // one is not an answer about this one.
+    setTyped({});
     setValues(seedActionForm(
       actionType?.parameters ?? [], chosen?.properties ?? {},
       localDefaultsOf(parameterDefaults),
@@ -11703,14 +11713,66 @@ export function CanvasActionForm({
   // section has no section whose drawing depends on the answer.
   const shown = shownQ.data;
 
-  // p.25: hidden parameters are supplied by the caller and never drawn. The
-  // form still sends them - `values` carries every parameter it seeded.
-  const declared = (actionType?.parameters ?? []) as FormParameter[];
+  // §329: p.43-46's overrides, which change what this form *asks for* rather
+  // than how it looks — a parameter can be required for one person and optional
+  // for another. **Asked of the server**, like the sections above and for a
+  // stronger reason: the same resolution decides whether the submission is
+  // refused, so a browser-side copy could ask for the wrong things and then
+  // refuse what somebody sent.
+  //
+  // Gated on `hasOverrides` rather than on "does a condition name a
+  // parameter", because p.43's own example asks who is submitting and names
+  // nothing — which is the defect §328 shipped and had to come back for.
+  const stored = (actionType?.parameters ?? []) as FormParameter[];
+  const overridden = hasOverrides(actionType?.parameters ?? []);
+  const watchingValues = overrideKey(actionType?.parameters ?? [], values);
+  const effectiveQ = useQuery({
+    queryKey: ["action-effective-parameters", actionTypeId, watchingValues],
+    queryFn: () => actionApi.effectiveParameters(workspaceId, actionTypeId!, values),
+    enabled: !!actionTypeId && overridden,
+  });
+  // **The stored parameters until the server answers**, rather than nothing. A
+  // form that drew no fields while the question was in flight would blank
+  // itself on every keystroke in a watched value; the stored row is what the
+  // parameter says when no block holds, which is the honest starting point and
+  // the one every form had before §329.
+  const declared = (
+    overridden && effectiveQ.data ? effectiveQ.data : stored
+  ) as FormParameter[];
   const layout = formLayout(declared, sections, shown);
   const visible = [
     ...layout.loose,
     ...layout.sections.flatMap((drawn) => drawn.parameters),
   ];
+  // p.45 lists default values among what an override may change, and the
+  // server honours one for a parameter the caller does not supply. **This form
+  // always supplies every parameter it drew**, so without this the overridden
+  // default could never apply through a form — the seed would win every time
+  // and the rule would be true only of submissions made without a screen.
+  //
+  // Only fields nobody has typed in, which is what makes this safe to run on
+  // every resolution: a default that changed while somebody was writing would
+  // otherwise take the sentence out from under them.
+  useEffect(() => {
+    if (!overridden || !effectiveQ.data) return;
+    const fill: Record<string, unknown> = {};
+    for (const parameter of effectiveQ.data) {
+      if (typed[parameter.api_name]) continue;
+      if (parameter.default_value === null || parameter.default_value === undefined) continue;
+      fill[parameter.api_name] = parameter.default_value;
+    }
+    if (Object.keys(fill).length === 0) return;
+    setValues((was) => {
+      const next = { ...was, ...fill };
+      // Compared before writing, because this effect runs on every resolution
+      // and an unconditional `setValues` would re-render forever.
+      return Object.keys(fill).every((k) => was[k] === next[k]) ? was : next;
+    });
+    // `typed` is read rather than depended on: a keystroke marks a field typed
+    // and the very next run would otherwise undo nothing but re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveQ.data, overridden]);
+
   const missingRequired = visible.filter((p) => p.required && !hasValue(values[p.api_name]));
   // A required parameter inside a section this form is not showing. The server
   // still requires it, so the submission would be refused — and saying
@@ -11738,8 +11800,10 @@ export function CanvasActionForm({
           workspaceId={workspaceId}
           dataType={(parameter as { data_type?: string }).data_type as never}
           value={values[parameter.api_name] ?? null}
-          onChange={(next) =>
-            setValues({ ...values, [parameter.api_name]: next })}
+          onChange={(next) => {
+            setTyped((was) => ({ ...was, [parameter.api_name]: true }));
+            setValues({ ...values, [parameter.api_name]: next });
+          }}
           label={parameterLabel(parameter)}
           required={parameter.required}
         />
