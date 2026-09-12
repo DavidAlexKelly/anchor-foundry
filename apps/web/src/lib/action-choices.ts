@@ -38,6 +38,10 @@ export interface ParameterChoices {
   items: ParameterChoice[];
   /** Whether there are more objects than the control can hold. */
   truncated: boolean;
+  /** The parameter a p.36 filter reads that nothing has supplied yet (§331).
+   * `null` when the list is simply what it is — "there is nothing to choose"
+   * and "fill in the other box first" are different things to be told. */
+  waiting_for?: string | null;
 }
 
 /** The offer for one parameter, or `null` when there is none.

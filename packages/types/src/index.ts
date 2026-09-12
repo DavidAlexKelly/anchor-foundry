@@ -2294,6 +2294,23 @@ export interface ActionOverrideBlock {
   set_default: unknown;
 }
 
+/** Where one of p.36's filter values comes from (§331).
+ *
+ * decision 0007's vocabulary, because "where does this value come from" is a
+ * question this platform has already answered once. p.36's third kind — a
+ * property of an object-reference parameter — is not implemented, and
+ * `docs/parity` carries it as a named ○. */
+export type ActionFilterValue =
+  | { kind: "value"; value: unknown }
+  | { kind: "parameter"; parameter: string };
+
+/** One of p.36's object dropdown filters: a property, and the values it may
+ * match. Several filters narrow together; the values inside one are an OR. */
+export interface ActionDropdownFilter {
+  property: string;
+  values: ActionFilterValue[];
+}
+
 export interface ActionParameter {
   id: string;
   api_name: string;
@@ -2313,6 +2330,11 @@ export interface ActionParameter {
    * enough to render a notification and not well enough to refuse a
    * submission. */
   object_type_id?: string | null;
+  /** p.36's object dropdown filters (§331; db 0084). **Empty for a caller who
+   * may not edit the action type** — p.40's static filter values are readable
+   * by anyone who can read the definition, and its example reveals that an
+   * investigation exists to people who cannot see a document in it. */
+  dropdown_filters?: ActionDropdownFilter[];
   /** p.43-46's override blocks, in the order the first-match rule reads them.
    * Absent on a payload that predates §329, and empty for most parameters. */
   overrides?: ActionOverrideBlock[];

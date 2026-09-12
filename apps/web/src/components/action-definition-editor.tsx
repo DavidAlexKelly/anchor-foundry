@@ -30,6 +30,10 @@ import { Dialog, Field } from "@/components/dialog";
 import { NotifyRuleFields } from "@/components/notify-rule-fields";
 import { TypePicker } from "@/components/type-picker";
 import { untypedNote } from "@/lib/action-choices";
+import {
+  blankFilter, filterSummary, readableParameters, staticValueWarning,
+  type DropdownFilter,
+} from "@/lib/action-filters";
 import { NotifyConfig, blankNotifyConfig, problem as notifyProblem } from "@/lib/notify-rule";
 import { WebhookRuleFields } from "@/components/webhook-rule-fields";
 import {
@@ -154,6 +158,10 @@ export function ActionDefinitionEditor({
       // db 0083: which object type this parameter holds (§330). Part of the
       // parameter, like the blocks below.
       object_type_id: p.object_type_id ?? null,
+      // p.36's dropdown filters (§331). Empty for a caller who may not edit
+      // the action, which is p.40-41's redaction — and this dialog is only
+      // opened by somebody who may.
+      dropdown_filters: p.dropdown_filters ?? [],
       // p.43-46's blocks travel with the parameter, so the dialog edits them
       // in the same document it already saves whole (§329).
       overrides: p.overrides ?? [],
@@ -887,6 +895,116 @@ export function ActionDefinitionEditor({
                     {untypedNote(p)}
                   </p>
                 )}
+                {/* p.36's filters. Only once the parameter says what it
+                    offers, because a filter is written against *that* type's
+                    properties — there is nothing to filter until then, and the
+                    server says so. */}
+                {p.object_type_id && (() => {
+                  const declared: DropdownFilter[] = p.dropdown_filters ?? [];
+                  const setFilters = (next: DropdownFilter[]) =>
+                    patchParameter(i, { dropdown_filters: next });
+                  const labels = Object.fromEntries(parameters.map(
+                    (q) => [q.api_name, q.display_name || q.api_name]));
+                  return (
+                    <div data-parameter-filters={p.api_name}>
+                      <div className="row-actions">
+                        <span className="field-hint">
+                          Only offer objects where…
+                        </span>
+                        <button
+                          className="btn quiet"
+                          aria-label={`Add a filter to ${p.api_name}`}
+                          onClick={() => setFilters([...declared, blankFilter()])}
+                        >
+                          Add filter
+                        </button>
+                      </div>
+                      {declared.map((f, fi) => {
+                        const patch = (next: Partial<DropdownFilter>) =>
+                          setFilters(declared.map(
+                            (x, j) => (j === fi ? { ...x, ...next } : x)));
+                        const only = f.values?.[0];
+                        const fromParameter = only?.kind === "parameter";
+                        return (
+                          <div className="row-actions" key={fi} data-filter-row={fi}>
+                            <PropertySelect
+                              workspaceId={workspaceId}
+                              typeId={String(p.object_type_id)}
+                              value={f.property}
+                              label={`Filter ${fi + 1} on ${p.api_name} property`}
+                              onChange={(next) => patch({ property: next })}
+                            />
+                            {/* p.36's two kinds of value. The choice is the
+                                one p.41 says matters: a parameter exposes
+                                nothing about the data, a typed-in value is
+                                part of the definition. */}
+                            <select
+                              value={fromParameter ? "parameter" : "value"}
+                              aria-label={`Filter ${fi + 1} on ${p.api_name} source`}
+                              onChange={(e) => patch({ values: [
+                                e.target.value === "parameter"
+                                  ? { kind: "parameter", parameter: "" }
+                                  : { kind: "value", value: "" },
+                              ] })}
+                            >
+                              <option value="value">a typed-in value</option>
+                              <option value="parameter">another parameter</option>
+                            </select>
+                            {fromParameter ? (
+                              <select
+                                value={String(
+                                  (only as { parameter?: string }).parameter ?? "")}
+                                aria-label={`Filter ${fi + 1} on ${p.api_name} parameter`}
+                                onChange={(e) => patch({ values: [
+                                  { kind: "parameter", parameter: e.target.value },
+                                ] })}
+                              >
+                                <option value="">Choose…</option>
+                                {/* Never this parameter, which would make the
+                                    dropdown depend on the value it offers. */}
+                                {readableParameters(parameters, p.api_name).map(
+                                  (name) => (
+                                    <option key={name} value={name}>
+                                      {labels[name] ?? name}
+                                    </option>
+                                  ))}
+                              </select>
+                            ) : (
+                              <input
+                                value={String(
+                                  (only as { value?: unknown })?.value ?? "")}
+                                aria-label={`Filter ${fi + 1} on ${p.api_name} value`}
+                                onChange={(e) => patch({ values: [
+                                  { kind: "value", value: e.target.value },
+                                ] })}
+                              />
+                            )}
+                            <span className="field-hint" data-testid="filter-summary">
+                              {filterSummary(f, labels)}
+                            </span>
+                            <button
+                              className="btn quiet"
+                              aria-label={`Remove filter ${fi + 1} on ${p.api_name}`}
+                              onClick={() => setFilters(
+                                declared.filter((_, j) => j !== fi))}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        );
+                      })}
+                      {/* p.40's warning, where the static value is typed and
+                          only then — p.41 is explicit that a parameter-read
+                          filter carries no such risk, and a warning on every
+                          filter is one nobody reads by the third. */}
+                      {staticValueWarning(declared) && (
+                        <p className="field-hint" data-testid="filter-static-warning">
+                          {staticValueWarning(declared)}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>
