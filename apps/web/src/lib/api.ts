@@ -1482,6 +1482,27 @@ export const objects = {
     request<import("./types").ObjectTypeUsage>(
       `/workspaces/${wid}/object-types/${typeId}/usage`,
     ),
+  /** p.69's cleanup queue, worst first (§325; `ontology-manager` p.68-74). */
+  cleanupQueue: (wid: string, opts?: { flag?: string; includeSnoozed?: boolean }) => {
+    const params = new URLSearchParams();
+    if (opts?.flag) params.set("flag", opts.flag);
+    if (opts?.includeSnoozed) params.set("include_snoozed", "true");
+    const q = params.toString();
+    return request<import("./types").CleanupCandidate[]>(
+      `/workspaces/${wid}/ontology-cleanup${q ? `?${q}` : ""}`,
+    );
+  },
+  /** p.71's snooze. **Yours alone** — "an action that will affect only the user
+   * that performs it" — which db 0080's row policy enforces. */
+  snoozeType: (wid: string, typeId: string, days: number, note?: string) =>
+    request<{ object_type_id: string; until: string; note: string | null }>(
+      `/workspaces/${wid}/object-types/${typeId}/cleanup-snooze`,
+      { method: "PUT", body: JSON.stringify({ days, note: note ?? null }) },
+    ),
+  wakeType: (wid: string, typeId: string) =>
+    request<void>(`/workspaces/${wid}/object-types/${typeId}/cleanup-snooze`, {
+      method: "DELETE",
+    }),
   /** Where a write to this type would land (§324; `action-types` p.135).
    *
    * The Explorer is workspace-scoped and a write is not: an instance comes

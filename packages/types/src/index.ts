@@ -2913,3 +2913,27 @@ export interface EditingProject {
   name: string;
   slug: string;
 }
+
+/** One object type the cleanup tool thinks is worth a look (§325; db 0080;
+ * `ontology-manager` p.68-74).
+ *
+ * **Flags, not a verdict.** p.68 says the tool "aims to help Ontology editors
+ * determine the safety of deleting an object type" — so this reports what is
+ * true and leaves p.71's three actions to the person reading it. */
+export interface CleanupCandidate {
+  id: string;
+  api_name: string;
+  display_name: string;
+  status: string;
+  description: string;
+  deprecation: { reason?: string; deadline?: string } | null;
+  /** db 0077's thirty-day count — the evidence behind the `unused` flag, and
+   * the one number that argues against deleting. */
+  interactions: number;
+  /** Already in p.70's priority order, worst first. A screen re-ranking them
+   * would be free to disagree with the order the list itself is in. */
+  flags: string[];
+  /** p.70's rank of the worst flag; lower is more urgent. */
+  priority: number;
+  snoozed_until: string | null;
+}

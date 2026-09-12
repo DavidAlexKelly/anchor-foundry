@@ -584,3 +584,56 @@ def test_the_queue_is_a_page_rather_than_the_whole_ontology(
     rows = queue(client, fx)
     assert len(rows) <= cleanup.MAX_CANDIDATES
     assert [c["priority"] for c in rows] == sorted(c["priority"] for c in rows)
+
+
+def labelled_flags() -> set[str]:
+    """The flags the browser has words for, read out of the TypeScript.
+
+    Crude on purpose, like §323's: a real parse needs a toolchain this suite
+    does not have, and what is being checked is that two lists in two languages
+    say the same thing. The vacuity guard below is what stops a regex that
+    stopped matching from turning this into a check over nothing.
+    """
+    import re
+
+    # Four levels: tests -> api -> apps -> the repository root.
+    root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    )
+    src = open(
+        os.path.join(root, "apps", "web", "src", "lib", "ontology-cleanup.ts"),
+        encoding="utf-8",
+    ).read()
+    body = src.split("FLAG_LABELS", 1)[1].split("};", 1)[0]
+    return set(re.findall(r"^\s{2}(\w+):\s*\{", body, re.MULTILINE))
+
+
+def test_every_flag_has_words_on_the_screen() -> None:
+    """**The drift the type system cannot see** (§315's pattern, §323's shape).
+
+    `FLAG_PRIORITY` is a Python tuple and `FLAG_LABELS` a TypeScript object,
+    and nothing but this line connects them. A flag added here and not there
+    draws as its own column value — `name_looks_temporary` printed at somebody
+    in a list whose buttons delete things.
+    """
+    labelled = labelled_flags()
+    assert labelled, "the labels could not be read; this was about to pass over nothing"
+    assert labelled == set(cleanup.FLAG_PRIORITY), (
+        "the server's flags and the browser's words for them have drifted: "
+        f"only in the server {set(cleanup.FLAG_PRIORITY) - labelled}, "
+        f"only in the browser {labelled - set(cleanup.FLAG_PRIORITY)}"
+    )
+
+
+def test_the_unused_window_matches_the_usage_the_flag_reads() -> None:
+    """`UNUSED_DAYS` is its own constant and db 0077's `WINDOW_DAYS` is another,
+    and they have to agree or the flag says "nobody used it in 30 days" over a
+    count taken across a different span.
+
+    Two constants rather than one import, because they answer different
+    questions and one moving should be a decision rather than a side effect —
+    so this is the line that makes it one.
+    """
+    from src.services import object_type_usage
+
+    assert cleanup.UNUSED_DAYS == object_type_usage.WINDOW_DAYS
