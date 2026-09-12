@@ -93,10 +93,12 @@ def test_a_broken_condition_does_not_take_the_form_down() -> None:
     ) is False
 
 
-def test_p123_offers_one_or_two_columns() -> None:
-    """"A section can be divided into one or two columns." Three is a layout
-    nothing renders."""
-    assert sections.COLUMN_CHOICES == (1, 2)
+# **There is no test here for the column count, and there was one.** It read
+# `sections.COLUMN_CHOICES == (1, 2)`, which is a test that a constant is
+# written the way it is written — and the service check it guarded turned out to
+# be unreachable, because `SectionIn.columns` is `Literal[1, 2]` and the table
+# carries the same `CHECK`. Both of those are exercised by
+# `test_three_columns_are_refused` below, through the door a caller uses.
 
 
 # ---- the Form tab, against a real action --------------------------------------
@@ -298,7 +300,12 @@ def test_three_columns_are_refused(
     client: TestClient, fx: Fixture, action: str
 ) -> None:
     """p.123 offers one or two. Three is a layout nothing renders, and storing
-    it would put a form in a state the screen has to guess about."""
+    it would put a form in a state the screen has to guess about.
+
+    The refusal is the request model's (`Literal[1, 2]`) with the table's
+    `CHECK` behind it. The service used to check a third time and the check
+    could not be reached — see the note where it was.
+    """
     r = put_sections(client, fx, action, [{"title": "Wide", "columns": 3}])
     assert r.status_code == 422, r.text
 
@@ -306,9 +313,18 @@ def test_three_columns_are_refused(
 def test_nothing_is_written_by_a_refused_form(
     client: TestClient, fx: Fixture, action: str
 ) -> None:
-    """**Checked before anything is written**, which is p.138's rule about
-    batches applied to a form: a Form tab half-replaced is worse than one
-    refused, because the builder cannot see which half took."""
+    """**The form the builder had is the form they still have.**
+
+    p.138's rule about batches applied to a form: a Form tab half-replaced is
+    worse than one refused, because the builder cannot see which half took.
+
+    **What keeps that promise is the transaction, not the order of the
+    statements** — `user_connection` is one transaction per request, so a
+    refusal rolls the delete back wherever it happened. This test said
+    "checked before anything is written" and a sweep that moved the delete to
+    the very top of `replace_sections` left it green, which is the honest way
+    to find out which layer you are actually testing.
+    """
     put_sections(client, fx, action, [{"title": "Kept", "parameters": ["status"]}])
     refused = put_sections(client, fx, action, [
         {"title": "New", "parameters": ["status"]},

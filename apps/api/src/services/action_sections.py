@@ -35,8 +35,13 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from ..lib.db import fetch_all, fetch_one
 from .actions import _passes  # the condition grammar decision 0007 already has
 
-#: p.123: "A section can be divided into one or two columns."
-COLUMN_CHOICES = (1, 2)
+# **p.123's "one or two columns" is not checked here, and the first draft
+# checked it.** `SectionIn.columns` is `Literal[1, 2]` and `action_sections`
+# carries `CHECK (columns IN (1, 2))` — two layers that both refuse three,
+# either side of this one. The check was unreachable: a mutation sweep deleted
+# it and every test stayed green, because nothing can call this with a number
+# the request model let through. §213's rule, and the reasoning stands in its
+# place rather than the line.
 
 
 def _json(value: Any) -> Any:
@@ -154,11 +159,6 @@ async def replace_sections(
         if title in titles:
             raise ValueError(f"two sections are both called {title!r}")
         titles.add(title)
-        columns = int(section.get("columns", 1))
-        if columns not in COLUMN_CHOICES:
-            raise ValueError(
-                f"{title!r} asks for {columns} columns; p.123 offers one or two"
-            )
         for name in section.get("parameters") or []:
             if str(name) not in known:
                 raise ValueError(
@@ -183,6 +183,13 @@ async def replace_sections(
     # parameter to the form body as the old sections go, so a parameter left
     # out of the new document ends up unsectioned rather than pointing at a row
     # that no longer exists.
+    #
+    # Everything above runs before this, which reads like the guarantee that a
+    # refused form leaves the old one alone — **and is not**. `user_connection`
+    # is one transaction per request, so the delete is rolled back whatever
+    # order it happened in; a sweep that moved this to the top of the function
+    # killed nothing. The order is how the function reads, not what keeps the
+    # promise, and the test that checks the promise names the transaction.
     await conn.exec_driver_sql(
         "DELETE FROM action_sections WHERE action_type_id = %s",
         (str(action_type_id),),

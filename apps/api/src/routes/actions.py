@@ -21,7 +21,7 @@ import os
 import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 from uuid import UUID, uuid4
 
 import anyio
@@ -497,8 +497,12 @@ class SectionIn(BaseModel):
     #: p.123's "optionally write a user-facing description… always be shown in
     #: the section itself, not in a tooltip".
     description: str = Field(default="", max_length=2000)
-    #: p.123: "A section can be divided into one or two columns."
-    columns: int = Field(default=1, ge=1, le=2)
+    #: p.123: "A section can be divided into one or two columns." **The only
+    #: place a caller's number is refused**, with the table's `CHECK` behind
+    #: it — the service used to check a third time and could not be reached.
+    #: `Literal` rather than a range, because these are two values rather than
+    #: an interval that happens to hold two.
+    columns: Literal[1, 2] = 1
     collapsible: bool = False
     collapsed: bool = False
     #: p.123's "can be hidden entirely" — the plain case, needing no condition.
