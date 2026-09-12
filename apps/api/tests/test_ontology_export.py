@@ -141,6 +141,62 @@ def test_an_object_type_brings_its_properties(exported: dict) -> None:
     assert found["description"] == "A type that gets exported"
 
 
+def test_properties_keep_the_order_somebody_put_them_in(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Named against the alphabet on purpose.**
+
+    A property's `sort_order` is how it was arranged, and an export that lost it
+    would reorder every form and table built from the file. The type above
+    happens to be in alphabetical order too — "name" before "score" — so the
+    mutation sweep dropped `sort_order` from the statement and nothing noticed.
+    Here the first property sorts last by name, so the two orders disagree and
+    only one of them can be right.
+    """
+    tag = uuid.uuid4().hex[:8]
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"ord_{tag}", "display_name": f"Ordered {tag}",
+              "properties": [
+                  {"api_name": "zulu", "display_name": "Zulu",
+                   "data_type": "string"},
+                  {"api_name": "alpha", "display_name": "Alpha",
+                   "data_type": "string"},
+              ]},
+    )
+    assert r.status_code == 201, r.text
+
+    doc = client.get(f"{wbase(fx)}/ontology-export",
+                     headers=hdr(fx.editor_sub)).json()
+    found = a_type(doc, f"ord_{tag}")
+    assert found is not None
+    assert [p["api_name"] for p in found["properties"]] == ["zulu", "alpha"], (
+        "the file keeps the order somebody arranged, not the alphabet"
+    )
+
+
+def test_a_jsonb_column_arriving_as_text_is_parsed(exported: dict) -> None:
+    """**The branch the driver's configuration hides.**
+
+    `psycopg` hands `jsonb` back as Python objects here, so `_json`'s
+    `isinstance(value, str)` arm never runs against this database — a mutant
+    removing it survived, and correctly. The arm is not dead though: the same
+    column arrives as text under a different driver setting, and a file whose
+    `conditional_format` was the *string* `"[{...}]"` would import as a
+    meaningless scalar rather than a list of rules.
+
+    So it is checked directly rather than through a query, which is the only
+    way to reach it — and the pairing below is the point: a field outside
+    `JSON_FIELDS` must be handed back untouched, or the blanket parse that
+    broke this module's first draft comes back.
+    """
+    row = {"conditional_format": '[{"kind": "always", "colour": "#000"}]',
+           "display_name": "Not JSON at all"}
+    picked = export._pick(row, ("conditional_format", "display_name"))
+    assert picked["conditional_format"] == [{"kind": "always", "colour": "#000"}]
+    assert picked["display_name"] == "Not JSON at all"
+
+
 def test_the_title_property_travels_as_a_name(exported: dict) -> None:
     """**The claim the whole file rests on.** `title_property_id` is a uuid, and
     a uuid means nothing in the workspace this file might be imported into — so

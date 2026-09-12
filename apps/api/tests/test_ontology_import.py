@@ -171,6 +171,26 @@ def test_formatting_on_a_property_the_file_does_not_carry_is_refused(
     assert "gone" in r.text
 
 
+def test_an_action_on_a_type_the_file_does_not_define_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The same rule for the third kind of reference.
+
+    Checked separately from the link above rather than assumed to follow from
+    it: they are three loops over three sections, and a sweep found this one
+    was the section nothing exercised.
+    """
+    document = a_file(fx, one_type(uuid.uuid4().hex[:8]))
+    document["action_types"] = [
+        {"api_name": "orphan", "display_name": "Orphan",
+         "object_type": "no_such_type", "parameters": [], "rules": [],
+         "criteria": []},
+    ]
+    r = plan(client, fx, document)
+    assert r.status_code == 422, r.text
+    assert "no_such_type" in r.text
+
+
 def test_a_link_joining_a_type_the_file_does_not_define_is_refused(
     client: TestClient, fx: Fixture
 ) -> None:
@@ -202,16 +222,53 @@ def test_nothing_is_written_by_a_refused_plan(
 def test_re_importing_an_untouched_export_plans_no_changes(
     client: TestClient, fx: Fixture
 ) -> None:
-    """**The test this whole file exists for.**
+    """**The test this whole file exists for**, and the one that was vacuous.
 
     p.66's screen shows "the number of changes made in the file that need to be
-    saved" — so a file nobody edited must show none. That is also the only
-    assertion that says the exporter and the importer agree about what an
-    ontology is: a planner counting every named thing would pass every other
-    test here and report the whole ontology as work to do, and an exporter that
-    dropped a field would show it as a change on every re-import.
+    saved", so a file nobody edited must show none. That is also the only
+    assertion saying the exporter and the importer agree about what an ontology
+    *is*: a planner counting every named thing would pass every other test here
+    and report the whole ontology as work to do, and an exporter that dropped a
+    field would show it as a change on every re-import.
+
+    **It checked none of that for its first hour alive.** `Fixture()` makes a
+    fresh workspace, so the export was an empty document and "no changes" was
+    true because there was nothing to change. The mutation sweep found it: a
+    planner calling every common name "changed" survived, because there were no
+    common names. So the ontology is built here first, and asserted non-empty
+    before the claim is made.
     """
+    tag = uuid.uuid4().hex[:8]
+    built = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"rt_{tag}", "display_name": f"Round trip {tag}",
+              "description": "Something to round-trip",
+              "properties": [
+                  {"api_name": "name", "display_name": "Name",
+                   "data_type": "string", "required": True},
+                  {"api_name": "score", "display_name": "Score",
+                   "data_type": "integer",
+                   "conditional_format": [
+                       {"kind": "standard", "property": "score",
+                        "comparison": "numeric_range", "max": 3,
+                        "colour": "#b91c1c"}]},
+              ],
+              "title_property": "name"},
+    )
+    assert built.status_code == 201, built.text
+    action = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": built.json()["id"], "api_name": f"edit_{tag}",
+              "display_name": "Edit", "editable_properties": ["name"]},
+    )
+    assert action.status_code == 201, action.text
+
     document = export(client, fx)
+    # **The guard that makes the assertion below mean something.** Without it
+    # this is a statement about an empty file.
+    assert document["object_types"], "nothing to round-trip"
+    assert document["action_types"], "nothing to round-trip"
+
     r = plan(client, fx, document)
     assert r.status_code == 200, r.text
     body = r.json()
@@ -219,6 +276,10 @@ def test_re_importing_an_untouched_export_plans_no_changes(
         section: {k: v for k, v in counts.items() if k != "unchanged"}
         for section, counts in body["sections"].items()
     }
+    # And every one of them was *seen* rather than missed: `unchanged` is what
+    # separates "nothing differs" from "nothing was compared".
+    assert f"rt_{tag}" in body["sections"]["object_types"]["unchanged"]
+    assert f"edit_{tag}" in body["sections"]["action_types"]["unchanged"]
     assert body["is_round_trip"] is True
 
 
