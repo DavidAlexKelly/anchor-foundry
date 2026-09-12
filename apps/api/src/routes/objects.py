@@ -1055,6 +1055,48 @@ class UsageByDay(BaseModel):
     interactions: int
 
 
+# ---- which project an edit from the Explorer belongs to (§324) ---------------
+class EditingProject(BaseModel):
+    """A project whose dataset backs this object type.
+
+    Named as well as identified, because the Explorer has to be able to say
+    *which* projects when there is more than one — "this type is mapped in two
+    projects" is a sentence somebody can act on and "editing is unavailable" is
+    not (§214).
+    """
+
+    id: UUID
+    name: str
+    slug: str
+
+
+@router.get(
+    "/object-types/{type_id}/editing-projects",
+    response_model=list[EditingProject],
+)
+async def object_type_editing_projects(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[EditingProject]:
+    """Where a write to this type would go (§324; `action-types` p.135).
+
+    **The Object Explorer is workspace-scoped and a write is not.** p.135 puts
+    inline edits in the Explorer's results view, but an object type is declared
+    in a workspace while the instance behind a row comes from a mapping, and a
+    mapping names a dataset in a *project* — so the Explorer cannot submit an
+    edit without first learning where it would land.
+
+    `viewer`, because this says where a type is mapped and nothing about what
+    any object of it contains — the same reasoning as the usage routes below,
+    and the write itself is still refused for anyone below `editor` on the
+    project the answer names.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        rows = await ontology_service.editing_projects(conn, type_id)
+    return [EditingProject(**row) for row in rows]
+
+
 @router.get("/object-types/{type_id}/usage", response_model=UsageSummary)
 async def object_type_usage_summary(
     type_id: UUID,

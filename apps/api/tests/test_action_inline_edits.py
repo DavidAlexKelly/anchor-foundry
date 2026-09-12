@@ -908,3 +908,92 @@ def test_a_refused_batch_writes_nothing_and_counts_nothing(
     assert usage_of(client, fx, ticket_type_id)["writes"] == before, (
         "a submission that wrote nothing is not a write"
     )
+
+
+# ---- where an edit from the Explorer would land (§324; p.135) ----------------
+def editing_projects(client: TestClient, fx: Fixture, type_id: str, sub=None):
+    r = client.get(f"{wbase(fx)}/object-types/{type_id}/editing-projects",
+                   headers=hdr(sub or fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_mapped_type_names_the_project_its_edits_would_reach(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """**The Object Explorer is workspace-scoped and a write is not** (§324).
+
+    `action-types` p.135 puts inline edits in the Explorer's results view, but
+    an object type is declared in a workspace while the instance behind a row
+    comes from a mapping — and a mapping names a dataset in a *project*. So
+    before the Explorer can submit anything it has to learn where the write
+    would land, which is what this route is for.
+    """
+    rows = editing_projects(client, fx, ticket_type_id)
+    assert [p["id"] for p in rows] == [str(fx.project)], rows
+    # Named, not just identified: with more than one the Explorer has to be
+    # able to say which, and "editing is unavailable" is not a sentence
+    # somebody can act on (§214).
+    assert rows[0]["name"]
+    assert rows[0]["slug"]
+
+
+def test_a_type_nothing_maps_names_no_project(
+    client: TestClient, fx: Fixture
+) -> None:
+    """An unsourced type has nowhere for a write to go, and says so by being
+    empty rather than by naming a project that could not take one.
+
+    The Explorer reads this as "not editable here", which is the same answer it
+    gives for a type with no eligible action — and a different answer from the
+    ambiguity below.
+    """
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"unmapped_{uuid.uuid4().hex[:8]}",
+              "display_name": "Unmapped",
+              "properties": [{"api_name": "name", "data_type": "string"}]},
+    )
+    assert r.status_code == 201, r.text
+    assert editing_projects(client, fx, r.json()["id"]) == []
+
+
+def test_a_type_mapped_twice_in_one_project_still_names_it_once(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """**`DISTINCT` is doing work, and this is what says so.**
+
+    A type may be mapped from several datasets, and two datasets in the same
+    project are two sources with one destination. Without the `DISTINCT` the
+    Explorer would read two rows as an ambiguity and refuse to edit a type
+    whose writes have exactly one place to go.
+    """
+    second = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub),
+        data={"name": f"MoreTickets {uuid.uuid4().hex[:6]}"},
+        files={"file": ("more.csv", io.BytesIO(TICKETS), "text/csv")},
+    )
+    assert second.status_code == 201, second.text
+    mapped = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={"object_type_id": ticket_type_id, "dataset_id": second.json()["id"],
+              "primary_key_column": "ticket_id",
+              "column_mappings": {"status": "status", "priority": "priority"}},
+    )
+    assert mapped.status_code == 201, mapped.text
+
+    rows = editing_projects(client, fx, ticket_type_id)
+    assert [p["id"] for p in rows] == [str(fx.project)], (
+        "two datasets in one project is one destination, not an ambiguity"
+    )
+
+
+def test_an_outsider_is_told_nothing_about_where_a_type_is_mapped(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """Where a workspace's types are mapped is a fact about that workspace."""
+    r = client.get(f"{wbase(fx)}/object-types/{ticket_type_id}/editing-projects",
+                   headers=hdr(fx.outsider_sub))
+    assert r.status_code in (403, 404), r.text

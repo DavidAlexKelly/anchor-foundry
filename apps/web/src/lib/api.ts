@@ -1482,6 +1482,15 @@ export const objects = {
     request<import("./types").ObjectTypeUsage>(
       `/workspaces/${wid}/object-types/${typeId}/usage`,
     ),
+  /** Where a write to this type would land (§324; `action-types` p.135).
+   *
+   * The Explorer is workspace-scoped and a write is not: an instance comes
+   * from a mapping, a mapping names a dataset, and a dataset lives in a
+   * project. Several means the Explorer says which rather than picking. */
+  editingProjects: (wid: string, typeId: string) =>
+    request<import("./types").EditingProject[]>(
+      `/workspaces/${wid}/object-types/${typeId}/editing-projects`,
+    ),
   usageByApplication: (wid: string, typeId: string) =>
     request<import("./types").ObjectTypeUsageByApplication[]>(
       `/workspaces/${wid}/object-types/${typeId}/usage/by-application`,

@@ -35,7 +35,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
-import { ApiError, objects as objApi } from "@/lib/api";
+import { ApiError, actions as actionApi, objects as objApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import {
@@ -54,6 +54,23 @@ import { displayValue } from "@/components/object-value";
 import { CopyLinkButton, useUrlState } from "@/components/use-url-state";
 import { memberFirst } from "@/lib/object-type-groups";
 import { truncationNote } from "@/lib/type-picker";
+import {
+  canStage,
+  eligibleActions,
+  rowLimitOf,
+  stage,
+  undoRow,
+  type Staged,
+} from "@/components/canvas/inline-edit";
+import {
+  editableColumns,
+  editingUnavailable,
+  editsColumn,
+  failureMessage,
+  savedMessage,
+  submitLabel,
+} from "@/lib/explorer-edit";
+import { PropertyInput } from "@/components/property-value";
 import type { ObjectTypeSummary, SavedSearch } from "@/lib/types";
 
 /** The explorer's whole state, and the whole of what a saved search stores.
@@ -377,6 +394,67 @@ export function ObjectExplorer({
     new Set((page.data?.items ?? []).flatMap((i) => Object.keys(i.properties))),
   ).filter((c) => !hiddenProperties.has(c)).slice(0, 6);
 
+  // ---- p.135's inline edits, in the Explorer's results view (§324) ----------
+  //
+  // **Asked only when one type is selected**, because that is the only state in
+  // which either question has an answer: an action type belongs to one object
+  // type, and a write needs the project whose dataset backs it.
+  const editActions = useQuery({
+    queryKey: ["explorer-edit-actions", onlyType?.id],
+    queryFn: () => actionApi.listTypes(workspaceId, onlyType!.id),
+    enabled: !!onlyType,
+  });
+  const editProjects = useQuery({
+    queryKey: ["explorer-edit-projects", onlyType?.id],
+    queryFn: () => objApi.editingProjects(workspaceId, onlyType!.id),
+    enabled: !!onlyType,
+  });
+  const eligible = eligibleActions(editActions.data);
+  const editAction = eligible[0] ?? null;
+  const whyNoEditing = editingUnavailable(
+    onlyType, eligible, canEdit, editProjects.data ?? [],
+  );
+  // Both queries have to have answered before an absence means anything: an
+  // unresolved `editProjects` looks exactly like a type with no dataset, and
+  // §318's rule is that a negative needs a positive beside it.
+  const editingKnown = !onlyType || (!!editActions.data && !!editProjects.data);
+  const editableFor = editableColumns(editAction, columns);
+  const editLimit = rowLimitOf(editAction);
+  const client = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [staged, setStaged] = useState<Staged>({});
+  const [saved, setSaved] = useState<string | null>(null);
+  const stagedRows = Object.keys(staged).length;
+
+  const save = useMutation({
+    mutationFn: () =>
+      actionApi.executeBatch(
+        workspaceId,
+        (editProjects.data ?? [])[0]!.id,
+        editAction!.id,
+        Object.entries(staged).map(([instance_id, values]) => ({
+          instance_id, values,
+        })),
+        // p.32's fifth write source, labelled so §320's breakdown can tell it
+        // from the Object Table's — the two reach this route identically.
+        "explorer",
+      ),
+    onSuccess: async (result) => {
+      if (!result.ok) return;
+      const rows = result.rows;
+      setStaged({});
+      setEditing(false);
+      setSaved(savedMessage(rows));
+      await client.invalidateQueries({ queryKey: ["object-explorer"] });
+    },
+  });
+
+  function stopEditing() {
+    setEditing(false);
+    setStaged({});
+    save.reset();
+  }
+
   return (
     <div className="ox">
       <div className="ox-aside">
@@ -547,6 +625,55 @@ export function ObjectExplorer({
               : "Nothing matches that."}
           </div>
         )}
+        {page.data && page.data.total > 0 && editingKnown && (
+          <div className="row-actions" style={{ marginBottom: 8 }}
+               data-testid="explorer-edit-bar">
+            {whyNoEditing ? (
+              /* **Said, not silently missing** (§214). Five states put no
+                 editors on this table — several types, a viewer, no eligible
+                 action, no dataset, two datasets — and they look identical.
+                 Which one it is decides who the reader goes and talks to. */
+              <span className="slug" data-testid="explorer-edit-why">
+                {whyNoEditing}
+              </span>
+            ) : editing ? (
+              <>
+                <button className="btn" data-testid="explorer-edit-save"
+                        disabled={stagedRows === 0 || save.isPending}
+                        onClick={() => save.mutate()}>
+                  {save.isPending ? "Saving…" : submitLabel(stagedRows)}
+                </button>
+                <button className="btn quiet" data-testid="explorer-edit-cancel"
+                        onClick={stopEditing}>
+                  Cancel
+                </button>
+                {/* p.242's row cap, from the action rather than typed here. */}
+                <span className="slug">
+                  {stagedRows} of {editLimit} rows staged
+                </span>
+              </>
+            ) : (
+              <button className="btn quiet" data-testid="explorer-edit-start"
+                      onClick={() => { setEditing(true); setSaved(null); }}>
+                Edit {onlyType?.display_name}
+              </button>
+            )}
+            {(save.isError || (save.data && !save.data.ok)) && (
+              <span className="form-error" data-testid="explorer-edit-error">
+                {failureMessage(
+                  save.data && !save.data.ok
+                    ? save.data.error
+                    : save.error instanceof ApiError
+                      ? save.error.message
+                      : null,
+                )}
+              </span>
+            )}
+            {saved && !editing && (
+              <span className="slug" data-testid="explorer-edit-saved">{saved}</span>
+            )}
+          </div>
+        )}
         {page.data && page.data.total > 0 && (
           <>
             <div className="data-grid">
@@ -577,13 +704,60 @@ export function ObjectExplorer({
                           )}
                         </td>
                         <td className="slug">{i.primary_key}</td>
-                        {columns.map((c) => (
-                          <td key={c}>
-                            {/* `String(value)` here rendered every geopoint as
-                                "[object Object]" — see object-value.ts. */}
-                            {displayValue(i.properties[c])}
-                          </td>
-                        ))}
+                        {columns.map((c) => {
+                          const parameter = editing ? editsColumn(editableFor, c) : null;
+                          if (!parameter) {
+                            return (
+                              <td key={c}>
+                                {/* `String(value)` here rendered every geopoint
+                                    as "[object Object]" — see object-value.ts. */}
+                                {displayValue(i.properties[c])}
+                              </td>
+                            );
+                          }
+                          const typed = staged[i.id]?.[parameter];
+                          return (
+                            <td key={c}>
+                              {/* p.242's cap is about **rows**, so a row already
+                                  staged stays editable however full the batch
+                                  is and one nobody has touched cannot be
+                                  started — switched off the same way §239's
+                                  table does it, with the fieldset §237 already
+                                  uses, rather than a second mechanism. */}
+                              <fieldset
+                                style={{ border: 0, margin: 0, padding: 0 }}
+                                disabled={!canStage(staged, i.id, editLimit)}
+                              >
+                              <PropertyInput
+                                workspaceId={workspaceId}
+                                /* **The parameter's declared type, not the
+                                   property's.** The editor produces a value
+                                   the server will bind against
+                                   `action_parameters`, and it is that
+                                   declaration the binder checks — a cell typed
+                                   as the property would disagree with the
+                                   check the submission actually faces. */
+                                dataType={
+                                  editAction?.parameters?.find(
+                                    (p) => p.api_name === parameter,
+                                  )?.data_type as never
+                                }
+                                value={
+                                  (typed !== undefined
+                                    ? typed
+                                    : i.properties[c]) as never
+                                }
+                                label={c}
+                                onChange={(next) =>
+                                  setStaged((was) =>
+                                    stage(was, i.id, parameter, next, editLimit),
+                                  )
+                                }
+                              />
+                              </fieldset>
+                            </td>
+                          );
+                        })}
                         <td className="slug">{new Date(i.updated_at).toLocaleString()}</td>
                         <td>
                           <button
@@ -599,6 +773,21 @@ export function ObjectExplorer({
                           >
                             Explore
                           </button>
+                          {/* p.242's Undo, "as seen in the left-most column of
+                              the table" — the whole row, which is what one
+                              button per row can mean. Drawn only for a row
+                              that has something to undo, so it is not a
+                              control that does nothing (§214). */}
+                          {editing && staged[i.id] && (
+                            <button
+                              className="btn quiet"
+                              style={{ padding: "3px 9px", fontSize: 12 }}
+                              data-testid={`explorer-undo-${i.id}`}
+                              onClick={() => setStaged((was) => undoRow(was, i.id))}
+                            >
+                              Undo
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );

@@ -2901,3 +2901,15 @@ export interface ActionRunHistory {
   seconds: number | null;
   requested_by_name: string | null;
 }
+
+/** A project whose dataset backs an object type (§324; `action-types` p.135).
+ *
+ * The Object Explorer is workspace-scoped and a write is not: an instance comes
+ * from a mapping, a mapping names a dataset, and a dataset lives in a project.
+ * A type mapped from two datasets in two projects genuinely has two, and the
+ * Explorer says so rather than picking one. */
+export interface EditingProject {
+  id: string;
+  name: string;
+  slug: string;
+}

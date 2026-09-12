@@ -19,6 +19,8 @@ import {
 } from "./explorer-edit";
 
 const TICKETS = { display_name: "Ticket" };
+/** One place for a write to go, which is the ordinary case. */
+const ONE_PROJECT = [{ name: "Support" }];
 
 const action = (over: Partial<EditAction> = {}): EditAction => ({
   id: "a1",
@@ -32,7 +34,7 @@ const action = (over: Partial<EditAction> = {}): EditAction => ({
 
 describe("why the Explorer is not offering an editor", () => {
   it("offers one when a single type, a write role and an action all line up", () => {
-    expect(editingUnavailable(TICKETS, [action()], true)).toBeNull();
+    expect(editingUnavailable(TICKETS, [action()], true, ONE_PROJECT)).toBeNull();
   });
 
   it("asks for one object type when the results mix several", () => {
@@ -40,7 +42,7 @@ describe("why the Explorer is not offering an editor", () => {
     // opens one object type; this one searches the workspace, and an action
     // type belongs to one object type — so a mixed result set has no single
     // action to offer.
-    const why = editingUnavailable(null, [action()], true);
+    const why = editingUnavailable(null, [action()], true, ONE_PROJECT);
     expect(why).toContain("one object type");
   });
 
@@ -48,32 +50,58 @@ describe("why the Explorer is not offering an editor", () => {
     // Three states look identical on screen — a table with no editors — and
     // §214's rule is that an absent control says why. "You may not" and "there
     // is nothing here to use" send somebody to different people.
-    const why = editingUnavailable(TICKETS, [action()], false);
+    const why = editingUnavailable(TICKETS, [action()], false, ONE_PROJECT);
     expect(why).toContain("not change them");
   });
 
   it("names the type when no action can back an edit", () => {
-    const why = editingUnavailable(TICKETS, [], true);
+    const why = editingUnavailable(TICKETS, [], true, ONE_PROJECT);
     expect(why).toContain("Ticket");
   });
 
+  it("refuses to choose between two projects, and names them", () => {
+    // **The Explorer is workspace-scoped and a write is not** (§324). An
+    // instance comes from a mapping, a mapping names a dataset, and a dataset
+    // lives in a project — so a type mapped from two datasets in two projects
+    // genuinely has two destinations, and silently picking one would write to
+    // a dataset the reader never named.
+    const why = editingUnavailable(TICKETS, [action()], true, [
+      { name: "Support" }, { name: "Billing" },
+    ]);
+    expect(why).toContain("Support");
+    expect(why).toContain("Billing");
+    // And it points somewhere that does work, rather than ending on a refusal.
+    expect(why).toContain("Open the object");
+  });
+
+  it("says there is nowhere to write when nothing maps the type", () => {
+    // A different answer from the ambiguity above: one is a type mapped twice
+    // and the other a type mapped not at all, and they are fixed by opposite
+    // actions.
+    const why = editingUnavailable(TICKETS, [action()], true, []);
+    expect(why).toContain("no dataset");
+  });
+
   it("gives a different answer for every reason", () => {
-    // The assertion that makes the four above mean something: a function
+    // The assertion that makes the five above mean something: a function
     // returning one sentence for every unavailable state would satisfy each of
     // them on its own.
     const said = new Set([
-      editingUnavailable(null, [action()], true),
-      editingUnavailable(TICKETS, [action()], false),
-      editingUnavailable(TICKETS, [], true),
+      editingUnavailable(null, [action()], true, ONE_PROJECT),
+      editingUnavailable(TICKETS, [action()], false, ONE_PROJECT),
+      editingUnavailable(TICKETS, [], true, ONE_PROJECT),
+      editingUnavailable(TICKETS, [action()], true, []),
+      editingUnavailable(TICKETS, [action()], true,
+        [{ name: "Support" }, { name: "Billing" }]),
     ]);
-    expect(said.size).toBe(3);
+    expect(said.size).toBe(5);
   });
 
   it("checks the role before it checks the actions", () => {
     // A viewer looking at a type with no eligible action is told the thing they
     // can do something about — ask for access — rather than a fact about the
     // ontology that is not their problem.
-    expect(editingUnavailable(TICKETS, [], false)).toContain("not change them");
+    expect(editingUnavailable(TICKETS, [], false, ONE_PROJECT)).toContain("not change them");
   });
 });
 

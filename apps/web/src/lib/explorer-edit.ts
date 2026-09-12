@@ -41,6 +41,10 @@ export function editingUnavailable(
   onlyType: { display_name: string } | null | undefined,
   eligible: readonly EditAction[],
   canWrite: boolean,
+  /** Where a write to this type would land. Several is an ambiguity the
+   * Explorer refuses rather than resolves; none means nothing maps the type,
+   * so there is nowhere for a write to go at all. */
+  projects: readonly { name: string }[] = [],
 ): string | null {
   if (!onlyType) {
     return "Narrow the search to one object type to edit results here.";
@@ -50,6 +54,19 @@ export function editingUnavailable(
   }
   if (eligible.length === 0) {
     return `No action on ${onlyType.display_name} can back an inline edit.`;
+  }
+  if (projects.length === 0) {
+    return `${onlyType.display_name} has no dataset behind it, so there is nowhere to write.`;
+  }
+  if (projects.length > 1) {
+    // **Named rather than counted.** "Editing is unavailable" sends somebody
+    // looking for a permission problem; naming the two projects tells them the
+    // type is mapped twice, which is a thing they can go and change (§214).
+    return (
+      `${onlyType.display_name} is mapped in ${projects.length} projects ` +
+      `(${projects.map((p) => p.name).join(", ")}), so an edit here has no ` +
+      "single place to go. Open the object to edit it."
+    );
   }
   return null;
 }
