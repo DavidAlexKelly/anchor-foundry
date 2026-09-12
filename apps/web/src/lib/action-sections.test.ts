@@ -90,6 +90,25 @@ describe("conditionParameters", () => {
     ])).toEqual([]);
   });
 
+  it("does not watch a side whose kind is not a parameter", () => {
+    // A hand-edited file (p.65's whole premise) or a document from a build
+    // that has a side kind this one does not. `_side` refuses an unknown kind,
+    // so the server hides the section whatever the value is — watching it
+    // would re-ask on every keystroke of something that cannot change the
+    // answer.
+    //
+    // Without this the guard is unkillable: every side kind decision 0007
+    // actually has either carries a `parameter` key or carries nothing, so
+    // dropping the check and relying on the key alone behaves identically.
+    expect(conditionParameters([section({
+      visible_when: {
+        left: { kind: "property", parameter: "status" },
+        operator: "is",
+        right: { kind: "value", value: 1 },
+      },
+    })])).toEqual([]);
+  });
+
   it("still names the parameters of a condition it cannot read", () => {
     // The point of this function is that it reads the document's *shape*. An
     // operator this build has never heard of is the server's problem, and the
@@ -193,11 +212,18 @@ describe("formLayout", () => {
   });
 
   it("keeps the order the section names its parameters in", () => {
+    // **Three names, in an order that is neither alphabetical nor the order
+    // the action declares them in.** The first version of this used
+    // `["owner", "status"]`, which is what sorting them gives — so a mutant
+    // that sorted the section's list survived, and §324's finding repeated
+    // itself one unit later: a fixture that cannot tell the two spellings
+    // apart is not a test of either.
     const layout = formLayout(
-      PARAMETERS, [section({ parameters: ["owner", "status"] })], undefined,
+      PARAMETERS, [section({ parameters: ["owner", "status", "reason"] })],
+      undefined,
     );
     expect(layout.sections[0]!.parameters.map((p) => p.api_name))
-      .toEqual(["owner", "status"]);
+      .toEqual(["owner", "status", "reason"]);
   });
 
   it("drops a name no parameter answers to", () => {
@@ -546,10 +572,19 @@ describe("renameParameter", () => {
   it("leaves a condition it cannot read alone", () => {
     // Rewriting a condition this control cannot express would be an edit
     // nobody asked for, on a rule nobody can see.
+    //
+    // **The condition has to name the parameter being renamed**, or the check
+    // is doing nothing. The first version compared the current user against a
+    // value: not expressible, but its `parameter` is `""`, so it was left
+    // alone by the name test rather than by the one under examination and a
+    // mutant dropping `expressible` survived. This one compares two
+    // parameters — the left is `status`, so the rename reaches it, and
+    // rewriting it would replace the right-hand *parameter* with an empty
+    // value and silently change what the section is conditional on.
     const odd = {
-      left: { kind: "current_user", attribute: "id" },
+      left: { kind: "parameter", parameter: "status" },
       operator: "is",
-      right: { kind: "value", value: "status" },
+      right: { kind: "parameter", parameter: "owner" },
     };
     expect(renameParameter([section({ visible_when: odd })], "status", "state")[0]!
       .visible_when).toEqual(odd);
