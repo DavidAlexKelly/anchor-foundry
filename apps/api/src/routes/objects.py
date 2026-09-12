@@ -55,6 +55,7 @@ from ..services import notification_store
 from ..services import object_comments as comments_service
 from ..services import ontology_cleanup as cleanup_service
 from ..services import ontology_export as export_service
+from ..services import ontology_import as import_service
 from ..services import workspaces as workspaces_service
 from ..services import object_type_usage as usage_service
 from ..services import ontology_recent
@@ -1078,6 +1079,53 @@ async def export_ontology(
     """
     async with user_connection(access.auth.user_id) as conn:
         return await export_service.export_ontology(conn, access.workspace_id)
+
+
+class ImportIn(BaseModel):
+    """A previously exported ontology, as p.65's JSON.
+
+    **`document` rather than a file upload**, because p.65's premise is that
+    somebody edited the JSON in a text editor — the bytes are already in hand,
+    and a multipart upload would make the copy-one-ontology-to-another workflow
+    go through a downloads folder.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    document: dict[str, Any]
+
+
+@router.post("/ontology-import/plan")
+async def plan_ontology_import(
+    body: ImportIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> dict[str, Any]:
+    """p.66's "number of changes made in the file that need to be saved".
+
+    **Writes nothing**, which is the half of p.66 this platform has to build
+    for itself: Foundry stages the file into a working state and shows a count
+    of unsaved changes, and there is no working state here to stage into.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        return await import_service.plan(conn, access.workspace_id, body.document)
+
+
+@router.post("/ontology-import")
+async def apply_ontology_import(
+    body: ImportIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> dict[str, Any]:
+    """Apply what the plan described.
+
+    A separate call rather than a flag on the plan, so that "show me" and "do
+    it" cannot be the same request read two ways — this is the one route in the
+    ontology that can rewrite every type at once.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        return await import_service.apply(
+            conn, access.workspace_id, body.document,
+            actor_id=access.auth.user_id,
+        )
 
 
 # ---- the Ontology cleanup queue (§325; `ontology-manager` p.68-74) -----------
