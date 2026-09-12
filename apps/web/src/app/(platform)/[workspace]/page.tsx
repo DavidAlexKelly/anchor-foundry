@@ -63,6 +63,14 @@ export default function WorkspacePage() {
               Cleanup
             </Link>
           )}
+          {/* p.66 puts Export and Import on an Advanced settings page reached
+              from the home page. Offered only to people who could use it, for
+              the same reason as Cleanup beside it. */}
+          {workspace && workspace.effective_role !== "viewer" && (
+            <Link className="btn quiet" href={`/${params.workspace}/advanced`}>
+              Advanced
+            </Link>
+          )}
           <span className={`chip${workspace?.effective_role === "admin" ? " brass" : ""}`}>
             {workspace?.effective_role}
           </span>

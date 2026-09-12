@@ -2937,3 +2937,32 @@ export interface CleanupCandidate {
   priority: number;
   snoozed_until: string | null;
 }
+
+/** What an ontology file would do if applied (§326-§327;
+ * `ontology-manager` p.66's "number of changes made in the file that need to
+ * be saved"). Computed against an export of the workspace as it is, so both
+ * sides are the same shape by construction. */
+export interface OntologyPlanSection {
+  added: string[];
+  /** Differs, not merely mentioned — a straight re-import of an untouched
+   * export plans nothing. */
+  changed: string[];
+  unchanged: string[];
+  /** In the workspace and not in the file. **Named, never removed**: deleting
+   * an object type takes its objects with it, with no review. */
+  absent_from_file: string[];
+}
+
+export interface OntologyPlan {
+  workspace: { id: string; slug: string; name: string };
+  from_workspace: { id?: string; slug?: string; name?: string } | null;
+  /** Whether the file came from this workspace — p.65's two workflows read the
+   * same plan differently. */
+  is_round_trip: boolean;
+  sections: {
+    object_types: OntologyPlanSection;
+    link_types: OntologyPlanSection;
+    action_types: OntologyPlanSection;
+  };
+  changes: number;
+}
