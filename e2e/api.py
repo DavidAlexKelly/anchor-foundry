@@ -370,7 +370,14 @@ class Module:
             f"/workspaces/{self.workspace_id}/object-types",
             {
                 "api_name": slug,
-                "display_name": slug.replace("_", " ").title(),
+                # **`capitalize`, not `title`.** The default slug is
+                # `seed_<tag>` and the display name has always been
+                # `Seed <tag>` with the tag's hex left alone — thirteen tests
+                # across four suites assert on it. `title()` capitalises every
+                # word *segment*, so it turned `seed_dba00d` into
+                # `Seed Dba00D` and CI went red on a helper change, not on a
+                # product change.
+                "display_name": slug.replace("_", " ").capitalize(),
                 "properties": [
                     {
                         "api_name": c,
