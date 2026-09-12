@@ -37,6 +37,11 @@ import {
 } from "@/lib/webhook-rule";
 import { webhooks as webhookApi } from "@/lib/api";
 import { actions as actionApi, objects as objApi, type ActionDefinitionInput } from "@/lib/api";
+import {
+  COLUMN_CHOICES, availableParameters, blankSection, collapsedInitially,
+  conditionDraft, conditionValue, forgetParameters, moveSection, placeParameter,
+  removeParameter, renameParameter, sectionSummary, type FormSection,
+} from "@/lib/action-sections";
 import type { ActionType } from "@/lib/types";
 
 /** `action_parameter_type` (migration 0044): the ontology's property types
@@ -149,6 +154,23 @@ export function ActionDefinitionEditor({
   );
   const [failure, setFailure] = useState<string | null>(null);
 
+  // p.122-124's Form tab (§328). **Its own read and its own write**, because
+  // a section is about how the form *looks* and the three lists above are
+  // about what the action does — an action with every section deleted submits
+  // exactly the same values from exactly the same parameters.
+  //
+  // `null` until the server has answered, which is not the same as "no
+  // sections": saving before it arrives must leave the form alone rather than
+  // write an empty one over it.
+  const savedSections = useQuery({
+    queryKey: ["action-sections", action.id],
+    queryFn: () => actionApi.sections(workspaceId, action.id),
+  });
+  const [sections, setSections] = useState<FormSection[] | null>(null);
+  if (sections === null && savedSections.data) setSections(savedSections.data);
+  const patchSection = (index: number, patch: Partial<FormSection>) =>
+    setSections((sections ?? []).map((s, i) => (i === index ? { ...s, ...patch } : s)));
+
   // Every object type in the workspace, so a rule can name one other than the
   // action's own (§139–§141). Summaries only: the properties of whichever type
   // a given rule names are fetched by `PropertySelect`, because carrying every
@@ -194,11 +216,24 @@ export function ActionDefinitionEditor({
   };
 
   const save = useMutation({
-    mutationFn: () =>
-      actionApi.setDefinition(workspaceId, action.id, { parameters, rules, criteria }),
+    mutationFn: async () => {
+      await actionApi.setDefinition(workspaceId, action.id, { parameters, rules, criteria });
+      // **After the definition, and only if it landed.** A section names its
+      // parameters by `api_name`, so one holding a parameter this save is
+      // adding — or renaming — can only be written once the parameter exists.
+      // Two documents, and the dependency runs one way.
+      //
+      // Skipped entirely while the read is still in flight: `null` means
+      // nobody has seen the form yet, and writing `[]` over it would delete an
+      // arrangement because somebody saved a rule quickly.
+      if (sections !== null) {
+        await actionApi.setSections(workspaceId, action.id, sections);
+      }
+    },
     onSuccess: async () => {
       setFailure(null);
       await queryClient.invalidateQueries({ queryKey: ["action-types", workspaceId] });
+      await queryClient.invalidateQueries({ queryKey: ["action-sections", action.id] });
       onClose();
     },
     // Including the refusal that names a Workshop module using a parameter
@@ -230,6 +265,11 @@ export function ActionDefinitionEditor({
         r.config.parameter === before ? { ...r, config: { ...r.config, parameter: after } } : r,
       ),
     );
+    // And through p.124's form, for the same reason: a section still naming
+    // the old parameter makes the server refuse the save, and the refusal is
+    // about a row the person did not touch.
+    setSections((current) =>
+      current === null ? null : renameParameter(current, before ?? "", after));
     setCriteria(
       criteria.map((c) => {
         const config = c.config as Record<string, unknown>;
@@ -319,7 +359,15 @@ export function ActionDefinitionEditor({
               <td>
                 <button
                   className="btn quiet"
-                  onClick={() => setParameters(parameters.filter((_, j) => j !== i))}
+                  onClick={() => {
+                    const left = parameters.filter((_, j) => j !== i);
+                    setParameters(left);
+                    // A section holding a parameter the action no longer
+                    // declares is refused by the server — about a section the
+                    // person was not looking at.
+                    setSections((current) =>
+                      current === null ? null : forgetParameters(current, left));
+                  }}
                 >
                   Remove
                 </button>
@@ -791,6 +839,201 @@ export function ActionDefinitionEditor({
         }
       >
         Add a criterion
+      </button>
+
+      <h3 className="field-label" style={{ marginTop: 24 }}>Form</h3>
+      <p className="field-hint">
+        p.122–124’s sections: a logical grouping of the parameters above, with a
+        title, an optional description shown in the section itself, one or two
+        columns, and hiding — plain, or on a prior parameter. A section changes how
+        the form looks and nothing else: an action with every section deleted
+        submits exactly the same values.
+      </p>
+      <div data-testid="section-rows">
+        {(sections ?? []).map((s, i) => {
+          const draft = conditionDraft(s);
+          return (
+            <div className="card" key={i} data-section-row={s.title} style={{ marginBottom: 12 }}>
+              <div className="row-actions">
+                <input
+                  value={s.title}
+                  aria-label={`Section ${i + 1} title`}
+                  onChange={(e) => patchSection(i, { title: e.target.value })}
+                />
+                <select
+                  value={s.columns}
+                  aria-label={`Section ${i + 1} columns`}
+                  onChange={(e) => patchSection(i, { columns: Number(e.target.value) })}
+                >
+                  {COLUMN_CHOICES.map((n) => (
+                    <option key={n} value={n}>{n === 2 ? "Two columns" : "One column"}</option>
+                  ))}
+                </select>
+                <button
+                  className="btn quiet"
+                  aria-label={`Move section ${i + 1} up`}
+                  disabled={i === 0}
+                  onClick={() => setSections(moveSection(sections ?? [], i, -1))}
+                >
+                  Up
+                </button>
+                <button
+                  className="btn quiet"
+                  aria-label={`Move section ${i + 1} down`}
+                  disabled={i === (sections ?? []).length - 1}
+                  onClick={() => setSections(moveSection(sections ?? [], i, 1))}
+                >
+                  Down
+                </button>
+                <button
+                  className="btn quiet"
+                  aria-label={`Remove section ${i + 1}`}
+                  onClick={() => setSections((sections ?? []).filter((_, j) => j !== i))}
+                >
+                  Remove
+                </button>
+              </div>
+              <span className="field-hint" data-testid="section-summary">
+                {sectionSummary(s)}
+              </span>
+              {/* p.123: "optionally write a user-facing description… will
+                  always be shown in the section itself, not in a tooltip." */}
+              <Field label="Description">
+                <input
+                  value={s.description}
+                  aria-label={`Section ${i + 1} description`}
+                  onChange={(e) => patchSection(i, { description: e.target.value })}
+                />
+              </Field>
+              <div className="row-actions">
+                <label className="field-hint">
+                  <input
+                    type="checkbox"
+                    checked={s.collapsible}
+                    aria-label={`Section ${i + 1} collapsible`}
+                    onChange={(e) => patchSection(i, { collapsible: e.target.checked })}
+                  />{" "}
+                  Collapsible
+                </label>
+                {/* **Unreachable unless it can be collapsed**, which is not a
+                    validation — it is that the second box means nothing without
+                    the first, and a form folded with no way to open it would be
+                    p.123’s "hidden entirely" wearing the wrong name. */}
+                <label className="field-hint">
+                  <input
+                    type="checkbox"
+                    checked={collapsedInitially(s)}
+                    disabled={!s.collapsible}
+                    aria-label={`Section ${i + 1} starts folded`}
+                    onChange={(e) => patchSection(i, { collapsed: e.target.checked })}
+                  />{" "}
+                  Starts folded
+                </label>
+                <label className="field-hint">
+                  <input
+                    type="checkbox"
+                    checked={s.hidden}
+                    aria-label={`Section ${i + 1} hidden`}
+                    onChange={(e) => patchSection(i, { hidden: e.target.checked })}
+                  />{" "}
+                  Hidden entirely
+                </label>
+              </div>
+              {/* p.123’s conditional override. Offered as the one case p.123
+                  describes — a prior parameter against a value — rather than
+                  decision 0007’s whole grammar; a condition this control cannot
+                  draw is left exactly as it is rather than reduced to one it
+                  can, which would delete a rule on the next save. */}
+              {draft.expressible ? (
+                <div className="row-actions" data-testid="section-condition">
+                  <span className="field-hint">Shown when</span>
+                  <select
+                    value={draft.parameter}
+                    aria-label={`Section ${i + 1} condition parameter`}
+                    onChange={(e) => patchSection(i, {
+                      visible_when: conditionValue({ ...draft, parameter: e.target.value }),
+                    })}
+                  >
+                    <option value="">Always</option>
+                    {parameters.map((p) => (
+                      <option key={p.api_name} value={p.api_name}>
+                        {p.display_name || p.api_name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={draft.operator}
+                    aria-label={`Section ${i + 1} condition operator`}
+                    disabled={!draft.parameter}
+                    onChange={(e) => patchSection(i, {
+                      visible_when: conditionValue({ ...draft, operator: e.target.value }),
+                    })}
+                  >
+                    {OPERATORS.map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                  <input
+                    value={draft.value}
+                    aria-label={`Section ${i + 1} condition value`}
+                    disabled={!draft.parameter}
+                    onChange={(e) => patchSection(i, {
+                      visible_when: conditionValue({ ...draft, value: e.target.value }),
+                    })}
+                  />
+                </div>
+              ) : (
+                <p className="field-hint" data-testid="section-condition-opaque">
+                  This section’s condition was not written here and this panel
+                  cannot draw it. It is left as it is; edit it where it came from.
+                </p>
+              )}
+              <Field label="Parameters">
+                <div className="row-actions" data-testid="section-parameters">
+                  {s.parameters.map((name) => (
+                    <button
+                      key={name}
+                      className="btn quiet"
+                      data-section-parameter={name}
+                      aria-label={`Take ${name} out of section ${i + 1}`}
+                      onClick={() => setSections(removeParameter(sections ?? [], i, name))}
+                    >
+                      {name} ×
+                    </button>
+                  ))}
+                  <select
+                    value=""
+                    aria-label={`Add a parameter to section ${i + 1}`}
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      setSections(placeParameter(sections ?? [], i, e.target.value));
+                    }}
+                  >
+                    <option value="">Add a parameter…</option>
+                    {/* Only what no *other* section holds: p.124 offers two ways
+                        to put a parameter in a section and neither is "in both",
+                        so the refusal exists and this is why nobody reaches it
+                        by the obvious route. */}
+                    {availableParameters(parameters, sections ?? [], i)
+                      .filter((p) => !s.parameters.includes(p.api_name))
+                      .map((p) => (
+                        <option key={p.api_name} value={p.api_name}>
+                          {p.display_name || p.api_name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              </Field>
+            </div>
+          );
+        })}
+      </div>
+      <button
+        className="btn quiet"
+        data-testid="add-section"
+        onClick={() => setSections([...(sections ?? []), blankSection(sections ?? [])])}
+      >
+        Add section
       </button>
 
       {/* **Beside Save rather than on a rule**, because these two refusals do

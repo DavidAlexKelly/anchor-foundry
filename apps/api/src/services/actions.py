@@ -2417,6 +2417,28 @@ async def set_definition(
                 "Change the module first, or keep the parameter's name."
             )
 
+    # **Which section each parameter was in, carried across the rewrite below**
+    # (db 0081). This function replaces every `action_parameters` row, so
+    # without this a definition save silently empties every section of the form
+    # — the rows survive, their contents do not. Nothing noticed for a unit,
+    # because the editor writes the form immediately afterwards and put it all
+    # back; a save through the API alone did not.
+    #
+    # **By api_name, which is the only handle the document carries.** A
+    # parameter renamed in the same save lands in no section, because the
+    # document says a parameter appeared and another vanished, and guessing
+    # which rename was meant is how an arrangement ends up somewhere nobody
+    # chose. The editor carries renames through the form itself and saves it
+    # after this, which is where a rename keeps its place.
+    placed = {
+        str(row["api_name"]): row["section_id"]
+        for row in await fetch_all(
+            conn,
+            "SELECT api_name, section_id FROM action_parameters "
+            " WHERE action_type_id = :aid AND section_id IS NOT NULL",
+            {"aid": str(action_type_id)},
+        )
+    }
     for table in ("action_parameters", "action_rules", "action_criteria"):
         await conn.execute(
             text(f"DELETE FROM {table} WHERE action_type_id = :aid"),
@@ -2428,9 +2450,9 @@ async def set_definition(
                 """
                 INSERT INTO action_parameters
                     (action_type_id, api_name, display_name, data_type, required,
-                     default_value, hidden, sort_order)
+                     default_value, hidden, sort_order, section_id)
                 VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type), :required,
-                        CAST(:default AS jsonb), :hidden, :ord)
+                        CAST(:default AS jsonb), :hidden, :ord, :section)
                 """
             ),
             {
@@ -2445,6 +2467,7 @@ async def set_definition(
                 ),
                 "hidden": bool(parameter.get("hidden", False)),
                 "ord": order,
+                "section": placed.get(str(parameter["api_name"])),
             },
         )
     for order, rule in enumerate(rules):
