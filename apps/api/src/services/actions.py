@@ -618,7 +618,18 @@ def object_parameter_types(
         if str(parameter.get("data_type")) != "object":
             continue
         name = str(parameter.get("api_name") or "")
-        if name and name not in out:
+        if not name:
+            continue
+        # **db 0083's column first, and it wins over the rules.** This
+        # docstring used to end by saying the guess would go the day the column
+        # arrived; §330 is that day. It overrides rather than fills a gap
+        # because a type somebody *declared* is a statement, and one read off a
+        # rule is an inference from what the action happens to do with the
+        # value — when they disagree the declaration is the answer.
+        declared = parameter.get("object_type_id")
+        if declared:
+            out[name] = str(declared)
+        elif name not in out:
             out[name] = str(default_object_type_id)
     return out
 
@@ -1185,7 +1196,7 @@ def seed_from_instance(
 # ---- parameters and rules ----------------------------------------------------
 _PARAMETER_COLUMNS = (
     "id, action_type_id, api_name, display_name, data_type, required, "
-    "default_value, hidden, sort_order"
+    "default_value, hidden, sort_order, object_type_id"
 )
 
 
@@ -2083,6 +2094,13 @@ def _validate_definition(
         data_type = str(parameter.get("data_type", ""))
         if data_type not in _PARAMETER_TYPES:
             raise ValueError(f"parameter {name!r} has unknown type {data_type!r}")
+        # db 0083: a type on a string is a claim nothing reads, and it would
+        # sit in the document looking like it meant something.
+        if parameter.get("object_type_id") and data_type != "object":
+            raise ValueError(
+                f"parameter {name!r} is a {data_type}, so it cannot name an "
+                "object type; only an `object` parameter holds one"
+            )
         if data_type in _UNSUPPORTED_PARAMETER_TYPES:
             raise ValueError(
                 f"parameter {name!r} cannot be a {data_type}: "
@@ -2496,9 +2514,10 @@ async def set_definition(
                 """
                 INSERT INTO action_parameters
                     (action_type_id, api_name, display_name, data_type, required,
-                     default_value, hidden, sort_order, section_id)
+                     default_value, hidden, sort_order, section_id, object_type_id)
                 VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type), :required,
-                        CAST(:default AS jsonb), :hidden, :ord, :section)
+                        CAST(:default AS jsonb), :hidden, :ord, :section,
+                        CAST(:otype AS uuid))
                 """
             ),
             {
@@ -2514,6 +2533,13 @@ async def set_definition(
                 "hidden": bool(parameter.get("hidden", False)),
                 "ord": order,
                 "section": placed.get(str(parameter["api_name"])),
+                # db 0083: which object type an `object` parameter holds. NULL
+                # for every other type, and for an object parameter nobody has
+                # typed — `object_parameter_types` still speaks for those.
+                "otype": (
+                    str(parameter["object_type_id"])
+                    if parameter.get("object_type_id") else None
+                ),
             },
         )
     # p.43-46's override blocks, written with the parameter that owns them
