@@ -201,7 +201,7 @@ import {
 import { outputClauses } from "./action-output";
 import {
   collapsedInitially, columnsOf as sectionColumnsOf, conditionKey, formLayout,
-  labelOf as parameterLabel,
+  hasConditions, labelOf as parameterLabel,
   requiredElsewhere, unreachableNote, type FormParameter, type FormSection,
 } from "@/lib/action-sections";
 import { interfaceQuery } from "./routing";
@@ -11683,19 +11683,25 @@ export function CanvasActionForm({
   // second reading of the document the definition editor writes.
   //
   // Keyed on only the values some section's condition actually names, so typing
-  // in an ordinary field is not a round trip, and a form whose sections carry
-  // no condition never asks at all.
+  // in an ordinary field is not a round trip — and **asked at all only when a
+  // section carries a condition**, which is a different question from whether
+  // any condition names a parameter. p.50's other template ("based on current
+  // user") reads nothing out of the form, so keying the `enabled` flag on the
+  // values made a section shown to one person undrawable for everybody. A
+  // mutation sweep found it.
   const watching = conditionKey(sections, values);
   const shownQ = useQuery({
     queryKey: ["action-visible-sections", actionTypeId, watching],
     queryFn: () => actionApi.visibleSections(workspaceId, actionTypeId!, values),
-    enabled: !!actionTypeId && watching !== "",
+    enabled: !!actionTypeId && hasConditions(sections),
   });
-  // **An empty list, not "no answer yet", when nothing is conditional.** The
-  // two differ: `undefined` holds a conditional section back until the server
-  // has spoken (p.123's "hidden at first"), and a form with no conditions at
-  // all has nothing to wait for.
-  const shown = watching === "" ? [] : shownQ.data;
+  // **`undefined` until the server answers**, which `drawnSections` reads as
+  // p.123's "hidden at first" for a conditional section and as nothing at all
+  // for one without a condition. There is deliberately no "substitute the
+  // empty list when nothing is conditional" here: it was in the first draft
+  // and a sweep showed it could not matter, because a form with no conditional
+  // section has no section whose drawing depends on the answer.
+  const shown = shownQ.data;
 
   // p.25: hidden parameters are supplied by the caller and never drawn. The
   // form still sends them - `values` carries every parameter it seeded.

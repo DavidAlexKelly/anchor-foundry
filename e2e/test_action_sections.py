@@ -225,6 +225,42 @@ def test_a_conditional_section_arrives_when_the_prior_parameter_says_so(
     expect(reason).to_have_count(0, timeout=30000)
 
 
+def test_a_section_shown_to_one_person_is_drawn_for_that_person(page, api):
+    """p.50's **other** condition template, which reads nothing out of the form.
+
+    "Simple submission criteria can require a specific user ID or group ID"
+    (p.140), and p.123's conditional override is the same grammar — so a
+    section can be shown to the person it names. **This is the check the unit
+    was missing**: the form decided whether to ask the server from which
+    parameters the conditions *mention*, and a condition about the current user
+    mentions none, so the question was never asked and the section could never
+    be drawn for anybody. A mutation sweep found it; nothing here did.
+
+    Both halves in one test, because "drawn" alone would pass for a form that
+    drew every conditional section and "not drawn" alone for one that drew
+    none.
+    """
+    me = api.call("GET", "/auth/me")["user_id"]
+    mod = build(api, "Current-user section", sections=[
+        {"title": "Mine", "parameters": ["reason"],
+         "visible_when": {"left": {"kind": "current_user", "attribute": "id"},
+                          "operator": "is",
+                          "right": {"kind": "value", "value": me}}},
+        {"title": "Theirs", "parameters": ["note"],
+         "visible_when": {"left": {"kind": "current_user", "attribute": "id"},
+                          "operator": "is",
+                          "right": {"kind": "value",
+                                    "value": "00000000-0000-0000-0000-000000000000"}}},
+    ])
+    open_module(page, mod)
+    choose_the_ticket(page)
+    expect(page.locator("[data-section='Mine']")).to_be_visible(timeout=30000)
+    expect(page.locator("[data-section='Theirs']")).to_have_count(0)
+    # And the browser is the same person the API call was, which is what makes
+    # the first assertion mean anything.
+    expect(in_section(page, "Mine", "reason")).to_have_value("because")
+
+
 def test_a_conditional_sections_parameter_is_submitted_even_while_it_is_hidden(
     page, api
 ):

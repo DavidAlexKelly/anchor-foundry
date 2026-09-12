@@ -12,6 +12,7 @@ import {
   conditionKey,
   conditionParameters,
   drawnSections,
+  hasConditions,
   formLayout,
   moveSection,
   placeParameter,
@@ -123,15 +124,66 @@ describe("conditionParameters", () => {
   });
 });
 
+describe("hasConditions", () => {
+  it("is false for a form of plain sections, which never asks the server", () => {
+    expect(hasConditions([section(), section({ id: "s2" })])).toBe(false);
+    expect(hasConditions([])).toBe(false);
+  });
+
+  it("is true for a section with a condition", () => {
+    expect(hasConditions([section({ visible_when: when("status", "closed") })]))
+      .toBe(true);
+  });
+
+  it("is true for a condition that names no parameter at all", () => {
+    // **The defect this function exists for.** p.50's other template asks
+    // about the current user and reads nothing out of the form, so a form that
+    // decided whether to ask the server from `conditionParameters` never asked
+    // — and a section shown to one person could not be drawn for anybody.
+    expect(hasConditions([section({
+      visible_when: {
+        left: { kind: "current_user", attribute: "id" },
+        operator: "is",
+        right: { kind: "value", value: "u1" },
+      },
+    })])).toBe(true);
+  });
+
+  it("is false when the only conditional section is hidden entirely", () => {
+    // "Hidden entirely" wins, so its condition cannot change anything and
+    // asking would be a round trip whose answer nobody reads.
+    expect(hasConditions([
+      section({ hidden: true, visible_when: when("status", "closed") }),
+    ])).toBe(false);
+  });
+});
+
 describe("conditionKey", () => {
-  it("is empty when nothing is conditional, which is how the form knows not to ask", () => {
-    expect(conditionKey([section()], { status: "open" })).toBe("");
+  it("is a constant when no condition names a parameter", () => {
+    // Not a degenerate case: an answer that cannot change while the form is
+    // open is one key and one round trip. **Whether to make it is
+    // `hasConditions`** — this used to return "" here and double as that
+    // decision, which is how the current-user case was lost.
+    const only = [section({
+      visible_when: {
+        left: { kind: "current_user", attribute: "id" },
+        operator: "is",
+        right: { kind: "value", value: "u1" },
+      },
+    })];
+    expect(conditionKey(only, { status: "open" }))
+      .toBe(conditionKey(only, { status: "closed" }));
   });
 
   it("changes when a named value changes", () => {
     const s = [section({ visible_when: when("status", "closed") })];
     expect(conditionKey(s, { status: "open" }))
       .not.toBe(conditionKey(s, { status: "closed" }));
+  });
+
+  it("is the same key for a plain form however it is filled in", () => {
+    expect(conditionKey([section()], { status: "open" }))
+      .toBe(conditionKey([section()], { status: "closed" }));
   });
 
   it("does not change when an unnamed value changes", () => {

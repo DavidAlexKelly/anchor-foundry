@@ -97,21 +97,42 @@ export function conditionParameters(sections: FormSection[]): string[] {
   return [...named].sort();
 }
 
+/** Whether any section's visibility is a question at all.
+ *
+ * **This, not `conditionParameters`, is what decides whether to ask the
+ * server** — and the first draft used the other one, which was a real defect
+ * and the reason this function exists. p.50 gives two condition templates, and
+ * only one of them names a parameter: a section shown to the person a
+ * criterion names ("based on current user") reads nothing out of the form at
+ * all, so `conditionParameters` came back empty, the form decided it had
+ * nothing to ask about, and that section could never be drawn for anybody.
+ *
+ * The two questions are genuinely different and were folded into one:
+ * *whether* the server has to be asked (this) and *when the answer goes stale*
+ * (`conditionKey`). A condition about the current user is asked once and never
+ * again, because who is asking does not change while a form is open.
+ */
+export function hasConditions(sections: FormSection[]): boolean {
+  return (sections ?? []).some((s) => !s.hidden && !!s.visible_when);
+}
+
 /** A stable key over only the values the conditions read.
  *
  * What the form's query is keyed on, so typing in a parameter no section asks
  * about does not re-ask the server — and so the answer for values already seen
  * is the cached one rather than a round trip and a flicker.
  *
- * `""` when nothing is conditional, which is also how the caller knows not to
- * ask at all.
+ * **A constant when no condition names a parameter**, which is right rather
+ * than a degenerate case: a section shown to one person (p.50's "based on
+ * current user") has an answer that cannot change while the form is open, so
+ * one key means one round trip. Whether to make that round trip is
+ * `hasConditions`, not this — see the note there.
  */
 export function conditionKey(
   sections: FormSection[],
   values: Record<string, unknown>,
 ): string {
   const named = conditionParameters(sections);
-  if (named.length === 0) return "";
   return JSON.stringify(named.map((name) => [name, values?.[name] ?? null]));
 }
 
