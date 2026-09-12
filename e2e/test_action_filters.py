@@ -270,6 +270,32 @@ def test_a_filter_written_in_the_panel_narrows_the_form(page, api):
     assert not any("Alpha" in o for o in shown), shown
 
 
+def test_opening_and_saving_the_dialog_keeps_the_filters_it_did_not_touch(page, api):
+    """**The regression a builder meets on their second visit**, and the
+    *identical* one §329 had with its override blocks.
+
+    The filters are part of the parameter and the dialog saves the parameters
+    whole, so a dialog that did not load them would delete every filter the
+    moment somebody opened it to fix a typo elsewhere. §329 found this by
+    sweep, wrote the test, and the test did not travel when the pattern did —
+    see the note in STATUS.md.
+    """
+    mod = build(api, "Filter kept", dropdown_filters=[static("region", "eu")])
+    open_editor(page, mod)
+    # An edit with nothing to do with the filters.
+    page.get_by_label("Parameter 1 label").fill("Region now")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    saved = api.call(
+        "GET", f"/workspaces/{mod.workspace_id}/action-types/{mod.action['id']}"
+    )
+    where = next(p for p in saved["parameters"] if p["api_name"] == "where")
+    assert where["display_name"] == "Region now"
+    team = next(p for p in saved["parameters"] if p["api_name"] == "team")
+    assert team["dropdown_filters"] == [static("region", "eu")]
+
+
 def test_the_panel_warns_about_a_typed_in_value_and_not_about_a_parameter(page, api):
     """p.40's concern, and p.41's own carve-out.
 
