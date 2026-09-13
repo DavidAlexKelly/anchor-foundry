@@ -279,7 +279,9 @@ def test_re_importing_an_untouched_export_plans_no_changes(
     # And every one of them was *seen* rather than missed: `unchanged` is what
     # separates "nothing differs" from "nothing was compared".
     assert f"rt_{tag}" in body["sections"]["object_types"]["unchanged"]
-    assert f"edit_{tag}" in body["sections"]["action_types"]["unchanged"]
+    # Qualified by its object type (§341), because an action's api_name is
+    # unique per *type* rather than per workspace.
+    assert f"rt_{tag}.edit_{tag}" in body["sections"]["action_types"]["unchanged"]
     assert body["is_round_trip"] is True
 
 
@@ -427,11 +429,56 @@ def test_action_types_are_still_reported_as_not_applied(
     r = apply(client, fx, document)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["not_applied"]["action_types"] == [f"act_{tag}"]
+    # **Named by the object type it is on as well as its own name** (§341):
+    # `action_types` is unique on (object_type_id, api_name), so a bare name
+    # does not identify an action in an ontology that has two of them.
+    assert body["not_applied"]["action_types"] == [f"imp_{tag}.act_{tag}"]
     # And the section it *used* to name is gone from the report rather than
     # empty, because "links were not applied" is no longer a thing that can be
     # true — a reader seeing an empty list would read it as "none this time".
     assert "link_types" not in body["not_applied"]
+
+
+def test_two_actions_sharing_a_name_are_told_apart(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**An action's api_name is not unique in an ontology** (§341).
+
+    `action_types` is unique on (object_type_id, api_name), so `same_name` on
+    one type and `same_name` on another are two different actions with one
+    name. Keyed by the name alone, a straight round trip reports one of them as
+    *changed* — the planner compared an action against the other action — and
+    the day the import applies actions it would apply the wrong one.
+
+    Found by a browser test whose workspace happened to hold two, which is why
+    this test builds that state on purpose: on a clean database nothing
+    collides and the distinction is invisible.
+    """
+    tag = uuid.uuid4().hex[:8]
+    for suffix in ("a", "b"):
+        made = client.post(
+            f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+            json={"api_name": f"dup_{tag}{suffix}",
+                  "display_name": f"Dup {tag}{suffix}",
+                  "properties": [{"api_name": "name", "display_name": "Name",
+                                  "data_type": "string"}]},
+        )
+        assert made.status_code == 201, made.text
+        act = client.post(
+            f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+            json={"object_type_id": made.json()["id"],
+                  "api_name": f"same_{tag}", "display_name": f"Same {suffix}",
+                  "editable_properties": ["name"]},
+        )
+        assert act.status_code == 201, act.text
+
+    document = export(client, fx)
+    body = plan(client, fx, document).json()
+    # Both are there, told apart, and neither is a change.
+    unchanged = body["sections"]["action_types"]["unchanged"]
+    assert f"dup_{tag}a.same_{tag}" in unchanged
+    assert f"dup_{tag}b.same_{tag}" in unchanged
+    assert body["sections"]["action_types"]["changed"] == []
 
 
 # ---- p.65's link types, applied (§340) -----------------------------------------

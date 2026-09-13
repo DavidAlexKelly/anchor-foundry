@@ -221,7 +221,12 @@ async def export_ontology(
           FROM action_types at
           JOIN object_types ot ON ot.id = at.object_type_id
          WHERE at.workspace_id = :wid
-         ORDER BY at.api_name
+         -- **By object type first, and that is not cosmetic** (§341).
+         -- `action_types` is unique on (object_type_id, api_name), *not* per
+         -- workspace, so two actions in one ontology may share a name — and
+         -- ordering by the name alone leaves which of them comes first to the
+         -- planner's tie-break, which is to say to nothing.
+         ORDER BY ot.api_name, at.api_name
         """,
         {"wid": str(workspace_id)},
     )
