@@ -632,6 +632,11 @@ class ParameterChoices(BaseModel):
     #: an empty list**, because "there is nothing to choose" and "fill in the
     #: other box first" are different things to tell somebody.
     waiting_for: str | None = None
+    #: Which property of that parameter's object is missing, for p.36's third
+    #: value kind (§334). `None` when the box itself is empty — the two are
+    #: different sentences, and "choose the Office first" is simply false to
+    #: somebody who has chosen one whose region happens to be blank.
+    waiting_for_property: str | None = None
 
 
 class ParameterChoicesRequest(BaseModel):
@@ -699,6 +704,12 @@ async def action_parameter_choices(
                     property_types=await choices_service.property_types_of(
                         conn, type_id
                     ),
+                    # p.36's third kind, which reads a property off the object
+                    # another parameter holds (§334).
+                    objects=await choices_service.object_values_of(
+                        conn, parameter, workspace_id=access.workspace_id,
+                        bound=body.values, parameters=action_type["parameters"],
+                    ),
                 )
                 # p.36's start and p.37's hops, as the nested set the object-set
                 # editor already builds (§333). Raises the same `Unresolved` a
@@ -723,6 +734,7 @@ async def action_parameter_choices(
                     object_type_name=str(object_type["display_name"]),
                     items=[], truncated=False,
                     waiting_for=missing.parameter,
+                    waiting_for_property=missing.property,
                 ))
                 continue
             rows, truncated = await choices_service.choices(

@@ -1,11 +1,16 @@
-"""Narrowing what an object parameter offers (§331; db 0084;
+"""Narrowing what an object parameter offers (§331, §334; db 0084;
 `action-types` p.33-36, p.40-41).
 
     "The object dropdown only shows objects where the specified property
-     matches any of the provided values. The value can be statically defined by
-     the user, inferred from another parameter, or a property of an Object
-     Reference parameter. **If more than one value is provided to compare
-     against, the result will be an OR operation.**" (p.36)
+     matches any of the provided values. **The value can be statically defined
+     by the user, inferred from another parameter, or a property of an Object
+     Reference parameter.** If more than one value is provided to compare
+     against, the result will be an OR operation." (p.36)
+
+**All three of p.36's value kinds as of §334.** The third reads through a
+parameter rather than out of one — "the Teams in the region of the Office you
+chose" — which is the only one of the three that compares against a value
+nobody typed and no parameter holds.
 
     "After configuring the filters, the action form will render a dropdown with
      only objects that match the filter. **The value selected is also validated
@@ -41,12 +46,20 @@ from typing import Any
 
 from . import object_sets
 
-#: p.36's value kinds, as decision 0007 already spells them. A `value` is
-#: p.36's "statically defined by the user"; a `parameter` is its "inferred from
-#: another parameter". p.36's third — a property of an object-reference
-#: parameter — is not here, and `docs/parity` carries it as a named ○ rather
-#: than a silent gap.
-VALUE_KINDS = ("value", "parameter")
+#: p.36's three value kinds, all of them as of §334. A `value` is p.36's
+#: "statically defined by the user", a `parameter` its "inferred from another
+#: parameter", and an `object_property` its "or a property of an Object
+#: Reference parameter".
+#:
+#: **`object_property` is spelled the way this platform already spells it** —
+#: `notifications.RECIPIENT_KINDS` has had the same name for the same idea
+#: since §257, and `workshop_variables` before that. One difference, and it is
+#: db 0083's doing: a notify rule's recipient carries an `object_type` because
+#: a parameter could not say what it held, and its docstring calls naming it
+#: "a second convention for the same fact". §330 gave the parameter the column,
+#: so a filter written today reads the type off the parameter and cannot
+#: disagree with it.
+VALUE_KINDS = ("value", "parameter", "object_property")
 
 
 def _json(value: Any) -> Any:
@@ -71,7 +84,38 @@ def referenced_parameters(parameter: dict[str, Any]) -> list[str]:
         for side in entry.get("values") or []:
             if not isinstance(side, dict):
                 continue
-            if str(side.get("kind", "")) != "parameter":
+            # Both of p.36's parameter-reading kinds (§334). An
+            # `object_property` value changes when its parameter does — the
+            # whole point of "the region of the Office you chose" — so a form
+            # that watched only the plain kind would narrow once and then stop.
+            if str(side.get("kind", "")) not in ("parameter", "object_property"):
+                continue
+            name = str(side.get("parameter", "")).strip()
+            if name:
+                named.add(name)
+    return sorted(named)
+
+
+def object_parameters_read(parameter: dict[str, Any]) -> list[str]:
+    """Which parameters p.36's third kind needs an object loaded for.
+
+    What the caller reads before `resolve` can run — see that function on why
+    the read is not in here.
+
+    **Names, not `(parameter, property)` pairs.** The first version returned
+    pairs and skipped one whose property was blank; a sweep showed neither
+    could matter. The caller loads one object per *parameter* however many
+    properties are read off it, and a value with a blank property still needs
+    that object loaded so `resolve` can report the property as missing rather
+    than the box as unfilled. The pair shape was a promise about a distinction
+    nothing made.
+    """
+    named: set[str] = set()
+    for entry in filters_of(parameter):
+        for side in entry.get("values") or []:
+            if not isinstance(side, dict):
+                continue
+            if str(side.get("kind", "")) != "object_property":
                 continue
             name = str(side.get("parameter", "")).strip()
             if name:
@@ -80,17 +124,24 @@ def referenced_parameters(parameter: dict[str, Any]) -> list[str]:
 
 
 class Unresolved(Exception):
-    """A filter that reads a parameter nobody has supplied yet.
+    """A filter that reads something nobody has supplied yet.
 
     Named rather than returned as `None`, because the two callers need
     different things from it and neither wants to guess: the dropdown turns it
     into a sentence about which box to fill in first, and the check turns it
     into a refusal.
+
+    `property` is set only for p.36's third kind, and only when the box *is*
+    filled in and the object it names has nothing under that property (§334).
+    The two states need different sentences: "choose the Office first" is
+    simply false to somebody who has chosen one, and a control that tells them
+    to do what they have already done is §214 in words.
     """
 
-    def __init__(self, parameter: str) -> None:
+    def __init__(self, parameter: str, *, property: str | None = None) -> None:
         super().__init__(parameter)
         self.parameter = parameter
+        self.property = property
 
 
 def resolve(
@@ -98,6 +149,7 @@ def resolve(
     *,
     bound: dict[str, Any],
     property_types: dict[str, str],
+    objects: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[object_sets.Filter, ...]:
     """p.36's filters as this platform's object-set filters.
 
@@ -111,6 +163,14 @@ def resolve(
     it. **Not "skip that value"**: dropping it would quietly widen an OR, and
     dropping the whole filter would quietly widen the set — both of which end
     with somebody picking an object the submission then refuses.
+
+    `objects` is `{parameter: properties}` for p.36's third kind, loaded by the
+    caller (§334). **The read is not in here** for the reason §333 gives about
+    `start_key`: a form holds instance ids and this needs what is *inside* the
+    object, which is a round trip — and keeping it outside is what lets the
+    whole of p.36's compilation be tested without a database. The shape is
+    `notifications.recipient_ids`' own `objects` argument, which has resolved
+    "a property of an object parameter" the same way since §257.
     """
     out: list[object_sets.Filter] = []
     for entry in filters_of(parameter):
@@ -130,6 +190,33 @@ def resolve(
                 if held is None or held == "":
                     raise Unresolved(name)
                 values.append(held)
+            elif kind == "object_property":
+                # p.36's third: "a property of an Object Reference parameter".
+                #
+                # **`reads`, not `prop`.** The first version named this `prop`
+                # and shadowed the filter's own property one scope out, so a
+                # filter on `region` reading an Office's `serves` compiled to
+                # `serves in [...]` against the *Team* type and matched nothing.
+                # Every test had the two properties sharing a name, which is
+                # the fixture mistake this unit already found twice — here it
+                # was hiding a defect rather than a weak check.
+                name = str(side.get("parameter", ""))
+                reads = str(side.get("property", ""))
+                if bound.get(name) is None or bound.get(name) == "":
+                    # Nobody has chosen the object yet, which is the same state
+                    # a plain parameter reference is in and gets the same
+                    # sentence: fill that box in first.
+                    raise Unresolved(name)
+                held = (objects or {}).get(name, {}).get(reads)
+                if held is None or held == "":
+                    # The box *is* filled in and the object has nothing there.
+                    # Told apart from the case above because "choose the Office
+                    # first" is false to somebody who has, and because
+                    # filtering on the empty value would narrow to whichever
+                    # objects also have nothing — a short list for a reason
+                    # nobody chose.
+                    raise Unresolved(name, property=reads)
+                values.append(held)
         if not values:
             # A filter with a property and no values narrows to nothing, which
             # would be a dropdown that is empty for a reason nobody chose.
@@ -148,6 +235,7 @@ def check_filters(
     *,
     declared_properties: set[str],
     parameter_names: set[str],
+    object_properties: dict[str, set[str]] | None = None,
 ) -> None:
     """Refuse a filter that could not narrow anything, at save time.
 
@@ -159,6 +247,13 @@ def check_filters(
     common one — a filter is written against the *offered* type, not the
     action's own, and those are easy to confuse because for most of this
     platform's history they were the same thing.
+
+    `object_properties` is `{parameter: its object type's property names}` for
+    every *other* object parameter with a declared type, which is what p.36's
+    third kind is checked against (§334). Its **absence is a refusal rather
+    than a permission**, the rule `notifications.parse_notify` states one
+    service over: a caller that has not resolved the ontology has checked no
+    property.
     """
     name = str(parameter.get("api_name", ""))
     for index, entry in enumerate(filters_of(parameter), start=1):
@@ -182,7 +277,7 @@ def check_filters(
                     f"filter {index} on {name!r} has a value of kind {kind!r}; "
                     f"this build offers {' and '.join(VALUE_KINDS)}"
                 )
-            if kind != "parameter":
+            if kind == "value":
                 continue
             read = str(side.get("parameter", ""))
             if read == name:
@@ -193,6 +288,32 @@ def check_filters(
                 raise ValueError(
                     f"filter {index} on {name!r} reads {read!r}, which is not "
                     "a parameter of this action"
+                )
+            if kind != "object_property":
+                continue
+            # p.36's third kind, and the two things only the ontology can
+            # answer (§334). The type comes off the *parameter* rather than out
+            # of the document, which is db 0083's whole point — see
+            # `VALUE_KINDS` on why a notify rule still names one.
+            offers = object_properties.get(read) if object_properties else None
+            if offers is None:
+                raise ValueError(
+                    f"filter {index} on {name!r} reads a property of {read!r}, "
+                    "which is not an object parameter with a declared type — "
+                    "p.36's third kind needs to know which object type it is "
+                    "reading from"
+                )
+            of = str(side.get("property", "")).strip()
+            if not of:
+                raise ValueError(
+                    f"filter {index} on {name!r} reads {read!r} without saying "
+                    "which of its properties"
+                )
+            if of not in offers:
+                raise ValueError(
+                    f"filter {index} on {name!r} reads {of!r} from {read!r}, "
+                    "which is not a property of the object type that parameter "
+                    "holds"
                 )
 
 

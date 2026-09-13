@@ -1,10 +1,11 @@
 /** Narrowing what an object parameter offers, the parts a document decides
- * (§331; `action-types` p.33-36, p.40-41).
+ * (§331, §334; `action-types` p.33-36, p.40-41).
  *
  * > "The object dropdown only shows objects where the specified property
  * > matches any of the provided values. The value can be statically defined by
- * > the user, inferred from another parameter… **If more than one value is
- * > provided to compare against, the result will be an OR operation.**" (p.36)
+ * > the user, inferred from another parameter, **or a property of an Object
+ * > Reference parameter**. If more than one value is provided to compare
+ * > against, the result will be an OR operation." (p.36)
  *
  * ---
  *
@@ -97,10 +98,21 @@ export function waitingNote(
   offer: ParameterChoices | null,
   labels: Record<string, string>,
 ): string | null {
-  const waiting = (offer as { waiting_for?: string | null } | null)?.waiting_for;
+  const waiting = offer?.waiting_for;
   if (!waiting) return null;
-  return `Choose ${labels?.[waiting] || waiting} first — it decides what can be `
-    + "picked here.";
+  const label = labels?.[waiting] || waiting;
+  // p.36's third kind has a second empty state, and it needs its own sentence
+  // (§334). The box *is* filled in and the object it names has nothing under
+  // the property the filter reads — so "choose it first" is simply false, and
+  // a control that tells somebody to do what they have already done is §214 in
+  // words. The server names the property rather than the form guessing it,
+  // because the form was never sent the filter (p.40-41).
+  const missing = offer?.waiting_for_property;
+  if (missing) {
+    return `The ${label} you chose has no ${missing}, so there is nothing to `
+      + "match on here.";
+  }
+  return `Choose ${label} first — it decides what can be picked here.`;
 }
 
 /** Whether this offer is empty because it is waiting rather than because the
@@ -111,7 +123,7 @@ export function waitingNote(
  * false and unhelpful when the truth is "you have not said which region".
  */
 export function isWaiting(offer: ParameterChoices | null): boolean {
-  return !!(offer as { waiting_for?: string | null } | null)?.waiting_for;
+  return !!offer?.waiting_for;
 }
 
 /** A blank filter, as Add filter leaves it.
@@ -134,11 +146,20 @@ export function filterSummary(
   labels: Record<string, string>,
 ): string {
   const property = filter?.property?.trim() || "(no property)";
-  const values = (filter?.values ?? []).map((value) =>
-    value?.kind === "parameter"
-      ? (labels?.[value.parameter] || value.parameter)
-      : JSON.stringify(value?.value ?? ""),
-  );
+  const values = (filter?.values ?? []).map((value) => {
+    if (value?.kind === "parameter") {
+      return labels?.[value.parameter] || value.parameter;
+    }
+    // p.36's third kind reads *through* a parameter, so the sentence has to
+    // say both halves (§334): "the Office's region" and "Office" describe
+    // different rules, and a summary showing only the parameter would read
+    // identically to the kind above it.
+    if (value?.kind === "object_property") {
+      const held = labels?.[value.parameter] || value.parameter;
+      return `${held}'s ${value.property}`;
+    }
+    return JSON.stringify(value?.value ?? "");
+  });
   if (values.length === 0) return `${property} matches nothing yet`;
   if (values.length === 1) return `${property} is ${values[0]}`;
   return `${property} is any of ${values.join(", ")}`;

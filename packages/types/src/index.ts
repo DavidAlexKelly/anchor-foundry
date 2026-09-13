@@ -2294,15 +2294,18 @@ export interface ActionOverrideBlock {
   set_default: unknown;
 }
 
-/** Where one of p.36's filter values comes from (§331).
+/** Where one of p.36's filter values comes from (§331, §334).
  *
  * decision 0007's vocabulary, because "where does this value come from" is a
- * question this platform has already answered once. p.36's third kind — a
- * property of an object-reference parameter — is not implemented, and
- * `docs/parity` carries it as a named ○. */
+ * question this platform has already answered once. All three of p.36's kinds
+ * as of §334; `object_property` is spelled the way a notify rule's recipient
+ * already spells the same idea, minus the object type — §330's column says
+ * what the parameter holds, so naming it here would be a second convention for
+ * one fact. */
 export type ActionFilterValue =
   | { kind: "value"; value: unknown }
-  | { kind: "parameter"; parameter: string };
+  | { kind: "parameter"; parameter: string }
+  | { kind: "object_property"; parameter: string; property: string };
 
 /** One of p.36's object dropdown filters: a property, and the values it may
  * match. Several filters narrow together; the values inside one are an OR. */

@@ -37,6 +37,22 @@ from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 
 
+# ---- reading an object's properties off a row (§334) --------------------------
+def test_properties_come_back_decoded_whichever_store_answered() -> None:
+    """**Both driver paths, because only one of them runs here.**
+
+    Postgres hands `properties` back already decoded and OpenSearch can hand
+    back the text, so the `isinstance(str)` branch is unreachable in this
+    suite's configuration — a sweep deleted it with everything green. p.36's
+    third kind reads a property *out* of this map, so a store that returned the
+    string would make every such filter behave as though the object had
+    nothing in it.
+    """
+    assert choices._properties({"properties": {"region": "eu"}}) == {"region": "eu"}
+    assert choices._properties({"properties": '{"region": "eu"}'}) == {"region": "eu"}
+    assert choices._properties({"properties": None}) == {}
+
+
 # ---- which type a parameter holds, decided without a database ----------------
 def a_parameter(**over) -> dict:
     return {"api_name": "subject", "data_type": "object", **over}
