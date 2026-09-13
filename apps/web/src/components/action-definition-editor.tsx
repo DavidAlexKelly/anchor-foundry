@@ -1118,6 +1118,13 @@ export function ActionDefinitionEditor({
                             (x, j) => (j === fi ? { ...x, ...next } : x)));
                         const only = f.values?.[0];
                         const fromParameter = only?.kind === "parameter";
+                        const fromObject = only?.kind === "object_property";
+                        // p.36's third kind reads through an *object*
+                        // parameter, so what it may read is §333's own list:
+                        // the other object parameters with a declared type.
+                        // Reusing it rather than writing a second one, because
+                        // "which parameters hold an object" is one question.
+                        const holders = startableParameters(parameters, p.api_name);
                         return (
                           <div className="row-actions" key={fi} data-filter-row={fi}>
                             <PropertySelect
@@ -1127,23 +1134,80 @@ export function ActionDefinitionEditor({
                               label={`Filter ${fi + 1} on ${p.api_name} property`}
                               onChange={(next) => patch({ property: next })}
                             />
-                            {/* p.36's two kinds of value. The choice is the
-                                one p.41 says matters: a parameter exposes
-                                nothing about the data, a typed-in value is
-                                part of the definition. */}
+                            {/* p.36's three kinds of value. The choice is the
+                                one p.41 says matters: a parameter — of either
+                                kind — exposes nothing about the data, while a
+                                typed-in value is part of the definition. */}
                             <select
-                              value={fromParameter ? "parameter" : "value"}
+                              value={fromObject ? "object_property"
+                                : fromParameter ? "parameter" : "value"}
                               aria-label={`Filter ${fi + 1} on ${p.api_name} source`}
                               onChange={(e) => patch({ values: [
                                 e.target.value === "parameter"
                                   ? { kind: "parameter", parameter: "" }
+                                  : e.target.value === "object_property"
+                                  // Seeded with the first object parameter and
+                                  // no property, which is the state the server
+                                  // refuses by name — a blank parameter would
+                                  // be refused too, and this way the second
+                                  // select has something to show.
+                                  ? { kind: "object_property",
+                                      parameter: holders[0]?.api_name ?? "",
+                                      property: "" }
                                   : { kind: "value", value: "" },
                               ] })}
                             >
                               <option value="value">a typed-in value</option>
                               <option value="parameter">another parameter</option>
+                              {/* Offered only when there is an object
+                                  parameter to read from. A kind that can only
+                                  produce a refusal is §214's control that
+                                  looks like it works. */}
+                              {holders.length > 0 && (
+                                <option value="object_property">
+                                  a property of a chosen object
+                                </option>
+                              )}
                             </select>
-                            {fromParameter ? (
+                            {fromObject ? (
+                              <>
+                                <select
+                                  value={String(
+                                    (only as { parameter?: string }).parameter ?? "")}
+                                  aria-label={`Filter ${fi + 1} on ${p.api_name} object`}
+                                  onChange={(e) => patch({ values: [
+                                    { kind: "object_property",
+                                      parameter: e.target.value, property: "" },
+                                  ] })}
+                                >
+                                  {holders.map((q) => (
+                                    <option key={q.api_name} value={q.api_name}>
+                                      {labels[q.api_name] ?? q.api_name}
+                                    </option>
+                                  ))}
+                                </select>
+                                {/* The properties of the type *that* parameter
+                                    holds, not the one being filtered — the two
+                                    are different object types and the server
+                                    checks against the first. */}
+                                <PropertySelect
+                                  workspaceId={workspaceId}
+                                  typeId={String(
+                                    holders.find((q) => q.api_name
+                                      === (only as { parameter?: string }).parameter)
+                                      ?.object_type_id ?? "")}
+                                  value={String(
+                                    (only as { property?: string }).property ?? "")}
+                                  label={`Filter ${fi + 1} on ${p.api_name} object property`}
+                                  onChange={(next) => patch({ values: [
+                                    { kind: "object_property",
+                                      parameter: (only as { parameter?: string })
+                                        .parameter ?? "",
+                                      property: next },
+                                  ] })}
+                                />
+                              </>
+                            ) : fromParameter ? (
                               <select
                                 value={String(
                                   (only as { parameter?: string }).parameter ?? "")}

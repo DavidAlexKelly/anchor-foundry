@@ -28,6 +28,7 @@ p.33's permission sentence is free, because RLS is what answers both.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 from uuid import UUID
 
@@ -172,6 +173,57 @@ async def start_key_of(
     return str(row["primary_key"]) if row else str(held)
 
 
+async def object_values_of(
+    conn: AsyncConnection,
+    parameter: dict[str, Any],
+    *,
+    workspace_id: UUID,
+    bound: dict[str, Any],
+    parameters: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """`{parameter: its object's properties}` for p.36's third value kind.
+
+    **The round trip `action_filters.resolve` deliberately does not make**
+    (§334). A form holds instance ids and a filter reading "the region of the
+    Office you chose" needs what is *inside* that object, so somebody has to
+    read it; keeping that here is what lets the whole of p.36's compilation be
+    decided without a database.
+
+    One read per *parameter named*, not per filter: two filters reading two
+    properties of the same Office are one object. A parameter whose id names
+    nothing readable is simply absent from the result, which `resolve` turns
+    into the same "there is nothing to match on" it gives an empty property —
+    the honest answer, because RLS makes "deleted" and "not yours" the same
+    state from here.
+    """
+    wanted = action_filters.object_parameters_read(parameter)
+    if not wanted:
+        return {}
+    declared = {
+        str(p.get("api_name")): type_of(p)
+        for p in object_parameters(parameters)
+    }
+    prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
+    store = instance_store.store_for(conn)
+    out: dict[str, dict[str, Any]] = {}
+    for name in wanted:
+        type_id = declared.get(name)
+        held = bound.get(name)
+        if not type_id or held is None or held == "":
+            continue
+        row = await store.get_instance(
+            search_prefix=prefix, object_type_id=type_id, instance_id=str(held),
+        )
+        if row is not None:
+            out[name] = _properties(row)
+    return out
+
+
+def _properties(row: dict[str, Any]) -> dict[str, Any]:
+    raw = row.get("properties")
+    return json.loads(raw) if isinstance(raw, str) else (raw or {})
+
+
 async def check_object_values(
     conn: AsyncConnection,
     *,
@@ -232,7 +284,11 @@ async def check_object_values(
         types = await property_types_of(conn, type_id)
         try:
             narrowing = action_filters.resolve(
-                parameter, bound=bound, property_types=types
+                parameter, bound=bound, property_types=types,
+                objects=await object_values_of(
+                    conn, parameter, workspace_id=workspace_id,
+                    bound=bound, parameters=parameters,
+                ),
             )
             # **Asking about this one object rather than reading the offer and
             # looking for it.** §331 evaluated the narrowed set at
