@@ -125,16 +125,41 @@ def test_a_filter_can_read_a_property_of_an_object_parameter() -> None:
 
 
 def test_the_property_read_is_the_one_named_rather_than_the_one_filtered() -> None:
-    """A filter on `region` may read `home_region`, and reading the *filtered*
-    property off the object instead would look identical whenever the two
-    happen to share a name — which is most of the time somebody writes one."""
+    """**Two properties, and the filter must keep both straight.**
+
+    A filter on `region` reading an Office's `home_region` compares the Team's
+    `region` against the Office's `home_region`. The first version named the
+    read property `prop` and shadowed the filter's own one scope out, so it
+    compiled to `home_region in [...]` against the Team — a property the Team
+    does not have, matching nothing. Every test had the two sharing a name and
+    none of them noticed; a browser fixture built to tell two *types* apart is
+    what surfaced it.
+
+    So this asserts the compiled filter's `property` as well as its value.
+    """
     [f] = filters.resolve(
         a_parameter(dropdown_filters=[
             from_object_property("region", "office", "home_region")]),
         bound={"office": "o-1"}, property_types={},
         objects={"office": {"region": "eu", "home_region": "uk"}},
     )
-    assert f.value == ["uk"]
+    assert (f.property, f.value) == ("region", ["uk"])
+
+
+def test_two_filters_reading_two_properties_keep_their_own(  # noqa: D103
+) -> None:
+    """One filter's read property must not leak into the next one's, which is
+    what a shadowed loop variable does when the second filter has no
+    object-property value of its own."""
+    first, second = filters.resolve(
+        a_parameter(dropdown_filters=[
+            from_object_property("region", "office", "home_region"),
+            static("tier", "gold"),
+        ]),
+        bound={"office": "o-1"}, property_types={},
+        objects={"office": {"home_region": "uk"}},
+    )
+    assert (first.property, second.property) == ("region", "tier")
 
 
 def test_the_three_kinds_mix_inside_one_or() -> None:

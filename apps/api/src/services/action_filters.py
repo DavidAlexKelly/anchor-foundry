@@ -192,14 +192,22 @@ def resolve(
                 values.append(held)
             elif kind == "object_property":
                 # p.36's third: "a property of an Object Reference parameter".
+                #
+                # **`reads`, not `prop`.** The first version named this `prop`
+                # and shadowed the filter's own property one scope out, so a
+                # filter on `region` reading an Office's `serves` compiled to
+                # `serves in [...]` against the *Team* type and matched nothing.
+                # Every test had the two properties sharing a name, which is
+                # the fixture mistake this unit already found twice — here it
+                # was hiding a defect rather than a weak check.
                 name = str(side.get("parameter", ""))
-                prop = str(side.get("property", ""))
+                reads = str(side.get("property", ""))
                 if bound.get(name) is None or bound.get(name) == "":
                     # Nobody has chosen the object yet, which is the same state
                     # a plain parameter reference is in and gets the same
                     # sentence: fill that box in first.
                     raise Unresolved(name)
-                held = (objects or {}).get(name, {}).get(prop)
+                held = (objects or {}).get(name, {}).get(reads)
                 if held is None or held == "":
                     # The box *is* filled in and the object has nothing there.
                     # Told apart from the case above because "choose the Office
@@ -207,7 +215,7 @@ def resolve(
                     # filtering on the empty value would narrow to whichever
                     # objects also have nothing — a short list for a reason
                     # nobody chose.
-                    raise Unresolved(name, property=prop)
+                    raise Unresolved(name, property=reads)
                 values.append(held)
         if not values:
             # A filter with a property and no values narrows to nothing, which

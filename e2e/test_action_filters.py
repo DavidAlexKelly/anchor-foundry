@@ -253,10 +253,15 @@ def build_with_office(api, name: str):
               {"code": "gamma", "name": "Gamma", "region": "us"}],
         key="code", title="name", slug=f"oteam_{tag}",
     )
+    # **`serves` rather than `region`, and that is the point.** The property the
+    # filter reads has to be one the *Office* has and the Team does not, or a
+    # panel reading the filtered type's properties instead of the read one
+    # offers the same list and nothing can tell them apart. A sweep found
+    # exactly that fixture here and in the API tests.
     office_type = mod.object_type(
-        columns=["code", "name", "region"],
-        rows=[{"code": "hq", "name": "HQ", "region": "eu"},
-              {"code": "branch", "name": "Branch", "region": "uk"}],
+        columns=["code", "name", "serves"],
+        rows=[{"code": "hq", "name": "HQ", "serves": "eu"},
+              {"code": "branch", "name": "Branch", "serves": "uk"}],
         key="code", title="name", slug=f"office_{tag}",
     )
     ticket_type = mod.object_type(
@@ -272,13 +277,20 @@ def build_with_office(api, name: str):
         "PUT",
         f"/workspaces/{mod.workspace_id}/action-types/{action['id']}/definition",
         {"parameters": [
+             # **Two object parameters, declared with `elsewhere` first.** The
+             # panel seeds the third kind with the first one it can read from,
+             # so with only one the object select's own `onChange` never has to
+             # do anything and a sweep can delete it. Choosing `office` here is
+             # a real change from what the panel proposed.
+             {"api_name": "elsewhere", "display_name": "Other office",
+              "data_type": "object", "object_type_id": office_type},
              {"api_name": "office", "display_name": "Office",
               "data_type": "object", "object_type_id": office_type},
              {"api_name": "team", "display_name": "Team", "data_type": "object",
               "object_type_id": team_type,
               "dropdown_filters": [{"property": "region", "values": [
                   {"kind": "object_property", "parameter": "office",
-                   "property": "region"}]}]},
+                   "property": "serves"}]}]},
          ],
          "rules": [{"kind": "modify_object",
                     "config": {"property": "note", "parameter": "team"}}],
@@ -304,9 +316,12 @@ def build_with_office(api, name: str):
 
 def choose_the_office_ticket(page) -> None:
     """`choose_the_ticket`'s job for the office fixture, which has no `where`
-    box to wait on — its first parameter is the Office picker."""
+    box to wait on — its first parameters are the two Office pickers."""
     page.locator("form > label select").first.select_option(index=1)
     expect(picker(page, "office")).to_have_count(1)
+    # Set to the *other* region, so a filter reading the wrong parameter is a
+    # visibly different list rather than the same one.
+    picker(page, "elsewhere").select_option(label="Branch")
 
 
 def test_choosing_an_object_narrows_by_one_of_its_properties(page, api):
@@ -496,6 +511,8 @@ def test_the_panel_writes_p36s_third_kind_and_the_form_honours_it(page, api):
         "PUT",
         f"/workspaces/{mod.workspace_id}/action-types/{mod.action['id']}/definition",
         {"parameters": [
+             {"api_name": "elsewhere", "display_name": "Other office",
+              "data_type": "object", "object_type_id": mod.office_type},
              {"api_name": "office", "display_name": "Office",
               "data_type": "object", "object_type_id": mod.office_type},
              {"api_name": "team", "display_name": "Team", "data_type": "object",
@@ -515,9 +532,12 @@ def test_the_panel_writes_p36s_third_kind_and_the_form_honours_it(page, api):
     page.get_by_label("Add a filter to team").click()
     page.get_by_label("Filter 1 on team property").select_option("region")
     page.get_by_label("Filter 1 on team source").select_option("object_property")
+    # Not the one the panel seeded (`elsewhere`), so the select has to write.
     page.get_by_label("Filter 1 on team object", exact=True).select_option("office")
-    page.get_by_label("Filter 1 on team object property").select_option("region")
-    expect(page.get_by_test_id("filter-summary")).to_contain_text("Office's region")
+    # `serves` is a property of the Office and not of the Team, so a panel
+    # offering the filtered type's properties cannot satisfy this line.
+    page.get_by_label("Filter 1 on team object property").select_option("serves")
+    expect(page.get_by_test_id("filter-summary")).to_contain_text("Office's serves")
     page.get_by_role("button", name="Save", exact=True).click()
     expect(page.get_by_role("dialog")).to_have_count(0)
 
@@ -526,7 +546,7 @@ def test_the_panel_writes_p36s_third_kind_and_the_form_honours_it(page, api):
     )
     team = next(p for p in saved["parameters"] if p["api_name"] == "team")
     assert team["dropdown_filters"] == [{"property": "region", "values": [
-        {"kind": "object_property", "parameter": "office", "property": "region"},
+        {"kind": "object_property", "parameter": "office", "property": "serves"},
     ]}]
 
     open_module(page, mod)
