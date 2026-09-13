@@ -948,6 +948,26 @@ async def delete_type(conn: AsyncConnection, workspace_id: UUID, type_id: UUID) 
             + " deprecated or experimental first (p.256)"
         )
 
+    # **And the references a parameter holds** (§339), which are three and only
+    # one of which the database enforces. db 0083's column has `ON DELETE
+    # RESTRICT`, which is the right rule with a message nobody can use: it fires
+    # inside the DELETE below and leaves the caller a 500. db 0085's walk and db
+    # 0086's options document are jsonb and hold nothing at all, so deleting the
+    # type they name used to succeed — and the dropdown they describe is empty
+    # or unbuildable from then on, with the person who could have fixed it long
+    # gone. Asked here, before anything is written, all three become the same
+    # sentence.
+    pointing = await actions_service.parameters_pointing_at(
+        conn, workspace_id, object_type_id=type_id
+    )
+    if pointing:
+        raise ConflictError(
+            f"{existing['api_name']!r} cannot be deleted while an action "
+            "parameter points at it: "
+            + actions_service.pointing_at_detail(pointing)
+            + ". Change those parameters first, or delete the action."
+        )
+
     await fetch_one(
         conn, "DELETE FROM object_types WHERE id = :tid RETURNING id", {"tid": str(type_id)}
     )
@@ -1986,6 +2006,27 @@ async def delete_link_type(conn: AsyncConnection, workspace_id: UUID, link_id: U
         str(existing["status"]), kind="link type",
         name=str(existing["api_name"]),
     )
+
+    # **The ○ db 0085 wrote against itself** (§339). A hop is a `link_type_id`
+    # inside a jsonb document, so no foreign key holds it and this delete used
+    # to simply succeed — leaving a dropdown that cannot be built, discovered by
+    # whoever next opened the form rather than by whoever deleted the link.
+    # 0085's own comment argued that was acceptable because the walk refuses a
+    # dangling hop by name; that is true and it is the wrong half of the trade,
+    # because it puts the sentence in front of the person who cannot act on it.
+    from . import actions as actions_service
+
+    pointing = await actions_service.parameters_pointing_at(
+        conn, workspace_id, link_type_id=link_id
+    )
+    if pointing:
+        raise ConflictError(
+            f"{existing['api_name']!r} cannot be deleted while an action "
+            "parameter follows it: "
+            + actions_service.pointing_at_detail(pointing)
+            + ". Change the walk first, or delete the action."
+        )
+
     row = await fetch_one(
         conn,
         "DELETE FROM link_types WHERE id=:lid AND workspace_id=:wid RETURNING id",
