@@ -1547,6 +1547,130 @@ async def active_action_types(
     return [dict(r) for r in rows]
 
 
+async def parameters_pointing_at(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    *,
+    link_type_id: UUID | None = None,
+    object_type_id: UUID | None = None,
+) -> list[dict[str, str]]:
+    """The action parameters that would be broken by deleting this (§339).
+
+    Returns `[{action, parameter, why}]`, ordered, where `why` is a phrase that
+    completes "…, which *<why>*".
+
+    **Three references and only one of them is a foreign key.** db 0083's
+    `object_type_id` is a real column with `ON DELETE RESTRICT`; db 0085's walk
+    and db 0086's options document are jsonb, and a jsonb column cannot carry
+    one. Each migration says so and each names this as its ○, so the scan is
+    written here rather than in the ontology: it is the action code that knows
+    what those documents mean, and a query in `ontology.py` matching on
+    `->'hops'` would be a second reader of a shape only this module defines.
+
+    **The column is scanned too, rather than left to the constraint.** `RESTRICT`
+    is the right rule and a terrible message: it fires inside the DELETE as an
+    integrity error, which reaches the caller as a 500 with nothing in it about
+    actions, parameters, or what to do — and db 0083's own comment promised that
+    "§325's cleanup queue is where a type is removed on purpose, and it reports
+    what refuses to go". Asking first is what makes that sentence true; the
+    constraint stays as the thing that is true even when nobody asked.
+    """
+    #: Each reference, as the clause that finds it and the phrase that names it.
+    #: **Paired, because the sentence has to come from the clause that
+    #: matched** rather than from which documents the parameter happens to
+    #: carry. The first draft worked the reason out afterwards from "does it
+    #: have a walk, does it have options", and a parameter with both was
+    #: described by whichever branch came first — so deleting the type a walk
+    #: *starts* from was reported as the type its values come from, which is a
+    #: refusal naming the wrong half of the thing it is refusing over.
+    references: list[tuple[str, str, str]] = []
+    params: dict[str, Any] = {"wid": str(workspace_id)}
+    if link_type_id is not None:
+        params["link"] = json.dumps([{"link_type_id": str(link_type_id)}])
+        # Containment rather than a `jsonb_array_elements` join: a hop is an
+        # object with two keys and `@>` asks exactly "is there an element with
+        # this one", which is the question. It also uses the GIN default
+        # operator class, so an index over these documents would serve it.
+        references.append((
+            "follows_link",
+            "(p.dropdown_search_around -> 'hops') @> CAST(:link AS jsonb)",
+            "is a link its dropdown follows",
+        ))
+    if object_type_id is not None:
+        # **Two names for one value, because it is used at two types.** db
+        # 0083's column is a `uuid` and a jsonb `->>` is `text`; Postgres infers
+        # a bind's type from its first use, so a single `:type` is inferred
+        # `uuid` by the column comparison and then fails the text ones with
+        # "operator does not exist: text = uuid". A single-clause probe of the
+        # text comparison passes, which is how that got as far as a 500.
+        params["type_id"] = str(object_type_id)
+        params["type_text"] = str(object_type_id)
+        params["far"] = json.dumps([{"far_type_id": str(object_type_id)}])
+        references.append((
+            "holds", "p.object_type_id = CAST(:type_id AS uuid)",
+            "is the object type it holds",
+        ))
+        references.append((
+            "from_options",
+            "p.options_from ->> 'object_type_id' = :type_text",
+            "is where its allowed values come from",
+        ))
+        references.append((
+            "walks_from",
+            "p.dropdown_search_around -> 'start' ->> 'object_type_id' "
+            "= :type_text",
+            "is where its dropdown's walk starts",
+        ))
+        # A *middle* of a walk, which the others miss: a hop lands on a type it
+        # names, and deleting that type breaks the walk without appearing at
+        # either end of it.
+        references.append((
+            "walks_through",
+            "(p.dropdown_search_around -> 'hops') @> CAST(:far AS jsonb)",
+            "is a type its dropdown's walk passes through",
+        ))
+    if not references:
+        return []
+
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT at.api_name AS action, p.api_name AS parameter,
+               {', '.join(f'({c}) AS {name}' for name, c, _ in references)}
+          FROM action_parameters p
+          JOIN action_types at ON at.id = p.action_type_id
+         WHERE at.workspace_id = CAST(:wid AS uuid)
+           AND ({' OR '.join(c for _, c, _ in references)})
+         ORDER BY at.api_name, p.api_name
+        """,
+        params,
+    )
+    out: list[dict[str, str]] = []
+    for row in rows:
+        # Every reference that matched, not the first: one parameter can hold a
+        # type and walk from it, and a refusal that named one of them would be
+        # answered by removing that one and refused again.
+        why = [phrase for name, _, phrase in references if row[name]]
+        out.append({
+            "action": str(row["action"]),
+            "parameter": str(row["parameter"]),
+            "why": " and ".join(why),
+        })
+    return out
+
+
+def pointing_at_detail(pointing: list[dict[str, str]]) -> str:
+    """`parameters_pointing_at`'s answer as the sentence a refusal carries.
+
+    Its own function because two callers refuse with it — a link type and an
+    object type — and a message assembled twice is a message that drifts.
+    """
+    return "; ".join(
+        f"{p['parameter']!r} of {p['action']!r}, which {p['why']}"
+        for p in pointing
+    )
+
+
 async def delete_action_type(
     conn: AsyncConnection, workspace_id: UUID, action_type_id: UUID
 ) -> None:
