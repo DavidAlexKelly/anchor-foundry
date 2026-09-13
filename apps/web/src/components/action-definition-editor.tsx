@@ -44,6 +44,9 @@ function labelsOf(
 }
 import { untypedNote } from "@/lib/action-choices";
 import {
+  blankOptions, optionable, optionsProblem, optionsSummary,
+} from "@/lib/action-options";
+import {
   blankFilter, filterSummary, readableParameters, staticValueWarning,
   type DropdownFilter,
 } from "@/lib/action-filters";
@@ -190,6 +193,10 @@ export function ActionDefinitionEditor({
       // and it happened again here — the browser test caught it, which is the
       // whole reason `STATUS.md` says to write that test first.
       dropdown_search_around: p.dropdown_search_around ?? null,
+      // p.33's options document (§335). Loaded for the reason above: this
+      // dialog saves the parameters whole, so one it does not read is one it
+      // overwrites with nothing.
+      options_from: p.options_from ?? null,
       // p.43-46's blocks travel with the parameter, so the dialog edits them
       // in the same document it already saves whole (§329).
       overrides: p.overrides ?? [],
@@ -899,6 +906,84 @@ export function ActionDefinitionEditor({
       >
         Add a criterion
       </button>
+
+      {/* p.33's multiple choice — its *other* shape, for parameters that are
+          not objects. Its own block rather than a corner of the one below,
+          because "which type does this object parameter hold" and "where do
+          this parameter's allowed values come from" are different questions
+          about different parameters — and a panel that only appeared when the
+          action happened to have an object parameter is one nobody could find
+          (the first draft did exactly that, and the browser test said so). */}
+      {parameters.some((p) => optionable(p.data_type)) && (
+        <>
+          <h3 className="field-label" style={{ marginTop: 24 }}>Allowed values</h3>
+          <p className="field-hint">
+            p.33: a parameter&rsquo;s dropdown can be reduced to the values a
+            property takes across a set of objects, so &ldquo;which
+            region&rdquo; is answered by the regions that exist rather than by
+            a list somebody retyped. Leaving it unset keeps the parameter
+            taking whatever is typed.
+          </p>
+        <div data-testid="parameter-options">
+          {parameters.map((p, i) => !optionable(p.data_type) ? null : (
+            <div key={i} data-parameter-options={p.api_name} style={{ marginBottom: 8 }}>
+              <div className="row-actions">
+                <label>
+                  <input
+                    type="checkbox"
+                    aria-label={`Options for ${p.api_name} from an object set`}
+                    checked={!!p.options_from}
+                    onChange={(e) => patchParameter(i, {
+                      options_from: e.target.checked ? blankOptions() : null,
+                    })}
+                  />
+                  {" "}{p.display_name || p.api_name}: get options from an object set
+                </label>
+                <span className="field-hint" data-testid="options-summary">
+                  {optionsSummary(p.options_from, typeNames)}
+                </span>
+              </div>
+              {p.options_from && (
+                <div className="row-actions">
+                  <TypePicker
+                    workspaceId={workspaceId}
+                    value={p.options_from.object_type_id}
+                    label={`Options for ${p.api_name} object type`}
+                    testId={`parameter-${i + 1}-options-type`}
+                    placeholder="Choose…"
+                    onChange={(next) => patchParameter(i, {
+                      // The property goes with the type: one chosen against
+                      // the old type is not a property of the new one, and
+                      // the server refuses that pair by name.
+                      options_from: { object_type_id: next, property: "" },
+                    })}
+                  />
+                  {p.options_from.object_type_id && (
+                    <PropertySelect
+                      workspaceId={workspaceId}
+                      typeId={p.options_from.object_type_id}
+                      value={p.options_from.property}
+                      label={`Options for ${p.api_name} property`}
+                      onChange={(next) => patchParameter(i, {
+                        options_from: {
+                          object_type_id: p.options_from?.object_type_id ?? "",
+                          property: next,
+                        },
+                      })}
+                    />
+                  )}
+                </div>
+              )}
+              {optionsProblem(p.options_from, p.data_type) && (
+                <p className="field-hint" data-testid="options-problem">
+                  {optionsProblem(p.options_from, p.data_type)}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+        </>
+      )}
 
       {/* p.25's object parameter, which until §330 was a box you typed a uuid
           into. Its own block rather than a column in the table above, because

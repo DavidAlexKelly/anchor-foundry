@@ -2314,6 +2314,13 @@ export interface ActionDropdownFilter {
   values: ActionFilterValue[];
 }
 
+/** p.33's multiple-choice options: the object type to read, and the property
+ * whose distinct values become the allowed ones. */
+export interface ActionParameterOptions {
+  object_type_id: string;
+  property: string;
+}
+
 /** One hop of p.37's Search Around: a link to follow, and where following it
  * lands. The landing type is answered by the server rather than trusted — the
  * walk decides where it arrives — and comes back so a client can send the
@@ -2371,6 +2378,12 @@ export interface ActionParameter {
    * the action: a walk names object types and link types, which is p.40's
    * combination in a different shape. */
   dropdown_search_around?: ActionSearchAround | null;
+  /** p.33's multiple choice: where a non-object parameter's allowed values
+   * come from (§335). `null`/absent is a parameter that takes whatever is
+   * typed. Redacted with the two above, and for the same reason — it names an
+   * object type and a property. The *values* it produces are not redacted:
+   * they are the dropdown, and RLS decided which objects they were read off. */
+  options_from?: ActionParameterOptions | null;
   /** p.43-46's override blocks, in the order the first-match rule reads them.
    * Absent on a payload that predates §329, and empty for most parameters. */
   overrides?: ActionOverrideBlock[];

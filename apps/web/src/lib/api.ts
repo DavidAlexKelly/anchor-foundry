@@ -1850,6 +1850,9 @@ export interface ActionDefinitionInput {
     /** p.36-37's search around (§333): where the dropdown's objects come from
      * before the filters narrow them. Redacted with the filters. */
     dropdown_search_around?: import("./types").ActionSearchAround | null;
+    /** p.33's multiple-choice options (§335): where a non-object parameter's
+     * allowed values are derived from. Redacted with the two above. */
+    options_from?: import("./types").ActionParameterOptions | null;
     /** p.43-46's override blocks (§329). Part of the parameter rather than a
      * document of their own — unlike §328's sections, which are about the
      * form — because an override changes what the parameter *is* under a

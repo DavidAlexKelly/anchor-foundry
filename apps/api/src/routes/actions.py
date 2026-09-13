@@ -35,6 +35,7 @@ from ..services import action_revert
 from ..services import action_choices as choices_service
 from ..services import action_filters as filters_service
 from ..services import action_search_arounds as search_arounds_service
+from ..services import action_options as options_service
 from ..services import action_overrides as overrides_service
 from ..services import action_sections as sections_service
 from ..services import actions as actions_service
@@ -131,6 +132,14 @@ class ActionParameterOut(BaseModel):
     #: not be able to see, and "somebody is offering the Documents linked to an
     #: Investigation" is the combination p.40 is about.
     dropdown_search_around: dict[str, Any] | None = None
+    #: p.33's multiple-choice options: where this parameter's allowed values
+    #: come from (§335; db 0086). `None` on every parameter that takes whatever
+    #: is typed. **Redacted with the filters and the walk**, on §333's
+    #: argument: it names an object type and a property, and "somebody is
+    #: offering the Investigation Names" is p.40's combination in a third
+    #: shape. The *values* are not redacted — they are the dropdown, and RLS
+    #: already decided which objects the reader could see them on.
+    options_from: dict[str, Any] | None = None
     #: db 0083: which object type this parameter's value is an instance of.
     #: `None` on every non-object parameter, and on an object parameter written
     #: before §330 — whose type the action's rules still say.
@@ -503,6 +512,9 @@ class ActionParameterIn(BaseModel):
     #: `None` is p.36's default start, which is every parameter written before
     #: §333 — and what the panel sends when somebody clears the walk.
     dropdown_search_around: dict[str, Any] | None = None
+    #: p.33: `{object_type_id, property}` for a multiple-choice parameter's
+    #: allowed values. `None` is a parameter that takes whatever is typed.
+    options_from: dict[str, Any] | None = None
     #: p.43-46's overrides, part of the parameter rather than a document of
     #: their own — unlike §328's sections, which are about the form. An
     #: omitted list means no blocks, which is what every parameter written
@@ -619,9 +631,26 @@ class ParameterChoices(BaseModel):
     """What one object parameter offers, and what it is."""
 
     parameter: str
-    object_type_id: UUID
-    object_type_name: str
-    items: list[ParameterChoice]
+    #: Which of p.33's two shapes this offer is (§335). `objects` is p.33's
+    #: "single object reference", whose `items` are objects; `values` is its
+    #: "multiple choice", whose `values` are what one property holds across a
+    #: set. **A discriminator rather than "whichever list is non-empty"**: an
+    #: object type with no objects and a property with no values are both
+    #: empty, and the form draws a different control for each.
+    kind: Literal["objects", "values"] = "objects"
+    #: The object type an `objects` offer is of. `None` on a `values` offer,
+    #: which is about a property rather than a type the form names.
+    object_type_id: UUID | None = None
+    object_type_name: str | None = None
+    items: list[ParameterChoice] = Field(default_factory=list)
+    #: p.33's allowed values, for a `values` offer. Sorted for display and
+    #: truncated by frequency — see `action_options.options`.
+    values: list[str] = Field(default_factory=list)
+    #: p.33's "will automatically prefill with the corresponding property
+    #: value", or `None`. Sent rather than worked out in the browser, because
+    #: the condition is about the *set* and the form is only ever shown what
+    #: the set left.
+    prefill: str | None = None
     #: **Whether there are more than the control can hold.** Said rather than
     #: silently omitted: a dropdown offering the first fifty of a thousand is
     #: §256's trap one control down — somebody would pick from the rows the
@@ -758,6 +787,27 @@ async def action_parameter_choices(
                     )
                     for r in rows
                 ],
+            ))
+
+        # p.33's multiple choice, in the same response as p.33's single object
+        # reference (§335). One call for both because a form asks once when it
+        # opens, and because the two are one sentence in p.33 — a `kind` tells
+        # the form which control to draw rather than which list happens to be
+        # non-empty.
+        for parameter in action_type["parameters"]:
+            if options_service.options_of(parameter) is None:
+                continue
+            values, truncated = await options_service.options(
+                conn, parameter, workspace_id=access.workspace_id,
+            )
+            out.append(ParameterChoices(
+                parameter=str(parameter["api_name"]),
+                kind="values",
+                values=values,
+                truncated=truncated,
+                prefill=options_service.prefill(
+                    values, required=bool(parameter.get("required")),
+                ),
             ))
     return out
 
@@ -1659,6 +1709,23 @@ async def execute_action(
                     bound=bound,
                     parameters=action_type["parameters"],
                 )
+                # p.33's other shape, and the same rule read for it (§335).
+                # p.33 does not say a multiple-choice value is validated, and
+                # it belongs anyway: a dropdown narrowed to three regions
+                # beside a check that accepts any string is §214's control
+                # that looks like it works, and the form is a convenience
+                # while this runs whether or not anybody drew one.
+                for parameter in action_type["parameters"]:
+                    if options_service.options_of(parameter) is None:
+                        continue
+                    allowed, _more = await options_service.options(
+                        conn, parameter, workspace_id=access.workspace_id,
+                    )
+                    options_service.check_option_values(
+                        parameter,
+                        bound.get(str(parameter["api_name"])),
+                        allowed=allowed,
+                    )
             # **Before the first rule runs, and before the run is even opened**
             # (p.49-50). "Refused" and "refused after writing half of it" look the
             # same to the caller and are very different in the dataset, and our

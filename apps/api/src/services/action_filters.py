@@ -359,6 +359,7 @@ def for_reader(parameter: dict[str, Any], *, may_edit: bool) -> dict[str, Any]:
     — it asks for the resulting objects — so what is left after this redaction
     is a list of names the reader could have written down themselves.
     """
+    from .action_options import options_of as _options_of
     from .action_search_arounds import (
         referenced_parameters as source_reads,
         source_of,
@@ -375,4 +376,10 @@ def for_reader(parameter: dict[str, Any], *, may_edit: bool) -> dict[str, Any]:
         "dropdown_watches": watches,
         "dropdown_filters": filters_of(parameter) if may_edit else [],
         "dropdown_search_around": source_of(parameter) if may_edit else None,
+        # p.33's options document goes the same way, on the same argument
+        # (§335): it names an object type and a property, which is p.40's
+        # combination in a third shape. The *values* it produces are not
+        # redacted — they are the dropdown itself, and RLS already decided
+        # which objects this reader could see them on.
+        "options_from": _options_of(parameter) if may_edit else None,
     }
