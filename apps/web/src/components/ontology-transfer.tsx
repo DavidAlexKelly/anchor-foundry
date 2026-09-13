@@ -23,8 +23,10 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, objects as objApi } from "@/lib/api";
 import {
+  appliedSummary,
   exportFilename,
   leftAloneWarning,
+  notAppliedNote,
   originNote,
   planHeadline,
   refusalText,
@@ -206,10 +208,16 @@ export function OntologyTransfer({
       )}
 
       {applying.data && (
-        <p className="login-note" data-testid="ontology-applied">
-          Applied: {applying.data.added.length} added,{" "}
-          {applying.data.updated.length} updated.
-        </p>
+        <>
+          <p className="login-note" data-testid="ontology-applied">
+            {appliedSummary(applying.data)}
+          </p>
+          {notAppliedNote(applying.data) && (
+            <p className="login-note" data-testid="ontology-not-applied">
+              {notAppliedNote(applying.data)}
+            </p>
+          )}
+        </>
       )}
     </section>
   );

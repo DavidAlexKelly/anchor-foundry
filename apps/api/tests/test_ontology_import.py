@@ -406,26 +406,207 @@ def test_applying_an_edit_updates_the_type(
     assert listed["items"][0]["display_name"] == "Renamed in the file"
 
 
-def test_link_and_action_types_are_reported_as_not_applied(
+def test_action_types_are_still_reported_as_not_applied(
     client: TestClient, fx: Fixture
 ) -> None:
     """**Named rather than silently skipped** (§214).
 
-    Applying links and actions needs its own resolution pass — a link joins two
-    types that may both be new in the same file, and an action's rules name
-    parameters that may be — so it is ○ here. A reader whose file carried three
-    link types and got no word of them would believe they arrived.
+    Link types are applied as of §340. An action still is not: its rules name
+    parameters, and since §330-§339 its parameters name object types, link
+    types and properties inside jsonb documents, so it needs a resolution pass
+    of its own. A reader whose file carried three action types and got no word
+    of them would believe they arrived.
     """
     tag = uuid.uuid4().hex[:8]
     document = a_file(fx, one_type(tag))
-    document["link_types"] = [
-        {"api_name": f"lnk_{tag}", "display_name": "Link",
-         "from_object_type": f"imp_{tag}", "to_object_type": f"imp_{tag}",
-         "cardinality": "one_to_many"},
+    document["action_types"] = [
+        {"api_name": f"act_{tag}", "display_name": "Act",
+         "object_type": f"imp_{tag}", "parameters": [], "rules": [],
+         "criteria": []},
     ]
     r = apply(client, fx, document)
     assert r.status_code == 200, r.text
-    assert r.json()["not_applied"]["link_types"] == [f"lnk_{tag}"]
+    body = r.json()
+    assert body["not_applied"]["action_types"] == [f"act_{tag}"]
+    # And the section it *used* to name is gone from the report rather than
+    # empty, because "links were not applied" is no longer a thing that can be
+    # true — a reader seeing an empty list would read it as "none this time".
+    assert "link_types" not in body["not_applied"]
+
+
+# ---- p.65's link types, applied (§340) -----------------------------------------
+def a_link(tag: str, **over) -> dict:
+    """A link from the file's first type to its second, joined on `name`."""
+    return {
+        "api_name": f"lnk_{tag}",
+        "display_name": "Belongs to",
+        "cardinality": "one_to_many",
+        "from_object_type": f"imp_{tag}",
+        "to_object_type": f"imp_{tag}b",
+        "from_property": "name",
+        "to_property": "$primary_key",
+        "from_side_name": "Members",
+        "to_side_name": "Owner",
+        "status": "experimental",
+        "deprecation": None,
+        **over,
+    }
+
+
+def two_types_and_a_link(fx: Fixture, tag: str, **over) -> dict:
+    document = a_file(fx, one_type(tag), one_type(tag, api_name=f"imp_{tag}b"))
+    document["link_types"] = [a_link(tag, **over)]
+    return document
+
+
+def links_of(client: TestClient, fx: Fixture) -> dict[str, dict]:
+    return {row["api_name"]: row for row in export(client, fx)["link_types"]}
+
+
+def test_a_link_whose_two_ends_are_both_new_in_the_file_is_applied(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The reason this was ○, stated as the test.** p.65's second workflow is
+    "copy the working state of one Ontology to another", where every type in the
+    file is new — so a link resolved before the object-type pass would name two
+    types that do not exist yet. Both ends are new here, which is the case a
+    single-pass importer cannot do at all.
+    """
+    tag = uuid.uuid4().hex[:8]
+    r = apply(client, fx, two_types_and_a_link(fx, tag))
+    assert r.status_code == 200, r.text
+    assert r.json()["links_added"] == [f"lnk_{tag}"]
+
+    made = links_of(client, fx)[f"lnk_{tag}"]
+    assert made["from_object_type"] == f"imp_{tag}"
+    assert made["to_object_type"] == f"imp_{tag}b"
+    assert made["cardinality"] == "one_to_many"
+    # The join and the side names travel with it, or the link is defined and
+    # not traversable (db 0027) — which looks identical in a listing and is a
+    # different ontology.
+    assert made["from_property"] == "name"
+    assert made["to_property"] == "$primary_key"
+    assert made["from_side_name"] == "Members"
+    assert made["to_side_name"] == "Owner"
+
+
+def test_re_importing_the_link_plans_no_changes(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The round trip §326 is built around, now that links are in it. A link
+    applied and then re-read has to compare equal to its own export, or every
+    later import reports work that is already done."""
+    tag = uuid.uuid4().hex[:8]
+    apply(client, fx, two_types_and_a_link(fx, tag)).raise_for_status()
+    again = plan(client, fx, two_types_and_a_link(fx, tag))
+    assert again.status_code == 200, again.text
+    assert again.json()["sections"]["link_types"]["changed"] == []
+    assert again.json()["sections"]["link_types"]["added"] == []
+
+
+def test_an_edited_join_is_applied_to_an_existing_link(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The half `set_link_join` calls mutable, which is what an import of an
+    existing link can carry."""
+    tag = uuid.uuid4().hex[:8]
+    apply(client, fx, two_types_and_a_link(fx, tag)).raise_for_status()
+    r = apply(client, fx, two_types_and_a_link(fx, tag, to_side_name="Holder"))
+    assert r.status_code == 200, r.text
+    assert r.json()["links_updated"] == [f"lnk_{tag}"]
+    assert links_of(client, fx)[f"lnk_{tag}"]["to_side_name"] == "Holder"
+
+
+def test_a_file_that_moves_an_end_of_an_existing_link_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """`set_link_join`'s own rule, which an import is not an exception to:
+    changing an endpoint "would make it a different relationship wearing the
+    same name". Applying the mutable half and leaving the ends would produce a
+    link matching neither the file nor the workspace."""
+    tag = uuid.uuid4().hex[:8]
+    apply(client, fx, two_types_and_a_link(fx, tag)).raise_for_status()
+    moved = two_types_and_a_link(fx, tag, to_object_type=f"imp_{tag}")
+    refused = apply(client, fx, moved)
+    assert refused.status_code == 422, refused.text
+    assert "different relationship wearing the same name" in refused.text
+
+
+def test_a_file_that_changes_an_existing_links_cardinality_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The same rule for the other immutable field — and asserted separately,
+    because one check covering both would pass with either clause deleted."""
+    tag = uuid.uuid4().hex[:8]
+    apply(client, fx, two_types_and_a_link(fx, tag)).raise_for_status()
+    refused = apply(
+        client, fx, two_types_and_a_link(fx, tag, cardinality="many_to_many"))
+    assert refused.status_code == 422, refused.text
+    assert "cardinality" in refused.text
+
+
+def test_nothing_is_written_when_a_link_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The check runs before the first write**, which is p.138's reasoning
+    about batches applied to a file: a half-applied import is worse than a
+    refused one.
+
+    The file carries a legal new object type *and* an illegal link change, so a
+    version that refused between the two passes would leave the type behind.
+    """
+    tag = uuid.uuid4().hex[:8]
+    apply(client, fx, two_types_and_a_link(fx, tag)).raise_for_status()
+    document = two_types_and_a_link(fx, tag, cardinality="many_to_many")
+    document["object_types"].append(one_type(tag, api_name=f"imp_{tag}c"))
+    refused = apply(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    assert f"imp_{tag}c" not in {t["api_name"] for t in export(client, fx)["object_types"]}
+
+
+def test_a_link_with_no_cardinality_is_refused_by_name(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**p.65's premise is a hand-edited file**, so a key somebody deleted has
+    to come back as a sentence about that key.
+
+    Before §340 nothing read `cardinality`, and the first thing that did turned
+    a file missing it into a 500 — an error that says nothing about the file and
+    nothing the reader can act on.
+    """
+    tag = uuid.uuid4().hex[:8]
+    document = two_types_and_a_link(fx, tag)
+    del document["link_types"][0]["cardinality"]
+    refused = apply(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    assert "cardinality" in refused.text
+    assert "one_to_many" in refused.text
+
+
+def test_a_link_with_no_api_name_is_refused_by_name(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The other field a link cannot be created without, and asserted apart
+    from the one above so neither check covers for the other."""
+    tag = uuid.uuid4().hex[:8]
+    document = two_types_and_a_link(fx, tag)
+    document["link_types"][0]["api_name"] = ""
+    refused = apply(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    assert "api_name" in refused.text
+
+
+def test_a_link_between_types_that_already_exist_is_still_applied(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The negative control for the two-pass ordering: the ends being new is
+    what makes the ordering necessary, not what makes the link get applied."""
+    tag = uuid.uuid4().hex[:8]
+    types_only = a_file(fx, one_type(tag), one_type(tag, api_name=f"imp_{tag}b"))
+    apply(client, fx, types_only).raise_for_status()
+    r = apply(client, fx, two_types_and_a_link(fx, tag))
+    assert r.status_code == 200, r.text
+    assert r.json()["links_added"] == [f"lnk_{tag}"]
 
 
 # ---- who may -------------------------------------------------------------------

@@ -8,8 +8,10 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  appliedSummary,
   exportFilename,
   leftAloneWarning,
+  notAppliedNote,
   originNote,
   planHeadline,
   refusalText,
@@ -167,5 +169,59 @@ describe("a refused file", () => {
     for (const nothing of [null, undefined, "", "  "]) {
       expect(refusalText(nothing)).toBe("This file could not be read as an ontology.");
     }
+  });
+});
+
+describe("what an import applied (§340)", () => {
+  const report = (over: Partial<Parameters<typeof appliedSummary>[0]> = {}) => ({
+    added: ["a"], updated: [], links_added: [], links_updated: [], ...over,
+  });
+
+  it("counts object types and link types apart", () => {
+    // **Not one total.** The two are applied by different passes and only one
+    // of them can be refused for redefining something, so a single number over
+    // a report whose link half failed would read as success.
+    const said = appliedSummary(report({ links_added: ["l1", "l2"] }));
+    expect(said).toContain("1 object type");
+    expect(said).toContain("2 link types");
+  });
+
+  it("leaves out a kind that has nothing in it", () => {
+    // The line is a receipt for what happened, and "0 link types" is not
+    // something that happened.
+    expect(appliedSummary(report())).not.toContain("link type");
+    expect(appliedSummary(report({ added: [], links_added: ["l1"] })))
+      .not.toContain("object type");
+  });
+
+  it("says so when nothing needed applying", () => {
+    expect(appliedSummary(report({ added: [] }))).toBe("Nothing needed applying.");
+  });
+
+  it("says new and updated separately", () => {
+    // A file that changed four links and added none is a different event from
+    // one that added four, and the count alone cannot tell them apart.
+    const said = appliedSummary(report({ added: [], updated: ["a", "b"] }));
+    expect(said).toContain("0 new");
+    expect(said).toContain("2 updated");
+  });
+});
+
+describe("what an import did not apply (§340)", () => {
+  it("names the action types it left alone", () => {
+    // §214: a reader whose file carried three action types and got no word of
+    // them would believe they arrived.
+    const said = notAppliedNote({ not_applied: { action_types: ["a", "b"] } });
+    expect(said).toContain("2 action types");
+    expect(said).toContain("not built yet");
+  });
+
+  it("is silent when the file had none", () => {
+    expect(notAppliedNote({ not_applied: { action_types: [] } })).toBe("");
+  });
+
+  it("uses the singular for one", () => {
+    expect(notAppliedNote({ not_applied: { action_types: ["a"] } }))
+      .toContain("1 action type was");
   });
 });
