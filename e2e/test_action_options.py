@@ -737,6 +737,35 @@ def test_a_walk_written_in_the_panel_narrows_the_values(page, api):
     assert not any("closed" in o for o in options_of(page, "region"))
 
 
+def test_the_walk_panel_opens_on_a_walk_that_can_be_saved(page, api):
+    """**Which type the panel is handed, and the sweep found it.**
+
+    `blankSearchAround` starts the walk at the type the parameter's set is read
+    from and no hops — p.36's default written out, and the one state that is
+    both empty and saveable. Handing the panel the *action's* type instead is
+    invisible inside it, because the same value is used to seed the walk and to
+    judge where it lands: the note it draws compares the wrong type against
+    itself and says nothing is wrong. What it is not invisible to is the
+    server, which refuses a walk landing anywhere but the type the options
+    name — so the panel would open refusing to save, which is §214 with the
+    refusal deferred to the button.
+    """
+    mod = build_walked(api, "Walked options blank", walked=False)
+    open_editor(page, mod)
+    page.get_by_label("Walk to region from somewhere else").check()
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    saved = api.call(
+        "GET", f"/workspaces/{mod.workspace_id}/action-types/{mod.action['id']}"
+    )
+    region = next(p for p in saved["parameters"] if p["api_name"] == "region")
+    assert region["dropdown_search_around"] == {
+        "start": {"kind": "object_type", "object_type_id": mod.issue_type},
+        "hops": [],
+    }
+
+
 def test_the_walk_panel_is_not_offered_before_there_is_a_set_to_walk_to(page, api):
     """A walk has to land somewhere, and for this shape the only thing that
     says where is the options document — so until one names a type and a
