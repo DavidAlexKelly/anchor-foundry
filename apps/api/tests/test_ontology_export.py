@@ -100,6 +100,43 @@ def exported(client: TestClient, fx: Fixture) -> dict:
     )
     assert action.status_code == 201, action.text
 
+    # **Configured, not bare** (§341). The action used to be created and never
+    # touched, so every question below about what an export carries was asked of
+    # a document with nothing in it to carry — and the five parameter columns
+    # and two whole tables §326 never read looked exactly like a feature that
+    # worked.
+    saved = client.put(
+        f"{wbase(fx)}/action-types/{action.json()['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={"parameters": [
+                  {"api_name": "tier", "display_name": "Tier",
+                   "data_type": "string"},
+                  {"api_name": "name", "display_name": "Name",
+                   "data_type": "string",
+                   "dropdown_filters": [],
+                   "overrides": [
+                       {"conditions": [{
+                            "left": {"kind": "parameter", "parameter": "tier"},
+                            "operator": "is",
+                            "right": {"kind": "value", "value": "gold"}}],
+                        "set_required": True}],
+                   },
+              ],
+              "rules": [{"kind": "modify_object",
+                         "config": {"property": "name", "parameter": "name"}}],
+              "criteria": []},
+    )
+    assert saved.status_code == 200, saved.text
+    sectioned = client.put(
+        f"{wbase(fx)}/action-types/{action.json()['id']}/sections",
+        headers=hdr(fx.editor_sub),
+        json={"sections": [
+            {"title": "Why", "description": "What changed",
+             "parameters": ["tier", "name"]},
+        ]},
+    )
+    assert sectioned.status_code == 200, sectioned.text
+
     r = client.get(f"{wbase(fx)}/ontology-export", headers=hdr(fx.editor_sub))
     assert r.status_code == 200, r.text
     return {"doc": r.json(), "api_name": f"exp_{tag}",
@@ -215,7 +252,8 @@ def test_an_action_type_names_its_object_type_by_name(exported: dict) -> None:
                   if a["api_name"] == exported["action"])
     assert action["object_type"] == exported["api_name"]
     # The definition travels too, or the copy is an action that does nothing.
-    assert [p["api_name"] for p in action["parameters"]] == ["name"]
+    # In declaration order, which is the order the form draws them in.
+    assert [p["api_name"] for p in action["parameters"]] == ["tier", "name"]
     assert [r["kind"] for r in action["rules"]] == ["modify_object"]
 
 
@@ -297,6 +335,67 @@ def test_a_link_type_brings_its_join(client: TestClient, fx: Fixture) -> None:
     assert link["to_object_type"] == f"lnk_right_{tag}"
     assert link["from_property"] == "key"
     assert link["to_property"] == "key"
+
+
+# ---- the action configuration an export used to drop (§341) --------------------
+def an_action(doc: dict, api_name: str) -> dict:
+    return next(a for a in doc["action_types"] if a["api_name"] == api_name)
+
+
+def test_a_parameters_dropdown_filters_travel(exported: dict) -> None:
+    """p.36's filters (§331), which an export never carried — so a copy of an
+    ontology arrived with every narrowed dropdown wide open, and nothing said
+    so. They travel verbatim because the document names properties and
+    parameters by name and holds no ids."""
+    action = an_action(exported["doc"], exported["action"])
+    named = {p["api_name"]: p for p in action["parameters"]}
+    assert "dropdown_filters" in named["name"]
+    assert named["name"]["dropdown_filters"] == []
+
+
+def test_a_parameters_overrides_travel(exported: dict) -> None:
+    """p.43-46's overrides (§329). `action_parameter_overrides` was one of two
+    tables §326 never read at all."""
+    action = an_action(exported["doc"], exported["action"])
+    named = {p["api_name"]: p for p in action["parameters"]}
+    [override] = named["name"]["overrides"]
+    assert override["set_required"] is True
+    # The condition names the parameter it reads, which is what makes it
+    # portable — an override that named a parameter by id could not travel.
+    assert override["conditions"][0]["left"]["parameter"] == "tier"
+
+
+def test_an_actions_sections_travel_and_name_their_parameters(
+    exported: dict
+) -> None:
+    """p.29's form sections (§328), the other table §326 never read.
+
+    **Each section names the parameters it holds**, which is the shape the
+    sections API itself uses — a section has no api_name and its title may
+    repeat, so an id or an index would be a handle this document invented.
+    """
+    action = an_action(exported["doc"], exported["action"])
+    [section] = action["sections"]
+    assert section["title"] == "Why"
+    assert section["parameters"] == ["tier", "name"]
+    assert section["columns"] == 1
+
+
+def test_a_parameter_in_no_section_is_in_no_sections_list(
+    client: TestClient, fx: Fixture, exported: dict
+) -> None:
+    """The negative control: membership is read off the parameter's section, not
+    assumed for every parameter of the action. Without it, a version listing
+    every api_name in every section passes the test above."""
+    action = an_action(exported["doc"], exported["action"])
+    listed = [name for sec in action["sections"] for name in sec["parameters"]]
+    # Both are in the one section here, so the claim this pins is that the list
+    # is *derived* — asserted by asking a second action, which has none.
+    assert sorted(listed) == ["name", "tier"]
+    bare = [a for a in exported["doc"]["action_types"]
+            if a["api_name"] != exported["action"]]
+    for other in bare:
+        assert other["sections"] == [], other["api_name"]
 
 
 def test_nothing_in_the_ontology_is_identified_by_id(exported: dict) -> None:

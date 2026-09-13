@@ -117,6 +117,14 @@ JSON_FIELDS = frozenset({
     "struct_fields",
     "default_value",
     "config",
+    # §341's additions. A filter document names properties and parameters by
+    # *name* and carries no ids, which is what lets it travel verbatim — unlike
+    # the three dropdown fields beside it, which name object and link types by
+    # id and are §326's remaining ○.
+    "dropdown_filters",
+    "conditions",
+    "set_default",
+    "visible_when",
 })
 
 
@@ -215,9 +223,9 @@ async def export_ontology(
     parameters = await fetch_all(
         conn,
         """
-        SELECT action_type_id, api_name, display_name,
+        SELECT id, action_type_id, api_name, display_name,
                data_type::text AS data_type, required, default_value, hidden,
-               sort_order
+               sort_order, section_id, dropdown_filters
           FROM action_parameters
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -247,6 +255,41 @@ async def export_ontology(
         """,
         {"wid": str(workspace_id)},
     )
+    # p.29's form sections (§328, db 0081) and p.43-46's overrides (§329, db
+    # 0082), which §326 never read at all — so an export dropped every section
+    # and every override somebody had configured, silently (§341).
+    sections = await fetch_all(
+        conn,
+        """
+        SELECT id, action_type_id, title, description, columns, collapsible,
+               collapsed, hidden, visible_when, sort_order
+          FROM action_sections
+         WHERE action_type_id = ANY(
+                   SELECT id FROM action_types WHERE workspace_id = :wid)
+         ORDER BY action_type_id, sort_order, id
+        """,
+        {"wid": str(workspace_id)},
+    )
+    overrides = await fetch_all(
+        conn,
+        """
+        SELECT o.parameter_id, o.conditions, o.set_hidden, o.set_required,
+               o.set_default, o.sort_order
+          FROM action_parameter_overrides o
+          JOIN action_parameters p ON p.id = o.parameter_id
+         WHERE p.action_type_id = ANY(
+                   SELECT id FROM action_types WHERE workspace_id = :wid)
+         ORDER BY o.parameter_id, o.sort_order, o.id
+        """,
+        {"wid": str(workspace_id)},
+    )
+    sections_by: dict[str, list[dict[str, Any]]] = {}
+    for row in sections:
+        sections_by.setdefault(str(row["action_type_id"]), []).append(row)
+    overrides_by: dict[str, list[dict[str, Any]]] = {}
+    for row in overrides:
+        overrides_by.setdefault(str(row["parameter_id"]), []).append(row)
+
     params_by: dict[str, list[dict[str, Any]]] = {}
     for row in parameters:
         params_by.setdefault(str(row["action_type_id"]), []).append(row)
@@ -305,8 +348,49 @@ async def export_ontology(
                         "default_value": _json(p["default_value"]),
                         "hidden": p["hidden"],
                         "sort_order": p["sort_order"],
+                        # p.36's filters (§331), which travel verbatim because
+                        # the document names properties and parameters by name.
+                        "dropdown_filters": _json(p["dropdown_filters"]) or [],
+                        # p.43-46's overrides (§329), nested under the parameter
+                        # they belong to rather than listed beside it — they
+                        # have no identity of their own and an order that is the
+                        # rule (p.45: if more than one holds, the first wins).
+                        "overrides": [
+                            {
+                                "conditions": _json(o["conditions"]),
+                                "set_hidden": o["set_hidden"],
+                                "set_required": o["set_required"],
+                                "set_default": _json(o["set_default"]),
+                                "sort_order": o["sort_order"],
+                            }
+                            for o in overrides_by.get(str(p["id"]), [])
+                        ],
                     }
                     for p in params_by.get(str(a["id"]), [])
+                ],
+                # p.29's sections (§328). **Each names the parameters it holds**
+                # rather than the parameter naming its section, because a
+                # section has no portable identity — no api_name, and titles
+                # that may repeat — so an id or an index would be a handle this
+                # document invented. Naming members needs neither.
+                "sections": [
+                    {
+                        "title": sec["title"],
+                        "description": sec["description"],
+                        "columns": sec["columns"],
+                        "collapsible": sec["collapsible"],
+                        "collapsed": sec["collapsed"],
+                        "hidden": sec["hidden"],
+                        "visible_when": _json(sec["visible_when"]),
+                        "sort_order": sec["sort_order"],
+                        "parameters": [
+                            p["api_name"]
+                            for p in params_by.get(str(a["id"]), [])
+                            if p["section_id"] is not None
+                            and str(p["section_id"]) == str(sec["id"])
+                        ],
+                    }
+                    for sec in sections_by.get(str(a["id"]), [])
                 ],
                 "rules": [
                     {"kind": r["kind"], "config": _json(r["config"]),
