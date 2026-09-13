@@ -704,6 +704,22 @@ def test_the_same_file_going_back_where_it_came_from_is_not_refused(
     assert accepted.status_code == 200, accepted.text
 
 
+def test_a_hand_edited_rule_that_is_not_an_object_is_not_a_server_fault(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.65's premise is somebody editing this JSON in a text editor, and both
+    of §343's readers run over every rule in the document — so a `config` that
+    is a string would turn a typo into a 500 with nothing in it. §340 shipped
+    exactly that defect for a link's missing `cardinality`; this is the same
+    mistake, refused in advance."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [an_action_ruled(
+        tag, ("create_link", "link_type: no_such_link"))]
+    read = plan(client, fx, document)
+    assert read.status_code == 200, read.text
+
+
 def test_a_copy_whose_notify_rule_reads_a_property_is_not_refused(
     client: TestClient, fx: Fixture
 ) -> None:

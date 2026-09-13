@@ -30,10 +30,11 @@ do not.
 way it was not there: `delete_link_type` refuses a link an action *parameter*
 walks (§339) and nothing refuses one an action *rule* names, so a rule holding a
 dangling link id is a state this platform can be in today. A file carrying that
-id would look portable and refuse on the way in; a file with the key missing
-refuses too — with `_validate_definition`'s own sentence, "a link rule names a
-link type this workspace does not have", which is the truth about the rule as it
-already stands.
+id would look portable and mean nothing anywhere; a file with the key missing
+says nothing it cannot say, which is all it means **today** — nothing applies
+action types yet. The day something does, `_validate_definition` refuses it by
+name, "a link rule names a link type this workspace does not have", which is the
+truth about the rule as it already stands.
 
 **And two references leave the ontology, which is p.67's refusal arriving after
 all.** §326 recorded that p.67's `UnreferencedRuleSets` had no cause here,

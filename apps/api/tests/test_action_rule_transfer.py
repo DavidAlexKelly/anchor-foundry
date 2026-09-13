@@ -115,8 +115,9 @@ def test_a_link_this_ontology_does_not_have_is_dropped_not_written() -> None:
     *parameter* walks and nothing refuses one an action *rule* names, so a rule
     holding a dangling link id is a state this platform can be in today.
 
-    A file carrying that id would look portable and refuse on the way in. A file
-    with the key missing refuses too — with `_validate_definition`'s own "a link
+    A file carrying that id would look portable and mean nothing anywhere. A
+    file with the key missing says nothing it cannot say — and the day action
+    types are applied, `_validate_definition` refuses it by name with "a link
     rule names a link type this workspace does not have", which is the truth
     about the rule as it already stands.
     """
@@ -191,6 +192,20 @@ def test_a_notify_rule_that_reads_a_property_stays_inside() -> None:
     assert transfer.outside_ontology({"kind": "notify", "config": {
         "recipients": {"kind": "object_property", "parameter": "who",
                        "object_type": ISSUE, "property": "owner_id"}}}) == []
+
+
+# ---- p.65's hand-edited file ---------------------------------------------------
+def test_a_config_that_is_not_an_object_names_nothing() -> None:
+    """**p.65's premise is somebody editing this JSON in a text editor**, so a
+    `config` that is a string is a file this platform will be handed. Both
+    readers are asked, because the plan calls both on every rule in the
+    document and either one reaching for `.get` on a string turns a typo into a
+    500 with nothing in it (§340 shipped exactly that defect for a link's
+    missing `cardinality`).
+    """
+    broken = {"kind": "create_link", "config": "link_type: raised_by"}
+    assert list(transfer.references(broken)) == []
+    assert transfer.outside_ontology({"kind": "webhook", "config": "oops"}) == []
 
 
 def test_a_rule_that_names_no_webhook_reaches_nothing() -> None:
