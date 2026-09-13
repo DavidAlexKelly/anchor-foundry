@@ -20,6 +20,7 @@ answer honestly.
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 import sys
@@ -67,6 +68,20 @@ def test_no_document_is_a_parameter_that_takes_what_is_typed() -> None:
     assert check(a_parameter()) is None
 
 
+def test_asking_a_parameter_with_no_document_reads_nothing() -> None:
+    """The guard returns before the connection is touched, which is how this
+    can be asked without one — and a `TypeError` would be a poor answer for a
+    caller that forgot to check.
+
+    `asyncio.run` rather than a marker: this suite has no async plugin
+    configured, and a test that silently *skips* proves even less than one that
+    passes for the wrong reason.
+    """
+    assert asyncio.run(options.options(
+        None, a_parameter(), workspace_id=uuid.uuid4(),
+    )) == ([], False)
+
+
 def test_a_legal_document_comes_back_normalised() -> None:
     assert check(a_parameter(options_from=from_set())) == {
         "object_type_id": REGIONS, "property": "label",
@@ -82,10 +97,17 @@ def test_an_unknown_option_is_refused() -> None:
 
 def test_an_object_parameter_is_refused() -> None:
     """**p.33's other shape**, which §330 built. A parameter with both would be
-    two answers to "what may I pick" and no way to say which won."""
+    two answers to "what may I pick" and no way to say which won.
+
+    Asserted on the sentence that *points at the other dropdown*, not merely on
+    the word "object": `object` is not in `OPTIONABLE_TYPES` either, so the
+    fallback refusal says "is a object, which cannot be offered…" and a looser
+    assertion passed with this branch deleted. A sweep said so.
+    """
     with pytest.raises(ValueError) as caught:
         check(a_parameter(data_type="object", options_from=from_set()))
-    assert "object" in str(caught.value)
+    assert "single object reference" in str(caught.value)
+    assert "cannot be offered" not in str(caught.value)
 
 
 def test_a_type_that_cannot_be_offered_as_a_list_is_refused() -> None:
@@ -304,6 +326,9 @@ def test_the_options_are_the_distinct_values_of_the_property(
     offer = offered(client, fx, setup)["region"]
     assert offer["kind"] == "values"
     assert offer["values"] == ["EU", "UK", "US"]
+    # And **not** truncated, which the test below cannot say for it: without
+    # this, "everything is truncated" passes every assertion in this file.
+    assert offer["truncated"] is False
 
 
 def test_a_values_offer_says_which_shape_it_is(
@@ -345,6 +370,43 @@ def test_several_values_do_not_prefill_through_the_api(
                                "property": "label"},
            required=True).raise_for_status()
     assert offered(client, fx, setup)["region"]["prefill"] is None
+
+
+def test_an_optional_parameter_with_one_value_does_not_prefill_through_the_api(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """p.33's `required` qualifier, through the door a caller uses.
+
+    The prefill tests above all use a required parameter, so a route that
+    passed `required=True` regardless behaved identically — a sweep said so.
+    """
+    tag = uuid.uuid4().hex[:8]
+    only = a_type(client, fx, f"opt{tag}", [("a", "SOLE"), ("b", "SOLE")])
+    define(client, fx, setup, {"object_type_id": only, "property": "label"},
+           required=False).raise_for_status()
+    offer = offered(client, fx, setup)["region"]
+    assert offer["values"] == ["SOLE"]
+    assert offer["prefill"] is None
+
+
+def test_what_is_stored_is_the_normalised_document(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """**The check's answer is what gets written**, not what arrived.
+
+    A property with whitespace round it passes the refusals — `check_options`
+    strips before comparing — and would then be grouped on verbatim, so the
+    dropdown would be empty for a reason nobody could see. The route stores
+    what the check returned, and a sweep that dropped the assignment left every
+    other test passing.
+    """
+    define(client, fx, setup, {"object_type_id": setup["region_type"],
+                               "property": "  label  "}).raise_for_status()
+    read = client.get(f"{wbase(fx)}/action-types/{setup['action']}",
+                      headers=hdr(fx.editor_sub)).json()
+    region = next(p for p in read["parameters"] if p["api_name"] == "region")
+    assert region["options_from"]["property"] == "label"
+    assert offered(client, fx, setup)["region"]["values"] == ["EU", "UK", "US"]
 
 
 def test_a_submission_outside_the_options_is_refused(

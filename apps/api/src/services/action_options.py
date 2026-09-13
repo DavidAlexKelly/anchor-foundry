@@ -151,6 +151,11 @@ async def options(
     """
     declared = options_of(parameter)
     if declared is None:
+        # Returns before the connection is touched, which is what lets this be
+        # asked without one — and is why it is a guard rather than a contract
+        # note. Both callers check `options_of` first, so nothing reaches it in
+        # this build; a `TypeError` would be a poor answer for the one that
+        # eventually does not.
         return [], False
     prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
     buckets, distinct = await instance_store.store_for(conn).group_object_set(
@@ -160,7 +165,12 @@ async def options(
         property_name=str(declared["property"]),
         limit=limit,
     )
-    values = sorted({str(value) for value, _count, _metric in buckets})
+    # **Not deduplicated here.** `group_object_set` is "one number per distinct
+    # value of a property" — the set comprehension this line used to build was
+    # a second copy of a promise the store makes, and a sweep removed it with
+    # nothing failing (§213). Sorting is this module's own, for the reason
+    # below.
+    values = sorted(str(value) for value, _count, _metric in buckets)
     return values, distinct > len(values)
 
 
