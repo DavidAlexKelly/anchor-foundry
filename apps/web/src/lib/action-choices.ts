@@ -33,9 +33,29 @@ export interface ParameterChoice {
 
 export interface ParameterChoices {
   parameter: string;
-  object_type_id: string;
-  object_type_name: string;
+  /** Which of p.33's two shapes this offer is (§335). `objects` is its "single
+   * object reference"; `values` is its "multiple choice", whose options are
+   * what one property holds across a set.
+   *
+   * **A discriminator rather than "whichever list is non-empty"**: an object
+   * type with no objects and a property with no values are both empty, and the
+   * form draws a different control — and a different sentence — for each.
+   * Absent on a payload that predates §335, which is an object offer. */
+  kind?: "objects" | "values";
+  /** `null` on a `values` offer, which is about a property rather than a type
+   * the form names. */
+  object_type_id?: string | null;
+  object_type_name?: string | null;
   items: ParameterChoice[];
+  /** p.33's allowed values, for a `values` offer. Sorted for display and
+   * truncated by frequency — the server keeps the most common and shows them
+   * in an order that does not reshuffle as the data moves. */
+  values?: string[];
+  /** p.33's "will automatically prefill with the corresponding property
+   * value", or `null`. **Sent rather than worked out here**, because the
+   * condition is about the object *set* and the form is only ever shown what
+   * the set left. */
+  prefill?: string | null;
   /** Whether there are more objects than the control can hold. */
   truncated: boolean;
   /** The parameter a p.36 filter reads that nothing has supplied yet (§331).
@@ -60,7 +80,26 @@ export function offerFor(
   apiName: string,
   offers: ParameterChoices[] | undefined,
 ): ParameterChoices | null {
-  return (offers ?? []).find((o) => o.parameter === apiName) ?? null;
+  // **Only p.33's object shape** (§335). The same response now carries
+  // `values` offers for multiple-choice parameters, and every caller of this
+  // function draws an object dropdown from what it returns — a values offer
+  // reaching one of them would render a list of objects that are not there.
+  return (offers ?? []).find(
+    (o) => o.parameter === apiName && (o.kind ?? "objects") === "objects") ?? null;
+}
+
+/** p.33's multiple-choice offer for one parameter, or `null`.
+ *
+ * `offerFor`'s sibling rather than a `kind` check at every call site: the two
+ * shapes are read by different controls, and a function that returned either
+ * would put the choosing in the components.
+ */
+export function valuesFor(
+  apiName: string,
+  offers: ParameterChoices[] | undefined,
+): ParameterChoices | null {
+  return (offers ?? []).find(
+    (o) => o.parameter === apiName && o.kind === "values") ?? null;
 }
 
 export function labelOf(choice: ParameterChoice): string {
@@ -77,7 +116,7 @@ export function labelOf(choice: ParameterChoice): string {
  */
 export function truncationNote(offer: ParameterChoices | null): string | null {
   if (!offer?.truncated) return null;
-  return `Showing the first ${offer.items.length} ${offer.object_type_name} `
+  return `Showing the first ${offer.items.length} ${offer.object_type_name ?? "object"} `
     + "objects. Narrow the parameter with a filter to reach the rest.";
 }
 

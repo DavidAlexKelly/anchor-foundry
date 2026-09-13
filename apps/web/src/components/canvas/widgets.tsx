@@ -207,8 +207,9 @@ import {
 import { hasOverrides, overrideKey } from "@/lib/action-overrides";
 import {
   emptyNote as noChoicesNote, labelOf as choiceLabel, offerFor,
-  truncationNote as choicesTruncatedNote,
+  truncationNote as choicesTruncatedNote, valuesFor,
 } from "@/lib/action-choices";
+import { emptyValuesNote, valuesTruncationNote } from "@/lib/action-options";
 import { filterKey, isWaiting, waitingNote } from "@/lib/action-filters";
 import { interfaceQuery } from "./routing";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
@@ -11801,6 +11802,37 @@ export function CanvasActionForm({
     // and the very next run would otherwise undo nothing but re-render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveQ.data, overridden]);
+  // p.33: "If only one linked object is available in the resulting object set
+  // and the parameter is required, the parameter dropdown will automatically
+  // prefill with the corresponding property value" (§335).
+  //
+  // The same shape as the effect above and for the same reasons: the condition
+  // is decided by the server, because it is about the object *set* and this
+  // form is only ever shown what the set left; and only untyped fields are
+  // filled, so a value that appeared while somebody was choosing does not take
+  // the choice out from under them.
+  //
+  // **`seeded` is in the dependencies and the browser test is why.** Choosing
+  // a subject re-seeds the whole form — "a different object is a different
+  // form" — and the offers have not changed, so an effect watching only them
+  // fills the box once, has it wiped a moment later, and never puts it back.
+  // p.33's prefill belongs to the form rather than to the response, so it is
+  // reapplied whenever the form is.
+  useEffect(() => {
+    const fill: Record<string, unknown> = {};
+    for (const offer of offersQ.data ?? []) {
+      if (offer.kind !== "values" || !offer.prefill) continue;
+      if (typed[offer.parameter]) continue;
+      if (hasValue(values[offer.parameter])) continue;
+      fill[offer.parameter] = offer.prefill;
+    }
+    if (Object.keys(fill).length === 0) return;
+    setValues((was) => {
+      const next = { ...was, ...fill };
+      return Object.keys(fill).every((k) => was[k] === next[k]) ? was : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offersQ.data, seeded]);
 
   const missingRequired = visible.filter((p) => p.required && !hasValue(values[p.api_name]));
   // A required parameter inside a section this form is not showing. The server
@@ -11810,6 +11842,12 @@ export function CanvasActionForm({
   const unreachable = unreachableNote(requiredElsewhere(declared, sections, shown));
   const field = (parameter: FormParameter) => {
     const offer = offerFor(parameter.api_name, offersQ.data);
+    // p.33's *other* shape (§335): a parameter that is not an object, whose
+    // allowed values are what one property holds across a set. Its own lookup
+    // rather than a `kind` check here, because the two are read by different
+    // controls and `offerFor` returning either would put the choosing in this
+    // component.
+    const choice = valuesFor(parameter.api_name, offersQ.data);
     return (
     <label className="field" key={parameter.api_name} data-parameter={parameter.api_name}>
       <span className="field-label">
@@ -11851,6 +11889,31 @@ export function CanvasActionForm({
               <option key={choice.id} value={choice.id}>{choiceLabel(choice)}</option>
             ))}
           </select>
+        ) : choice ? (
+          /* p.33's multiple choice. A plain `<select>` of values rather than
+             `PropertyInput`, because the point of the control is that the
+             options are derived — a typed value would be refused by the same
+             rule that produced them (§214, and the check on the submit path). */
+          <select
+            aria-label={parameterLabel(parameter)}
+            required={parameter.required}
+            data-testid="values-select"
+            value={values[parameter.api_name] === null
+              || values[parameter.api_name] === undefined
+              ? "" : String(values[parameter.api_name])}
+            onChange={(e) => {
+              setTyped((was) => ({ ...was, [parameter.api_name]: true }));
+              setValues({
+                ...values,
+                [parameter.api_name]: e.target.value === "" ? null : e.target.value,
+              });
+            }}
+          >
+            <option value="">Choose…</option>
+            {(choice.values ?? []).map((value) => (
+              <option key={value} value={value}>{value}</option>
+            ))}
+          </select>
         ) : (
         <PropertyInput
           workspaceId={workspaceId}
@@ -11883,6 +11946,21 @@ export function CanvasActionForm({
         {offer && choicesTruncatedNote(offer) && (
           <span className="field-hint" data-testid="choices-truncated">
             {choicesTruncatedNote(offer)}
+          </span>
+        )}
+        {/* p.33's two states a derived list of values has and a text box does
+            not (§335). Their own notes rather than the object ones above:
+            "there are no Teams" and "no object has a value for that property"
+            are different things to be told, and the second is the one an
+            editor can act on. */}
+        {emptyValuesNote(choice) && (
+          <span className="field-hint" data-testid="values-empty">
+            {emptyValuesNote(choice)}
+          </span>
+        )}
+        {valuesTruncationNote(choice) && (
+          <span className="field-hint" data-testid="values-truncated">
+            {valuesTruncationNote(choice)}
           </span>
         )}
       </fieldset>

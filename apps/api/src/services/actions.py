@@ -1197,7 +1197,7 @@ def seed_from_instance(
 _PARAMETER_COLUMNS = (
     "id, action_type_id, api_name, display_name, data_type, required, "
     "default_value, hidden, sort_order, object_type_id, dropdown_filters, "
-    "dropdown_search_around"
+    "dropdown_search_around, options_from"
 )
 
 
@@ -2549,6 +2549,24 @@ async def set_definition(
             object_type_ids=workspace_type_ids,
             parameters=parameters,
         )
+    # p.33's multiple-choice options, checked here for the reason the two above
+    # are: a property belongs to an object type, and `_validate_definition` is a
+    # pure function over a document (§335).
+    from .action_options import check_options, options_of
+
+    for parameter in parameters:
+        if options_of(parameter) is None:
+            continue
+        named = str((options_of(parameter) or {}).get("object_type_id") or "")
+        resolved: dict[str, set[str]] = {}
+        if named:
+            try:
+                await ontology_service.get_type(conn, workspace_id, UUID(named))
+            except (NotFoundError, ValueError):
+                pass
+            else:
+                resolved[named] = await _properties_of(named)
+        parameter["options_from"] = check_options(parameter, properties=resolved)
     _validate_definition(
         parameters=parameters, rules=rules, criteria=criteria,
         property_types=property_types, object_type_id=object_type_id,
@@ -2613,11 +2631,11 @@ async def set_definition(
                 INSERT INTO action_parameters
                     (action_type_id, api_name, display_name, data_type, required,
                      default_value, hidden, sort_order, section_id, object_type_id,
-                     dropdown_filters, dropdown_search_around)
+                     dropdown_filters, dropdown_search_around, options_from)
                 VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type), :required,
                         CAST(:default AS jsonb), :hidden, :ord, :section,
                         CAST(:otype AS uuid), CAST(:filters AS jsonb),
-                        CAST(:around AS jsonb))
+                        CAST(:around AS jsonb), CAST(:options AS jsonb))
                 """
             ),
             {
@@ -2650,6 +2668,13 @@ async def set_definition(
                 "around": (
                     json.dumps(parameter["dropdown_search_around"])
                     if parameter.get("dropdown_search_around") else None
+                ),
+                # p.33's multiple-choice options (db 0086). NULL for a
+                # parameter that takes whatever is typed, which is every one
+                # written before today.
+                "options": (
+                    json.dumps(parameter["options_from"])
+                    if parameter.get("options_from") else None
                 ),
             },
         )
