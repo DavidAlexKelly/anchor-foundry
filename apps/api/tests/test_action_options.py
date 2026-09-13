@@ -856,6 +856,27 @@ def test_a_walk_that_reaches_nothing_offers_nothing(
     assert offer["waiting_for"] is None
 
 
+def test_a_start_that_names_nothing_offers_nothing(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """**The other empty, and the sweep found it.** An id naming no object the
+    caller can read is not "nobody has chosen yet": the walk starts from an
+    empty set, so it reaches nothing and there is nothing to offer. Falling
+    through to an unfiltered read would offer every state in the workspace —
+    the silent widening decision 0002 exists to remove — and it is the only
+    input that reaches that branch, because an employee who merely has no
+    issues still gives the walk a join value to look for.
+
+    `start_key_of`'s own docstring draws this line and nothing was asking it to
+    hold. The submission is refused either way, by `check_object_values` and in
+    a sentence about the box that actually holds the bad value.
+    """
+    define_walked(client, fx, setup, linked).raise_for_status()
+    offer = states(client, fx, setup, {"who": str(uuid.uuid4())})
+    assert offer["values"] == []
+    assert offer["waiting_for"] is None
+
+
 def test_p33s_linked_prefill(
     client: TestClient, fx: Fixture, setup, linked
 ) -> None:
@@ -911,6 +932,31 @@ def test_the_walk_narrows_the_check_too(
     assert run(client, fx, setup,
                {"who": grace, "state": "open"}).status_code == 200
     refused = run(client, fx, setup, {"who": grace, "state": "closed"})
+    assert refused.status_code == 422, refused.text
+    assert "offers" in refused.text
+
+
+def test_the_check_carries_the_filters_as_well_as_the_walk(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """**Both narrowings on the submit path, which the sweep found was one.**
+
+    The filters ride on the walk's outermost set rather than beside it — the
+    compiled definition carries them, and the resolver hands them back — so a
+    check built from a walk with no filters on it silently accepts everything
+    the walk reaches. Ada has an open issue and a closed one, and the filter
+    leaves only the closed one, so `open` is exactly the value that separates
+    "narrowed by both" from "narrowed by the walk alone".
+    """
+    define_walked(
+        client, fx, setup, linked,
+        filters_doc=[{"property": "state",
+                      "values": [{"kind": "value", "value": "closed"}]}],
+    ).raise_for_status()
+    ada = linked["people"]["E1"]
+    assert run(client, fx, setup,
+               {"who": ada, "state": "closed"}).status_code == 200
+    refused = run(client, fx, setup, {"who": ada, "state": "open"})
     assert refused.status_code == 422, refused.text
     assert "offers" in refused.text
 
