@@ -1495,7 +1495,9 @@ export const objects = {
     request<{
       added: string[];
       updated: string[];
-      not_applied: { link_types: string[]; action_types: string[] };
+      links_added: string[];
+      links_updated: string[];
+      not_applied: { action_types: string[] };
       absent_from_file: string[];
     }>(`/workspaces/${wid}/ontology-import`, {
       method: "POST",

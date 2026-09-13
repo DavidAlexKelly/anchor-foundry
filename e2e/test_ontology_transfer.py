@@ -248,3 +248,54 @@ def test_a_file_that_leaves_a_type_out_says_it_is_left_alone(
     expect(warning).to_be_visible(timeout=30000)
     expect(warning).to_contain_text("left alone")
     expect(warning).to_contain_text("Ontology cleanup")
+
+
+def test_a_link_in_the_file_reaches_the_ontology(page, api, workspace) -> None:
+    """**p.65's link types, through the screen** (§340).
+
+    The API tests prove the two-pass resolution; what needs a browser is the
+    join between the server's report and the sentence above the button — the
+    counts arrive in fields nothing else reads, and a line that said "1 added"
+    over a link that was never created would look exactly like success.
+
+    Both ends are new in the file, which is p.65's "copy the working state of
+    one Ontology to another" and the case a single-pass import cannot do.
+    """
+    open_advanced(page, workspace)
+    document = api.call(
+        "GET", f"/workspaces/{workspace.workspace_id}/ontology-export")
+    tag = uuid.uuid4().hex[:8]
+    template = next(t for t in document["object_types"]
+                    if t["api_name"] == f"tr_{workspace.tag}")
+    left, right = f"lft_{tag}", f"rgt_{tag}"
+    document["object_types"] += [
+        {**template, "api_name": left, "display_name": "Left"},
+        {**template, "api_name": right, "display_name": "Right"},
+    ]
+    document["link_types"].append({
+        "api_name": f"joins_{tag}", "display_name": "Joins",
+        "cardinality": "one_to_many",
+        "from_object_type": left, "to_object_type": right,
+        "from_property": "name", "to_property": "$primary_key",
+        "from_side_name": "Members", "to_side_name": "Owner",
+        "status": "experimental", "deprecation": None,
+    })
+    choose(page, document)
+
+    expect(page.get_by_test_id("plan-link_types")).to_contain_text(
+        "1 new", timeout=30000)
+    apply = page.get_by_test_id("ontology-import-apply")
+    expect(apply).to_be_enabled()
+    apply.click()
+    # The receipt names the link half, which is the field this unit added.
+    expect(page.get_by_test_id("ontology-applied")).to_contain_text(
+        "1 link type", timeout=30000)
+
+    def links() -> list[str]:
+        return [
+            row["api_name"] for row in
+            api.call("GET", f"/workspaces/{workspace.workspace_id}/link-types")
+        ]
+
+    eventually(links, lambda names: f"joins_{tag}" in names,
+               what="the imported link type to reach the ontology")

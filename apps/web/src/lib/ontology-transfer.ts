@@ -111,3 +111,60 @@ export function originNote(plan: OntologyPlan): string {
 export function refusalText(message: string | null | undefined): string {
   return message?.trim() || "This file could not be read as an ontology.";
 }
+
+/** What an import report is a report *of*, as one sentence (§340).
+ *
+ * **Object types and link types are counted separately** rather than added
+ * together, because they are applied by two different passes and only one of
+ * them can be refused for redefining something — so "4 applied" over a report
+ * whose link half failed would be a number that reads as success.
+ *
+ * A kind with nothing in it is left out rather than shown as a zero. The line
+ * is a receipt for what happened, and "0 link types" is not something that
+ * happened.
+ */
+export function appliedSummary(report: {
+  added: string[];
+  updated: string[];
+  links_added: string[];
+  links_updated: string[];
+}): string {
+  const parts: string[] = [];
+  const count = (n: number, one: string, many: string) =>
+    `${n} ${n === 1 ? one : many}`;
+  const types = report.added.length + report.updated.length;
+  const links = report.links_added.length + report.links_updated.length;
+  if (types) {
+    parts.push(
+      `${count(types, "object type", "object types")} `
+      + `(${report.added.length} new, ${report.updated.length} updated)`,
+    );
+  }
+  if (links) {
+    parts.push(
+      `${count(links, "link type", "link types")} `
+      + `(${report.links_added.length} new, ${report.links_updated.length} updated)`,
+    );
+  }
+  if (parts.length === 0) return "Nothing needed applying.";
+  return `Applied ${parts.join(" and ")}.`;
+}
+
+/** What the import declined to apply, or "" (§340).
+ *
+ * Action types are still named in the plan and not applied — an action's rules
+ * name parameters, and since §330-§339 its parameters name object types, link
+ * types and properties inside jsonb documents, so it needs a resolution pass of
+ * its own. Saying so is the difference between a feature that is missing and a
+ * file that was quietly half-read.
+ */
+export function notAppliedNote(report: {
+  not_applied: { action_types: string[] };
+}): string {
+  const actions = report.not_applied.action_types;
+  if (actions.length === 0) return "";
+  const which = actions.length === 1
+    ? "1 action type was" : `${actions.length} action types were`;
+  return `${which} named in the file and not applied — importing an action `
+    + "is not built yet, so these are unchanged here.";
+}

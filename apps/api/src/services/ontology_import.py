@@ -111,6 +111,23 @@ def check_references(document: dict[str, Any]) -> None:
                 f"link type {link.get('api_name')!r} joins "
                 f"{link.get(side)!r}, which the file does not define",
             )
+        # **The field a link cannot be created without** (§340). p.65's premise
+        # is that somebody edited this JSON in a text editor, so a key they
+        # deleted has to come back as a sentence about that key — before §340
+        # applied links nothing read `cardinality`, and the first thing that did
+        # turned a hand-edited file into a 500.
+        #
+        # There is no check for a missing `api_name` beside this one, and a
+        # sweep is why (§213): `create_link_type` refuses one by regex, in a
+        # sentence that names the field, and a request is a single transaction —
+        # so the earlier check changed neither the outcome nor what was written.
+        # `object_types` has one because its name is a *key* this module builds
+        # a dictionary on, which is a different job.
+        _require(
+            link.get("cardinality") in ontology_service.CARDINALITIES,
+            f"link type {link.get('api_name')!r} needs a cardinality, one of "
+            f"{', '.join(sorted(ontology_service.CARDINALITIES))}",
+        )
 
     for action in document["action_types"]:
         _require(
@@ -118,6 +135,54 @@ def check_references(document: dict[str, Any]) -> None:
             f"action type {action.get('api_name')!r} is on "
             f"{action.get('object_type')!r}, which the file does not define",
         )
+
+
+#: What a link type will not let an import change, and the reason is
+#: `ontology.set_link_join`'s own: "changing an endpoint or the cardinality
+#: would make it a different relationship wearing the same name — delete and
+#: recreate for that." An import is not an exception to that. Applying the half
+#: that *is* mutable and leaving these would produce a link matching neither the
+#: file nor the workspace, which is worse than refusing (§340).
+IMMUTABLE_LINK_FIELDS = (
+    ("from_object_type", "the type at its from end"),
+    ("to_object_type", "the type at its to end"),
+    ("cardinality", "its cardinality"),
+)
+
+
+def check_immutable_links(
+    document: dict[str, Any], current: dict[str, Any]
+) -> None:
+    """Refuse a file that redefines a link this workspace already has.
+
+    Its own function rather than a line in `check_references`, because that one
+    is pure over the document and this is a comparison against the workspace.
+
+    **It is called before the first write, and that is tidiness rather than
+    safety** — a sweep is what made the difference clear. Moving this call to
+    sit after the object-type pass changes no test and no outcome, because
+    `user_connection` wraps the whole request in one transaction: any refusal
+    already rolls back everything the import had written. So the reason it runs
+    first is that work nobody will keep is work not worth doing, and not the
+    half-applied-import argument `check_references` can legitimately make about
+    a file it reads before touching a database at all.
+
+    A link the workspace does not have is not checked here — it is created whole
+    below, endpoints and all.
+    """
+    mine = {row["api_name"]: row for row in current["link_types"]}
+    for link in document["link_types"]:
+        held = mine.get(link.get("api_name"))
+        if held is None:
+            continue
+        for field, phrase in IMMUTABLE_LINK_FIELDS:
+            _require(
+                link.get(field) == held.get(field),
+                f"link type {link.get('api_name')!r} already exists here and "
+                f"the file changes {phrase}, which would make it a different "
+                f"relationship wearing the same name. Rename it in the file, "
+                f"or delete the link type first",
+            )
 
 
 async def plan(
@@ -182,21 +247,35 @@ async def apply(
     *,
     actor_id: UUID,
 ) -> dict[str, Any]:
-    """Write what the plan described. Object types only, for now.
+    """Write what the plan described. Object types and link types.
 
-    **Adds and updates, never removals** — the module docstring says why. What
-    is applied here is the object types and their properties; link types and
-    action types are named in the plan and are ○ in `ontology.md`, because each
-    needs its own resolution pass (a link joins two types that may both be new
-    in the same file, and an action's rules name parameters that may be).
+    **Adds and updates, never removals** — the module docstring says why.
+
+    **Two passes, because a link needs its ends to exist** (§340). p.65's second
+    workflow is "copy the working state of one Ontology to another", where every
+    type in the file is new — so a link resolved before the object-type pass
+    would name two types that are not there yet. Resolving afterwards by
+    api_name needs no ordering rules in the document and no two-phase insert:
+    `check_references` has already refused a file whose link names a type the
+    file does not define, and every type the file defines exists by the time the
+    second pass runs.
+
+    Action types are still named in the plan and not applied, and are still ○ in
+    `ontology.md`: an action's rules and criteria name parameters, and since
+    §330-§339 its parameters name object types, link types and properties inside
+    jsonb documents — so it needs a resolution pass of its own rather than a
+    line here.
 
     Returned as a report rather than as a status, because an import is
     something a person reads afterwards: p.66's screen shows a count, and a
     count with nothing under it cannot be checked against what was expected.
     """
     made = await plan(conn, workspace_id, document)
-    current = {t["api_name"]: t for t in (await export_ontology(
-        conn, workspace_id))["object_types"]}
+    before = await export_ontology(conn, workspace_id)
+    # Before the two passes rather than between them — see the function's own
+    # docstring for why that is a preference and not a safety property.
+    check_immutable_links(document, before)
+    current = {t["api_name"]: t for t in before["object_types"]}
     added: list[str] = []
     updated: list[str] = []
     for kind in document["object_types"]:
@@ -240,17 +319,134 @@ async def apply(
             )
             added.append(name)
 
+    links_added, links_updated = await _apply_links(
+        conn, workspace_id, document, made, actor_id=actor_id
+    )
+
     return {
         "added": added,
         "updated": updated,
+        "links_added": links_added,
+        "links_updated": links_updated,
         "not_applied": {
-            "link_types": made["sections"]["link_types"]["added"]
-            + made["sections"]["link_types"]["changed"],
             "action_types": made["sections"]["action_types"]["added"]
             + made["sections"]["action_types"]["changed"],
         },
         "absent_from_file": made["sections"]["object_types"]["absent_from_file"],
     }
+
+
+async def _apply_links(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    document: dict[str, Any],
+    made: dict[str, Any],
+    *,
+    actor_id: UUID,
+) -> tuple[list[str], list[str]]:
+    """p.65's link types, resolved by api_name after the types exist (§340).
+
+    A link that is new is created whole. A link that exists has already been
+    checked for an endpoint or cardinality change, so what is left is the half
+    `set_link_join` calls mutable: the join, the two side names, and the status.
+
+    **The status goes through `set_link_join` even on a create**, rather than
+    being a column on the insert. p.257 caps a link at the weakest status of its
+    two object types and its join properties, and that cap lives in one place;
+    an insert carrying a status would be a second answer to "how production-ready
+    is this link", free to store something p.257 says is unreachable.
+
+    **A link's `deprecation` is not applied, and cannot be by anything.** The
+    column is exported and no code path in this build writes it — not this, not
+    the PATCH route, not §177's bulk status. That is a ○ on the Status row
+    rather than something to fix here, and it costs a round trip nothing today:
+    every export of every workspace carries `null` for it.
+    """
+    section = made["sections"]["link_types"]
+    wanted = set(section["added"]) | set(section["changed"])
+    if not wanted:
+        return [], []
+
+    types = {
+        row["api_name"]: UUID(str(row["id"]))
+        for row in await _types_by_name(conn, workspace_id)
+    }
+    # The ids, read straight rather than off an export: `LINK_FIELDS` carries
+    # what a *file* should say about a link, and an id is the one thing a
+    # portable document must never contain (§326's whole shape is by api_name).
+    existing = {
+        row["api_name"]: UUID(str(row["id"]))
+        for row in await _links_by_name(conn, workspace_id)
+    }
+    added: list[str] = []
+    updated: list[str] = []
+    for link in document["link_types"]:
+        name = str(link.get("api_name"))
+        if name not in wanted:
+            continue
+        if name not in existing:
+            made_link = await ontology_service.create_link_type(
+                conn,
+                workspace_id=workspace_id,
+                api_name=name,
+                display_name=link.get("display_name") or name,
+                from_type_id=types[str(link["from_object_type"])],
+                to_type_id=types[str(link["to_object_type"])],
+                cardinality=str(link["cardinality"]),
+                created_by=actor_id,
+                from_property=link.get("from_property"),
+                to_property=link.get("to_property"),
+                from_side_name=link.get("from_side_name"),
+                to_side_name=link.get("to_side_name"),
+            )
+            link_id = UUID(str(made_link["id"]))
+            added.append(name)
+        else:
+            link_id = existing[name]
+            updated.append(name)
+        await ontology_service.set_link_join(
+            conn,
+            workspace_id,
+            link_id,
+            from_property=link.get("from_property"),
+            to_property=link.get("to_property"),
+            from_side_name=link.get("from_side_name"),
+            to_side_name=link.get("to_side_name"),
+            status=link.get("status"),
+        )
+    return added, updated
+
+
+async def _types_by_name(
+    conn: AsyncConnection, workspace_id: UUID
+) -> list[dict[str, Any]]:
+    return await _named_rows(conn, workspace_id, "object_types")
+
+
+async def _links_by_name(
+    conn: AsyncConnection, workspace_id: UUID
+) -> list[dict[str, Any]]:
+    return await _named_rows(conn, workspace_id, "link_types")
+
+
+async def _named_rows(
+    conn: AsyncConnection, workspace_id: UUID, table: str
+) -> list[dict[str, Any]]:
+    """`{id, api_name}` for one workspace-scoped ontology table.
+
+    The table name is this module's own literal and never a caller's — the two
+    call sites above pass constants — which is what keeps an f-string in a query
+    honest here.
+    """
+    from ..lib.db import fetch_all
+
+    assert table in ("object_types", "link_types"), table
+    rows = await fetch_all(
+        conn,
+        f"SELECT id, api_name FROM {table} WHERE workspace_id = :wid",
+        {"wid": str(workspace_id)},
+    )
+    return [dict(r) for r in rows]
 
 
 async def _find_type(
