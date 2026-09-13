@@ -212,9 +212,13 @@ def define(client: TestClient, fx: Fixture, setup, *, typed: bool):
     )
 
 
-def offered(client: TestClient, fx: Fixture, setup, sub=None):
-    r = client.get(f"{wbase(fx)}/action-types/{setup['action']}/parameter-choices",
-                   headers=hdr(sub or fx.viewer_sub))
+def offered(client: TestClient, fx: Fixture, setup, sub=None, values=None):
+    # A POST since §331: p.36's filters may read the values filled in so far,
+    # so "what does this parameter offer" is a question *about* a partly
+    # completed form rather than about the action alone.
+    r = client.post(f"{wbase(fx)}/action-types/{setup['action']}/parameter-choices",
+                    headers=hdr(sub or fx.viewer_sub),
+                    json={"values": values or {}})
     assert r.status_code == 200, r.text
     return {c["parameter"]: c for c in r.json()}
 
@@ -356,8 +360,8 @@ def test_a_viewer_may_ask_what_a_parameter_offers(
     and RLS is the whole of that sentence."""
     define(client, fx, setup, typed=True).raise_for_status()
     assert offered(client, fx, setup, sub=fx.viewer_sub)["team"]["items"]
-    r = client.get(f"{wbase(fx)}/action-types/{setup['action']}/parameter-choices",
-                   headers=hdr(fx.outsider_sub))
+    r = client.post(f"{wbase(fx)}/action-types/{setup['action']}/parameter-choices",
+                    headers=hdr(fx.outsider_sub), json={"values": {}})
     assert r.status_code in (403, 404), r.text
 
 
@@ -401,9 +405,9 @@ def test_a_type_with_more_objects_than_the_control_holds_says_so(
     )
     assert r.status_code == 200, r.text
 
-    offer = client.get(
+    offer = client.post(
         f"{wbase(fx)}/action-types/{action.json()['id']}/parameter-choices",
-        headers=hdr(fx.viewer_sub),
+        headers=hdr(fx.viewer_sub), json={"values": {}},
     ).json()[0]
     assert offer["truncated"] is True
     assert len(offer["items"]) == choices.MAX_CHOICES

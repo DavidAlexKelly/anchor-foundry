@@ -1196,7 +1196,7 @@ def seed_from_instance(
 # ---- parameters and rules ----------------------------------------------------
 _PARAMETER_COLUMNS = (
     "id, action_type_id, api_name, display_name, data_type, required, "
-    "default_value, hidden, sort_order, object_type_id"
+    "default_value, hidden, sort_order, object_type_id, dropdown_filters"
 )
 
 
@@ -2451,6 +2451,33 @@ async def set_definition(
     check_references(
         parameters, await sections_service.list_sections(conn, action_type_id)
     )
+    # p.36's filters, refused at save time against the properties of the type
+    # each parameter *offers* — not the action's own, which is the confusion
+    # this check exists for (§331). Its own loop rather than a line in
+    # `_validate_definition`, because that is a pure function over a document
+    # and this needs the ontology of a type the document names.
+    from .action_filters import check_filters
+
+    declared_names = {str(p.get("api_name", "")) for p in parameters}
+    for parameter in parameters:
+        if not (parameter.get("dropdown_filters") or []):
+            continue
+        offered = parameter.get("object_type_id")
+        if not offered:
+            raise ValueError(
+                f"{parameter.get('api_name')!r} has dropdown filters but does "
+                "not say which object type it offers, so there is nothing to "
+                "filter"
+            )
+        offered_properties = {
+            str(p["api_name"])
+            for p in await ontology_service.list_properties(conn, UUID(str(offered)))
+        }
+        check_filters(
+            parameter,
+            declared_properties=offered_properties,
+            parameter_names=declared_names,
+        )
     _validate_definition(
         parameters=parameters, rules=rules, criteria=criteria,
         property_types=property_types, object_type_id=object_type_id,
@@ -2514,10 +2541,11 @@ async def set_definition(
                 """
                 INSERT INTO action_parameters
                     (action_type_id, api_name, display_name, data_type, required,
-                     default_value, hidden, sort_order, section_id, object_type_id)
+                     default_value, hidden, sort_order, section_id, object_type_id,
+                     dropdown_filters)
                 VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type), :required,
                         CAST(:default AS jsonb), :hidden, :ord, :section,
-                        CAST(:otype AS uuid))
+                        CAST(:otype AS uuid), CAST(:filters AS jsonb))
                 """
             ),
             {
@@ -2540,6 +2568,9 @@ async def set_definition(
                     str(parameter["object_type_id"])
                     if parameter.get("object_type_id") else None
                 ),
+                # p.36's dropdown filters (db 0084). Part of the parameter, like
+                # its type and its override blocks.
+                "filters": json.dumps(parameter.get("dropdown_filters") or []),
             },
         )
     # p.43-46's override blocks, written with the parameter that owns them

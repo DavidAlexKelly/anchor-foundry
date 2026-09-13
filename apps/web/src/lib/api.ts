@@ -1841,6 +1841,12 @@ export interface ActionDefinitionInput {
     /** db 0083: which object type an `object` parameter holds (§330). Refused
      * on any other type, because a type on a string is a claim nothing reads. */
     object_type_id?: string | null;
+    /** p.36's object dropdown filters (§331). Empty for a caller who may not
+     * edit the action type, which is p.40-41's redaction. */
+    dropdown_filters?: import("./types").ActionDropdownFilter[];
+    /** Which other parameters those filters read (§332). Sent to everyone, so
+     * a redacted form still knows which boxes to re-ask on. */
+    dropdown_watches?: string[];
     /** p.43-46's override blocks (§329). Part of the parameter rather than a
      * document of their own — unlike §328's sections, which are about the
      * form — because an override changes what the parameter *is* under a
@@ -1971,9 +1977,14 @@ export const actions = {
    * has not drawn anything yet. A parameter whose object type nobody declared
    * is absent rather than empty: the form draws its text box, because offering
    * a *guessed* list would be worse than offering none. */
-  parameterChoices: (wid: string, actionTypeId: string) =>
+  parameterChoices: (
+    wid: string,
+    actionTypeId: string,
+    values: Record<string, unknown> = {},
+  ) =>
     request<import("./action-choices").ParameterChoices[]>(
       `/workspaces/${wid}/action-types/${actionTypeId}/parameter-choices`,
+      { method: "POST", body: JSON.stringify({ values }) },
     ),
   /** The parameters as they stand for this caller and these values (§329;
    * p.43-46).

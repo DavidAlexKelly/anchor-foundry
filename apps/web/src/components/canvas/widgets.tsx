@@ -209,6 +209,7 @@ import {
   emptyNote as noChoicesNote, labelOf as choiceLabel, offerFor,
   truncationNote as choicesTruncatedNote,
 } from "@/lib/action-choices";
+import { filterKey, isWaiting, waitingNote } from "@/lib/action-filters";
 import { interfaceQuery } from "./routing";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
@@ -11732,10 +11733,24 @@ export function CanvasActionForm({
   // and this is the list p.33-37 assumes. Absent for a parameter whose type
   // nobody declared, which keeps its text box: a *guessed* list would be worse
   // than none, because a reader cannot tell a wrong list from a short one.
+  // p.36's filters may read what has been filled in so far (§331), so this is
+  // keyed on **only those values**: a form whose object parameters carry no
+  // parameter-reading filters asks once when it opens, and typing in a box no
+  // filter mentions is not a round trip.
+  const watchingFilters = filterKey(
+    (actionType?.parameters ?? []) as never, values,
+  );
   const offersQ = useQuery({
-    queryKey: ["action-parameter-choices", actionTypeId],
-    queryFn: () => actionApi.parameterChoices(workspaceId, actionTypeId!),
+    queryKey: ["action-parameter-choices", actionTypeId, watchingFilters],
+    queryFn: () => actionApi.parameterChoices(workspaceId, actionTypeId!, values),
     enabled: !!actionTypeId,
+    // **The last list stays while the next one loads** (§331). Without this the
+    // data is `undefined` for the width of a round trip whenever a watched
+    // value changes, `offerFor` returns nothing, and the control flips from a
+    // dropdown to a text box and back on every keystroke in the box above it —
+    // which is worse than a stale list, because a text box will accept an id
+    // the filter excludes.
+    placeholderData: (previous) => previous,
   });
   const stored = (actionType?.parameters ?? []) as FormParameter[];
   const overridden = hasOverrides(actionType?.parameters ?? []);
@@ -11849,7 +11864,18 @@ export function CanvasActionForm({
           required={parameter.required}
         />
         )}
-        {offer && noChoicesNote(offer) && (
+        {/* p.36's filter can read a box nobody has filled in, and then the
+            list is empty for a reason worth saying: "there are no Teams" is
+            false and unhelpful when the truth is "you have not said which
+            region". §331. */}
+        {offer && isWaiting(offer) && (
+          <span className="field-hint" data-testid="choices-waiting">
+            {waitingNote(offer, Object.fromEntries(declared.map(
+              (p) => [p.api_name, parameterLabel(p)],
+            )))}
+          </span>
+        )}
+        {offer && !isWaiting(offer) && noChoicesNote(offer) && (
           <span className="field-hint" data-testid="choices-empty">
             {noChoicesNote(offer)}
           </span>
