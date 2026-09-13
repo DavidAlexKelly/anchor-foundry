@@ -795,13 +795,42 @@ async def action_parameter_choices(
         # the form which control to draw rather than which list happens to be
         # non-empty.
         for parameter in action_type["parameters"]:
-            if options_service.options_of(parameter) is None:
+            set_type = options_service.set_type_of(parameter)
+            if set_type is None:
+                continue
+            name = str(parameter["api_name"])
+            try:
+                # p.33's "adding filters to **non-object reference multiple
+                # choice**… parameters", which is the same compiled narrowing an
+                # object dropdown uses — against the type the *options* name
+                # rather than the one the parameter holds (§336).
+                narrowing = filters_service.resolve(
+                    parameter,
+                    bound=body.values,
+                    property_types=await choices_service.property_types_of(
+                        conn, set_type
+                    ),
+                    objects=await choices_service.object_values_of(
+                        conn, parameter, workspace_id=access.workspace_id,
+                        bound=body.values, parameters=action_type["parameters"],
+                    ),
+                )
+            except filters_service.Unresolved as missing:
+                # The same empty-and-named answer an object dropdown gives, for
+                # the same reason: offering every value would offer exactly the
+                # ones the filter exists to exclude.
+                out.append(ParameterChoices(
+                    parameter=name, kind="values", values=[], truncated=False,
+                    waiting_for=missing.parameter,
+                    waiting_for_property=missing.property,
+                ))
                 continue
             values, truncated = await options_service.options(
                 conn, parameter, workspace_id=access.workspace_id,
+                filters=narrowing,
             )
             out.append(ParameterChoices(
-                parameter=str(parameter["api_name"]),
+                parameter=name,
                 kind="values",
                 values=values,
                 truncated=truncated,
@@ -1716,10 +1745,39 @@ async def execute_action(
                 # that looks like it works, and the form is a convenience
                 # while this runs whether or not anybody drew one.
                 for parameter in action_type["parameters"]:
-                    if options_service.options_of(parameter) is None:
+                    set_type = options_service.set_type_of(parameter)
+                    if set_type is None:
                         continue
+                    try:
+                        # **The same narrowing the dropdown used** (§336), so
+                        # "which values are offered" and "which are accepted"
+                        # cannot come apart — p.34's rule for the other shape,
+                        # read for this one.
+                        narrowing = filters_service.resolve(
+                            parameter,
+                            bound=bound,
+                            property_types=await choices_service.property_types_of(
+                                conn, set_type
+                            ),
+                            objects=await choices_service.object_values_of(
+                                conn, parameter,
+                                workspace_id=access.workspace_id,
+                                bound=bound,
+                                parameters=action_type["parameters"],
+                            ),
+                        )
+                    except filters_service.Unresolved as missing:
+                        # Fails closed, as it does for an object dropdown: the
+                        # filter reads a box nothing supplied, so whether this
+                        # value is in the set is a question nobody can answer.
+                        raise ValueError(
+                            f"{str(parameter['api_name'])!r} is narrowed by "
+                            f"{missing.parameter!r}, which this submission "
+                            "does not supply"
+                        )
                     allowed, _more = await options_service.options(
                         conn, parameter, workspace_id=access.workspace_id,
+                        filters=narrowing,
                     )
                     options_service.check_option_values(
                         parameter,

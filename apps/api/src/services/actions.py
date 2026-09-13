@@ -2452,13 +2452,6 @@ async def set_definition(
     check_references(
         parameters, await sections_service.list_sections(conn, action_type_id)
     )
-    # p.36's filters, refused at save time against the properties of the type
-    # each parameter *offers* — not the action's own, which is the confusion
-    # this check exists for (§331). Its own loop rather than a line in
-    # `_validate_definition`, because that is a pure function over a document
-    # and this needs the ontology of a type the document names.
-    from .action_filters import check_filters
-
     declared_names = {str(p.get("api_name", "")) for p in parameters}
     # One read per object type rather than per parameter that mentions it: an
     # action with four parameters offering the same type asked four times.
@@ -2474,10 +2467,43 @@ async def set_definition(
             }
         return property_names[type_id]
 
+    # p.33's multiple-choice options, checked here for the reason the two above
+    # are: a property belongs to an object type, and `_validate_definition` is a
+    # pure function over a document (§335).
+    from .action_options import check_options, options_of
+
+    for parameter in parameters:
+        if options_of(parameter) is None:
+            continue
+        named = str((options_of(parameter) or {}).get("object_type_id") or "")
+        resolved: dict[str, set[str]] = {}
+        if named:
+            try:
+                await ontology_service.get_type(conn, workspace_id, UUID(named))
+            except (NotFoundError, ValueError):
+                pass
+            else:
+                resolved[named] = await _properties_of(named)
+        parameter["options_from"] = check_options(parameter, properties=resolved)
+    # p.36's filters, refused at save time against the properties of the type
+    # each parameter *offers* — not the action's own, which is the confusion
+    # this check exists for (§331). Its own loop rather than a line in
+    # `_validate_definition`, because that is a pure function over a document
+    # and this needs the ontology of a type the document names.
+    from .action_filters import check_filters
+
     for parameter in parameters:
         if not (parameter.get("dropdown_filters") or []):
             continue
-        offered = parameter.get("object_type_id")
+        # **Which type this parameter's dropdown reads** (§336). For p.33's
+        # single object reference that is db 0083's column; for its multiple
+        # choice it is the type the options name, because p.33's own sentence
+        # is "adding filters to non-object reference multiple choice *or*
+        # single object reference parameters". One question with two places to
+        # look it up, asked once here rather than at each check below.
+        offered = parameter.get("object_type_id") or (
+            (options_of(parameter) or {}).get("object_type_id")
+        )
         if not offered:
             raise ValueError(
                 f"{parameter.get('api_name')!r} has dropdown filters but does "
@@ -2549,24 +2575,6 @@ async def set_definition(
             object_type_ids=workspace_type_ids,
             parameters=parameters,
         )
-    # p.33's multiple-choice options, checked here for the reason the two above
-    # are: a property belongs to an object type, and `_validate_definition` is a
-    # pure function over a document (§335).
-    from .action_options import check_options, options_of
-
-    for parameter in parameters:
-        if options_of(parameter) is None:
-            continue
-        named = str((options_of(parameter) or {}).get("object_type_id") or "")
-        resolved: dict[str, set[str]] = {}
-        if named:
-            try:
-                await ontology_service.get_type(conn, workspace_id, UUID(named))
-            except (NotFoundError, ValueError):
-                pass
-            else:
-                resolved[named] = await _properties_of(named)
-        parameter["options_from"] = check_options(parameter, properties=resolved)
     _validate_definition(
         parameters=parameters, rules=rules, criteria=criteria,
         property_types=property_types, object_type_id=object_type_id,

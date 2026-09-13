@@ -240,7 +240,7 @@ def a_type(client: TestClient, fx: Fixture, tag: str, rows: list[tuple[str, str]
     assert made.status_code == 201, made.text
     type_id = made.json()["id"]
     header = ",".join(columns)
-    csv = f"{header}\n" + "".join(f"{a},{b}\n" for a, b in rows)
+    csv = f"{header}\n" + "".join(",".join(map(str, row)) + "\n" for row in rows)
     dataset = client.post(
         f"{pbase(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
         data={"name": f"Options {tag}"},
@@ -270,9 +270,17 @@ def setup(client: TestClient, fx: Fixture):
     # **`US` three times**, so the store's frequency order (US, EU, UK) and the
     # alphabetical one (EU, UK, US) differ. A fixture where they agreed could
     # not tell which the control used, and a sweep walked through it.
-    region_type = a_type(client, fx, f"reg{tag}", [
-        ("o1", "US"), ("o2", "US"), ("o3", "US"), ("o4", "EU"), ("o5", "UK"),
-    ])
+    #
+    # `tier` is a third *populated* property, for §336's filters to cut on. The
+    # first version filtered on `code` — the primary key column, declared as a
+    # property and written by nothing — so every filtered list came back empty
+    # and the tests failed for a reason that had nothing to do with filtering.
+    region_type = a_type(
+        client, fx, f"reg{tag}",
+        [("o1", "US", "gold"), ("o2", "US", "gold"), ("o3", "US", "silver"),
+         ("o4", "EU", "gold"), ("o5", "UK", "silver")],
+        columns=("code", "label", "tier"),
+    )
     ticket_type = a_type(client, fx, f"tkt{tag}", [("t1", "x")])
     action = client.post(
         f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
@@ -545,3 +553,160 @@ def test_the_watch_list_is_untouched_by_an_options_document(
          "options_from": {"object_type_id": setup["region_type"],
                           "property": "label"}}
     assert filters.for_reader(p, may_edit=False)["dropdown_watches"] == []
+
+
+# ---- p.33's filters over the options set (§336) ---------------------------------
+def define_filtered(client, fx, setup, filters_doc, *, required=False, sub=None,
+                    property_name="label"):
+    return client.put(
+        f"{wbase(fx)}/action-types/{setup['action']}/definition",
+        headers=hdr(sub or fx.editor_sub),
+        json={"parameters": [
+                  {"api_name": "tier", "display_name": "Tier",
+                   "data_type": "string"},
+                  {"api_name": "region", "display_name": "Region",
+                   "data_type": "string", "required": required,
+                   "options_from": {"object_type_id": setup["region_type"],
+                                    "property": property_name},
+                   "dropdown_filters": filters_doc},
+              ],
+              "rules": [{"kind": "modify_object",
+                         "config": {"property": "label", "parameter": "region"}}],
+              "criteria": []},
+    )
+
+
+def test_a_static_filter_narrows_the_options(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """p.33's own first sentence: "**adding filters** to non-object reference
+    multiple choice… parameters will determine the allowed values".
+
+    The fixture's offices are US/gold, US/gold, US/silver, EU/gold, UK/silver —
+    so the silver ones leave UK and US where the whole set leaves EU, UK and
+    US. Both halves differ, which is what makes "narrowed" visible.
+    """
+    define_filtered(client, fx, setup, [
+        {"property": "tier", "values": [{"kind": "value", "value": "silver"}]},
+    ]).raise_for_status()
+    assert offered(client, fx, setup)["region"]["values"] == ["UK", "US"]
+
+
+def test_the_unfiltered_list_is_still_the_whole_set(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """Without this, "the filter narrows" passes for "the options are always
+    one value"."""
+    define_filtered(client, fx, setup, []).raise_for_status()
+    assert offered(client, fx, setup)["region"]["values"] == ["EU", "UK", "US"]
+
+
+def test_a_filter_reading_a_parameter_narrows_as_it_is_typed(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """p.36's second value kind over p.33's shape. The same compiled narrowing
+    an object dropdown uses, because p.33 describes one filter vocabulary over
+    two shapes and a second one here would be free to disagree."""
+    define_filtered(client, fx, setup, [
+        {"property": "tier", "values": [{"kind": "parameter", "parameter": "tier"}]},
+    ]).raise_for_status()
+    assert offered(client, fx, setup, {"tier": "silver"})["region"]["values"] == [
+        "UK", "US",
+    ]
+    assert offered(client, fx, setup, {"tier": "gold"})["region"]["values"] == [
+        "EU", "US",
+    ]
+
+
+def test_an_unfilled_filter_leaves_the_list_empty_and_names_the_box(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """The same empty-and-named answer an object dropdown gives: offering every
+    value would offer exactly the ones the filter exists to exclude."""
+    define_filtered(client, fx, setup, [
+        {"property": "tier", "values": [{"kind": "parameter", "parameter": "tier"}]},
+    ]).raise_for_status()
+    offer = offered(client, fx, setup)["region"]
+    assert offer["values"] == []
+    assert offer["waiting_for"] == "tier"
+
+
+def test_a_narrowed_list_narrows_the_check_too(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """p.34's rule for the other shape, read for this one: a list narrowed to
+    EU and US beside a check that accepts UK as well is §214's control that
+    looks like it works."""
+    define_filtered(client, fx, setup, [
+        {"property": "tier", "values": [{"kind": "value", "value": "gold"}]},
+    ]).raise_for_status()
+    assert run(client, fx, setup, {"region": "EU"}).status_code == 200
+    refused = run(client, fx, setup, {"region": "UK"})
+    assert refused.status_code == 422, refused.text
+    assert "offers" in refused.text
+
+
+def test_a_submission_that_does_not_supply_the_filters_box_is_refused(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """**Fails closed**, as it does for an object dropdown: whether this value
+    is in the set is a question nobody can answer without the box."""
+    define_filtered(client, fx, setup, [
+        {"property": "tier", "values": [{"kind": "parameter", "parameter": "tier"}]},
+    ]).raise_for_status()
+    refused = run(client, fx, setup, {"region": "US"})
+    assert refused.status_code == 422, refused.text
+    assert "tier" in refused.text
+
+
+def test_a_filter_is_checked_against_the_type_the_options_name(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """Not the action's own type, and not a guess: p.33's multiple choice has
+    no `object_type_id` of its own, so the only type its filters can be written
+    against is the one its options come from."""
+    bad = define_filtered(client, fx, setup, [
+        {"property": "no_such_property",
+         "values": [{"kind": "value", "value": "x"}]},
+    ])
+    assert bad.status_code == 422, bad.text
+    assert "no_such_property" in bad.text
+
+
+def test_a_filtered_multiple_choice_parameter_is_watched(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """§332's rule: the filter is redacted and the box it reads is not, or a
+    reader's form narrows once and then stops."""
+    define_filtered(client, fx, setup, [
+        {"property": "tier", "values": [{"kind": "parameter", "parameter": "tier"}]},
+    ]).raise_for_status()
+    read = client.get(f"{wbase(fx)}/action-types/{setup['action']}",
+                      headers=hdr(fx.viewer_sub)).json()
+    region = next(p for p in read["parameters"] if p["api_name"] == "region")
+    assert region["dropdown_filters"] == []
+    assert region["dropdown_watches"] == ["tier"]
+
+
+def test_a_filter_on_a_parameter_with_no_options_is_still_refused(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """The gate widened to "or the type its options name", not to "anything
+    goes": a string parameter with filters and no options document has nothing
+    to filter, and the refusal says so."""
+    bad = client.put(
+        f"{wbase(fx)}/action-types/{setup['action']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={"parameters": [
+                  {"api_name": "region", "display_name": "Region",
+                   "data_type": "string",
+                   "dropdown_filters": [
+                       {"property": "label",
+                        "values": [{"kind": "value", "value": "EU"}]}]},
+              ],
+              "rules": [{"kind": "modify_object",
+                         "config": {"property": "label", "parameter": "region"}}],
+              "criteria": []},
+    )
+    assert bad.status_code == 422, bad.text
+    assert "which object type it offers" in bad.text

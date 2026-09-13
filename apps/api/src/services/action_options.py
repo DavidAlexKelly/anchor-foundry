@@ -130,11 +130,26 @@ def check_options(
     return {"object_type_id": type_id, "property": prop}
 
 
+def set_type_of(parameter: dict[str, Any]) -> str | None:
+    """Which object type this parameter's *options* are read from, or `None`.
+
+    `action_choices.type_of`'s sibling for p.33's other shape (§336). The two
+    answer the same question — "whose objects does this dropdown read" — for
+    the two kinds of parameter p.33's first sentence names, and they are
+    separate because a parameter is one or the other: an object parameter has
+    db 0083's column and refuses an options document, and a multiple-choice
+    parameter is refused the column.
+    """
+    declared = options_of(parameter)
+    return str(declared["object_type_id"]) if declared else None
+
+
 async def options(
     conn: AsyncConnection,
     parameter: dict[str, Any],
     *,
     workspace_id: UUID,
+    filters: tuple[Any, ...] = (),
     limit: int = MAX_OPTIONS,
 ) -> tuple[list[str], bool]:
     """The values this parameter may be set to, and whether there were more.
@@ -158,10 +173,16 @@ async def options(
         # eventually does not.
         return [], False
     prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
+    # p.33's own first sentence — "**adding filters** to non-object reference
+    # multiple choice… parameters will determine the allowed values" — narrowing
+    # the set before the property is read off it (§336). The same compiled
+    # `Filter`s an object dropdown uses, because p.33 describes one filter
+    # vocabulary over two shapes and a second one here would be free to
+    # disagree.
     buckets, distinct = await instance_store.store_for(conn).group_object_set(
         search_prefix=prefix,
         object_type_id=UUID(str(declared["object_type_id"])),
-        filters=(),
+        filters=filters,
         property_name=str(declared["property"]),
         limit=limit,
     )

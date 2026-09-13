@@ -11963,7 +11963,19 @@ export function CanvasActionForm({
             "there are no Teams" and "no object has a value for that property"
             are different things to be told, and the second is the one an
             editor can act on. */}
-        {emptyValuesNote(choice) && (
+        {/* p.33's list can be narrowed by a filter reading another box
+            (§336), so it has the same waiting state an object dropdown has —
+            and `emptyValuesNote` must stand down for it, because "no object
+            has a value for that property" is false when the truth is "you
+            have not said which region". */}
+        {choice && isWaiting(choice) && (
+          <span className="field-hint" data-testid="values-waiting">
+            {waitingNote(choice, Object.fromEntries(declared.map(
+              (p) => [p.api_name, parameterLabel(p)],
+            )))}
+          </span>
+        )}
+        {choice && !isWaiting(choice) && emptyValuesNote(choice) && (
           <span className="field-hint" data-testid="values-empty">
             {emptyValuesNote(choice)}
           </span>
