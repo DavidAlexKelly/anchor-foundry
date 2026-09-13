@@ -701,6 +701,12 @@ def test_a_blank_parameter_is_not_refused_for_a_filter_nothing_is_using(
     ).raise_for_status()
     got = run(client, fx, setup, {"note": "anything"})
     assert got.status_code == 200, got.text
+    # **A cleared box, not an absent one**, which is what a form sends: every
+    # parameter with the emptied one as `""`. The sweep found that only `None`
+    # was being treated as nothing, so a submission from a real form would
+    # still have been refused for a filter about the box it had just cleared.
+    cleared = run(client, fx, setup, {"note": "anything", "region": ""})
+    assert cleared.status_code == 200, cleared.text
 
 
 @pytest.fixture(scope="module")
@@ -1029,6 +1035,17 @@ def test_the_walk_narrows_the_check_too(
     refused = run(client, fx, setup, {"who": grace, "state": "closed"})
     assert refused.status_code == 422, refused.text
     assert "offers" in refused.text
+
+    # **And a value that is in the walked set without being the first of it**
+    # (§338, and the sweep found it). Ada's two issues are one open and one
+    # closed, so both counts are one and the tie-break is alphabetical — a
+    # check that read the walked set at one bucket rather than asking about
+    # this value would accept `closed` and refuse `open`, which is narrower
+    # than the rule and wrong in the direction nobody notices until a form
+    # refuses what it just offered.
+    ada = linked["people"]["E1"]
+    assert run(client, fx, setup,
+               {"who": ada, "state": "open"}).status_code == 200
 
 
 def test_the_check_carries_the_filters_as_well_as_the_walk(

@@ -284,6 +284,12 @@ def confirming(
 
     A blank value adds nothing, because there is no value to ask about; the
     caller skips the read entirely and `check_option_values` returns anyway.
+
+    **The caller's `limit=1` is a statement, not the mechanism.** This equality
+    leaves at most one bucket, so asking for one and asking for fifty return the
+    same list and a sweep could not make the limit matter — worth writing down
+    rather than rediscovering, because the obvious reading is that the two
+    together are what removes the page size and only one of them is.
     """
     declared = options_of(parameter)
     if declared is None or value is None or value == "":
