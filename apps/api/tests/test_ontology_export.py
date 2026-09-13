@@ -93,6 +93,29 @@ def exported(client: TestClient, fx: Fixture) -> dict:
     assert made.status_code == 201, made.text
     type_id = made.json()["id"]
 
+    # **Something for a dropdown to point at** (§342). Without a second type
+    # and a link, the three id-bearing fields have nothing to name and every
+    # question about whether they travel is asked of an absent value.
+    far = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"far_{tag}", "display_name": f"Far {tag}",
+              "properties": [
+                  {"api_name": "name", "display_name": "Name",
+                   "data_type": "string"},
+                  {"api_name": "near_id", "display_name": "Near",
+                   "data_type": "string"}],
+              "title_property": "name"},
+    )
+    assert far.status_code == 201, far.text
+    joined = client.post(
+        f"{wbase(fx)}/link-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"joins_{tag}", "display_name": "Joins",
+              "from_type_id": far.json()["id"], "to_type_id": type_id,
+              "cardinality": "one_to_many",
+              "from_property": "near_id", "to_property": "$primary_key"},
+    )
+    assert joined.status_code == 201, joined.text
+
     action = client.post(
         f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
         json={"object_type_id": type_id, "api_name": f"rename_{tag}",
@@ -111,8 +134,29 @@ def exported(client: TestClient, fx: Fixture) -> dict:
         json={"parameters": [
                   {"api_name": "tier", "display_name": "Tier",
                    "data_type": "string"},
+                  {"api_name": "who", "display_name": "Who",
+                   "data_type": "object",
+                   # db 0083's column, and where the walk below starts.
+                   "object_type_id": type_id,
+                   # **A real filter, not an empty list.** §341 asserted that
+                   # filters "travel" against a fixture whose list was empty,
+                   # so carrying them and dropping them produced the same
+                   # document; the sweep said so twice before this stuck.
+                   "dropdown_filters": [
+                       {"property": "name",
+                        "values": [{"kind": "value", "value": "keep"}]}]},
                   {"api_name": "name", "display_name": "Name",
                    "data_type": "string",
+                   # db 0086's options set, reached by db 0085's walk — so the
+                   # file has to name a type *and* a link, which is the whole
+                   # of what this unit translates.
+                   "options_from": {"object_type_id": far.json()["id"],
+                                    "property": "name"},
+                   "dropdown_search_around": {
+                       "start": {"kind": "parameter",
+                                 "object_type_id": type_id,
+                                 "parameter": "who"},
+                       "hops": [{"link_type_id": joined.json()["id"]}]},
                    # **A string default, and a browser test is why** (§341).
                    # A jsonb column holding a JSON *string* decodes to a Python
                    # `str`, which the old `_json` could not tell from an
@@ -151,7 +195,8 @@ def exported(client: TestClient, fx: Fixture) -> dict:
     r = client.get(f"{wbase(fx)}/ontology-export", headers=hdr(fx.editor_sub))
     assert r.status_code == 200, r.text
     return {"doc": r.json(), "api_name": f"exp_{tag}",
-            "action": f"rename_{tag}", "type_id": type_id}
+            "action": f"rename_{tag}", "type_id": type_id,
+            "far": f"far_{tag}", "link": f"joins_{tag}"}
 
 
 def a_type(doc: dict, api_name: str) -> dict | None:
@@ -264,7 +309,7 @@ def test_an_action_type_names_its_object_type_by_name(exported: dict) -> None:
     assert action["object_type"] == exported["api_name"]
     # The definition travels too, or the copy is an action that does nothing.
     # In declaration order, which is the order the form draws them in.
-    assert [p["api_name"] for p in action["parameters"]] == ["tier", "name"]
+    assert [p["api_name"] for p in action["parameters"]] == ["tier", "who", "name"]
     assert [r["kind"] for r in action["rules"]] == ["modify_object"]
 
 
@@ -363,6 +408,74 @@ def test_a_parameters_overrides_travel(exported: dict) -> None:
     # The condition names the parameter it reads, which is what makes it
     # portable — an override that named a parameter by id could not travel.
     assert override["conditions"][0]["left"]["parameter"] == "tier"
+
+
+# ---- the three fields that point, as names (§342) -------------------------------
+def test_the_type_a_parameter_holds_travels_as_a_name(exported: dict) -> None:
+    """db 0083's column. An id from this workspace means nothing in the one a
+    file is imported into, which is why §326's whole document is by api_name —
+    and this column was simply absent from it until now."""
+    action = an_action(exported["doc"], exported["action"])
+    named = {p["api_name"]: p for p in action["parameters"]}
+    assert named["who"]["object_type"] == exported["api_name"]
+    assert "object_type_id" not in named["who"]
+
+
+def test_the_options_set_travels_as_a_name(exported: dict) -> None:
+    """db 0086's document (§335), whose type is an id and whose property is
+    already a name."""
+    action = an_action(exported["doc"], exported["action"])
+    named = {p["api_name"]: p for p in action["parameters"]}
+    assert named["name"]["options_from"]["object_type"] == exported["far"]
+    assert named["name"]["options_from"]["property"] == "name"
+    assert "object_type_id" not in named["name"]["options_from"]
+
+
+def test_the_walk_travels_as_names(exported: dict) -> None:
+    """db 0085's document (§333): a start that is a type, a parameter it reads,
+    and a hop that is a link **and** the type it lands on.
+
+    The landing type travels for readability and is not trusted on the way
+    back — `check_source` recomputes it from the link — but it must be a name
+    here, or the file carries an id and the round trip is broken.
+    """
+    action = an_action(exported["doc"], exported["action"])
+    named = {p["api_name"]: p for p in action["parameters"]}
+    walk = named["name"]["dropdown_search_around"]
+    assert walk["start"]["kind"] == "parameter"
+    assert walk["start"]["object_type"] == exported["api_name"]
+    assert walk["start"]["parameter"] == "who"
+    [hop] = walk["hops"]
+    assert hop["link_type"] == exported["link"]
+    assert hop["far_object_type"] == exported["far"]
+
+
+def test_a_parameter_that_points_nowhere_says_nothing(exported: dict) -> None:
+    """**The negative control.** The three keys are emitted only when there is
+    something to say, so a plain parameter adds none of them — otherwise a
+    round trip invents `"options_from": null` on every parameter that never had
+    one, and every file grows three keys per parameter for nothing."""
+    action = an_action(exported["doc"], exported["action"])
+    named = {p["api_name"]: p for p in action["parameters"]}
+    for key in ("object_type", "options_from", "dropdown_search_around"):
+        assert key not in named["tier"], key
+
+
+def test_a_parameters_filters_travel_beside_the_type_they_narrow(
+    exported: dict
+) -> None:
+    """§341 held these back, and the reason was the coupling this unit closes:
+    a filter is written against the type in `object_type_id`, so carrying one
+    without the other puts a narrowing in the file with nothing to say what it
+    narrows."""
+    action = an_action(exported["doc"], exported["action"])
+    named = {p["api_name"]: p for p in action["parameters"]}
+    [carried] = named["who"]["dropdown_filters"]
+    assert carried["property"] == "name"
+    assert carried["values"] == [{"kind": "value", "value": "keep"}]
+    # And a parameter with nothing to narrow still has the key, as an empty
+    # list — "no filters" is a state the document should say out loud.
+    assert named["tier"]["dropdown_filters"] == []
 
 
 def test_a_string_default_survives_the_export(exported: dict) -> None:

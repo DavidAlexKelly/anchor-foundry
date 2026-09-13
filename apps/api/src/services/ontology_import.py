@@ -129,12 +129,51 @@ def check_references(document: dict[str, Any]) -> None:
             f"{', '.join(sorted(ontology_service.CARDINALITIES))}",
         )
 
+    links = {l.get("api_name") for l in document["link_types"]}
     for action in document["action_types"]:
         _require(
             action.get("object_type") in types,
             f"action type {action.get('api_name')!r} is on "
             f"{action.get('object_type')!r}, which the file does not define",
         )
+        # **A parameter's dropdown names types and links, and the file has to
+        # define them too** (§342). The same rule as a link's two ends, one
+        # resource further in: a name the document does not carry cannot be
+        # resolved on the way in, and a dropdown stored against nothing is the
+        # state §339 spent a unit making unreachable by deletion.
+        for parameter in action.get("parameters") or []:
+            where = f"{action.get('object_type')}.{action.get('api_name')}." \
+                    f"{parameter.get('api_name')}"
+            for named, kind in _parameter_references(parameter):
+                _require(
+                    named in (types if kind == "object type" else links),
+                    f"{where} names the {kind} {named!r}, which the file does "
+                    "not define",
+                )
+
+
+def _parameter_references(parameter: dict[str, Any]):
+    """Every type and link one parameter's dropdown names, for `check_references`.
+
+    A generator rather than three loops at the call site, because the three
+    fields are one question — "what does this dropdown point at" — and the day
+    a fourth arrives it should be added in one place. The shapes themselves are
+    `action_parameter_transfer`'s; this only walks them.
+    """
+    held = parameter.get("object_type")
+    if held:
+        yield held, "object type"
+    options = parameter.get("options_from")
+    if isinstance(options, dict) and options.get("object_type"):
+        yield options["object_type"], "object type"
+    walk = parameter.get("dropdown_search_around")
+    if isinstance(walk, dict) and walk:
+        start = walk.get("start") or {}
+        if start.get("object_type"):
+            yield start["object_type"], "object type"
+        for hop in walk.get("hops") or []:
+            if isinstance(hop, dict) and hop.get("link_type"):
+                yield hop["link_type"], "link type"
 
 
 #: What a link type will not let an import change, and the reason is
