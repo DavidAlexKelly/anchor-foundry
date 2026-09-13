@@ -422,3 +422,133 @@ def test_the_panel_offers_no_list_for_a_parameter_that_cannot_have_one(page, api
     expect(page.get_by_test_id("parameter-options")).to_be_visible()
     expect(page.locator("[data-parameter-options='note']")).to_have_count(1)
     expect(page.locator("[data-parameter-options='region']")).to_have_count(0)
+
+
+# ---- p.33's filters over the options set (§336) ---------------------------------
+def build_filtered(api, name: str):
+    """An action whose Region list is narrowed by the Tier chosen above it.
+
+    Offices are US/gold, US/gold, US/silver, EU/gold, UK/silver — so gold
+    leaves EU and US, silver leaves UK and US, and the whole set leaves all
+    three. No two of those lists are the same, which is what makes "narrowed by
+    *this* value" visible rather than merely "narrowed".
+    """
+    mod = Module(api, name)
+    tag = uuid.uuid4().hex[:8]
+    office_type = mod.object_type(
+        columns=["code", "region", "tier"],
+        rows=[{"code": "o1", "region": "US", "tier": "gold"},
+              {"code": "o2", "region": "US", "tier": "gold"},
+              {"code": "o3", "region": "US", "tier": "silver"},
+              {"code": "o4", "region": "EU", "tier": "gold"},
+              {"code": "o5", "region": "UK", "tier": "silver"}],
+        key="code", title="code", slug=f"fltoffice_{tag}",
+    )
+    ticket_type = mod.object_type(
+        columns=["ticket_id", "note"], rows=[{"ticket_id": "1", "note": ""}],
+        key="ticket_id", title="ticket_id", slug=f"fltticket_{tag}",
+    )
+    action = api.call(
+        "POST", f"/workspaces/{mod.workspace_id}/action-types",
+        {"object_type_id": ticket_type, "api_name": f"fltassign_{tag}",
+         "display_name": "Assign ticket", "editable_properties": ["note"]},
+    )
+    api.call(
+        "PUT",
+        f"/workspaces/{mod.workspace_id}/action-types/{action['id']}/definition",
+        {"parameters": [
+             {"api_name": "tier", "display_name": "Tier", "data_type": "string"},
+             {"api_name": "region", "display_name": "Region",
+              "data_type": "string",
+              "options_from": {"object_type_id": office_type,
+                               "property": "region"},
+              "dropdown_filters": [{"property": "tier", "values": [
+                  {"kind": "parameter", "parameter": "tier"}]}]},
+         ],
+         "rules": [{"kind": "modify_object",
+                    "config": {"property": "note", "parameter": "region"}}],
+         "criteria": []},
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "txt": {"resolvedName": "CanvasText",
+                    "props": {"tag": "p", "text": "FILTERED OPTIONS FORM"}},
+            "frm": {"resolvedName": "CanvasActionForm",
+                    "props": {"actionTypeId": action["id"]}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+    mod.type_id = ticket_type
+    mod.office_type = office_type
+    mod.office_api_name = f"fltoffice_{tag}"
+    mod.action = action
+    return mod
+
+
+def test_typing_a_value_narrows_the_list_of_values(page, api):
+    """**p.33's first sentence, on a screen**, and the loop no layer below can
+    see: a value typed in one box changes what the next box offers, and the two
+    lists differ from each other as well as from the whole set."""
+    mod = build_filtered(api, "Filtered options")
+    open_module(page, mod)
+    page.locator("form > label select").first.select_option(index=1)
+    # Nothing typed: the list says which box comes first rather than offering
+    # every region and refusing the submission later.
+    expect(page.get_by_test_id("values-waiting")).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("values-waiting")).to_contain_text("Tier")
+
+    page.locator("[data-parameter='tier'] input").fill("silver")
+    expect(picker(page, "region").locator("option")).to_contain_text(
+        ["Choose", "UK", "US"], timeout=30000
+    )
+    assert not any("EU" in o for o in options_of(page, "region"))
+
+    # And again, to a different answer — one value could be a list that
+    # narrowed once and then stopped listening.
+    page.locator("[data-parameter='tier'] input").fill("gold")
+    expect(picker(page, "region").locator("option")).to_contain_text(
+        ["Choose", "EU", "US"], timeout=30000
+    )
+    assert not any("UK" in o for o in options_of(page, "region"))
+
+
+def test_a_filter_written_in_the_panel_narrows_the_values(page, api):
+    """**The panel and the form, in one test.** The filter panel used to live
+    inside the object-parameter block, so this shape could not have one at all
+    (§336) — a panel that saved something the form does not honour, or a form
+    narrowed by something no panel can write, would each pass every other test
+    here.
+    """
+    mod = build(api, "Filtered options panel")
+    open_module(page, mod)
+    choose_the_ticket(page)
+    shown = [o for o in options_of(page, "region") if o != "Choose…"]
+    assert shown == ["EU", "UK", "US"], shown
+
+    open_editor(page, mod)
+    panel = page.locator("[data-parameter-filters='region']")
+    expect(panel).to_have_count(1)
+    page.get_by_label("Add a filter to region").click()
+    page.get_by_label("Filter 1 on region property").select_option("region")
+    page.get_by_label("Filter 1 on region value").fill("UK")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    open_module(page, mod)
+    choose_the_ticket(page)
+    shown = [o for o in options_of(page, "region") if o != "Choose…"]
+    assert shown == ["UK"], shown
+
+
+def test_the_filter_panel_is_not_offered_before_there_is_a_set_to_narrow(page, api):
+    """A filter is written against the properties of the type the options name,
+    so until one is chosen there is nothing to write it against — and the
+    server refuses a filter on a parameter with no options at all."""
+    mod = build(api, "Filtered options unset", options=False)
+    open_editor(page, mod)
+    expect(page.locator("[data-parameter-filters='region']")).to_have_count(0)
+    # The options row itself is there, so this is the filter panel waiting
+    # rather than the section being absent.
+    expect(page.locator("[data-parameter-options='region']")).to_have_count(1)
