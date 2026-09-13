@@ -1847,6 +1847,9 @@ export interface ActionDefinitionInput {
     /** Which other parameters those filters read (§332). Sent to everyone, so
      * a redacted form still knows which boxes to re-ask on. */
     dropdown_watches?: string[];
+    /** p.36-37's search around (§333): where the dropdown's objects come from
+     * before the filters narrow them. Redacted with the filters. */
+    dropdown_search_around?: import("./types").ActionSearchAround | null;
     /** p.43-46's override blocks (§329). Part of the parameter rather than a
      * document of their own — unlike §328's sections, which are about the
      * form — because an override changes what the parameter *is* under a

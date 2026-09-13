@@ -1196,7 +1196,8 @@ def seed_from_instance(
 # ---- parameters and rules ----------------------------------------------------
 _PARAMETER_COLUMNS = (
     "id, action_type_id, api_name, display_name, data_type, required, "
-    "default_value, hidden, sort_order, object_type_id, dropdown_filters"
+    "default_value, hidden, sort_order, object_type_id, dropdown_filters, "
+    "dropdown_search_around"
 )
 
 
@@ -1989,7 +1990,7 @@ async def link_types_for(
     rows = await fetch_all(
         conn,
         """
-        SELECT id, from_object_type_id, to_object_type_id,
+        SELECT id, display_name, from_object_type_id, to_object_type_id,
                from_property, to_property, cardinality
           FROM link_types
          WHERE workspace_id = :wid
@@ -2478,6 +2479,44 @@ async def set_definition(
             declared_properties=offered_properties,
             parameter_names=declared_names,
         )
+    # p.36-37's search around, checked in the same place and for the same
+    # reason: a walk joins up or it does not, and that is a fact about the
+    # ontology rather than about the document (§333). **The normalised
+    # document replaces what arrived** — the walk decides where each hop lands,
+    # so a caller's `far_type_id` is checked and then answered, which is what
+    # makes the shape read-modify-write safe.
+    from .action_search_arounds import check_source, source_of
+
+    sourced = [p for p in parameters if source_of(p) is not None]
+    workspace_type_ids: set[str] = set()
+    workspace_links: dict[str, dict[str, Any]] = {}
+    if sourced:
+        workspace_links = await link_types_for(conn, workspace_id)
+        # Resolved one at a time through `get_type`, which is the read that
+        # answers "is this type in this workspace *and* visible to you" — a set
+        # built from a listing would answer the first question only, and a
+        # listing is a page (§256).
+        for parameter in sourced:
+            start = (source_of(parameter) or {}).get("start") or {}
+            named = str(start.get("object_type_id") or "")
+            if not named or named in workspace_type_ids:
+                continue
+            try:
+                await ontology_service.get_type(conn, workspace_id, UUID(named))
+            except (NotFoundError, ValueError):
+                continue
+            workspace_type_ids.add(named)
+    for parameter in sourced:
+        parameter["dropdown_search_around"] = check_source(
+            parameter,
+            object_type_id=(
+                str(parameter["object_type_id"])
+                if parameter.get("object_type_id") else None
+            ),
+            link_types=workspace_links,
+            object_type_ids=workspace_type_ids,
+            parameters=parameters,
+        )
     _validate_definition(
         parameters=parameters, rules=rules, criteria=criteria,
         property_types=property_types, object_type_id=object_type_id,
@@ -2542,10 +2581,11 @@ async def set_definition(
                 INSERT INTO action_parameters
                     (action_type_id, api_name, display_name, data_type, required,
                      default_value, hidden, sort_order, section_id, object_type_id,
-                     dropdown_filters)
+                     dropdown_filters, dropdown_search_around)
                 VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type), :required,
                         CAST(:default AS jsonb), :hidden, :ord, :section,
-                        CAST(:otype AS uuid), CAST(:filters AS jsonb))
+                        CAST(:otype AS uuid), CAST(:filters AS jsonb),
+                        CAST(:around AS jsonb))
                 """
             ),
             {
@@ -2571,6 +2611,14 @@ async def set_definition(
                 # p.36's dropdown filters (db 0084). Part of the parameter, like
                 # its type and its override blocks.
                 "filters": json.dumps(parameter.get("dropdown_filters") or []),
+                # p.36-37's search around (db 0085). NULL rather than an empty
+                # object for p.36's default start, because "every object of the
+                # type" is a fact about the parameter and not a hole in it —
+                # and it is what every parameter written before today says.
+                "around": (
+                    json.dumps(parameter["dropdown_search_around"])
+                    if parameter.get("dropdown_search_around") else None
+                ),
             },
         )
     # p.43-46's override blocks, written with the parameter that owns them

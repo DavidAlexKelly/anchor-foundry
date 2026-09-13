@@ -238,8 +238,20 @@ def for_reader(parameter: dict[str, Any], *, may_edit: bool) -> dict[str, Any]:
     — it asks for the resulting objects — so what is left after this redaction
     is a list of names the reader could have written down themselves.
     """
+    from .action_search_arounds import (
+        referenced_parameters as source_reads,
+        source_of,
+    )
+
+    # p.36-37's search around goes with the filters (§333): a walk names object
+    # types and link types, and "somebody is offering the Documents linked to
+    # this Investigation" is exactly p.40's combination. What the *start* reads
+    # stays, for §332's reason — the form has to know which box makes the
+    # dropdown change, and p.37's example changes on every one of them.
+    watches = sorted({*referenced_parameters(parameter), *source_reads(parameter)})
     return {
         **parameter,
-        "dropdown_watches": referenced_parameters(parameter),
+        "dropdown_watches": watches,
         "dropdown_filters": filters_of(parameter) if may_edit else [],
+        "dropdown_search_around": source_of(parameter) if may_edit else None,
     }
