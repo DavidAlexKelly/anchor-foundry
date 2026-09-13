@@ -509,6 +509,21 @@ def test_a_parameter_naming_a_type_the_file_does_not_define_is_refused(
     assert f"imp_{tag}.act_{tag}.pick" in refused.text
 
 
+def test_an_options_set_naming_a_type_the_file_does_not_define_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """db 0086's document names a type too, and a sweep found this one was the
+    only reference nothing checked — the other two tests each covered their own
+    field and left this one to be covered by neither."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [an_action_naming(
+        tag, options_from={"object_type": "nowhere", "property": "name"})]
+    refused = plan(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    assert "nowhere" in refused.text and "object type" in refused.text
+
+
 def test_a_walk_naming_a_link_the_file_does_not_define_is_refused(
     client: TestClient, fx: Fixture
 ) -> None:

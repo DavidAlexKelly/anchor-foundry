@@ -137,7 +137,14 @@ def exported(client: TestClient, fx: Fixture) -> dict:
                   {"api_name": "who", "display_name": "Who",
                    "data_type": "object",
                    # db 0083's column, and where the walk below starts.
-                   "object_type_id": type_id},
+                   "object_type_id": type_id,
+                   # **A real filter, not an empty list.** §341 asserted that
+                   # filters "travel" against a fixture whose list was empty,
+                   # so carrying them and dropping them produced the same
+                   # document; the sweep said so twice before this stuck.
+                   "dropdown_filters": [
+                       {"property": "name",
+                        "values": [{"kind": "value", "value": "keep"}]}]},
                   {"api_name": "name", "display_name": "Name",
                    "data_type": "string",
                    # db 0086's options set, reached by db 0085's walk — so the
@@ -463,8 +470,12 @@ def test_a_parameters_filters_travel_beside_the_type_they_narrow(
     narrows."""
     action = an_action(exported["doc"], exported["action"])
     named = {p["api_name"]: p for p in action["parameters"]}
-    assert named["who"]["dropdown_filters"] == []
-    assert "dropdown_filters" in named["tier"]
+    [carried] = named["who"]["dropdown_filters"]
+    assert carried["property"] == "name"
+    assert carried["values"] == [{"kind": "value", "value": "keep"}]
+    # And a parameter with nothing to narrow still has the key, as an empty
+    # list — "no filters" is a state the document should say out loud.
+    assert named["tier"]["dropdown_filters"] == []
 
 
 def test_a_string_default_survives_the_export(exported: dict) -> None:
