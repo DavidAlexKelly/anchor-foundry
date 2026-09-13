@@ -498,6 +498,10 @@ def test_typing_a_value_narrows_the_list_of_values(page, api):
     # every region and refusing the submission later.
     expect(page.get_by_test_id("values-waiting")).to_be_visible(timeout=30000)
     expect(page.get_by_test_id("values-waiting")).to_contain_text("Tier")
+    # **And not also the other sentence** (§318's shape): "no object has a
+    # value for that property" is false when the truth is "you have not said
+    # which tier", and both notes rendering is the state a sweep found.
+    expect(page.get_by_test_id("values-empty")).to_have_count(0)
 
     page.locator("[data-parameter='tier'] input").fill("silver")
     expect(picker(page, "region").locator("option")).to_contain_text(

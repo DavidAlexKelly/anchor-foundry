@@ -159,6 +159,14 @@ def resolve(
     it always has — the decision that a comparison is legal is made once,
     against the ontology the caller resolved.
 
+    **Nothing reads that type today, and that is worth knowing rather than
+    discovering.** `in` is equality-shaped, so both stores compare its values as
+    text and neither consults `data_type`; a sweep proved it by handing this an
+    empty `property_types` and changing nothing an API test could see. It is
+    carried because the day p.36 grows an ordered comparison the decision must
+    already have been made here rather than in a store — which is §221's rule,
+    and the reason this is a note and not a deletion.
+
     Raises `Unresolved` for the first parameter-valued side with nothing behind
     it. **Not "skip that value"**: dropping it would quietly widen an OR, and
     dropping the whole filter would quietly widen the set — both of which end
