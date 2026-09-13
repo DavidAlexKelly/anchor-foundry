@@ -113,8 +113,16 @@ def exported(client: TestClient, fx: Fixture) -> dict:
                    "data_type": "string"},
                   {"api_name": "name", "display_name": "Name",
                    "data_type": "string",
+                   # **A string default, and a browser test is why** (§341).
+                   # A jsonb column holding a JSON *string* decodes to a Python
+                   # `str`, which the old `_json` could not tell from an
+                   # undecoded one — so it parsed it twice and
+                   # `json.loads('see the ticket')` failed. p.43-46's whole
+                   # point is defaulting a parameter to a value, and for a
+                   # string parameter that value is a string.
                    "overrides": [
-                       {"conditions": [{
+                       {"set_default": "see the ticket",
+                        "conditions": [{
                             "left": {"kind": "parameter", "parameter": "tier"},
                             "operator": "is",
                             "right": {"kind": "value", "value": "gold"}}],
@@ -355,6 +363,21 @@ def test_a_parameters_overrides_travel(exported: dict) -> None:
     # The condition names the parameter it reads, which is what makes it
     # portable — an override that named a parameter by id could not travel.
     assert override["conditions"][0]["left"]["parameter"] == "tier"
+
+
+def test_a_string_default_survives_the_export(exported: dict) -> None:
+    """**The defect a browser test found** (§341).
+
+    Every jsonb column the export reads is cast to `::text` in SQL now, so what
+    arrives is NULL or JSON text whatever the driver is configured to do. The
+    heuristic it replaced — "if it is a string it must be raw JSON text" — is
+    undecidable for exactly this value, and the failure was a 422 on *every*
+    export in the workspace rather than anything about this one override.
+    """
+    action = an_action(exported["doc"], exported["action"])
+    named = {p["api_name"]: p for p in action["parameters"]}
+    [override] = named["name"]["overrides"]
+    assert override["set_default"] == "see the ticket"
 
 
 def test_an_actions_sections_travel_and_name_their_parameters(

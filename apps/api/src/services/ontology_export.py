@@ -134,6 +134,24 @@ JSON_FIELDS = frozenset({
 
 
 def _json(value: Any) -> Any:
+    """Parse a jsonb column that every query above casts to `::text`.
+
+    **The cast is the point, and a browser test is why** (§341). This used to
+    read "if it is a string it must be raw JSON text", because psycopg hands
+    jsonb back as text in some configurations and as decoded objects in others.
+    That heuristic is undecidable for one case and it is not a rare one: a jsonb
+    column holding a JSON *string* decodes to a Python `str`, which is
+    indistinguishable from an undecoded one — so `_json` parsed it a second
+    time and `json.loads('see the ticket')` failed.
+
+    An override's `set_default` is the field that found it, and p.43-46's whole
+    point is defaulting a parameter to a value, which for a string parameter is
+    a string. `default_value` had the same latent defect since §326 and nothing
+    had set a string default in a workspace that was later exported.
+
+    Casting in SQL removes the guess rather than patching it: what arrives is
+    NULL or JSON text, always, whatever the driver is configured to do.
+    """
     return json.loads(value) if isinstance(value, str) else value
 
 
@@ -166,7 +184,7 @@ async def export_ontology(
         conn,
         """
         SELECT id, api_name, display_name, description, icon, colour,
-               status::text AS status, deprecation,
+               status::text AS status, deprecation::text AS deprecation,
                visibility::text AS visibility, title_property_id
           FROM object_types
          WHERE workspace_id = :wid
@@ -179,9 +197,12 @@ async def export_ontology(
         """
         SELECT object_type_id, api_name, display_name,
                data_type::text AS data_type, required, description, sort_order,
-               visibility::text AS visibility, value_format, conditional_format,
-               edit_only, derivation, struct_fields, status::text AS status,
-               deprecation, id
+               visibility::text AS visibility,
+               value_format::text AS value_format,
+               conditional_format::text AS conditional_format,
+               edit_only, derivation::text AS derivation,
+               struct_fields::text AS struct_fields, status::text AS status,
+               deprecation::text AS deprecation, id
           FROM object_type_properties
          WHERE object_type_id = ANY(
                    SELECT id FROM object_types WHERE workspace_id = :wid)
@@ -201,7 +222,7 @@ async def export_ontology(
         SELECT lt.api_name, lt.display_name, lt.cardinality::text AS cardinality,
                lt.from_property, lt.to_property,
                lt.from_side_name, lt.to_side_name,
-               lt.status::text AS status, lt.deprecation,
+               lt.status::text AS status, lt.deprecation::text AS deprecation,
                a.api_name AS from_object_type, b.api_name AS to_object_type
           FROM link_types lt
           JOIN object_types a ON a.id = lt.from_object_type_id
@@ -216,7 +237,8 @@ async def export_ontology(
         conn,
         """
         SELECT at.id, at.api_name, at.display_name, at.description,
-               at.status::text AS status, at.deprecation, at.allow_revert,
+               at.status::text AS status,
+               at.deprecation::text AS deprecation, at.allow_revert,
                ot.api_name AS object_type
           FROM action_types at
           JOIN object_types ot ON ot.id = at.object_type_id
@@ -234,7 +256,8 @@ async def export_ontology(
         conn,
         """
         SELECT id, action_type_id, api_name, display_name,
-               data_type::text AS data_type, required, default_value, hidden,
+               data_type::text AS data_type, required,
+               default_value::text AS default_value, hidden,
                sort_order, section_id
           FROM action_parameters
          WHERE action_type_id = ANY(
@@ -246,7 +269,8 @@ async def export_ontology(
     rules = await fetch_all(
         conn,
         """
-        SELECT action_type_id, kind::text AS kind, config, sort_order
+        SELECT action_type_id, kind::text AS kind, config::text AS config,
+               sort_order
           FROM action_rules
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -257,7 +281,7 @@ async def export_ontology(
     criteria = await fetch_all(
         conn,
         """
-        SELECT action_type_id, message, config
+        SELECT action_type_id, message, config::text AS config
           FROM action_criteria
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -272,7 +296,8 @@ async def export_ontology(
         conn,
         """
         SELECT id, action_type_id, title, description, columns, collapsible,
-               collapsed, hidden, visible_when, sort_order
+               collapsed, hidden, visible_when::text AS visible_when,
+               sort_order
           FROM action_sections
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -283,8 +308,9 @@ async def export_ontology(
     overrides = await fetch_all(
         conn,
         """
-        SELECT o.parameter_id, o.conditions, o.set_hidden, o.set_required,
-               o.set_default, o.sort_order
+        SELECT o.parameter_id, o.conditions::text AS conditions,
+               o.set_hidden, o.set_required,
+               o.set_default::text AS set_default, o.sort_order
           FROM action_parameter_overrides o
           JOIN action_parameters p ON p.id = o.parameter_id
          WHERE p.action_type_id = ANY(
