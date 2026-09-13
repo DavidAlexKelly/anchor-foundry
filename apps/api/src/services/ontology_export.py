@@ -117,10 +117,41 @@ JSON_FIELDS = frozenset({
     "struct_fields",
     "default_value",
     "config",
+    # §341's additions, for the two tables §326 never read.
+    #
+    # **`dropdown_filters` is deliberately not here**, though it is name-based
+    # and would travel verbatim. A filter is written against the type the
+    # parameter offers, and that type is `object_type_id` — an id, and one of
+    # the three fields this unit leaves to §342. Carrying the filter without it
+    # would put a narrowing in the file with nothing to say what it narrows,
+    # which is a document that reads as complete and is not. A sweep is what
+    # made the coupling obvious: the fixture's filter list was empty, so
+    # "carried" and "dropped" were the same document.
+    "conditions",
+    "set_default",
+    "visible_when",
 })
 
 
 def _json(value: Any) -> Any:
+    """Parse a jsonb column that every query above casts to `::text`.
+
+    **The cast is the point, and a browser test is why** (§341). This used to
+    read "if it is a string it must be raw JSON text", because psycopg hands
+    jsonb back as text in some configurations and as decoded objects in others.
+    That heuristic is undecidable for one case and it is not a rare one: a jsonb
+    column holding a JSON *string* decodes to a Python `str`, which is
+    indistinguishable from an undecoded one — so `_json` parsed it a second
+    time and `json.loads('see the ticket')` failed.
+
+    An override's `set_default` is the field that found it, and p.43-46's whole
+    point is defaulting a parameter to a value, which for a string parameter is
+    a string. `default_value` had the same latent defect since §326 and nothing
+    had set a string default in a workspace that was later exported.
+
+    Casting in SQL removes the guess rather than patching it: what arrives is
+    NULL or JSON text, always, whatever the driver is configured to do.
+    """
     return json.loads(value) if isinstance(value, str) else value
 
 
@@ -153,7 +184,7 @@ async def export_ontology(
         conn,
         """
         SELECT id, api_name, display_name, description, icon, colour,
-               status::text AS status, deprecation,
+               status::text AS status, deprecation::text AS deprecation,
                visibility::text AS visibility, title_property_id
           FROM object_types
          WHERE workspace_id = :wid
@@ -166,9 +197,12 @@ async def export_ontology(
         """
         SELECT object_type_id, api_name, display_name,
                data_type::text AS data_type, required, description, sort_order,
-               visibility::text AS visibility, value_format, conditional_format,
-               edit_only, derivation, struct_fields, status::text AS status,
-               deprecation, id
+               visibility::text AS visibility,
+               value_format::text AS value_format,
+               conditional_format::text AS conditional_format,
+               edit_only, derivation::text AS derivation,
+               struct_fields::text AS struct_fields, status::text AS status,
+               deprecation::text AS deprecation, id
           FROM object_type_properties
          WHERE object_type_id = ANY(
                    SELECT id FROM object_types WHERE workspace_id = :wid)
@@ -188,7 +222,7 @@ async def export_ontology(
         SELECT lt.api_name, lt.display_name, lt.cardinality::text AS cardinality,
                lt.from_property, lt.to_property,
                lt.from_side_name, lt.to_side_name,
-               lt.status::text AS status, lt.deprecation,
+               lt.status::text AS status, lt.deprecation::text AS deprecation,
                a.api_name AS from_object_type, b.api_name AS to_object_type
           FROM link_types lt
           JOIN object_types a ON a.id = lt.from_object_type_id
@@ -203,21 +237,28 @@ async def export_ontology(
         conn,
         """
         SELECT at.id, at.api_name, at.display_name, at.description,
-               at.status::text AS status, at.deprecation, at.allow_revert,
+               at.status::text AS status,
+               at.deprecation::text AS deprecation, at.allow_revert,
                ot.api_name AS object_type
           FROM action_types at
           JOIN object_types ot ON ot.id = at.object_type_id
          WHERE at.workspace_id = :wid
-         ORDER BY at.api_name
+         -- **By object type first, and that is not cosmetic** (§341).
+         -- `action_types` is unique on (object_type_id, api_name), *not* per
+         -- workspace, so two actions in one ontology may share a name — and
+         -- ordering by the name alone leaves which of them comes first to the
+         -- planner's tie-break, which is to say to nothing.
+         ORDER BY ot.api_name, at.api_name
         """,
         {"wid": str(workspace_id)},
     )
     parameters = await fetch_all(
         conn,
         """
-        SELECT action_type_id, api_name, display_name,
-               data_type::text AS data_type, required, default_value, hidden,
-               sort_order
+        SELECT id, action_type_id, api_name, display_name,
+               data_type::text AS data_type, required,
+               default_value::text AS default_value, hidden,
+               sort_order, section_id
           FROM action_parameters
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -228,7 +269,8 @@ async def export_ontology(
     rules = await fetch_all(
         conn,
         """
-        SELECT action_type_id, kind::text AS kind, config, sort_order
+        SELECT action_type_id, kind::text AS kind, config::text AS config,
+               sort_order
           FROM action_rules
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -239,7 +281,7 @@ async def export_ontology(
     criteria = await fetch_all(
         conn,
         """
-        SELECT action_type_id, message, config
+        SELECT action_type_id, message, config::text AS config
           FROM action_criteria
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -247,6 +289,43 @@ async def export_ontology(
         """,
         {"wid": str(workspace_id)},
     )
+    # p.29's form sections (§328, db 0081) and p.43-46's overrides (§329, db
+    # 0082), which §326 never read at all — so an export dropped every section
+    # and every override somebody had configured, silently (§341).
+    sections = await fetch_all(
+        conn,
+        """
+        SELECT id, action_type_id, title, description, columns, collapsible,
+               collapsed, hidden, visible_when::text AS visible_when,
+               sort_order
+          FROM action_sections
+         WHERE action_type_id = ANY(
+                   SELECT id FROM action_types WHERE workspace_id = :wid)
+         ORDER BY action_type_id, sort_order, id
+        """,
+        {"wid": str(workspace_id)},
+    )
+    overrides = await fetch_all(
+        conn,
+        """
+        SELECT o.parameter_id, o.conditions::text AS conditions,
+               o.set_hidden, o.set_required,
+               o.set_default::text AS set_default, o.sort_order
+          FROM action_parameter_overrides o
+          JOIN action_parameters p ON p.id = o.parameter_id
+         WHERE p.action_type_id = ANY(
+                   SELECT id FROM action_types WHERE workspace_id = :wid)
+         ORDER BY o.parameter_id, o.sort_order, o.id
+        """,
+        {"wid": str(workspace_id)},
+    )
+    sections_by: dict[str, list[dict[str, Any]]] = {}
+    for row in sections:
+        sections_by.setdefault(str(row["action_type_id"]), []).append(row)
+    overrides_by: dict[str, list[dict[str, Any]]] = {}
+    for row in overrides:
+        overrides_by.setdefault(str(row["parameter_id"]), []).append(row)
+
     params_by: dict[str, list[dict[str, Any]]] = {}
     for row in parameters:
         params_by.setdefault(str(row["action_type_id"]), []).append(row)
@@ -305,8 +384,46 @@ async def export_ontology(
                         "default_value": _json(p["default_value"]),
                         "hidden": p["hidden"],
                         "sort_order": p["sort_order"],
+                        # p.43-46's overrides (§329), nested under the parameter
+                        # they belong to rather than listed beside it — they
+                        # have no identity of their own and an order that is the
+                        # rule (p.45: if more than one holds, the first wins).
+                        "overrides": [
+                            {
+                                "conditions": _json(o["conditions"]),
+                                "set_hidden": o["set_hidden"],
+                                "set_required": o["set_required"],
+                                "set_default": _json(o["set_default"]),
+                                "sort_order": o["sort_order"],
+                            }
+                            for o in overrides_by.get(str(p["id"]), [])
+                        ],
                     }
                     for p in params_by.get(str(a["id"]), [])
+                ],
+                # p.29's sections (§328). **Each names the parameters it holds**
+                # rather than the parameter naming its section, because a
+                # section has no portable identity — no api_name, and titles
+                # that may repeat — so an id or an index would be a handle this
+                # document invented. Naming members needs neither.
+                "sections": [
+                    {
+                        "title": sec["title"],
+                        "description": sec["description"],
+                        "columns": sec["columns"],
+                        "collapsible": sec["collapsible"],
+                        "collapsed": sec["collapsed"],
+                        "hidden": sec["hidden"],
+                        "visible_when": _json(sec["visible_when"]),
+                        "sort_order": sec["sort_order"],
+                        "parameters": [
+                            p["api_name"]
+                            for p in params_by.get(str(a["id"]), [])
+                            if p["section_id"] is not None
+                            and str(p["section_id"]) == str(sec["id"])
+                        ],
+                    }
+                    for sec in sections_by.get(str(a["id"]), [])
                 ],
                 "rules": [
                     {"kind": r["kind"], "config": _json(r["config"]),

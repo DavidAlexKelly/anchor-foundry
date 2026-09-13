@@ -200,9 +200,28 @@ async def plan(
     check_references(document)
     current = await export_ontology(conn, workspace_id)
 
-    def compare(section: str, key: str = "api_name") -> dict[str, list[str]]:
-        mine = {row[key]: row for row in current[section]}
-        theirs = {row.get(key): row for row in document[section]}
+    def named(section: str) -> "Any":
+        """How this section's rows are keyed, and for actions it is a pair.
+
+        **An action's api_name is not unique in an ontology** (§341).
+        `action_types` is unique on (object_type_id, api_name), so `set_status`
+        on Ticket and `set_status` on Invoice are two different actions with one
+        name — and keying the document by the name alone silently drops one of
+        them, reports the other as *changed* when the two differ, and would
+        apply the wrong one the day the import applies actions at all.
+
+        Found by a browser test whose workspace happened to hold two, which is
+        also why it is written down here: on a clean database nothing collides
+        and this reads like a distinction without a difference.
+        """
+        if section == "action_types":
+            return lambda row: f"{row.get('object_type')}.{row.get('api_name')}"
+        return lambda row: row.get("api_name")
+
+    def compare(section: str) -> dict[str, list[str]]:
+        key = named(section)
+        mine = {key(row): row for row in current[section]}
+        theirs = {key(row): row for row in document[section]}
         return {
             "added": sorted(n for n in theirs if n not in mine),
             # **Changed means "differs", not "mentioned".** A file that is a

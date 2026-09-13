@@ -100,6 +100,54 @@ def exported(client: TestClient, fx: Fixture) -> dict:
     )
     assert action.status_code == 201, action.text
 
+    # **Configured, not bare** (§341). The action used to be created and never
+    # touched, so every question below about what an export carries was asked of
+    # a document with nothing in it to carry — and the five parameter columns
+    # and two whole tables §326 never read looked exactly like a feature that
+    # worked.
+    saved = client.put(
+        f"{wbase(fx)}/action-types/{action.json()['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={"parameters": [
+                  {"api_name": "tier", "display_name": "Tier",
+                   "data_type": "string"},
+                  {"api_name": "name", "display_name": "Name",
+                   "data_type": "string",
+                   # **A string default, and a browser test is why** (§341).
+                   # A jsonb column holding a JSON *string* decodes to a Python
+                   # `str`, which the old `_json` could not tell from an
+                   # undecoded one — so it parsed it twice and
+                   # `json.loads('see the ticket')` failed. p.43-46's whole
+                   # point is defaulting a parameter to a value, and for a
+                   # string parameter that value is a string.
+                   "overrides": [
+                       {"set_default": "see the ticket",
+                        "conditions": [{
+                            "left": {"kind": "parameter", "parameter": "tier"},
+                            "operator": "is",
+                            "right": {"kind": "value", "value": "gold"}}],
+                        "set_required": True}],
+                   },
+              ],
+              "rules": [{"kind": "modify_object",
+                         "config": {"property": "name", "parameter": "name"}}],
+              "criteria": []},
+    )
+    assert saved.status_code == 200, saved.text
+    sectioned = client.put(
+        f"{wbase(fx)}/action-types/{action.json()['id']}/sections",
+        headers=hdr(fx.editor_sub),
+        json={"sections": [
+            # **One of the two on purpose.** With both in it, "the parameters
+            # this section holds" and "every parameter of the action" are the
+            # same list, and a version listing all of them passes — which is
+            # what the first draft did, and a sweep said so.
+            {"title": "Why", "description": "What changed",
+             "parameters": ["name"]},
+        ]},
+    )
+    assert sectioned.status_code == 200, sectioned.text
+
     r = client.get(f"{wbase(fx)}/ontology-export", headers=hdr(fx.editor_sub))
     assert r.status_code == 200, r.text
     return {"doc": r.json(), "api_name": f"exp_{tag}",
@@ -215,7 +263,8 @@ def test_an_action_type_names_its_object_type_by_name(exported: dict) -> None:
                   if a["api_name"] == exported["action"])
     assert action["object_type"] == exported["api_name"]
     # The definition travels too, or the copy is an action that does nothing.
-    assert [p["api_name"] for p in action["parameters"]] == ["name"]
+    # In declaration order, which is the order the form draws them in.
+    assert [p["api_name"] for p in action["parameters"]] == ["tier", "name"]
     assert [r["kind"] for r in action["rules"]] == ["modify_object"]
 
 
@@ -297,6 +346,70 @@ def test_a_link_type_brings_its_join(client: TestClient, fx: Fixture) -> None:
     assert link["to_object_type"] == f"lnk_right_{tag}"
     assert link["from_property"] == "key"
     assert link["to_property"] == "key"
+
+
+# ---- the action configuration an export used to drop (§341) --------------------
+def an_action(doc: dict, api_name: str) -> dict:
+    return next(a for a in doc["action_types"] if a["api_name"] == api_name)
+
+
+def test_a_parameters_overrides_travel(exported: dict) -> None:
+    """p.43-46's overrides (§329). `action_parameter_overrides` was one of two
+    tables §326 never read at all."""
+    action = an_action(exported["doc"], exported["action"])
+    named = {p["api_name"]: p for p in action["parameters"]}
+    [override] = named["name"]["overrides"]
+    assert override["set_required"] is True
+    # The condition names the parameter it reads, which is what makes it
+    # portable — an override that named a parameter by id could not travel.
+    assert override["conditions"][0]["left"]["parameter"] == "tier"
+
+
+def test_a_string_default_survives_the_export(exported: dict) -> None:
+    """**The defect a browser test found** (§341).
+
+    Every jsonb column the export reads is cast to `::text` in SQL now, so what
+    arrives is NULL or JSON text whatever the driver is configured to do. The
+    heuristic it replaced — "if it is a string it must be raw JSON text" — is
+    undecidable for exactly this value, and the failure was a 422 on *every*
+    export in the workspace rather than anything about this one override.
+    """
+    action = an_action(exported["doc"], exported["action"])
+    named = {p["api_name"]: p for p in action["parameters"]}
+    [override] = named["name"]["overrides"]
+    assert override["set_default"] == "see the ticket"
+
+
+def test_an_actions_sections_travel_and_name_their_parameters(
+    exported: dict
+) -> None:
+    """p.29's form sections (§328), the other table §326 never read.
+
+    **Each section names the parameters it holds**, which is the shape the
+    sections API itself uses — a section has no api_name and its title may
+    repeat, so an id or an index would be a handle this document invented.
+    """
+    action = an_action(exported["doc"], exported["action"])
+    [section] = action["sections"]
+    assert section["title"] == "Why"
+    assert section["parameters"] == ["name"]
+    assert section["columns"] == 1
+
+
+def test_a_parameter_in_no_section_is_in_no_sections_list(
+    client: TestClient, fx: Fixture, exported: dict
+) -> None:
+    """The negative control: membership is read off the parameter's section, not
+    assumed for every parameter of the action. Without it, a version listing
+    every api_name in every section passes the test above."""
+    action = an_action(exported["doc"], exported["action"])
+    listed = [name for sec in action["sections"] for name in sec["parameters"]]
+    # `tier` is a parameter of this action and a member of no section, so it
+    # must not appear — which is the assertion the first draft could not make,
+    # because its fixture put both parameters in the one section and left
+    # "the members" and "all of them" indistinguishable.
+    assert "tier" not in listed
+    assert listed == ["name"]
 
 
 def test_nothing_in_the_ontology_is_identified_by_id(exported: dict) -> None:
