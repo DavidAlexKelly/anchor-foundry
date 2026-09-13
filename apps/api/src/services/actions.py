@@ -1639,6 +1639,16 @@ async def parameters_pointing_at(
                {', '.join(f'({c}) AS {name}' for name, c, _ in references)}
           FROM action_parameters p
           JOIN action_types at ON at.id = p.action_type_id
+         -- **A guard a sweep could not make fail, and it stays** (§213's other
+         -- outcome). A type id is unique and every stored reference is checked
+         -- at save time to name a type this workspace has — db 0083's foreign
+         -- key absolutely, `check_options` and `check_source` by refusing one
+         -- it does not — so no row another workspace owns can match the
+         -- clauses below anyway. What this defends against is a writer that
+         -- does not go through those checks, and §326's ontology import is an
+         -- open ○ that will write exactly these documents. Deleting it would
+         -- leave an unscoped read of every workspace's parameters resting on
+         -- an invariant enforced somewhere else entirely.
          WHERE at.workspace_id = CAST(:wid AS uuid)
            AND ({' OR '.join(c for _, c, _ in references)})
          ORDER BY at.api_name, p.api_name

@@ -245,11 +245,30 @@ def test_the_type_the_values_come_from_will_not_go(
 ) -> None:
     """db 0086's ○. This one used to return 204, and the dropdown it describes
     is empty from then on — which the form says out loud, to somebody who
-    cannot do anything about it."""
+    cannot do anything about it.
+
+    **One parameter, two references, and the sweep found both halves.** The repo
+    type is where `name`'s values come from *and* where its walk lands, so this
+    is the case that tells "name every reference that matched" apart from "name
+    the first". A refusal naming one of two is answered by removing that one and
+    refused again, which is a worse experience than not refusing at all.
+
+    And the negative half (§318): the sentence must not claim references this
+    type does not have. Without it, a version that named *every* phrase
+    regardless of what matched passes — the reason would be decoration rather
+    than a reading of the document.
+    """
     define(client, fx, world, walked(world)).raise_for_status()
     refused = delete_type(client, fx, world["repo"])
     assert refused.status_code == 409, refused.text
-    assert "is where its allowed values come from" in refused.json()["detail"]
+    detail = refused.json()["detail"]
+    assert "is where its allowed values come from" in detail
+    assert "walk passes through" in detail
+    # `repo` is held by no parameter and is not where the walk starts — the
+    # employee type is both of those, and saying so here would be a sentence
+    # about a different type.
+    assert "is the object type it holds" not in detail
+    assert "walk starts" not in detail
 
 
 def test_a_type_in_the_middle_of_a_walk_will_not_go(
