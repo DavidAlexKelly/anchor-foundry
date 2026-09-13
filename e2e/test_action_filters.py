@@ -24,7 +24,7 @@ import uuid
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import WEB_BASE, open_module
+from conftest import WEB_BASE, open_module, settled
 from ontology_page import pick_type
 
 
@@ -328,3 +328,41 @@ def test_the_panel_will_not_offer_the_parameter_its_own_filter_is_on(page, api):
     assert not any(
         "Team" in o for o in choices.locator("option").all_inner_texts()
     )
+
+
+# ---- the reader the redaction is for (§332) ------------------------------------
+def test_the_loop_works_for_somebody_who_may_not_edit_the_action(viewer_page, api):
+    """**§331's redaction broke p.36's loop for exactly the people it protects.**
+
+    A viewer is sent no `dropdown_filters` (p.40-41), and the form worked out
+    which boxes to re-ask on by reading them — so it watched nothing, and
+    choosing a region left the Team dropdown sitting on "choose Region first"
+    forever. §214's control that looks like it works, and green in every suite,
+    because every other browser test in this file runs as the owner.
+
+    The same steps as `test_typing_in_one_box_changes_what_the_next_one_offers`,
+    driven by the reader instead. Not a variation on it: the two differ only in
+    who is holding the mouse, and that turned out to be the whole defect.
+    """
+    mod = build(api, "Filter as viewer",
+                dropdown_filters=[from_parameter("region", "where")])
+    # **Not `open_module`**, which clicks Preview: a viewer has no builder to
+    # preview out of, so the module's own address is already the running app.
+    viewer_page.goto(f"{WEB_BASE}{mod.url}")
+    settled(viewer_page)
+    choose_the_ticket(viewer_page)
+
+    expect(viewer_page.get_by_test_id("choices-waiting")).to_be_visible(timeout=30000)
+    field(viewer_page, "where").fill("uk")
+    expect(viewer_page.get_by_test_id("choices-waiting")).to_have_count(0, timeout=30000)
+    shown = options(viewer_page, "team")
+    assert any("Beta" in o for o in shown), shown
+    assert not any("Alpha" in o for o in shown), shown
+
+    # And again, because a dropdown that narrowed once and then stopped
+    # listening is the shape this test exists to refuse.
+    field(viewer_page, "where").fill("us")
+    expect(picker(viewer_page, "team").locator("option")).to_contain_text(
+        ["Choose", "Gamma"], timeout=30000
+    )
+    assert not any("Beta" in o for o in options(viewer_page, "team"))

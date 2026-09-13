@@ -23,10 +23,10 @@ const fromParameter = (property: string, parameter: string): DropdownFilter => (
 });
 
 function parameter(over: Partial<{
-  api_name: string; data_type: string; dropdown_filters: DropdownFilter[];
+  api_name: string; data_type: string; dropdown_watches: string[];
 }> = {}) {
   return {
-    api_name: "team", data_type: "object", dropdown_filters: [], ...over,
+    api_name: "team", data_type: "object", dropdown_watches: [], ...over,
   };
 }
 
@@ -42,52 +42,55 @@ describe("filterParameters", () => {
     // A form whose object parameters carry no filters asks exactly once, when
     // it opens.
     expect(filterParameters([parameter()])).toEqual([]);
-    expect(filterParameters([parameter({
-      dropdown_filters: [statically("region", "eu")],
-    })])).toEqual([]);
   });
 
-  it("does not watch a value whose kind is not a parameter", () => {
-    // **The fourth unit in a row to need this exact check** (§328, §329, §331
-    // on the server, and here). Every value kind this build has either carries
-    // a `parameter` key or carries nothing, so the guard and "does it have a
-    // non-empty name" behave identically — until a document carries a kind
-    // this build does not have, which p.36's own third value kind will be the
-    // day somebody imports one.
-    expect(filterParameters([parameter({
-      dropdown_filters: [{
-        property: "region",
-        values: [{ kind: "object_property", parameter: "where" } as never],
-      }],
-    })])).toEqual([]);
-  });
+  // **Withdrawn (§332), and this is the reasoning §213 asks be left in its
+  // place.** There used to be a test here that a value whose `kind` is not
+  // `"parameter"` is not watched — the fourth copy of a guard §328, §329 and
+  // §331 each needed. It is gone because this function no longer reads a
+  // filter: the kinds are the server's business now (`referenced_parameters`,
+  // and `test_referenced_parameters_ignores_a_side_whose_kind_is_not_a_parameter`
+  // is that check, still failing when the guard goes). A copy here would assert
+  // over an argument this module is never handed.
 
-  it("names what the filters read, across parameters and values", () => {
+  it("names what the server said the dropdown reads", () => {
+    // **Told, not worked out.** The filters are redacted for anyone who may not
+    // edit the action (p.40-41), so a version of this that walked them returned
+    // nothing for exactly the readers who fill the form in — and their dropdown
+    // never re-asked. The names come down whole and this only merges them.
     expect(filterParameters([
-      parameter({ dropdown_filters: [fromParameter("region", "where")] }),
-      parameter({
-        api_name: "owner",
-        dropdown_filters: [{
-          property: "tier",
-          values: [
-            { kind: "parameter", parameter: "level" },
-            { kind: "value", value: "a" },
-          ],
-        }],
-      }),
+      parameter({ dropdown_watches: ["where"] }),
+      parameter({ api_name: "owner", dropdown_watches: ["level"] }),
     ])).toEqual(["level", "where"]);
+  });
+
+  it("says each name once, however many dropdowns read it", () => {
+    // Two controls narrowed by the same box is one value to watch, and a key
+    // that listed it twice would still be right — until it is compared with one
+    // built from a document that happens to order them differently.
+    expect(filterParameters([
+      parameter({ dropdown_watches: ["where"] }),
+      parameter({ api_name: "owner", dropdown_watches: ["where"] }),
+    ])).toEqual(["where"]);
+  });
+
+  it("survives a parameter the server said nothing about", () => {
+    // Every parameter written before §332 — and every non-object one, which is
+    // most of a form.
+    expect(filterParameters([{ api_name: "note", data_type: "string" }]))
+      .toEqual([]);
   });
 });
 
 describe("filterKey", () => {
   it("changes when a value a filter reads changes", () => {
-    const p = [parameter({ dropdown_filters: [fromParameter("region", "where")] })];
+    const p = [parameter({ dropdown_watches: ["where"] })];
     expect(filterKey(p, { where: "eu" })).not.toBe(filterKey(p, { where: "uk" }));
   });
 
   it("does not change when an unread value changes", () => {
     // The reason typing in a plain field is not a round trip.
-    const p = [parameter({ dropdown_filters: [fromParameter("region", "where")] })];
+    const p = [parameter({ dropdown_watches: ["where"] })];
     expect(filterKey(p, { where: "eu", note: "a" }))
       .toBe(filterKey(p, { where: "eu", note: "b" }));
   });

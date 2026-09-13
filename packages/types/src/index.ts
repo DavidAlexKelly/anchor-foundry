@@ -2335,6 +2335,12 @@ export interface ActionParameter {
    * by anyone who can read the definition, and its example reveals that an
    * investigation exists to people who cannot see a document in it. */
   dropdown_filters?: ActionDropdownFilter[];
+  /** Which of the action's other parameters those filters read (§332).
+   * **Sent whether or not the filters are**, and the reason the redaction above
+   * costs a form nothing: this is what it re-asks its dropdown on. Working it
+   * out from `dropdown_filters` instead means a redacted reader watches
+   * nothing, which is the form §331 shipped. */
+  dropdown_watches?: string[];
   /** p.43-46's override blocks, in the order the first-match rule reads them.
    * Absent on a payload that predates §329, and empty for most parameters. */
   overrides?: ActionOverrideBlock[];

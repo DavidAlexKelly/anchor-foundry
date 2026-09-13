@@ -283,14 +283,29 @@ def browser():
         launched.close()
 
 
-@pytest.fixture
-def page(browser, token: str, request):
-    """A signed-in page, and a failure on any console error.
+@pytest.fixture(scope="session")
+def viewer_token(stack: None) -> str:
+    """The dev viewer's token, for a screen driven by somebody who may not edit.
 
-    The console check is not decoration. A React error boundary catches a
-    thrown render and shows *something*, so a widget can be broken while a
-    screenshot looks plausible - the errors are how that surfaces.
+    **Added in §332, and the reason is a defect that shipped.** Every browser
+    test in this suite runs as the owner, so a screen that is *only* wrong for a
+    reader — one whose response was redacted, or whose controls are meant to be
+    absent — has never had a browser in front of it. §331 redacted an action's
+    dropdown filters and, with them, the thing the form reads to know which
+    boxes to re-ask on; the loop kept working for the owner and stopped for
+    everyone else, and the whole suite stayed green.
     """
+    if not os.path.exists(TOKENS_FILE):
+        pytest.fail(
+            f"{TOKENS_FILE} does not exist - start the API with "
+            "--tokens-file (scripts/dev-up.sh does)."
+        )
+    with open(TOKENS_FILE) as handle:
+        tokens = json.load(handle)
+    return tokens["viewer@acme.dev.local"]
+
+
+def _signed_in(browser, token: str, request):
     context = browser.new_context(viewport={"width": 1500, "height": 1200})
     opened = context.new_page()
     errors: list[str] = []
@@ -309,6 +324,28 @@ def page(browser, token: str, request):
     if report is not None and report.failed:
         _capture_failure(opened, request.node.name)
     context.close()
+
+
+@pytest.fixture
+def page(browser, token: str, request):
+    """A signed-in page, and a failure on any console error.
+
+    The console check is not decoration. A React error boundary catches a
+    thrown render and shows *something*, so a widget can be broken while a
+    screenshot looks plausible - the errors are how that surfaces.
+    """
+    yield from _signed_in(browser, token, request)
+
+
+@pytest.fixture
+def viewer_page(browser, viewer_token: str, request):
+    """The same page, signed in as somebody who may not edit anything.
+
+    Its own context rather than a second login in `page`'s, so the two can be
+    open at once: what a reader is shown is usually only interesting next to
+    what the person who wrote it is shown.
+    """
+    yield from _signed_in(browser, viewer_token, request)
 
 
 def eventually(read, matches, *, what: str, timeout_ms: int | None = None):

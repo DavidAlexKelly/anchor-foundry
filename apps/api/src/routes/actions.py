@@ -115,6 +115,14 @@ class ActionParameterOut(BaseModel):
     #: p.40's example is a filter naming an investigation shown to people who
     #: cannot see a document in it.
     dropdown_filters: list[dict[str, Any]] = Field(default_factory=list)
+    #: Which of the action's other parameters those filters read (§332).
+    #: **Not redacted**, and the reason the redaction above is survivable: a
+    #: form re-asks its dropdown when a watched value changes, and a reader who
+    #: was sent no filters has no other way to know one exists. A parameter name
+    #: of an action they can already read in full is not p.40's "property value
+    #: combination" — it is the dependency the form demonstrates on the first
+    #: keystroke either way.
+    dropdown_watches: list[str] = Field(default_factory=list)
     #: db 0083: which object type this parameter's value is an instance of.
     #: `None` on every non-object parameter, and on an object parameter written
     #: before §330 — whose type the action's rules still say.
@@ -313,15 +321,19 @@ def _action_type_out(row: dict[str, Any], *, may_edit: bool = True) -> ActionTyp
     # `default_value` is deliberately not run through `_parse_json` - see
     # `bind_parameters`: a jsonb scalar comes back already decoded, and parsing
     # it again raises.
-    parameters = list(row["parameters"])
-    # p.40-41's redaction (§331). "Static value filters in object dropdown
+    # p.40-41's redaction, and the watch list that keeps a redacted form
+    # working (§331, §332). "Static value filters in object dropdown
     # validations are exposed to all users who can view the action type. Use of
     # these filters risks exposing property value combinations to users without
     # permissions to view the filtered objects" — so a caller who may not edit
     # the action does not receive them. They lose nothing by it: the form asks
-    # for the *objects* a filter leaves, never for the filter.
-    if not may_edit:
-        parameters = [filters_service.redact(p) for p in parameters]
+    # for the *objects* a filter leaves, never for the filter. What it does need
+    # is which boxes to re-ask on, which is `dropdown_watches` and which
+    # `for_reader` supplies in the same breath rather than leaving to a second
+    # call somebody can forget — see its docstring for the form that broke.
+    parameters = [
+        filters_service.for_reader(p, may_edit=may_edit) for p in row["parameters"]
+    ]
     return ActionTypeOut(
         **{
             **row,
@@ -753,6 +765,13 @@ async def effective_action_parameters(
     parameter, resolved — `overrides` stays empty rather than echoing the rules
     that produced it, because a screen drawing this needs to know what to ask
     for and a reader of the *definition* gets the blocks from the action type.
+
+    **p.40-41's redaction applies here too** (§332), and §331 missed it: this is
+    a `viewer` route returning the same `ActionParameterOut`, so a filter
+    redacted on the two reads that go through `_action_type_out` came back in
+    full through this one. A redaction with a third door is not a redaction —
+    and it is exactly the leak p.41 says Foundry could not close and this build
+    claimed to have, reopened by the endpoint the form calls most.
     """
     async with user_connection(access.auth.user_id) as conn:
         action_type = await actions_service.get_action_type(
@@ -763,8 +782,12 @@ async def effective_action_parameters(
     resolved = overrides_service.resolve(
         action_type["parameters"], values=body.values, user=user, order=order
     )
+    may_edit = _may_edit(access)
     return [
-        ActionParameterOut(**{**row, "overrides": []}) for row in resolved
+        ActionParameterOut(
+            **{**filters_service.for_reader(row, may_edit=may_edit), "overrides": []}
+        )
+        for row in resolved
     ]
 
 

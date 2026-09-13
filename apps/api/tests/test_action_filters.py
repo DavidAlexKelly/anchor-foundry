@@ -191,7 +191,19 @@ def test_redaction_removes_the_filters_entirely() -> None:
     cannot see a document in it.
     """
     p = a_parameter(dropdown_filters=[static("investigation", "Area 51")])
-    assert filters.redact(p)["dropdown_filters"] == []
+    assert filters.for_reader(p, may_edit=False)["dropdown_filters"] == []
+
+
+def test_an_editor_still_receives_the_filters() -> None:
+    """The other half of "who is asking", at the layer that decides it.
+
+    Without this the whole of `for_reader` could return an empty list and the
+    redaction tests would all still pass.
+    """
+    p = a_parameter(dropdown_filters=[static("region", "eu")])
+    assert filters.for_reader(p, may_edit=True)["dropdown_filters"] == [
+        static("region", "eu")
+    ]
 
 
 def test_redaction_leaves_everything_else_alone() -> None:
@@ -199,10 +211,35 @@ def test_redaction_leaves_everything_else_alone() -> None:
     offers. Only the sentence that produced the offer goes."""
     p = a_parameter(display_name="Team", required=True,
                     dropdown_filters=[static("region", "eu")])
-    redacted = filters.redact(p)
+    redacted = filters.for_reader(p, may_edit=False)
     assert redacted["display_name"] == "Team"
     assert redacted["required"] is True
     assert redacted["api_name"] == "team"
+
+
+def test_a_redacted_parameter_still_says_what_the_form_must_watch() -> None:
+    """**§332, and the reason `redact` is not a function any more.**
+
+    The redaction is for people who may not edit the action — which is everyone
+    who *runs* it — and the form re-asks its dropdown when a watched value
+    changes. §331 sent them no filters and no watch list, so p.36's "inferred
+    from another parameter" was dead for exactly them: choose a region and the
+    Team dropdown never notices. The names survive the redaction because they
+    are not p.40's "property value combination"; they are parameters of an
+    action this reader can already read in full.
+    """
+    p = a_parameter(dropdown_filters=[from_parameter("region", "where")])
+    redacted = filters.for_reader(p, may_edit=False)
+    assert redacted["dropdown_filters"] == []
+    assert redacted["dropdown_watches"] == ["where"]
+
+
+def test_an_editor_gets_the_same_watch_list() -> None:
+    """One source for it, rather than one per role: the browser reads this
+    field and never walks the filters, so an editor whose watch list came from
+    somewhere else would be a second answer to the same question."""
+    p = a_parameter(dropdown_filters=[from_parameter("region", "where")])
+    assert filters.for_reader(p, may_edit=True)["dropdown_watches"] == ["where"]
 
 
 # ---- the save-time refusals ---------------------------------------------------
@@ -557,3 +594,70 @@ def test_a_viewer_still_gets_the_narrowed_dropdown(
     keys = {c["primary_key"]
             for c in offered(client, fx, setup, sub=fx.viewer_sub)["team"]["items"]}
     assert keys == {"alpha"}
+
+
+def test_effective_parameters_redacts_as_well(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """**The third door** (§332).
+
+    `effective-parameters` is `viewer`, returns the same `ActionParameterOut`,
+    and is the endpoint the form calls most — and §331 left it unredacted while
+    closing the other two. p.41 describes Foundry's residual leak as a filter
+    visible in a network request; this build claimed not to have one, and did.
+    """
+    define(client, fx, setup, [static("region", "eu")]).raise_for_status()
+    r = client.post(
+        f"{wbase(fx)}/action-types/{setup['action']}/effective-parameters",
+        headers=hdr(fx.viewer_sub), json={"values": {}},
+    )
+    assert r.status_code == 200, r.text
+    team = next(p for p in r.json() if p["api_name"] == "team")
+    assert team["dropdown_filters"] == []
+
+
+def test_effective_parameters_still_shows_an_editor_the_filters(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """Otherwise the fix above is "send nobody anything", which is a redaction
+    the same way an unplugged screen is a permission model."""
+    define(client, fx, setup, [static("region", "eu")]).raise_for_status()
+    r = client.post(
+        f"{wbase(fx)}/action-types/{setup['action']}/effective-parameters",
+        headers=hdr(fx.editor_sub), json={"values": {}},
+    )
+    assert r.status_code == 200, r.text
+    team = next(p for p in r.json() if p["api_name"] == "team")
+    assert team["dropdown_filters"] == [static("region", "eu")]
+
+
+def test_a_viewer_is_told_which_box_the_dropdown_depends_on(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """**What §331's redaction took away without replacing** (§332).
+
+    The form re-asks `parameter-choices` when a watched value changes, and it
+    learns which values those are from the parameter. Redacted, it learned
+    none — so for every reader who cannot edit the action, p.36's "inferred
+    from another parameter" was a dropdown that said "choose Region first" and
+    then ignored the region.
+    """
+    define(client, fx, setup, [from_parameter("region", "where")]).raise_for_status()
+    as_viewer = client.get(f"{wbase(fx)}/action-types/{setup['action']}",
+                           headers=hdr(fx.viewer_sub)).json()
+    team = next(p for p in as_viewer["parameters"] if p["api_name"] == "team")
+    assert team["dropdown_filters"] == []
+    assert team["dropdown_watches"] == ["where"]
+
+
+def test_a_static_filter_leaves_the_watch_list_empty(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """A form whose filters read nothing asks once, when it opens — so a watch
+    list naming everything would be a round trip per keystroke on a screen
+    whose dropdown cannot change."""
+    define(client, fx, setup, [static("region", "eu")]).raise_for_status()
+    as_viewer = client.get(f"{wbase(fx)}/action-types/{setup['action']}",
+                           headers=hdr(fx.viewer_sub)).json()
+    team = next(p for p in as_viewer["parameters"] if p["api_name"] == "team")
+    assert team["dropdown_watches"] == []

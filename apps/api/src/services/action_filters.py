@@ -196,8 +196,9 @@ def check_filters(
                 )
 
 
-def redact(parameter: dict[str, Any]) -> dict[str, Any]:
-    """The parameter as somebody who may not edit the action sees it (p.40-41).
+def for_reader(parameter: dict[str, Any], *, may_edit: bool) -> dict[str, Any]:
+    """The parameter as this caller sees it: p.40-41's redaction, and the one
+    thing a redacted form still has to be told.
 
     p.40: "Static value filters in object dropdown validations are exposed to
     all users who can view the action type. Use of these filters risks exposing
@@ -207,15 +208,38 @@ def redact(parameter: dict[str, Any]) -> dict[str, Any]:
 
     p.41 gives the mitigation as redaction — "a user will not be able to see the
     new object dropdown filters in the action type definition in the interface
-    or while inspecting the response in the backend" — and that is what this
-    does. **The whole list goes, not just the static values.** A filter reduced
-    to its properties still says "somebody is filtering Documents by
-    Investigation Name", and p.40's concern is the combination.
+    or while inspecting the response in the backend" — and that is what
+    `dropdown_filters` becoming `[]` is. **The whole list goes, not just the
+    static values.** A filter reduced to its properties still says "somebody is
+    filtering Documents by Investigation Name", and p.40's concern is the
+    combination.
+
+    **`dropdown_watches` is why this is one function rather than two.** §331
+    shipped the redaction alone, and the form works out which boxes to re-ask on
+    by reading the filters — so for the people the redaction is *for*, p.36's
+    "inferred from another parameter" stopped working entirely: fill in Region
+    and the Team dropdown sits on "choose Region first" forever, because nothing
+    told it Region mattered. That is §214's control that looks like it works,
+    and it was invisible because every test of the loop ran as an editor. A
+    redaction that can be applied without supplying the replacement is a
+    redaction that will be, so the two are the same call and there is no
+    `redact` to reach for.
+
+    What the watch list gives away is a parameter *name* of the same action,
+    which the reader already has in full — not a property, not a value, not a
+    combination of the two. It says "this dropdown depends on that box", which
+    is a fact the form's own behaviour states out loud the moment somebody
+    types. Sent to the editor as well, so the browser has one source for it
+    rather than one per role.
 
     p.41 then admits the leak Foundry could not close: its form receives the
     filter as an object set, so "users could review the network request
     containing this object set". This platform's form never receives the filter
     — it asks for the resulting objects — so what is left after this redaction
-    is nothing at all.
+    is a list of names the reader could have written down themselves.
     """
-    return {**parameter, "dropdown_filters": []}
+    return {
+        **parameter,
+        "dropdown_watches": referenced_parameters(parameter),
+        "dropdown_filters": filters_of(parameter) if may_edit else [],
+    }

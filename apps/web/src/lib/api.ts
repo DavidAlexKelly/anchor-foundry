@@ -1844,6 +1844,9 @@ export interface ActionDefinitionInput {
     /** p.36's object dropdown filters (§331). Empty for a caller who may not
      * edit the action type, which is p.40-41's redaction. */
     dropdown_filters?: import("./types").ActionDropdownFilter[];
+    /** Which other parameters those filters read (§332). Sent to everyone, so
+     * a redacted form still knows which boxes to re-ask on. */
+    dropdown_watches?: string[];
     /** p.43-46's override blocks (§329). Part of the parameter rather than a
      * document of their own — unlike §328's sections, which are about the
      * form — because an override changes what the parameter *is* under a

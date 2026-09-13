@@ -22,6 +22,11 @@
  * action. That is why `waitingFor` comes back as a *parameter name* from the
  * server rather than being worked out here: the form knows which box to point
  * at without being told what the rule is.
+ *
+ * `dropdown_watches` is the same trick and for the same reason (§332). A form
+ * has to know which boxes to re-ask on, and the version of this file that
+ * worked it out from the filters knew nothing for the readers the redaction was
+ * written for — so the server names the parameters and keeps the rule.
  */
 
 import type { ParameterChoices } from "./action-choices";
@@ -37,7 +42,7 @@ export type FilterValue = ActionFilterValue;
 interface HasFilters {
   api_name: string;
   data_type: string;
-  dropdown_filters?: DropdownFilter[];
+  dropdown_watches?: string[];
 }
 
 /** Every parameter any filter reads.
@@ -45,17 +50,24 @@ interface HasFilters {
  * The form keys its choices query on these values, so typing in a parameter no
  * filter mentions does not re-ask — and a form whose object parameters carry no
  * filters asks exactly once, when it opens.
+ *
+ * **Read off the server's own answer rather than worked out from the filters**
+ * (§332). The filters are redacted for anyone who may not edit the action
+ * (p.40-41), so the first version of this — which walked `dropdown_filters` —
+ * returned nothing for exactly those readers: their Team dropdown said "choose
+ * Region first", they chose a region, and nothing re-asked, because nothing had
+ * told the form that Region mattered. `dropdown_watches` is sent to everybody
+ * for that reason and this reads only it.
  */
 export function filterParameters(parameters: HasFilters[]): string[] {
   const named = new Set<string>();
   for (const parameter of parameters ?? []) {
-    for (const filter of parameter.dropdown_filters ?? []) {
-      for (const value of filter.values ?? []) {
-        if (value?.kind !== "parameter") continue;
-        const name = String(value.parameter ?? "").trim();
-        if (name) named.add(name);
-      }
-    }
+    // Taken as sent. `referenced_parameters` already trimmed these and dropped
+    // the blanks, so a guard here would be a second copy of a promise the
+    // server makes — free to disagree with it the day one of them changes
+    // (§213). Deduplicated and sorted because *this* merges several
+    // parameters' lists, which is the one thing the server could not do.
+    for (const name of parameter.dropdown_watches ?? []) named.add(name);
   }
   return [...named].sort();
 }
