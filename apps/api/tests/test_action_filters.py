@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
 from src.services import action_filters as filters  # noqa: E402
+from src.services import instance_store  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 
@@ -661,3 +662,55 @@ def test_a_static_filter_leaves_the_watch_list_empty(
                            headers=hdr(fx.viewer_sub)).json()
     team = next(p for p in as_viewer["parameters"] if p["api_name"] == "team")
     assert team["dropdown_watches"] == []
+
+
+def test_a_matching_object_past_the_dropdowns_cap_is_still_accepted(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """**§256's trap arriving through the back door** (found in §333, fixed
+    here).
+
+    §331 answered "is this value allowed" by evaluating the narrowed set at
+    `MAX_CHOICES` and searching the result, so an object that matched the filter
+    perfectly well but sat past the fiftieth was refused — the answer depended
+    on how many the *control* can hold. The dropdown is a control and may
+    truncate; the check is a rule and may not.
+
+    The type is loaded with more than a page of matching objects and the last
+    one is submitted. Nothing below an API test can see this: it is a fact about
+    a limit and a result set.
+    """
+    tag = uuid.uuid4().hex[:8]
+    many = a_type(
+        client, fx, f"cap{tag}",
+        [(f"o{n:03d}", "eu") for n in range(instance_store.INSTANCE_PAGE_SIZE + 5)],
+    )
+    r = client.put(
+        f"{wbase(fx)}/action-types/{setup['action']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={"parameters": [
+                  {"api_name": "where", "display_name": "Where",
+                   "data_type": "string"},
+                  {"api_name": "team", "display_name": "Team",
+                   "data_type": "object", "object_type_id": many,
+                   "dropdown_filters": [static("region", "eu")]},
+              ],
+              "rules": [{"kind": "modify_object",
+                         "config": {"property": "name", "parameter": "where"}}],
+              "criteria": []},
+    )
+    assert r.status_code == 200, r.text
+
+    shown = offered(client, fx, setup)["team"]
+    assert shown["truncated"] is True, "the fixture must exceed the control's cap"
+    offered_keys = {c["primary_key"] for c in shown["items"]}
+
+    # Paged, because a listing is a page (§256) and this one caps at the same
+    # number the dropdown does — the first page is exactly what was offered.
+    rows = client.get(
+        f"{wbase(fx)}/object-types/{many}/instances", headers=hdr(fx.editor_sub),
+        params={"offset": instance_store.INSTANCE_PAGE_SIZE},
+    ).json()["items"]
+    beyond = next(r for r in rows if r["primary_key"] not in offered_keys)
+    accepted = run(client, fx, setup, {"where": "x", "team": beyond["id"]})
+    assert accepted.status_code == 200, accepted.text

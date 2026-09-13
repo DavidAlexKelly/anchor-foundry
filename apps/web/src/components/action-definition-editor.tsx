@@ -29,11 +29,32 @@ import { useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { NotifyRuleFields } from "@/components/notify-rule-fields";
 import { TypePicker } from "@/components/type-picker";
+
+/** What the form calls each parameter, for a sentence a person reads.
+ *
+ * Falls back to the api_name, because a parameter being renamed is a state the
+ * editor is in constantly and "Choose  first" is worse than "Choose where
+ * first".
+ */
+function labelsOf(
+  parameters: { api_name: string; display_name?: string }[],
+): Record<string, string> {
+  return Object.fromEntries((parameters ?? []).map(
+    (q) => [q.api_name, q.display_name || q.api_name]));
+}
 import { untypedNote } from "@/lib/action-choices";
 import {
   blankFilter, filterSummary, readableParameters, staticValueWarning,
   type DropdownFilter,
 } from "@/lib/action-filters";
+import {
+  blankSearchAround,
+  landingNote,
+  nextHops,
+  sourceSummary,
+  startableParameters,
+  type SearchAround,
+} from "@/lib/action-search-arounds";
 import { NotifyConfig, blankNotifyConfig, problem as notifyProblem } from "@/lib/notify-rule";
 import { WebhookRuleFields } from "@/components/webhook-rule-fields";
 import {
@@ -162,6 +183,13 @@ export function ActionDefinitionEditor({
       // the action, which is p.40-41's redaction — and this dialog is only
       // opened by somebody who may.
       dropdown_filters: p.dropdown_filters ?? [],
+      // p.36-37's search around (§333). **Loaded here or silently deleted**:
+      // this dialog saves the parameters whole, so a document it does not read
+      // is one it overwrites with nothing the moment somebody opens it to fix a
+      // label. §329 found that with its override blocks, §331 with its filters,
+      // and it happened again here — the browser test caught it, which is the
+      // whole reason `STATUS.md` says to write that test first.
+      dropdown_search_around: p.dropdown_search_around ?? null,
       // p.43-46's blocks travel with the parameter, so the dialog edits them
       // in the same document it already saves whole (§329).
       overrides: p.overrides ?? [],
@@ -206,6 +234,16 @@ export function ActionDefinitionEditor({
     queryKey: ["link-types", workspaceId],
     queryFn: () => objApi.listLinkTypes(workspaceId),
   });
+  // Type names for the search-around panel's sentences, read off the links
+  // themselves rather than fetched. Every type a walk can *reach* is at one end
+  // of a link, so the list already names them — and §256's rule about the type
+  // listing being a page is exactly why this is not a second read of it. A type
+  // no link touches falls back to "an object type", which is a walk with no
+  // hops and so a sentence nobody needs the name in.
+  const typeNames = Object.fromEntries((links.data ?? []).flatMap((l) => [
+    [l.from_object_type_id, l.from_display_name],
+    [l.to_object_type_id, l.to_display_name],
+  ]));
   // The workspace's webhooks, for the one question the *editor* has to answer
   // rather than the rule: which outputs a writeback above this rule produces
   // (p.110). Fetched once here rather than per rule, and shared with
@@ -895,6 +933,162 @@ export function ActionDefinitionEditor({
                     {untypedNote(p)}
                   </p>
                 )}
+                {/* p.36-37's search around, above the filters because it
+                    decides which set they narrow. Only once the parameter says
+                    what it offers: a walk has to land somewhere, and §330's
+                    column is the only thing that says where. */}
+                {p.object_type_id && (() => {
+                  const source = p.dropdown_search_around ?? null;
+                  const all = links.data ?? [];
+                  const setSource = (next: SearchAround | null) =>
+                    patchParameter(i, { dropdown_search_around: next });
+                  const hops = source?.hops ?? [];
+                  const upTo = (n: number): SearchAround | null =>
+                    source && { ...source, hops: hops.slice(0, n) };
+                  return (
+                    <div data-parameter-search-around={p.api_name}>
+                      <div className="row-actions">
+                        <label>
+                          <input
+                            type="checkbox"
+                            aria-label={`Walk to ${p.api_name} from somewhere else`}
+                            checked={!!source}
+                            onChange={(e) => setSource(e.target.checked
+                              ? blankSearchAround(String(p.object_type_id))
+                              : null)}
+                          />
+                          {" "}Reach these objects by following links
+                        </label>
+                        <span className="field-hint" data-testid="search-around-summary">
+                          {sourceSummary(source, all, typeNames, labelsOf(parameters))}
+                        </span>
+                      </div>
+                      {source && (
+                        <>
+                          <div className="row-actions">
+                            <select
+                              value={source.start.kind}
+                              aria-label={`Walk to ${p.api_name} starts from`}
+                              onChange={(e) => {
+                                const startable = startableParameters(
+                                  parameters, p.api_name);
+                                setSource(e.target.value === "parameter"
+                                  ? (startable[0]
+                                    ? { start: {
+                                        kind: "parameter",
+                                        object_type_id: startable[0].object_type_id,
+                                        parameter: startable[0].api_name,
+                                      }, hops: [] }
+                                    : source)
+                                  : blankSearchAround(String(p.object_type_id)));
+                              }}
+                            >
+                              <option value="object_type">every object of a type</option>
+                              <option value="parameter">an object chosen above</option>
+                            </select>
+                            {source.start.kind === "parameter" ? (
+                              <select
+                                value={source.start.parameter ?? ""}
+                                aria-label={`Walk to ${p.api_name} starting parameter`}
+                                onChange={(e) => {
+                                  const picked = startableParameters(
+                                    parameters, p.api_name,
+                                  ).find((q) => q.api_name === e.target.value);
+                                  if (!picked) return;
+                                  // The hops go with it: a walk from a different
+                                  // type is a different walk, and keeping them
+                                  // would leave links that no longer join up.
+                                  setSource({ start: {
+                                    kind: "parameter",
+                                    object_type_id: picked.object_type_id,
+                                    parameter: picked.api_name,
+                                  }, hops: [] });
+                                }}
+                              >
+                                {startableParameters(parameters, p.api_name).map(
+                                  (q) => (
+                                    <option key={q.api_name} value={q.api_name}>
+                                      {labelsOf(parameters)[q.api_name] ?? q.api_name}
+                                    </option>
+                                  ))}
+                              </select>
+                            ) : (
+                              <TypePicker
+                                workspaceId={workspaceId}
+                                value={source.start.object_type_id}
+                                label={`Walk to ${p.api_name} starting type`}
+                                testId={`parameter-${i + 1}-start-type`}
+                                onChange={(next) => next && setSource({
+                                  start: {
+                                    kind: "object_type", object_type_id: next,
+                                  },
+                                  hops: [],
+                                })}
+                              />
+                            )}
+                          </div>
+                          {hops.map((hop, hi) => (
+                            <div className="row-actions" key={hi} data-hop-row={hi}>
+                              <select
+                                value={hop.link_type_id}
+                                aria-label={`Walk to ${p.api_name} link ${hi + 1}`}
+                                onChange={(e) => setSource({
+                                  ...source,
+                                  // Everything after this hop walked from where
+                                  // the old link landed, so it goes with it.
+                                  hops: [...hops.slice(0, hi),
+                                         { link_type_id: e.target.value }],
+                                })}
+                              >
+                                {/* Only the links that touch where the walk has
+                                    reached, and only the ones that can be
+                                    followed at all (db 0027). */}
+                                {nextHops(upTo(hi), all).map((link) => (
+                                  <option key={link.id} value={link.id}>
+                                    {link.display_name}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                className="btn quiet"
+                                aria-label={`Remove link ${hi + 1} from ${p.api_name}`}
+                                onClick={() => setSource({
+                                  ...source, hops: hops.slice(0, hi),
+                                })}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))}
+                          {(() => {
+                            // The first link that *can* be followed from where
+                            // the walk stands. A button offering a hop that
+                            // does not join up is one the server refuses, so
+                            // there is no button when there is none (§214).
+                            const [next] = nextHops(source, all);
+                            return next ? (
+                              <button
+                                className="btn quiet"
+                                aria-label={`Follow another link from ${p.api_name}`}
+                                onClick={() => setSource({
+                                  ...source,
+                                  hops: [...hops, { link_type_id: next.id }],
+                                })}
+                              >
+                                Follow a link
+                              </button>
+                            ) : null;
+                          })()}
+                          {landingNote(source, all, p.object_type_id, typeNames) && (
+                            <p className="field-hint" data-testid="search-around-landing">
+                              {landingNote(source, all, p.object_type_id, typeNames)}
+                            </p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
                 {/* p.36's filters. Only once the parameter says what it
                     offers, because a filter is written against *that* type's
                     properties — there is nothing to filter until then, and the
@@ -903,8 +1097,7 @@ export function ActionDefinitionEditor({
                   const declared: DropdownFilter[] = p.dropdown_filters ?? [];
                   const setFilters = (next: DropdownFilter[]) =>
                     patchParameter(i, { dropdown_filters: next });
-                  const labels = Object.fromEntries(parameters.map(
-                    (q) => [q.api_name, q.display_name || q.api_name]));
+                  const labels = labelsOf(parameters);
                   return (
                     <div data-parameter-filters={p.api_name}>
                       <div className="row-actions">

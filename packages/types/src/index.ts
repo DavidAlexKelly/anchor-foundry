@@ -2311,6 +2311,27 @@ export interface ActionDropdownFilter {
   values: ActionFilterValue[];
 }
 
+/** One hop of p.37's Search Around: a link to follow, and where following it
+ * lands. The landing type is answered by the server rather than trusted — the
+ * walk decides where it arrives — and comes back so a client can send the
+ * document it was given. */
+export interface ActionSearchAroundHop {
+  link_type_id: string;
+  far_type_id?: string;
+}
+
+/** p.36's starting set, and p.37's hops from it. `kind: "parameter"` is p.36's
+ * "could also be set to an ObjectReference… parameter", which is what makes
+ * p.37's own example ("Github Issue of Current Employee") writable. */
+export interface ActionSearchAround {
+  start: {
+    kind: "object_type" | "parameter";
+    object_type_id: string;
+    parameter?: string;
+  };
+  hops: ActionSearchAroundHop[];
+}
+
 export interface ActionParameter {
   id: string;
   api_name: string;
@@ -2341,6 +2362,12 @@ export interface ActionParameter {
    * out from `dropdown_filters` instead means a redacted reader watches
    * nothing, which is the form §331 shipped. */
   dropdown_watches?: string[];
+  /** p.36-37: where this dropdown's objects come from, before the filters
+   * narrow them (§333). `null`/absent is p.36's default — every object of
+   * `object_type_id`. **Redacted with the filters** for anyone who may not edit
+   * the action: a walk names object types and link types, which is p.40's
+   * combination in a different shape. */
+  dropdown_search_around?: ActionSearchAround | null;
   /** p.43-46's override blocks, in the order the first-match rule reads them.
    * Absent on a payload that predates §329, and empty for most parameters. */
   overrides?: ActionOverrideBlock[];

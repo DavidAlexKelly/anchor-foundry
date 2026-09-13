@@ -621,6 +621,34 @@ class Traversal:
     base: ObjectSet
 
 
+def far_end(link: "Mapping[str, Any]", *, here: str) -> "tuple[str, bool] | None":
+    """Which object type this link reaches from `here`, and whether that is
+    the outbound end — or `None` when the link does not touch `here` at all.
+
+    **The one rule in this platform that says which way a link is being
+    walked**, and it is here rather than in each walker because a second copy
+    would be free to disagree with migration 0027's join the moment somebody
+    edits a link. §333 was about to be the third: `derived_properties._chain`
+    walks a chain to find where it lands, `object_set_eval.resolve_traversal`
+    decides the near end at evaluation time, and p.37's Search Arounds walk one
+    more. Direction is *derived* from the type reached so far — which is why no
+    definition in this build names one, and none can name the wrong one.
+
+    A self-link is outbound by this reading, because `here == from_id` is
+    tested first. Both ends are the same type, so where the walk lands is the
+    same either way; what "outbound" then decides is the cardinality a caller
+    reads off the link, and `from -> to` is the direction that cardinality was
+    written for.
+    """
+    from_id = str(link["from_object_type_id"])
+    to_id = str(link["to_object_type_id"])
+    if here == from_id:
+        return to_id, True
+    if here == to_id:
+        return from_id, False
+    return None
+
+
 def object_type_id_of(definition: Any) -> UUID:
     """Just the object type an unvalidated definition names.
 

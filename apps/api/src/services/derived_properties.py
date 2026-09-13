@@ -29,6 +29,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import object_sets
+
 #: p.147: "Derived properties support traversing up to 3 levels of linked
 #: objects."
 MAX_HOPS = 3
@@ -219,17 +221,16 @@ def _chain(
         if not isinstance(link_id, str) or link_id not in link_types:
             raise DerivationError(f"{where}: this workspace has no such link type")
         link = link_types[link_id]
-        from_id = str(link["from_object_type_id"])
-        to_id = str(link["to_object_type_id"])
-        if here == from_id:
-            far, outbound = to_id, True
-        elif here == to_id:
-            far, outbound = from_id, False
-        else:
+        # `object_sets.far_end` rather than the from/to comparison this used to
+        # inline: three walkers now derive a direction from the type reached so
+        # far, and one rule they can disagree about is one too many (§333).
+        reached = object_sets.far_end(link, here=here)
+        if reached is None:
             raise DerivationError(
                 f"{where}: {link['display_name']!r} does not touch the object "
                 "type this chain has reached"
             )
+        far, outbound = reached
         if not link.get("from_property") or not link.get("to_property"):
             # A link type can be defined and not traversable (db 0027). There
             # is nothing to follow, so there is nothing to derive.

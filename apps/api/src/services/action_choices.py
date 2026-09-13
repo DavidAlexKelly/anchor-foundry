@@ -35,7 +35,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all
 from . import action_filters
+from . import action_search_arounds as search_arounds
 from . import instance_store
+from . import object_set_eval
+from . import object_sets
 from . import instances as instances_service
 
 #: How many objects a dropdown offers. p.33-37 says nothing about a limit, and
@@ -90,6 +93,7 @@ async def choices(
     workspace_id: UUID,
     object_type_id: UUID,
     filters: tuple[Any, ...] = (),
+    definition: Any = None,
     limit: int = MAX_CHOICES,
 ) -> tuple[list[dict[str, Any]], bool]:
     """The objects this parameter may be set to, and whether there were more.
@@ -106,15 +110,66 @@ async def choices(
     names, one control down.
     """
     prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
+    store = instance_store.store_for(conn)
     # p.36's filters, as the object set p.41 says Foundry compiles them into
-    # (§331). Unfiltered goes through the same call with an empty tuple rather
+    # (§331), and p.36-37's start and hops as the `via` chain that set already
+    # supports (§333). Unfiltered and unwalked go through the same call rather
     # than a different one, so there is one path for "what does this parameter
     # offer" and no second place for the answer to be decided.
-    rows, total = await instance_store.store_for(conn).evaluate_object_set(
+    if definition is not None and definition.via is not None:
+        filters, empty = await object_set_eval.resolve_traversal(
+            conn, store, prefix, workspace_id, definition
+        )
+        if empty:
+            # The set below linked to nothing, so this one has no members. An
+            # unfiltered read here would be the silent widening decision 0002
+            # exists to remove — and it would offer every object of the type,
+            # which is the opposite of what a walk narrowing to none means.
+            return [], False
+    rows, total = await store.evaluate_object_set(
         search_prefix=prefix, object_type_id=object_type_id,
         filters=filters, limit=limit, offset=0,
     )
     return [dict(r) for r in rows], total > len(rows)
+
+
+async def start_key_of(
+    conn: AsyncConnection,
+    parameter: dict[str, Any],
+    *,
+    workspace_id: UUID,
+    bound: dict[str, Any],
+) -> str | None:
+    """The primary key of the object p.37's walk starts from, or `None`.
+
+    **A form holds instance ids and a set names primary keys**, and this is the
+    one round trip between them. `search_arounds.build` stays pure and testable
+    without a database because the lookup lives here instead.
+
+    An id nothing resolves comes back unchanged rather than as `None`, and the
+    difference matters: `None` means "nobody has chosen an employee yet", which
+    the form answers with "choose that box first", while an id that names
+    nothing this caller can read means the walk starts from an empty set — an
+    empty dropdown, correctly. The submission is refused either way, because the
+    starting parameter is itself an object parameter and `check_object_values`
+    refuses an id it cannot read by its own rule, in a sentence about the box
+    that actually holds the bad value.
+    """
+    name = search_arounds.start_parameter(parameter)
+    if name is None:
+        return None
+    held = bound.get(name)
+    if held is None or held == "":
+        return None
+    start = (search_arounds.source_of(parameter) or {}).get("start") or {}
+    type_id = str(start.get("object_type_id") or "")
+    if not type_id:
+        return str(held)
+    prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
+    row = await instance_store.store_for(conn).get_instance(
+        search_prefix=prefix, object_type_id=type_id, instance_id=str(held),
+    )
+    return str(row["primary_key"]) if row else str(held)
 
 
 async def check_object_values(
@@ -166,34 +221,59 @@ async def check_object_values(
             raise ValueError(
                 f"{value!r} is not an object of the type {name!r} asks for"
             )
-        # p.34's second sentence, with p.36's filters in it (§331). The type is
-        # not the whole of "the value selected is also validated": a dropdown
-        # narrowed to three objects and a check that accepts any object of the
-        # type is a control that looks like it works.
+        # p.34's second sentence, with p.36's filters in it (§331) and p.37's
+        # walk (§333). The type is not the whole of "the value selected is also
+        # validated": a dropdown narrowed to three objects and a check that
+        # accepts any object of the type is a control that looks like it works.
         declared = action_filters.filters_of(parameter)
-        if not declared:
+        walked = search_arounds.source_of(parameter)
+        if not declared and walked is None:
             continue
         types = await property_types_of(conn, type_id)
         try:
             narrowing = action_filters.resolve(
                 parameter, bound=bound, property_types=types
             )
+            # **Asking about this one object rather than reading the offer and
+            # looking for it.** §331 evaluated the narrowed set at
+            # `MAX_CHOICES` and searched the result, so an object that matched
+            # the filter but sat past the fiftieth was refused — the answer to
+            # "is this value allowed" depended on how many the *control* can
+            # hold, which is §256's trap arriving through the back door. A key
+            # equality makes it a set of one and the page size stops mattering.
+            confirming = (*narrowing, object_sets.Filter(
+                property=object_sets.PRIMARY_KEY_FILTER,
+                op="eq", value=row["primary_key"],
+            ))
+            definition = search_arounds.build(
+                parameter, object_type_id=UUID(type_id),
+                filters=confirming,
+                start_key=await start_key_of(
+                    conn, parameter, workspace_id=workspace_id, bound=bound,
+                ),
+            )
         except action_filters.Unresolved as missing:
-            # **Fails closed.** The filter reads a parameter nothing supplied,
-            # so whether this object is in the set is a question nobody can
-            # answer — and accepting on an unanswered question is how a value
-            # the filter exists to exclude gets written.
+            # **Fails closed**, for the filters and for the walk alike. The rule
+            # reads a parameter nothing supplied, so whether this object is in
+            # the set is a question nobody can answer — and accepting on an
+            # unanswered question is how a value the rule exists to exclude
+            # gets written.
             raise ValueError(
-                f"{name!r} is filtered on {missing.parameter!r}, which this "
+                f"{name!r} is narrowed by {missing.parameter!r}, which this "
                 "submission does not supply"
             ) from missing
-        if not narrowing:
-            continue
-        matched, _ = await store.evaluate_object_set(
-            search_prefix=prefix, object_type_id=type_id,
-            filters=narrowing, limit=MAX_CHOICES, offset=0,
+        # **The same call the dropdown makes**, rather than a second reading of
+        # the rules: p.34 says the offered list and the accepted value are one
+        # rule, and the cheapest way for them to agree is for there to be one
+        # place that decides. A walk that reached nothing must refuse rather
+        # than fall through, which is why this no longer skips when the
+        # narrowing is empty — with a search around, empty filters and no set
+        # are different answers.
+        matched, _ = await choices(
+            conn, workspace_id=workspace_id, object_type_id=UUID(type_id),
+            filters=confirming, definition=definition, limit=1,
         )
-        if not any(str(r["id"]) == value for r in matched):
+        if not matched:
             raise ValueError(
                 f"{value!r} is not among the objects {name!r} offers"
             )

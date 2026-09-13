@@ -34,6 +34,7 @@ from ..services import action_metrics
 from ..services import action_revert
 from ..services import action_choices as choices_service
 from ..services import action_filters as filters_service
+from ..services import action_search_arounds as search_arounds_service
 from ..services import action_overrides as overrides_service
 from ..services import action_sections as sections_service
 from ..services import actions as actions_service
@@ -123,6 +124,13 @@ class ActionParameterOut(BaseModel):
     #: combination" — it is the dependency the form demonstrates on the first
     #: keystroke either way.
     dropdown_watches: list[str] = Field(default_factory=list)
+    #: p.36-37: where this dropdown's objects come from, before the filters
+    #: narrow them (§333; db 0085). `None` is p.36's default — every object of
+    #: `object_type_id`. **Redacted with the filters**, and for the same
+    #: sentence in p.40: a walk names object types and link types the reader may
+    #: not be able to see, and "somebody is offering the Documents linked to an
+    #: Investigation" is the combination p.40 is about.
+    dropdown_search_around: dict[str, Any] | None = None
     #: db 0083: which object type this parameter's value is an instance of.
     #: `None` on every non-object parameter, and on an object parameter written
     #: before §330 — whose type the action's rules still say.
@@ -491,6 +499,10 @@ class ActionParameterIn(BaseModel):
     #: p.36's filters: `{property, values: [{kind, ...}]}`, ANDed, each value
     #: list read as an OR (§331).
     dropdown_filters: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    #: p.36-37: `{start: {kind, object_type_id, parameter?}, hops: [...]}`.
+    #: `None` is p.36's default start, which is every parameter written before
+    #: §333 — and what the panel sends when somebody clears the walk.
+    dropdown_search_around: dict[str, Any] | None = None
     #: p.43-46's overrides, part of the parameter rather than a document of
     #: their own — unlike §328's sections, which are about the form. An
     #: omitted list means no blocks, which is what every parameter written
@@ -688,6 +700,18 @@ async def action_parameter_choices(
                         conn, type_id
                     ),
                 )
+                # p.36's start and p.37's hops, as the nested set the object-set
+                # editor already builds (§333). Raises the same `Unresolved` a
+                # filter does when the walk starts from a box nobody has filled
+                # in, which is p.37's own example before the employee is chosen.
+                definition = search_arounds_service.build(
+                    parameter, object_type_id=UUID(type_id),
+                    filters=narrowing,
+                    start_key=await choices_service.start_key_of(
+                        conn, parameter, workspace_id=access.workspace_id,
+                        bound=body.values,
+                    ),
+                )
             except filters_service.Unresolved as missing:
                 # p.36 lets a filter read another parameter, so a dropdown can
                 # depend on a box nobody has filled in. **Empty, and named**:
@@ -703,7 +727,7 @@ async def action_parameter_choices(
                 continue
             rows, truncated = await choices_service.choices(
                 conn, workspace_id=access.workspace_id, object_type_id=UUID(type_id),
-                filters=narrowing,
+                filters=narrowing, definition=definition,
             )
             title = str(object_type.get("title_property") or "")
             out.append(ParameterChoices(
