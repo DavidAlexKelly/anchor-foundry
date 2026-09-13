@@ -1762,6 +1762,20 @@ async def execute_action(
                     set_type = options_service.set_type_of(parameter)
                     if set_type is None:
                         continue
+                    submitted = bound.get(str(parameter["api_name"]))
+                    if submitted is None or submitted == "":
+                        # **Nothing was chosen, so nothing is being checked**
+                        # (§338). This used to resolve the narrowing anyway and
+                        # refuse the whole submission when a filter read a box
+                        # nobody had filled in — for a parameter nobody had
+                        # filled in either, which is a refusal about a value
+                        # that does not exist. `check_object_values` skips an
+                        # empty box before it looks at a rule, and the reason is
+                        # the same one: an optional parameter left blank means
+                        # something, and it is not "this action cannot run". A
+                        # required one is refused by the check that is actually
+                        # about requiredness, in a sentence that says so.
+                        continue
                     try:
                         # **The same narrowing the dropdown used** (§336), so
                         # "which values are offered" and "which are accepted"
@@ -1780,6 +1794,16 @@ async def execute_action(
                                 parameters=action_type["parameters"],
                             ),
                         )
+                        # **Asking about this one value rather than reading the
+                        # offer and looking for it** (§338), which is §333's
+                        # move for the other shape: the offer is truncated by
+                        # frequency, so searching it made "is this allowed"
+                        # depend on how many the control can hold. The
+                        # narrowing goes on the walk's outermost set as well,
+                        # because that is where the resolver reads it from.
+                        confirming = options_service.confirming(
+                            parameter, submitted, filters=narrowing,
+                        )
                         # p.37's walk, on the same side of the same `try` as
                         # the filters (§337): a walk starting from an empty box
                         # and a filter reading one are the same unanswered
@@ -1787,7 +1811,7 @@ async def execute_action(
                         # drifting into being answered differently.
                         definition = search_arounds_service.build(
                             parameter, object_type_id=UUID(set_type),
-                            filters=narrowing,
+                            filters=confirming,
                             start_key=await choices_service.start_key_of(
                                 conn, parameter,
                                 workspace_id=access.workspace_id, bound=bound,
@@ -1804,12 +1828,10 @@ async def execute_action(
                         )
                     allowed, _more = await options_service.options(
                         conn, parameter, workspace_id=access.workspace_id,
-                        filters=narrowing, definition=definition,
+                        filters=confirming, definition=definition, limit=1,
                     )
                     options_service.check_option_values(
-                        parameter,
-                        bound.get(str(parameter["api_name"])),
-                        allowed=allowed,
+                        parameter, submitted, allowed=allowed,
                     )
             # **Before the first rule runs, and before the run is even opened**
             # (p.49-50). "Refused" and "refused after writing half of it" look the
