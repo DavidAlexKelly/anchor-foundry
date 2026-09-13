@@ -267,8 +267,11 @@ def setup(client: TestClient, fx: Fixture):
     """Offices whose `label` repeats, so "distinct" is a claim with something
     to prove: four objects, three labels."""
     tag = uuid.uuid4().hex[:8]
+    # **`US` three times**, so the store's frequency order (US, EU, UK) and the
+    # alphabetical one (EU, UK, US) differ. A fixture where they agreed could
+    # not tell which the control used, and a sweep walked through it.
     region_type = a_type(client, fx, f"reg{tag}", [
-        ("o1", "EU"), ("o2", "UK"), ("o3", "US"), ("o4", "EU"),
+        ("o1", "US"), ("o2", "US"), ("o3", "US"), ("o4", "EU"), ("o5", "UK"),
     ])
     ticket_type = a_type(client, fx, f"tkt{tag}", [("t1", "x")])
     action = client.post(
@@ -517,14 +520,19 @@ def test_more_distinct_values_than_the_control_holds_are_reported(
 def test_the_options_are_sorted_for_display(
     client: TestClient, fx: Fixture, setup
 ) -> None:
-    """The store returns the most common values first so a cap keeps the ones
-    somebody is most likely to want; what survives is sorted so the control
-    does not reshuffle when the data shifts underneath it. `EU` is the most
-    common label in this fixture and it is not first by frequency alone."""
+    """**Two orderings, and the fixture has to tell them apart.**
+
+    The store returns the most common first, so a cap keeps the ones somebody
+    is most likely to want; what survives is sorted so the control does not
+    reshuffle as the data moves. `US` is the most common here and the last
+    alphabetically, so `== sorted(values)` is a claim rather than a tautology —
+    the first fixture had them agreeing and a sweep removed the sort with
+    everything green.
+    """
     define(client, fx, setup, {"object_type_id": setup["region_type"],
                                "property": "label"}).raise_for_status()
     values = offered(client, fx, setup)["region"]["values"]
-    assert values == sorted(values)
+    assert values == ["EU", "UK", "US"]
 
 
 def test_the_watch_list_is_untouched_by_an_options_document(

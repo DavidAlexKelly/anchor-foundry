@@ -11822,8 +11822,18 @@ export function CanvasActionForm({
     const fill: Record<string, unknown> = {};
     for (const offer of offersQ.data ?? []) {
       if (offer.kind !== "values" || !offer.prefill) continue;
+      // **`typed` and only `typed`** (§213). There used to be a
+      // `hasValue(values[...])` beside this, and a sweep could delete it with
+      // nothing failing — for a reason worth writing down rather than a gap in
+      // the tests. The prefill fires only when the set left exactly one allowed
+      // value, so anything already in the box that is *not* that value is not a
+      // choice: it is the subject's own property read at seed time, and the
+      // submission would refuse it (§214's check on the submit path). Filling
+      // over it is p.33's sentence doing its job. What must not be overwritten
+      // is what somebody actually did, which is what `typed` records — clearing
+      // a required box and having it refill itself is a control arguing with
+      // the person using it.
       if (typed[offer.parameter]) continue;
-      if (hasValue(values[offer.parameter])) continue;
       fill[offer.parameter] = offer.prefill;
     }
     if (Object.keys(fill).length === 0) return;

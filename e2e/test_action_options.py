@@ -30,10 +30,11 @@ from ontology_page import pick_type
 #: listed one option per object would show EU twice, and with three distinct
 #: objects nothing could tell "distinct" from "all of them".
 OFFICES = [
-    {"code": "o1", "region": "EU"},
-    {"code": "o2", "region": "UK"},
+    {"code": "o1", "region": "US"},
+    {"code": "o2", "region": "US"},
     {"code": "o3", "region": "US"},
     {"code": "o4", "region": "EU"},
+    {"code": "o5", "region": "UK"},
 ]
 
 
@@ -150,6 +151,43 @@ def test_several_values_are_left_for_somebody_to_choose(page, api):
     open_module(page, mod)
     choose_the_ticket(page)
     expect(picker(page, "region")).to_have_count(1)
+    expect(picker(page, "region")).to_have_value("")
+
+
+def test_the_values_are_shown_alphabetically_rather_than_by_frequency(page, api):
+    """**Two orderings, on purpose, and the fixture has to tell them apart.**
+
+    The store returns the most common value first so that a cap keeps the ones
+    somebody is most likely to want; what survives is sorted so the control does
+    not reshuffle as the data moves. `US` is the most common region here and the
+    last alphabetically — a fixture where the two orders agreed could not see
+    which one the control used, and a sweep said so.
+    """
+    mod = build(api, "Options order")
+    open_module(page, mod)
+    choose_the_ticket(page)
+    shown = [o for o in options_of(page, "region") if o != "Choose…"]
+    assert shown == ["EU", "UK", "US"], shown
+
+
+def test_clearing_a_prefilled_box_leaves_it_clear(page, api):
+    """**What the prefill must not argue with.**
+
+    p.33 fills a blank; it does not undo a person. Clearing the box is a
+    choice, and a control that refilled itself a moment later would be arguing
+    with whoever made it — which is what `typed` records and the only thing the
+    effect checks (see the note beside it on what it deliberately does not).
+    """
+    mod = build(api, "Options cleared", required=True, offices=[
+        {"code": "o1", "region": "SOLE"}, {"code": "o2", "region": "SOLE"},
+    ])
+    open_module(page, mod)
+    choose_the_ticket(page)
+    expect(picker(page, "region")).to_have_value("SOLE", timeout=30000)
+    picker(page, "region").select_option("")
+    expect(picker(page, "region")).to_have_value("")
+    # Still clear a moment later, rather than refilled by the next render.
+    page.wait_for_timeout(1000)
     expect(picker(page, "region")).to_have_value("")
 
 
