@@ -2460,6 +2460,20 @@ async def set_definition(
     from .action_filters import check_filters
 
     declared_names = {str(p.get("api_name", "")) for p in parameters}
+    # One read per object type rather than per parameter that mentions it: an
+    # action with four parameters offering the same type asked four times.
+    property_names: dict[str, set[str]] = {}
+
+    async def _properties_of(type_id: str) -> set[str]:
+        if type_id not in property_names:
+            property_names[type_id] = {
+                str(row["api_name"])
+                for row in await ontology_service.list_properties(
+                    conn, UUID(type_id)
+                )
+            }
+        return property_names[type_id]
+
     for parameter in parameters:
         if not (parameter.get("dropdown_filters") or []):
             continue
@@ -2470,14 +2484,27 @@ async def set_definition(
                 "not say which object type it offers, so there is nothing to "
                 "filter"
             )
-        offered_properties = {
-            str(p["api_name"])
-            for p in await ontology_service.list_properties(conn, UUID(str(offered)))
-        }
+        # p.36's third value kind reads a property of *another* object
+        # parameter, so what it may read is that parameter's own type's
+        # properties (§334). Built for every typed object parameter rather than
+        # only the ones some filter mentions, because working out which are
+        # mentioned means reading the document `check_filters` is about to.
+        readable: dict[str, set[str]] = {}
+        for other in parameters:
+            other_name = str(other.get("api_name", ""))
+            other_type = other.get("object_type_id")
+            if (
+                other_name == str(parameter.get("api_name", ""))
+                or str(other.get("data_type")) != "object"
+                or not other_type
+            ):
+                continue
+            readable[other_name] = await _properties_of(str(other_type))
         check_filters(
             parameter,
-            declared_properties=offered_properties,
+            declared_properties=await _properties_of(str(offered)),
             parameter_names=declared_names,
+            object_properties=readable,
         )
     # p.36-37's search around, checked in the same place and for the same
     # reason: a walk joins up or it does not, and that is a fact about the

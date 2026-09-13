@@ -123,6 +123,29 @@ describe("waitingNote", () => {
       offer({ waiting_for: "where" } as Partial<ParameterChoices>), {},
     )).toContain("where");
   });
+
+  it("says something else when the chosen object has nothing there", () => {
+    // **p.36's third kind's second empty state** (§334). The box *is* filled
+    // in, so "choose Office first" is simply false — a control telling
+    // somebody to do what they have already done is §214 in words.
+    const note = waitingNote(
+      offer({ waiting_for: "office", waiting_for_property: "region" }),
+      { office: "Office" },
+    );
+    expect(note).toContain("Office");
+    expect(note).toContain("region");
+    expect(note).not.toContain("first");
+  });
+
+  it("still says which box first when the box itself is empty", () => {
+    // The two states differ only in that field, so a version that read the
+    // property whenever one was named would give the wrong sentence to every
+    // unfilled box.
+    expect(waitingNote(
+      offer({ waiting_for: "office", waiting_for_property: null }),
+      { office: "Office" },
+    )).toContain("first");
+  });
 });
 
 describe("isWaiting", () => {
@@ -162,6 +185,24 @@ describe("filterSummary", () => {
       .toBe("region is Region");
   });
 
+  it("says both halves of p.36's third kind", () => {
+    // "the Office's region" and "Office" are different rules, and a summary
+    // showing only the parameter would read identically to the kind above.
+    expect(filterSummary({
+      property: "region",
+      values: [{ kind: "object_property", parameter: "office",
+                 property: "region" }],
+    }, { office: "Office" })).toBe("region is Office's region");
+  });
+
+  it("shows an object-property value by its parameter's label", () => {
+    expect(filterSummary({
+      property: "region",
+      values: [{ kind: "object_property", parameter: "office",
+                 property: "tier" }],
+    }, {})).toBe("region is office's tier");
+  });
+
   it("says so when a half-written filter has no property", () => {
     expect(filterSummary({ property: "", values: [] }, {}))
       .toContain("no property");
@@ -187,6 +228,17 @@ describe("readableParameters", () => {
 });
 
 describe("staticValueWarning", () => {
+  it("says nothing about a value read off an object", () => {
+    // p.41's carve-out covers p.36's third kind for the same reason it covers
+    // its second: nothing about the underlying data is in the definition, only
+    // the name of a parameter and one of its properties (§334).
+    expect(staticValueWarning([{
+      property: "region",
+      values: [{ kind: "object_property", parameter: "office",
+                 property: "region" }],
+    }])).toBeNull();
+  });
+
   it("says nothing when every value comes from a parameter", () => {
     // p.41 is explicit that this carries no risk: "no information about the
     // underlying data is exposed to the action type viewer". A warning on

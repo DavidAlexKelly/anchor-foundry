@@ -42,6 +42,11 @@ export interface ParameterChoices {
    * `null` when the list is simply what it is — "there is nothing to choose"
    * and "fill in the other box first" are different things to be told. */
   waiting_for?: string | null;
+  /** Which property of that parameter's object is missing, for p.36's third
+   * value kind (§334). `null` when the box itself is empty — the two need
+   * different sentences, because "choose the Office first" is false to
+   * somebody who has chosen one whose region happens to be blank. */
+  waiting_for_property?: string | null;
 }
 
 /** The offer for one parameter, or `null` when there is none.

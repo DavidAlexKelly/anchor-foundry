@@ -236,6 +236,121 @@ def test_a_filtered_submission_carries_the_object_that_was_offered(page, api):
     assert json.loads(sent[0])["values"]["team"] == alpha["id"]
 
 
+# ---- p.36's third value kind (§334) ---------------------------------------------
+def build_with_office(api, name: str):
+    """An action whose Team dropdown matches the region of the Office chosen
+    above it — p.36's third kind, on a canvas.
+
+    Two offices in different regions, because with one the filter's value never
+    changes and "reads the object" is indistinguishable from "happens to match".
+    """
+    mod = Module(api, name)
+    tag = uuid.uuid4().hex[:8]
+    team_type = mod.object_type(
+        columns=["code", "name", "region"],
+        rows=[{"code": "alpha", "name": "Alpha", "region": "eu"},
+              {"code": "beta", "name": "Beta", "region": "uk"},
+              {"code": "gamma", "name": "Gamma", "region": "us"}],
+        key="code", title="name", slug=f"oteam_{tag}",
+    )
+    office_type = mod.object_type(
+        columns=["code", "name", "region"],
+        rows=[{"code": "hq", "name": "HQ", "region": "eu"},
+              {"code": "branch", "name": "Branch", "region": "uk"}],
+        key="code", title="name", slug=f"office_{tag}",
+    )
+    ticket_type = mod.object_type(
+        columns=["ticket_id", "note"], rows=[{"ticket_id": "1", "note": ""}],
+        key="ticket_id", title="ticket_id", slug=f"oticket_{tag}",
+    )
+    action = api.call(
+        "POST", f"/workspaces/{mod.workspace_id}/action-types",
+        {"object_type_id": ticket_type, "api_name": f"oassign_{tag}",
+         "display_name": "Assign ticket", "editable_properties": ["note"]},
+    )
+    api.call(
+        "PUT",
+        f"/workspaces/{mod.workspace_id}/action-types/{action['id']}/definition",
+        {"parameters": [
+             {"api_name": "office", "display_name": "Office",
+              "data_type": "object", "object_type_id": office_type},
+             {"api_name": "team", "display_name": "Team", "data_type": "object",
+              "object_type_id": team_type,
+              "dropdown_filters": [{"property": "region", "values": [
+                  {"kind": "object_property", "parameter": "office",
+                   "property": "region"}]}]},
+         ],
+         "rules": [{"kind": "modify_object",
+                    "config": {"property": "note", "parameter": "team"}}],
+         "criteria": []},
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "txt": {"resolvedName": "CanvasText",
+                    "props": {"tag": "p", "text": "OBJECT PROPERTY FORM"}},
+            "frm": {"resolvedName": "CanvasActionForm",
+                    "props": {"actionTypeId": action["id"]}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+    mod.type_id = ticket_type
+    mod.team_type = team_type
+    mod.office_type = office_type
+    mod.action = action
+    return mod
+
+
+def choose_the_office_ticket(page) -> None:
+    """`choose_the_ticket`'s job for the office fixture, which has no `where`
+    box to wait on — its first parameter is the Office picker."""
+    page.locator("form > label select").first.select_option(index=1)
+    expect(picker(page, "office")).to_have_count(1)
+
+
+def test_choosing_an_object_narrows_by_one_of_its_properties(page, api):
+    """**p.36's third kind, end to end, which is the only place it can be
+    seen.** Choose HQ and the Teams offered are the EU ones — a value nobody
+    typed and no parameter holds."""
+    mod = build_with_office(api, "Object property filter")
+    open_module(page, mod)
+    choose_the_office_ticket(page)
+    picker(page, "office").select_option(label="HQ")
+    expect(picker(page, "team").locator("option")).to_contain_text(
+        ["Choose", "Alpha"], timeout=30000
+    )
+    shown = options(page, "team")
+    assert not any("Beta" in o for o in shown), shown
+    assert not any("Gamma" in o for o in shown), shown
+
+
+def test_choosing_a_different_object_narrows_differently(page, api):
+    """A filter that read the object once and then stopped listening passes the
+    test above and fails this one."""
+    mod = build_with_office(api, "Object property changes")
+    open_module(page, mod)
+    choose_the_office_ticket(page)
+    picker(page, "office").select_option(label="HQ")
+    expect(picker(page, "team").locator("option")).to_contain_text(
+        ["Choose", "Alpha"], timeout=30000
+    )
+    picker(page, "office").select_option(label="Branch")
+    expect(picker(page, "team").locator("option")).to_contain_text(
+        ["Choose", "Beta"], timeout=30000
+    )
+    assert not any("Alpha" in o for o in options(page, "team"))
+
+
+def test_before_the_object_is_chosen_the_form_says_which_box(page, api):
+    mod = build_with_office(api, "Object property waiting")
+    open_module(page, mod)
+    choose_the_office_ticket(page)
+    expect(page.get_by_test_id("choices-waiting")).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("choices-waiting")).to_contain_text("Office")
+    expect(page.get_by_test_id("choices-waiting")).to_contain_text("first")
+
+
 # ---- the editor, and p.40 ------------------------------------------------------
 def open_editor(page, mod: Module) -> None:
     page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/objects")
@@ -366,3 +481,70 @@ def test_the_loop_works_for_somebody_who_may_not_edit_the_action(viewer_page, ap
         ["Choose", "Gamma"], timeout=30000
     )
     assert not any("Beta" in o for o in options(viewer_page, "team"))
+
+
+def test_the_panel_writes_p36s_third_kind_and_the_form_honours_it(page, api):
+    """**The panel and the form, in one test** (§334).
+
+    A panel that saved something the form does not honour, or a form narrowed
+    by something no panel can write, would each pass every other test here.
+    """
+    mod = build_with_office(api, "Object property panel")
+    # Start it as a plain unfiltered dropdown, so the narrowing below is the
+    # panel's doing rather than the fixture's.
+    api.call(
+        "PUT",
+        f"/workspaces/{mod.workspace_id}/action-types/{mod.action['id']}/definition",
+        {"parameters": [
+             {"api_name": "office", "display_name": "Office",
+              "data_type": "object", "object_type_id": mod.office_type},
+             {"api_name": "team", "display_name": "Team", "data_type": "object",
+              "object_type_id": mod.team_type},
+         ],
+         "rules": [{"kind": "modify_object",
+                    "config": {"property": "note", "parameter": "team"}}],
+         "criteria": []},
+    )
+    open_module(page, mod)
+    choose_the_office_ticket(page)
+    expect(picker(page, "team").locator("option")).to_contain_text(
+        ["Choose", "Alpha", "Beta", "Gamma"], timeout=30000
+    )
+
+    open_editor(page, mod)
+    page.get_by_label("Add a filter to team").click()
+    page.get_by_label("Filter 1 on team property").select_option("region")
+    page.get_by_label("Filter 1 on team source").select_option("object_property")
+    page.get_by_label("Filter 1 on team object", exact=True).select_option("office")
+    page.get_by_label("Filter 1 on team object property").select_option("region")
+    expect(page.get_by_test_id("filter-summary")).to_contain_text("Office's region")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    saved = api.call(
+        "GET", f"/workspaces/{mod.workspace_id}/action-types/{mod.action['id']}"
+    )
+    team = next(p for p in saved["parameters"] if p["api_name"] == "team")
+    assert team["dropdown_filters"] == [{"property": "region", "values": [
+        {"kind": "object_property", "parameter": "office", "property": "region"},
+    ]}]
+
+    open_module(page, mod)
+    choose_the_office_ticket(page)
+    picker(page, "office").select_option(label="Branch")
+    expect(picker(page, "team").locator("option")).to_contain_text(
+        ["Choose", "Beta"], timeout=30000
+    )
+    assert not any("Alpha" in o for o in options(page, "team"))
+
+
+def test_the_panel_will_not_offer_the_third_kind_with_nothing_to_read_from(page, api):
+    """A kind that can only produce a refusal is §214's control that looks like
+    it works: this action has one object parameter and it is the one being
+    filtered, so there is nothing to read a property off."""
+    mod = build(api, "No object to read", dropdown_filters=[static("region", "eu")])
+    open_editor(page, mod)
+    source = page.get_by_label("Filter 1 on team source")
+    shown = [t.strip() for t in source.locator("option").all_inner_texts()]
+    assert "a property of a chosen object" not in shown, shown
+    assert "another parameter" in shown, shown

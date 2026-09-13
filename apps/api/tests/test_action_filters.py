@@ -101,6 +101,110 @@ def test_a_filter_can_read_another_parameter() -> None:
     assert f.value == ["uk"]
 
 
+# ---- p.36's third value kind (§334) ---------------------------------------------
+def from_object_property(prop: str, name: str, of: str) -> dict:
+    return {"property": prop,
+            "values": [{"kind": "object_property", "parameter": name,
+                        "property": of}]}
+
+
+def test_a_filter_can_read_a_property_of_an_object_parameter() -> None:
+    """p.36's third: "or a property of an Object Reference parameter".
+
+    The whole sentence is now implemented, and this is the half neither of the
+    other two can express — "the Teams in the region of the Office you chose"
+    compares against a value nobody typed and no parameter holds.
+    """
+    [f] = filters.resolve(
+        a_parameter(dropdown_filters=[
+            from_object_property("region", "office", "region")]),
+        bound={"office": "o-1"}, property_types={},
+        objects={"office": {"region": "uk"}},
+    )
+    assert (f.property, f.op, f.value) == ("region", "in", ["uk"])
+
+
+def test_the_property_read_is_the_one_named_rather_than_the_one_filtered() -> None:
+    """A filter on `region` may read `home_region`, and reading the *filtered*
+    property off the object instead would look identical whenever the two
+    happen to share a name — which is most of the time somebody writes one."""
+    [f] = filters.resolve(
+        a_parameter(dropdown_filters=[
+            from_object_property("region", "office", "home_region")]),
+        bound={"office": "o-1"}, property_types={},
+        objects={"office": {"region": "eu", "home_region": "uk"}},
+    )
+    assert f.value == ["uk"]
+
+
+def test_the_three_kinds_mix_inside_one_or() -> None:
+    """p.36's OR does not care which kind produced a value, and a `values` list
+    that handled only its first entry's kind would pass every single-kind
+    test."""
+    [f] = filters.resolve(
+        a_parameter(dropdown_filters=[{"property": "region", "values": [
+            {"kind": "value", "value": "eu"},
+            {"kind": "parameter", "parameter": "where"},
+            {"kind": "object_property", "parameter": "office",
+             "property": "region"},
+        ]}]),
+        bound={"where": "us", "office": "o-1"}, property_types={},
+        objects={"office": {"region": "uk"}},
+    )
+    assert f.value == ["eu", "us", "uk"]
+
+
+def test_an_object_parameter_nobody_has_chosen_says_which_box_comes_first() -> None:
+    """The same state a plain parameter reference is in, and the same sentence:
+    the object has not been chosen, so choose it."""
+    with pytest.raises(filters.Unresolved) as caught:
+        filters.resolve(
+            a_parameter(dropdown_filters=[
+                from_object_property("region", "office", "region")]),
+            bound={}, property_types={}, objects={},
+        )
+    assert caught.value.parameter == "office"
+    assert caught.value.property is None
+
+
+def test_a_chosen_object_with_nothing_under_that_property_is_a_different_state() -> None:
+    """**Told apart on purpose** (§334). "Choose the Office first" is false to
+    somebody who has chosen one, and a control that tells them to do what they
+    have already done is §214 in words.
+
+    Filtering on the empty value would be worse: it narrows to whichever Teams
+    also have no region, which is a short list for a reason nobody chose.
+    """
+    for held in ({"office": {"region": None}}, {"office": {"region": ""}},
+                 {"office": {}}, {}):
+        with pytest.raises(filters.Unresolved) as caught:
+            filters.resolve(
+                a_parameter(dropdown_filters=[
+                    from_object_property("region", "office", "region")]),
+                bound={"office": "o-1"}, property_types={}, objects=held,
+            )
+        assert caught.value.parameter == "office"
+        assert caught.value.property == "region", held
+
+
+def test_an_object_property_filter_is_watched_like_a_parameter_one() -> None:
+    """The value changes when the Office does, which is the whole point of it —
+    so a form watching only the plain kind narrows once and then stops."""
+    assert filters.referenced_parameters(a_parameter(dropdown_filters=[
+        from_object_property("region", "office", "region")])) == ["office"]
+
+
+def test_what_a_filter_reads_off_its_objects_is_named_for_the_caller() -> None:
+    """What `object_values_of` loads before `resolve` can run. Pairs rather
+    than names, because two filters may read two properties of one Office and
+    the caller reads that object once."""
+    assert filters.object_property_reads(a_parameter(dropdown_filters=[
+        from_object_property("region", "office", "region"),
+        from_object_property("tier", "office", "tier"),
+        from_parameter("size", "where"),
+    ])) == [("office", "region"), ("office", "tier")]
+
+
 def test_a_filter_with_no_property_narrows_nothing_rather_than_everything() -> None:
     """**A document that predates the save-time refusal.**
 
@@ -128,12 +232,20 @@ def test_referenced_parameters_ignores_a_side_whose_kind_is_not_a_parameter() ->
 
     Every side kind this build has either carries a `parameter` key or carries
     nothing, so the guard and "does it have a non-empty name" behave
-    identically — until a document carries a kind this build does not have,
-    which p.36's own third value kind will be the day somebody imports one.
+    identically — until a document carries a kind this build does not have.
+
+    **This test used to use `object_property` as that unknown kind, and §334
+    implemented it.** Left as it was, the check would have kept passing while
+    testing nothing: `object_property` is now watched on purpose, so the guard
+    it was written to defend would have been deleted with the suite green. The
+    kind here is p.90's "From a function", which `notifications.RECIPIENT_KINDS`
+    names as the one Foundry offers and this platform does not — a kind that
+    stays unknown because something real is missing, rather than because nobody
+    has got to it yet.
     """
     assert filters.referenced_parameters(a_parameter(dropdown_filters=[{
         "property": "region",
-        "values": [{"kind": "object_property", "parameter": "where",
+        "values": [{"kind": "function", "parameter": "where",
                     "property": "region"}],
     }])) == []
 
@@ -244,9 +356,17 @@ def test_an_editor_gets_the_same_watch_list() -> None:
 
 
 # ---- the save-time refusals ---------------------------------------------------
-def check(parameter: dict, *, properties=("region", "tier"), names=("team", "where")):
+#: What each *other* object parameter's type offers, for p.36's third kind.
+#: `office` holds an Office, whose properties are these; `where` is a string
+#: parameter and so is absent — which is one of the refusals below.
+OBJECT_PROPERTIES = {"office": {"region", "tier"}}
+
+
+def check(parameter: dict, *, properties=("region", "tier"),
+          names=("team", "where", "office"), objects=OBJECT_PROPERTIES):
     filters.check_filters(
-        parameter, declared_properties=set(properties), parameter_names=set(names)
+        parameter, declared_properties=set(properties),
+        parameter_names=set(names), object_properties=objects,
     )
 
 
@@ -273,16 +393,79 @@ def test_a_filter_with_no_property_is_refused() -> None:
 
 
 def test_a_value_kind_this_build_does_not_have_is_refused_by_name() -> None:
-    """p.36's third kind — a property of an object-reference parameter — is not
-    implemented, and a document carrying one is told so rather than having the
-    value quietly ignored."""
+    """A document carrying a kind this build lacks is told so rather than
+    having the value quietly ignored — which would widen the filter's OR and
+    offer exactly what it exists to exclude.
+
+    p.90's "From a function" is the standing example, as it is for a notify
+    rule's recipients: Foundry offers it and this platform has no Functions.
+    (It was p.36's third kind until §334 built that one.)
+    """
     with pytest.raises(ValueError) as caught:
         check(a_parameter(dropdown_filters=[{
             "property": "region",
-            "values": [{"kind": "object_property", "parameter": "where",
-                        "property": "region"}],
+            "values": [{"kind": "function", "parameter": "where"}],
         }]))
-    assert "object_property" in str(caught.value)
+    assert "function" in str(caught.value)
+
+
+def test_an_object_property_filter_naming_a_string_parameter_is_refused() -> None:
+    """p.36 says an *Object Reference* parameter. Reading a property off a
+    string is not a thing that can be done, and the honest place to say so is
+    the save rather than an empty dropdown."""
+    with pytest.raises(ValueError) as caught:
+        check(a_parameter(dropdown_filters=[
+            from_object_property("region", "where", "region")]))
+    assert "not an object parameter with a declared type" in str(caught.value)
+
+
+def test_an_object_property_filter_naming_an_untyped_parameter_is_refused() -> None:
+    """Every object parameter written before §330 is in this state. There is no
+    type to check the property against, so there is nothing to check — and
+    `notifications.parse_notify`'s rule applies: a caller that has resolved no
+    ontology has checked no property."""
+    with pytest.raises(ValueError) as caught:
+        check(a_parameter(dropdown_filters=[
+            from_object_property("region", "office", "region")]),
+            objects={})
+    assert "declared type" in str(caught.value)
+
+
+def test_an_object_property_filter_reading_an_unknown_property_is_refused() -> None:
+    """Checked against the *read* parameter's type, not the offered one — the
+    two are different object types and the fixture makes them share property
+    names so that confusing them would pass."""
+    with pytest.raises(ValueError) as caught:
+        check(a_parameter(dropdown_filters=[
+            from_object_property("region", "office", "no_such_property")]))
+    assert "no_such_property" in str(caught.value)
+    assert "office" in str(caught.value)
+
+
+def test_an_object_property_filter_with_no_property_named_is_refused() -> None:
+    """Half a rule. Compiled it would read `None` off the object and narrow to
+    nothing, which is an empty dropdown for a reason nobody chose."""
+    with pytest.raises(ValueError) as caught:
+        check(a_parameter(dropdown_filters=[{
+            "property": "region",
+            "values": [{"kind": "object_property", "parameter": "office"}],
+        }]))
+    assert "which of its properties" in str(caught.value)
+
+
+def test_an_object_property_filter_reading_itself_is_refused() -> None:
+    """The dropdown would read a property of the object it is offering."""
+    with pytest.raises(ValueError) as caught:
+        check(a_parameter(dropdown_filters=[
+            from_object_property("region", "team", "region")]))
+    assert "itself" in str(caught.value)
+
+
+def test_a_legal_object_property_filter_is_not_refused() -> None:
+    """Otherwise every refusal above passes for a rule that refuses the kind
+    outright."""
+    check(a_parameter(dropdown_filters=[
+        from_object_property("region", "office", "tier")]))
 
 
 def test_a_filter_reading_a_parameter_that_is_gone_is_refused() -> None:
@@ -714,3 +897,155 @@ def test_a_matching_object_past_the_dropdowns_cap_is_still_accepted(
     beyond = next(r for r in rows if r["primary_key"] not in offered_keys)
     accepted = run(client, fx, setup, {"where": "x", "team": beyond["id"]})
     assert accepted.status_code == 200, accepted.text
+
+
+# ---- p.36's third kind, with objects behind it (§334) ---------------------------
+@pytest.fixture(scope="module")
+def offices(client: TestClient, fx: Fixture, setup):
+    """A second object type whose objects carry a region, so a filter can read
+    one off the object somebody chose.
+
+    Two offices in different regions, because with one the filter's value never
+    changes and "reads the object" is indistinguishable from "happens to match".
+    """
+    tag = uuid.uuid4().hex[:8]
+    office_type = a_type(client, fx, f"off{tag}", [("hq", "eu"), ("branch", "uk")])
+    rows = client.get(f"{wbase(fx)}/object-types/{office_type}/instances",
+                      headers=hdr(fx.editor_sub)).json()["items"]
+    return {"type": office_type, "ids": {r["primary_key"]: r["id"] for r in rows}}
+
+
+def define_with_office(client, fx, setup, offices, values, sub=None):
+    return client.put(
+        f"{wbase(fx)}/action-types/{setup['action']}/definition",
+        headers=hdr(sub or fx.editor_sub),
+        json={"parameters": [
+                  {"api_name": "where", "display_name": "Where",
+                   "data_type": "string"},
+                  {"api_name": "office", "display_name": "Office",
+                   "data_type": "object", "object_type_id": offices["type"]},
+                  {"api_name": "team", "display_name": "Team",
+                   "data_type": "object",
+                   "object_type_id": setup["team_type"],
+                   "dropdown_filters": [{"property": "region", "values": values}]},
+              ],
+              "rules": [{"kind": "modify_object",
+                         "config": {"property": "name", "parameter": "where"}}],
+              "criteria": []},
+    )
+
+
+def a_read(name="office", of="region"):
+    return [{"kind": "object_property", "parameter": name, "property": of}]
+
+
+def test_the_dropdown_matches_a_property_of_the_chosen_object(
+    client: TestClient, fx: Fixture, setup, offices
+) -> None:
+    """**p.36's third kind, end to end.** Choose the EU office and the Teams
+    offered are the EU ones — a value nobody typed and no parameter holds."""
+    define_with_office(client, fx, setup, offices, a_read()).raise_for_status()
+    shown = offered(client, fx, setup, {"office": offices["ids"]["hq"]})["team"]
+    assert {c["primary_key"] for c in shown["items"]} == {"alpha"}
+
+
+def test_choosing_a_different_object_changes_the_dropdown(
+    client: TestClient, fx: Fixture, setup, offices
+) -> None:
+    """A filter that read the object once and then stopped would pass the test
+    above and fail this one."""
+    define_with_office(client, fx, setup, offices, a_read()).raise_for_status()
+    shown = offered(client, fx, setup, {"office": offices["ids"]["branch"]})["team"]
+    assert {c["primary_key"] for c in shown["items"]} == {"beta"}
+
+
+def test_before_the_object_is_chosen_the_form_is_told_which_box(
+    client: TestClient, fx: Fixture, setup, offices
+) -> None:
+    define_with_office(client, fx, setup, offices, a_read()).raise_for_status()
+    shown = offered(client, fx, setup)["team"]
+    assert shown["items"] == []
+    assert shown["waiting_for"] == "office"
+    assert shown["waiting_for_property"] is None
+
+
+def test_an_object_with_nothing_under_that_property_names_the_property(
+    client: TestClient, fx: Fixture, setup, offices
+) -> None:
+    """**The two empty states, told apart** (§334). The box is filled in, so
+    "choose the Office first" would be false; what is missing is the property,
+    and the response says which one so the form can say so too."""
+    tag = uuid.uuid4().hex[:8]
+    blank_type = a_type(client, fx, f"blk{tag}", [("nowhere", "")])
+    rows = client.get(f"{wbase(fx)}/object-types/{blank_type}/instances",
+                      headers=hdr(fx.editor_sub)).json()["items"]
+    define_with_office(
+        client, fx, setup, {"type": blank_type}, a_read(),
+    ).raise_for_status()
+    shown = offered(client, fx, setup, {"office": rows[0]["id"]})["team"]
+    assert shown["items"] == []
+    assert shown["waiting_for"] == "office"
+    assert shown["waiting_for_property"] == "region"
+
+
+def test_a_submission_outside_the_read_property_is_refused(
+    client: TestClient, fx: Fixture, setup, offices
+) -> None:
+    """p.34's second sentence with p.36's third kind in it. A dropdown narrowed
+    to the EU teams beside a check that accepts a UK one is §214's control that
+    looks like it works."""
+    define_with_office(client, fx, setup, offices, a_read()).raise_for_status()
+    teams = client.get(
+        f"{wbase(fx)}/object-types/{setup['team_type']}/instances",
+        headers=hdr(fx.editor_sub)).json()["items"]
+    beta = next(t for t in teams if t["primary_key"] == "beta")
+    refused = run(client, fx, setup, {
+        "where": "x", "office": offices["ids"]["hq"], "team": beta["id"],
+    })
+    assert refused.status_code == 422, refused.text
+    assert "offers" in refused.text
+
+
+def test_a_submission_inside_the_read_property_is_accepted(
+    client: TestClient, fx: Fixture, setup, offices
+) -> None:
+    """Without this the refusal above passes for a check that refuses
+    everything."""
+    define_with_office(client, fx, setup, offices, a_read()).raise_for_status()
+    teams = client.get(
+        f"{wbase(fx)}/object-types/{setup['team_type']}/instances",
+        headers=hdr(fx.editor_sub)).json()["items"]
+    alpha = next(t for t in teams if t["primary_key"] == "alpha")
+    ok = run(client, fx, setup, {
+        "where": "x", "office": offices["ids"]["hq"], "team": alpha["id"],
+    })
+    assert ok.status_code == 200, ok.text
+
+
+def test_a_submission_that_does_not_supply_the_read_object_is_refused(
+    client: TestClient, fx: Fixture, setup, offices
+) -> None:
+    """**Fails closed.** Whether this team is in the set is a question nobody
+    can answer without the office."""
+    define_with_office(client, fx, setup, offices, a_read()).raise_for_status()
+    teams = client.get(
+        f"{wbase(fx)}/object-types/{setup['team_type']}/instances",
+        headers=hdr(fx.editor_sub)).json()["items"]
+    alpha = next(t for t in teams if t["primary_key"] == "alpha")
+    refused = run(client, fx, setup, {"where": "x", "team": alpha["id"]})
+    assert refused.status_code == 422, refused.text
+    assert "office" in refused.text
+
+
+def test_a_viewer_is_told_to_watch_the_object_parameter(
+    client: TestClient, fx: Fixture, setup, offices
+) -> None:
+    """§332's rule with p.36's third kind under it: the filter is redacted and
+    the parameter it reads is not, because a form told nothing re-asks
+    nothing."""
+    define_with_office(client, fx, setup, offices, a_read()).raise_for_status()
+    read = client.get(f"{wbase(fx)}/action-types/{setup['action']}",
+                      headers=hdr(fx.viewer_sub)).json()
+    team = next(p for p in read["parameters"] if p["api_name"] == "team")
+    assert team["dropdown_filters"] == []
+    assert team["dropdown_watches"] == ["office"]
