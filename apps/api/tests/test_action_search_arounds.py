@@ -282,6 +282,24 @@ def test_the_start_parameter_is_what_the_form_watches() -> None:
         dropdown_search_around=source(from_parameter(), WORKS_ON))) == ["who"]
 
 
+def test_a_start_whose_kind_is_not_a_parameter_is_not_watched() -> None:
+    """**The seventh time this exact check has been needed** (§328, §329, §331
+    twice, §332, and here), and the sweep found it again.
+
+    Every start kind this build has either carries a `parameter` key or carries
+    nothing, so the guard and "does it have a non-empty name" behave
+    identically — until a document carries a kind this build does not have,
+    which p.36's ObjectReference *list* parameter will be the day it arrives or
+    an ontology import (§326) brings one. The value below is the only input that
+    tells the two apart: an unknown kind that *does* name a parameter.
+    """
+    assert around.referenced_parameters(a_parameter(dropdown_search_around={
+        "start": {"kind": "object_set", "object_type_id": EMPLOYEE,
+                  "parameter": "who"},
+        "hops": [{"link_type_id": WORKS_ON}],
+    })) == []
+
+
 def test_a_type_start_watches_nothing() -> None:
     """A dropdown that cannot change asks once, when the form opens."""
     assert around.referenced_parameters(a_parameter(
@@ -586,6 +604,26 @@ def test_an_unfilled_start_offers_nothing_and_names_the_box(client, fx, world) -
     shown = offered(client, fx, world)["issue"]
     assert shown["items"] == []
     assert shown["waiting_for"] == "who"
+
+
+def test_a_walk_whose_start_reaches_nothing_offers_nothing(
+    client: TestClient, fx: Fixture, world
+) -> None:
+    """**The silent widening decision 0002 exists to remove**, found by sweep.
+
+    When the set below a hop has no members there is nothing to join against,
+    and an unfiltered read of the far type would offer *every* issue — the exact
+    opposite of what a walk narrowing to none means, in front of somebody who
+    would have no way to tell. The start here names an employee that does not
+    exist, which is the state a form is in whenever somebody's chosen object has
+    since been deleted.
+
+    Not the same as `waiting_for`: that box is filled in, so nothing is waiting.
+    """
+    define(client, fx, world, search_around=a_walk(world)).raise_for_status()
+    shown = offered(client, fx, world, {"who": str(uuid.uuid4())})["issue"]
+    assert shown["items"] == []
+    assert shown["waiting_for"] is None
 
 
 def test_the_filters_narrow_what_the_walk_reached(client, fx, world) -> None:
