@@ -209,7 +209,12 @@ describe("startableParameters", () => {
   const all = [
     { api_name: "issue", data_type: "object", object_type_id: ISSUE },
     { api_name: "who", data_type: "object", object_type_id: EMPLOYEE },
-    { api_name: "note", data_type: "string" },
+    // **A string that still carries a type**, which is the only input that
+    // tells "is it an object parameter" apart from "does it have a type" — the
+    // server refuses this pair, but the dialog is in it the moment somebody
+    // changes a parameter from object to string. A sweep found the two
+    // conditions indistinguishable without it.
+    { api_name: "note", data_type: "string", object_type_id: EMPLOYEE },
     { api_name: "untyped", data_type: "object", object_type_id: null },
   ];
 
