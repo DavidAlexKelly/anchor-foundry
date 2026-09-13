@@ -548,12 +548,18 @@ def test_a_file_that_changes_an_existing_links_cardinality_is_refused(
 def test_nothing_is_written_when_a_link_is_refused(
     client: TestClient, fx: Fixture
 ) -> None:
-    """**The check runs before the first write**, which is p.138's reasoning
-    about batches applied to a file: a half-applied import is worse than a
-    refused one.
+    """**A refused import writes nothing, including the half that was legal.**
 
-    The file carries a legal new object type *and* an illegal link change, so a
-    version that refused between the two passes would leave the type behind.
+    The file carries a legal new object type *and* an illegal link change, and
+    the type is not there afterwards.
+
+    What makes that true is `user_connection`: the whole request is one
+    transaction, so a refusal anywhere rolls back everything the import had
+    written. The first draft of this test claimed it was proving the *position*
+    of `check_immutable_links` — and a sweep showed that moving that call to
+    after the object-type pass changes nothing here. The behaviour is worth
+    pinning; the reason it holds is the transaction, and this test is now
+    written as a test of that.
     """
     tag = uuid.uuid4().hex[:8]
     apply(client, fx, two_types_and_a_link(fx, tag)).raise_for_status()
@@ -586,8 +592,14 @@ def test_a_link_with_no_cardinality_is_refused_by_name(
 def test_a_link_with_no_api_name_is_refused_by_name(
     client: TestClient, fx: Fixture
 ) -> None:
-    """The other field a link cannot be created without, and asserted apart
-    from the one above so neither check covers for the other."""
+    """The other field a link cannot be created without.
+
+    **Refused a layer down**, and `ontology_import` has no check of its own for
+    it: `create_link_type` matches the api_name against a regex and names the
+    field, and since a request is one transaction the earlier refusal changed
+    neither the outcome nor what was written. The test stays because the
+    behaviour matters; the check it was written against is gone (§213).
+    """
     tag = uuid.uuid4().hex[:8]
     document = two_types_and_a_link(fx, tag)
     document["link_types"][0]["api_name"] = ""

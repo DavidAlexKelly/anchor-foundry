@@ -111,15 +111,18 @@ def check_references(document: dict[str, Any]) -> None:
                 f"link type {link.get('api_name')!r} joins "
                 f"{link.get(side)!r}, which the file does not define",
             )
-        # **The fields a link cannot be created without** (§340). p.65's premise
+        # **The field a link cannot be created without** (§340). p.65's premise
         # is that somebody edited this JSON in a text editor, so a key they
         # deleted has to come back as a sentence about that key — before §340
         # applied links nothing read `cardinality`, and the first thing that did
         # turned a hand-edited file into a 500.
-        _require(
-            bool(link.get("api_name")),
-            "every link type in the file needs an api_name",
-        )
+        #
+        # There is no check for a missing `api_name` beside this one, and a
+        # sweep is why (§213): `create_link_type` refuses one by regex, in a
+        # sentence that names the field, and a request is a single transaction —
+        # so the earlier check changed neither the outcome nor what was written.
+        # `object_types` has one because its name is a *key* this module builds
+        # a dictionary on, which is a different job.
         _require(
             link.get("cardinality") in ontology_service.CARDINALITIES,
             f"link type {link.get('api_name')!r} needs a cardinality, one of "
@@ -152,10 +155,17 @@ def check_immutable_links(
 ) -> None:
     """Refuse a file that redefines a link this workspace already has.
 
-    **Before anything is written**, which is the same rule `check_references`
-    follows and for the same reason: a half-applied import is worse than a
-    refused one. It cannot live in `check_references` because that is a pure
-    function over the document, and this is a comparison against the workspace.
+    Its own function rather than a line in `check_references`, because that one
+    is pure over the document and this is a comparison against the workspace.
+
+    **It is called before the first write, and that is tidiness rather than
+    safety** — a sweep is what made the difference clear. Moving this call to
+    sit after the object-type pass changes no test and no outcome, because
+    `user_connection` wraps the whole request in one transaction: any refusal
+    already rolls back everything the import had written. So the reason it runs
+    first is that work nobody will keep is work not worth doing, and not the
+    half-applied-import argument `check_references` can legitimately make about
+    a file it reads before touching a database at all.
 
     A link the workspace does not have is not checked here — it is created whole
     below, endpoints and all.
@@ -262,9 +272,8 @@ async def apply(
     """
     made = await plan(conn, workspace_id, document)
     before = await export_ontology(conn, workspace_id)
-    # **Refused before the first write**, which is why it is here rather than
-    # between the two passes: an object type applied and then a link refused
-    # leaves a workspace that matches neither side.
+    # Before the two passes rather than between them — see the function's own
+    # docstring for why that is a preference and not a safety property.
     check_immutable_links(document, before)
     current = {t["api_name"]: t for t in before["object_types"]}
     added: list[str] = []
