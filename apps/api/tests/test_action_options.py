@@ -710,3 +710,319 @@ def test_a_filter_on_a_parameter_with_no_options_is_still_refused(
     )
     assert bad.status_code == 422, bad.text
     assert "which object type it offers" in bad.text
+
+
+# ---- p.37's walk over the options set (§337) ------------------------------------
+#
+# **p.33's own word is "linked" and until §337 nothing could be.**
+#
+#     "…If only one **linked** object is available in the resulting object set
+#      and the parameter is required, the parameter dropdown will automatically
+#      prefill with the corresponding property value." (p.33)
+#
+# A multiple-choice parameter could name an object type and a property (§335)
+# and narrow that type by a filter (§336), but "the resulting object set" was
+# always every object of one type. p.33's sentence is about a set reached from
+# somewhere — "display or prefill values based on properties of **a linked
+# object**" — which is p.37's Search Around, and this is where the two meet.
+@pytest.fixture(scope="module")
+def linked(client: TestClient, fx: Fixture, setup):
+    """p.37's example with a property read off the far end: employees, the
+    issues raised by them, and the states those issues are in.
+
+    **Three employees and deliberately uneven issues.** Ada's two issues are in
+    two states, Grace's two are both open, and Hopper has none — so "the whole
+    set", "narrowed to one value" and "narrowed to nothing" are three different
+    answers a fixture with one employee could not tell apart.
+    """
+    tag = uuid.uuid4().hex[:8]
+    employee = a_type(
+        client, fx, f"emp{tag}",
+        [("E1", "Ada"), ("E2", "Grace"), ("E3", "Hopper")],
+        columns=("id", "name"),
+    )
+    issue = a_type(
+        client, fx, f"iss{tag}",
+        [("I1", "E1", "open"), ("I2", "E1", "closed"),
+         ("I3", "E2", "open"), ("I4", "E2", "open")],
+        columns=("id", "employee_id", "state"),
+    )
+    link = client.post(
+        f"{wbase(fx)}/link-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"raised_by_{tag}", "display_name": "Raised by",
+              "from_type_id": issue, "to_type_id": employee,
+              "cardinality": "one_to_many",
+              "from_property": "employee_id", "to_property": "$primary_key"},
+    )
+    assert link.status_code == 201, link.text
+    people = {
+        r["primary_key"]: r["id"]
+        for r in client.get(f"{wbase(fx)}/object-types/{employee}/instances",
+                            headers=hdr(fx.editor_sub)).json()["items"]
+    }
+    return {"employee": employee, "issue": issue, "link": link.json()["id"],
+            "people": people}
+
+
+def define_walked(client, fx, setup, linked, *, hops=None, start=None,
+                  required=False, filters_doc=None, walked=True):
+    """The action's `state` parameter, offering the states of the issues
+    reached from whoever is in the `who` box."""
+    source = None
+    if walked:
+        source = {
+            "start": start or {"kind": "parameter",
+                               "object_type_id": linked["employee"],
+                               "parameter": "who"},
+            "hops": [{"link_type_id": linked["link"]}] if hops is None else hops,
+        }
+    return client.put(
+        f"{wbase(fx)}/action-types/{setup['action']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={"parameters": [
+                  {"api_name": "who", "display_name": "Who",
+                   "data_type": "object", "object_type_id": linked["employee"]},
+                  {"api_name": "state", "display_name": "State",
+                   "data_type": "string", "required": required,
+                   "options_from": {"object_type_id": linked["issue"],
+                                    "property": "state"},
+                   "dropdown_filters": filters_doc or [],
+                   "dropdown_search_around": source},
+              ],
+              "rules": [{"kind": "modify_object",
+                         "config": {"property": "label", "parameter": "state"}}],
+              "criteria": []},
+    )
+
+
+def states(client, fx, setup, values=None):
+    return offered(client, fx, setup, values)["state"]
+
+
+def test_a_walk_narrows_the_values_to_what_is_linked(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """p.37's sentence with a property read off the far end: "traversing a link
+    on every object in the current set".
+
+    Ada's issues are open and closed; Grace's are both open. Two starts, two
+    answers — and neither is a coincidence of the data, because the unfiltered
+    set below holds both values.
+    """
+    define_walked(client, fx, setup, linked).raise_for_status()
+    ada = {"who": linked["people"]["E1"]}
+    grace = {"who": linked["people"]["E2"]}
+    assert states(client, fx, setup, ada)["values"] == ["closed", "open"]
+    assert states(client, fx, setup, grace)["values"] == ["open"]
+
+
+def test_without_the_walk_the_start_changes_nothing(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """The negative control the test above needs. Without it, "the walk
+    narrows" passes for an options list that happens to answer differently for
+    two different people — so this pins the *unwalked* answer, which is every
+    state in the workspace whoever is in the box.
+    """
+    define_walked(client, fx, setup, linked, walked=False).raise_for_status()
+    grace = {"who": linked["people"]["E2"]}
+    assert states(client, fx, setup, grace)["values"] == ["closed", "open"]
+    assert states(client, fx, setup)["values"] == ["closed", "open"]
+
+
+def test_before_the_start_is_chosen_the_list_is_empty_and_names_the_box(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """p.37's own example before the employee is chosen. The same
+    empty-and-named answer an object dropdown gives — one `Unresolved`, one
+    `except`, so a walk starting nowhere and a filter reading nothing cannot
+    drift into being answered differently."""
+    define_walked(client, fx, setup, linked).raise_for_status()
+    offer = states(client, fx, setup)
+    assert offer["values"] == []
+    assert offer["waiting_for"] == "who"
+
+
+def test_a_walk_that_reaches_nothing_offers_nothing(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """**Not the same as an empty walk.** Hopper has no issues, so the set is
+    genuinely empty — and reading the type unfiltered would offer every state
+    in the workspace, which is the opposite of what a walk narrowing to none
+    means. Empty and *not* waiting: there is nothing to fill in."""
+    define_walked(client, fx, setup, linked).raise_for_status()
+    offer = states(client, fx, setup, {"who": linked["people"]["E3"]})
+    assert offer["values"] == []
+    assert offer["waiting_for"] is None
+
+
+def test_a_start_that_names_nothing_offers_nothing(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """**The other empty, and the sweep found it.** An id naming no object the
+    caller can read is not "nobody has chosen yet": the walk starts from an
+    empty set, so it reaches nothing and there is nothing to offer. Falling
+    through to an unfiltered read would offer every state in the workspace —
+    the silent widening decision 0002 exists to remove — and it is the only
+    input that reaches that branch, because an employee who merely has no
+    issues still gives the walk a join value to look for.
+
+    `start_key_of`'s own docstring draws this line and nothing was asking it to
+    hold. The submission is refused either way, by `check_object_values` and in
+    a sentence about the box that actually holds the bad value.
+    """
+    define_walked(client, fx, setup, linked).raise_for_status()
+    offer = states(client, fx, setup, {"who": str(uuid.uuid4())})
+    assert offer["values"] == []
+    assert offer["waiting_for"] is None
+
+
+def test_p33s_linked_prefill(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """**p.33's own sentence, for the first time with something linked.**
+
+    > "If only one linked object is available in the resulting object set and
+    > the parameter is required, the parameter dropdown will automatically
+    > prefill with the corresponding property value." (p.33)
+
+    Grace's issues are both open, so there is one value and nothing to decide.
+    Ada's are not, so there is — and the same parameter does not prefill.
+    """
+    define_walked(client, fx, setup, linked, required=True).raise_for_status()
+    grace = states(client, fx, setup, {"who": linked["people"]["E2"]})
+    assert grace["values"] == ["open"] and grace["prefill"] == "open"
+    ada = states(client, fx, setup, {"who": linked["people"]["E1"]})
+    assert ada["prefill"] is None
+
+
+def test_a_filter_narrows_the_far_end_rather_than_the_start(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """p.34 names "filters **and Search Arounds**" in one breath, and the order
+    matters: what shows up is the far end, so that is what a filter cuts. A
+    filter applied to the starting set would be filtering Employees by a
+    property of an Issue.
+
+    **Both starts are asked on purpose.** Ada has a closed issue and Grace has
+    none, so the filter and the walk each have to hold for the pair to differ —
+    a version asking only Ada would pass with the walk ignored entirely, which
+    is how the first draft of this test read.
+    """
+    define_walked(
+        client, fx, setup, linked,
+        filters_doc=[{"property": "state",
+                      "values": [{"kind": "value", "value": "closed"}]}],
+    ).raise_for_status()
+    assert states(client, fx, setup,
+                  {"who": linked["people"]["E1"]})["values"] == ["closed"]
+    assert states(client, fx, setup,
+                  {"who": linked["people"]["E2"]})["values"] == []
+
+
+def test_the_walk_narrows_the_check_too(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """p.34's second sentence for p.33's other shape. A list narrowed to the
+    states of Grace's issues beside a check that accepts `closed` as well is
+    §214's control that looks like it works — with the extra insult of having
+    offered the value it then rejects."""
+    define_walked(client, fx, setup, linked).raise_for_status()
+    grace = linked["people"]["E2"]
+    assert run(client, fx, setup,
+               {"who": grace, "state": "open"}).status_code == 200
+    refused = run(client, fx, setup, {"who": grace, "state": "closed"})
+    assert refused.status_code == 422, refused.text
+    assert "offers" in refused.text
+
+
+def test_the_check_carries_the_filters_as_well_as_the_walk(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """**Both narrowings on the submit path, which the sweep found was one.**
+
+    The filters ride on the walk's outermost set rather than beside it — the
+    compiled definition carries them, and the resolver hands them back — so a
+    check built from a walk with no filters on it silently accepts everything
+    the walk reaches. Ada has an open issue and a closed one, and the filter
+    leaves only the closed one, so `open` is exactly the value that separates
+    "narrowed by both" from "narrowed by the walk alone".
+    """
+    define_walked(
+        client, fx, setup, linked,
+        filters_doc=[{"property": "state",
+                      "values": [{"kind": "value", "value": "closed"}]}],
+    ).raise_for_status()
+    ada = linked["people"]["E1"]
+    assert run(client, fx, setup,
+               {"who": ada, "state": "closed"}).status_code == 200
+    refused = run(client, fx, setup, {"who": ada, "state": "open"})
+    assert refused.status_code == 422, refused.text
+    assert "offers" in refused.text
+
+
+def test_a_submission_that_does_not_supply_the_walks_start_is_refused(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """**Fails closed**, as it does for a filter and for an object dropdown:
+    the walk starts from a box nothing supplied, so whether this value is in
+    the set is a question nobody can answer, and accepting on an unanswered
+    question is how a value the rule exists to exclude gets written."""
+    define_walked(client, fx, setup, linked).raise_for_status()
+    refused = run(client, fx, setup, {"state": "open"})
+    assert refused.status_code == 422, refused.text
+    assert "who" in refused.text
+
+
+def test_a_walk_landing_somewhere_other_than_the_options_type_is_refused(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """The refusal the save-time check exists for, read against the type the
+    *options* name. With no hops the walk stops on the employee, whose
+    properties are not where `state` lives, so every value offered would be
+    refused a moment after somebody picked it."""
+    bad = define_walked(client, fx, setup, linked, hops=[])
+    assert bad.status_code == 422, bad.text
+    assert "different object type" in bad.text
+
+
+def test_a_walk_on_a_parameter_with_nothing_to_offer_is_still_refused(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """The landing type widened to "or the type its options name", not to
+    "anything goes": a plain string parameter has no set for a walk to land
+    on, and the refusal says so."""
+    bad = client.put(
+        f"{wbase(fx)}/action-types/{setup['action']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={"parameters": [
+                  {"api_name": "who", "display_name": "Who",
+                   "data_type": "object", "object_type_id": linked["employee"]},
+                  {"api_name": "state", "display_name": "State",
+                   "data_type": "string",
+                   "dropdown_search_around": {
+                       "start": {"kind": "parameter",
+                                 "object_type_id": linked["employee"],
+                                 "parameter": "who"},
+                       "hops": [{"link_type_id": linked["link"]}]}},
+              ],
+              "rules": [{"kind": "modify_object",
+                         "config": {"property": "label", "parameter": "state"}}],
+              "criteria": []},
+    )
+    assert bad.status_code == 422, bad.text
+    assert "where it is meant to land" in bad.text
+
+
+def test_a_reader_watches_the_walks_start_without_being_told_the_walk(
+    client: TestClient, fx: Fixture, setup, linked
+) -> None:
+    """§332's rule, which this shape inherits rather than repeats: the walk is
+    redacted for somebody who may not edit the action (p.40-41) and the box it
+    starts from is not, or a reader's form narrows once and then stops."""
+    define_walked(client, fx, setup, linked).raise_for_status()
+    read = client.get(f"{wbase(fx)}/action-types/{setup['action']}",
+                      headers=hdr(fx.viewer_sub)).json()
+    state = next(p for p in read["parameters"] if p["api_name"] == "state")
+    assert state["dropdown_search_around"] is None
+    assert state["dropdown_watches"] == ["who"]
