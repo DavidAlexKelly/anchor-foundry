@@ -2489,17 +2489,22 @@ async def set_definition(
         # properties (§334). Built for every typed object parameter rather than
         # only the ones some filter mentions, because working out which are
         # mentioned means reading the document `check_filters` is about to.
+        #
+        # **Only "does it have a type" is asked here**, and two conditions that
+        # used to sit beside it are gone because a sweep could delete either
+        # with nothing failing (§213). A parameter reading *itself* is refused
+        # by `check_filters` before it looks at this map at all; a *string*
+        # carrying an object type is refused by `_validate_definition`, whose
+        # message about a type on a string is the better one anyway. Repeating
+        # either here only changed which refusal a caller saw.
         readable: dict[str, set[str]] = {}
         for other in parameters:
-            other_name = str(other.get("api_name", ""))
             other_type = other.get("object_type_id")
-            if (
-                other_name == str(parameter.get("api_name", ""))
-                or str(other.get("data_type")) != "object"
-                or not other_type
-            ):
+            if not other_type:
                 continue
-            readable[other_name] = await _properties_of(str(other_type))
+            readable[str(other.get("api_name", ""))] = await _properties_of(
+                str(other_type)
+            )
         check_filters(
             parameter,
             declared_properties=await _properties_of(str(offered)),

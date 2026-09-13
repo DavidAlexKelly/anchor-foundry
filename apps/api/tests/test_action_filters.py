@@ -195,14 +195,18 @@ def test_an_object_property_filter_is_watched_like_a_parameter_one() -> None:
 
 
 def test_what_a_filter_reads_off_its_objects_is_named_for_the_caller() -> None:
-    """What `object_values_of` loads before `resolve` can run. Pairs rather
-    than names, because two filters may read two properties of one Office and
-    the caller reads that object once."""
-    assert filters.object_property_reads(a_parameter(dropdown_filters=[
+    """What `object_values_of` loads before `resolve` can run.
+
+    One entry per *parameter*, not per property: two filters reading two
+    properties of the same Office are one object to read. And only the third
+    kind — a plain parameter reference needs no object at all.
+    """
+    assert filters.object_parameters_read(a_parameter(dropdown_filters=[
         from_object_property("region", "office", "region"),
         from_object_property("tier", "office", "tier"),
         from_parameter("size", "where"),
-    ])) == [("office", "region"), ("office", "tier")]
+        static("code", "x"),
+    ])) == ["office"]
 
 
 def test_a_filter_with_no_property_narrows_nothing_rather_than_everything() -> None:
@@ -357,12 +361,18 @@ def test_an_editor_gets_the_same_watch_list() -> None:
 
 # ---- the save-time refusals ---------------------------------------------------
 #: What each *other* object parameter's type offers, for p.36's third kind.
-#: `office` holds an Office, whose properties are these; `where` is a string
-#: parameter and so is absent — which is one of the refusals below.
-OBJECT_PROPERTIES = {"office": {"region", "tier"}}
+#: `office` holds an Office; `where` is a string parameter and so is absent,
+#: which is one of the refusals below.
+#:
+#: **Deliberately not the same set as the offered type's** (`region`, `tier`).
+#: The first version made them identical and a sweep walked straight through
+#: it: checking the property against the *filtered* type instead of the *read*
+#: one behaved the same, because every name was in both. `site` is in the
+#: Office and not in the Team, and `code` the other way round.
+OBJECT_PROPERTIES = {"office": {"region", "site"}}
 
 
-def check(parameter: dict, *, properties=("region", "tier"),
+def check(parameter: dict, *, properties=("region", "tier", "code"),
           names=("team", "where", "office"), objects=OBJECT_PROPERTIES):
     filters.check_filters(
         parameter, declared_properties=set(properties),
@@ -461,11 +471,28 @@ def test_an_object_property_filter_reading_itself_is_refused() -> None:
     assert "itself" in str(caught.value)
 
 
+def test_the_property_is_checked_against_the_read_type_not_the_filtered_one() -> None:
+    """**Two object types, and the check must use the right one.**
+
+    `site` is a property of the Office and not of the Team; `code` is the other
+    way round. A version reading the filtered type's properties accepts the
+    second and refuses the first, which is exactly backwards — and a fixture
+    where both types offered the same names could not see it. A sweep found
+    that fixture.
+    """
+    check(a_parameter(dropdown_filters=[
+        from_object_property("region", "office", "site")]))
+    with pytest.raises(ValueError) as caught:
+        check(a_parameter(dropdown_filters=[
+            from_object_property("region", "office", "code")]))
+    assert "code" in str(caught.value)
+
+
 def test_a_legal_object_property_filter_is_not_refused() -> None:
     """Otherwise every refusal above passes for a rule that refuses the kind
     outright."""
     check(a_parameter(dropdown_filters=[
-        from_object_property("region", "office", "tier")]))
+        from_object_property("region", "office", "region")]))
 
 
 def test_a_filter_reading_a_parameter_that_is_gone_is_refused() -> None:

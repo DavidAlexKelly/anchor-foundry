@@ -196,7 +196,7 @@ async def object_values_of(
     the honest answer, because RLS makes "deleted" and "not yours" the same
     state from here.
     """
-    wanted = {name for name, _ in action_filters.object_property_reads(parameter)}
+    wanted = action_filters.object_parameters_read(parameter)
     if not wanted:
         return {}
     declared = {
@@ -206,7 +206,7 @@ async def object_values_of(
     prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
     store = instance_store.store_for(conn)
     out: dict[str, dict[str, Any]] = {}
-    for name in sorted(wanted):
+    for name in wanted:
         type_id = declared.get(name)
         held = bound.get(name)
         if not type_id or held is None or held == "":

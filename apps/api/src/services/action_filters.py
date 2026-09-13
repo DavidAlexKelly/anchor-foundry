@@ -96,13 +96,21 @@ def referenced_parameters(parameter: dict[str, Any]) -> list[str]:
     return sorted(named)
 
 
-def object_property_reads(parameter: dict[str, Any]) -> list[tuple[str, str]]:
-    """The `(parameter, property)` pairs p.36's third kind reads.
+def object_parameters_read(parameter: dict[str, Any]) -> list[str]:
+    """Which parameters p.36's third kind needs an object loaded for.
 
-    What the caller has to load an object for before `resolve` can run — see
-    that function on why the read is not in here.
+    What the caller reads before `resolve` can run — see that function on why
+    the read is not in here.
+
+    **Names, not `(parameter, property)` pairs.** The first version returned
+    pairs and skipped one whose property was blank; a sweep showed neither
+    could matter. The caller loads one object per *parameter* however many
+    properties are read off it, and a value with a blank property still needs
+    that object loaded so `resolve` can report the property as missing rather
+    than the box as unfilled. The pair shape was a promise about a distinction
+    nothing made.
     """
-    pairs: set[tuple[str, str]] = set()
+    named: set[str] = set()
     for entry in filters_of(parameter):
         for side in entry.get("values") or []:
             if not isinstance(side, dict):
@@ -110,10 +118,9 @@ def object_property_reads(parameter: dict[str, Any]) -> list[tuple[str, str]]:
             if str(side.get("kind", "")) != "object_property":
                 continue
             name = str(side.get("parameter", "")).strip()
-            prop = str(side.get("property", "")).strip()
-            if name and prop:
-                pairs.add((name, prop))
-    return sorted(pairs)
+            if name:
+                named.add(name)
+    return sorted(named)
 
 
 class Unresolved(Exception):
