@@ -173,12 +173,36 @@ def test_a_link_with_no_join_is_refused() -> None:
 def test_a_chain_longer_than_the_set_limit_is_refused() -> None:
     """`object_sets.MAX_TRAVERSALS`, not a second number: every hop becomes a
     `Traversal`, and `parse` refuses a deeper set anyway — so a larger cap here
-    would be a promise overruled one call down."""
+    would be a promise overruled one call down.
+
+    **A walk that joins up perfectly well**, Employee → Issue → Repo → Issue →
+    Employee, so the cap is the only thing that can refuse it. The first version
+    used a chain that also failed to join up, and asserted the number appeared
+    in the message — which "hop 3 follows 'Raised by', which does not touch…"
+    satisfies too, so the check passed with the cap deleted. A sweep said so.
+    """
     with pytest.raises(ValueError) as caught:
-        check(a_parameter(dropdown_search_around=source(
-            from_type(), WORKS_ON, BELONGS_TO, WORKS_ON, BELONGS_TO)))
+        around.check_source(
+            a_parameter(object_type_id=EMPLOYEE, dropdown_search_around=source(
+                from_type(), WORKS_ON, BELONGS_TO, BELONGS_TO, WORKS_ON)),
+            object_type_id=EMPLOYEE, link_types=LINKS,
+            object_type_ids=TYPES, parameters=[a_parameter()],
+        )
+    assert "at most" in str(caught.value)
     assert str(around.MAX_HOPS) in str(caught.value)
     assert around.MAX_HOPS == object_sets.MAX_TRAVERSALS
+
+
+def test_a_chain_exactly_at_the_limit_is_allowed() -> None:
+    """Otherwise the refusal above passes for a cap of zero — and three hops is
+    the depth `object_sets` was built to carry."""
+    got = around.check_source(
+        a_parameter(dropdown_search_around=source(
+            from_type(), WORKS_ON, BELONGS_TO, BELONGS_TO)),
+        object_type_id=ISSUE, link_types=LINKS,
+        object_type_ids=TYPES, parameters=[a_parameter()],
+    )
+    assert [h["far_type_id"] for h in got["hops"]] == [ISSUE, REPO, ISSUE]
 
 
 def test_a_start_this_workspace_does_not_have_is_refused() -> None:
