@@ -81,6 +81,7 @@ def build(api, name: str, *, offices=None, required=False, options=True):
     mod.type_id = ticket_type
     mod.office_type = office_type
     mod.office_api_name = f"opoffice_{tag}"
+    mod.ticket_api_name = f"opticket_{tag}"
     mod.action = action
     return mod
 
@@ -170,24 +171,85 @@ def test_the_values_are_shown_alphabetically_rather_than_by_frequency(page, api)
     assert shown == ["EU", "UK", "US"], shown
 
 
-def test_clearing_a_prefilled_box_leaves_it_clear(page, api):
-    """**What the prefill must not argue with.**
+def test_clearing_a_prefilled_box_survives_the_offers_arriving_again(page, api):
+    """**What the prefill must not argue with, and the only way to ask it.**
 
-    p.33 fills a blank; it does not undo a person. Clearing the box is a
-    choice, and a control that refilled itself a moment later would be arguing
-    with whoever made it — which is what `typed` records and the only thing the
-    effect checks (see the note beside it on what it deliberately does not).
+    p.33 fills a blank; it does not undo a person. But the effect runs on the
+    offers and on re-seeding, and `refetchOnWindowFocus` is off — so clearing
+    the box alone never consults the guard, and a sweep deleting it stayed
+    green. What *does* bring the offers back while a form is open is p.36: a
+    filter on another parameter re-keys the choices query on every keystroke in
+    the box it reads.
+
+    So this form has both, and the keystroke is the point: the region box was
+    cleared on purpose and must still be clear after the response lands.
     """
-    mod = build(api, "Options cleared", required=True, offices=[
-        {"code": "o1", "region": "SOLE"}, {"code": "o2", "region": "SOLE"},
-    ])
+    mod = Module(api, "Options cleared")
+    tag = uuid.uuid4().hex[:8]
+    office_type = mod.object_type(
+        columns=["code", "region"],
+        rows=[{"code": "o1", "region": "SOLE"}, {"code": "o2", "region": "SOLE"}],
+        key="code", title="code", slug=f"clroffice_{tag}",
+    )
+    team_type = mod.object_type(
+        columns=["code", "where"],
+        rows=[{"code": "alpha", "where": "eu"}, {"code": "beta", "where": "uk"}],
+        key="code", title="code", slug=f"clrteam_{tag}",
+    )
+    ticket_type = mod.object_type(
+        columns=["ticket_id", "note"], rows=[{"ticket_id": "1", "note": ""}],
+        key="ticket_id", title="ticket_id", slug=f"clrticket_{tag}",
+    )
+    action = api.call(
+        "POST", f"/workspaces/{mod.workspace_id}/action-types",
+        {"object_type_id": ticket_type, "api_name": f"clrassign_{tag}",
+         "display_name": "Assign ticket", "editable_properties": ["note"]},
+    )
+    api.call(
+        "PUT",
+        f"/workspaces/{mod.workspace_id}/action-types/{action['id']}/definition",
+        {"parameters": [
+             {"api_name": "where", "display_name": "Where", "data_type": "string"},
+             # The filtered dropdown, whose watched box is what makes the
+             # choices query re-run while the form is open.
+             {"api_name": "team", "display_name": "Team", "data_type": "object",
+              "object_type_id": team_type,
+              "dropdown_filters": [{"property": "where", "values": [
+                  {"kind": "parameter", "parameter": "where"}]}]},
+             {"api_name": "region", "display_name": "Region",
+              "data_type": "string", "required": True,
+              "options_from": {"object_type_id": office_type,
+                               "property": "region"}},
+         ],
+         "rules": [{"kind": "modify_object",
+                    "config": {"property": "note", "parameter": "region"}}],
+         "criteria": []},
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "txt": {"resolvedName": "CanvasText",
+                    "props": {"tag": "p", "text": "CLEARED FORM"}},
+            "frm": {"resolvedName": "CanvasActionForm",
+                    "props": {"actionTypeId": action["id"]}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+    mod.type_id = ticket_type
+    mod.action = action
+
     open_module(page, mod)
-    choose_the_ticket(page)
+    page.locator("form > label select").first.select_option(index=1)
     expect(picker(page, "region")).to_have_value("SOLE", timeout=30000)
     picker(page, "region").select_option("")
     expect(picker(page, "region")).to_have_value("")
-    # Still clear a moment later, rather than refilled by the next render.
-    page.wait_for_timeout(1000)
+
+    # The keystroke that brings the offers back.
+    page.locator("[data-parameter='where'] input").fill("uk")
+    expect(picker(page, "team").locator("option")).to_contain_text(
+        ["Choose", "beta"], timeout=30000
+    )
     expect(picker(page, "region")).to_have_value("")
 
 
@@ -299,6 +361,42 @@ def test_a_list_written_in_the_panel_narrows_the_form(page, api):
     assert shown == ["EU", "UK", "US"], shown
 
 
+def test_unchecking_the_box_clears_the_document(page, api):
+    """The checkbox is the only way back to "whatever is typed in", and a
+    parameter left holding a half-written document would be refused on the next
+    save of something else entirely."""
+    mod = build(api, "Options unchecked")
+    open_editor(page, mod)
+    panel = page.locator("[data-parameter-options='region']")
+    panel.get_by_role("checkbox").uncheck()
+    expect(panel.get_by_test_id("options-summary")).to_contain_text(
+        "Whatever is typed in"
+    )
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    saved = api.call(
+        "GET", f"/workspaces/{mod.workspace_id}/action-types/{mod.action['id']}"
+    )
+    region = next(p for p in saved["parameters"] if p["api_name"] == "region")
+    assert region["options_from"] is None
+
+
+def test_changing_the_type_drops_a_property_of_the_old_one(page, api):
+    """A property chosen against one type is not a property of the next, and
+    the server refuses that pair by name — so the panel clears it rather than
+    letting Save produce a 422 about a field somebody did not touch."""
+    mod = build(api, "Options retype")
+    open_editor(page, mod)
+    panel = page.locator("[data-parameter-options='region']")
+    expect(panel.get_by_test_id("options-summary")).to_contain_text("region of every")
+    # The ticket type has no `region`, so keeping the old property here would
+    # be exactly the pair the server refuses.
+    pick_type(page, "parameter-1-options-type",
+              {"id": mod.type_id, "api_name": mod.ticket_api_name})
+    expect(panel.get_by_test_id("options-problem")).to_contain_text("property")
+
+
 def test_the_panel_offers_no_list_for_a_parameter_that_cannot_have_one(page, api):
     """p.33's multiple choice is for parameters that are *not* objects; that
     shape has had its own dropdown since §330. Offering the setting would be a
@@ -310,13 +408,17 @@ def test_the_panel_offers_no_list_for_a_parameter_that_cannot_have_one(page, api
         {"parameters": [
              {"api_name": "region", "display_name": "Region",
               "data_type": "object", "object_type_id": mod.office_type},
+             {"api_name": "note", "display_name": "Note", "data_type": "string"},
          ],
          "rules": [{"kind": "modify_object",
-                    "config": {"property": "note", "parameter": "region"}}],
+                    "config": {"property": "note", "parameter": "note"}}],
          "criteria": []},
     )
     open_editor(page, mod)
+    # **The section itself is on screen** — `note` is a string and can have a
+    # list — so this is the *row* being absent rather than the whole block.
+    # With only an object parameter the outer gate hides everything and the
+    # assertion passes for the wrong reason; a sweep found that fixture.
+    expect(page.get_by_test_id("parameter-options")).to_be_visible()
+    expect(page.locator("[data-parameter-options='note']")).to_have_count(1)
     expect(page.locator("[data-parameter-options='region']")).to_have_count(0)
-    # And the object parameter's own settings are still there, so this is not
-    # "the dialog drew nothing".
-    expect(page.get_by_test_id("object-parameter-types")).to_be_visible()
