@@ -30,6 +30,22 @@ that does not fall into it.
 **p.33's permission sentence is free**, as it was for §330: the read goes
 through the caller's own connection, so RLS has already narrowed the objects
 before this module sees a value.
+
+**p.33's own word is "linked", and §337 is where that becomes true.**
+
+    "…**ensure the parameter is set to display multiple choices, select Get
+     options from an object set, configure the desired object set**, and select
+     the property that includes all allowed values… If only one **linked**
+     object is available in the resulting object set…" (p.33)
+
+"Configure the desired object set" is three separate things, and they arrived
+one unit at a time: a type and a property (§335), filters over it (§336), and
+p.37's Search Around (§337). Until the last of them "the resulting object set"
+was always every object of one type — nothing could be linked to anything, so
+p.33's prefill sentence described a condition this platform could not produce.
+The walk arrives here already compiled, as the same nested `ObjectSet` an object
+dropdown is handed, and is collapsed by the same resolver: one answer to "which
+objects", asked by two shapes.
 """
 from __future__ import annotations
 
@@ -40,6 +56,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from . import instance_store
+from . import object_set_eval
 from . import instances as instances_service
 
 #: How many options a dropdown offers, and the store's own page size for
@@ -150,6 +167,7 @@ async def options(
     *,
     workspace_id: UUID,
     filters: tuple[Any, ...] = (),
+    definition: Any = None,
     limit: int = MAX_OPTIONS,
 ) -> tuple[list[str], bool]:
     """The values this parameter may be set to, and whether there were more.
@@ -157,6 +175,13 @@ async def options(
     Returns `(values, truncated)`. **Truncated against the distinct total the
     store reports**, not against how many rows were read — see the module
     docstring on why that distinction is the whole design.
+
+    `definition` is p.36-37's set, already compiled by
+    `action_search_arounds.build` and already carrying `filters` on its
+    outermost. It is passed *as well as* `filters` rather than instead of them
+    because a parameter with no walk has no definition to build and the plain
+    filters are the whole answer — which is the arrangement `action_choices`
+    already uses, and the reason the two shapes cannot drift.
 
     Ordered alphabetically for display and truncated by *frequency*, which are
     two different orderings on purpose. `group_object_set` returns the most
@@ -173,13 +198,31 @@ async def options(
         # eventually does not.
         return [], False
     prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
+    store = instance_store.store_for(conn)
     # p.33's own first sentence — "**adding filters** to non-object reference
     # multiple choice… parameters will determine the allowed values" — narrowing
     # the set before the property is read off it (§336). The same compiled
     # `Filter`s an object dropdown uses, because p.33 describes one filter
     # vocabulary over two shapes and a second one here would be free to
     # disagree.
-    buckets, distinct = await instance_store.store_for(conn).group_object_set(
+    #
+    # And p.33's "**configure the desired object set**" in full (§337): a walk
+    # is how that sentence is answered for the set p.37 describes, and it
+    # arrives here as the same nested `ObjectSet` an object dropdown is handed,
+    # collapsed by the same resolver. "The region of the offices *this customer*
+    # is served by" is not a property comparison on Office at all — it is p.37's
+    # Search Around with a property read off the far end.
+    if definition is not None and definition.via is not None:
+        filters, empty = await object_set_eval.resolve_traversal(
+            conn, store, prefix, workspace_id, definition
+        )
+        if empty:
+            # The set below linked to nothing, so there is nothing to read a
+            # property off. Reading the type unfiltered would offer every value
+            # in the workspace, which is the opposite of what a walk narrowing
+            # to none means — the same widening `action_choices` refuses.
+            return [], False
+    buckets, distinct = await store.group_object_set(
         search_prefix=prefix,
         object_type_id=UUID(str(declared["object_type_id"])),
         filters=filters,

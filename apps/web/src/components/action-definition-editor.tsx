@@ -56,6 +56,7 @@ import {
   nextHops,
   sourceSummary,
   startableParameters,
+  type LinkType,
   type SearchAround,
 } from "@/lib/action-search-arounds";
 import { NotifyConfig, blankNotifyConfig, problem as notifyProblem } from "@/lib/notify-rule";
@@ -158,6 +159,184 @@ function PropertySelect({
         </option>
       ))}
     </select>
+  );
+}
+
+/** p.36-37's search around for one parameter, whichever shape it is.
+ *
+ * **Its own component since §337**, for the reason `FilterPanel` became one a
+ * unit earlier: p.34 names "filters **and Search Arounds**" in one breath, p.33
+ * puts both on two kinds of parameter, and this panel lived inside the
+ * object-parameter block — so a multiple-choice parameter could not have one at
+ * all. `typeId` is where the walk has to land: db 0083's column for an object
+ * parameter, and the type the options are read from for a multiple-choice one.
+ *
+ * Everything it decides — which links can be followed from where the walk
+ * stands, what the walk currently says, where it lands — stays in
+ * `@/lib/action-search-arounds`; this only draws.
+ */
+function SearchAroundPanel({
+  workspaceId, parameters, parameter, index, typeId, typeNames, links, onChange,
+}: {
+  workspaceId: string;
+  parameters: Parameter[];
+  parameter: Parameter;
+  index: number;
+  typeId: string;
+  typeNames: Record<string, string>;
+  links: LinkType[];
+  onChange: (next: SearchAround | null) => void;
+}) {
+  const p = parameter;
+  const i = index;
+  const all = links;
+  const source = p.dropdown_search_around ?? null;
+  const setSource = onChange;
+  const hops = source?.hops ?? [];
+  const upTo = (n: number): SearchAround | null =>
+    source && { ...source, hops: hops.slice(0, n) };
+  return (
+    <div data-parameter-search-around={p.api_name}>
+                      <div className="row-actions">
+                        <label>
+                          <input
+                            type="checkbox"
+                            aria-label={`Walk to ${p.api_name} from somewhere else`}
+                            checked={!!source}
+                            onChange={(e) => setSource(e.target.checked
+                              ? blankSearchAround(typeId)
+                              : null)}
+                          />
+                          {" "}Reach these objects by following links
+                        </label>
+                        <span className="field-hint" data-testid="search-around-summary">
+                          {sourceSummary(source, all, typeNames, labelsOf(parameters))}
+                        </span>
+                      </div>
+                      {source && (
+                        <>
+                          <div className="row-actions">
+                            <select
+                              value={source.start.kind}
+                              aria-label={`Walk to ${p.api_name} starts from`}
+                              onChange={(e) => {
+                                const startable = startableParameters(
+                                  parameters, p.api_name);
+                                setSource(e.target.value === "parameter"
+                                  ? (startable[0]
+                                    ? { start: {
+                                        kind: "parameter",
+                                        object_type_id: startable[0].object_type_id,
+                                        parameter: startable[0].api_name,
+                                      }, hops: [] }
+                                    : source)
+                                  : blankSearchAround(typeId));
+                              }}
+                            >
+                              <option value="object_type">every object of a type</option>
+                              <option value="parameter">an object chosen above</option>
+                            </select>
+                            {source.start.kind === "parameter" ? (
+                              <select
+                                value={source.start.parameter ?? ""}
+                                aria-label={`Walk to ${p.api_name} starting parameter`}
+                                onChange={(e) => {
+                                  const picked = startableParameters(
+                                    parameters, p.api_name,
+                                  ).find((q) => q.api_name === e.target.value);
+                                  if (!picked) return;
+                                  // The hops go with it: a walk from a different
+                                  // type is a different walk, and keeping them
+                                  // would leave links that no longer join up.
+                                  setSource({ start: {
+                                    kind: "parameter",
+                                    object_type_id: picked.object_type_id,
+                                    parameter: picked.api_name,
+                                  }, hops: [] });
+                                }}
+                              >
+                                {startableParameters(parameters, p.api_name).map(
+                                  (q) => (
+                                    <option key={q.api_name} value={q.api_name}>
+                                      {labelsOf(parameters)[q.api_name] ?? q.api_name}
+                                    </option>
+                                  ))}
+                              </select>
+                            ) : (
+                              <TypePicker
+                                workspaceId={workspaceId}
+                                value={source.start.object_type_id}
+                                label={`Walk to ${p.api_name} starting type`}
+                                testId={`parameter-${i + 1}-start-type`}
+                                onChange={(next) => next && setSource({
+                                  start: {
+                                    kind: "object_type", object_type_id: next,
+                                  },
+                                  hops: [],
+                                })}
+                              />
+                            )}
+                          </div>
+                          {hops.map((hop, hi) => (
+                            <div className="row-actions" key={hi} data-hop-row={hi}>
+                              <select
+                                value={hop.link_type_id}
+                                aria-label={`Walk to ${p.api_name} link ${hi + 1}`}
+                                onChange={(e) => setSource({
+                                  ...source,
+                                  // Everything after this hop walked from where
+                                  // the old link landed, so it goes with it.
+                                  hops: [...hops.slice(0, hi),
+                                         { link_type_id: e.target.value }],
+                                })}
+                              >
+                                {/* Only the links that touch where the walk has
+                                    reached, and only the ones that can be
+                                    followed at all (db 0027). */}
+                                {nextHops(upTo(hi), all).map((link) => (
+                                  <option key={link.id} value={link.id}>
+                                    {link.display_name}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                className="btn quiet"
+                                aria-label={`Remove link ${hi + 1} from ${p.api_name}`}
+                                onClick={() => setSource({
+                                  ...source, hops: hops.slice(0, hi),
+                                })}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))}
+                          {(() => {
+                            // The first link that *can* be followed from where
+                            // the walk stands. A button offering a hop that
+                            // does not join up is one the server refuses, so
+                            // there is no button when there is none (§214).
+                            const [next] = nextHops(source, all);
+                            return next ? (
+                              <button
+                                className="btn quiet"
+                                aria-label={`Follow another link from ${p.api_name}`}
+                                onClick={() => setSource({
+                                  ...source,
+                                  hops: [...hops, { link_type_id: next.id }],
+                                })}
+                              >
+                                Follow a link
+                              </button>
+                            ) : null;
+                          })()}
+                          {landingNote(source, all, typeId, typeNames) && (
+                            <p className="field-hint" data-testid="search-around-landing">
+                              {landingNote(source, all, typeId, typeNames)}
+                            </p>
+                          )}
+                        </>
+                      )}
+    </div>
   );
 }
 
@@ -1173,6 +1352,23 @@ export function ActionDefinitionEditor({
                   will determine the allowed values" (§336). Written against the
                   type the *options* name, which is what the panel is handed,
                   and only once there is a set to narrow. */}
+              {/* p.33's "configure the desired object set", which is a walk
+                  as often as it is a filter (§337) — and above the filters for
+                  the same reason it is in the object block: it decides which
+                  set they narrow. */}
+              {p.options_from?.object_type_id && p.options_from?.property && (
+                <SearchAroundPanel
+                  workspaceId={workspaceId}
+                  parameters={parameters}
+                  parameter={p}
+                  index={i}
+                  typeId={p.options_from.object_type_id}
+                  typeNames={typeNames}
+                  links={links.data ?? []}
+                  onChange={(next) =>
+                    patchParameter(i, { dropdown_search_around: next })}
+                />
+              )}
               {p.options_from?.object_type_id && p.options_from?.property && (
                 <FilterPanel
                   workspaceId={workspaceId}
@@ -1226,158 +1422,19 @@ export function ActionDefinitionEditor({
                     decides which set they narrow. Only once the parameter says
                     what it offers: a walk has to land somewhere, and §330's
                     column is the only thing that says where. */}
-                {p.object_type_id && (() => {
-                  const source = p.dropdown_search_around ?? null;
-                  const all = links.data ?? [];
-                  const setSource = (next: SearchAround | null) =>
-                    patchParameter(i, { dropdown_search_around: next });
-                  const hops = source?.hops ?? [];
-                  const upTo = (n: number): SearchAround | null =>
-                    source && { ...source, hops: hops.slice(0, n) };
-                  return (
-                    <div data-parameter-search-around={p.api_name}>
-                      <div className="row-actions">
-                        <label>
-                          <input
-                            type="checkbox"
-                            aria-label={`Walk to ${p.api_name} from somewhere else`}
-                            checked={!!source}
-                            onChange={(e) => setSource(e.target.checked
-                              ? blankSearchAround(String(p.object_type_id))
-                              : null)}
-                          />
-                          {" "}Reach these objects by following links
-                        </label>
-                        <span className="field-hint" data-testid="search-around-summary">
-                          {sourceSummary(source, all, typeNames, labelsOf(parameters))}
-                        </span>
-                      </div>
-                      {source && (
-                        <>
-                          <div className="row-actions">
-                            <select
-                              value={source.start.kind}
-                              aria-label={`Walk to ${p.api_name} starts from`}
-                              onChange={(e) => {
-                                const startable = startableParameters(
-                                  parameters, p.api_name);
-                                setSource(e.target.value === "parameter"
-                                  ? (startable[0]
-                                    ? { start: {
-                                        kind: "parameter",
-                                        object_type_id: startable[0].object_type_id,
-                                        parameter: startable[0].api_name,
-                                      }, hops: [] }
-                                    : source)
-                                  : blankSearchAround(String(p.object_type_id)));
-                              }}
-                            >
-                              <option value="object_type">every object of a type</option>
-                              <option value="parameter">an object chosen above</option>
-                            </select>
-                            {source.start.kind === "parameter" ? (
-                              <select
-                                value={source.start.parameter ?? ""}
-                                aria-label={`Walk to ${p.api_name} starting parameter`}
-                                onChange={(e) => {
-                                  const picked = startableParameters(
-                                    parameters, p.api_name,
-                                  ).find((q) => q.api_name === e.target.value);
-                                  if (!picked) return;
-                                  // The hops go with it: a walk from a different
-                                  // type is a different walk, and keeping them
-                                  // would leave links that no longer join up.
-                                  setSource({ start: {
-                                    kind: "parameter",
-                                    object_type_id: picked.object_type_id,
-                                    parameter: picked.api_name,
-                                  }, hops: [] });
-                                }}
-                              >
-                                {startableParameters(parameters, p.api_name).map(
-                                  (q) => (
-                                    <option key={q.api_name} value={q.api_name}>
-                                      {labelsOf(parameters)[q.api_name] ?? q.api_name}
-                                    </option>
-                                  ))}
-                              </select>
-                            ) : (
-                              <TypePicker
-                                workspaceId={workspaceId}
-                                value={source.start.object_type_id}
-                                label={`Walk to ${p.api_name} starting type`}
-                                testId={`parameter-${i + 1}-start-type`}
-                                onChange={(next) => next && setSource({
-                                  start: {
-                                    kind: "object_type", object_type_id: next,
-                                  },
-                                  hops: [],
-                                })}
-                              />
-                            )}
-                          </div>
-                          {hops.map((hop, hi) => (
-                            <div className="row-actions" key={hi} data-hop-row={hi}>
-                              <select
-                                value={hop.link_type_id}
-                                aria-label={`Walk to ${p.api_name} link ${hi + 1}`}
-                                onChange={(e) => setSource({
-                                  ...source,
-                                  // Everything after this hop walked from where
-                                  // the old link landed, so it goes with it.
-                                  hops: [...hops.slice(0, hi),
-                                         { link_type_id: e.target.value }],
-                                })}
-                              >
-                                {/* Only the links that touch where the walk has
-                                    reached, and only the ones that can be
-                                    followed at all (db 0027). */}
-                                {nextHops(upTo(hi), all).map((link) => (
-                                  <option key={link.id} value={link.id}>
-                                    {link.display_name}
-                                  </option>
-                                ))}
-                              </select>
-                              <button
-                                className="btn quiet"
-                                aria-label={`Remove link ${hi + 1} from ${p.api_name}`}
-                                onClick={() => setSource({
-                                  ...source, hops: hops.slice(0, hi),
-                                })}
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          ))}
-                          {(() => {
-                            // The first link that *can* be followed from where
-                            // the walk stands. A button offering a hop that
-                            // does not join up is one the server refuses, so
-                            // there is no button when there is none (§214).
-                            const [next] = nextHops(source, all);
-                            return next ? (
-                              <button
-                                className="btn quiet"
-                                aria-label={`Follow another link from ${p.api_name}`}
-                                onClick={() => setSource({
-                                  ...source,
-                                  hops: [...hops, { link_type_id: next.id }],
-                                })}
-                              >
-                                Follow a link
-                              </button>
-                            ) : null;
-                          })()}
-                          {landingNote(source, all, p.object_type_id, typeNames) && (
-                            <p className="field-hint" data-testid="search-around-landing">
-                              {landingNote(source, all, p.object_type_id, typeNames)}
-                            </p>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  );
-                })()}
+                {p.object_type_id && (
+                  <SearchAroundPanel
+                    workspaceId={workspaceId}
+                    parameters={parameters}
+                    parameter={p}
+                    index={i}
+                    typeId={String(p.object_type_id)}
+                    typeNames={typeNames}
+                    links={links.data ?? []}
+                    onChange={(next) =>
+                      patchParameter(i, { dropdown_search_around: next })}
+                  />
+                )}
                 {p.object_type_id && (
                   <FilterPanel
                     workspaceId={workspaceId}

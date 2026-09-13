@@ -815,6 +815,20 @@ async def action_parameter_choices(
                         bound=body.values, parameters=action_type["parameters"],
                     ),
                 )
+                # p.33's "configure the desired object set" finished (§337):
+                # p.36's start and p.37's hops, compiled by the same function an
+                # object dropdown uses and landing on the type the options name.
+                # Raises the same `Unresolved` when the walk starts from a box
+                # nobody has filled in, so the two narrowings have one answer to
+                # "not yet".
+                definition = search_arounds_service.build(
+                    parameter, object_type_id=UUID(set_type),
+                    filters=narrowing,
+                    start_key=await choices_service.start_key_of(
+                        conn, parameter, workspace_id=access.workspace_id,
+                        bound=body.values,
+                    ),
+                )
             except filters_service.Unresolved as missing:
                 # The same empty-and-named answer an object dropdown gives, for
                 # the same reason: offering every value would offer exactly the
@@ -827,7 +841,7 @@ async def action_parameter_choices(
                 continue
             values, truncated = await options_service.options(
                 conn, parameter, workspace_id=access.workspace_id,
-                filters=narrowing,
+                filters=narrowing, definition=definition,
             )
             out.append(ParameterChoices(
                 parameter=name,
@@ -1766,6 +1780,19 @@ async def execute_action(
                                 parameters=action_type["parameters"],
                             ),
                         )
+                        # p.37's walk, on the same side of the same `try` as
+                        # the filters (§337): a walk starting from an empty box
+                        # and a filter reading one are the same unanswered
+                        # question, and one `except` is what keeps them from
+                        # drifting into being answered differently.
+                        definition = search_arounds_service.build(
+                            parameter, object_type_id=UUID(set_type),
+                            filters=narrowing,
+                            start_key=await choices_service.start_key_of(
+                                conn, parameter,
+                                workspace_id=access.workspace_id, bound=bound,
+                            ),
+                        )
                     except filters_service.Unresolved as missing:
                         # Fails closed, as it does for an object dropdown: the
                         # filter reads a box nothing supplied, so whether this
@@ -1777,7 +1804,7 @@ async def execute_action(
                         )
                     allowed, _more = await options_service.options(
                         conn, parameter, workspace_id=access.workspace_id,
-                        filters=narrowing,
+                        filters=narrowing, definition=definition,
                     )
                     options_service.check_option_values(
                         parameter,

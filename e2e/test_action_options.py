@@ -368,7 +368,11 @@ def test_unchecking_the_box_clears_the_document(page, api):
     mod = build(api, "Options unchecked")
     open_editor(page, mod)
     panel = page.locator("[data-parameter-options='region']")
-    panel.get_by_role("checkbox").uncheck()
+    # **Named rather than "the checkbox in this panel"**: §337 put a second one
+    # inside the same row — p.37's walk over the set the options name — and an
+    # unlabelled reach for one of two is the strict-mode collision that finds
+    # out about it by failing a test that is about something else.
+    panel.get_by_label("Options for region from an object set").uncheck()
     expect(panel.get_by_test_id("options-summary")).to_contain_text(
         "Whatever is typed in"
     )
@@ -555,4 +559,191 @@ def test_the_filter_panel_is_not_offered_before_there_is_a_set_to_narrow(page, a
     expect(page.locator("[data-parameter-filters='region']")).to_have_count(0)
     # The options row itself is there, so this is the filter panel waiting
     # rather than the section being absent.
+    expect(page.locator("[data-parameter-options='region']")).to_have_count(1)
+
+
+# ---- p.37's walk over the options set (§337) ------------------------------------
+#: p.37's example with a property read off the far end. **Uneven on purpose**:
+#: Ada's two issues are in two states and Grace's two are both open, so "the
+#: whole set" and "narrowed to one value" are different lists — and Grace's is
+#: what makes p.33's own word "linked" visible in its prefill sentence.
+WALK_EMPLOYEES = [{"id": "E1", "name": "Ada"}, {"id": "E2", "name": "Grace"}]
+WALK_ISSUES = [
+    {"id": "I1", "employee_id": "E1", "state": "open"},
+    {"id": "I2", "employee_id": "E1", "state": "closed"},
+    {"id": "I3", "employee_id": "E2", "state": "open"},
+    {"id": "I4", "employee_id": "E2", "state": "open"},
+]
+
+
+def build_walked(api, name: str, *, walked=True, required=False):
+    """An Assign form whose State list is the states of the issues raised by
+    whoever is in the Employee box."""
+    mod = Module(api, name)
+    tag = uuid.uuid4().hex[:8]
+    employee_type = mod.object_type(
+        columns=["id", "name"], rows=WALK_EMPLOYEES, key="id", title="name",
+        slug=f"wemp_{tag}",
+    )
+    issue_type = mod.object_type(
+        columns=["id", "employee_id", "state"], rows=WALK_ISSUES, key="id",
+        title="id", slug=f"wiss_{tag}",
+    )
+    ticket_type = mod.object_type(
+        columns=["ticket_id", "note"], rows=[{"ticket_id": "1", "note": ""}],
+        key="ticket_id", title="ticket_id", slug=f"wtkt_{tag}",
+    )
+    link = api.call(
+        "POST", f"/workspaces/{mod.workspace_id}/link-types",
+        {"api_name": f"wraised_by_{tag}", "display_name": "Raised by",
+         "from_type_id": issue_type, "to_type_id": employee_type,
+         "cardinality": "one_to_many",
+         "from_property": "employee_id", "to_property": "$primary_key"},
+    )
+    action = api.call(
+        "POST", f"/workspaces/{mod.workspace_id}/action-types",
+        {"object_type_id": ticket_type, "api_name": f"wassign_{tag}",
+         "display_name": "Assign ticket", "editable_properties": ["note"]},
+    )
+    api.call(
+        "PUT",
+        f"/workspaces/{mod.workspace_id}/action-types/{action['id']}/definition",
+        {"parameters": [
+             {"api_name": "who", "display_name": "Employee",
+              "data_type": "object", "object_type_id": employee_type},
+             {"api_name": "region", "display_name": "State",
+              "data_type": "string", "required": required,
+              "options_from": {"object_type_id": issue_type,
+                               "property": "state"},
+              "dropdown_search_around": {
+                  "start": {"kind": "parameter",
+                            "object_type_id": employee_type,
+                            "parameter": "who"},
+                  "hops": [{"link_type_id": link["id"]}]} if walked else None},
+         ],
+         "rules": [{"kind": "modify_object",
+                    "config": {"property": "note", "parameter": "region"}}],
+         "criteria": []},
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "txt": {"resolvedName": "CanvasText",
+                    "props": {"tag": "p", "text": "WALKED OPTIONS FORM"}},
+            "frm": {"resolvedName": "CanvasActionForm",
+                    "props": {"actionTypeId": action["id"]}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+    mod.type_id = ticket_type
+    mod.employee_type = employee_type
+    mod.issue_type = issue_type
+    mod.action = action
+    mod.link = link
+    return mod
+
+
+def test_choosing_the_start_narrows_the_values(page, api):
+    """**p.37's walk with a property read off the far end, on a screen.**
+
+    Ada's issues are open and closed; Grace's are both open. Both halves,
+    because a list that walked once and then stopped listening passes the first
+    on its own — and a list ignoring the walk entirely passes it too, since the
+    whole set is also open and closed.
+    """
+    mod = build_walked(api, "Walked options")
+    open_module(page, mod)
+    page.locator("form > label select").first.select_option(index=1)
+    picker(page, "who").select_option(label="Ada")
+    expect(picker(page, "region").locator("option")).to_contain_text(
+        ["Choose", "closed", "open"], timeout=30000
+    )
+    picker(page, "who").select_option(label="Grace")
+    # **Waiting on the count rather than on the text.** `to_contain_text` with
+    # a list matches a subsequence, so ["Choose", "open"] is satisfied by a list
+    # that still holds `closed` — the wait returned at once and the assertion
+    # below caught a list that had not refetched yet. A negative assertion needs
+    # a positive wait that the negative cannot be true during (§318).
+    expect(picker(page, "region").locator("option")).to_have_count(2, timeout=30000)
+    assert not any("closed" in o for o in options_of(page, "region"))
+
+
+def test_before_the_start_is_chosen_the_list_says_which_box(page, api):
+    """The same empty-and-named answer an object dropdown gives, drawn by the
+    same control §336 gave a waiting state."""
+    mod = build_walked(api, "Walked options waiting")
+    open_module(page, mod)
+    page.locator("form > label select").first.select_option(index=1)
+    expect(page.get_by_test_id("values-waiting")).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("values-waiting")).to_contain_text("Employee")
+    # **And not also the other sentence** (§318's shape): "no object has a
+    # value for that property" is false when the truth is "you have not said
+    # which employee".
+    expect(page.get_by_test_id("values-empty")).to_have_count(0)
+
+
+def test_p33s_linked_prefill_on_a_screen(page, api):
+    """**p.33's prefill sentence with something linked**, which is the whole
+    of why §337 exists:
+
+    > "If only one **linked** object is available in the resulting object set
+    > and the parameter is required, the parameter dropdown will automatically
+    > prefill with the corresponding property value." (p.33)
+
+    Ada's issues leave two states, so the box stays on "Choose…"; Grace's leave
+    one, and it fills itself in. **Ada first on purpose**: a box that prefills
+    from any walked set at all passes the second half on its own, and the empty
+    first half is the only thing that says the condition was read.
+    """
+    mod = build_walked(api, "Walked options prefill", required=True)
+    open_module(page, mod)
+    page.locator("form > label select").first.select_option(index=1)
+    picker(page, "who").select_option(label="Ada")
+    expect(picker(page, "region").locator("option")).to_have_count(3, timeout=30000)
+    expect(picker(page, "region")).to_have_value("")
+    picker(page, "who").select_option(label="Grace")
+    expect(picker(page, "region")).to_have_value("open", timeout=30000)
+
+
+def test_a_walk_written_in_the_panel_narrows_the_values(page, api):
+    """**The panel and the form, in one test.** The search-around panel lived
+    inside the object-parameter block, so this shape could not have one at all
+    (§337) — a panel that saved something the form does not honour, or a form
+    narrowed by something no panel can write, would each pass every other test
+    here.
+    """
+    mod = build_walked(api, "Walked options panel", walked=False)
+    open_module(page, mod)
+    page.locator("form > label select").first.select_option(index=1)
+    picker(page, "who").select_option(label="Grace")
+    expect(picker(page, "region").locator("option")).to_contain_text(
+        ["Choose", "closed", "open"], timeout=30000
+    )
+
+    open_editor(page, mod)
+    panel = page.locator("[data-parameter-search-around='region']")
+    expect(panel).to_have_count(1)
+    page.get_by_label("Walk to region from somewhere else").check()
+    page.get_by_label("Walk to region starts from").select_option("parameter")
+    page.get_by_label("Follow another link from region").click()
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    open_module(page, mod)
+    page.locator("form > label select").first.select_option(index=1)
+    picker(page, "who").select_option(label="Grace")
+    expect(picker(page, "region").locator("option")).to_have_count(2, timeout=30000)
+    assert not any("closed" in o for o in options_of(page, "region"))
+
+
+def test_the_walk_panel_is_not_offered_before_there_is_a_set_to_walk_to(page, api):
+    """A walk has to land somewhere, and for this shape the only thing that
+    says where is the options document — so until one names a type and a
+    property there is no panel, the same rule the filter panel follows."""
+    mod = build(api, "Walked options unset", options=False)
+    open_editor(page, mod)
+    expect(page.locator("[data-parameter-search-around='region']")).to_have_count(0)
+    # The options row itself is there, so this is the walk panel waiting rather
+    # than the section being absent.
     expect(page.locator("[data-parameter-options='region']")).to_have_count(1)

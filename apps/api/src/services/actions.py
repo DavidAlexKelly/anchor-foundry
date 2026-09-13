@@ -2470,7 +2470,7 @@ async def set_definition(
     # p.33's multiple-choice options, checked here for the reason the two above
     # are: a property belongs to an object type, and `_validate_definition` is a
     # pure function over a document (§335).
-    from .action_options import check_options, options_of
+    from .action_options import check_options, options_of, set_type_of
 
     for parameter in parameters:
         if options_of(parameter) is None:
@@ -2501,9 +2501,7 @@ async def set_definition(
         # is "adding filters to non-object reference multiple choice *or*
         # single object reference parameters". One question with two places to
         # look it up, asked once here rather than at each check below.
-        offered = parameter.get("object_type_id") or (
-            (options_of(parameter) or {}).get("object_type_id")
-        )
+        offered = parameter.get("object_type_id") or set_type_of(parameter)
         if not offered:
             raise ValueError(
                 f"{parameter.get('api_name')!r} has dropdown filters but does "
@@ -2567,9 +2565,16 @@ async def set_definition(
     for parameter in sourced:
         parameter["dropdown_search_around"] = check_source(
             parameter,
+            # **Where the walk has to land**, which is the same two-place
+            # question the filters ask one loop above (§337). p.33 puts filters
+            # on both shapes and p.34 names "filters **and Search Arounds**" in
+            # one breath, so a walk over a multiple-choice parameter's set lands
+            # on the type its options are read from — db 0086's document — where
+            # an object parameter's lands on db 0083's column.
             object_type_id=(
                 str(parameter["object_type_id"])
-                if parameter.get("object_type_id") else None
+                if parameter.get("object_type_id")
+                else set_type_of(parameter)
             ),
             link_types=workspace_links,
             object_type_ids=workspace_type_ids,

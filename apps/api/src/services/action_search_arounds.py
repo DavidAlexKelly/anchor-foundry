@@ -28,6 +28,15 @@ one.** `object_type_id` (db 0083) says what the parameter holds; the walk says
 where it arrives; if they differ the definition is refused at save time rather
 than producing a dropdown of the wrong objects. Same refusal §156 makes for a
 traversal's link/landing pair and `derived_properties` for a derivation's.
+
+**Two shapes walk, and nothing here knows which is asking (§337).** p.34 names
+"filters **and Search Arounds**" in one breath and p.33 puts both on "non-object
+reference multiple choice **or** single object reference parameters", so a walk
+is not a property of the object shape — it is a property of having a set. What
+differs is only where the walk has to land: db 0083's column for an object
+parameter, and the type the options document names for a multiple-choice one.
+That answer is worked out by the caller and arrives as `object_type_id`, which
+is why this module needed nothing added to serve the second shape.
 """
 from __future__ import annotations
 
