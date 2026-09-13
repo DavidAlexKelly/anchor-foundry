@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from . import action_parameter_transfer as parameter_transfer
+from . import action_rule_transfer as rule_transfer
 
 #: The document's own version. p.65 says "you should not depend on the exported
 #: JSON schema as it may change over time" — which is licence to change it, and
@@ -152,6 +153,13 @@ def _json(value: Any) -> Any:
 
     Casting in SQL removes the guess rather than patching it: what arrives is
     NULL or JSON text, always, whatever the driver is configured to do.
+
+    **The actions route already knew.** `_action_type_out` carries a comment
+    saying `default_value` is deliberately not parsed, "a jsonb scalar comes
+    back already decoded, and parsing it again raises" — written before this
+    module and never read by it. `action_overrides._json` is the same heuristic
+    with no comment at all, and is reached only with a `conditions` list, which
+    is why it has not met this. Named here so the next person finds all three.
     """
     return json.loads(value) if isinstance(value, str) else value
 
@@ -455,8 +463,20 @@ async def export_ontology(
                     }
                     for sec in sections_by.get(str(a["id"]), [])
                 ],
+                # p.75's rules. **The config is translated, not echoed** (§343):
+                # six of its fields hold a uuid — the object type three of them
+                # name, the link type two of them name, and the type a notify
+                # rule reads a recipient off — so an action with a `create_link`
+                # rule used to put a link type's id straight into the file. The
+                # assertion that nothing in the ontology is identified by id was
+                # already there and passed, because no fixture had ever built a
+                # rule that carried one.
                 "rules": [
-                    {"kind": r["kind"], "config": _json(r["config"]),
+                    {"kind": r["kind"],
+                     "config": rule_transfer.to_names(
+                         {"kind": r["kind"], "config": _json(r["config"])},
+                         type_names=type_names, link_names=link_names,
+                     ),
                      "sort_order": r["sort_order"]}
                     for r in rules_by.get(str(a["id"]), [])
                 ],

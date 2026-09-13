@@ -173,8 +173,27 @@ def exported(client: TestClient, fx: Fixture) -> dict:
                         "set_required": True}],
                    },
               ],
-              "rules": [{"kind": "modify_object",
-                         "config": {"property": "name", "parameter": "name"}}],
+              "rules": [
+                  {"kind": "modify_object",
+                   "config": {"property": "name", "parameter": "name"}},
+                  # **A rule that names a link type** (§343). Until this unit
+                  # every rule in every fixture was a `modify_object` naming a
+                  # property and a parameter, so the file's own "nothing is
+                  # identified by id" assertion passed over a `config` that was
+                  # written to the file verbatim — and an action with this rule
+                  # put a uuid straight into it.
+                  {"kind": "create_link",
+                   "config": {"link_type": joined.json()["id"],
+                              "object": "who"}},
+                  # **And a rule that reaches outside the ontology** (p.67).
+                  # A static recipient list names people, who are not in the
+                  # file and cannot be; the export carries the ids and the
+                  # import refuses the file for any workspace but this one.
+                  {"kind": "notify",
+                   "config": {"recipients": {"kind": "static",
+                                             "user_ids": [str(fx.viewer)]},
+                              "subject": "Renamed"}},
+              ],
               "criteria": []},
     )
     assert saved.status_code == 200, saved.text
@@ -310,7 +329,8 @@ def test_an_action_type_names_its_object_type_by_name(exported: dict) -> None:
     # The definition travels too, or the copy is an action that does nothing.
     # In declaration order, which is the order the form draws them in.
     assert [p["api_name"] for p in action["parameters"]] == ["tier", "who", "name"]
-    assert [r["kind"] for r in action["rules"]] == ["modify_object"]
+    assert [r["kind"] for r in action["rules"]] == [
+        "modify_object", "create_link", "notify"]
 
 
 def test_conditional_formatting_travels_whole(exported: dict) -> None:
@@ -324,10 +344,16 @@ def test_conditional_formatting_travels_whole(exported: dict) -> None:
     which is why they cannot travel. This platform's are inline jsonb on the
     property and name only sibling properties by api_name — so they are
     self-contained and the refusal p.67 describes would be a check that can
-    never be right (§214).
+    never be right *for formatting* (§214).
 
-    What *is* real is the same class of problem: a rule naming a property the
-    file does not carry. That is checked below.
+    **Right about formatting, wrong about the class** (§343). p.67 is about a
+    rule referring to something the ontology does not contain, and two of this
+    platform's action rules do: a webhook rule names a webhook and a static
+    notify rule names people. So the refusal exists after all, one table over —
+    see `check_outside_ontology` and the tests for it in `test_ontology_import`.
+
+    What is also real is the narrower version: a rule naming a property the file
+    does not carry. That is checked below.
     """
     found = a_type(exported["doc"], exported["api_name"])
     assert found is not None
@@ -525,6 +551,65 @@ def test_a_parameter_in_no_section_is_in_no_sections_list(
     assert listed == ["name"]
 
 
+def _a_rule(doc: dict, action: str, kind: str) -> dict:
+    found = next(a for a in doc["action_types"] if a["api_name"] == action)
+    return next(r for r in found["rules"] if r["kind"] == kind)
+
+
+def test_the_link_a_rule_writes_travels_as_a_name(exported: dict) -> None:
+    """**The defect §343 found, as the assertion that would have caught it.**
+    p.75's `create_link` rule names its link type, and that name was a uuid in
+    the file until this unit — so a copy carried a rule pointing at a link that
+    exists in one workspace and nowhere else.
+
+    Asserted here as well as by the sweep of uuids below, because that sweep
+    passes just as well if the field is dropped entirely.
+    """
+    rule = _a_rule(exported["doc"], exported["action"], "create_link")
+    assert rule["config"]["link_type"] == exported["link"]
+    # The rest of the config already named things by name, and still does.
+    assert rule["config"]["object"] == "who"
+
+
+def test_a_rule_that_reaches_outside_the_ontology_keeps_its_ids(
+    exported: dict,
+) -> None:
+    """**p.67's class, and the one exemption the file allows** (§343).
+
+        "…conditional formatting rules that are not defined in that Ontology
+         and cannot be transferred over." (p.67)
+
+    A static notify rule names people. They are not in the ontology and no
+    translation can put them there, so the export carries the ids rather than
+    dropping a working rule — and `ontology_import` refuses the file for any
+    workspace but the one it came from. Dropping them silently would be the
+    worst of the three outcomes: a rule that imports cleanly and notifies
+    nobody.
+    """
+    rule = _a_rule(exported["doc"], exported["action"], "notify")
+    assert UUID_LIKE.findall(json.dumps(rule["config"]["recipients"]))
+
+
+def _without_references_that_leave_the_ontology(doc: dict) -> dict:
+    """The document, less the ids p.67 says cannot be transferred over.
+
+    Written out longhand rather than by calling `action_rule_transfer`, so the
+    assertion below is not checking the export against the same table the
+    export was built from.
+    """
+    ontology = json.loads(
+        json.dumps({k: v for k, v in doc.items() if k != "workspace"})
+    )
+    for action in ontology["action_types"]:
+        for rule in action["rules"]:
+            config = rule.get("config") or {}
+            config.pop("webhook", None)
+            recipients = config.get("recipients") or {}
+            if recipients.get("kind") == "static":
+                recipients.pop("user_ids", None)
+    return ontology
+
+
 def test_nothing_in_the_ontology_is_identified_by_id(exported: dict) -> None:
     """**p.65's second workflow, as one assertion**: "copy the working state of
     one Ontology to another".
@@ -533,9 +618,16 @@ def test_nothing_in_the_ontology_is_identified_by_id(exported: dict) -> None:
     imported into, so the ontology half of the document must contain none. The
     `workspace` block is exempt and named as such — it describes where the file
     *came from*, which is the one thing that is allowed to be about this copy.
+
+    **And a rule's references outside the ontology are exempt too** (§343), by
+    the two lines above rather than by weakening the sweep: a webhook and a list
+    of recipients are not ontology, so the file cannot name them and refuses to
+    travel instead (p.67). Everything the ontology *does* contain is still
+    swept, including the five rule fields that held a uuid before this unit.
     """
-    ontology = {k: v for k, v in exported["doc"].items() if k != "workspace"}
-    stray = UUID_LIKE.findall(json.dumps(ontology))
+    stray = UUID_LIKE.findall(
+        json.dumps(_without_references_that_leave_the_ontology(exported["doc"]))
+    )
     assert stray == [], f"the ontology names things by id: {stray[:3]}"
 
 
