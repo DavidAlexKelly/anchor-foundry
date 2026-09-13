@@ -261,6 +261,46 @@ def prefill(values: list[str], *, required: bool) -> str | None:
     return values[0]
 
 
+def confirming(
+    parameter: dict[str, Any], value: Any, *, filters: tuple[Any, ...] = (),
+) -> tuple[Any, ...]:
+    """`filters`, plus one asking whether *this* value is in the set (§338).
+
+    **The difference between asking a question and reading an answer.** The
+    check used to evaluate the narrowed set at `MAX_OPTIONS` and look for the
+    submitted value in what came back, so "is this value allowed" depended on
+    how many the *control* can hold: `group_object_set` truncates by frequency,
+    and a legitimate value that happened to be the fifty-first most common was
+    refused with a sentence saying it is not one of the values offered. It was
+    one of them. §256's trap arriving through the back door, and the same one
+    §331 shipped for the object shape and §333 removed by key.
+
+    An equality on the property being grouped makes it a set of one bucket, so
+    the page size stops deciding. **Text equality is the same comparison the
+    check does**: `Filter`'s `data_type` is `None` for every equality-shaped
+    operator because they compare the text of a value, and `check_option_values`
+    compares `str(value)` against the text of a bucket — one rule, asked twice,
+    rather than a store-side comparison free to disagree with a Python one.
+
+    A blank value adds nothing, because there is no value to ask about; the
+    caller skips the read entirely and `check_option_values` returns anyway.
+
+    **The caller's `limit=1` is a statement, not the mechanism.** This equality
+    leaves at most one bucket, so asking for one and asking for fifty return the
+    same list and a sweep could not make the limit matter — worth writing down
+    rather than rediscovering, because the obvious reading is that the two
+    together are what removes the page size and only one of them is.
+    """
+    declared = options_of(parameter)
+    if declared is None or value is None or value == "":
+        return filters
+    from . import object_sets
+
+    return (*filters, object_sets.Filter(
+        property=str(declared["property"]), op="eq", value=str(value),
+    ))
+
+
 def check_option_values(
     parameter: dict[str, Any], value: Any, *, allowed: list[str]
 ) -> None:
@@ -272,6 +312,14 @@ def check_option_values(
     has to hold for a caller that never drew one. It is the same argument p.34
     makes out loud for the object dropdown one section along, applied to the
     shape p.33 describes without repeating it.
+
+    **`allowed` is an answer, not the offer** (§338). Its caller narrows the
+    read to this one value with `confirming` and asks for one bucket, so what
+    arrives is `[value]` or `[]` — "does the set contain it" rather than "here
+    are fifty of them, look". The membership test is unchanged and still reads
+    the same either way, which is why this function did not have to know: what
+    changed is that the list it is handed is no longer truncated by frequency,
+    and so no longer refuses a value for being unpopular.
     """
     if value is None or value == "":
         return

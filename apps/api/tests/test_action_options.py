@@ -659,6 +659,107 @@ def test_a_submission_that_does_not_supply_the_filters_box_is_refused(
     assert "tier" in refused.text
 
 
+def test_a_blank_parameter_is_not_refused_for_a_filter_nothing_is_using(
+    client: TestClient, fx: Fixture, setup
+) -> None:
+    """**The refusal above, aimed at a value that does not exist** (§338).
+
+    Nothing was chosen for Region, so whether Region's value is in the set is
+    not a question this submission asks — and refusing on it makes an optional
+    parameter's filter into a reason the whole action cannot run. The rule
+    above still holds for the case it is about: a value *was* submitted and the
+    set it must belong to cannot be worked out.
+
+    `check_object_values` has always skipped an empty box before it looks at a
+    rule; this is the same line for p.33's other shape, and a required
+    parameter left blank is still refused by the check that is about
+    requiredness.
+    """
+    # Its own definition rather than `define_filtered`'s, because the action
+    # has to be able to write something without Region: a form whose only rule
+    # reads the blank parameter is refused for having nothing to write, which
+    # is a different refusal and would hide this one.
+    client.put(
+        f"{wbase(fx)}/action-types/{setup['action']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={"parameters": [
+                  {"api_name": "tier", "display_name": "Tier",
+                   "data_type": "string"},
+                  {"api_name": "note", "display_name": "Note",
+                   "data_type": "string"},
+                  {"api_name": "region", "display_name": "Region",
+                   "data_type": "string",
+                   "options_from": {"object_type_id": setup["region_type"],
+                                    "property": "label"},
+                   "dropdown_filters": [
+                       {"property": "tier",
+                        "values": [{"kind": "parameter", "parameter": "tier"}]}]},
+              ],
+              "rules": [{"kind": "modify_object",
+                         "config": {"property": "label", "parameter": "note"}}],
+              "criteria": []},
+    ).raise_for_status()
+    got = run(client, fx, setup, {"note": "anything"})
+    assert got.status_code == 200, got.text
+    # **A cleared box, not an absent one**, which is what a form sends: every
+    # parameter with the emptied one as `""`. The sweep found that only `None`
+    # was being treated as nothing, so a submission from a real form would
+    # still have been refused for a filter about the box it had just cleared.
+    cleared = run(client, fx, setup, {"note": "anything", "region": ""})
+    assert cleared.status_code == 200, cleared.text
+
+
+@pytest.fixture(scope="module")
+def crowded(client: TestClient, fx: Fixture, setup):
+    """More distinct values than the control holds, so "offered" and "allowed"
+    are different lists.
+
+    One office per region and `MAX_OPTIONS + 10` of them, which makes the
+    truncation *arbitrary* rather than principled: `group_object_set` orders by
+    frequency, every value has a count of one, and the tie-break is alphabetical
+    — so the values that fall off the end are simply the last ones by name, and
+    every one of them is a value the set genuinely allows.
+    """
+    tag = uuid.uuid4().hex[:8]
+    over = options.MAX_OPTIONS + 10
+    type_id = a_type(
+        client, fx, f"many{tag}",
+        [(f"o{i:04d}", f"R{i:04d}") for i in range(over)],
+        columns=("code", "label"),
+    )
+    return {"type": type_id, "over": over}
+
+
+def test_a_value_past_the_controls_cap_is_still_accepted(
+    client: TestClient, fx: Fixture, setup, crowded
+) -> None:
+    """**§256's trap, arriving through the back door** (§338).
+
+    The check used to evaluate the set at `MAX_OPTIONS` and look for the
+    submitted value in what came back, so the answer to "is this value allowed"
+    depended on how many the *control* can hold — and the sentence it refused
+    with, "is not one of the values it offers", was false about a value the set
+    contains. §331 shipped exactly this for the object shape and §333 removed it
+    by asking about the one object; this asks about the one value.
+    """
+    define(client, fx, setup,
+           {"object_type_id": crowded["type"], "property": "label"},
+           ).raise_for_status()
+    offer = offered(client, fx, setup)["region"]
+    assert offer["truncated"] is True
+    every = {f"R{i:04d}" for i in range(crowded["over"])}
+    missing = sorted(every - set(offer["values"]))
+    # The fixture has to overflow or the test is about nothing.
+    assert missing, offer["values"]
+
+    accepted = run(client, fx, setup, {"region": missing[0]})
+    assert accepted.status_code == 200, accepted.text
+    # And still a check: a value no object has is refused, at the same cap.
+    refused = run(client, fx, setup, {"region": "R9999"})
+    assert refused.status_code == 422, refused.text
+    assert "offers" in refused.text
+
+
 def test_a_filter_is_checked_against_the_type_the_options_name(
     client: TestClient, fx: Fixture, setup
 ) -> None:
@@ -934,6 +1035,17 @@ def test_the_walk_narrows_the_check_too(
     refused = run(client, fx, setup, {"who": grace, "state": "closed"})
     assert refused.status_code == 422, refused.text
     assert "offers" in refused.text
+
+    # **And a value that is in the walked set without being the first of it**
+    # (§338, and the sweep found it). Ada's two issues are one open and one
+    # closed, so both counts are one and the tie-break is alphabetical — a
+    # check that read the walked set at one bucket rather than asking about
+    # this value would accept `closed` and refuse `open`, which is narrower
+    # than the rule and wrong in the direction nobody notices until a form
+    # refuses what it just offered.
+    ada = linked["people"]["E1"]
+    assert run(client, fx, setup,
+               {"who": ada, "state": "open"}).status_code == 200
 
 
 def test_the_check_carries_the_filters_as_well_as_the_walk(
