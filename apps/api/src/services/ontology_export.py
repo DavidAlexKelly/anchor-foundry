@@ -34,6 +34,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
+from . import action_parameter_transfer as parameter_transfer
 
 #: The document's own version. p.65 says "you should not depend on the exported
 #: JSON schema as it may change over time" — which is licence to change it, and
@@ -216,10 +217,17 @@ async def export_ontology(
         by_type.setdefault(str(row["object_type_id"]), []).append(row)
         title_of[str(row["id"])] = str(row["api_name"])
 
+    # **id → api_name, for the three fields that point** (§342). Built from the
+    # rows this function already read rather than by a fourth query: an export
+    # that resolved names separately could disagree with the types and links it
+    # is writing in the same document.
+    type_names = {str(t["id"]): str(t["api_name"]) for t in types}
+
     links = await fetch_all(
         conn,
         """
-        SELECT lt.api_name, lt.display_name, lt.cardinality::text AS cardinality,
+        SELECT lt.id, lt.api_name, lt.display_name,
+               lt.cardinality::text AS cardinality,
                lt.from_property, lt.to_property,
                lt.from_side_name, lt.to_side_name,
                lt.status::text AS status, lt.deprecation::text AS deprecation,
@@ -258,7 +266,10 @@ async def export_ontology(
         SELECT id, action_type_id, api_name, display_name,
                data_type::text AS data_type, required,
                default_value::text AS default_value, hidden,
-               sort_order, section_id
+               sort_order, section_id,
+               object_type_id, dropdown_filters::text AS dropdown_filters,
+               dropdown_search_around::text AS dropdown_search_around,
+               options_from::text AS options_from
           FROM action_parameters
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -326,6 +337,8 @@ async def export_ontology(
     for row in overrides:
         overrides_by.setdefault(str(row["parameter_id"]), []).append(row)
 
+    link_names = {str(l["id"]): str(l["api_name"]) for l in links}
+
     params_by: dict[str, list[dict[str, Any]]] = {}
     for row in parameters:
         params_by.setdefault(str(row["action_type_id"]), []).append(row)
@@ -384,6 +397,23 @@ async def export_ontology(
                         "default_value": _json(p["default_value"]),
                         "hidden": p["hidden"],
                         "sort_order": p["sort_order"],
+                        # p.36's filters (§331), which name properties and
+                        # parameters and so travel verbatim — but only
+                        # alongside the type they are written against, which
+                        # is why they waited for §342 rather than riding §341.
+                        "dropdown_filters": _json(p["dropdown_filters"]) or [],
+                        # db 0083, 0085 and 0086's three pointing fields, as
+                        # api_names (§342). Only the ones this parameter has.
+                        **parameter_transfer.to_names(
+                            {
+                                "object_type_id": p["object_type_id"],
+                                "dropdown_search_around": _json(
+                                    p["dropdown_search_around"]),
+                                "options_from": _json(p["options_from"]),
+                            },
+                            type_names=type_names,
+                            link_names=link_names,
+                        ),
                         # p.43-46's overrides (§329), nested under the parameter
                         # they belong to rather than listed beside it — they
                         # have no identity of their own and an order that is the

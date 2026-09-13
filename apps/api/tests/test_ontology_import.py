@@ -481,6 +481,74 @@ def test_two_actions_sharing_a_name_are_told_apart(
     assert body["sections"]["action_types"]["changed"] == []
 
 
+# ---- what a parameter's dropdown names (§342) -----------------------------------
+def an_action_naming(tag: str, **parameter) -> dict:
+    return {"api_name": f"act_{tag}", "display_name": "Act",
+            "object_type": f"imp_{tag}", "rules": [], "criteria": [],
+            "parameters": [{"api_name": "pick", "display_name": "Pick",
+                            "data_type": "object", **parameter}]}
+
+
+def test_a_parameter_naming_a_type_the_file_does_not_define_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The same rule as a link's two ends, one resource further in** (§342).
+
+    db 0083's column is an id in the database and an api_name in the file, so a
+    name the document does not carry cannot be resolved on the way in — and a
+    dropdown stored against nothing is the state §339 spent a unit making
+    unreachable by deletion.
+    """
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [an_action_naming(tag, object_type="nowhere")]
+    refused = plan(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    assert "nowhere" in refused.text and "object type" in refused.text
+    # Named where it is, so a reader editing JSON can find it.
+    assert f"imp_{tag}.act_{tag}.pick" in refused.text
+
+
+def test_a_walk_naming_a_link_the_file_does_not_define_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """db 0085's hops name link types, which the file must also carry. Asserted
+    apart from the type above because one check covering both would pass with
+    either half deleted."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [an_action_naming(
+        tag,
+        object_type=f"imp_{tag}",
+        dropdown_search_around={
+            "start": {"kind": "object_type", "object_type": f"imp_{tag}"},
+            "hops": [{"link_type": "no_such_link"}]},
+    )]
+    refused = plan(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    assert "no_such_link" in refused.text and "link type" in refused.text
+
+
+def test_a_parameter_naming_what_the_file_does_define_is_accepted(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The negative control**, without which every assertion above passes for
+    a build that refuses any action carrying a dropdown at all."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag), one_type(tag, api_name=f"imp_{tag}b"))
+    document["link_types"] = [a_link(tag)]
+    document["action_types"] = [an_action_naming(
+        tag,
+        object_type=f"imp_{tag}b",
+        options_from={"object_type": f"imp_{tag}", "property": "name"},
+        dropdown_search_around={
+            "start": {"kind": "object_type", "object_type": f"imp_{tag}"},
+            "hops": [{"link_type": f"lnk_{tag}"}]},
+    )]
+    accepted = plan(client, fx, document)
+    assert accepted.status_code == 200, accepted.text
+
+
 # ---- p.65's link types, applied (§340) -----------------------------------------
 def a_link(tag: str, **over) -> dict:
     """A link from the file's first type to its second, joined on `name`."""
