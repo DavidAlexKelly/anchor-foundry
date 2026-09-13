@@ -113,7 +113,6 @@ def exported(client: TestClient, fx: Fixture) -> dict:
                    "data_type": "string"},
                   {"api_name": "name", "display_name": "Name",
                    "data_type": "string",
-                   "dropdown_filters": [],
                    "overrides": [
                        {"conditions": [{
                             "left": {"kind": "parameter", "parameter": "tier"},
@@ -131,8 +130,12 @@ def exported(client: TestClient, fx: Fixture) -> dict:
         f"{wbase(fx)}/action-types/{action.json()['id']}/sections",
         headers=hdr(fx.editor_sub),
         json={"sections": [
+            # **One of the two on purpose.** With both in it, "the parameters
+            # this section holds" and "every parameter of the action" are the
+            # same list, and a version listing all of them passes — which is
+            # what the first draft did, and a sweep said so.
             {"title": "Why", "description": "What changed",
-             "parameters": ["tier", "name"]},
+             "parameters": ["name"]},
         ]},
     )
     assert sectioned.status_code == 200, sectioned.text
@@ -342,17 +345,6 @@ def an_action(doc: dict, api_name: str) -> dict:
     return next(a for a in doc["action_types"] if a["api_name"] == api_name)
 
 
-def test_a_parameters_dropdown_filters_travel(exported: dict) -> None:
-    """p.36's filters (§331), which an export never carried — so a copy of an
-    ontology arrived with every narrowed dropdown wide open, and nothing said
-    so. They travel verbatim because the document names properties and
-    parameters by name and holds no ids."""
-    action = an_action(exported["doc"], exported["action"])
-    named = {p["api_name"]: p for p in action["parameters"]}
-    assert "dropdown_filters" in named["name"]
-    assert named["name"]["dropdown_filters"] == []
-
-
 def test_a_parameters_overrides_travel(exported: dict) -> None:
     """p.43-46's overrides (§329). `action_parameter_overrides` was one of two
     tables §326 never read at all."""
@@ -377,7 +369,7 @@ def test_an_actions_sections_travel_and_name_their_parameters(
     action = an_action(exported["doc"], exported["action"])
     [section] = action["sections"]
     assert section["title"] == "Why"
-    assert section["parameters"] == ["tier", "name"]
+    assert section["parameters"] == ["name"]
     assert section["columns"] == 1
 
 
@@ -389,13 +381,12 @@ def test_a_parameter_in_no_section_is_in_no_sections_list(
     every api_name in every section passes the test above."""
     action = an_action(exported["doc"], exported["action"])
     listed = [name for sec in action["sections"] for name in sec["parameters"]]
-    # Both are in the one section here, so the claim this pins is that the list
-    # is *derived* — asserted by asking a second action, which has none.
-    assert sorted(listed) == ["name", "tier"]
-    bare = [a for a in exported["doc"]["action_types"]
-            if a["api_name"] != exported["action"]]
-    for other in bare:
-        assert other["sections"] == [], other["api_name"]
+    # `tier` is a parameter of this action and a member of no section, so it
+    # must not appear — which is the assertion the first draft could not make,
+    # because its fixture put both parameters in the one section and left
+    # "the members" and "all of them" indistinguishable.
+    assert "tier" not in listed
+    assert listed == ["name"]
 
 
 def test_nothing_in_the_ontology_is_identified_by_id(exported: dict) -> None:

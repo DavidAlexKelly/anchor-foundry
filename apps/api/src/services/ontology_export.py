@@ -117,11 +117,16 @@ JSON_FIELDS = frozenset({
     "struct_fields",
     "default_value",
     "config",
-    # §341's additions. A filter document names properties and parameters by
-    # *name* and carries no ids, which is what lets it travel verbatim — unlike
-    # the three dropdown fields beside it, which name object and link types by
-    # id and are §326's remaining ○.
-    "dropdown_filters",
+    # §341's additions, for the two tables §326 never read.
+    #
+    # **`dropdown_filters` is deliberately not here**, though it is name-based
+    # and would travel verbatim. A filter is written against the type the
+    # parameter offers, and that type is `object_type_id` — an id, and one of
+    # the three fields this unit leaves to §342. Carrying the filter without it
+    # would put a narrowing in the file with nothing to say what it narrows,
+    # which is a document that reads as complete and is not. A sweep is what
+    # made the coupling obvious: the fixture's filter list was empty, so
+    # "carried" and "dropped" were the same document.
     "conditions",
     "set_default",
     "visible_when",
@@ -225,7 +230,7 @@ async def export_ontology(
         """
         SELECT id, action_type_id, api_name, display_name,
                data_type::text AS data_type, required, default_value, hidden,
-               sort_order, section_id, dropdown_filters
+               sort_order, section_id
           FROM action_parameters
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -348,9 +353,6 @@ async def export_ontology(
                         "default_value": _json(p["default_value"]),
                         "hidden": p["hidden"],
                         "sort_order": p["sort_order"],
-                        # p.36's filters (§331), which travel verbatim because
-                        # the document names properties and parameters by name.
-                        "dropdown_filters": _json(p["dropdown_filters"]) or [],
                         # p.43-46's overrides (§329), nested under the parameter
                         # they belong to rather than listed beside it — they
                         # have no identity of their own and an order that is the
