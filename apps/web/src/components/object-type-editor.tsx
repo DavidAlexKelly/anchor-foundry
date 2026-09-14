@@ -97,6 +97,7 @@ const CARRIED: { [K in keyof Required<PropertyInput>]: true } = {
   derivation: true,
   struct_fields: true,
   array_of: true,
+  reducers: true,
   shared_property_id: true,
   value_type_id: true,
   status: true,

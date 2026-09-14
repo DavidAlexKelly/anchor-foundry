@@ -69,6 +69,7 @@ def module(api):
         types={"address": "struct", "tags": "array"},
         struct_fields={"address": FIELDS},
         array_of={"tags": "string"},
+        reducers={"tags": [{"operation": "first"}]},
         descriptions={"code": CODE_DESCRIPTION},
     )
     return mod
@@ -104,6 +105,7 @@ def test_the_type_starts_with_a_description_and_a_struct(api, module) -> None:
         "street", "postal_code", "floors"
     ]
     assert before["tags"]["array_of"] == "string"
+    assert before["tags"]["reducers"] == [{"operation": "first", "field": None}]
 
 
 def test_editing_a_type_keeps_the_settings_the_edit_did_not_touch(
@@ -137,6 +139,14 @@ def test_editing_a_type_keeps_the_settings_the_edit_did_not_touch(
     assert after["tags"]["array_of"] == "string", (
         "the array's element type did not survive an edit to a different "
         "property"
+    )
+    # **The fourth key, and §348 shipped without it** (p.131-133; db 0088).
+    # `reducers` reached the database, the export, the version snapshot and two
+    # read paths, all guarded — and not this map, which is the one place a
+    # setting is lost by *saving something else*. Found the same way §245 found
+    # `description`: by going to add the next key and reading the list.
+    assert after["tags"]["reducers"] == [{"operation": "first", "field": None}], (
+        "the array's reducers did not survive an edit to a different property"
     )
 
 
