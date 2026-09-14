@@ -65,6 +65,11 @@ PROPERTY_FIELDS = (
     # imported array property is a declaration that says nothing and the server
     # refuses it (§346).
     "array_of",
+    # db 0088. Name-based for `array_of`'s reason and one more: a reducer names
+    # an *operation* and a *struct field*, and a struct field is declared in the
+    # same property one line up — so there is nothing here an import has to
+    # resolve against the workspace it lands in.
+    "reducers",
     "status",
     "deprecation",
 )
@@ -122,6 +127,7 @@ JSON_FIELDS = frozenset({
     "conditional_format",
     "derivation",
     "struct_fields",
+    "reducers",
     "default_value",
     "config",
     # §341's additions, for the two tables §326 never read.
@@ -216,7 +222,8 @@ async def export_ontology(
                conditional_format::text AS conditional_format,
                edit_only, derivation::text AS derivation,
                struct_fields::text AS struct_fields,
-               array_of::text AS array_of, status::text AS status,
+               array_of::text AS array_of, reducers::text AS reducers,
+               status::text AS status,
                deprecation::text AS deprecation, id
           FROM object_type_properties
          WHERE object_type_id = ANY(

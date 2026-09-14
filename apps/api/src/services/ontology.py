@@ -30,7 +30,8 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # copy of them (see that module's docstring).
 from . import (
     array_properties, conditional_format, derived_properties, ontology_status,
-    shared_properties, struct_fields, value_format, value_types,
+    property_reducers, shared_properties, struct_fields, value_format,
+    value_types,
 )
 from .property_values import (  # noqa: F401
     ATTACHMENT_FIELDS,
@@ -394,7 +395,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
         SELECT p.id, p.api_name, p.display_name, p.data_type, p.required,
                p.description, p.sort_order, p.visibility, p.value_format,
                p.conditional_format, p.edit_only, p.derivation,
-               p.struct_fields, p.array_of,
+               p.struct_fields, p.array_of, p.reducers,
                p.status, p.deprecation,
                p.shared_property_id,
                sp.api_name AS shared_property_api_name,
@@ -444,6 +445,39 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
         prop["effective_value_type_id"] = full["value_type_id"]
         del prop["own_value_type_id"]
         out.append(shared_properties.resolve(prop, shared))
+    return out
+
+
+async def reducers_for(
+    conn: AsyncConnection, type_id: UUID
+) -> dict[str, list[dict[str, Any]]]:
+    """``{property api_name: its reducers}`` for one object type (db 0088).
+
+    **Its own query rather than `list_properties`.** A read that wants reducers
+    wants two columns, and `list_properties` resolves shared metadata and joins
+    through `value_type_versions` under two row-level-security policies - the
+    cost `list_properties_for_workspace` was written to stop paying N times.
+    This one is paid once per page of instances, which is the budget p.131's
+    "in a table" has to fit into.
+
+    Properties that declare none are left out, so a type with no array property
+    answers with an empty mapping and `reduce_all` does nothing.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT api_name, reducers FROM object_type_properties
+         WHERE object_type_id = :tid AND reducers IS NOT NULL
+        """,
+        {"tid": str(type_id)},
+    )
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        held = row["reducers"]
+        if isinstance(held, str):
+            held = json.loads(held)
+        if isinstance(held, list) and held:
+            out[str(row["api_name"])] = held
     return out
 
 
@@ -637,6 +671,16 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
             data_type=str(prop["data_type"]),
             property_name=api,
             array_of=prop["array_of"],
+        )
+        # db 0088, and **last of the three**, because every question it asks is
+        # a question about the other two's answers: which element type, and
+        # which of the element's fields (p.131-133).
+        prop["reducers"] = property_reducers.parse(
+            prop.get("reducers"),
+            data_type=str(prop["data_type"]),
+            array_of=prop["array_of"],
+            struct_fields=prop["struct_fields"],
+            property_name=api,
         )
         if prop.get("derivation") is not None:
             # p.148's own list, checked here because each item is a fact about
@@ -848,6 +892,7 @@ async def _write_property_rows(
                                                 visibility, value_format,
                                                 conditional_format, edit_only,
                                                 derivation, struct_fields, array_of,
+                                                reducers,
                                                 shared_property_id,
                                                 value_type_id, status, deprecation)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
@@ -855,6 +900,7 @@ async def _write_property_rows(
                     CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly,
                     CAST(:deriv AS jsonb), CAST(:sfields AS jsonb),
                     CAST(:arrayof AS property_data_type),
+                    CAST(:reducers AS jsonb),
                     :shared, :valuetype,
                     CAST(:status AS ontology_status), CAST(:depr AS jsonb))
             RETURNING id
@@ -892,6 +938,14 @@ async def _write_property_rows(
                 # db 0087. NULL for every type but `array`, which is the
                 # pairing `array_properties.parse` checks in both directions.
                 "arrayof": prop.get("array_of") or None,
+                # db 0088. NULL for every type but `array`, and for an array
+                # that declares none — reduction is optional where an element
+                # type is not.
+                "reducers": (
+                    json.dumps(prop["reducers"])
+                    if prop.get("reducers")
+                    else None
+                ),
                 # p.187: attaching is part of saving the object type, so the
                 # reference is written with the rest of the property rather
                 # than by a separate call somebody could forget to make.
@@ -1052,6 +1106,7 @@ async def _snapshot_version(
                                'derivation', p.derivation,
                                'struct_fields', p.struct_fields,
                                'array_of', p.array_of,
+                               'reducers', p.reducers,
                                'shared_property_id', p.shared_property_id,
                                'value_type_id', p.value_type_id,
                                'status', p.status,

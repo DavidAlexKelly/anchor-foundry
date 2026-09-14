@@ -65,6 +65,7 @@ from ..services import interfaces as interfaces_service
 from ..services import interface_sets
 from ..services import shared_properties as shared_properties_service
 from ..services import value_types as value_types_service
+from ..services import property_reducers
 from ..services.dataset_engine import DatasetEngineError
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["objects"])
@@ -132,6 +133,12 @@ class PropertyIn(BaseModel):
     # types are allowed is a *narrower* list than this model's `data_type`
     # pattern, and a pattern here would be a second copy of it.
     array_of: str | None = None
+    # Ordered property reducers (Foundry `object-link-types` p.131-133; db
+    # 0088). Free-form here and checked in `services/property_reducers` for
+    # `struct_fields`' reason twice over: which operations are legal depends on
+    # the *element* type, and which fields may be named depends on the struct
+    # declared one field up.
+    reducers: list[dict[str, Any]] | None = None
     # The shared property this one inherits its metadata from (Foundry
     # `object-link-types` p.187). Null detaches it (p.188), which is why this
     # is an explicit field rather than something only ever added: an omitted
@@ -168,6 +175,7 @@ class PropertyOut(BaseModel):
     derivation: dict[str, Any] | None = None
     struct_fields: list[dict[str, Any]] | None = None
     array_of: str | None = None
+    reducers: list[dict[str, Any]] | None = None
     shared_property_id: UUID | None = None
     # p.178: "Shared properties on objects are denoted with a globe icon next
     # to their name." The name comes back with the id so an application can
@@ -409,6 +417,13 @@ class InstanceOut(BaseModel):
     id: UUID
     primary_key: str
     properties: dict[str, Any]
+    # The reduced value of each array property that declares a reducer
+    # (`object-link-types` p.131-133; db 0088), keyed by property api_name and
+    # **beside** `properties` rather than inside it — p.131 keeps the full
+    # array accessible and has applications "view the complete array on hover".
+    # Empty for a type with no reducers, and for every read that does not fill
+    # it in: see `_reduced` for which those are and why.
+    reduced: dict[str, Any] = {}
     updated_at: datetime
 
 
@@ -421,6 +436,30 @@ class InstancePage(BaseModel):
 
 def _jsonb(value: Any) -> dict[str, Any]:
     return json.loads(value) if isinstance(value, str) else value
+
+
+def _reduced(row: dict[str, Any], reducers: dict[str, Any]) -> InstanceOut:
+    """One instance row, with p.131's reduced values worked out.
+
+    **A whole page of them, unlike a derived property**, and the difference is
+    what each answer costs. `_with_derived` is single-reads-only in its own
+    words because a derived property costs a query per hop; a reducer costs one
+    comparison over a list that is already in the row this function was handed,
+    so the page that p.131 actually asks for ("display only the most recent
+    date when viewing the property **in a table**") is a page of comparisons
+    and no extra round trips.
+
+    `reducers` is read once per request rather than per row — the same shape as
+    `_count_usage`'s "one read for the page, not one per object".
+    """
+    properties = _jsonb(row["properties"])
+    return InstanceOut(
+        **{
+            **row,
+            "properties": properties,
+            "reduced": property_reducers.reduce_all(properties, reducers),
+        }
+    )
 
 
 def _source_out(row: dict[str, Any]) -> SourceOut:
@@ -1348,13 +1387,16 @@ async def list_instances(
         rows, total = await instance_store.store_for(conn).list_for_type(
             search_prefix=prefix, object_type_id=type_id, limit=limit, offset=offset
         )
+        # p.131's "in a table". One query for the page, for `_count_usage`'s
+        # reason one line down.
+        reducers = await ontology_service.reducers_for(conn, type_id)
         # **One read for the page, not one per object** (p.32).
         await _count_usage(
             conn, object_type_id=type_id, user_id=access.auth.user_id,
             application=application, reads=1,
         )
     return InstancePage(
-        items=[InstanceOut(**{**r, "properties": _jsonb(r["properties"])}) for r in rows],
+        items=[_reduced(r, reducers) for r in rows],
         total=total,
         limit=limit,
         offset=offset,
@@ -1387,7 +1429,8 @@ async def get_instance(
             conn, instance_store.store_for(conn), prefix, access.workspace_id,
             type_id, row,
         )
-    return InstanceOut(**{**row, "properties": _jsonb(row["properties"])})
+        reducers = await ontology_service.reducers_for(conn, type_id)
+    return _reduced(row, reducers)
 
 
 class ExplorerInstanceOut(InstanceOut):

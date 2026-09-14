@@ -1346,6 +1346,28 @@ export interface StructField {
   data_type: PropertyDataType;
 }
 
+/** One reducer on an array property (Foundry `object-link-types` p.131–133
+ * [Beta]; db 0088).
+ *
+ * The operation vocabulary is **per category** and deliberately not one
+ * max/min pair: p.132 gives numbers highest/lowest, dates latest/earliest,
+ * strings first/last (lexicographically) and booleans true-first/false-first.
+ * That is not decoration — `latest` means later in time and `last` means later
+ * in the alphabet, and an array of ISO timestamps compared as text answers the
+ * first question with the second one's method.
+ *
+ * Typed as `string` rather than a union for `StructField.data_type`'s reason:
+ * the server owns which operations go with which element type
+ * (`services/property_reducers.py`), and a second copy here would be free to
+ * disagree with the one that refuses. */
+export interface PropertyReducer {
+  operation: string;
+  /** Which struct field to reduce by, and null for every other element type.
+   * p.133: "Reducers function on struct arrays based on a specific field
+   * within the struct, not the struct itself." */
+  field: string | null;
+}
+
 /** A geopoint property's stored value (db 0029). Always lat,lon - see
  * property_values.py for why that order and not GeoJSON's lon,lat. */
 export interface GeoPoint {
@@ -1407,6 +1429,19 @@ export interface ObjectTypeProperty {
    * `StructField.data_type`'s reason — the server owns the list that refuses,
    * and a second copy here would be free to disagree with it. */
   array_of: PropertyDataType | null;
+  /** Ordered property reducers (Foundry `object-link-types` p.131–133 [Beta];
+   * db 0088). Null for every property that declares none, which is every
+   * non-array and most arrays.
+   *
+   * **Read-time only.** p.131: "Reduction does not change the underlying
+   * property type or property data stored; instead, it provides access to the
+   * reduced value in the array when reading the property value." So this says
+   * nothing about what `properties[name]` holds — the reduced value arrives
+   * beside it, in `ObjectInstance.reduced`.
+   *
+   * The order is p.133's: the first reducer picks, and the ones after it break
+   * the ties it leaves. */
+  reducers: PropertyReducer[] | null;
   /** The shared property this one inherits its metadata from (Foundry
    * `object-link-types` p.187–188), or null for an ordinary property.
    *
@@ -2273,6 +2308,23 @@ export interface ObjectInstance {
   id: string;
   primary_key: string;
   properties: Record<string, unknown>;
+  /** The reduced value of each array property that declares a reducer
+   * (Foundry `object-link-types` p.131–133; db 0088), keyed by property
+   * api_name — and **beside** `properties` rather than replacing anything in
+   * it, because p.131 keeps the full array accessible and has applications
+   * "view the complete array on hover or in expanded views".
+   *
+   * A property is **absent** rather than null when there is no reduced value,
+   * so `name in reduced` is the question.
+   *
+   * Optional because **not every read fills it in**, and the type should say
+   * so rather than let a page trust a field that is not always there. The two
+   * that do are the instance list and the single instance — p.131's "in a
+   * table", and the object's own page. `ExplorerInstance` is the read that
+   * does not and cannot: it spans object types, so there is no one set of
+   * declarations to reduce against, and it is assignable here exactly because
+   * this is optional. */
+  reduced?: Record<string, unknown>;
   updated_at: string;
 }
 
