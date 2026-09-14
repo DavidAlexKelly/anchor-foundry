@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
-from src.services import array_properties, property_values  # noqa: E402
+from src.services import array_properties, property_values, struct_fields  # noqa: E402
 from src.services import ontology as ontology_service  # noqa: E402
 
 ADDRESS = [
@@ -130,11 +130,55 @@ def test_the_element_types_are_foundrys_list_and_not_this_platforms() -> None:
     }
 
 
-def test_a_struct_element_needs_nothing_new_to_say() -> None:
-    """p.140 names "Struct Array" in as many words, and `struct_fields` already
+def test_a_struct_element_is_accepted_as_an_element_type() -> None:
+    """p.140 names "Struct Array" in as many words, and `struct_fields`
     describes the *element* rather than the property (db 0064) — which is why
-    the array type could carry it without a second column."""
+    the array type carries it without a second column."""
     assert parse("struct") == "struct"
+
+
+def test_an_array_of_structs_may_declare_the_elements_fields() -> None:
+    """**§346 said p.140 "needed nothing new" and it was wrong by one line.**
+
+    `struct_fields.parse` read the label alone, so it refused any non-`struct`
+    property carrying fields — and an array of structs could not be declared at
+    all. The claim came from `array_properties.parse` accepting `"struct"` as
+    an element type, which it does; nothing had declared one *through the API*,
+    and the test above cannot tell the two apart.
+
+    Found by the browser test that tried to render one (§347), which is the
+    layer that had to build the whole thing to ask its question.
+    """
+    assert struct_fields.parse(
+        ADDRESS, data_type="array", property_name="stops", array_of="struct",
+    ) == [
+        {"api_name": "street", "display_name": "street", "description": "",
+         "data_type": "string"},
+        {"api_name": "floors", "display_name": "floors", "description": "",
+         "data_type": "integer"},
+    ]
+
+
+def test_an_array_of_anything_else_still_cannot_have_struct_fields() -> None:
+    """The negative control, and the rule §346 was reaching for: fields on an
+    array of strings are a claim nothing reads, exactly as they are on a
+    string."""
+    with pytest.raises(struct_fields.StructFieldError,
+                       match="cannot have struct fields"):
+        struct_fields.parse(
+            ADDRESS, data_type="array", property_name="tags",
+            array_of="string",
+        )
+
+
+def test_an_array_of_structs_needs_at_least_one_field() -> None:
+    """p.149's rule reaches the element too: it is the element that is the
+    struct, and one with no fields is the same empty promise."""
+    with pytest.raises(struct_fields.StructFieldError,
+                       match="at least one field"):
+        struct_fields.parse(
+            None, data_type="array", property_name="stops", array_of="struct",
+        )
 
 
 # ---- the value (p.86) --------------------------------------------------------
@@ -257,6 +301,31 @@ def test_an_object_type_round_trips_an_array_property(
     assert code["array_of"] is None
 
 
+def test_an_object_type_round_trips_an_array_of_structs(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.140 through the API — the path that was broken, and the reason the
+    pure test above is not enough on its own."""
+    tag = uuid.uuid4().hex[:6]
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"stops_{tag}", "display_name": f"Stops {tag}",
+              "properties": [
+                  {"api_name": "code", "data_type": "string"},
+                  {"api_name": "stops", "data_type": "array",
+                   "array_of": "struct", "struct_fields": ADDRESS},
+              ],
+              "title_property": "code"},
+    )
+    assert r.status_code == 201, r.text
+    detail = client.get(
+        f"{wbase(fx)}/object-types/{r.json()['id']}", headers=hdr(fx.editor_sub)
+    ).json()
+    stops = next(p for p in detail["properties"] if p["api_name"] == "stops")
+    assert stops["array_of"] == "struct"
+    assert [f["api_name"] for f in stops["struct_fields"]] == ["street", "floors"]
+
+
 def test_an_array_property_with_no_element_type_is_refused_by_the_api(
     client: TestClient, fx: Fixture
 ) -> None:
@@ -327,6 +396,43 @@ def test_an_array_property_travels_through_an_ontology_file(
                           json={"document": document})
     assert planned.status_code == 200, planned.text
     assert f"exp_{tag}" in planned.json()["sections"]["object_types"]["unchanged"]
+
+
+# ---- the editor's list, against this one (§191) ------------------------------
+def test_the_editor_offers_every_element_type_it_can_complete() -> None:
+    """§190's drift guard, one type over (§347).
+
+    `array-property.ts` names what the dialog offers as an element type, and a
+    mirror goes stale — so it is compared against **the server's** list rather
+    than against a second copy of itself, which is the direction that catches
+    an addition rather than only a disagreement.
+
+    One is absent and it is the editor's own reason rather than this module's:
+    `attachment` needs an upload (§39) and the dialog has nowhere to put one,
+    which is also why it is missing from the property dropdown.
+    """
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(
+        os.path.join(root, "web", "src", "lib", "array-property.ts"),
+        encoding="utf-8",
+    ).read()
+    listed = re.search(
+        r"export const ELEMENT_TYPES: PropertyDataType\[\] = \[(.*?)\];",
+        source, re.S,
+    )
+    assert listed, "ELEMENT_TYPES not found - has array-property.ts moved?"
+    offered = set(re.findall(r'"([a-z_]+)"', listed.group(1)))
+    assert offered, "ELEMENT_TYPES parsed as empty"
+    assert array_properties.INNER_TYPES - offered == {"attachment"}, (
+        "an element type the server accepts and the editor does not offer has "
+        "to be named here with a reason"
+    )
+    assert not offered - array_properties.INNER_TYPES, (
+        f"the editor offers element types the server refuses: "
+        f"{sorted(offered - array_properties.INNER_TYPES)}"
+    )
 
 
 # ---- through a sync (the wiring, not the functions) --------------------------

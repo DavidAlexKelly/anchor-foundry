@@ -27,6 +27,10 @@ import { DerivedPropertyEditor } from "@/components/derived-property-editor";
 import { SharedPropertyPicker } from "@/components/shared-property-picker";
 import { StatusField } from "@/components/status-field";
 import { StructFieldsEditor } from "@/components/struct-fields-editor";
+import {
+  DEFAULT_ELEMENT, ELEMENT_TYPES, needsFields, structuresTheElement,
+  withDataType,
+} from "@/lib/array-property";
 import { ValueTypePicker } from "@/components/value-type-picker";
 import { ApiError, objects as objApi, type PropertyInput } from "@/lib/api";
 import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
@@ -58,7 +62,7 @@ import type {
 // that cannot work.
 export const PROPERTY_TYPES: PropertyDataType[] = [
   "string", "integer", "float", "boolean", "date", "timestamp", "geopoint", "json",
-  "struct",
+  "struct", "array",
 ];
 
 export const PROPERTY_VISIBILITIES: PropertyVisibility[] = ["normal", "prominent", "hidden"];
@@ -92,6 +96,7 @@ const CARRIED: { [K in keyof Required<PropertyInput>]: true } = {
   edit_only: true,
   derivation: true,
   struct_fields: true,
+  array_of: true,
   shared_property_id: true,
   value_type_id: true,
   status: true,
@@ -268,7 +273,11 @@ export function PropertyRows({
             aria-label={`Property ${index + 1} type`}
             onChange={(e) => {
               const next = [...properties];
-              next[index] = { ...prop, data_type: e.target.value as PropertyDataType };
+              // **Never `{...prop, data_type}`** (§347). db 0087 refuses a
+              // declaration that says only half of itself, and switching away
+              // from `array` without clearing `array_of` produces exactly that
+              // — silently, because the row still looks right.
+              next[index] = withDataType(prop, e.target.value as PropertyDataType);
               onChange(next);
             }}
           >
@@ -276,6 +285,30 @@ export function PropertyRows({
               <option key={t} value={t}>{t}</option>
             ))}
           </select>
+          {/* p.86's element type. **A select rather than a dialog**, unlike a
+              struct's fields: an array's declaration is one more choice, and a
+              dialog for one dropdown is a dialog nobody wants open. It is
+              beside the type for the same reason — the two together are one
+              sentence ("a list of dates"), and reading them apart is how a
+              half-written declaration gets saved. */}
+          {prop.data_type === "array" && (
+            <select
+              value={prop.array_of ?? DEFAULT_ELEMENT}
+              aria-label={`Property ${index + 1} element type`}
+              disabled={!!prop.shared_property_id}
+              onChange={(e) => {
+                const next = [...properties];
+                next[index] = {
+                  ...prop, array_of: e.target.value as PropertyDataType,
+                };
+                onChange(next);
+              }}
+            >
+              {ELEMENT_TYPES.map((t) => (
+                <option key={t} value={t}>of {t}</option>
+              ))}
+            </select>
+          )}
           {/* Visibility (Foundry `object-link-types` p.111): "an indication to
               user applications for how prominently to display the property".
               A display hint, never a permission — a hidden property is still
@@ -367,7 +400,12 @@ export function PropertyRows({
               is the only type whose declaration is *incomplete* without this
               dialog, so the count is not decoration — a struct showing no
               number is a property the server will refuse. */}
-          {prop.data_type === "struct" && (
+          {/* **And an array of structs is the same button** (§347; p.140's
+              "Struct Array"). db 0064's column holds the *element's* fields in
+              that case, which is what let the server carry a struct array
+              without a second column — so the dialog it opens is the same
+              dialog, about the same declaration. */}
+          {needsFields(prop) && (
             <button
               type="button"
               className="btn"

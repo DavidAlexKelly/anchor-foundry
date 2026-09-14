@@ -337,6 +337,7 @@ class Module:
         rules: dict[str, list[dict]] | None = None,
         descriptions: dict[str, str] | None = None,
         struct_fields: dict[str, list[dict]] | None = None,
+        array_of: dict[str, str] | None = None,
         slug: str | None = None,
     ) -> str:
         """Upload, declare, map and sync - the whole way an object type gets
@@ -408,6 +409,11 @@ class Module:
                         # `_coerce_struct` reads back.
                         **({"struct_fields": (struct_fields or {})[c]}
                            if c in (struct_fields or {}) else {}),
+                        # The element type of an `array` property (p.86; db
+                        # 0087). The CSV cell holds the list as JSON text, for
+                        # the same reason a struct's does.
+                        **({"array_of": (array_of or {})[c]}
+                           if c in (array_of or {}) else {}),
                     }
                     for c in columns
                 ],

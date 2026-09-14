@@ -75,7 +75,22 @@ class StructFieldError(ValueError):
     """A struct declaration that could not be stored."""
 
 
-def parse(value: Any, *, data_type: str, property_name: str) -> list[dict[str, Any]] | None:
+def _an(data_type: str) -> str:
+    """"a struct" or "an array" — the article the refusal above reads with.
+
+    Worth the three lines because the message is the whole point of the
+    refusal, and "is a array" is the kind of thing a reader stops on.
+    """
+    return f"an {data_type}" if data_type[:1] in "aeiou" else f"a {data_type}"
+
+
+def parse(
+    value: Any,
+    *,
+    data_type: str,
+    property_name: str,
+    array_of: str | None = None,
+) -> list[dict[str, Any]] | None:
     """Normalise and check one property's ``struct_fields``.
 
     Returns the stored form - an ordered list of
@@ -88,15 +103,29 @@ def parse(value: Any, *, data_type: str, property_name: str) -> list[dict[str, A
     on a `string` property is a claim nothing reads, and silently dropping it
     would leave somebody looking at a saved definition that does not contain
     what they typed.
+
+    **An array of structs is a struct declaration too** (§347; p.140's "Struct
+    Array"; db 0087). The fields describe the *element* in that case, which is
+    the same thing this column has always held — §346 said p.140 "needed
+    nothing new" and it was wrong by one line: this refusal read the label
+    alone, so an array of structs could not be declared at all. The claim was
+    written from `array_properties.parse` accepting `"struct"` as an element
+    type, which it does; nothing had declared one through the API. Found by the
+    test that tried to render one.
     """
-    if data_type != "struct":
+    if data_type != "struct" and not (
+        data_type == "array" and array_of == "struct"
+    ):
         if _stated(value):
             raise StructFieldError(
-                f"{property_name!r} is a {data_type} and cannot have struct fields"
+                f"{property_name!r} is {_an(data_type)} and cannot have struct "
+                "fields"
             )
         return None
     if not isinstance(value, list) or not value:
-        # p.149: "Structs must have at least 1 field."
+        # p.149: "Structs must have at least 1 field." An array of structs is
+        # held to it as well, because it is the element that is the struct and
+        # an element with no fields is the same empty promise.
         raise StructFieldError(
             f"struct property {property_name!r} needs at least one field"
         )

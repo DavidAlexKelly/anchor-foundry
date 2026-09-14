@@ -2846,6 +2846,14 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   color: var(--ink-soft); white-space: nowrap;
 }
 
+/* An array's elements (§347; `object-link-types` p.86). Wrapping rather than
+   scrolling, and for `struct-value`'s reason one rule up: a cell in a table of
+   objects cannot set its own height without setting every row's, and a list
+   that clipped would hide the element somebody is looking for. The elements
+   themselves reuse `.chip`, which is what every other list of short values on
+   this platform is already drawn as. */
+.array-value { display: inline-flex; flex-wrap: wrap; gap: 2px; align-items: baseline; }
+
 /* ---- the notification bell (§257; `action-types` p.91) --------------------
    Anchored to the app bar rather than to the page, because p.91 puts
    notifications in the Workspace: a person has one inbox across every
