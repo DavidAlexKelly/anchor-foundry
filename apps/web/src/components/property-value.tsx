@@ -244,6 +244,42 @@ export function PropertyValue({
       );
     }
   }
+  // An array, drawn as its elements (p.86; db 0087). Before this it fell
+  // through to `JSON.stringify` below, which shows a list of dates as
+  // `["2024-01-01","2024-02-01"]` — readable, and not what anybody declared a
+  // date array for.
+  //
+  // **`structFields` means the element's fields here**, which is the same
+  // thing db 0064's column holds for an array (p.140's "Struct Array") — so
+  // p.140 needed nothing new in this renderer either, and no third
+  // per-property prop was added. The docstring on `structFields` above says
+  // why that mattered: it is the threshold at which the three should collapse
+  // into one `property` prop instead.
+  //
+  // **Elements render untyped**, exactly as a struct's field values do a few
+  // lines down, so an array of dates shows its ISO strings. That is a real
+  // limitation and it is the *same* limitation, lifted by the same refactor
+  // rather than by a special case here.
+  if (dataType === "array" && Array.isArray(value)) {
+    if (value.length === 0) {
+      return <span style={{ ...paint, color: "var(--ink-soft)" }}>{emptyText}</span>;
+    }
+    return (
+      <span className="array-value" style={paint} data-testid="array-value">
+        {value.map((element, index) => (
+          <span key={index} className="chip" style={{ marginRight: 4 }}>
+            <PropertyValue
+              workspaceId={workspaceId}
+              dataType={element !== null && typeof element === "object"
+                ? "struct" : undefined}
+              structFields={structFields}
+              value={element}
+            />
+          </span>
+        ))}
+      </span>
+    );
+  }
   // A struct, read against what its property declares (p.149). p.59's whole
   // argument for the type is "semantic grouping" — an address is one concept,
   // not five properties — so it is drawn as its fields rather than as the JSON

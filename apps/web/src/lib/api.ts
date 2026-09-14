@@ -957,6 +957,11 @@ export interface PropertyInput {
    * Null for anything else, which the server refuses to store rather than
    * ignoring — a schema on a string property is a claim nothing reads. */
   struct_fields?: import("./types").StructField[] | null;
+  /** The element type of an `array` property (`object-link-types` p.86; db
+   * 0087). Null for anything else, which the server refuses to store rather
+   * than ignore — so it is sent explicitly on every save, and the editor's
+   * `withDataType` is what keeps the two halves agreeing. */
+  array_of?: import("./types").PropertyDataType | null;
   /** The value type constraining this property (`object-link-types` p.227).
    * Null detaches it, so it is sent explicitly rather than omitted. */
   value_type_id?: string | null;

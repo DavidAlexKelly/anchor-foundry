@@ -101,3 +101,40 @@ def pick_type(page, test_id: str, kind: dict) -> None:
         picker.locator(f'option[value="{kind["id"]}"]')
     ).to_be_attached(timeout=20000)
     picker.select_option(str(kind["id"]))
+
+
+def save_type(page) -> None:
+    """Save the object type dialog, acknowledging the impact when there is one.
+
+    **The wait is the whole point, and two copies of this helper were missing
+    it** (§347). The dialog asks the server what a property change would break,
+    and it disables Save while that question is in flight — so asking whether
+    the acknowledge checkbox is on the page, *before* the answer arrives, reads
+    "no" for a change that breaks something and then clicks a button that is
+    disabled. §318's trap: the absence of the checkbox means "not yet", not
+    "not needed", and nothing had waited on a positive signal first.
+
+    It bit when an array property joined the type dropdown, because retyping a
+    property is a breaking change (0028: a retype is a delete plus an insert)
+    and every consumer of the old property is a consumer of one that is gone.
+    `test_struct_fields_editor` had the same race and passed on timing.
+
+    The settled states are the two the button can be in: enabled and reading
+    *Save*, or reading *Save anyway* behind a tick. Waiting for either is what
+    makes the branch below a reading of the page rather than of the clock.
+    """
+    page.wait_for_function(
+        """() => {
+            const submit = document.querySelector('form button[type=submit]');
+            if (!submit) return false;
+            return !submit.disabled || submit.textContent.trim() === 'Save anyway';
+        }""",
+        timeout=30000,
+    )
+    acknowledge = page.get_by_role("checkbox", name="I understand, save it anyway")
+    if acknowledge.count():
+        acknowledge.check()
+        page.get_by_role("button", name="Save anyway").click()
+    else:
+        page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)

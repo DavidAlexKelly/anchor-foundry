@@ -329,6 +329,43 @@ def test_an_array_property_travels_through_an_ontology_file(
     assert f"exp_{tag}" in planned.json()["sections"]["object_types"]["unchanged"]
 
 
+# ---- the editor's list, against this one (§191) ------------------------------
+def test_the_editor_offers_every_element_type_it_can_complete() -> None:
+    """§190's drift guard, one type over (§347).
+
+    `array-property.ts` names what the dialog offers as an element type, and a
+    mirror goes stale — so it is compared against **the server's** list rather
+    than against a second copy of itself, which is the direction that catches
+    an addition rather than only a disagreement.
+
+    One is absent and it is the editor's own reason rather than this module's:
+    `attachment` needs an upload (§39) and the dialog has nowhere to put one,
+    which is also why it is missing from the property dropdown.
+    """
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(
+        os.path.join(root, "web", "src", "lib", "array-property.ts"),
+        encoding="utf-8",
+    ).read()
+    listed = re.search(
+        r"export const ELEMENT_TYPES: PropertyDataType\[\] = \[(.*?)\];",
+        source, re.S,
+    )
+    assert listed, "ELEMENT_TYPES not found - has array-property.ts moved?"
+    offered = set(re.findall(r'"([a-z_]+)"', listed.group(1)))
+    assert offered, "ELEMENT_TYPES parsed as empty"
+    assert array_properties.INNER_TYPES - offered == {"attachment"}, (
+        "an element type the server accepts and the editor does not offer has "
+        "to be named here with a reason"
+    )
+    assert not offered - array_properties.INNER_TYPES, (
+        f"the editor offers element types the server refuses: "
+        f"{sorted(offered - array_properties.INNER_TYPES)}"
+    )
+
+
 # ---- through a sync (the wiring, not the functions) --------------------------
 #: A list column as a CSV cell: JSON text, which is exactly what `column_value`
 #: writes back and `_coerce_array` reads — so this is the same round trip a

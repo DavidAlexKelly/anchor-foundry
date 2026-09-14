@@ -66,7 +66,25 @@ export function toPropertyApiName(display: string): string {
  * Deliberately a subtraction from `PROPERTY_TYPES` rather than a list of its
  * own: a base type added there should appear here the same day unless somebody
  * writes down why not. */
-export const NOT_INTERFACE_TYPES: string[] = ["struct"];
+export const NOT_INTERFACE_TYPES: string[] = [
+  "struct",
+  /** **p.132, and it is a rule about reducers rather than about arrays.**
+   *
+   * > "Array properties require non-array types to satisfactorily implement
+   * > interface properties." (`object-link-types` p.132)
+   *
+   * The sentence sits in the property-reducers section: an array implements an
+   * interface property by *reducing* to a non-array value — highest, most
+   * recent, first lexicographically (p.132-133's table). This platform has no
+   * reducers, so there is nothing for an array to reduce *to*, and offering
+   * one here would be offering an implementation that cannot be satisfied.
+   *
+   * Named the day the editor started offering the type at all (§347), because
+   * until then it was absent from this dropdown for the unrelated reason that
+   * it was absent from every dropdown. The reducers row in
+   * `docs/parity/ontology.md` is the ○ that lifts this. */
+  "array",
+];
 
 export function interfacePropertyTypes(
   all: PropertyDataType[],

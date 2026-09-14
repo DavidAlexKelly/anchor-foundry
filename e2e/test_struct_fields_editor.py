@@ -27,7 +27,7 @@ from playwright.sync_api import expect
 
 from api import Module
 from conftest import WEB_BASE, eventually
-from ontology_page import find_type_row
+from ontology_page import find_type_row, save_type
 
 ADDRESS = json.dumps({"street": "12 Main St", "postal_code": "N1 9GU", "floors": "3"})
 CONTACT = json.dumps({"name": "A. Nother", "phone": "020 7946 0000"})
@@ -78,25 +78,6 @@ def open_type_editor(page, module) -> None:
     row = find_type_row(page, f"seed_{module.tag}")
     row.get_by_role("button", name="Edit").click()
     expect(page.get_by_role("textbox", name="Property 1 name")).to_be_visible()
-
-
-def save_type(page) -> None:
-    """Save the object type, acknowledging the impact when there is one.
-
-    **Converting a property to a struct is a breaking change and the platform
-    says so**, which is worth stating rather than working around: a retype is a
-    delete plus an insert (0028), so every consumer of the old string property
-    is a consumer of a property that no longer exists. The dialog turns Save
-    into *Save anyway* behind an explicit tick, and this helper does what a
-    person would.
-    """
-    acknowledge = page.get_by_role("checkbox", name="I understand, save it anyway")
-    if acknowledge.count():
-        acknowledge.check()
-        page.get_by_role("button", name="Save anyway").click()
-    else:
-        page.get_by_role("button", name="Save", exact=True).click()
-    expect(page.get_by_role("dialog")).to_have_count(0)
 
 
 def property_row(page, api_name: str) -> int:
