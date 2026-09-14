@@ -29,6 +29,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from . import action_rule_transfer as rule_transfer
 from . import ontology as ontology_service
 from .ontology_export import FORMAT_VERSION, export_ontology
 
@@ -79,6 +80,11 @@ def check_references(document: dict[str, Any]) -> None:
     ontology; this platform's formatting is inline and names sibling properties,
     so the equivalent failure is a rule — or a link, or an action — naming
     something the document does not carry.
+
+    **Not all of p.67, and `check_outside_ontology` is the rest** (§343). This
+    one is pure over the document and asks whether the file is self-consistent;
+    that one asks whether a reference can survive the journey at all, which
+    needs to know where the file is going.
 
     Checked before anything is written, because a half-applied import is worse
     than a refused one: p.138's reasoning about batches, applied to a file.
@@ -150,6 +156,68 @@ def check_references(document: dict[str, Any]) -> None:
                     f"{where} names the {kind} {named!r}, which the file does "
                     "not define",
                 )
+        # **And so does a rule** (§343). p.75's rules name the object type they
+        # create, change or delete and the link type they write or clear, and a
+        # notify rule names the type it reads a recipient off — six fields that
+        # held a uuid until this unit and are api_names now. Same rule as the
+        # dropdown above, one table over.
+        for order, rule in enumerate(action.get("rules") or [], start=1):
+            where = f"{action.get('object_type')}.{action.get('api_name')} " \
+                    f"rule {order}"
+            for named, kind in rule_transfer.references(rule):
+                _require(
+                    named in (types if kind == "object type" else links),
+                    f"{where} names the {kind} {named!r}, which the file does "
+                    "not define",
+                )
+
+
+def check_outside_ontology(document: dict[str, Any]) -> None:
+    """p.67's refusal, for the file that is going somewhere else (§343).
+
+        "If you receive the error `OntologyMetadata:UnreferencedRuleSets`, you
+         are trying to import an Ontology working state with conditional
+         formatting rules that are not defined in that Ontology and cannot be
+         transferred over. You will need to delete the … rules from the Ontology
+         working state before importing." (p.67)
+
+        "An exported Ontology working state with conditional formatting rules
+         configured on its properties cannot be imported to an Ontology other
+         than the one it was exported from." (p.67)
+
+    **§326 recorded that this refusal had no cause here, and that was right
+    about formatting and wrong about the class.** This platform's conditional
+    formatting is inline jsonb naming sibling properties, so it is
+    self-contained and p.67's own example genuinely cannot happen. What can is
+    the thing p.67 is *about*: a rule referring to something the ontology does
+    not contain. A webhook rule names a webhook, which is scoped to a workspace
+    and a project; a static notify rule names people, who are scoped to an
+    organisation. Neither is in the file and neither can be, so the file cannot
+    build them somewhere else.
+
+    **Only for a copy, which is the other half of p.67's sentence** — "other
+    than the one it was exported from". A round trip is putting the ontology
+    back where those ids already mean what they say, and refusing it would be
+    refusing p.65's first workflow for a reason that does not apply to it.
+
+    The remedy is p.67's remedy: the message names the action and the rule, so
+    the sentence somebody can act on is "delete this rule from the file".
+    """
+    reaching: list[str] = []
+    for action in document["action_types"]:
+        for order, rule in enumerate(action.get("rules") or [], start=1):
+            for what in rule_transfer.outside_ontology(rule):
+                reaching.append(
+                    f"{action.get('object_type')}.{action.get('api_name')} "
+                    f"rule {order} names {what}"
+                )
+    _require(
+        not reaching,
+        "this file came from a different ontology and carries rules that "
+        "reach outside it: " + "; ".join(reaching) + ". Those references "
+        "cannot be transferred over — delete the rules from the file, or "
+        "import it into the workspace it was exported from (p.67)",
+    )
 
 
 def _parameter_references(parameter: dict[str, Any]):
@@ -238,6 +306,13 @@ async def plan(
     read_document(document)
     check_references(document)
     current = await export_ontology(conn, workspace_id)
+    round_trip = (document.get("workspace") or {}).get("id") == current[
+        "workspace"
+    ]["id"]
+    # p.67's refusal, which needs the one fact `check_references` cannot have:
+    # whether this file is going back where it came from (§343).
+    if not round_trip:
+        check_outside_ontology(document)
 
     def named(section: str) -> "Any":
         """How this section's rows are keyed, and for actions it is a pair.
@@ -288,9 +363,9 @@ async def plan(
         #: p.65's two workflows, told apart by the one fact the file carries
         #: about its origin. A round-trip and a copy want different things read
         #: of the same plan: "nothing changed" is reassuring for one and
-        #: suspicious for the other.
-        "is_round_trip": (document.get("workspace") or {}).get("id")
-        == current["workspace"]["id"],
+        #: suspicious for the other. It is also what p.67's refusal turns on,
+        #: which is why it is computed above rather than here (§343).
+        "is_round_trip": round_trip,
         "sections": sections,
         "changes": sum(
             len(s["added"]) + len(s["changed"]) for s in sections.values()

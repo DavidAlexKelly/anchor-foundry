@@ -564,6 +564,180 @@ def test_a_parameter_naming_what_the_file_does_define_is_accepted(
     assert accepted.status_code == 200, accepted.text
 
 
+# ---- what a rule names (§343) ---------------------------------------------------
+def an_action_ruled(tag: str, *rules: dict) -> dict:
+    return {"api_name": f"act_{tag}", "display_name": "Act",
+            "object_type": f"imp_{tag}", "criteria": [], "parameters": [],
+            "rules": [{"kind": k, "config": c, "sort_order": i}
+                      for i, (k, c) in enumerate(rules)]}
+
+
+def test_a_rule_naming_a_type_the_file_does_not_define_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The same rule as a parameter's dropdown, one table over** (§343).
+
+    p.75's object rules name the type they create, change or delete, and that
+    name was a uuid in the file until this unit — so nothing checked it and
+    nothing could.
+    """
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [an_action_ruled(
+        tag, ("create_object", {"object_type": "nowhere",
+                                "primary_key": "name"}))]
+    refused = plan(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    assert "nowhere" in refused.text and "object type" in refused.text
+    # Named by its position, because a rule has no name of its own.
+    assert f"imp_{tag}.act_{tag} rule 1" in refused.text
+
+
+def test_a_rule_naming_a_link_the_file_does_not_define_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """Asserted apart from the type above so neither covers for the other —
+    they are two tables in `action_rule_transfer` and a check reading only one
+    of them passes the other's test."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [an_action_ruled(
+        tag, ("create_link", {"link_type": "no_such_link", "object": "who"}))]
+    refused = plan(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    assert "no_such_link" in refused.text and "link type" in refused.text
+
+
+def test_a_notify_rules_recipient_type_is_checked_too(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.96's object-property recipient names its type one level deeper than
+    the five beside it, which is exactly the shape a check written as a flat
+    scan of `config` would miss."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [an_action_ruled(tag, ("notify", {
+        "recipients": {"kind": "object_property", "parameter": "who",
+                       "object_type": "nowhere", "property": "owner_id"},
+        "subject": "Hi"}))]
+    refused = plan(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    assert "nowhere" in refused.text and "object type" in refused.text
+
+
+def test_a_rule_naming_what_the_file_does_define_is_accepted(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The negative control**, without which every assertion above passes for
+    a build that refuses any action carrying a rule at all."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag), one_type(tag, api_name=f"imp_{tag}b"))
+    document["link_types"] = [a_link(tag)]
+    document["action_types"] = [an_action_ruled(
+        tag,
+        ("modify_object", {"object_type": f"imp_{tag}b", "object": "who",
+                           "property": "name", "parameter": "name"}),
+        ("create_link", {"link_type": f"lnk_{tag}", "object": "who"}),
+    )]
+    accepted = plan(client, fx, document)
+    assert accepted.status_code == 200, accepted.text
+
+
+# ---- p.67's refusal, which turns out to have a cause here (§343) ----------------
+def a_rule_reaching_outside(kind: str) -> tuple[str, dict]:
+    if kind == "webhook":
+        return ("webhook", {"webhook": str(uuid.uuid4()), "mode": "writeback"})
+    return ("notify", {"recipients": {"kind": "static",
+                                      "user_ids": [str(uuid.uuid4())]},
+                       "subject": "Hi"})
+
+
+@pytest.mark.parametrize("kind", ["webhook", "notify"])
+def test_a_copy_carrying_a_rule_that_reaches_outside_is_refused(
+    client: TestClient, fx: Fixture, kind: str
+) -> None:
+    """**p.67, for the class §326 said had no cause here.**
+
+        "An exported Ontology working state with conditional formatting rules
+         configured on its properties cannot be imported to an Ontology other
+         than the one it was exported from." (p.67)
+
+    That reading was right about formatting — this platform's is inline jsonb
+    naming sibling properties, so p.67's own example genuinely cannot happen —
+    and wrong about the class. A webhook rule names a webhook, scoped to a
+    workspace and a project; a static notify rule names people, scoped to an
+    organisation. Neither is in the file and neither can be.
+
+    Both kinds are asserted, because a refusal reading one of them would leave
+    the other silently importable into a workspace where it means nothing.
+    """
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag),
+                      origin={"id": str(uuid.uuid4()), "slug": "elsewhere",
+                              "name": "Elsewhere"})
+    document["action_types"] = [an_action_ruled(
+        tag, a_rule_reaching_outside(kind))]
+    refused = plan(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    # p.67's own remedy: the sentence names the rule to delete from the file.
+    assert f"imp_{tag}.act_{tag} rule 1" in refused.text
+    assert "cannot be transferred over" in refused.text
+
+
+@pytest.mark.parametrize("kind", ["webhook", "notify"])
+def test_the_same_file_going_back_where_it_came_from_is_not_refused(
+    client: TestClient, fx: Fixture, kind: str
+) -> None:
+    """**The other half of p.67's sentence**: "other than the one it was
+    exported from".
+
+    A round trip is putting the ontology back where those ids already mean what
+    they say, so refusing it would be refusing p.65's first workflow for a
+    reason that does not apply to it — and this is what tells the check apart
+    from one that simply refuses every webhook and every notification.
+    """
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [an_action_ruled(
+        tag, a_rule_reaching_outside(kind))]
+    accepted = plan(client, fx, document)
+    assert accepted.status_code == 200, accepted.text
+
+
+def test_a_hand_edited_rule_that_is_not_an_object_is_not_a_server_fault(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.65's premise is somebody editing this JSON in a text editor, and both
+    of §343's readers run over every rule in the document — so a `config` that
+    is a string would turn a typo into a 500 with nothing in it. §340 shipped
+    exactly that defect for a link's missing `cardinality`; this is the same
+    mistake, refused in advance."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [an_action_ruled(
+        tag, ("create_link", "link_type: no_such_link"))]
+    read = plan(client, fx, document)
+    assert read.status_code == 200, read.text
+
+
+def test_a_copy_whose_notify_rule_reads_a_property_is_not_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.96's other recipient kind names an object type and a property, both of
+    which are in the file. Without this, a refusal that stopped every `notify`
+    rule from being copied would pass the two above."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag),
+                      origin={"id": str(uuid.uuid4()), "slug": "elsewhere",
+                              "name": "Elsewhere"})
+    document["action_types"] = [an_action_ruled(tag, ("notify", {
+        "recipients": {"kind": "object_property", "parameter": "who",
+                       "object_type": f"imp_{tag}", "property": "name"},
+        "subject": "Hi"}))]
+    accepted = plan(client, fx, document)
+    assert accepted.status_code == 200, accepted.text
+
+
 # ---- p.65's link types, applied (§340) -----------------------------------------
 def a_link(tag: str, **over) -> dict:
     """A link from the file's first type to its second, joined on `name`."""
