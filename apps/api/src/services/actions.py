@@ -1372,6 +1372,9 @@ async def create_shell_action_type(
     """
     if not _API_NAME_RE.match(api_name):
         raise ValueError(f"invalid action api_name {api_name!r}")
+    # db 0013's own check, asked here so a hand-edited ontology file meets a
+    # sentence rather than an integrity error (§345).
+    display_name = check_display_name(display_name)
     # p.253 gives an action a status like every other ontological resource, and
     # p.255 names action types in the list `promoted` does not apply to.
     ontology_status.check_status(status, kind="action type")
@@ -1516,34 +1519,68 @@ async def create_action_type(
     }
 
 
+def check_display_name(display_name: Any) -> str:
+    """p.7's "Enter a Display name for your action type", as a refusal.
+
+    **The column's own rule, asked before the column asks it** (§345). db 0013
+    checks `length(display_name) BETWEEN 1 AND 200`, and a constraint fires as
+    an integrity error — a 500 with nothing in it about which field is wrong.
+    The route's schema says the same thing for a request; this is the path an
+    ontology file takes, and p.65's premise is that somebody edited that file in
+    a text editor.
+    """
+    text_value = str(display_name or "").strip()
+    if not 1 <= len(text_value) <= 200:
+        raise ValueError(
+            "an action type's display name is between 1 and 200 characters "
+            f"(given {len(text_value)})"
+        )
+    return text_value
+
+
 async def rename_action_type(
     conn: AsyncConnection,
     workspace_id: UUID,
     action_type_id: UUID,
     *,
-    display_name: str,
-    description: str,
+    display_name: str | None = None,
+    description: str | None = None,
 ) -> None:
-    """What an action is *called*, which nothing else in this build writes.
+    """p.7's Overview tab: what an action is *called* (§344, §345).
 
-    **Found by §344, and it is a gap rather than a feature.** p.30's screen sets
-    an action's display name when it is created and no screen changes it
-    afterwards: `set_definition` writes what the action does, `set_action_status`
-    writes how much to rely on it, and the PATCH route covers neither. So an
-    ontology file that renamed an action had its rename silently dropped — the
-    import reported the action as updated and the name stayed as it was, which
-    is §214's control that looks like it works.
+        "Enter a **Display name** for your action type." (p.7)
 
-    Here rather than in `ontology_import` because `action_types` is this
-    module's table. Not a route: the ○ is that there is no screen for renaming
-    an action, and adding an endpoint with nothing on the other end of it would
-    be answering a question nobody has asked yet.
+        "You can now see the full detailed view of your action type. You can
+         make additional adjustments, like **adding a Description in the
+         Overview tab**…" (p.7)
+
+    **Found by §344, and it was a gap rather than a feature.** The creation
+    wizard set both and nothing changed them afterwards: `set_definition` writes
+    what the action does, `set_action_status` writes how much to rely on it, and
+    the PATCH route covered neither. An ontology file that renamed an action had
+    its rename silently dropped while the import reported the action as updated,
+    which is §214's control that looks like it works.
+
+    **Omitted means unchanged**, like every other field on that PATCH (§170),
+    and `COALESCE` rather than a read-then-write so a rename is one statement
+    and cannot race a concurrent description edit. An empty description is a
+    real value and clears the field; it is `None` that means "leave it".
+
+    **It does not raise for an action that is not there, and a sweep is why**
+    (§213). The first draft did, with `RETURNING id`; deleting that raise killed
+    no test, because both callers read the action afterwards — the route through
+    `set_action_status`, which is what returns it, and the import through a map
+    it built from `action_types` a moment earlier. A second 404 that can only
+    ever agree with the first is a branch nothing can hold to account.
     """
+    if display_name is not None:
+        display_name = check_display_name(display_name)
     await conn.execute(
         text(
             """
             UPDATE action_types
-               SET display_name = :name, description = :descr
+               SET display_name = COALESCE(:name, display_name),
+                   description = COALESCE(:descr, description)
              WHERE id = :aid AND workspace_id = :wid
             """
         ),

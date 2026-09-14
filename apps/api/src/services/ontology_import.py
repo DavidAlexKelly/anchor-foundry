@@ -649,8 +649,7 @@ async def _apply_actions(
             # it as updated — §214's control that looks like it works.
             await actions_service.rename_action_type(
                 conn, workspace_id, action_type_id,
-                display_name=action.get("display_name")
-                or str(action["api_name"]),
+                display_name=action.get("display_name"),
                 description=action.get("description") or "",
             )
             updated.append(where)
@@ -660,7 +659,15 @@ async def _apply_actions(
                 workspace_id=workspace_id,
                 object_type_id=UUID(type_ids[str(action["object_type"])]),
                 api_name=str(action["api_name"]),
-                display_name=action.get("display_name") or str(action["api_name"]),
+                # **Not defaulted to the api_name**, which is what the first
+                # draft did and a sweep found unreachable (§345). p.65's
+                # premise is a hand-edited file, and a display name somebody
+                # deleted has to come back as a sentence about *that key* —
+                # inventing one puts an action into the ontology under a name
+                # nobody chose, and db 0013 refuses an empty one anyway, as a
+                # 500 with nothing in it. Same correction §340 made for a
+                # link's missing `cardinality`.
+                display_name=action.get("display_name"),
                 description=action.get("description") or "",
                 created_by=actor_id,
             )

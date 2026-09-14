@@ -233,15 +233,28 @@ class ActionTypeCreate(BaseModel):
     deprecation: dict[str, Any] | None = None
 
 
-class ActionStatusUpdate(BaseModel):
-    """p.256's status dropdown, for an action type.
+class ActionTypeUpdate(BaseModel):
+    """What an action *is*, rather than what it does: p.7's Overview tab and
+    p.256's status dropdown.
 
-    **Both fields optional, and omitted means unchanged** - §170's rule. This
-    is the only endpoint that writes an action's status, so treating a missing
-    field as the documented default for a *new* resource would demote an
-    action every time a client that predates statuses touched it.
+    **Every field optional, and omitted means unchanged** - §170's rule. The
+    status half is the only endpoint that writes an action's status, so treating
+    a missing field as the documented default for a *new* resource would demote
+    an action every time a client that predates statuses touched it.
+
+    **The name joins the status rather than the definition PUT** (§345), for the
+    reason that PUT's own docstring gives: its body is the action's parameters,
+    rules and criteria — what the action *does* — and folding a rename into it
+    would make every rule edit a rename. p.7 puts the display name in the
+    creation wizard and the description in the Overview tab, and both are
+    statements about the action.
     """
 
+    #: p.7's "Enter a Display name for your action type", after creation.
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    #: p.7's "adding a Description in the Overview tab". An empty string is a
+    #: real value here and clears it; `None` is what means "leave it alone".
+    description: str | None = Field(default=None, max_length=2000)
     status: str | None = None
     deprecation: dict[str, Any] | None = None
     #: p.154's "Allow revert after action submission" toggle, which sits beside
@@ -436,19 +449,50 @@ async def get_action_type(
 
 
 @router.patch("/action-types/{action_type_id}", response_model=ActionTypeOut)
-async def set_action_status(
+async def update_action_type(
     action_type_id: UUID,
-    body: ActionStatusUpdate,
+    body: ActionTypeUpdate,
     request: Request,
     access: WorkspaceAccess = Depends(require_workspace_role("editor")),
 ) -> ActionTypeOut:
-    """p.256's status dropdown (`object-link-types` p.253-256).
+    """p.7's Overview tab and p.256's status dropdown (`object-link-types`
+    p.253-256).
 
     Separate from the definition PUT because that body is what the action
-    *does*; a status is a statement about how much anyone should rely on it,
-    and folding one into the other would make every rule edit a status write.
+    *does*; a status is a statement about how much anyone should rely on it and
+    a name is what it is called, and folding either into the definition would
+    make every rule edit write them too.
+
+    **Two audit entries rather than one**, when a request carries both: they are
+    different decisions with different readers, and an `action_type.status` row
+    that quietly also meant a rename would make the log worse than no log
+    (§345). A request that changes neither writes neither.
     """
     async with user_connection(access.auth.user_id) as conn:
+        named = body.display_name is not None or body.description is not None
+        if named:
+            await actions_service.rename_action_type(
+                conn,
+                access.workspace_id,
+                action_type_id,
+                display_name=body.display_name,
+                description=body.description,
+            )
+            await audit.record(
+                conn,
+                organisation_id=access.auth.organisation_id,
+                user_id=access.auth.user_id,
+                action="action_type.rename",
+                resource_type="action_type",
+                resource_id=action_type_id,
+                workspace_id=access.workspace_id,
+                metadata={"display_name": body.display_name},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+        # **Always called, even when only the name changed**, because it is also
+        # the read that returns the action — and its own rule is that an omitted
+        # field is unchanged, so a name-only request writes no status.
         row = await actions_service.set_action_status(
             conn,
             access.workspace_id,
@@ -457,18 +501,20 @@ async def set_action_status(
             deprecation=body.deprecation,
             allow_revert=body.allow_revert,
         )
-        await audit.record(
-            conn,
-            organisation_id=access.auth.organisation_id,
-            user_id=access.auth.user_id,
-            action="action_type.status",
-            resource_type="action_type",
-            resource_id=action_type_id,
-            workspace_id=access.workspace_id,
-            metadata={"status": row["status"]},
-            ip_address=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
-        )
+        if body.status is not None or body.deprecation is not None \
+                or body.allow_revert is not None:
+            await audit.record(
+                conn,
+                organisation_id=access.auth.organisation_id,
+                user_id=access.auth.user_id,
+                action="action_type.status",
+                resource_type="action_type",
+                resource_id=action_type_id,
+                workspace_id=access.workspace_id,
+                metadata={"status": row["status"]},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
     return _action_type_out(row)
 
 

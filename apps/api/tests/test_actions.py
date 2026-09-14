@@ -313,6 +313,125 @@ def test_an_action_on_a_type_that_is_not_there_is_a_404(
     assert r.status_code == 404, r.text
 
 
+# ---- p.7's Overview tab (§345) --------------------------------------------------
+@pytest.fixture
+def renameable(client: TestClient, fx: Fixture, customer_type_id: str) -> str:
+    """An action of this test's own, because these tests rename it."""
+    r = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": customer_type_id,
+              "api_name": f"named_{uuid.uuid4().hex[:8]}",
+              "display_name": "Before", "description": "The old description",
+              "editable_properties": ["name"]},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def patch(client: TestClient, fx: Fixture, action_id: str, body: dict):
+    return client.patch(f"{wbase(fx)}/action-types/{action_id}",
+                        headers=hdr(fx.editor_sub), json=body)
+
+
+def test_an_action_can_be_renamed_after_it_is_created(
+    client: TestClient, fx: Fixture, renameable: str
+) -> None:
+    """**The gap §344 found, closed from the screen's side.**
+
+        "Enter a Display name for your action type." (p.7)
+
+        "You can make additional adjustments, like adding a Description in the
+         Overview tab." (p.7)
+
+    Until §345 the creation wizard set both and nothing changed them: an
+    ontology import could rename an action and a person could not.
+    """
+    r = patch(client, fx, renameable, {"display_name": "After",
+                                       "description": "The new one"})
+    assert r.status_code == 200, r.text
+    assert r.json()["display_name"] == "After"
+    assert r.json()["description"] == "The new one"
+
+
+def test_renaming_leaves_the_api_name_and_the_status_alone(
+    client: TestClient, fx: Fixture, renameable: str
+) -> None:
+    """**Omitted means unchanged** (§170), and the api_name is not on this body
+    at all: it is what every saved Workshop module and every ontology file names
+    the action by, so changing it is a different operation."""
+    before = client.get(f"{wbase(fx)}/action-types/{renameable}",
+                        headers=hdr(fx.editor_sub)).json()
+    assert patch(client, fx, renameable, {"status": "active"}).status_code == 200
+    r = patch(client, fx, renameable, {"display_name": "Renamed once"})
+    assert r.status_code == 200, r.text
+    assert r.json()["api_name"] == before["api_name"]
+    assert r.json()["status"] == "active"
+    assert r.json()["description"] == before["description"]
+
+
+def test_an_emptied_description_is_cleared_rather_than_ignored(
+    client: TestClient, fx: Fixture, renameable: str
+) -> None:
+    """The one case "omitted means unchanged" has to be told apart from: `""`
+    is a real value, and `null` is what means leave it. A description that
+    could be written and never removed would be a field with a one-way door."""
+    r = patch(client, fx, renameable, {"description": ""})
+    assert r.status_code == 200, r.text
+    assert r.json()["description"] == ""
+
+
+def test_a_name_the_column_would_refuse_is_refused_by_name(
+    client: TestClient, fx: Fixture, renameable: str
+) -> None:
+    """db 0013 checks `length(display_name) BETWEEN 1 AND 200`, and a
+    constraint fires as an integrity error — a 500 with nothing in it about
+    which field is wrong."""
+    assert patch(client, fx, renameable,
+                 {"display_name": ""}).status_code == 422
+    assert patch(client, fx, renameable,
+                 {"display_name": "x" * 201}).status_code == 422
+    # And the action is untouched, which is what makes the refusal a refusal.
+    got = client.get(f"{wbase(fx)}/action-types/{renameable}",
+                     headers=hdr(fx.editor_sub)).json()
+    assert got["display_name"] == "Before"
+
+
+def test_a_viewer_cannot_rename_an_action(
+    client: TestClient, fx: Fixture, renameable: str
+) -> None:
+    r = client.patch(f"{wbase(fx)}/action-types/{renameable}",
+                     headers=hdr(fx.viewer_sub),
+                     json={"display_name": "Not allowed"})
+    assert r.status_code == 403
+
+
+def test_a_rename_and_a_status_change_are_audited_apart(
+    client: TestClient, fx: Fixture, renameable: str
+) -> None:
+    """**Two entries, because they are two decisions with different readers**
+    (§345). An `action_type.status` row that quietly also meant a rename would
+    make the log worse than no log — and a rename with no row at all is a
+    change to what everybody sees, made by nobody."""
+    assert patch(client, fx, renameable,
+                 {"display_name": "Audited"}).status_code == 200
+    entries = client.get("/api/org/audit?limit=200",
+                         headers=hdr(fx.admin_sub)).json()
+    def logged() -> set[str]:
+        rows = client.get("/api/org/audit?limit=200",
+                          headers=hdr(fx.admin_sub)).json()
+        return {e["action"] for e in rows
+                if str(e.get("resource_id")) == renameable}
+
+    # The rename is there, and — the half that discriminates — the status is
+    # not: a PATCH that changed no status must not say one changed.
+    assert logged() == {"action_type.create", "action_type.rename"}
+
+    assert patch(client, fx, renameable,
+                 {"status": "active"}).status_code == 200
+    assert logged() == {"action_type.create", "action_type.rename",
+                        "action_type.status"}
+
+
 def test_actions_audited(client: TestClient, fx: Fixture) -> None:
     r = client.get("/api/org/audit?limit=200", headers=hdr(fx.admin_sub))
     actions = {e["action"] for e in r.json()}
