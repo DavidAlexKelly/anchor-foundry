@@ -17,6 +17,7 @@ paths agreeing about what an element may be.
 """
 from __future__ import annotations
 
+import io
 import os
 import sys
 import uuid
@@ -326,6 +327,86 @@ def test_an_array_property_travels_through_an_ontology_file(
                           json={"document": document})
     assert planned.status_code == 200, planned.text
     assert f"exp_{tag}" in planned.json()["sections"]["object_types"]["unchanged"]
+
+
+# ---- through a sync (the wiring, not the functions) --------------------------
+#: A list column as a CSV cell: JSON text, which is exactly what `column_value`
+#: writes back and `_coerce_array` reads — so this is the same round trip a
+#: write-back takes, arriving from the direction a real dataset does.
+TAGGED = (
+    b"key,tags,counts\n"
+    b'T1,"[""alpha"",""beta""]","[""1"",""2""]"\n'
+)
+
+
+def test_a_sync_reads_an_array_column_against_its_element_type(
+    client: TestClient, fx: Fixture, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """**The wiring, which the functions above cannot speak for.**
+
+    `coerce_rows` is tested directly and `field_for` is tested directly; what
+    neither says is whether the *route* builds the element-type map and hands
+    it over. A sweep found both halves of that unguarded — and the same gap has
+    been open for `struct_fields` since §245, because that unit tested
+    `coerce_rows` directly too.
+
+    An integer element rather than a string, for the reason the mapping test
+    now states: `string` is what an unread declaration falls back to, so an
+    array of strings would look identical either way.
+    """
+    from src.routes import datasets as ds_routes
+    from src.services.storage import LocalStorageGateway
+
+    ds_routes.configure_storage_gateway(
+        LocalStorageGateway(str(tmp_path_factory.mktemp("array-storage")))
+    )
+    tag = uuid.uuid4().hex[:6]
+    dataset = client.post(
+        f"{wbase(fx)}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub), data={"name": f"Tagged {tag}"},
+        files={"file": ("tagged.csv", io.BytesIO(TAGGED), "text/csv")},
+    )
+    assert dataset.status_code == 201, dataset.text
+
+    made = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"synced_{tag}", "display_name": f"Synced {tag}",
+              "properties": [
+                  {"api_name": "key", "data_type": "string"},
+                  {"api_name": "tags", "data_type": "array",
+                   "array_of": "string"},
+                  {"api_name": "counts", "data_type": "array",
+                   "array_of": "integer"},
+              ],
+              "title_property": "key"},
+    )
+    assert made.status_code == 201, made.text
+    type_id = made.json()["id"]
+
+    source = client.post(
+        f"{wbase(fx)}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={"object_type_id": type_id, "dataset_id": dataset.json()["id"],
+              "primary_key_column": "key",
+              "column_mappings": {"key": "key", "tags": "tags",
+                                  "counts": "counts"}},
+    )
+    assert source.status_code == 201, source.text
+    synced = client.post(
+        f"{wbase(fx)}/projects/{fx.project}/object-type-sources/"
+        f"{source.json()['id']}/sync",
+        headers=hdr(fx.editor_sub),
+    )
+    assert synced.status_code == 200, synced.text
+
+    listed = client.get(f"{wbase(fx)}/object-types/{type_id}/instances",
+                        headers=hdr(fx.viewer_sub)).json()
+    held = listed["items"][0]["properties"]
+    assert held["tags"] == ["alpha", "beta"]
+    # **The integers are the assertion.** The column holds `["1","2"]` as text;
+    # an element type that never reached the coercer would leave them strings,
+    # which is what the sweep's mutant did.
+    assert held["counts"] == [1, 2]
 
 
 def test_an_action_cannot_declare_an_array_parameter(

@@ -102,10 +102,17 @@ def test_an_array_with_no_element_type_falls_back_rather_than_disappearing() -> 
 
 def test_the_mapping_reads_the_element_type_off_the_property() -> None:
     """`mapping_for`'s own row, not just `field_for` in isolation — the half
-    that would still be wrong if the loop forgot to pass `array_of`."""
+    that would still be wrong if the loop forgot to pass `array_of`.
+
+    **Not an array of strings, and a sweep is why.** `string` is also
+    `FALLBACK_TYPE`, so a loop that dropped `array_of` produced the fallback —
+    which is the same mapping — and the assertion held either way. An element
+    type that is not the fallback is what makes the two answers different.
+    """
     built = fields([{"api_name": "tags", "data_type": "array",
-                     "array_of": "string"}])
-    assert built["tags"] == im.field_for("string")
+                     "array_of": "integer"}])
+    assert built["tags"] == im.field_for("integer")
+    assert built["tags"] != im.field_for(im.FALLBACK_TYPE)
 
 
 def test_a_string_keeps_both_readers() -> None:
