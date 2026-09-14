@@ -5905,6 +5905,18 @@ header. §263's rule about a lesson recorded where it was learned applies
 squarely here — the paragraph above is worth nothing without the command
 underneath it.
 
+**And a mutation harness's browser stage inherits that split** (§347). A
+sweep over browser tests drives the *developer's* stack, which is the
+accumulated dev database — so it reports a survivor for any mutant whose
+test depends on state a clean workspace has and that one does not. §347
+hit it exactly: a helper's missing wait showed as SURVIVOR under the harness
+and as a hard failure under `fresh-e2e.sh`, because the mutant only bites when
+the object type has a consumer to break, and retyping a property in a
+long-lived workspace often has none. **A browser survivor is not a survivor
+until `fresh-e2e.sh` agrees**, and the cheap way to ask is to remove the line
+by hand and run that script — which is what turned a guard about to be
+deleted as unfalsifiable into one that is held.
+
 **No mutation harness, and the reason is not that this was tidying.** §271
 changed no production source: every edit is a test, a document, or a script.
 A harness answers "would the tests notice if this line were wrong", and there

@@ -122,6 +122,15 @@ def save_type(page) -> None:
     The settled states are the two the button can be in: enabled and reading
     *Save*, or reading *Save anyway* behind a tick. Waiting for either is what
     makes the branch below a reading of the page rather than of the clock.
+
+    **Playwright's retry hides half of this, which is why it took a fresh
+    database to see.** A click auto-waits for enabled, so the non-blocking case
+    absorbs the race; only the blocking one — where the button stays
+    disabled until the tick — fails. So the mutant that deletes this wait
+    survives a sweep run against the accumulated dev workspace, where retyping a
+    property often breaks nothing, and fails immediately under
+    `scripts/fresh-e2e.sh`, where the type has a source mapping to break.
+    `STATUS.md` §271 has the general form.
     """
     page.wait_for_function(
         """() => {
