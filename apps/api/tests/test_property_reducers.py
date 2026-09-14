@@ -193,6 +193,65 @@ def test_every_element_type_0087_allows_has_a_decision_here() -> None:
     assert set(array_properties.INNER_TYPES) - {"struct"} == decided
 
 
+def test_the_editor_offers_exactly_the_operations_the_server_takes() -> None:
+    """§190's drift guard, one declaration over (§349).
+
+    `property-reducer.ts` names what the Reduce dialog offers per base type,
+    and a mirror goes stale — so it is compared against **this module's** table
+    rather than against a second copy of itself, which is the direction that
+    catches an addition rather than only a disagreement.
+
+    Nothing is left out in either direction here, unlike `array-property.ts`'s
+    element types: an operation is a word in a dropdown, so there is no version
+    of one the dialog cannot complete and no reason for it to offer one the
+    server refuses.
+    """
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(
+        os.path.join(root, "web", "src", "lib", "property-reducer.ts"),
+        encoding="utf-8",
+    ).read()
+    listed = re.search(
+        r"export const OPERATIONS: Record<string, string\[\]> = \{(.*?)\n\};",
+        source, re.S,
+    )
+    assert listed, "OPERATIONS not found - has property-reducer.ts moved?"
+    offered = {
+        base: tuple(re.findall(r'"([a-z_]+)"', ops))
+        for base, ops in re.findall(r"(\w+): \[(.*?)\]", listed.group(1))
+    }
+    assert offered, "OPERATIONS parsed as empty"
+    assert offered == property_reducers.OPERATIONS, (
+        "the editor's reducer table and the server's disagree: "
+        f"editor {offered}, server {property_reducers.OPERATIONS}"
+    )
+
+
+def test_every_operation_the_editor_offers_has_words_to_show() -> None:
+    """The other half of the table, and the half a drift guard on `OPERATIONS`
+    alone would miss: a dropdown whose label map is short by one renders that
+    row as `true_first`, which is the API's spelling and nobody's sentence."""
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(
+        os.path.join(root, "web", "src", "lib", "property-reducer.ts"),
+        encoding="utf-8",
+    ).read()
+    listed = re.search(
+        r"export const OPERATION_LABELS: Record<string, string> = \{(.*?)\n\};",
+        source, re.S,
+    )
+    assert listed, "OPERATION_LABELS not found"
+    labelled = set(re.findall(r"^\s*(\w+):", listed.group(1), re.M))
+    assert labelled == set(property_reducers.ALL_OPERATIONS), (
+        f"labelled {sorted(labelled)}, "
+        f"server has {sorted(property_reducers.ALL_OPERATIONS)}"
+    )
+
+
 # ---- p.133's struct arrays ---------------------------------------------------
 def test_a_struct_array_reduces_by_a_field_and_says_so_when_it_does_not() -> None:
     """> "Reducers function on struct arrays based on a specific field within

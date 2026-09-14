@@ -27,10 +27,12 @@ import { DerivedPropertyEditor } from "@/components/derived-property-editor";
 import { SharedPropertyPicker } from "@/components/shared-property-picker";
 import { StatusField } from "@/components/status-field";
 import { StructFieldsEditor } from "@/components/struct-fields-editor";
+import { PropertyReducerEditor } from "@/components/property-reducer-editor";
 import {
   DEFAULT_ELEMENT, ELEMENT_TYPES, needsFields, structuresTheElement,
   withDataType,
 } from "@/lib/array-property";
+import { canReduce, reducerSummary } from "@/lib/property-reducer";
 import { ValueTypePicker } from "@/components/value-type-picker";
 import { ApiError, objects as objApi, type PropertyInput } from "@/lib/api";
 import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
@@ -157,6 +159,8 @@ export function PropertyRows({
     constraining === null ? null : properties[constraining];
   const [structuring, setStructuring] = useState<number | null>(null);
   const structuringRow = structuring === null ? null : properties[structuring];
+  const [reducing, setReducing] = useState<number | null>(null);
+  const reducingRow = reducing === null ? null : properties[reducing];
 
   return (
     <div>
@@ -229,6 +233,21 @@ export function PropertyRows({
           onSave={(next) => {
             const rows = [...properties];
             rows[structuring!] = { ...structuringRow, struct_fields: next };
+            onChange(rows);
+          }}
+        />
+      )}
+      {reducingRow && (
+        <PropertyReducerEditor
+          open
+          onClose={() => setReducing(null)}
+          propertyName={reducingRow.api_name || `property ${reducing! + 1}`}
+          // The whole row, not just its reducers: every question the dialog
+          // asks is about `array_of` and `struct_fields` too (p.133).
+          property={reducingRow as ObjectTypeProperty}
+          onSave={(next) => {
+            const rows = [...properties];
+            rows[reducing!] = { ...reducingRow, reducers: next };
             onChange(rows);
           }}
         />
@@ -416,6 +435,28 @@ export function PropertyRows({
               onClick={() => setStructuring(index)}
             >
               Fields{prop.struct_fields?.length ? ` (${prop.struct_fields.length})` : ""}
+            </button>
+          )}
+          {/* Property reducers (`object-link-types` p.131–133; db 0088).
+              Gated on `canReduce` rather than on `data_type === "array"`,
+              which is §214's rule and the same one `Fields` applies: an array
+              of geopoints has no operation p.132 gives it, and an array of
+              structs whose every field is one has nothing to reduce *by* — so
+              the button would open a dialog whose only outcome is a refusal.
+
+              The count is not decoration either. A property that reduces and
+              one that does not are different declarations, and p.131's whole
+              point is that the difference is invisible in the stored value. */}
+          {canReduce(prop) && (
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              aria-label={`Property ${index + 1} reducers`}
+              disabled={!!prop.shared_property_id}
+              onClick={() => setReducing(index)}
+            >
+              Reduce{reducerSummary(prop)}
             </button>
           )}
           {/* Shared property (`object-link-types` p.187). Only on the edit
