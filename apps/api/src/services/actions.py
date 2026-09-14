@@ -1545,7 +1545,7 @@ async def rename_action_type(
     *,
     display_name: str | None = None,
     description: str | None = None,
-) -> dict[str, Any]:
+) -> None:
     """p.7's Overview tab: what an action is *called* (§344, §345).
 
         "Enter a **Display name** for your action type." (p.7)
@@ -1565,26 +1565,30 @@ async def rename_action_type(
     and `COALESCE` rather than a read-then-write so a rename is one statement
     and cannot race a concurrent description edit. An empty description is a
     real value and clears the field; it is `None` that means "leave it".
+
+    **It does not raise for an action that is not there, and a sweep is why**
+    (§213). The first draft did, with `RETURNING id`; deleting that raise killed
+    no test, because both callers read the action afterwards — the route through
+    `set_action_status`, which is what returns it, and the import through a map
+    it built from `action_types` a moment earlier. A second 404 that can only
+    ever agree with the first is a branch nothing can hold to account.
     """
     if display_name is not None:
         display_name = check_display_name(display_name)
-    row = await fetch_one(
-        conn,
-        """
-        UPDATE action_types
-           SET display_name = COALESCE(:name, display_name),
-               description = COALESCE(:descr, description)
-         WHERE id = :aid AND workspace_id = :wid
-        RETURNING id
-        """,
+    await conn.execute(
+        text(
+            """
+            UPDATE action_types
+               SET display_name = COALESCE(:name, display_name),
+                   description = COALESCE(:descr, description)
+             WHERE id = :aid AND workspace_id = :wid
+            """
+        ),
         {
             "name": display_name, "descr": description,
             "aid": str(action_type_id), "wid": str(workspace_id),
         },
     )
-    if row is None:
-        raise NotFoundError("action type")
-    return dict(row)
 
 
 async def set_action_status(

@@ -778,6 +778,44 @@ def test_a_rule_whose_link_the_file_dropped_is_refused_by_name(
     assert "link type" in refused.text
 
 
+@pytest.mark.parametrize("name", ["", "x" * 201])
+@pytest.mark.parametrize("existing", [False, True])
+def test_a_display_name_the_column_would_refuse_is_refused_by_name(
+    client: TestClient, fx: Fixture, name: str, existing: bool
+) -> None:
+    """**p.65's premise is a hand-edited file**, and db 0013 checks
+    `length(display_name) BETWEEN 1 AND 200` — which fires as an integrity
+    error, a 500 with nothing in it about which field is wrong. Same shape as
+    the 500 §340 shipped for a link's missing `cardinality`.
+
+    Both paths and both ends of the range, because a sweep found the guard
+    unreachable four ways at once: the route's own schema refuses these before
+    the service sees them, so the import is the only caller that can reach it —
+    and the first draft defaulted an empty name to the api_name, which put an
+    action into the ontology under a name nobody chose and meant the empty case
+    could not arrive at all.
+    """
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [{
+        "api_name": f"act_{tag}", "display_name": "Fine for now",
+        "object_type": f"imp_{tag}", "criteria": [], "sections": [],
+        "parameters": [{"api_name": "name", "display_name": "Name",
+                        "data_type": "string"}],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "name", "parameter": "name"}}],
+    }]
+    if existing:
+        # The rename path rather than the create path: the action is already
+        # there and the file changes what it is called.
+        assert apply(client, fx, document).status_code == 200
+    document["action_types"][0]["display_name"] = name
+
+    refused = apply(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    assert "display name" in refused.text, refused.text
+
+
 def test_nothing_is_written_when_an_action_is_refused(
     client: TestClient, fx: Fixture
 ) -> None:
