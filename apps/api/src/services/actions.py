@@ -2088,6 +2088,18 @@ _PARAMETER_TYPES = frozenset(_ONTOLOGY_PROPERTY_TYPES | {"object"})
 # type it does not name, so an allowed struct parameter would render as a box
 # no viewer could ever fill in correctly, which is a control that cannot work.
 _UNSUPPORTED_PARAMETER_TYPES = {
+    # p.36's "The starting set could also be set to an `ObjectReference` list
+    # parameter" is the first thing that will want one, and it is a named ○ on
+    # the Search Arounds row. Until then an array parameter would render as
+    # `pure.inputTypeFor`'s fallback text box — one value typed into a control
+    # that claims to hold a list — which is §214's control that cannot work.
+    # The label is storable (db 0087) so the schema and the editor agree; this
+    # is what refuses it at save time, where the person who typed it is looking.
+    "array": (
+        "an array parameter needs a control that collects several values and a "
+        "starting-set kind that reads one, neither of which this build has yet "
+        "(action-types p.36)"
+    ),
     "struct": (
         "a struct parameter needs the property's declared fields to check a "
         "value against, which this action's write path does not carry yet "

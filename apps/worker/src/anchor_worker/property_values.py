@@ -263,8 +263,72 @@ def _coerce_boolean(value: Any) -> bool:
     raise PropertyValueError(f"expected a boolean, got {value!r}")
 
 
+def _coerce_array(value: Any, array_of: Any, struct_fields: Any) -> list[Any]:
+    """p.86's array value, element by element (db 0087).
+
+    > "**Array properties cannot contain null elements.**" (p.86)
+
+    **A JSON string is accepted**, for `_coerce_struct`'s reason exactly:
+    `column_value` writes an array back to a dataset column as JSON text, and
+    the next sync reads that column and comes back through here. An array that
+    survived only until its source was re-synced would not work.
+
+    **Every element goes through `coerce_property_value`**, so "what an array of
+    dates may hold" has the same answer as "what a date may hold" rather than a
+    second one — which is what makes an array of structs need nothing new: the
+    element carries the property's `struct_fields`, because they describe the
+    *element* and not the property (db 0064).
+
+    p.116's emptiness rule is **not here**: it belongs to `required`, which is a
+    fact about the property rather than about the value, and this function's own
+    rule is that absence is not a type error. `check_required` makes it.
+    """
+    if isinstance(value, str):
+        import json as _json
+
+        try:
+            value = _json.loads(value)
+        except ValueError as exc:
+            raise PropertyValueError(
+                f"expected an array, got {value[:40]!r}"
+            ) from exc
+    if not isinstance(value, list):
+        raise PropertyValueError(
+            f"an array value must be a list, got {type(value).__name__}"
+        )
+    if not isinstance(array_of, str) or not array_of:
+        # The declaration is what says how to read the elements, and the
+        # ontology refuses to store an array without one (db 0087) — so
+        # reaching here means a caller did not pass it. Refused rather than
+        # passed through, which would be `json` behaviour under an array's name.
+        raise PropertyValueError(
+            "an array value cannot be read without its property's element type"
+        )
+    out: list[Any] = []
+    for index, element in enumerate(value):
+        if element is None:
+            # p.86, and it is a refusal rather than a filter: dropping the null
+            # would change the length of somebody's list without telling them,
+            # and an array's positions are the only thing identifying its
+            # elements.
+            raise PropertyValueError(
+                f"element {index} is null, and an array property cannot "
+                "contain null elements (object-link-types p.86)"
+            )
+        try:
+            out.append(coerce_property_value(
+                array_of, element, struct_fields=struct_fields))
+        except PropertyValueError as exc:
+            raise PropertyValueError(f"element {index} ({array_of}) - {exc}") from exc
+    return out
+
+
 def coerce_property_value(
-    data_type: str, value: Any, *, struct_fields: Any = None
+    data_type: str,
+    value: Any,
+    *,
+    struct_fields: Any = None,
+    array_of: Any = None,
 ) -> Any:
     """The single definition of what a property value may be (db 0029).
 
@@ -284,14 +348,22 @@ def coerce_property_value(
     None passes through: absent is not a type error, and `required` is a
     separate concern the ontology already models.
 
-    `struct_fields` is the one type whose meaning is not carried by its name
-    (db 0064): a struct is a *schema*, so coercing one needs the declaration as
-    well as the label. It is a keyword rather than a second positional because
-    every other type ignores it, and a caller that forgets it for a struct is
-    refused rather than served - see `_coerce_struct`.
+    `struct_fields` and `array_of` are the two types whose meaning is not
+    carried by their name (db 0064, db 0087): a struct is a *schema* and an
+    array says nothing until it says of what, so coercing either needs the
+    declaration as well as the label. Keywords rather than positionals because
+    every other type ignores them, and a caller that forgets one is refused
+    rather than served - see `_coerce_struct` and `_coerce_array`.
+
+    **An array of structs takes both**, and `struct_fields` means the same
+    thing in that case as in every other: the fields of the *element*. That is
+    what db 0064's column already holds, which is why p.140's "Struct Array"
+    needed nothing added here.
     """
     if value is None:
         return None
+    if data_type == "array":
+        return _coerce_array(value, array_of, struct_fields)
     if data_type == "struct":
         return _coerce_struct(value, struct_fields)
     if data_type == "geopoint":
@@ -344,6 +416,14 @@ def column_value(data_type: str, value: Any) -> Any:
         return None
     if data_type == "geopoint" and isinstance(value, dict):
         return f"{value['lat']},{value['lon']}"
+    if data_type == "array" and isinstance(value, list):
+        # The whole list as JSON text, for the reason below: a dataset column
+        # holds a scalar, and an array flattened to anything else - the first
+        # element, a joined string - would not survive the round trip that
+        # `_coerce_array` makes work.
+        import json as _json
+
+        return _json.dumps(value)
     if data_type in ("attachment", "struct") and isinstance(value, dict):
         # The whole reference, as JSON text, not just the key: filename,
         # content type and size are not derivable from a storage key, and a
@@ -367,6 +447,7 @@ def coerce_rows(
     rows: list[tuple[str, dict[str, Any]]],
     property_types: dict[str, str],
     struct_fields: dict[str, Any] | None = None,
+    array_of: dict[str, str] | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
     """Apply the declared types to a whole sync's worth of extracted rows.
 
@@ -387,12 +468,20 @@ def coerce_rows(
     guessed at - the mapping names properties that exist, and one that does
     not is a §38 edit racing a sync, not a value to reinterpret.
 
-    `struct_fields` is `{property: its declared fields}` (db 0064), a second
-    mapping rather than a richer `property_types` because every caller builds
-    both from the same property list in the same loop, and widening the first
+    `struct_fields` is `{property: its declared fields}` (db 0064) and
+    `array_of` is `{property: its element type}` (db 0087) — maps beside
+    `property_types` rather than a richer one, because every caller builds all
+    three from the same property list in the same loop, and widening the first
     would change a signature four call sites and two mirrored copies read.
+
+    **Three parallel maps is the most this shape should carry**, and it is said
+    here rather than discovered on the fourth: the next property type whose
+    label does not name its meaning should widen `property_types` into a map of
+    declarations instead, which is the change db 0064's own comment described
+    and deferred.
     """
     struct_fields = struct_fields or {}
+    array_of = array_of or {}
     out: list[tuple[str, dict[str, Any]]] = []
     for primary_key, properties in rows:
         coerced: dict[str, Any] = {}
@@ -403,7 +492,9 @@ def coerce_rows(
                 continue
             try:
                 coerced[name] = coerce_property_value(
-                    data_type, value, struct_fields=struct_fields.get(name)
+                    data_type, value,
+                    struct_fields=struct_fields.get(name),
+                    array_of=array_of.get(name),
                 )
             except PropertyValueError as exc:
                 raise PropertyValueError(

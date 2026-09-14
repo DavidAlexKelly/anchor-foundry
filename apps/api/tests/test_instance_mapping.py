@@ -39,6 +39,19 @@ DELIBERATE_FALLBACKS = {
     "time_series",
 }
 
+#: Declared types with no entry here that are **not** falling back either — a
+#: third answer the guard above needs so the second one keeps meaning what it
+#: says (db 0087).
+#:
+#: OpenSearch has no array type: a field mapped `long` accepts `5` and
+#: `[5, 6, 7]` under the same declaration, and matches when any element does.
+#: So an array property is mapped as *its element type*, and a `FIELD_TYPES`
+#: entry for `array` would be a second answer to a question `array_of` already
+#: answers — and the wrong answer for nine of the ten element types. Tested
+#: directly below rather than only excluded here, because an exclusion on its
+#: own would let the fallback creep back in unnoticed.
+ANSWERED_BY_THE_ELEMENT = {"array"}
+
 
 def test_every_declared_type_is_mapped_or_deliberately_falls_back() -> None:
     """A type missing from the table maps as a string - findable but never
@@ -53,13 +66,46 @@ def test_every_declared_type_is_mapped_or_deliberately_falls_back() -> None:
     a reason. Adding a property type then fails here until somebody says which
     it is.
     """
-    unmapped = set(ontology_service.PROPERTY_TYPES) - set(im.FIELD_TYPES)
+    unmapped = (set(ontology_service.PROPERTY_TYPES) - set(im.FIELD_TYPES)
+                - ANSWERED_BY_THE_ELEMENT)
     assert unmapped == DELIBERATE_FALLBACKS, (
         "a declared property type with no mapping is indexed as a string, "
         "silently - map it or name it in DELIBERATE_FALLBACKS"
     )
     stray = set(im.FIELD_TYPES) - set(ontology_service.PROPERTY_TYPES)
     assert not stray, f"mappings for types no property can have: {sorted(stray)}"
+
+
+def test_an_array_is_mapped_as_the_type_it_holds() -> None:
+    """**The mapping OpenSearch already has** (db 0087; `object-link-types`
+    p.86). There is no array type in the cluster — any field accepts a list of
+    its own type — so an array of dates has a date's mapping, and the
+    date-range query the explorer builds matches an instance when any element
+    falls in the range.
+
+    Asserted against `field_for` of the element rather than against a literal,
+    because the claim is that the two answers are the *same* answer: a copy of
+    the date mapping written out here would agree with itself while the two
+    drifted.
+    """
+    for inner in ("string", "integer", "date", "geopoint", "struct"):
+        assert im.field_for("array", inner) == im.field_for(inner), inner
+
+
+def test_an_array_with_no_element_type_falls_back_rather_than_disappearing() -> None:
+    """A hand-edited row that lost its `array_of`, or one written by a future
+    migration against this API. Mapped as text, which is what every unknown
+    label gets: an index that cannot be created makes every instance of the
+    type unreadable, and the property is still findable this way."""
+    assert im.field_for("array", None) == im.field_for(im.FALLBACK_TYPE)
+
+
+def test_the_mapping_reads_the_element_type_off_the_property() -> None:
+    """`mapping_for`'s own row, not just `field_for` in isolation — the half
+    that would still be wrong if the loop forgot to pass `array_of`."""
+    built = fields([{"api_name": "tags", "data_type": "array",
+                     "array_of": "string"}])
+    assert built["tags"] == im.field_for("string")
 
 
 def test_a_string_keeps_both_readers() -> None:

@@ -1322,7 +1322,15 @@ export type PropertyDataType =
    * 0064). `json` already accepted the same values; what a struct adds is the
    * property declaring which fields it holds and what each one is, in
    * `struct_fields` below. Depth of one — p.149 refuses nesting. */
-  | "struct";
+  | "struct"
+  /** **The first label that does not name a type** (Foundry
+   * `object-link-types` p.86; db 0087). An `integer` property holds integers
+   * and there is nothing more to say; an array says nothing until it says of
+   * what, so the element type is in `array_of` below. The server owns which
+   * element types are allowed (`services/array_properties.py`); no `Vector`
+   * here because this platform has none, and no nesting because p.86's scope
+   * is arrays of base types. */
+  | "array";
 
 /** One declared field of a struct property (Foundry `object-link-types`
  * p.149). The order is the author's: p.154 builds a struct one *Add field* at
@@ -1390,6 +1398,15 @@ export interface ObjectTypeProperty {
    * not a struct" are different states, and an empty array would collapse
    * them. p.149 requires at least one field, so a struct never has none. */
   struct_fields: StructField[] | null;
+  /** The element type of an `array` property (Foundry `object-link-types`
+   * p.86; db 0087). Null for every other data type, which is the same
+   * distinction `struct_fields` makes: "holds nothing in particular" and "is
+   * not an array" are different states.
+   *
+   * Typed as `PropertyDataType` rather than a narrower union for
+   * `StructField.data_type`'s reason — the server owns the list that refuses,
+   * and a second copy here would be free to disagree with it. */
+  array_of: PropertyDataType | null;
   /** The shared property this one inherits its metadata from (Foundry
    * `object-link-types` p.187–188), or null for an ordinary property.
    *
