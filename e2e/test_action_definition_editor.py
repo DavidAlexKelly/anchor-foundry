@@ -552,6 +552,19 @@ def test_a_reference_to_a_parameter_that_is_gone_is_named_in_the_form(page, api)
     page.get_by_test_id("rule-2-subject").fill("About ")
     page.get_by_test_id("rule-2-subject-insert-status").click()
     expect(page.get_by_test_id("rule-2-problem")).to_have_count(0)
+    # **The focus wait `test_a_user_reference_is_inserted` writes out at
+    # length, and the one insert site in this file that never got it.** The
+    # button's `requestAnimationFrame` pulls focus back to the subject after
+    # the value has already landed, so `to_have_count(0)` above can return with
+    # the frame still pending — and `fill` on the parameter name below then
+    # focuses that box, the frame yanks focus back here, and Playwright's
+    # `insertText` types "state" into the *subject*.
+    #
+    # That is not the hypothesis, it is what CI printed: the failing page had
+    # `About {{{status}}}state` in the subject and `status` still in the
+    # parameter name, so the rename never happened and the stale reference the
+    # test is about was never created.
+    expect(page.get_by_test_id("rule-2-subject")).to_be_focused()
 
     page.get_by_label("Parameter 1 name").fill("state")
     said = page.get_by_test_id("rule-2-problem")
