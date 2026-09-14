@@ -513,7 +513,16 @@ def _web(*parts: str) -> str:
 #: has no way to complete the declaration - the reasons are written out beside
 #: `PROPERTY_TYPES` in `object-type-editor.tsx`. Named here so a new base type
 #: with no editor is a failing test rather than a silent gap.
-EDITOR_GAPS = {"attachment", "time_series"}
+EDITOR_GAPS = {
+    "attachment",
+    "time_series",
+    # **Held back the way `struct` was by §245**, and for the same sentence
+    # written beside `PROPERTY_TYPES`: the dropdown alone cannot complete the
+    # declaration. An array needs its element type (db 0087), which is a second
+    # control this dialog does not have yet; offering the type without it would
+    # produce a property the server refuses.
+    "array",
+}
 
 
 def test_every_base_type_is_offered_or_deliberately_held_back() -> None:

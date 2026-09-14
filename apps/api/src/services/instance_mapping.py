@@ -104,8 +104,23 @@ ORDERABLE_TYPES = ("integer", "float", "date", "timestamp")
 FALLBACK_TYPE = "string"
 
 
-def field_for(data_type: Any) -> dict[str, Any]:
-    """One property's mapping, from its declared type."""
+def field_for(data_type: Any, array_of: Any = None) -> dict[str, Any]:
+    """One property's mapping, from its declared type.
+
+    **`array` has no entry in `FIELD_TYPES`, and that is the mapping** (db
+    0087). OpenSearch has no array type: a field mapped `long` accepts `5` and
+    `[5, 6, 7]` with the same declaration, and every query over it matches when
+    *any* element matches. So an array property is mapped as the type of its
+    elements, and a static entry for `array` would be a second answer to a
+    question `array_of` already answers — worse, it would be the wrong answer
+    for nine of the ten inner types.
+
+    An array whose element type is missing falls back with everything else,
+    rather than being mapped `object`: a hand-edited row that lost its
+    `array_of` is still more findable as text than as a disabled object.
+    """
+    if isinstance(data_type, str) and data_type == "array":
+        return field_for(array_of if isinstance(array_of, str) else None)
     if isinstance(data_type, str) and data_type in FIELD_TYPES:
         return dict(FIELD_TYPES[data_type])
     return dict(FIELD_TYPES[FALLBACK_TYPE])
@@ -173,7 +188,7 @@ def mapping_for(properties: list[dict[str, Any]] | None) -> dict[str, Any]:
         name = row.get("api_name")
         if not isinstance(name, str) or not name:
             continue
-        fields[name] = field_for(row.get("data_type"))
+        fields[name] = field_for(row.get("data_type"), row.get("array_of"))
     return {
         "mappings": {
             "properties": {

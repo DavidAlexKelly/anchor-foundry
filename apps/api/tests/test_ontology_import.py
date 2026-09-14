@@ -87,6 +87,11 @@ def one_type(tag: str, **over) -> dict:
              "visibility": "normal", "value_format": None,
              "conditional_format": None, "edit_only": False,
              "derivation": None, "struct_fields": None,
+             # db 0087. Hand-built documents in this file have to carry every
+             # field the export writes, or a straight re-import reports the
+             # type as *changed* — which is what the second-apply test caught
+             # the moment the column arrived.
+             "array_of": None,
              "status": "experimental", "deprecation": None},
         ],
         **over,

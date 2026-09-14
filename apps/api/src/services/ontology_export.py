@@ -60,6 +60,11 @@ PROPERTY_FIELDS = (
     "edit_only",
     "derivation",
     "struct_fields",
+    # db 0087. **Name-based already**: an element type is a base type's own
+    # label, not an id, so it travels verbatim — but it has to travel, or an
+    # imported array property is a declaration that says nothing and the server
+    # refuses it (§346).
+    "array_of",
     "status",
     "deprecation",
 )
@@ -210,7 +215,8 @@ async def export_ontology(
                value_format::text AS value_format,
                conditional_format::text AS conditional_format,
                edit_only, derivation::text AS derivation,
-               struct_fields::text AS struct_fields, status::text AS status,
+               struct_fields::text AS struct_fields,
+               array_of::text AS array_of, status::text AS status,
                deprecation::text AS deprecation, id
           FROM object_type_properties
          WHERE object_type_id = ANY(

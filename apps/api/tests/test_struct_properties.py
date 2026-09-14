@@ -124,6 +124,11 @@ def test_the_field_types_are_p149s_list_and_not_this_platforms() -> None:
                          # nesting with the type system switched off
         "attachment",    # a reference the upload path issues per property
         "time_series",   # `object_type_series` names a property, not a field
+        "array",         # p.140's shape is "Struct Array" - an array *of*
+                         # structs, which db 0087 expresses as an `array`
+                         # property whose `struct_fields` describe the element.
+                         # A struct field holding an array is the other
+                         # direction and p.149 does not name it.
     }
 
 

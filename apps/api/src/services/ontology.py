@@ -29,8 +29,8 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # definitions live in their own module because the worker needs a verbatim
 # copy of them (see that module's docstring).
 from . import (
-    conditional_format, derived_properties, ontology_status, shared_properties,
-    struct_fields, value_format, value_types,
+    array_properties, conditional_format, derived_properties, ontology_status,
+    shared_properties, struct_fields, value_format, value_types,
 )
 from .property_values import (  # noqa: F401
     ATTACHMENT_FIELDS,
@@ -53,6 +53,12 @@ PROPERTY_TYPES = {
     # the property saying which fields it holds and what each one is, so the
     # fields travel with the property row in `struct_fields`.
     "struct",
+    # **The first label that does not name a type** (db 0087,
+    # `object-link-types` p.86). An `integer` property holds integers and there
+    # is nothing more to say; an array says nothing until it says of what, so
+    # the element type travels with the property row in `array_of` and
+    # `array_properties` decides which ones are allowed.
+    "array",
 }
 
 # How prominently an application should show a property (Foundry
@@ -388,7 +394,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
         SELECT p.id, p.api_name, p.display_name, p.data_type, p.required,
                p.description, p.sort_order, p.visibility, p.value_format,
                p.conditional_format, p.edit_only, p.derivation,
-               p.struct_fields,
+               p.struct_fields, p.array_of,
                p.status, p.deprecation,
                p.shared_property_id,
                sp.api_name AS shared_property_api_name,
@@ -622,6 +628,13 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
             data_type=str(prop["data_type"]),
             property_name=api,
         )
+        # db 0087, normalised in place for `value_format`'s reason: what is
+        # stored has to be what was checked.
+        prop["array_of"] = array_properties.parse(
+            prop.get("array_of"),
+            data_type=str(prop["data_type"]),
+            property_name=api,
+        )
         if prop.get("derivation") is not None:
             # p.148's own list, checked here because each item is a fact about
             # the *property* rather than about the chain.
@@ -831,13 +844,14 @@ async def _write_property_rows(
                                                 data_type, required, description, sort_order,
                                                 visibility, value_format,
                                                 conditional_format, edit_only,
-                                                derivation, struct_fields,
+                                                derivation, struct_fields, array_of,
                                                 shared_property_id,
                                                 value_type_id, status, deprecation)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
                     :required, :descr, :sort, CAST(:vis AS property_visibility),
                     CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly,
                     CAST(:deriv AS jsonb), CAST(:sfields AS jsonb),
+                    CAST(:arrayof AS property_data_type),
                     :shared, :valuetype,
                     CAST(:status AS ontology_status), CAST(:depr AS jsonb))
             RETURNING id
@@ -872,6 +886,9 @@ async def _write_property_rows(
                     if prop.get("struct_fields") is not None
                     else None
                 ),
+                # db 0087. NULL for every type but `array`, which is the
+                # pairing `array_properties.parse` checks in both directions.
+                "arrayof": prop.get("array_of") or None,
                 # p.187: attaching is part of saving the object type, so the
                 # reference is written with the rest of the property rather
                 # than by a separate call somebody could forget to make.
@@ -1031,6 +1048,7 @@ async def _snapshot_version(
                                'edit_only', p.edit_only,
                                'derivation', p.derivation,
                                'struct_fields', p.struct_fields,
+                               'array_of', p.array_of,
                                'shared_property_id', p.shared_property_id,
                                'value_type_id', p.value_type_id,
                                'status', p.status,

@@ -126,6 +126,12 @@ class PropertyIn(BaseModel):
     # than this model's `data_type` pattern - a per-field pydantic model would
     # have to restate one of the two.
     struct_fields: list[dict[str, Any]] | None = None
+    # The element type of an `array` property (Foundry `object-link-types`
+    # p.86; db 0087). A plain string here and checked in
+    # `services/array_properties` for `struct_fields`' reason: which element
+    # types are allowed is a *narrower* list than this model's `data_type`
+    # pattern, and a pattern here would be a second copy of it.
+    array_of: str | None = None
     # The shared property this one inherits its metadata from (Foundry
     # `object-link-types` p.187). Null detaches it (p.188), which is why this
     # is an explicit field rather than something only ever added: an omitted
@@ -161,6 +167,7 @@ class PropertyOut(BaseModel):
     edit_only: bool = False
     derivation: dict[str, Any] | None = None
     struct_fields: list[dict[str, Any]] | None = None
+    array_of: str | None = None
     shared_property_id: UUID | None = None
     # p.178: "Shared properties on objects are denoted with a globe icon next
     # to their name." The name comes back with the id so an application can
@@ -3653,7 +3660,17 @@ async def sync_source(
                 for p in declared
                 if p.get("struct_fields") is not None
             }
-        rows = ontology_service.coerce_rows(rows, property_types, struct_by_property)
+            # An array is the other one (db 0087): the label says it holds a
+            # list and the element type says of what, so the declaration
+            # travels beside the label for the same reason.
+            array_by_property = {
+                str(p["api_name"]): str(p["array_of"])
+                for p in declared
+                if p.get("array_of") is not None
+            }
+        rows = ontology_service.coerce_rows(
+            rows, property_types, struct_by_property, array_by_property
+        )
     except (DatasetEngineError, ontology_service.PropertyValueError) as exc:
         ok, error = False, str(exc)
 
