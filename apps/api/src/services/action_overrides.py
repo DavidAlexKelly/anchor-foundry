@@ -73,17 +73,26 @@ def form_order(
     rather than refused: `replace_sections` cannot create one, but an ontology
     import (§326) or a hand-edited row can, and a save that failed here would
     be refusing the wrong document.
+
+    **By position, not by id** (§344). The first draft keyed each section's
+    members on `section["id"]` and read them back in the same loop, which the
+    list below does identically for stored rows — and correctly for the case
+    that made it matter: an ontology file's sections have no id at all, because
+    a section has no portable identity (§341). Keyed by id they all collapsed
+    onto `'None'`, so every section drew the *last* one's members and the rest
+    of the parameters were reported as unsectioned. §344 needs this function
+    over a document, so the handle had to stop being one the document lacks.
     """
     declared = [str(p["api_name"]) for p in parameters]
     known = set(declared)
-    claimed: dict[str, list[str]] = {}
-    for section in sections:
-        inside = [str(n) for n in (section.get("parameters") or []) if str(n) in known]
-        claimed[str(section.get("id"))] = inside
-    taken = {name for names in claimed.values() for name in names}
+    claimed = [
+        [str(n) for n in (section.get("parameters") or []) if str(n) in known]
+        for section in sections
+    ]
+    taken = {name for names in claimed for name in names}
     order = [name for name in declared if name not in taken]
-    for section in sections:
-        order.extend(claimed.get(str(section.get("id")), []))
+    for names in claimed:
+        order.extend(names)
     return order
 
 

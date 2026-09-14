@@ -299,3 +299,55 @@ def test_a_link_in_the_file_reaches_the_ontology(page, api, workspace) -> None:
 
     eventually(links, lambda names: f"joins_{tag}" in names,
                what="the imported link type to reach the ontology")
+
+
+def test_an_action_in_the_file_reaches_the_ontology(page, api, workspace) -> None:
+    """**p.65's action types, through the screen** (§344).
+
+    The API tests prove the third pass and the round trip; what needs a browser
+    is the same join the link test is about — the receipt's action half arrives
+    in fields nothing else reads, and a line saying "1 action type" over an
+    action that was never written would look exactly like success.
+
+    On a type that is new in the same file, because that is p.65's second
+    workflow and the case the pass ordering exists for.
+    """
+    open_advanced(page, workspace)
+    document = api.call(
+        "GET", f"/workspaces/{workspace.workspace_id}/ontology-export")
+    tag = uuid.uuid4().hex[:8]
+    template = next(t for t in document["object_types"]
+                    if t["api_name"] == f"tr_{workspace.tag}")
+    on = f"acts_{tag}"
+    document["object_types"].append(
+        {**template, "api_name": on, "display_name": "Acted on"})
+    document["action_types"].append({
+        "api_name": f"rename_{tag}", "display_name": "Rename",
+        "description": "", "object_type": on, "criteria": [], "sections": [],
+        "status": "experimental", "deprecation": None, "allow_revert": True,
+        "parameters": [{"api_name": "name", "display_name": "Name",
+                        "data_type": "string", "required": False,
+                        "default_value": None, "hidden": False,
+                        "sort_order": 0, "dropdown_filters": [],
+                        "overrides": []}],
+        "rules": [{"kind": "modify_object", "sort_order": 0,
+                   "config": {"property": "name", "parameter": "name"}}],
+    })
+    choose(page, document)
+
+    expect(page.get_by_test_id("plan-action_types")).to_contain_text(
+        "1 new", timeout=30000)
+    apply = page.get_by_test_id("ontology-import-apply")
+    expect(apply).to_be_enabled()
+    apply.click()
+    expect(page.get_by_test_id("ontology-applied")).to_contain_text(
+        "1 action type", timeout=30000)
+
+    def actions() -> list[str]:
+        rows = api.call(
+            "GET", f"/workspaces/{workspace.workspace_id}/action-types")
+        return [a["api_name"]
+                for a in (rows["items"] if isinstance(rows, dict) else rows)]
+
+    eventually(actions, lambda names: f"rename_{tag}" in names,
+               what="the imported action type to reach the ontology")

@@ -1497,7 +1497,8 @@ export const objects = {
       updated: string[];
       links_added: string[];
       links_updated: string[];
-      not_applied: { action_types: string[] };
+      actions_added: string[];
+      actions_updated: string[];
       absent_from_file: string[];
     }>(`/workspaces/${wid}/ontology-import`, {
       method: "POST",

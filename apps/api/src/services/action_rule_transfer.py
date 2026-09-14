@@ -46,6 +46,10 @@ translated — there is nothing in the file to translate them against — so the
 travel as ids and `ontology_import` refuses the file for a workspace other than
 the one it came from, which is the sentence p.67 writes and the remedy p.67
 gives ("delete the … rules from the Ontology working state before importing").
+
+**Both directions are here since §344**, which gave the inverse a caller: the
+import resolves a rule's references once the file's object types and link types
+have been written.
 """
 from __future__ import annotations
 
@@ -97,6 +101,61 @@ def to_names(
             _named(recipients, "object_type", type_names)
             config["recipients"] = recipients
     return config
+
+
+def to_ids(
+    rule: dict[str, Any],
+    *,
+    type_ids: dict[str, str],
+    link_ids: dict[str, str],
+    where: str = "a rule",
+) -> dict[str, Any]:
+    """One rule's config, with its ontology references back as ids (§344).
+
+    The inverse of `to_names`, failing the other way for the reason
+    `action_parameter_transfer` gives: outward, a reference this ontology cannot
+    name is dropped; inward, a name this workspace does not have is refused,
+    because a rule quietly missing its link type is a rule that does nothing.
+
+    **A key the file does not carry stays absent**, which is the other half of
+    the same decision. `object_type` absent is p.75's own subject; `link_type`
+    absent is a rule whose link this ontology could not name when the file was
+    written, and `_validate_definition` refuses that in a sentence naming the
+    field — which is the truth about the rule, and better than a refusal from
+    here that would have to invent one.
+    """
+    config = dict(rule.get("config") or {})
+    kind = str(rule.get("kind", ""))
+    if kind in TYPE_KEYS:
+        _resolved(config, TYPE_KEYS[kind], type_ids, where, "object type")
+    if kind in LINK_KEYS:
+        _resolved(config, LINK_KEYS[kind], link_ids, where, "link type")
+    if kind == "notify":
+        recipients = config.get("recipients")
+        if isinstance(recipients, dict) and "object_type" in recipients:
+            recipients = dict(recipients)
+            _resolved(recipients, "object_type", type_ids, where, "object type")
+            config["recipients"] = recipients
+    return config
+
+
+def _resolved(
+    config: dict[str, Any],
+    key: str,
+    ids: dict[str, str],
+    where: str,
+    kind: str,
+) -> None:
+    """Replace one api_name with this workspace's id, or refuse naming it."""
+    if key not in config or not config[key]:
+        return
+    found = ids.get(str(config[key]))
+    if not found:
+        raise ValueError(
+            f"{where} names the {kind} {config[key]!r}, which this workspace "
+            "does not have"
+        )
+    config[key] = found
 
 
 def _named(config: dict[str, Any], key: str, names: dict[str, str]) -> None:

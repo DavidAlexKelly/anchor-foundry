@@ -408,35 +408,46 @@ def test_applying_an_edit_updates_the_type(
     assert listed["items"][0]["display_name"] == "Renamed in the file"
 
 
-def test_action_types_are_still_reported_as_not_applied(
+def test_an_action_in_the_file_is_applied(
     client: TestClient, fx: Fixture
 ) -> None:
-    """**Named rather than silently skipped** (§214).
+    """p.65's action types, written rather than named (§344).
 
-    Link types are applied as of §340. An action still is not: its rules name
-    parameters, and since §330-§339 its parameters name object types, link
-    types and properties inside jsonb documents, so it needs a resolution pass
-    of its own. A reader whose file carried three action types and got no word
-    of them would believe they arrived.
+    They were reported as not applied from §326 to §343 — the wait was the
+    resolution pass, because an action's parameters and rules name object types
+    and link types by id and the file names them by name.
     """
     tag = uuid.uuid4().hex[:8]
     document = a_file(fx, one_type(tag))
     document["action_types"] = [
         {"api_name": f"act_{tag}", "display_name": "Act",
-         "object_type": f"imp_{tag}", "parameters": [], "rules": [],
-         "criteria": []},
+         "object_type": f"imp_{tag}", "criteria": [],
+         "parameters": [{"api_name": "name", "display_name": "Name",
+                         "data_type": "string"}],
+         "rules": [{"kind": "modify_object",
+                    "config": {"property": "name", "parameter": "name"}}]},
     ]
     r = apply(client, fx, document)
     assert r.status_code == 200, r.text
-    body = r.json()
     # **Named by the object type it is on as well as its own name** (§341):
     # `action_types` is unique on (object_type_id, api_name), so a bare name
     # does not identify an action in an ontology that has two of them.
-    assert body["not_applied"]["action_types"] == [f"imp_{tag}.act_{tag}"]
-    # And the section it *used* to name is gone from the report rather than
-    # empty, because "links were not applied" is no longer a thing that can be
-    # true — a reader seeing an empty list would read it as "none this time".
-    assert "link_types" not in body["not_applied"]
+    assert r.json()["actions_added"] == [f"imp_{tag}.act_{tag}"]
+    # Checked in the ontology rather than in the report, because the report is
+    # the thing that just told you it worked.
+    assert an_action(client, fx, tag)["parameters"][0]["api_name"] == "name"
+
+
+def an_action(client: TestClient, fx: Fixture, tag: str) -> dict:
+    listed = client.get(f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub))
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()
+    found = next(a for a in (rows["items"] if isinstance(rows, dict) else rows)
+                 if a["api_name"] == f"act_{tag}")
+    full = client.get(f"{wbase(fx)}/action-types/{found['id']}",
+                      headers=hdr(fx.editor_sub))
+    assert full.status_code == 200, full.text
+    return full.json()
 
 
 def test_two_actions_sharing_a_name_are_told_apart(
@@ -479,6 +490,303 @@ def test_two_actions_sharing_a_name_are_told_apart(
     assert f"dup_{tag}a.same_{tag}" in unchanged
     assert f"dup_{tag}b.same_{tag}" in unchanged
     assert body["sections"]["action_types"]["changed"] == []
+
+
+# ---- applying an action type (§344) ---------------------------------------------
+def a_configured_ontology(client: TestClient, fx: Fixture, tag: str) -> dict:
+    """One action with every feature §328-§343 gave a parameter, built through
+    the API so the workspace holds what a real one would.
+
+    Nothing here is incidental: the type a parameter holds, the set a
+    multiple-choice one reads, the walk that reaches it, the filters that narrow
+    it, the section the form puts it in, the override that changes it and the
+    rule that writes a link are each a field some pass has to carry, and a
+    fixture missing one asks its question of an absent value (§341's lesson,
+    three times over).
+    """
+    near = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"near_{tag}", "display_name": "Near",
+              "properties": [{"api_name": "name", "display_name": "Name",
+                              "data_type": "string", "required": True}],
+              "title_property": "name"})
+    assert near.status_code == 201, near.text
+    far = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"far_{tag}", "display_name": "Far",
+              "properties": [
+                  {"api_name": "name", "display_name": "Name",
+                   "data_type": "string"},
+                  {"api_name": "near_id", "display_name": "Near",
+                   "data_type": "string"}],
+              "title_property": "name"})
+    assert far.status_code == 201, far.text
+    link = client.post(
+        f"{wbase(fx)}/link-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"joins_{tag}", "display_name": "Joins",
+              "from_type_id": far.json()["id"], "to_type_id": near.json()["id"],
+              "cardinality": "one_to_many",
+              "from_property": "near_id", "to_property": "$primary_key"})
+    assert link.status_code == 201, link.text
+    action = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": near.json()["id"], "api_name": f"act_{tag}",
+              "display_name": "Act", "editable_properties": ["name"]})
+    assert action.status_code == 201, action.text
+    saved = client.put(
+        f"{wbase(fx)}/action-types/{action.json()['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={"parameters": [
+                  {"api_name": "tier", "display_name": "Tier",
+                   "data_type": "string"},
+                  {"api_name": "who", "display_name": "Who",
+                   "data_type": "object", "object_type_id": near.json()["id"],
+                   "dropdown_filters": [
+                       {"property": "name",
+                        "values": [{"kind": "value", "value": "keep"}]}]},
+                  {"api_name": "name", "display_name": "Name",
+                   "data_type": "string",
+                   "options_from": {"object_type_id": far.json()["id"],
+                                    "property": "name"},
+                   "dropdown_search_around": {
+                       "start": {"kind": "parameter",
+                                 "object_type_id": near.json()["id"],
+                                 "parameter": "who"},
+                       "hops": [{"link_type_id": link.json()["id"]}]},
+                   "overrides": [
+                       {"set_default": "see the ticket", "set_required": True,
+                        "conditions": [{
+                            "left": {"kind": "parameter", "parameter": "tier"},
+                            "operator": "is",
+                            "right": {"kind": "value", "value": "gold"}}]}]},
+              ],
+              "rules": [
+                  {"kind": "modify_object",
+                   "config": {"property": "name", "parameter": "name"}},
+                  {"kind": "create_link",
+                   "config": {"link_type": link.json()["id"],
+                              "object": "who"}},
+              ],
+              "criteria": [
+                  {"message": "Only gold tiers may rename",
+                   "config": {"operator": "is",
+                              "left": {"kind": "parameter", "parameter": "tier"},
+                              "right": {"kind": "value", "value": "gold"}}}]})
+    assert saved.status_code == 200, saved.text
+    sectioned = client.put(
+        f"{wbase(fx)}/action-types/{action.json()['id']}/sections",
+        headers=hdr(fx.editor_sub),
+        json={"sections": [{"title": "Why", "description": "What changed",
+                            "parameters": ["name"]}]})
+    assert sectioned.status_code == 200, sectioned.text
+    return {"action_id": action.json()["id"], "link_id": link.json()["id"]}
+
+
+def the_action(document: dict, tag: str) -> dict:
+    return next(a for a in document["action_types"]
+                if a["api_name"] == f"act_{tag}")
+
+
+def test_a_deleted_action_comes_back_exactly_as_it_left(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The test §344 exists for.** Export a fully configured action, delete
+    it, import the file, and the document the workspace produces is the document
+    it was given.
+
+    Equality over the whole action sub-document, not a field list: a writer that
+    dropped the walk, or the filters, or the section membership, or the second
+    rule would pass any assertion naming the fields somebody remembered. The
+    document is id-free (§326, §342, §343), so it compares across two different
+    rows of the same action — which is the only reason this can be an `==`.
+    """
+    tag = uuid.uuid4().hex[:8]
+    built = a_configured_ontology(client, fx, tag)
+    before = the_action(export(client, fx), tag)
+
+    gone = client.delete(f"{wbase(fx)}/action-types/{built['action_id']}",
+                         headers=hdr(fx.editor_sub))
+    assert gone.status_code in (200, 204), gone.text
+
+    document = export(client, fx)
+    document["action_types"].append(before)
+    applied = apply(client, fx, document)
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["actions_added"] == [f"near_{tag}.act_{tag}"]
+
+    assert the_action(export(client, fx), tag) == before
+
+
+def test_re_importing_a_configured_action_plans_no_changes(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Idempotence, which is the other half of the claim above.** The first
+    import can be right about every field and still be a change every time, if
+    apply and export disagree about anything — and a reader pressing Apply twice
+    is exactly what p.66's screen invites."""
+    tag = uuid.uuid4().hex[:8]
+    a_configured_ontology(client, fx, tag)
+    document = export(client, fx)
+    assert the_action(document, tag)["parameters"], "nothing to round-trip"
+
+    applied = apply(client, fx, document)
+    assert applied.status_code == 200, applied.text
+    body = plan(client, fx, export(client, fx)).json()
+    assert f"near_{tag}.act_{tag}" in body["sections"]["action_types"]["unchanged"]
+    assert body["sections"]["action_types"]["changed"] == []
+
+
+def test_an_edited_action_is_updated_rather_than_duplicated(
+    client: TestClient, fx: Fixture
+) -> None:
+    """`action_types` is unique on (object_type_id, api_name), so a second
+    insert would be refused outright — which means a pass that did not look for
+    the existing row could not update an action at all."""
+    tag = uuid.uuid4().hex[:8]
+    a_configured_ontology(client, fx, tag)
+    document = export(client, fx)
+    the_action(document, tag)["display_name"] = "Renamed in the file"
+
+    applied = apply(client, fx, document)
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["actions_updated"] == [f"near_{tag}.act_{tag}"]
+    assert applied.json()["actions_added"] == []
+    assert the_action(export(client, fx), tag)["display_name"] \
+        == "Renamed in the file"
+
+
+def test_an_override_reading_a_parameter_the_file_puts_above_it(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Why `set_definition` is handed the sections it is about to be given**
+    (§344).
+
+    p.45 lets an override read only the parameters above it "in the form
+    hierarchy", and the hierarchy is §328's sections — which do not exist when a
+    new action's definition is saved. Declared order here puts the reader first
+    and the read second; the file's sections put them the other way round. So
+    this action is legal where it was exported and, without the sections in
+    hand, refused where it is imported.
+
+    Measured before it was built: `check_references` accepts this document with
+    the sections and refuses it without them.
+    """
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [{
+        "api_name": f"act_{tag}", "display_name": "Act",
+        "object_type": f"imp_{tag}", "criteria": [], "rules": [],
+        "parameters": [
+            {"api_name": "note", "display_name": "Note", "data_type": "string",
+             "overrides": [{"set_required": True, "conditions": [{
+                 "left": {"kind": "parameter", "parameter": "tier"},
+                 "operator": "is",
+                 "right": {"kind": "value", "value": "gold"}}]}]},
+            {"api_name": "tier", "display_name": "Tier", "data_type": "string"},
+        ],
+        "sections": [{"title": "First", "parameters": ["tier"]},
+                     {"title": "Second", "parameters": ["note"]}],
+    }]
+    applied = apply(client, fx, document)
+    assert applied.status_code == 200, applied.text
+    # And the arrangement that made it legal is the one the workspace now has.
+    found = an_action(client, fx, tag)
+    sections = client.get(
+        f"{wbase(fx)}/action-types/{found['id']}/sections",
+        headers=hdr(fx.editor_sub)).json()
+    assert [s["title"] for s in sections] == ["First", "Second"]
+    assert sections[1]["parameters"] == ["note"]
+
+
+def test_an_action_that_never_modifies_its_subject_is_applied(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Why the import creates a shell rather than going through p.30's
+    screen** (§344). `create_action_type` converts editable properties into
+    parameters and `modify_object` rules, and `editable_properties_of` returns
+    nothing for an action whose only rule creates an object — so that path
+    refuses a perfectly legal action with "an action must make at least one
+    property editable"."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [{
+        "api_name": f"act_{tag}", "display_name": "Act",
+        "object_type": f"imp_{tag}", "criteria": [], "sections": [],
+        "parameters": [{"api_name": "name", "display_name": "Name",
+                        "data_type": "string"}],
+        "rules": [{"kind": "create_object",
+                   "config": {"primary_key": "name",
+                              "properties": {"name": "name"}}}],
+    }]
+    applied = apply(client, fx, document)
+    assert applied.status_code == 200, applied.text
+    assert [r["kind"] for r in an_action(client, fx, tag)["rules"]] \
+        == ["create_object"]
+
+
+def test_an_actions_status_travels(client: TestClient, fx: Fixture) -> None:
+    """p.253's status and p.154's revert toggle are statements *about* the
+    action rather than part of what it does, so they are written by their own
+    call — and a pass that forgot them would import every action as
+    `experimental` with revert on, silently."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [{
+        "api_name": f"act_{tag}", "display_name": "Act",
+        "object_type": f"imp_{tag}", "criteria": [], "sections": [],
+        "status": "active", "allow_revert": False,
+        "parameters": [{"api_name": "name", "display_name": "Name",
+                        "data_type": "string"}],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "name", "parameter": "name"}}],
+    }]
+    assert apply(client, fx, document).status_code == 200
+    found = an_action(client, fx, tag)
+    assert found["status"] == "active"
+    assert found["allow_revert"] is False
+
+
+def test_a_rule_whose_link_the_file_dropped_is_refused_by_name(
+    client: TestClient, fx: Fixture
+) -> None:
+    """§343 drops a reference this ontology cannot name rather than writing it
+    as an id, and said the refusal would arrive "the day action types are
+    applied". This is that day: `_validate_definition` names the field, which is
+    the truth about the rule as it stands."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [{
+        "api_name": f"act_{tag}", "display_name": "Act",
+        "object_type": f"imp_{tag}", "criteria": [], "sections": [],
+        "parameters": [{"api_name": "who", "display_name": "Who",
+                        "data_type": "object"}],
+        "rules": [{"kind": "create_link", "config": {"object": "who"}}],
+    }]
+    refused = apply(client, fx, document)
+    assert refused.status_code == 422, refused.text
+    assert "link type" in refused.text
+
+
+def test_nothing_is_written_when_an_action_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """A refused import writes nothing at all, including the object types that
+    were legal — and that is `user_connection`'s single transaction rather than
+    an ordering, which is the correction §340 had to make about its own version
+    of this sentence."""
+    tag = uuid.uuid4().hex[:8]
+    document = a_file(fx, one_type(tag))
+    document["action_types"] = [{
+        "api_name": f"act_{tag}", "display_name": "Act",
+        "object_type": f"imp_{tag}", "criteria": [], "sections": [],
+        "parameters": [],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "name", "parameter": "gone"}}],
+    }]
+    assert apply(client, fx, document).status_code == 422
+    listed = client.get(f"{wbase(fx)}/object-types?q=imp_{tag}",
+                        headers=hdr(fx.editor_sub)).json()
+    assert listed["items"] == []
 
 
 # ---- what a parameter's dropdown names (§342) -----------------------------------
