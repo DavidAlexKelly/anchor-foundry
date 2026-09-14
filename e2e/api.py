@@ -338,6 +338,7 @@ class Module:
         descriptions: dict[str, str] | None = None,
         struct_fields: dict[str, list[dict]] | None = None,
         array_of: dict[str, str] | None = None,
+        reducers: dict[str, list[dict]] | None = None,
         slug: str | None = None,
     ) -> str:
         """Upload, declare, map and sync - the whole way an object type gets
@@ -414,6 +415,12 @@ class Module:
                         # the same reason a struct's does.
                         **({"array_of": (array_of or {})[c]}
                            if c in (array_of or {}) else {}),
+                        # Ordered property reducers on an array property
+                        # (p.131-133; db 0088). Read-time only — the CSV cell
+                        # still holds the whole list, and reduction is what the
+                        # *read* does with it.
+                        **({"reducers": (reducers or {})[c]}
+                           if c in (reducers or {}) else {}),
                     }
                     for c in columns
                 ],

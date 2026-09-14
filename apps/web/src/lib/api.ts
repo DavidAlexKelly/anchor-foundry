@@ -962,6 +962,14 @@ export interface PropertyInput {
    * than ignore — so it is sent explicitly on every save, and the editor's
    * `withDataType` is what keeps the two halves agreeing. */
   array_of?: import("./types").PropertyDataType | null;
+  /** Ordered property reducers on an array property (`object-link-types`
+   * p.131–133; db 0088). Null for anything else, which the server refuses to
+   * store rather than ignore — so it is sent explicitly on every save, for
+   * `array_of`'s reason and one it learned the hard way: §348 built this
+   * column everywhere *except* here, so opening the editor and saving anything
+   * at all erased every reducer on the type. The field being here is what
+   * makes `CARRIED` a compile error until it is carried. */
+  reducers?: import("./types").PropertyReducer[] | null;
   /** The value type constraining this property (`object-link-types` p.227).
    * Null detaches it, so it is sent explicitly rather than omitted. */
   value_type_id?: string | null;
