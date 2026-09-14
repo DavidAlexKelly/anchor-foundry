@@ -142,8 +142,102 @@ def test_a_walk_from_a_type_keeps_no_parameter() -> None:
     }
 
 
+# ---- and back again (§344) -----------------------------------------------------
+def ids(parameter: dict, *, types=None, links=None, where="p") -> dict:
+    return transfer.to_ids(
+        parameter,
+        type_ids={v: k for k, v in (TYPES if types is None else types).items()},
+        link_ids={v: k for k, v in (LINKS if links is None else links).items()},
+        where=where,
+    )
+
+
+def test_a_parameter_survives_the_round_trip() -> None:
+    """**The claim both directions exist for**, asserted as one equality rather
+    than field by field: a translator that dropped the walk's `parameter` start,
+    or a hop's landing type, would pass any list of fields somebody
+    remembered."""
+    stored = {
+        "object_type_id": TICKET,
+        "options_from": {"object_type_id": ISSUE, "property": "state"},
+        "dropdown_search_around": a_walk(),
+    }
+    assert ids(names(stored)) == stored
+
+
+def test_a_walk_from_a_type_survives_too() -> None:
+    """p.36's default start reads no parameter, and a round trip must not invent
+    one — an empty `parameter` key would make `check_source` look for a
+    parameter called `''`."""
+    stored = {"dropdown_search_around": a_walk(
+        start={"kind": "object_type", "object_type_id": TICKET})}
+    assert ids(names(stored)) == stored
+
+
+def test_a_parameter_pointing_nowhere_gains_nothing() -> None:
+    assert ids({"api_name": "note", "data_type": "string"}) == {}
+
+
+def test_the_landing_type_is_put_back_rather_than_left_to_be_derived() -> None:
+    """`check_source` recomputes each hop's far end and **refuses a document
+    that declares a different one** — so carrying it back is what makes a
+    hand-edited walk that does not join up refuse, instead of importing cleanly
+    as a different walk."""
+    written = ids(names({"dropdown_search_around": a_walk()}))
+    assert written["dropdown_search_around"]["hops"] == [
+        {"link_type_id": RAISED, "far_type_id": ISSUE}]
+
+
+def test_a_hop_with_no_landing_type_is_still_followed() -> None:
+    """A file may legitimately not carry one: §342 leaves a walk out whole when
+    it cannot name every part, but a hand-written file need not have it at all,
+    and `check_source` will supply it."""
+    written = ids({"dropdown_search_around": {
+        "start": {"kind": "object_type", "object_type": "ticket"},
+        "hops": [{"link_type": "raised_by"}]}})
+    assert written["dropdown_search_around"]["hops"] == [
+        {"link_type_id": RAISED}]
+
+
+# ---- a name this workspace does not have ---------------------------------------
+def test_a_name_this_workspace_lacks_is_refused_rather_than_dropped() -> None:
+    """**The asymmetry between the two directions, and the whole reason to say
+    it out loud** (§344).
+
+    Outward, a reference this ontology cannot name is *left out*: a document
+    carrying an id would look portable and mean nothing anywhere. Inward,
+    dropping it would write a parameter with no dropdown and then report the
+    file as applied — the file said something and the workspace got something
+    else, and nobody would be told.
+    """
+    for parameter in (
+        {"object_type": "nowhere"},
+        {"options_from": {"object_type": "nowhere", "property": "state"}},
+        {"dropdown_search_around": {
+            "start": {"kind": "object_type", "object_type": "nowhere"}}},
+        {"dropdown_search_around": {
+            "start": {"kind": "object_type", "object_type": "ticket"},
+            "hops": [{"link_type": "no_such_link"}]}},
+        {"dropdown_search_around": {
+            "start": {"kind": "object_type", "object_type": "ticket"},
+            "hops": [{"link_type": "raised_by",
+                      "far_object_type": "nowhere"}]}},
+    ):
+        try:
+            ids(parameter, where="ticket.rename.pick")
+        except ValueError as refusal:
+            # Named where it is, because "an object type this workspace does not
+            # have" is no use without the field it came from.
+            assert "ticket.rename.pick" in str(refusal), parameter
+        else:
+            raise AssertionError(f"not refused: {parameter}")
+
+
 def test_a_walk_with_no_hops_is_still_a_walk() -> None:
     """p.36's "changed to any other type" with nothing to follow. An empty hop
-    list is a real state and not the same as having no walk."""
-    written = names({"dropdown_search_around": a_walk(hops=[])})
-    assert written["dropdown_search_around"]["hops"] == []
+    list is a real state and not the same as having no walk, and it has to
+    survive both directions or a dropdown narrowed to one type comes back as
+    every object of it."""
+    stored = {"dropdown_search_around": a_walk(hops=[])}
+    assert names(stored)["dropdown_search_around"]["hops"] == []
+    assert ids(names(stored)) == stored

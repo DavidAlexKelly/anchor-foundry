@@ -1338,7 +1338,7 @@ async def get_action_type(
     return (await _with_definition(conn, [dict(row)]))[0]
 
 
-async def create_action_type(
+async def create_shell_action_type(
     conn: AsyncConnection,
     *,
     workspace_id: UUID,
@@ -1346,15 +1346,32 @@ async def create_action_type(
     api_name: str,
     display_name: str,
     description: str,
-    editable_properties: list[str],
     created_by: UUID,
     status: str = ontology_status.DEFAULT_STATUS,
     deprecation: Any = None,
 ) -> dict[str, Any]:
+    """An action type with no parameters and no rules yet (§344).
+
+    **The half of `create_action_type` that is about the action rather than
+    about p.75's conversion.** The name, the subject, and p.253's status; the
+    row and nothing under it.
+
+    Its caller is the ontology import, which has the parameters and rules in the
+    file and writes them with `set_definition` a moment later. Going through
+    `create_action_type` would insert one parameter and one `modify_object` rule
+    per editable property and then delete every one of them - and it would
+    *refuse* an action whose rules never modify the subject, because
+    `editable_properties_of` returns nothing for a file whose only rule is
+    `create_object`. A perfectly legal action, unimportable for want of a
+    conversion it did not need.
+
+    Not exposed as a route. p.30's screen creates an action by choosing
+    properties, which is `create_action_type`; a shell with no rules does
+    nothing, and offering one would be offering a half-built resource with no
+    screen that finishes it.
+    """
     if not _API_NAME_RE.match(api_name):
         raise ValueError(f"invalid action api_name {api_name!r}")
-    if not editable_properties:
-        raise ValueError("an action must make at least one property editable")
     # p.253 gives an action a status like every other ontological resource, and
     # p.255 names action types in the list `promoted` does not apply to.
     ontology_status.check_status(status, kind="action type")
@@ -1363,29 +1380,6 @@ async def create_action_type(
     from . import ontology as ontology_service
 
     await ontology_service.get_type(conn, workspace_id, object_type_id)  # 404 if invisible
-    declared = await ontology_service.list_properties(conn, object_type_id)
-    known = {p["api_name"] for p in declared}
-    unknown = [p for p in editable_properties if p not in known]
-    if unknown:
-        raise ValueError(f"not properties of this object type: {', '.join(unknown)}")
-    # **The same refusal `_validate_definition` makes, on the path that does not
-    # go through it.** This conversion writes one parameter per editable
-    # property, typed from the property, so a struct property here would insert
-    # a struct parameter that the definition PUT would refuse a moment later -
-    # two answers to one question, and the one a person meets first would be
-    # silence. See `_UNSUPPORTED_PARAMETER_TYPES`.
-    declared_types = {p["api_name"]: str(p["data_type"]) for p in declared}
-    refused = [
-        prop for prop in editable_properties
-        if declared_types.get(prop) in _UNSUPPORTED_PARAMETER_TYPES
-    ]
-    if refused:
-        kind = declared_types[refused[0]]
-        raise ValueError(
-            f"{', '.join(refused)} cannot be made editable by an action: "
-            + _UNSUPPORTED_PARAMETER_TYPES[kind]
-        )
-
     existing = await fetch_one(
         conn,
         "SELECT 1 AS x FROM action_types WHERE object_type_id=:tid AND api_name=:api",
@@ -1412,6 +1406,71 @@ async def create_action_type(
         },
     )
     assert row is not None
+    return dict(row)
+
+
+async def create_action_type(
+    conn: AsyncConnection,
+    *,
+    workspace_id: UUID,
+    object_type_id: UUID,
+    api_name: str,
+    display_name: str,
+    description: str,
+    editable_properties: list[str],
+    created_by: UUID,
+    status: str = ontology_status.DEFAULT_STATUS,
+    deprecation: Any = None,
+) -> dict[str, Any]:
+    """p.30's screen: an action built by choosing properties to make editable.
+
+    **The row comes from `create_shell_action_type`** (§344) and everything
+    below it is p.75's conversion, which is the half an ontology import does not
+    want. The 404 guard is repeated here rather than left to the shell, because
+    the refusals below must not come first: `list_properties` on a type this
+    caller cannot see returns nothing, which would turn "no such object type"
+    into "not properties of this object type".
+    """
+    if not editable_properties:
+        raise ValueError("an action must make at least one property editable")
+
+    from . import ontology as ontology_service
+
+    await ontology_service.get_type(conn, workspace_id, object_type_id)
+    declared = await ontology_service.list_properties(conn, object_type_id)
+    known = {p["api_name"] for p in declared}
+    unknown = [p for p in editable_properties if p not in known]
+    if unknown:
+        raise ValueError(f"not properties of this object type: {', '.join(unknown)}")
+    # **The same refusal `_validate_definition` makes, on the path that does not
+    # go through it.** This conversion writes one parameter per editable
+    # property, typed from the property, so a struct property here would insert
+    # a struct parameter that the definition PUT would refuse a moment later -
+    # two answers to one question, and the one a person meets first would be
+    # silence. See `_UNSUPPORTED_PARAMETER_TYPES`.
+    declared_types = {p["api_name"]: str(p["data_type"]) for p in declared}
+    refused = [
+        prop for prop in editable_properties
+        if declared_types.get(prop) in _UNSUPPORTED_PARAMETER_TYPES
+    ]
+    if refused:
+        kind = declared_types[refused[0]]
+        raise ValueError(
+            f"{', '.join(refused)} cannot be made editable by an action: "
+            + _UNSUPPORTED_PARAMETER_TYPES[kind]
+        )
+
+    row = await create_shell_action_type(
+        conn,
+        workspace_id=workspace_id,
+        object_type_id=object_type_id,
+        api_name=api_name,
+        display_name=display_name,
+        description=description,
+        created_by=created_by,
+        status=status,
+        deprecation=deprecation,
+    )
     action_type_id = UUID(str(row["id"]))
     property_types = declared_types
     display_names = {p["api_name"]: p["display_name"] for p in declared}
@@ -1455,6 +1514,44 @@ async def create_action_type(
         **(await _with_definition(conn, [dict(row)]))[0],
         "object_type_name": object_type["display_name"],
     }
+
+
+async def rename_action_type(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    action_type_id: UUID,
+    *,
+    display_name: str,
+    description: str,
+) -> None:
+    """What an action is *called*, which nothing else in this build writes.
+
+    **Found by §344, and it is a gap rather than a feature.** p.30's screen sets
+    an action's display name when it is created and no screen changes it
+    afterwards: `set_definition` writes what the action does, `set_action_status`
+    writes how much to rely on it, and the PATCH route covers neither. So an
+    ontology file that renamed an action had its rename silently dropped — the
+    import reported the action as updated and the name stayed as it was, which
+    is §214's control that looks like it works.
+
+    Here rather than in `ontology_import` because `action_types` is this
+    module's table. Not a route: the ○ is that there is no screen for renaming
+    an action, and adding an endpoint with nothing on the other end of it would
+    be answering a question nobody has asked yet.
+    """
+    await conn.execute(
+        text(
+            """
+            UPDATE action_types
+               SET display_name = :name, description = :descr
+             WHERE id = :aid AND workspace_id = :wid
+            """
+        ),
+        {
+            "name": display_name, "descr": description,
+            "aid": str(action_type_id), "wid": str(workspace_id),
+        },
+    )
 
 
 async def set_action_status(
@@ -2558,6 +2655,7 @@ async def set_definition(
     parameters: list[dict[str, Any]],
     rules: list[dict[str, Any]],
     criteria: list[dict[str, Any]],
+    sections: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Replace an action type's parameters, rules and criteria as one document.
 
@@ -2566,6 +2664,17 @@ async def set_definition(
     would have an ordering in which every sequence of individually valid edits
     passes through an invalid state. Saving the module document (decision 0002)
     is the same shape for the same reason.
+
+    **`sections` is the arrangement this save is about to be given** (§344), and
+    it exists because p.45's override rule reads the form and an import writes
+    the form in a second call. An action being created by an import has no
+    sections yet, so the default - reading them from the database - answers
+    "every parameter in declaration order", and an override that reads a
+    parameter the *file's* sections put above it would be refused for an
+    arrangement the workspace is one statement away from having. Measured, not
+    assumed: `check_references` accepts that document with the sections and
+    refuses it without them. Every other caller passes nothing and reads what is
+    stored, which is what they are editing against.
     """
     from . import ontology as ontology_service
 
@@ -2584,7 +2693,9 @@ async def set_definition(
     from .action_overrides import check_references
 
     check_references(
-        parameters, await sections_service.list_sections(conn, action_type_id)
+        parameters,
+        sections if sections is not None
+        else await sections_service.list_sections(conn, action_type_id),
     )
     declared_names = {str(p.get("api_name", "")) for p in parameters}
     # One read per object type rather than per parameter that mentions it: an

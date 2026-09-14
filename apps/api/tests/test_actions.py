@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import os
 import sys
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -288,6 +289,28 @@ def test_delete_action_type(client: TestClient, fx: Fixture, customer_type_id: s
     temp_id = r.json()["id"]
     assert client.delete(f"{wbase(fx)}/action-types/{temp_id}", headers=hdr(fx.editor_sub)).status_code == 204
     assert client.get(f"{wbase(fx)}/action-types/{temp_id}", headers=hdr(fx.viewer_sub)).status_code == 404
+
+
+def test_an_action_on_a_type_that_is_not_there_is_a_404(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Which refusal comes first, and a sweep is why it is asserted** (§344).
+
+    `create_action_type` reads the type's properties to convert them into
+    parameters, and `list_properties` on a type this caller cannot see returns
+    nothing — so with the 404 guard removed the property check wins and "no such
+    object type" arrives as "not properties of this object type", which sends
+    the reader looking for a typo in a list that was never the problem.
+
+    §344 moved the row insert into `create_shell_action_type`, which carries its
+    own guard; this says the *order* still holds on the path above it.
+    """
+    r = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": str(uuid.uuid4()), "api_name": "nowhere_action",
+              "display_name": "Nowhere", "editable_properties": ["name"]},
+    )
+    assert r.status_code == 404, r.text
 
 
 def test_actions_audited(client: TestClient, fx: Fixture) -> None:

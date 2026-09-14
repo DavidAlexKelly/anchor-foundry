@@ -141,6 +141,79 @@ def test_dropping_one_field_does_not_take_the_rest_of_the_rule() -> None:
     assert written == {"object": "who", "target": "other"}
 
 
+# ---- and back again (§344) -----------------------------------------------------
+def to_ids(rule: dict, *, types=None, links=None, where="r") -> dict:
+    return transfer.to_ids(
+        rule,
+        type_ids={v: k for k, v in (TYPES if types is None else types).items()},
+        link_ids={v: k for k, v in (LINKS if links is None else links).items()},
+        where=where,
+    )
+
+
+def test_a_rules_references_survive_the_round_trip() -> None:
+    """Asserted as one equality over each kind, so a translator that carried the
+    reference and lost the rest of the config would fail here rather than pass a
+    list of fields somebody remembered."""
+    for rule in (
+        {"kind": "create_object",
+         "config": {"object_type": ISSUE, "primary_key": "key",
+                    "properties": {"title": "name"}}},
+        {"kind": "create_link",
+         "config": {"link_type": RAISED, "object": "who", "target": "other"}},
+        {"kind": "notify", "config": {
+            "recipients": {"kind": "object_property", "parameter": "who",
+                           "object_type": ISSUE, "property": "owner_id"},
+            "subject": "Hello"}},
+    ):
+        assert to_ids({"kind": rule["kind"], "config": named(rule)}) \
+            == rule["config"], rule["kind"]
+
+
+def test_a_rule_naming_nothing_gains_nothing() -> None:
+    """p.75's `object_type` is optional and absent means this action's own
+    subject, so a round trip that invented the key would turn "the object I am
+    applied to" into a claim about a named type."""
+    config = {"property": "state", "parameter": "state"}
+    assert to_ids({"kind": "modify_object", "config": config}) == config
+
+
+def test_a_key_the_file_dropped_stays_absent() -> None:
+    """§343 drops a reference this ontology could not name rather than writing
+    an id. Refusing *here* would have to invent the field that is missing;
+    `_validate_definition` names it a moment later — "a link rule names a link
+    type this workspace does not have" — which is the truth about the rule."""
+    assert to_ids({"kind": "create_link", "config": {"object": "who"}}) \
+        == {"object": "who"}
+
+
+def test_a_name_this_workspace_lacks_is_refused() -> None:
+    """The mirror of §343's outward rule: dropping it on the way in would write
+    a rule that does nothing and report the file as applied."""
+    for rule in (
+        {"kind": "create_link", "config": {"link_type": "gone"}},
+        {"kind": "delete_object", "config": {"object_type": "gone"}},
+        {"kind": "notify", "config": {
+            "recipients": {"kind": "object_property", "object_type": "gone"}}},
+    ):
+        try:
+            to_ids(rule, where="ticket.rename rule 2")
+        except ValueError as refusal:
+            assert "ticket.rename rule 2" in str(refusal), rule
+        else:
+            raise AssertionError(f"not refused: {rule}")
+
+
+def test_the_document_being_applied_is_not_edited() -> None:
+    """The nested rewrite again, in the direction that reads from a file the
+    caller still holds — and an import reads the same document twice, once to
+    plan and once to apply."""
+    recipients = {"kind": "object_property", "object_type": "issue"}
+    rule = {"kind": "notify", "config": {"recipients": recipients}}
+    to_ids(rule)
+    assert recipients["object_type"] == "issue"
+
+
 # ---- what `check_references` reads ---------------------------------------------
 def test_the_references_a_rule_makes_are_reported_with_their_kind() -> None:
     assert list(transfer.references(

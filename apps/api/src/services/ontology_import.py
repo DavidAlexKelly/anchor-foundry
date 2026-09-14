@@ -29,6 +29,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from . import action_parameter_transfer as parameter_transfer
 from . import action_rule_transfer as rule_transfer
 from . import ontology as ontology_service
 from .ontology_export import FORMAT_VERSION, export_ontology
@@ -380,24 +381,19 @@ async def apply(
     *,
     actor_id: UUID,
 ) -> dict[str, Any]:
-    """Write what the plan described. Object types and link types.
+    """Write what the plan described. Object types, link types and actions.
 
     **Adds and updates, never removals** — the module docstring says why.
 
-    **Two passes, because a link needs its ends to exist** (§340). p.65's second
-    workflow is "copy the working state of one Ontology to another", where every
-    type in the file is new — so a link resolved before the object-type pass
-    would name two types that are not there yet. Resolving afterwards by
-    api_name needs no ordering rules in the document and no two-phase insert:
-    `check_references` has already refused a file whose link names a type the
-    file does not define, and every type the file defines exists by the time the
-    second pass runs.
-
-    Action types are still named in the plan and not applied, and are still ○ in
-    `ontology.md`: an action's rules and criteria name parameters, and since
-    §330-§339 its parameters name object types, link types and properties inside
-    jsonb documents — so it needs a resolution pass of its own rather than a
-    line here.
+    **Three passes, because each one needs the last** (§340, §344). p.65's
+    second workflow is "copy the working state of one Ontology to another",
+    where every type in the file is new — so a link resolved before the
+    object-type pass would name two types that are not there yet, and an action
+    resolved before the link pass would name a link that is not. Resolving
+    afterwards by api_name needs no ordering rules in the document and no
+    two-phase insert: `check_references` has already refused a file naming
+    anything it does not define, and everything the file defines exists by the
+    time the pass that needs it runs.
 
     Returned as a report rather than as a status, because an import is
     something a person reads afterwards: p.66's screen shows a count, and a
@@ -455,16 +451,17 @@ async def apply(
     links_added, links_updated = await _apply_links(
         conn, workspace_id, document, made, actor_id=actor_id
     )
+    actions_added, actions_updated = await _apply_actions(
+        conn, workspace_id, document, made, actor_id=actor_id
+    )
 
     return {
         "added": added,
         "updated": updated,
         "links_added": links_added,
         "links_updated": links_updated,
-        "not_applied": {
-            "action_types": made["sections"]["action_types"]["added"]
-            + made["sections"]["action_types"]["changed"],
-        },
+        "actions_added": actions_added,
+        "actions_updated": actions_updated,
         "absent_from_file": made["sections"]["object_types"]["absent_from_file"],
     }
 
@@ -548,6 +545,173 @@ async def _apply_links(
             status=link.get("status"),
         )
     return added, updated
+
+
+async def _apply_actions(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    document: dict[str, Any],
+    made: dict[str, Any],
+    *,
+    actor_id: UUID,
+) -> tuple[list[str], list[str]]:
+    """p.65's action types, resolved by api_name after the types and links exist.
+
+    **A third pass for the same reason there was a second** (§340). An action's
+    parameters name object types and link types and its rules name both, so
+    every one of them has to be there before an action can be written — and
+    p.65's second workflow, "copy the working state of one Ontology to another",
+    is the case where *none* of them were a moment ago.
+
+    **The action row and its document are two calls, because they always were.**
+    `create_shell_action_type` writes the row; `set_definition` writes the
+    parameters, rules and criteria as the one document they constrain each
+    other inside (decision 0007); `replace_sections` writes p.29's form, which
+    is its own document for the same reason. Going through `create_action_type`
+    instead would run p.75's property-to-parameter conversion and then delete
+    every row it wrote — and would refuse an action whose rules never modify its
+    subject, which is a legal action and not an importable one.
+
+    **The form is handed to `set_definition` as well as written after it**, and
+    that is not belt and braces: p.45 lets an override read only the parameters
+    *above* it in the form, the form is §328's sections, and the sections do not
+    exist yet when a new action's definition is saved. Without this, an action
+    that is legal where it was exported is refused where it is imported, for an
+    arrangement the workspace is one statement away from having.
+
+    **Every reference is resolved before anything is written**, so a file naming
+    something this workspace does not have refuses rather than half-applying —
+    and `user_connection`'s single transaction is what actually keeps that
+    promise, as §340 had to learn about its own version of this sentence.
+    """
+    section = made["sections"]["action_types"]
+    wanted = set(section["added"]) | set(section["changed"])
+    if not wanted:
+        return [], []
+
+    # Imported here rather than at the top: `actions` imports `ontology`, which
+    # this module also imports, and the pair at module scope is a cycle.
+    from . import action_sections as sections_service
+    from . import actions as actions_service
+    from ..lib.db import fetch_all
+
+    type_ids = {
+        str(row["api_name"]): str(row["id"])
+        for row in await _types_by_name(conn, workspace_id)
+    }
+    link_ids = {
+        str(row["api_name"]): str(row["id"])
+        for row in await _links_by_name(conn, workspace_id)
+    }
+    # **Keyed by `object_type.api_name`, like the plan** (§341). `action_types`
+    # is unique on (object_type_id, api_name) and not per workspace, so the name
+    # alone would find `set_status` on Ticket when the file meant the one on
+    # Invoice — and this is the pass that would then have written it.
+    held = {
+        f"{row['object_type']}.{row['api_name']}": UUID(str(row["id"]))
+        for row in await fetch_all(
+            conn,
+            """
+            SELECT at.id, at.api_name, ot.api_name AS object_type
+              FROM action_types at
+              JOIN object_types ot ON ot.id = at.object_type_id
+             WHERE at.workspace_id = :wid
+            """,
+            {"wid": str(workspace_id)},
+        )
+    }
+
+    added: list[str] = []
+    updated: list[str] = []
+    for action in document["action_types"]:
+        where = f"{action.get('object_type')}.{action.get('api_name')}"
+        if where not in wanted:
+            continue
+        parameters = [
+            _parameter_for(parameter, type_ids, link_ids, where)
+            for parameter in action.get("parameters") or []
+        ]
+        rules = [
+            {"kind": rule.get("kind"),
+             "config": rule_transfer.to_ids(
+                 rule, type_ids=type_ids, link_ids=link_ids,
+                 where=f"{where} rule {order}")}
+            for order, rule in enumerate(action.get("rules") or [], start=1)
+        ]
+        criteria = [dict(c) for c in (action.get("criteria") or [])]
+        sections = [dict(s) for s in (action.get("sections") or [])]
+
+        if where in held:
+            action_type_id = held[where]
+            # **What the action is called, which nothing else writes** (§344).
+            # No screen renames an action, so without this an ontology file that
+            # renamed one had the rename dropped and the import still reported
+            # it as updated — §214's control that looks like it works.
+            await actions_service.rename_action_type(
+                conn, workspace_id, action_type_id,
+                display_name=action.get("display_name")
+                or str(action["api_name"]),
+                description=action.get("description") or "",
+            )
+            updated.append(where)
+        else:
+            row = await actions_service.create_shell_action_type(
+                conn,
+                workspace_id=workspace_id,
+                object_type_id=UUID(type_ids[str(action["object_type"])]),
+                api_name=str(action["api_name"]),
+                display_name=action.get("display_name") or str(action["api_name"]),
+                description=action.get("description") or "",
+                created_by=actor_id,
+            )
+            action_type_id = UUID(str(row["id"]))
+            added.append(where)
+
+        await actions_service.set_definition(
+            conn, workspace_id, action_type_id,
+            parameters=parameters, rules=rules, criteria=criteria,
+            sections=sections,
+        )
+        await sections_service.replace_sections(conn, action_type_id, sections)
+        # p.253's status and p.154's revert toggle, written last because they
+        # are statements *about* the action rather than part of what it does —
+        # which is the division `set_action_status` exists to keep.
+        await actions_service.set_action_status(
+            conn, workspace_id, action_type_id,
+            status=action.get("status"),
+            deprecation=action.get("deprecation"),
+            allow_revert=action.get("allow_revert"),
+        )
+    return added, updated
+
+
+def _parameter_for(
+    parameter: dict[str, Any],
+    type_ids: dict[str, str],
+    link_ids: dict[str, str],
+    where: str,
+) -> dict[str, Any]:
+    """One document parameter as the definition API's shape (§344).
+
+    Built field by field rather than echoed with `**parameter`: the file carries
+    `sort_order`, which `set_definition` derives from the list's order, and a
+    document that had grown a key nobody validated would be handed straight to
+    an insert. The same argument `check_source` makes about a walk.
+    """
+    return {
+        "api_name": parameter.get("api_name"),
+        "display_name": parameter.get("display_name"),
+        "data_type": parameter.get("data_type"),
+        "required": bool(parameter.get("required", False)),
+        "default_value": parameter.get("default_value"),
+        "hidden": bool(parameter.get("hidden", False)),
+        "dropdown_filters": parameter.get("dropdown_filters") or [],
+        "overrides": parameter.get("overrides") or [],
+        **parameter_transfer.to_ids(
+            parameter, type_ids=type_ids, link_ids=link_ids,
+            where=f"{where}.{parameter.get('api_name')}",
+        ),
+    }
 
 
 async def _types_by_name(

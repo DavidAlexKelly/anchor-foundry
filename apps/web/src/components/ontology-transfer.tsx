@@ -26,7 +26,6 @@ import {
   appliedSummary,
   exportFilename,
   leftAloneWarning,
-  notAppliedNote,
   originNote,
   planHeadline,
   refusalText,
@@ -208,16 +207,9 @@ export function OntologyTransfer({
       )}
 
       {applying.data && (
-        <>
-          <p className="login-note" data-testid="ontology-applied">
-            {appliedSummary(applying.data)}
-          </p>
-          {notAppliedNote(applying.data) && (
-            <p className="login-note" data-testid="ontology-not-applied">
-              {notAppliedNote(applying.data)}
-            </p>
-          )}
-        </>
+        <p className="login-note" data-testid="ontology-applied">
+          {appliedSummary(applying.data)}
+        </p>
       )}
     </section>
   );

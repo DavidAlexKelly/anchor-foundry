@@ -11,7 +11,7 @@ import {
   appliedSummary,
   exportFilename,
   leftAloneWarning,
-  notAppliedNote,
+
   originNote,
   planHeadline,
   refusalText,
@@ -172,24 +172,29 @@ describe("a refused file", () => {
   });
 });
 
-describe("what an import applied (§340)", () => {
+describe("what an import applied (§340, §344)", () => {
   const report = (over: Partial<Parameters<typeof appliedSummary>[0]> = {}) => ({
-    added: ["a"], updated: [], links_added: [], links_updated: [], ...over,
+    added: ["a"], updated: [], links_added: [], links_updated: [],
+    actions_added: [], actions_updated: [], ...over,
   });
 
-  it("counts object types and link types apart", () => {
-    // **Not one total.** The two are applied by different passes and only one
-    // of them can be refused for redefining something, so a single number over
-    // a report whose link half failed would read as success.
-    const said = appliedSummary(report({ links_added: ["l1", "l2"] }));
+  it("counts the three kinds apart", () => {
+    // **Not one total.** They are applied by three different passes and any one
+    // of them can be refused on its own, so a single number over a report whose
+    // action half failed would read as success.
+    const said = appliedSummary(report({
+      links_added: ["l1", "l2"], actions_added: ["x"],
+    }));
     expect(said).toContain("1 object type");
     expect(said).toContain("2 link types");
+    expect(said).toContain("1 action type");
   });
 
   it("leaves out a kind that has nothing in it", () => {
     // The line is a receipt for what happened, and "0 link types" is not
     // something that happened.
     expect(appliedSummary(report())).not.toContain("link type");
+    expect(appliedSummary(report())).not.toContain("action type");
     expect(appliedSummary(report({ added: [], links_added: ["l1"] })))
       .not.toContain("object type");
   });
@@ -205,23 +210,20 @@ describe("what an import applied (§340)", () => {
     expect(said).toContain("0 new");
     expect(said).toContain("2 updated");
   });
-});
 
-describe("what an import did not apply (§340)", () => {
-  it("names the action types it left alone", () => {
-    // §214: a reader whose file carried three action types and got no word of
-    // them would believe they arrived.
-    const said = notAppliedNote({ not_applied: { action_types: ["a", "b"] } });
-    expect(said).toContain("2 action types");
-    expect(said).toContain("not built yet");
-  });
-
-  it("is silent when the file had none", () => {
-    expect(notAppliedNote({ not_applied: { action_types: [] } })).toBe("");
-  });
-
-  it("uses the singular for one", () => {
-    expect(notAppliedNote({ not_applied: { action_types: ["a"] } }))
-      .toContain("1 action type was");
+  it("reads as a list once there are three kinds", () => {
+    // "a and b and c" is what a naive join gives, and §344 is the unit that
+    // made three possible.
+    const said = appliedSummary(report({
+      links_added: ["l"], actions_added: ["x"],
+    }));
+    // One "and", before the last kind, with a comma separating the first two.
+    expect(said.split(" and ")).toHaveLength(2);
+    expect(said).toContain("updated), 1 link type");
+    // And two kinds still read as "a and b", with no comma to dangle.
+    const two = appliedSummary(report({ links_added: ["l"] }));
+    expect(two.split(" and ")).toHaveLength(2);
+    expect(two).not.toContain(",  ");
+    expect(two).toContain("updated) and 1 link type");
   });
 });

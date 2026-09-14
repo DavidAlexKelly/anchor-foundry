@@ -25,19 +25,30 @@ a field. `action_search_arounds` and `action_options` own these documents;
 this is their transfer form, and it is pure: dictionaries in, dictionaries out,
 so the whole of it is decided without a database.
 
-**Only the outward direction is here.** The inverse belongs to the unit that
-applies action types at import, and it has no caller until then — a translator
-back to ids, written now, would be a page of code nothing runs and nothing can
-hold to account. What the import *can* check today is the document: a parameter
-naming a type or link the file does not define is refused by `check_references`,
-because the plan reads files whether or not apply writes actions.
+**And the inverse, which §344 gave a caller.** `to_ids` is what the import
+resolves a parameter's dropdown with once the file's object types and link types
+have been written, and the two directions are deliberately *not* symmetric about
+failure: outward, a reference this ontology cannot name is left out, because a
+document carrying an id would look portable and be meaningless anywhere; inward,
+a name this workspace does not have is **refused**, because leaving it out would
+write a parameter with no dropdown and report the file as applied. The file said
+something; the workspace would have got something else, and nobody would be told.
+
+Nothing resolvable reaches `to_ids` in practice — `check_references` has already
+refused a file naming anything it does not define, and every type and link the
+file defines exists by the time actions are applied — so the refusal is the
+backstop for a writer that skips those checks, which is the same argument §339's
+workspace guard was left in place for.
 
 **Nothing is invented on the way through.** A hop's `far_type_id` is derived —
 `action_search_arounds.check_source` recomputes it from the link and refuses a
 document that disagrees — so it travels for readability and is *checked* rather
-than trusted on the way back in. The names this module emits are the ones the
-rest of the document already uses: `object_type` for a type, as an action's
-subject is written, and `link_type` for a link.
+than trusted on the way back in. That is why `to_ids` puts it back rather than
+leaving `check_source` to fill the gap: a landing type carried and then silently
+replaced would make a hand-edited walk that does not join up import cleanly as a
+different walk. The names this module emits are the ones the rest of the document
+already uses: `object_type` for a type, as an action's subject is written, and
+`link_type` for a link.
 """
 from __future__ import annotations
 
@@ -123,3 +134,101 @@ def _walk_to_names(
             return None
         hops.append({"link_type": link, "far_object_type": far})
     return {"start": written_start, "hops": hops}
+
+
+def _resolved(
+    ids: dict[str, str], value: Any, *, where: str, kind: str
+) -> str:
+    """One api_name as this workspace's id, or a refusal naming it.
+
+    **The asymmetry with `_named` is the point** (§344). Outward, a reference
+    this ontology cannot name is left out; inward, a name this workspace does
+    not have is refused — because leaving it out would write a parameter with no
+    dropdown and then report the file as applied, which is a silent
+    disagreement between what the file said and what the workspace got.
+    """
+    found = ids.get(str(value))
+    if not found:
+        raise ValueError(
+            f"{where} names the {kind} {value!r}, which this workspace does "
+            "not have"
+        )
+    return found
+
+
+def to_ids(
+    parameter: dict[str, Any],
+    *,
+    type_ids: dict[str, str],
+    link_ids: dict[str, str],
+    where: str = "a parameter",
+) -> dict[str, Any]:
+    """The three pointing fields as this workspace's ids, for one parameter.
+
+    The inverse of `to_names`, and the same rule about absence: a parameter the
+    file says nothing about points at nothing, so the keys are emitted only when
+    the document has something to say. `where` is how the refusals name this
+    parameter — `type.action.parameter`, as `check_references` writes it — since
+    a message about "an object type this workspace does not have" is no use
+    without the field it came from.
+    """
+    out: dict[str, Any] = {}
+    held = parameter.get("object_type")
+    if held:
+        out["object_type_id"] = _resolved(
+            type_ids, held, where=where, kind="object type")
+
+    options = parameter.get("options_from")
+    if isinstance(options, dict) and options.get("object_type"):
+        out["options_from"] = {
+            "object_type_id": _resolved(
+                type_ids, options["object_type"], where=where,
+                kind="object type"),
+            "property": options.get("property"),
+        }
+
+    walk = parameter.get("dropdown_search_around")
+    if isinstance(walk, dict) and walk:
+        out["dropdown_search_around"] = _walk_to_ids(
+            walk, type_ids, link_ids, where)
+    return out
+
+
+def _walk_to_ids(
+    walk: dict[str, Any],
+    type_ids: dict[str, str],
+    link_ids: dict[str, str],
+    where: str,
+) -> dict[str, Any]:
+    """p.36's start and p.37's hops, back as ids.
+
+    **The landing type is put back rather than left to be recomputed.**
+    `check_source` derives each hop's far end from the link and refuses a
+    document that declares a different one, so carrying it through is what makes
+    a hand-edited walk that does not join up refuse instead of importing cleanly
+    as a *different* walk.
+    """
+    start = walk.get("start") or {}
+    resolved: dict[str, Any] = {
+        "kind": start.get("kind"),
+        "object_type_id": _resolved(
+            type_ids, start.get("object_type"), where=where,
+            kind="object type"),
+    }
+    if start.get("parameter"):
+        resolved["parameter"] = start["parameter"]
+
+    hops: list[dict[str, Any]] = []
+    for hop in walk.get("hops") or []:
+        if not isinstance(hop, dict):
+            raise ValueError(f"{where} has a hop that is not an object")
+        walked: dict[str, Any] = {
+            "link_type_id": _resolved(
+                link_ids, hop.get("link_type"), where=where, kind="link type"),
+        }
+        if hop.get("far_object_type"):
+            walked["far_type_id"] = _resolved(
+                type_ids, hop["far_object_type"], where=where,
+                kind="object type")
+        hops.append(walked)
+    return {"start": resolved, "hops": hops}
