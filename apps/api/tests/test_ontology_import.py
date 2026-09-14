@@ -92,6 +92,9 @@ def one_type(tag: str, **over) -> dict:
              # type as *changed* — which is what the second-apply test caught
              # the moment the column arrived.
              "array_of": None,
+             # db 0088, for the line above's reason — the same test caught this
+             # column the same way, which is the contract working twice.
+             "reducers": None,
              "status": "experimental", "deprecation": None},
         ],
         **over,
