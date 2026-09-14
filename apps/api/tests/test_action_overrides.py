@@ -214,6 +214,28 @@ def test_form_order_ignores_a_name_no_parameter_answers_to() -> None:
     ) == ["a"]
 
 
+def test_form_order_reads_sections_that_have_no_id() -> None:
+    """**An ontology file's sections have none** (§341, §344): a section has no
+    portable identity — no api_name, and titles that may repeat — so the
+    document names members instead, and §344 asks this function about a document
+    before it is written.
+
+    Keyed on `section["id"]` every id-less section collapsed onto one key, so
+    each drew the *last* section's members and the rest of the parameters were
+    reported as unsectioned. Three sections rather than two, because with two
+    the wrong answer still happens to put the right name above the right one —
+    which is how the sweep found this test missing rather than the earlier one
+    failing.
+    """
+    params = [parameter("a"), parameter("b"), parameter("c")]
+    sections = [{"parameters": ["c"]}, {"parameters": ["a"]},
+                {"parameters": ["b"]}]
+    assert overrides.form_order(params, sections) == ["c", "a", "b"]
+    # And stored rows, which do have ids, are unchanged by the same code.
+    with_ids = [{"id": f"s{n}", **s} for n, s in enumerate(sections)]
+    assert overrides.form_order(params, with_ids) == ["c", "a", "b"]
+
+
 def test_readable_before_is_strictly_above() -> None:
     order = ["a", "b", "c"]
     assert overrides.readable_before(order, "a") == set()

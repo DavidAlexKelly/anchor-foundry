@@ -537,8 +537,12 @@ def a_configured_ontology(client: TestClient, fx: Fixture, tag: str) -> dict:
         f"{wbase(fx)}/action-types/{action.json()['id']}/definition",
         headers=hdr(fx.editor_sub),
         json={"parameters": [
+                  # **A real default, not an absent one.** A sweep found the
+                  # round trip below could drop `default_value` and still be
+                  # equal, because no parameter here had one — §341's mistake,
+                  # for the fourth time across these units.
                   {"api_name": "tier", "display_name": "Tier",
-                   "data_type": "string"},
+                   "data_type": "string", "default_value": "bronze"},
                   {"api_name": "who", "display_name": "Who",
                    "data_type": "object", "object_type_id": near.json()["id"],
                    "dropdown_filters": [
@@ -682,10 +686,17 @@ def test_an_override_reading_a_parameter_the_file_puts_above_it(
                  "left": {"kind": "parameter", "parameter": "tier"},
                  "operator": "is",
                  "right": {"kind": "value", "value": "gold"}}]}]},
+            {"api_name": "why", "display_name": "Why", "data_type": "string"},
             {"api_name": "tier", "display_name": "Tier", "data_type": "string"},
         ],
+        # **Three sections, and the middle one is the point.** With two, a
+        # `form_order` that collapsed every id-less section onto one key still
+        # happened to put `tier` above `note` — so the test passed over the
+        # broken version and a sweep is what said so. Three is where the wrong
+        # answer separates from the right one.
         "sections": [{"title": "First", "parameters": ["tier"]},
-                     {"title": "Second", "parameters": ["note"]}],
+                     {"title": "Second", "parameters": ["why"]},
+                     {"title": "Third", "parameters": ["note"]}],
     }]
     applied = apply(client, fx, document)
     assert applied.status_code == 200, applied.text
@@ -694,8 +705,8 @@ def test_an_override_reading_a_parameter_the_file_puts_above_it(
     sections = client.get(
         f"{wbase(fx)}/action-types/{found['id']}/sections",
         headers=hdr(fx.editor_sub)).json()
-    assert [s["title"] for s in sections] == ["First", "Second"]
-    assert sections[1]["parameters"] == ["note"]
+    assert [s["title"] for s in sections] == ["First", "Second", "Third"]
+    assert sections[2]["parameters"] == ["note"]
 
 
 def test_an_action_that_never_modifies_its_subject_is_applied(
