@@ -12,6 +12,7 @@ import {
   type PropertyInput,
 } from "@/lib/api";
 import { ActionDefinitionEditor } from "@/components/action-definition-editor";
+import { ActionOverviewDialog } from "@/components/action-overview-dialog";
 import { ObjectViewEditor } from "@/components/object-view-editor";
 import { InterfacesPanel } from "@/components/interfaces-panel";
 import { OntologySearch } from "@/components/ontology-search";
@@ -973,6 +974,9 @@ export default function ObjectsPage() {
   const [creatingSource, setCreatingSource] = useState(false);
   const [creatingAction, setCreatingAction] = useState(false);
   const [definingAction, setDefiningAction] = useState<ActionType | null>(null);
+  // p.7's Overview tab, which had no screen until §345 — the creation wizard
+  // set an action's name and nothing changed it afterwards.
+  const [namingAction, setNamingAction] = useState<ActionType | null>(null);
   const queryClient = useQueryClient();
 
   // **Keyed by the filter, deliberately.** Six other components cache the
@@ -1610,6 +1614,14 @@ export default function ObjectsPage() {
                           <button
                             className="btn quiet"
                             style={{ padding: "3px 9px", fontSize: 12, marginRight: 6 }}
+                            data-testid={`action-overview-${a.api_name}`}
+                            onClick={() => setNamingAction(a)}
+                          >
+                            Overview
+                          </button>
+                          <button
+                            className="btn quiet"
+                            style={{ padding: "3px 9px", fontSize: 12, marginRight: 6 }}
                             onClick={() => setDefiningAction(a)}
                           >
                             Parameters
@@ -1709,6 +1721,13 @@ export default function ObjectsPage() {
           workspaceId={workspace.id}
           action={definingAction}
           onClose={() => setDefiningAction(null)}
+        />
+      )}
+      {namingAction && workspace && (
+        <ActionOverviewDialog
+          workspaceId={workspace.id}
+          action={namingAction}
+          onClose={() => setNamingAction(null)}
         />
       )}
       {creatingAction && workspace && (

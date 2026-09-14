@@ -1933,6 +1933,26 @@ export const actions = {
       `/workspaces/${wid}/action-types/${actionTypeId}`,
       { method: "PATCH", body: JSON.stringify(input) },
     ),
+  /** p.7's Overview tab: what the action is *called* (§345).
+   *
+   * > "Enter a Display name for your action type." (p.7)
+   *
+   * > "You can make additional adjustments, like adding a Description in the
+   * > Overview tab." (p.7)
+   *
+   * The same PATCH as the status, for the same reason the status is not on
+   * `setDefinition`: both are statements *about* the action rather than part of
+   * what it does. **Omitting a field means unchanged**, and an empty
+   * description is a real value that clears it. */
+  rename: (
+    wid: string,
+    actionTypeId: string,
+    input: { display_name?: string; description?: string },
+  ) =>
+    request<import("./types").ActionType>(
+      `/workspaces/${wid}/action-types/${actionTypeId}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
   /** p.124's Form Content order — the sections and what is inside them (§328).
    *
    * Its own call rather than a field on the action type, because a section is
