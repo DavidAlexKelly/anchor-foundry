@@ -47,7 +47,9 @@ ADDRESS = json.dumps(
      "county": "Greater London"}
 )
 
-SITES = [{"code": "A1", "address": ADDRESS}]
+TAGS = json.dumps(["north", "depot"])
+
+SITES = [{"code": "A1", "address": ADDRESS, "tags": TAGS}]
 
 CODE_DESCRIPTION = "The site's own code, as the depot system spells it."
 
@@ -56,12 +58,17 @@ CODE_DESCRIPTION = "The site's own code, as the depot system spells it."
 def module(api):
     mod = Module(api, "Type editor carry")
     mod.object_type(
-        columns=["code", "address"],
+        columns=["code", "address", "tags"],
         rows=SITES,
         key="code",
         title="code",
-        types={"address": "struct"},
+        # **Three settings, each carried by a different key** (§245, §347). A
+        # description is a plain column, a struct's fields are a declaration,
+        # and an array's element type is the other declaration — and all three
+        # are lost the same way, by a hand-kept map that forgot one.
+        types={"address": "struct", "tags": "array"},
         struct_fields={"address": FIELDS},
+        array_of={"tags": "string"},
         descriptions={"code": CODE_DESCRIPTION},
     )
     return mod
@@ -96,6 +103,7 @@ def test_the_type_starts_with_a_description_and_a_struct(api, module) -> None:
     assert [f["api_name"] for f in before["address"]["struct_fields"]] == [
         "street", "postal_code", "floors"
     ]
+    assert before["tags"]["array_of"] == "string"
 
 
 def test_editing_a_type_keeps_the_settings_the_edit_did_not_touch(
@@ -126,6 +134,10 @@ def test_editing_a_type_keeps_the_settings_the_edit_did_not_touch(
     assert [f["api_name"] for f in after["address"]["struct_fields"]] == [
         "street", "postal_code", "floors"
     ], "the struct's schema did not survive an edit to a different property"
+    assert after["tags"]["array_of"] == "string", (
+        "the array's element type did not survive an edit to a different "
+        "property"
+    )
 
 
 def test_a_synced_struct_holds_the_declared_fields_and_nothing_else(

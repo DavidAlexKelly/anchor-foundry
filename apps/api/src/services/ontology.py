@@ -623,17 +623,20 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
             property_name=api,
             types_by_property=types_by_property,
         )
-        prop["struct_fields"] = struct_fields.parse(
-            prop.get("struct_fields"),
-            data_type=str(prop["data_type"]),
-            property_name=api,
-        )
         # db 0087, normalised in place for `value_format`'s reason: what is
-        # stored has to be what was checked.
+        # stored has to be what was checked — and **before** the struct fields,
+        # because p.140's "Struct Array" makes those a question about the
+        # element type rather than about the label alone (§347).
         prop["array_of"] = array_properties.parse(
             prop.get("array_of"),
             data_type=str(prop["data_type"]),
             property_name=api,
+        )
+        prop["struct_fields"] = struct_fields.parse(
+            prop.get("struct_fields"),
+            data_type=str(prop["data_type"]),
+            property_name=api,
+            array_of=prop["array_of"],
         )
         if prop.get("derivation") is not None:
             # p.148's own list, checked here because each item is a fact about

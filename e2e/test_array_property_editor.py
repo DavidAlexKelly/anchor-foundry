@@ -36,6 +36,17 @@ from conftest import WEB_BASE, eventually
 from ontology_page import find_type_row, save_type
 
 TAGS = json.dumps(["alpha", "beta"])
+#: p.140's "Struct Array": a list whose elements are structs, as the CSV cell
+#: holds it. `struct_fields` describes the *element* (db 0064), which is what
+#: let the server carry this shape without a second column.
+STOPS = json.dumps([
+    {"street": "Main", "floors": "2"},
+    {"street": "High", "floors": "4"},
+])
+STOP_FIELDS = [
+    {"api_name": "street", "display_name": "Street", "data_type": "string"},
+    {"api_name": "floors", "display_name": "Floors", "data_type": "integer"},
+]
 
 
 @pytest.fixture(scope="module")
@@ -189,3 +200,39 @@ def test_an_array_value_is_drawn_as_its_elements(page, api, module) -> None:
     # **Not the JSON.** The brackets and quotes are what the fall-through drew,
     # and asserting only on "alpha" would pass over it.
     assert "[" not in drawn.inner_text(), drawn.inner_text()
+
+
+def test_an_array_of_structs_draws_each_element_against_the_fields(
+    page, api, module
+) -> None:
+    """p.140's "Struct Array", rendered — the case that needed no third
+    per-property prop, because `structFields` already means the *element's*
+    fields for an array (db 0064).
+
+    The **labels** are the assertion. An element drawn without the declaration
+    falls through to the JSON a `json` property gets, which still contains the
+    values — so asserting on "Main" alone would pass over exactly the bug this
+    test is for.
+    """
+    mod = Module(api, "Array of structs")
+    mod.object_type(
+        columns=["code", "stops"],
+        rows=[{"code": "C1", "stops": STOPS}],
+        key="code", title="code",
+        types={"stops": "array"}, array_of={"stops": "struct"},
+        struct_fields={"stops": STOP_FIELDS},
+    )
+    page.goto(
+        f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/objects/"
+        f"{mod.object_type_id}"
+    )
+    drawn = page.get_by_test_id("array-value").first
+    expect(drawn).to_be_visible(timeout=30000)
+    # Upper-cased by `.struct-field-label`, so the comparison is too — the
+    # claim is that the label is *there*, not how it is cased.
+    text = drawn.inner_text().upper()
+    assert "STREET" in text and "FLOORS" in text, text
+    assert "MAIN" in text and "HIGH" in text, text
+    # And the declared order, which the value's own keys cannot recover: a
+    # struct arrives from jsonb with its keys reordered.
+    assert text.index("STREET") < text.index("FLOORS"), text

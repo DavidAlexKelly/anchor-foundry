@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
-from src.services import array_properties, property_values  # noqa: E402
+from src.services import array_properties, property_values, struct_fields  # noqa: E402
 from src.services import ontology as ontology_service  # noqa: E402
 
 ADDRESS = [
@@ -130,11 +130,55 @@ def test_the_element_types_are_foundrys_list_and_not_this_platforms() -> None:
     }
 
 
-def test_a_struct_element_needs_nothing_new_to_say() -> None:
-    """p.140 names "Struct Array" in as many words, and `struct_fields` already
+def test_a_struct_element_is_accepted_as_an_element_type() -> None:
+    """p.140 names "Struct Array" in as many words, and `struct_fields`
     describes the *element* rather than the property (db 0064) — which is why
-    the array type could carry it without a second column."""
+    the array type carries it without a second column."""
     assert parse("struct") == "struct"
+
+
+def test_an_array_of_structs_may_declare_the_elements_fields() -> None:
+    """**§346 said p.140 "needed nothing new" and it was wrong by one line.**
+
+    `struct_fields.parse` read the label alone, so it refused any non-`struct`
+    property carrying fields — and an array of structs could not be declared at
+    all. The claim came from `array_properties.parse` accepting `"struct"` as
+    an element type, which it does; nothing had declared one *through the API*,
+    and the test above cannot tell the two apart.
+
+    Found by the browser test that tried to render one (§347), which is the
+    layer that had to build the whole thing to ask its question.
+    """
+    assert struct_fields.parse(
+        ADDRESS, data_type="array", property_name="stops", array_of="struct",
+    ) == [
+        {"api_name": "street", "display_name": "street", "description": "",
+         "data_type": "string"},
+        {"api_name": "floors", "display_name": "floors", "description": "",
+         "data_type": "integer"},
+    ]
+
+
+def test_an_array_of_anything_else_still_cannot_have_struct_fields() -> None:
+    """The negative control, and the rule §346 was reaching for: fields on an
+    array of strings are a claim nothing reads, exactly as they are on a
+    string."""
+    with pytest.raises(struct_fields.StructFieldError,
+                       match="cannot have struct fields"):
+        struct_fields.parse(
+            ADDRESS, data_type="array", property_name="tags",
+            array_of="string",
+        )
+
+
+def test_an_array_of_structs_needs_at_least_one_field() -> None:
+    """p.149's rule reaches the element too: it is the element that is the
+    struct, and one with no fields is the same empty promise."""
+    with pytest.raises(struct_fields.StructFieldError,
+                       match="at least one field"):
+        struct_fields.parse(
+            None, data_type="array", property_name="stops", array_of="struct",
+        )
 
 
 # ---- the value (p.86) --------------------------------------------------------
@@ -255,6 +299,31 @@ def test_an_object_type_round_trips_an_array_property(
     # and "is not an array" stay tellable apart.
     code = next(p for p in detail["properties"] if p["api_name"] == "code")
     assert code["array_of"] is None
+
+
+def test_an_object_type_round_trips_an_array_of_structs(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.140 through the API — the path that was broken, and the reason the
+    pure test above is not enough on its own."""
+    tag = uuid.uuid4().hex[:6]
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"stops_{tag}", "display_name": f"Stops {tag}",
+              "properties": [
+                  {"api_name": "code", "data_type": "string"},
+                  {"api_name": "stops", "data_type": "array",
+                   "array_of": "struct", "struct_fields": ADDRESS},
+              ],
+              "title_property": "code"},
+    )
+    assert r.status_code == 201, r.text
+    detail = client.get(
+        f"{wbase(fx)}/object-types/{r.json()['id']}", headers=hdr(fx.editor_sub)
+    ).json()
+    stops = next(p for p in detail["properties"] if p["api_name"] == "stops")
+    assert stops["array_of"] == "struct"
+    assert [f["api_name"] for f in stops["struct_fields"]] == ["street", "floors"]
 
 
 def test_an_array_property_with_no_element_type_is_refused_by_the_api(
