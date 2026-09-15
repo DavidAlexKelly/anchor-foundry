@@ -86,10 +86,16 @@ function subtitle(node: PipelineNode): string {
 function NodeCard({
   node,
   selected,
+  lit = false,
+  dimmed = false,
   onSelect,
 }: {
   node: PipelineNode;
   selected: boolean;
+  /** This dataset has the column p.55's list has highlighted. */
+  lit?: boolean;
+  /** Some column is highlighted and this node is not one of its datasets. */
+  dimmed?: boolean;
   onSelect: () => void;
 }) {
   return (
@@ -113,13 +119,19 @@ function NodeCard({
               ? "var(--danger)"
               : "var(--line-strong)"
         }`,
-        borderLeft: `4px solid ${statusColour(node)}`,
+        borderLeft: `4px solid ${lit ? "var(--accent)" : statusColour(node)}`,
         borderRadius: "var(--radius)",
         boxShadow: selected ? "var(--shadow-card-hover)" : "var(--shadow-card)",
         cursor: "pointer",
         display: "block",
         overflow: "hidden",
+        // p.55's highlight, as a *contrast* rather than a colour on the lit
+        // ones alone: what the reader is looking for is which of these has the
+        // column, and dimming the rest is what makes that readable on a graph
+        // with forty nodes on it.
+        opacity: dimmed ? 0.35 : 1,
       }}
+      data-lit={lit ? "true" : undefined}
     >
       <div
         style={{
@@ -241,6 +253,11 @@ export function PipelineGraphView({
   maxHeight?: number;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
+  // p.55's "click one of the columns to highlight the datasets in your
+  // selection that contain this column" (§353). One at a time, because the
+  // question it answers is "where else is *this* column" — two highlighted at
+  // once would light up a union nobody asked about.
+  const [column, setColumn] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
@@ -253,6 +270,10 @@ export function PipelineGraphView({
   }, [graph]);
 
   const selectedNode = selected ? byId.get(selected) ?? null : null;
+  const lit = useMemo(
+    () => new Set(graph.columns.find((c) => c.name === column)?.datasets ?? []),
+    [graph.columns, column],
+  );
 
   if (graph.nodes.length === 0) {
     return (
@@ -269,6 +290,41 @@ export function PipelineGraphView({
           {graph.cycles.length === 1 ? "A cycle" : `${graph.cycles.length} cycles`} here:{" "}
           {graph.cycles.flat().length} resources feed each other in a loop. A model in a
           cycle set to run on new input data will re-trigger itself indefinitely.
+        </div>
+      )}
+      {graph.columns.length > 0 && (
+        /* p.54-55's Frequent Columns. **Most frequent first**, which is the
+           server's ordering, and the count beside each name is what that
+           ordering is *by* — a list sorted by something invisible reads as
+           arbitrary. Clicking one highlights the datasets that have it and
+           clicking it again clears, because a highlight nothing can turn off
+           is a mode rather than a question. */
+        <div style={{ marginBottom: 8 }} data-testid="frequent-columns">
+          <div className="slug" style={{ marginBottom: 4 }}>
+            Frequent columns
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {graph.columns.map((c) => (
+              <button
+                key={c.name}
+                type="button"
+                className={column === c.name ? "chip on" : "chip"}
+                data-testid={`column-${c.name}`}
+                // The name as an attribute as well as text: the count sits
+                // beside it with only CSS between them, so `inner_text` reads
+                // "id3" — the DOM has no space in it (§214's note, one
+                // component over).
+                data-column={c.name}
+                aria-pressed={column === c.name}
+                onClick={() => setColumn(column === c.name ? null : c.name)}
+              >
+                {c.name}
+                <span className="slug" style={{ marginLeft: 5 }}>
+                  {c.datasets.length}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
       <div className="form-actions" style={{ marginBottom: 8, justifyContent: "flex-end" }}>
@@ -396,6 +452,8 @@ export function PipelineGraphView({
                 key={n.id}
                 node={n}
                 selected={selected === n.id}
+                lit={lit.has(n.id)}
+                dimmed={lit.size > 0 && !lit.has(n.id)}
                 onSelect={() => setSelected(n.id === selected ? null : n.id)}
               />
             ))}

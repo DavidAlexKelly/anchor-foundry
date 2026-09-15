@@ -299,12 +299,14 @@ def test_an_empty_project_is_an_empty_graph(client: TestClient, fx: Fixture) -> 
         f"/api/workspaces/{fx.workspace}/projects/{empty}/pipeline", headers=hdr(fx.owner_sub)
     )
     assert r.status_code == 200, r.text
-    # `links` joined this shape in §351. Asserted as the **whole** dict on
-    # purpose: an empty graph is the one case where every key can be named,
-    # so a key added without a thought about what "empty" means for it fails
-    # here rather than reaching a client that did not expect it.
-    assert r.json() == {"nodes": [], "edges": [], "links": [], "cycles": [],
-                        "layer_count": 0}
+    # `links` joined this shape in §351 and `columns` in §353. Asserted as the
+    # **whole** dict on purpose: an empty graph is the one case where every key
+    # can be named, so a key added without a thought about what "empty" means
+    # for it fails here rather than reaching a client that did not expect it.
+    # It has now caught two in two units, which is the contract working rather
+    # than a test to relax.
+    assert r.json() == {"nodes": [], "edges": [], "links": [], "columns": [],
+                        "cycles": [], "layer_count": 0}
 
 
 def test_an_outsider_cannot_read_the_graph(client: TestClient, fx: Fixture) -> None:
@@ -848,3 +850,149 @@ def test_built_at_is_the_version_rather_than_the_row(
         "input_is_newer"
     )
 
+
+
+# ---- frequent columns (§353; `data-lineage` p.54-55) ------------------------
+@pytest.fixture(scope="module")
+def columned(client: TestClient, fx: Fixture) -> dict[str, str]:
+    """Three uploads in their own project, sharing some columns and not others.
+
+    `id` is in all three, `val` in two, `only` in one — so the ordering the
+    section is *sorted* by has something to sort, rather than a flat list that
+    any order would satisfy.
+    """
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.owner_sub),
+        json={"name": f"Columns {fx.tag}", "slug": f"columns-{fx.tag}"},
+    )
+    assert r.status_code == 201, r.text
+    pbase = f"/api/workspaces/{fx.workspace}/projects/{r.json()['id']}"
+
+    made: dict[str, str] = {"base": pbase}
+    for key, csv in (
+        ("all", b"id,val,only\n1,10,x\n"),
+        ("two", b"id,val\n1,10\n"),
+        ("one", b"id\n1\n"),
+    ):
+        r = client.post(
+            f"{pbase}/datasets/upload", headers=hdr(fx.owner_sub),
+            data={"name": f"{key.title()} {fx.tag}"},
+            files={"file": ("rows.csv", io.BytesIO(csv), "text/csv")},
+        )
+        assert r.status_code == 201, r.text
+        made[key] = r.json()["id"]
+    return made
+
+
+def test_the_columns_are_the_most_frequent_first(
+    client: TestClient, fx: Fixture, columned: dict[str, str]
+) -> None:
+    """> "Under the Frequent Columns section, you can see the **most frequent
+    > columns by name** in your selection." (p.55)
+
+    The order is the claim: `id` is in three datasets, `val` in two, `only` in
+    one. A list in any other order would still contain all three names, which
+    is why this asserts the sequence rather than the set.
+    """
+    r = client.get(f"{columned['base']}/pipeline", headers=hdr(fx.owner_sub))
+    assert r.status_code == 200, r.text
+    assert [c["name"] for c in r.json()["columns"]] == ["id", "val", "only"]
+
+
+def test_a_column_says_which_datasets_have_it(
+    client: TestClient, fx: Fixture, columned: dict[str, str]
+) -> None:
+    """p.55's click: "highlight the datasets in your selection that contain
+    this column". The ids are what make that possible — a count would say how
+    many to look for and not which.
+    """
+    g = client.get(f"{columned['base']}/pipeline", headers=hdr(fx.owner_sub)).json()
+    by_name = {c["name"]: c["datasets"] for c in g["columns"]}
+
+    assert by_name["id"] == sorted(
+        f"dataset:{columned[k]}" for k in ("all", "two", "one")
+    )
+    assert by_name["val"] == sorted(
+        f"dataset:{columned[k]}" for k in ("all", "two")
+    )
+    # The negative half: `only` is in exactly one, so a build that listed every
+    # dataset under every column would fail here rather than only in the order.
+    assert by_name["only"] == [f"dataset:{columned['all']}"]
+
+
+def test_a_focused_lineage_view_answers_about_its_own_component(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    """The columns follow the **graph as drawn**, which is why they are
+    computed after the focus narrowing — the same placement `links` have and
+    for the same reason: a lineage view asks about the datasets it drew.
+
+    p.54's first instruction is "ensure you added all datasets of interest in
+    your pipeline to your lineage graph", so the graph *is* the selection here.
+    Narrowing *within* it is p.54's drag-select, which is its own ○ row.
+    """
+    whole = client.get(f"{base(fx)}/pipeline", headers=hdr(fx.viewer_sub)).json()
+    focused = client.get(
+        f"{base(fx)}/pipeline?focus=dataset:{chain['b_out']}",
+        headers=hdr(fx.viewer_sub),
+    ).json()
+
+    drawn = {n["id"] for n in focused["nodes"]}
+    for column in focused["columns"]:
+        assert set(column["datasets"]) <= drawn, column
+    # And the whole project's answer is a superset, which is what says the
+    # narrowing did something rather than that both are empty.
+    assert {c["name"] for c in whole["columns"]} >= {
+        c["name"] for c in focused["columns"]
+    }
+    assert focused["columns"], "the focused component has datasets with columns"
+
+
+def test_a_dataset_with_no_schema_contributes_nothing(
+    client: TestClient, fx: Fixture
+) -> None:
+    """An empty project answers with an empty list rather than omitting the
+    key — the shape is the same whether or not there is anything to say."""
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.owner_sub),
+        json={"name": f"Bare {fx.tag}", "slug": f"bare-{fx.tag}"},
+    )
+    assert r.status_code == 201, r.text
+    g = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{r.json()['id']}/pipeline",
+        headers=hdr(fx.owner_sub),
+    ).json()
+    assert g["columns"] == []
+
+
+def test_two_equally_common_columns_come_back_in_a_stable_order(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The tiebreak p.55's ordering does not specify, and the one a sweep found
+    nothing testing: without it two columns of the same frequency come back in
+    whatever order the schemas listed them, which is stable per request and
+    arbitrary between projects.
+
+    `zeta` is declared *before* `alpha` in both datasets, so insertion order
+    and alphabetical order disagree — which is the only arrangement that can
+    tell a tiebreak from the absence of one.
+    """
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.owner_sub),
+        json={"name": f"Tied {fx.tag}", "slug": f"tied-{fx.tag}"},
+    )
+    assert r.status_code == 201, r.text
+    pbase = f"/api/workspaces/{fx.workspace}/projects/{r.json()['id']}"
+    for name in ("First", "Second"):
+        r = client.post(
+            f"{pbase}/datasets/upload", headers=hdr(fx.owner_sub),
+            data={"name": f"{name} {fx.tag}"},
+            files={"file": ("rows.csv", io.BytesIO(b"zeta,alpha\n1,2\n"), "text/csv")},
+        )
+        assert r.status_code == 201, r.text
+
+    g = client.get(f"{pbase}/pipeline", headers=hdr(fx.owner_sub)).json()
+    assert [c["name"] for c in g["columns"]] == ["alpha", "zeta"], g["columns"]
+    # Both really are equally common, which is what makes the order a tiebreak
+    # rather than the frequency sort doing the work.
+    assert {len(c["datasets"]) for c in g["columns"]} == {2}

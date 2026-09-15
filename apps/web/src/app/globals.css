@@ -229,6 +229,9 @@ button { font: inherit; cursor: pointer; }
   color: var(--accent-deep);
 }
 .chip.brass { background: var(--brass-wash); color: var(--brass); }
+/* p.55's highlighted column (§353). `aria-pressed` carries the state for
+   a reader who cannot see it; this is the half that can. */
+.chip.on { background: var(--accent); color: var(--paper); }
 
 .count {
   font-family: var(--font-mono);

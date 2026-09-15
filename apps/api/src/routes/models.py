@@ -544,10 +544,26 @@ class GraphLink(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class GraphColumn(BaseModel):
+    """One column name and the datasets on the graph that have it (§353;
+    `data-lineage` p.54-55).
+
+    **Which datasets, not how many.** The count is what p.55's section is
+    sorted by and `len(datasets)` is that count; the ids are what make p.55's
+    "click one of the columns to highlight the datasets that contain this
+    column" possible at all."""
+
+    name: str
+    datasets: list[str]
+
+
 class PipelineGraph(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     links: list[GraphLink] = []
+    # p.55's Frequent Columns, most frequent first. Over the graph as drawn,
+    # so a focused lineage view answers about its own component.
+    columns: list[GraphColumn] = []
     cycles: list[list[str]]
     layer_count: int
 

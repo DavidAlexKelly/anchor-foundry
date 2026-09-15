@@ -1230,10 +1230,29 @@ export interface PipelineLink {
   cardinality: string;
 }
 
+/** One column name and the datasets on the graph that have it (§353;
+ * `data-lineage` p.54–55).
+ *
+ * **Which datasets, not how many.** The count is what p.55's section is
+ * sorted by and `datasets.length` is that count; the ids are what make
+ * p.55's "click one of the columns to highlight the datasets that contain
+ * this column" possible at all.
+ *
+ * By name only, not by name and type — p.55 says "by name", and a column that
+ * is a string in one dataset and an integer in another is exactly the case
+ * somebody changing a schema is looking for. */
+export interface PipelineColumn {
+  name: string;
+  datasets: string[];
+}
+
 export interface PipelineGraph {
   nodes: PipelineNode[];
   edges: PipelineEdge[];
   links: PipelineLink[];
+  /** p.55's Frequent Columns, most frequent first, over the graph as drawn —
+   * so a focused lineage view answers about its own component. */
+  columns: PipelineColumn[];
   /** Node ids grouped per cycle; empty when the graph is a clean DAG. */
   cycles: string[][];
   layer_count: number;
