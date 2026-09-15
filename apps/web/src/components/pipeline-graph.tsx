@@ -2,7 +2,21 @@
 
 import { useMemo, useRef, useState } from "react";
 import type { PipelineGraph, PipelineNode } from "@/lib/types";
-import { outOfDateNote } from "@/lib/pipeline-graph";
+import {
+  columnsIn,
+  GAP_X,
+  GAP_Y,
+  isDrag,
+  NODE_H,
+  NODE_W,
+  nodesInRect,
+  nodeX,
+  nodeY,
+  outOfDateNote,
+  PAD,
+  toggleSelected,
+  type Rect,
+} from "@/lib/pipeline-graph";
 
 // One renderer, two entry points: the project-wide Pipeline page and a
 // single dataset's lineage, which is the same endpoint with a `focus`
@@ -14,27 +28,18 @@ import { outOfDateNote } from "@/lib/pipeline-graph";
 // (apps/api/src/services/pipeline.py), so laying the graph out is arithmetic
 // rather than a graph-layout library — see that module's docstring for why
 // the layering lives on the server.
-const NODE_W = 190;
-const NODE_H = 74;
-const GAP_X = 88;
-const GAP_Y = 26;
-const PAD = 28;
-
-function x(layer: number) {
-  return PAD + layer * (NODE_W + GAP_X);
-}
-function y(position: number) {
-  return PAD + position * (NODE_H + GAP_Y);
-}
+// The card geometry and the layer arithmetic are `lib/pipeline-graph`'s,
+// because §354's drag rectangle has to know where the cards are — see that
+// module for why there is only one copy of them.
 
 /** A cubic bezier from one node's right edge to the next node's left edge.
  *  Horizontal control points keep every edge reading left-to-right even when
  *  it spans several layers. */
 function edgePath(from: PipelineNode, to: PipelineNode): string {
-  const x1 = x(from.layer) + NODE_W;
-  const y1 = y(from.position) + NODE_H / 2;
-  const x2 = x(to.layer);
-  const y2 = y(to.position) + NODE_H / 2;
+  const x1 = nodeX(from.layer) + NODE_W;
+  const y1 = nodeY(from.position) + NODE_H / 2;
+  const x2 = nodeX(to.layer);
+  const y2 = nodeY(to.position) + NODE_H / 2;
   const bend = Math.max(30, (x2 - x1) / 2);
   return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
 }
@@ -96,17 +101,20 @@ function NodeCard({
   lit?: boolean;
   /** Some column is highlighted and this node is not one of its datasets. */
   dimmed?: boolean;
-  onSelect: () => void;
+  /** Told whether Ctrl/Cmd was held, which is p.54's "select multiple nodes
+   *  at once" — the modifier is read here rather than in the handler because
+   *  only the event knows it. */
+  onSelect: (additive: boolean) => void;
 }) {
   return (
     <button
       type="button"
-      onClick={onSelect}
+      onClick={(e) => onSelect(e.ctrlKey || e.metaKey)}
       title={node.name}
       style={{
         position: "absolute",
-        left: x(node.layer),
-        top: y(node.position),
+        left: nodeX(node.layer),
+        top: nodeY(node.position),
         width: NODE_W,
         height: NODE_H,
         textAlign: "left",
@@ -131,6 +139,12 @@ function NodeCard({
         // with forty nodes on it.
         opacity: dimmed ? 0.35 : 1,
       }}
+      data-testid="graph-node"
+      // Which nodes are in the selection, as an attribute rather than only a
+      // border: with several selected the count says how many and the borders
+      // say *which*, and a border is not something a test can read without
+      // asserting on a colour (§353's note, one attribute over).
+      data-selected={selected ? "true" : undefined}
       data-lit={lit ? "true" : undefined}
     >
       <div
@@ -191,7 +205,12 @@ function Details({
       }}
     >
       <div>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 14 }}>{node.name}</div>
+        <div
+          data-testid="details-name"
+          style={{ fontFamily: "var(--font-display)", fontSize: 14 }}
+        >
+          {node.name}
+        </div>
         <div className="slug">{node.slug ?? node.kind}</div>
       </div>
       {node.kind === "object_type" ? (
@@ -252,7 +271,12 @@ export function PipelineGraphView({
   onOpen: (node: PipelineNode) => void;
   maxHeight?: number;
 }) {
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  // p.7's two modes. **Panning is the default**, as it is in Foundry: the
+  // gesture a reader makes without thinking is moving the graph around, and a
+  // page that opens in a mode where dragging selects would have them draw a
+  // rectangle every time they meant to look further right.
+  const [tool, setTool] = useState<"pan" | "select">("pan");
   // p.55's "click one of the columns to highlight the datasets in your
   // selection that contain this column" (§353). One at a time, because the
   // question it answers is "where else is *this* column" — two highlighted at
@@ -261,6 +285,12 @@ export function PipelineGraphView({
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  // The rectangle as drawn, in canvas coordinates, and what it is being added
+  // to. `base` is captured at mousedown rather than read at mouseup because a
+  // Ctrl+drag is one gesture: whether it extends the selection is decided by
+  // the modifier held when it started.
+  const [marquee, setMarquee] = useState<Rect | null>(null);
+  const marqueeFrom = useRef<{ x: number; y: number; base: string[] } | null>(null);
 
   const byId = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph.nodes]);
   const canvas = useMemo(() => {
@@ -269,11 +299,47 @@ export function PipelineGraphView({
     return { width: Math.max(width, 400), height: PAD * 2 + rows * (NODE_H + GAP_Y) };
   }, [graph]);
 
-  const selectedNode = selected ? byId.get(selected) ?? null : null;
-  const lit = useMemo(
-    () => new Set(graph.columns.find((c) => c.name === column)?.datasets ?? []),
-    [graph.columns, column],
+  const chosen = useMemo(() => new Set(selected), [selected]);
+  // The detail bar answers about *a* node, so it appears for exactly one.
+  // Several selected is a different question, and it gets the count instead.
+  const only = selected.length === 1 ? selected[0] : undefined;
+  const selectedNode = only === undefined ? null : byId.get(only) ?? null;
+  // p.55's histogram is "in your selection" (§354). Nothing selected is the
+  // whole graph, which is the state the page opens in — see `columnsIn`.
+  const columns = useMemo(
+    () => columnsIn(graph.columns, selected),
+    [graph.columns, selected],
   );
+  const lit = useMemo(
+    () => new Set(columns.find((c) => c.name === column)?.datasets ?? []),
+    [columns, column],
+  );
+
+  /** Where a pointer is on the graph, undoing the pan and the zoom the
+   *  canvas is drawn with — the rectangle has to be in the same coordinates
+   *  as the cards it is tested against. */
+  function canvasPoint(e: React.MouseEvent<HTMLDivElement>) {
+    const box = e.currentTarget.getBoundingClientRect();
+    return {
+      x: (e.clientX - box.left - pan.x) / zoom,
+      y: (e.clientY - box.top - pan.y) / zoom,
+    };
+  }
+
+  /** Ends whichever gesture is in flight, and takes the nodes if it was a
+   *  rectangle. Shared by mouse-up and leaving the viewport. */
+  function endDrag() {
+    const from = marqueeFrom.current;
+    marqueeFrom.current = null;
+    drag.current = null;
+    setMarquee(null);
+    // A press that barely moved is a click, and the card underneath has its
+    // own handler — see `isDrag` for why letting both run would unselect the
+    // node that was clicked.
+    if (!from || !marquee || !isDrag(marquee)) return;
+    const taken = nodesInRect(graph.nodes, marquee);
+    setSelected(from.base.length === 0 ? taken : [...new Set([...from.base, ...taken])]);
+  }
 
   if (graph.nodes.length === 0) {
     return (
@@ -292,7 +358,7 @@ export function PipelineGraphView({
           cycle set to run on new input data will re-trigger itself indefinitely.
         </div>
       )}
-      {graph.columns.length > 0 && (
+      {columns.length > 0 && (
         /* p.54-55's Frequent Columns. **Most frequent first**, which is the
            server's ordering, and the count beside each name is what that
            ordering is *by* — a list sorted by something invisible reads as
@@ -304,7 +370,7 @@ export function PipelineGraphView({
             Frequent columns
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {graph.columns.map((c) => (
+            {columns.map((c) => (
               <button
                 key={c.name}
                 type="button"
@@ -327,7 +393,31 @@ export function PipelineGraphView({
           </div>
         </div>
       )}
-      <div className="form-actions" style={{ marginBottom: 8, justifyContent: "flex-end" }}>
+      <div className="form-actions" style={{ marginBottom: 8, alignItems: "center" }}>
+        {/* p.7's graph tools. Two modes and nothing else, because that is the
+            whole of the choice: "Click and drag to pan around the graph when
+            in the default Panning mode. To use the cursor to select multiple
+            nodes, switch to Drag select mode in the graph tools or hold Shift
+            while clicking and dragging." */}
+        <button
+          type="button"
+          className={tool === "pan" ? "chip on" : "chip"}
+          data-testid="tool-pan"
+          aria-pressed={tool === "pan"}
+          onClick={() => setTool("pan")}
+        >
+          Pan
+        </button>
+        <button
+          type="button"
+          className={tool === "select" ? "chip on" : "chip"}
+          data-testid="tool-drag-select"
+          aria-pressed={tool === "select"}
+          onClick={() => setTool("select")}
+        >
+          Drag select
+        </button>
+        <span style={{ marginLeft: "auto" }} />
         <button className="btn quiet" onClick={() => setZoom((z) => Math.max(0.4, z - 0.15))}>
           −
         </button>
@@ -353,30 +443,60 @@ export function PipelineGraphView({
         }}
       >
         <div
+          data-testid="graph-viewport"
           style={{
             // Tall enough for the graph, capped so a wide pipeline doesn't
             // push the detail bar off the screen.
             height: Math.min(maxHeight, Math.max(240, canvas.height)),
             overflow: "hidden",
             position: "relative",
-            cursor: drag.current ? "grabbing" : "grab",
+            cursor:
+              tool === "select" ? "crosshair"
+              : drag.current ? "grabbing"
+              : "grab",
+          }}
+          // Focusable so the graph can hear p.54's Ctrl/Cmd+A. Without this
+          // the key press goes to the document and selects the page's text.
+          tabIndex={0}
+          onKeyDown={(e) => {
+            // p.54: "use Ctrl / Command + A to select all nodes."
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+              e.preventDefault();
+              setSelected(graph.nodes.map((n) => n.id));
+            }
           }}
           onMouseDown={(e) => {
+            if (tool === "select" || e.shiftKey) {
+              const at = canvasPoint(e);
+              marqueeFrom.current = {
+                x: at.x,
+                y: at.y,
+                base: e.ctrlKey || e.metaKey ? selected : [],
+              };
+              setMarquee({ x1: at.x, y1: at.y, x2: at.x, y2: at.y });
+              return;
+            }
             drag.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
           }}
           onMouseMove={(e) => {
+            const from = marqueeFrom.current;
+            if (from) {
+              const at = canvasPoint(e);
+              setMarquee({ x1: from.x, y1: from.y, x2: at.x, y2: at.y });
+              return;
+            }
             if (!drag.current) return;
             setPan({
               x: drag.current.panX + (e.clientX - drag.current.x),
               y: drag.current.panY + (e.clientY - drag.current.y),
             });
           }}
-          onMouseUp={() => {
-            drag.current = null;
-          }}
-          onMouseLeave={() => {
-            drag.current = null;
-          }}
+          onMouseUp={endDrag}
+          // Leaving the viewport mid-drag commits what was drawn rather than
+          // throwing it away: the rectangle is on the screen, and a gesture
+          // that silently does nothing because the pointer crossed an edge is
+          // the kind of control §214 calls worse than none.
+          onMouseLeave={endDrag}
         >
           <div
             style={{
@@ -409,7 +529,7 @@ export function PipelineGraphView({
                 const from = byId.get(e.from);
                 const to = byId.get(e.to);
                 if (!from || !to) return null;
-                const touched = selected === e.from || selected === e.to;
+                const touched = chosen.has(e.from) || chosen.has(e.to);
                 return (
                   <path
                     key={i}
@@ -431,7 +551,7 @@ export function PipelineGraphView({
                 const from = byId.get(l.from);
                 const to = byId.get(l.to);
                 if (!from || !to) return null;
-                const touched = selected === l.from || selected === l.to;
+                const touched = chosen.has(l.from) || chosen.has(l.to);
                 return (
                   <path
                     key={l.id}
@@ -447,19 +567,64 @@ export function PipelineGraphView({
                 );
               })}
             </svg>
+            {marquee && isDrag(marquee) && (
+              <div
+                data-testid="graph-marquee"
+                style={{
+                  position: "absolute",
+                  left: Math.min(marquee.x1, marquee.x2),
+                  top: Math.min(marquee.y1, marquee.y2),
+                  width: Math.abs(marquee.x2 - marquee.x1),
+                  height: Math.abs(marquee.y2 - marquee.y1),
+                  border: "1px dashed var(--accent)",
+                  background: "var(--accent-wash)",
+                  // The rectangle is a drawing of the gesture, not a thing to
+                  // click: events have to reach the cards underneath it.
+                  pointerEvents: "none",
+                }}
+              />
+            )}
             {graph.nodes.map((n) => (
               <NodeCard
                 key={n.id}
                 node={n}
-                selected={selected === n.id}
+                selected={chosen.has(n.id)}
                 lit={lit.has(n.id)}
                 dimmed={lit.size > 0 && !lit.has(n.id)}
-                onSelect={() => setSelected(n.id === selected ? null : n.id)}
+                onSelect={(additive) =>
+                  setSelected((current) => toggleSelected(current, n.id, additive))
+                }
               />
             ))}
           </div>
         </div>
         {selectedNode && <Details node={selectedNode} onOpen={() => onOpen(selectedNode)} />}
+        {selected.length > 1 && (
+          /* What a selection of several says for itself. The count is the
+             part that matters: the histogram above is now answering about
+             these nodes, and a reader who cannot see how many they have has
+             no way to tell a narrowed list from the graph's own. */
+          <div
+            data-testid="selection-summary"
+            style={{
+              borderTop: "1px solid var(--line)",
+              padding: "10px 16px",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <span data-testid="selection-count">{selected.length} nodes selected</span>
+            <button
+              className="btn quiet"
+              data-testid="selection-clear"
+              style={{ marginLeft: "auto" }}
+              onClick={() => setSelected([])}
+            >
+              Clear
+            </button>
+          </div>
+        )}
       </div>
     </>
   );
