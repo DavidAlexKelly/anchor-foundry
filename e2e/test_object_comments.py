@@ -54,6 +54,46 @@ def open_object(page, module) -> None:
     expect(page.get_by_test_id("view-comments")).to_be_visible(timeout=30000)
 
 
+def open_comments(page) -> None:
+    """Open the Helper and wait for the thread to have **answered**.
+
+    p.137's panel renders its draft box while the comments query is still in
+    flight, and `fill` only waits for the box to exist. That gap is the one
+    `ontology_page.find_type_row` records: the textarea is a *controlled*
+    input, so a render landing between Playwright's DOM write and React's
+    state update writes the old (empty) value straight back over it — and the
+    submit that follows posts nothing.
+
+    The positive wait is the thread's own answer, either shape of it, which is
+    §318's rule: `comments-panel` alone is visible immediately, because
+    "Loading comments…" is drawn *inside* it.
+    """
+    page.get_by_test_id("view-comments").click()
+    expect(page.get_by_test_id("comments-panel")).to_be_visible(timeout=30000)
+    expect(
+        page.get_by_test_id("comment-list").or_(page.get_by_test_id("comments-empty"))
+    ).to_be_visible(timeout=30000)
+
+
+def type_comment(page, said: str) -> None:
+    """Put `said` in the draft box and make sure it stayed there.
+
+    Checked and re-filled for `find_type_row`'s reason — a render can still
+    land on the keystroke even after the wait above, because posting a comment
+    invalidates two queries and these tests run one after another on the same
+    object.
+    """
+    draft = page.get_by_test_id("comment-draft")
+    for _ in range(4):
+        draft.fill(said)
+        try:
+            expect(draft).to_have_value(said, timeout=2000)
+            break
+        except AssertionError:
+            continue
+    expect(draft).to_have_value(said, timeout=5000)
+
+
 def test_the_button_is_in_the_object_view_header(page, talked_about) -> None:
     """**p.137's placement**, and the only claim a browser can check.
 
@@ -89,10 +129,9 @@ def test_a_comment_is_posted_and_appears_in_the_thread(page, talked_about) -> No
     """p.137's first capability, end to end through the screen."""
     said = f"this needs checking {uuid.uuid4().hex[:6]}"
     open_object(page, talked_about)
-    page.get_by_test_id("view-comments").click()
-    expect(page.get_by_test_id("comments-panel")).to_be_visible(timeout=30000)
+    open_comments(page)
 
-    page.get_by_test_id("comment-draft").fill(said)
+    type_comment(page, said)
     page.get_by_test_id("comment-submit").click()
     expect(page.get_by_test_id("comment-list")).to_contain_text(said, timeout=30000)
     # The draft is cleared, so a second comment is not the first one again.
@@ -106,8 +145,8 @@ def test_the_button_counts_what_is_behind_it(page, talked_about) -> None:
     open_object(page, talked_about)
     button = page.get_by_test_id("view-comments")
     before = button.inner_text()
-    button.click()
-    page.get_by_test_id("comment-draft").fill(f"counting {uuid.uuid4().hex[:6]}")
+    open_comments(page)
+    type_comment(page, f"counting {uuid.uuid4().hex[:6]}")
     page.get_by_test_id("comment-submit").click()
     # The posted comment is the positive wait; the label is then read off a
     # panel that has demonstrably updated (§318).
@@ -127,11 +166,8 @@ def test_a_mention_is_marked_with_the_server_s_own_span(page, api, talked_about)
     named = next(m for m in members if m.get("display_name"))
 
     open_object(page, talked_about)
-    page.get_by_test_id("view-comments").click()
-    expect(page.get_by_test_id("comments-panel")).to_be_visible(timeout=30000)
-    page.get_by_test_id("comment-draft").fill(
-        f"@{named['display_name']} please look {uuid.uuid4().hex[:6]}"
-    )
+    open_comments(page)
+    type_comment(page, f"@{named['display_name']} please look {uuid.uuid4().hex[:6]}")
     page.get_by_test_id("comment-submit").click()
 
     mention = page.get_by_test_id("comment-mention").last
@@ -147,10 +183,9 @@ def test_an_at_that_names_nobody_is_not_marked(page, talked_about) -> None:
     and imply somebody had been told.
     """
     open_object(page, talked_about)
-    page.get_by_test_id("view-comments").click()
-    expect(page.get_by_test_id("comments-panel")).to_be_visible(timeout=30000)
+    open_comments(page)
     tag = uuid.uuid4().hex[:6]
-    page.get_by_test_id("comment-draft").fill(f"mail nobody@example.org about {tag}")
+    type_comment(page, f"mail nobody@example.org about {tag}")
     page.get_by_test_id("comment-submit").click()
 
     posted = page.get_by_test_id("comment-list")
