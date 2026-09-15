@@ -14,7 +14,7 @@
  * parse `.tsx`: a rule that lives in a component is a rule with no unit test.
  */
 
-import type { PipelineColumn, PipelineNode } from "@/lib/types";
+import type { PipelineColumn, PipelineEdge, PipelineNode } from "@/lib/types";
 
 /** The project-relative section each kind of node belongs to. */
 export function nodeSection(node: Pick<PipelineNode, "kind">): string {
@@ -223,4 +223,80 @@ export function columnsIn(
         // reorder itself the moment a reader selects every node on the graph.
         (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
     );
+}
+
+/* ------------------------------------------------------------------ *
+ * Growing a selection along the lineage (§355; `data-lineage` p.7, p.52)
+ * ------------------------------------------------------------------ */
+
+/** Which way along the arrows an expansion walks. */
+export type Direction = "upstream" | "downstream";
+
+/**
+ * A selection grown along the graph's edges (p.7's arrows, p.52's **Expand
+ * node** and **Expand parents**).
+ *
+ * > "After adding nodes to the graph, you can add their related resources by
+ * > clicking on the arrows on either side of the node or by using the
+ * > **Expand** option in the graph tools." (p.7)
+ *
+ * > "Then, select **Expand node**. You can see all of the ancestor nodes for
+ * > that dataset by clicking the double left arrow above **Expand parents**."
+ * > (p.52)
+ *
+ * **Selection, not addition, and that is the whole translation.** Foundry's
+ * graph is built up from nothing because its scope is an enterprise, so its
+ * arrows *add* resources; this graph is a project drawn whole, so there is
+ * nothing to add and the same gesture grows the **selection** instead. That
+ * keeps what the control is for — "show me what this dataset feeds" — and
+ * drops the mechanism it only needed because the graph started empty. It also
+ * lands where §354 left the histogram: expand downstream from a source, and
+ * p.55's Frequent Columns is answering about everything it touches.
+ *
+ * `hops` is p.52's two granularities in one argument: `1` is an arrow on one
+ * side of the node, `Infinity` is the double arrow that takes the whole chain.
+ *
+ * **Edges, not links.** An ontology link type is a relationship, not a
+ * direction data flows, so two object types referring to each other are not
+ * one upstream of the other (§351's rule, read the other way round).
+ *
+ * Breadth-first with a `seen` set, so a cycle terminates rather than spinning
+ * — this graph reports cycles rather than removing them (§352). The frontier
+ * is the nodes *this* hop found, never everything found so far: `hops` is a
+ * distance, and a frontier that only grows never empties.
+ *
+ * The seeds come back in the answer: growing a selection keeps what was
+ * already in it, which is what makes clicking the same button twice reach
+ * further rather than start over.
+ */
+export function relatives(
+  edges: readonly Pick<PipelineEdge, "from" | "to">[],
+  seeds: readonly string[],
+  direction: Direction,
+  hops: number,
+): string[] {
+  const next = new Map<string, string[]>();
+  for (const edge of edges) {
+    const [at, to] =
+      direction === "downstream" ? [edge.from, edge.to] : [edge.to, edge.from];
+    const already = next.get(at);
+    if (already) already.push(to);
+    else next.set(at, [to]);
+  }
+  const grown = [...seeds];
+  const seen = new Set(seeds);
+  let frontier = [...seeds];
+  for (let hop = 0; hop < hops && frontier.length > 0; hop += 1) {
+    const found: string[] = [];
+    for (const id of frontier) {
+      for (const neighbour of next.get(id) ?? []) {
+        if (seen.has(neighbour)) continue;
+        seen.add(neighbour);
+        grown.push(neighbour);
+        found.push(neighbour);
+      }
+    }
+    frontier = found;
+  }
+  return grown;
 }

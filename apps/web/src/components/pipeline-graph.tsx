@@ -14,6 +14,7 @@ import {
   nodeY,
   outOfDateNote,
   PAD,
+  relatives,
   toggleSelected,
   type Rect,
 } from "@/lib/pipeline-graph";
@@ -391,6 +392,26 @@ export function PipelineGraphView({
               </button>
             ))}
           </div>
+          {column !== null && (
+            /* p.8's drill-down: "By clicking on the values, the matching
+               nodes are highlighted. If you want to drill down to just those
+               resources, click on **Update selection**." The highlight is a
+               question and this is the answer being kept — everything after
+               it, the histogram included, is about those datasets.
+
+               The chip stays pressed afterwards, and every remaining node is
+               lit because they all have the column: that is the drill-down
+               having happened rather than a highlight that failed to dim
+               anything. */
+            <button
+              className="btn quiet"
+              data-testid="update-selection"
+              style={{ marginTop: 6 }}
+              onClick={() => setSelected([...lit])}
+            >
+              Update selection
+            </button>
+          )}
         </div>
       )}
       <div className="form-actions" style={{ marginBottom: 8, alignItems: "center" }}>
@@ -599,11 +620,15 @@ export function PipelineGraphView({
           </div>
         </div>
         {selectedNode && <Details node={selectedNode} onOpen={() => onOpen(selectedNode)} />}
-        {selected.length > 1 && (
-          /* What a selection of several says for itself. The count is the
-             part that matters: the histogram above is now answering about
-             these nodes, and a reader who cannot see how many they have has
-             no way to tell a narrowed list from the graph's own. */
+        {selected.length > 0 && (
+          /* What a selection says for itself. The count is the part that
+             matters: the histogram above is now answering about these nodes,
+             and a reader who cannot see how many they have has no way to tell
+             a narrowed list from the graph's own.
+
+             **From one node up, not two**, because p.52's flow starts on a
+             single node — "right-click the node, then select Expand node" —
+             and the expansions below are the whole reason this bar exists. */
           <div
             data-testid="selection-summary"
             style={{
@@ -611,10 +636,41 @@ export function PipelineGraphView({
               padding: "10px 16px",
               display: "flex",
               alignItems: "center",
-              gap: 12,
+              flexWrap: "wrap",
+              gap: 8,
             }}
           >
-            <span data-testid="selection-count">{selected.length} nodes selected</span>
+            <span data-testid="selection-count" style={{ marginRight: 4 }}>
+              {selected.length} node{selected.length === 1 ? "" : "s"} selected
+            </span>
+            {/* p.7's arrows on either side of a node and p.52's double arrow,
+                as four buttons rather than a gesture on the card: the cards
+                here are 190px wide with three lines of text on them, and
+                arrows small enough to fit beside one are arrows nobody hits.
+                Ordered the way the graph reads, upstream on the left. */}
+            <span className="slug">Expand</span>
+            {(
+              [
+                ["all-upstream", "All upstream", "upstream", Infinity],
+                ["upstream", "Upstream", "upstream", 1],
+                ["downstream", "Downstream", "downstream", 1],
+                ["all-downstream", "All downstream", "downstream", Infinity],
+              ] as const
+            ).map(([id, label, direction, hops]) => (
+              <button
+                key={id}
+                type="button"
+                className="chip"
+                data-testid={`expand-${id}`}
+                onClick={() =>
+                  setSelected((current) =>
+                    relatives(graph.edges, current, direction, hops),
+                  )
+                }
+              >
+                {label}
+              </button>
+            ))}
             <button
               className="btn quiet"
               data-testid="selection-clear"

@@ -17,6 +17,7 @@ import {
   nodesInRect,
   outOfDateNote,
   PAD,
+  relatives,
   toggleSelected,
 } from "./pipeline-graph";
 
@@ -238,5 +239,81 @@ describe("selecting several nodes (p.7, p.54, §354)", () => {
       // would say they did.
       expect(columnsIn(columns, ["model:1", "object_type:1"])).toEqual([]);
     });
+  });
+});
+
+describe("growing a selection along the lineage (p.7, p.52, §355)", () => {
+  //   a ─┐
+  //      ├─> c ──> d ──> e
+  //   b ─┘
+  const edges = [
+    { from: "a", to: "c" },
+    { from: "b", to: "c" },
+    { from: "c", to: "d" },
+    { from: "d", to: "e" },
+  ];
+
+  it("takes one step along the arrows (p.7)", () => {
+    expect(relatives(edges, ["c"], "downstream", 1)).toEqual(["c", "d"]);
+    expect(relatives(edges, ["c"], "upstream", 1)).toEqual(["c", "a", "b"]);
+  });
+
+  it("takes the whole chain when asked for it (p.52)", () => {
+    // p.52's double arrow: "all of the ancestor nodes for that dataset".
+    expect(relatives(edges, ["e"], "upstream", Infinity)).toEqual([
+      "e", "d", "c", "a", "b",
+    ]);
+  });
+
+  it("stops one step short, which is what makes a step a step", () => {
+    // The negative control for the hop count: a build that always walked the
+    // whole chain would satisfy the first assertion above for `c` downstream,
+    // because `c` happens to have one child.
+    expect(relatives(edges, ["e"], "upstream", 1)).toEqual(["e", "d"]);
+    expect(relatives(edges, ["e"], "upstream", 2)).toEqual(["e", "d", "c"]);
+  });
+
+  it("keeps what was already selected", () => {
+    // Growing a selection rather than replacing it is what makes pressing the
+    // same button twice reach further instead of starting over.
+    expect(relatives(edges, ["a", "b"], "downstream", 1)).toEqual(["a", "b", "c"]);
+  });
+
+  it("never repeats a node two paths reach", () => {
+    // `c` is reachable from both `a` and `b`, and a duplicate would have the
+    // histogram count one dataset twice.
+    expect(relatives(edges, ["a", "b"], "downstream", Infinity)).toEqual([
+      "a", "b", "c", "d", "e",
+    ]);
+  });
+
+  it("goes one way at a time", () => {
+    // **The distinction the two buttons are for.** Walking both directions at
+    // once from a dataset in the middle of a pipeline is the whole component,
+    // which is what `focus` already draws — the question here is "what feeds
+    // this" or "what does this feed", and they have different answers.
+    expect(relatives(edges, ["c"], "downstream", Infinity)).toEqual(["c", "d", "e"]);
+    expect(relatives(edges, ["c"], "upstream", Infinity)).toEqual(["c", "a", "b"]);
+  });
+
+  it("terminates on a cycle rather than spinning", () => {
+    // This graph reports cycles; it does not remove them (§352).
+    const loop = [
+      { from: "x", to: "y" },
+      { from: "y", to: "z" },
+      { from: "z", to: "x" },
+    ];
+    expect(relatives(loop, ["x"], "downstream", Infinity)).toEqual(["x", "y", "z"]);
+  });
+
+  it("finds nothing at the end of the line", () => {
+    // The negative control: an expansion that always grew would read as
+    // working on every node.
+    expect(relatives(edges, ["e"], "downstream", Infinity)).toEqual(["e"]);
+    expect(relatives(edges, ["a"], "upstream", Infinity)).toEqual(["a"]);
+  });
+
+  it("an empty selection grows into nothing", () => {
+    expect(relatives(edges, [], "downstream", Infinity)).toEqual([]);
   });
 });
