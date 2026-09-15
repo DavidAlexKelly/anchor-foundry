@@ -639,3 +639,212 @@ def test_the_mermaid_walk_carries_object_types_too(
     assert "([" in g["mermaid"], g["mermaid"]
     # And no link type anywhere in it.
     assert f"Visited {fx.tag}" not in g["mermaid"]
+
+
+# ---- out-of-date datasets (§352; `data-lineage` p.51) ------------------------
+@pytest.fixture(scope="module")
+def staleness(client: TestClient, fx: Fixture) -> dict[str, str]:
+    """A four-stage chain in **its own project**, with the first model re-run.
+
+    Its own project for this file's own reason one level down: these tests
+    assert on whole-project counts, and `chain`'s tests assert `layer_count`,
+    so two fixtures sharing a project would make each other's numbers depend on
+    test order.
+
+    S → A → a_out → B → b_out → C → c_out, every model run once, and then **A
+    run again**. That leaves `a_out` newer than `b_out`, which is p.51's
+    "upstream dataset that hasn't built and isn't up to date" happening for
+    real rather than by writing a timestamp into a fixture.
+    """
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.owner_sub),
+        json={"name": f"Stale {fx.tag}", "slug": f"stale-{fx.tag}"},
+    )
+    assert r.status_code == 201, r.text
+    project = r.json()["id"]
+    pbase = f"/api/workspaces/{fx.workspace}/projects/{project}"
+
+    r = client.post(
+        f"{pbase}/datasets/upload", headers=hdr(fx.owner_sub),
+        data={"name": f"S {fx.tag}"},
+        files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    made: dict[str, str] = {"source": r.json()["id"], "project": project, "base": pbase}
+
+    upstream = made["source"]
+    for step, code in (("a", "SELECT id, val * 2 AS doubled FROM raw"),
+                       ("b", "SELECT id, doubled + 1 AS bumped FROM raw"),
+                       ("c", "SELECT id, bumped FROM raw")):
+        r = client.post(
+            f"{pbase}/models", headers=hdr(fx.owner_sub),
+            json={"name": f"{step.upper()} {fx.tag}", "code": code,
+                  "inputs": [{"dataset_id": upstream, "input_alias": "raw"}]},
+        )
+        assert r.status_code == 201, r.text
+        made[step] = r.json()["id"]
+        r = client.post(f"{pbase}/models/{made[step]}/run", headers=hdr(fx.owner_sub))
+        assert r.json()["ok"], r.text
+        upstream = r.json()["output_dataset"]["id"]
+        made[f"{step}_out"] = upstream
+
+    # **The whole fixture turns on this line.** Re-running A writes a new
+    # version of `a_out`, which is now newer than the `b_out` built from it —
+    # so `b_out` is directly out of date and `c_out`, built from `b_out`, is
+    # out of date because something upstream is. One re-run rather than two:
+    # re-running B as well makes `c_out` directly stale, which sounds like a
+    # stronger fixture and quietly removes the only node this project has that
+    # exercises the transitive reason at all.
+    r = client.post(f"{pbase}/models/{made['a']}/run", headers=hdr(fx.owner_sub))
+    assert r.json()["ok"], r.text
+    return made
+
+
+def stale_graph(client: TestClient, fx: Fixture, staleness: dict[str, str]) -> dict:
+    r = client.get(f"{staleness['base']}/pipeline", headers=hdr(fx.owner_sub))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_dataset_whose_input_is_newer_says_which_of_p51s_reasons_it_is(
+    client: TestClient, fx: Fixture, staleness: dict[str, str]
+) -> None:
+    """> "Is there an upstream dataset that hasn't built and isn't up to
+    > date?" (p.51)
+
+    **The two reasons are different answers to different questions**, which is
+    why they are two values rather than one flag: `input_is_newer` names the
+    dataset to rebuild, and `upstream_is_out_of_date` only says to look
+    further up. A single boolean would send somebody to rebuild `c_out` when
+    the thing that needs rebuilding is `b_out`.
+    """
+    g = stale_graph(client, fx, staleness)
+    by_id = {n["id"]: n for n in g["nodes"]}
+
+    b_out = by_id[f"dataset:{staleness['b_out']}"]
+    assert b_out["out_of_date"] is True
+    assert b_out["out_of_date_reason"] == "input_is_newer", b_out
+
+    # `c_out`'s own input is *not* newer than it — `b_out` has not been rebuilt
+    # — so the only thing wrong with it is upstream, and that is what it says.
+    c_out = by_id[f"dataset:{staleness['c_out']}"]
+    assert c_out["out_of_date"] is True
+    assert c_out["out_of_date_reason"] == "upstream_is_out_of_date", c_out
+
+
+def test_the_rebuilt_dataset_and_the_source_are_not_out_of_date(
+    client: TestClient, fx: Fixture, staleness: dict[str, str]
+) -> None:
+    """**The control that makes the test above mean something.** A build that
+    marked everything stale would satisfy every assertion up there.
+
+    Two different reasons to be current, and both are worth asserting: `a_out`
+    was rebuilt *after* its input, and `S` has nothing feeding it at all — p.51's
+    third question, whether the source itself is current, is the one this
+    platform has nowhere to record an answer for.
+    """
+    g = stale_graph(client, fx, staleness)
+    by_id = {n["id"]: n for n in g["nodes"]}
+
+    a_out = by_id[f"dataset:{staleness['a_out']}"]
+    assert a_out["out_of_date"] is False and a_out["out_of_date_reason"] is None
+
+    source = by_id[f"dataset:{staleness['source']}"]
+    assert source["out_of_date"] is False and source["out_of_date_reason"] is None
+
+
+def test_a_model_is_never_the_thing_that_is_out_of_date(
+    client: TestClient, fx: Fixture, staleness: dict[str, str]
+) -> None:
+    """A model is not a thing that goes stale; its *output* is, and that is the
+    dataset one edge along. The keys are on the node anyway so the shape stays
+    one shape — which is what this asserts, because a `None` where a `False`
+    belongs is the kind of difference a client branches on."""
+    g = stale_graph(client, fx, staleness)
+    for node in g["nodes"]:
+        if node["kind"] != "dataset":
+            assert node["out_of_date"] is False, node
+            assert node["out_of_date_reason"] is None, node
+            assert node["built_at"] is None, node
+
+
+def test_a_model_that_has_never_run_puts_no_output_on_the_graph(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**This test used to claim something that cannot happen**, and a sweep
+    is what found it: it was written as "a dataset nothing has built yet is
+    unbuilt rather than stale", and there is no such dataset.
+    `models.output_dataset_id` is NULL until the first run, so a never-run
+    model contributes no output *node* at all — the two `None` guards in
+    `_mark_out_of_date` are unreachable, which is recorded in its docstring
+    rather than pretended about here.
+
+    What is true and worth holding is the shape of the graph: a model with no
+    output is a node with nothing downstream of it, and nothing on the graph
+    is out of date because nothing has been built twice."""
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.owner_sub),
+        json={"name": f"Unrun {fx.tag}", "slug": f"unrun-{fx.tag}"},
+    )
+    assert r.status_code == 201, r.text
+    pbase = f"/api/workspaces/{fx.workspace}/projects/{r.json()['id']}"
+    r = client.post(
+        f"{pbase}/datasets/upload", headers=hdr(fx.owner_sub),
+        data={"name": f"Raw {fx.tag}"},
+        files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    source = r.json()["id"]
+    r = client.post(
+        f"{pbase}/models", headers=hdr(fx.owner_sub),
+        json={"name": f"Never {fx.tag}", "code": "SELECT * FROM raw",
+              "inputs": [{"dataset_id": source, "input_alias": "raw"}]},
+    )
+    assert r.status_code == 201, r.text
+
+    g = client.get(f"{pbase}/pipeline", headers=hdr(fx.owner_sub)).json()
+    assert [n for n in g["nodes"] if n["out_of_date"]] == []
+    # The positive half: the graph is real and the model is on it, so this is
+    # not passing because nothing was drawn.
+    assert any(n["kind"] == "model" for n in g["nodes"]), g["nodes"]
+    # And the claim the renamed test actually makes: one dataset, the upload.
+    assert [n["name"] for n in g["nodes"] if n["kind"] == "dataset"] == [
+        f"Raw {fx.tag}"
+    ], g["nodes"]
+    # Its *input* edge is there — the model reads the upload — and the output
+    # edge is the one that does not exist yet. Stated as the difference,
+    # because "no edges" was the first draft of this line and was wrong.
+    assert [e["to"] for e in g["edges"]] == [
+        n["id"] for n in g["nodes"] if n["kind"] == "model"
+    ], g["edges"]
+    assert not [e for e in g["edges"] if e["from"].startswith("model:")], (
+        "a model that has never run has written nothing to point at"
+    )
+
+
+def test_built_at_is_the_version_rather_than_the_row(
+    client: TestClient, fx: Fixture, staleness: dict[str, str]
+) -> None:
+    """`datasets.updated_at` is touched by a rename, and a rename is not a
+    build. Comparing those would make renaming a dataset mark everything
+    downstream of it stale, which is a warning nobody can act on."""
+    g = stale_graph(client, fx, staleness)
+    by_id = {n["id"]: n for n in g["nodes"]}
+    a_out = by_id[f"dataset:{staleness['a_out']}"]
+    assert a_out["built_at"] is not None
+
+    r = client.patch(
+        f"{staleness['base']}/datasets/{staleness['a_out']}",
+        headers=hdr(fx.owner_sub), json={"name": f"A renamed {fx.tag}"},
+    )
+    assert r.status_code == 200, r.text
+
+    after = {n["id"]: n for n in stale_graph(client, fx, staleness)["nodes"]}
+    renamed = after[f"dataset:{staleness['a_out']}"]
+    assert renamed["built_at"] == a_out["built_at"], "a rename is not a build"
+    assert renamed["out_of_date"] is False
+    # And nothing downstream moved either, which is the failure this guards.
+    assert after[f"dataset:{staleness['b_out']}"]["out_of_date_reason"] == (
+        "input_is_newer"
+    )
+

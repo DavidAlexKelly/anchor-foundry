@@ -504,6 +504,17 @@ class GraphNode(BaseModel):
     last_run_status: str | None = None
     last_run_at: datetime | None = None
     updated_at: datetime | None = None
+    # When this dataset last *became* what it is (§352; `data-lineage` p.51) —
+    # its latest version's `created_at`, not the row's `updated_at`, because a
+    # rename touches that one and a rename is not a build. Null on a model and
+    # on an object type, neither of which is a thing that gets built.
+    built_at: datetime | None = None
+    # p.51's "upstream dataset that hasn't built and isn't up to date".
+    out_of_date: bool = False
+    # Which of p.51's reasons: `input_is_newer` names the dataset to rebuild,
+    # `upstream_is_out_of_date` says to look further up. Two values rather than
+    # one flag, because they send a reader to different places.
+    out_of_date_reason: str | None = None
 
 
 class GraphEdge(BaseModel):

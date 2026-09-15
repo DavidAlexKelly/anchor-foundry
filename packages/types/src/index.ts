@@ -1193,6 +1193,17 @@ export interface PipelineNode {
   last_run_status: string | null;
   last_run_at: string | null;
   updated_at: string | null;
+  /** When this dataset last *became* what it is (§352; `data-lineage` p.51) —
+   * its latest version's creation time, not the row's `updated_at`, because a
+   * rename touches that one and a rename is not a build. Null on a model and
+   * on an object type, neither of which is a thing that gets built. */
+  built_at: string | null;
+  /** p.51's "upstream dataset that hasn't built and isn't up to date". */
+  out_of_date: boolean;
+  /** Which of p.51's reasons — `"input_is_newer"` names the dataset to
+   * rebuild, `"upstream_is_out_of_date"` says to look further up. Two values
+   * rather than one flag, because they send a reader to different places. */
+  out_of_date_reason: string | null;
 }
 
 export interface PipelineEdge {

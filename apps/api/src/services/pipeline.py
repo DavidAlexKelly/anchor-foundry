@@ -90,7 +90,13 @@ async def project_graph(
                d.updated_at,
                (SELECT v.expectation_results FROM dataset_versions v
                  WHERE v.dataset_id = d.id
-                 ORDER BY v.version_number DESC LIMIT 1) AS expectation_results
+                 ORDER BY v.version_number DESC LIMIT 1) AS expectation_results,
+               -- When the dataset last *became* what it is (§352;
+               -- `data-lineage` p.51). `datasets.updated_at` is not this: a
+               -- rename touches it, and a rename is not a build.
+               (SELECT v.created_at FROM dataset_versions v
+                 WHERE v.dataset_id = d.id
+                 ORDER BY v.version_number DESC LIMIT 1) AS built_at
           FROM datasets d
          WHERE d.project_id = :pid
          ORDER BY d.name
@@ -157,8 +163,12 @@ async def project_graph(
             "row_count": d["row_count"],
             "current_version": d["current_version"],
             "updated_at": d["updated_at"],
+            "built_at": d["built_at"],
             # Read from the cache only - see this module's docstring.
             "health_status": _health_status(d["expectation_results"]),
+            # Filled in below, once every node and edge is known.
+            "out_of_date": False,
+            "out_of_date_reason": None,
             "language": None,
             "trigger_mode": None,
             "last_run_status": None,
@@ -175,7 +185,13 @@ async def project_graph(
             "row_count": None,
             "current_version": None,
             "updated_at": m["last_run_at"],
+            "built_at": None,
             "health_status": None,
+            # A model is not a thing that goes out of date; its *output* is,
+            # and that is the dataset node one edge along. Present so the node
+            # shape stays one shape rather than two.
+            "out_of_date": False,
+            "out_of_date_reason": None,
             "language": m["language"],
             "trigger_mode": m["trigger_mode"],
             "last_run_status": m["last_run_status"],
@@ -209,7 +225,10 @@ async def project_graph(
                 "row_count": None,
                 "current_version": None,
                 "updated_at": row["last_synced_at"],
+                "built_at": None,
                 "health_status": None,
+                "out_of_date": False,
+                "out_of_date_reason": None,
                 "language": None,
                 "trigger_mode": None,
                 "last_run_status": status,
@@ -299,6 +318,8 @@ async def project_graph(
                 "cardinality": row["cardinality"],
             })
 
+    _mark_out_of_date(nodes, edges)
+
     layers, cycles = _layer(known, edges)
     for node in nodes:
         node["layer"] = layers[node["id"]]
@@ -322,6 +343,105 @@ async def project_graph(
         "cycles": cycles,
         "layer_count": (max(layers.values()) + 1) if layers else 0,
     }
+
+
+#: p.51's two answerable questions, as the two states a dataset can be in.
+#: Ordered most specific first, which is also which one wins when both apply:
+#: "its input is newer than it" names the dataset to rebuild, and "an upstream
+#: is out of date" only says to look further up.
+INPUT_IS_NEWER = "input_is_newer"
+UPSTREAM_IS_OUT_OF_DATE = "upstream_is_out_of_date"
+
+
+def _mark_out_of_date(
+    nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
+) -> None:
+    """Which datasets are out of date, and which of p.51's reasons it is.
+
+    > "Is my dataset build failing? Is there an **upstream dataset that hasn't
+    >  built and isn't up to date**? Have we received up-to-date data from the
+    >  source?" (`data-lineage` p.51)
+
+    **Two of those three, and the third is named rather than guessed at.** The
+    first is already on the graph — a model's `last_run_status` is red when its
+    build failed. The second is this function. The third asks whether the
+    *source* is current, which needs an expectation about how often data
+    arrives that this platform has nowhere to record; inventing one would put a
+    number on the screen that nothing stands behind.
+
+    **Times are compared, not version numbers.** Two datasets' version numbers
+    are independent counters, so "input is at v7 and output at v3" says nothing
+    at all; when each last *became what it is* is the comparison that means
+    something. `built_at` is the latest version's `created_at` rather than
+    `datasets.updated_at`, because a rename touches the latter and a rename is
+    not a build.
+
+    **The two `None` guards are unfalsifiable, and they stay.** A sweep found
+    that nothing can reach them: `models.output_dataset_id` is NULL until the
+    first run, so a never-run model contributes no output *node* at all, and
+    every dataset that exists has a version. §213 says delete a check nothing
+    can make fail — with the stated exception of one whose absence would be a
+    real fault, and this is that: `None > datetime` raises, and a `TypeError`
+    here is a 500 on a read path rather than a wrong answer. Two lines against
+    that trade is worth making, and saying so is better than a test that
+    pretends to exercise them. The docstring is the guard's justification
+    because no test can be.
+
+    Mutates the nodes, because the caller is about to lay them out and a second
+    pass to merge two lists of the same nodes is a second chance to mismatch
+    them.
+    """
+    by_id = {n["id"]: n for n in nodes}
+    # Dataset → the datasets feeding it, through whichever model sits between.
+    # The graph's edges are dataset→model and model→dataset, so the producing
+    # model is the hop this collapses.
+    into: dict[str, list[str]] = defaultdict(list)
+    downstream: dict[str, list[str]] = defaultdict(list)
+    for edge in edges:
+        downstream[edge["from"]].append(edge["to"])
+    for model_id, outputs in list(downstream.items()):
+        if not model_id.startswith("model:"):
+            continue
+        for output in outputs:
+            for source, targets in downstream.items():
+                if source.startswith("dataset:") and model_id in targets:
+                    into[output].append(source)
+
+    stale: set[str] = set()
+    for output, sources in into.items():
+        built = by_id.get(output, {}).get("built_at")
+        if built is None:
+            continue
+        for source in sources:
+            fed = by_id.get(source, {}).get("built_at")
+            if fed is not None and fed > built:
+                node = by_id[output]
+                node["out_of_date"] = True
+                node["out_of_date_reason"] = INPUT_IS_NEWER
+                stale.add(output)
+                break
+
+    # Then downstream of those, which is p.51's second question asked one hop
+    # further along. Breadth-first with a `seen` set, so a cycle terminates
+    # rather than spinning — `_layer` reports cycles, it does not remove them.
+    frontier = list(stale)
+    seen = set(stale)
+    while frontier:
+        current = frontier.pop()
+        for step in downstream.get(current, []):
+            for onward in ([step] if step.startswith("dataset:")
+                           else downstream.get(step, [])):
+                if onward in seen or onward not in by_id:
+                    continue
+                seen.add(onward)
+                frontier.append(onward)
+                # **No "unless it already has a reason" here, because `seen`
+                # already is that check.** It starts as the directly-stale set,
+                # so every node this loop reaches is one nothing has marked —
+                # a sweep proved the guard unfalsifiable, which is the tell for
+                # a second answer to a question something else answers (§213).
+                by_id[onward]["out_of_date"] = True
+                by_id[onward]["out_of_date_reason"] = UPSTREAM_IS_OUT_OF_DATE
 
 
 def _connected_component(node_ids: set[str], edges: list[dict[str, Any]], start: str) -> set[str]:

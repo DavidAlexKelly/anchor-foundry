@@ -37,3 +37,30 @@ export function nodePath(
 ): string {
   return `/${workspace}/${project}/${nodeSection(node)}`;
 }
+
+/**
+ * What a node's out-of-date state reads as (§352; `data-lineage` p.51).
+ *
+ * > "Is there an upstream dataset that hasn't built and isn't up to date?"
+ * > (p.51)
+ *
+ * **Two sentences rather than one badge**, because the two states send a
+ * reader to different places: one names *this* dataset as the thing to
+ * rebuild, and the other says the thing to rebuild is further up. A single
+ * "out of date" would have somebody rebuilding the wrong one and watching it
+ * come back stale.
+ *
+ * Returns `""` for a node that is current, which is most of them.
+ */
+export function outOfDateNote(
+  node: Pick<PipelineNode, "out_of_date" | "out_of_date_reason">,
+): string {
+  if (!node.out_of_date) return "";
+  if (node.out_of_date_reason === "upstream_is_out_of_date") {
+    return "an upstream is out of date";
+  }
+  // Anything else out of date is the direct case. Not keyed on the exact
+  // string: a reason this build has not heard of still means *something* is
+  // stale, and saying so beats drawing nothing at all.
+  return "its input is newer";
+}
