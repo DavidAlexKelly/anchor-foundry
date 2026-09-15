@@ -38,6 +38,7 @@ import { objects as objApi } from "@/lib/api";
 import { MapCanvas } from "@/components/canvas/map";
 import { toLatLon } from "@/components/canvas/map";
 import { PropertyValue } from "@/components/property-value";
+import { ReducedValue } from "@/components/reduced-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 import { visibleProperties } from "@/components/object-properties";
 import { plot } from "@/components/series-plot";
@@ -250,13 +251,21 @@ export function StandardObjectView({
               <tr key={p.api_name} data-property={p.api_name}>
                 <th scope="row">{p.display_name || p.api_name}</th>
                 <td>
-                  <PropertyValue
+                  {/* p.131's "in a table or application" (§349; db 0088).
+                      **The ordinary list reduces and the prominent cards above
+                      do not**, which is p.131's own distinction rather than an
+                      omission: applications "enable you to view the complete
+                      array on hover **or in expanded views**", and a card
+                      given a whole row of its own is the expanded view. So the
+                      reduced value is what a reader scanning the list sees,
+                      and the full array is what a property promoted to a card
+                      shows. `ReducedValue` falls through to the value itself
+                      for every property that declares no reducer. */}
+                  <ReducedValue
                     workspaceId={workspaceId}
-                    dataType={p.data_type}
-                    valueFormat={p.value_format}
-                    structFields={p.struct_fields}
+                    property={p}
+                    instance={instance}
                     style={conditionalStyle(p.conditional_format, instance.properties)}
-                    value={instance.properties[p.api_name]}
                   />
                 </td>
               </tr>

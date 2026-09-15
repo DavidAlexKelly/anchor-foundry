@@ -2854,6 +2854,11 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    this platform is already drawn as. */
 .array-value { display: inline-flex; flex-wrap: wrap; gap: 2px; align-items: baseline; }
 
+/* One value standing for a list (§349; `object-link-types` p.131). The count
+   beside it is a `.slug`, so the reduced value is the only part that reads as
+   the value — p.131 shows "the most recent date", not a summary of a list. */
+.reduced-value { display: inline-flex; gap: 0; align-items: baseline; }
+
 /* ---- the notification bell (§257; `action-types` p.91) --------------------
    Anchored to the app bar rather than to the page, because p.91 puts
    notifications in the Workspace: a person has one inbox across every

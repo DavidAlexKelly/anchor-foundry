@@ -8,6 +8,7 @@ import { actions as actionApi, ApiError, objects as objApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
+import { ReducedValue } from "@/components/reduced-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { UndoToast } from "@/components/undo-toast";
@@ -225,13 +226,18 @@ export default function ObjectInstancesPage() {
                     <td className="slug">{instance.primary_key}</td>
                     {properties.map((p) => (
                       <td key={p.api_name}>
-                        <PropertyValue
+                        {/* p.131's "in a table", which is the sentence that
+                            says where a reducer is *for*. `ReducedValue`
+                            falls through to the value itself for every
+                            property that declares none, which is every
+                            property on every type until somebody says
+                            otherwise — so this is not an array special case
+                            standing in the table's one rendering path. */}
+                        <ReducedValue
                           workspaceId={workspace!.id}
-                          dataType={p.data_type}
-                          valueFormat={p.value_format}
-                          structFields={p.struct_fields}
+                          property={p}
+                          instance={instance}
                           style={conditionalStyle(p.conditional_format, instance.properties)}
-                          value={instance.properties[p.api_name]}
                         />
                       </td>
                     ))}
