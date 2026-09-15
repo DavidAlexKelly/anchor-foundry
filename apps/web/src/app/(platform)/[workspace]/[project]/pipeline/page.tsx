@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import { models as modelApi } from "@/lib/api";
 import { PipelineGraphView } from "@/components/pipeline-graph";
+import { nodePath } from "@/lib/pipeline-graph";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { PipelineGraph, PipelineNode } from "@/lib/types";
 
@@ -20,8 +21,10 @@ export default function PipelinePage() {
   });
 
   function open(node: PipelineNode) {
-    const base = `/${params.workspace}/${params.project}`;
-    router.push(node.kind === "model" ? `${base}/models` : `${base}/datasets`);
+    // One rule for the three graphs that draw these nodes — see
+    // `lib/pipeline-graph`, which is where an object type learned to open
+    // into the Ontology Manager (§351; p.32).
+    router.push(nodePath(node, params.workspace, params.project));
   }
 
   return (

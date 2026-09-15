@@ -6,6 +6,7 @@ import { useState } from "react";
 import { ApiError, datasets as dsApi, downloadFile, models as modelApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { PipelineGraphView } from "@/components/pipeline-graph";
+import { nodePath } from "@/lib/pipeline-graph";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { Dataset, DatasetHealth, TabularResult } from "@/lib/types";
 
@@ -567,11 +568,12 @@ function LineageDialog({
         <PipelineGraphView
           graph={graph.data}
           maxHeight={380}
-          // Only models need navigating to - a dataset node is reachable
-          // from the list this dialog was opened over.
+          // A dataset node is deliberately inert: the list this dialog was
+          // opened over is right behind it. Everything else navigates, which
+          // since §351 includes an object type (p.32).
           onOpen={(node) => {
-            if (node.kind === "model") {
-              router.push(`/${params.workspace}/${params.project}/models`);
+            if (node.kind !== "dataset") {
+              router.push(nodePath(node, params.workspace, params.project));
             }
           }}
         />

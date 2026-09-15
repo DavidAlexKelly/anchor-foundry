@@ -1168,8 +1168,11 @@ export interface ModelAdoption {
  *  fields are both nullable rather than split into a union, so the view can
  *  map over `nodes` without narrowing on every access. */
 export interface PipelineNode {
-  id: string;                 // "dataset:<uuid>" | "model:<uuid>"
-  kind: "dataset" | "model";
+  id: string;                 // "dataset:<uuid>" | "model:<uuid>" | "object_type:<uuid>"
+  /** An object type is on this graph when a dataset in the project backs it
+   * (§351; `data-lineage` p.31) — which is what turns a pipeline view into
+   * the answer to "if I change this column, what breaks?". */
+  kind: "dataset" | "model" | "object_type";
   resource_id: string;
   name: string;
   /** Distance downstream; every edge points from a lower layer to a higher one. */
@@ -1199,9 +1202,27 @@ export interface PipelineEdge {
   label: string | null;
 }
 
+/** A link type between two object types on the graph (§351;
+ * `data-lineage` p.32).
+ *
+ * **Beside the edges, never among them.** An edge means *data flows this way*
+ * and is what the layering and the cycle report are built from; a link type is
+ * a relationship between two object types, so two types referring to each
+ * other are an ordinary ontology rather than a cycle in a pipeline. Both ends
+ * are always nodes on the same graph — a link to an object type outside the
+ * component is not sent. */
+export interface PipelineLink {
+  id: string;
+  from: string;
+  to: string;
+  name: string;
+  cardinality: string;
+}
+
 export interface PipelineGraph {
   nodes: PipelineNode[];
   edges: PipelineEdge[];
+  links: PipelineLink[];
   /** Node ids grouped per cycle; empty when the graph is a clean DAG. */
   cycles: string[][];
   layer_count: number;

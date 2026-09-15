@@ -39,6 +39,15 @@ function edgePath(from: PipelineNode, to: PipelineNode): string {
 }
 
 function statusColour(node: PipelineNode): string {
+  // An object type's last *run* is its last sync (§351), so it colours the
+  // way a model does rather than the way a dataset's health does — the
+  // question a red node answers here is "did the thing that writes this
+  // work", and for an object type that thing is the sync.
+  if (node.kind === "object_type") {
+    if (node.last_run_status === "ok") return "var(--accent)";
+    if (node.last_run_status === "error") return "var(--danger)";
+    return "var(--line-strong)";
+  }
   if (node.kind === "model") {
     if (node.last_run_status === "succeeded") return "var(--accent)";
     if (node.last_run_status === "failed") return "var(--danger)";
@@ -51,6 +60,12 @@ function statusColour(node: PipelineNode): string {
 }
 
 function subtitle(node: PipelineNode): string {
+  if (node.kind === "object_type") {
+    // The api_name, because that is what a person writing a transform or an
+    // action against this type actually types — the display name is already
+    // the line above it.
+    return node.slug ?? "object type";
+  }
   if (node.kind === "model") {
     const trigger =
       node.trigger_mode === "cron" ? "scheduled"
@@ -110,7 +125,7 @@ function NodeCard({
           color: "var(--ink-soft)",
         }}
       >
-        {node.kind}
+        {node.kind === "object_type" ? "object type" : node.kind}
         {node.in_cycle && <span style={{ color: "var(--danger)" }}> · in a cycle</span>}
       </div>
       <div
@@ -153,7 +168,24 @@ function Details({
         <div style={{ fontFamily: "var(--font-display)", fontSize: 14 }}>{node.name}</div>
         <div className="slug">{node.slug ?? node.kind}</div>
       </div>
-      {node.kind === "model" ? (
+      {node.kind === "object_type" ? (
+        <>
+          <span
+            className={
+              node.last_run_status === "ok" ? "status-ok"
+              : node.last_run_status === "error" ? "status-error"
+              : "status-unconfigured"
+            }
+          >
+            <span className="status-dot" />
+            <span className="status-label">
+              {node.last_run_status === "never_synced"
+                ? "never synced"
+                : node.last_run_status ?? "never synced"}
+            </span>
+          </span>
+        </>
+      ) : node.kind === "model" ? (
         <>
           <span className="chip">{node.language === "python" ? "Python" : "SQL"}</span>
           <span className="chip">{node.trigger_mode}</span>
@@ -177,7 +209,7 @@ function Details({
       )}
       {when && <span className="slug">{new Date(when).toLocaleString()}</span>}
       <button className="btn quiet" style={{ marginLeft: "auto" }} onClick={onOpen}>
-        Open {node.kind}
+        Open {node.kind === "object_type" ? "object type" : node.kind}
       </button>
     </div>
   );
@@ -317,6 +349,31 @@ export function PipelineGraphView({
                     strokeWidth={touched ? 2 : 1.25}
                     markerEnd="url(#pipeline-arrow)"
                   />
+                );
+              })}
+              {/* p.32's link types. **Dashed and un-arrowed on purpose**: an
+                  arrow on this graph means data flows that way, and a link
+                  type is a relationship between two object types. Drawing one
+                  like an edge would say the ontology is part of the build
+                  order, which is exactly what keeping them out of `edges`
+                  avoids on the server. */}
+              {graph.links.map((l) => {
+                const from = byId.get(l.from);
+                const to = byId.get(l.to);
+                if (!from || !to) return null;
+                const touched = selected === l.from || selected === l.to;
+                return (
+                  <path
+                    key={l.id}
+                    d={edgePath(from, to)}
+                    fill="none"
+                    stroke={touched ? "var(--accent)" : "var(--line)"}
+                    strokeWidth={touched ? 2 : 1.25}
+                    strokeDasharray="4 3"
+                    data-testid="pipeline-link"
+                  >
+                    <title>{`${l.name} (${l.cardinality})`}</title>
+                  </path>
                 );
               })}
             </svg>
