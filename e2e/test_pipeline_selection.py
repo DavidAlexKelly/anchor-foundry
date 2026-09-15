@@ -121,7 +121,7 @@ def test_a_rectangle_in_drag_select_mode_takes_the_nodes_under_it(page, selectab
     # assertion that says the rectangle took *that* card. A count would have
     # read the same for any one of the three.
     expect(page.get_by_test_id("details-name")).to_have_text(title)
-    expect(page.get_by_test_id("selection-summary")).to_have_count(0)
+    expect(page.get_by_test_id("selection-count")).to_have_text("1 node selected")
     # And the graph draws the one it took, rather than leaving the detail bar
     # to be the only place the selection exists.
     selected = page.locator("[data-selected]")
