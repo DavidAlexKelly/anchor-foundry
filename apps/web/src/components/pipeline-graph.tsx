@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import type { PipelineGraph, PipelineNode } from "@/lib/types";
+import { outOfDateNote } from "@/lib/pipeline-graph";
 
 // One renderer, two entry points: the project-wide Pipeline page and a
 // single dataset's lineage, which is the same endpoint with a `focus`
@@ -53,6 +54,9 @@ function statusColour(node: PipelineNode): string {
     if (node.last_run_status === "failed") return "var(--danger)";
     return "var(--line-strong)";
   }
+  // A stale dataset outranks its health here: passing expectations on data
+  // that is behind is exactly the reassuring half of the answer (§352).
+  if (node.out_of_date) return "var(--brass)";
   if (node.health_status === "fail") return "var(--danger)";
   if (node.health_status === "warn") return "var(--brass)";
   if (node.health_status === "pass") return "var(--accent)";
@@ -127,6 +131,16 @@ function NodeCard({
       >
         {node.kind === "object_type" ? "object type" : node.kind}
         {node.in_cycle && <span style={{ color: "var(--danger)" }}> · in a cycle</span>}
+        {/* p.51's out-of-date state (§352), beside the cycle warning because
+            both answer "why does this node need my attention". `--brass` and
+            not `--danger`: a stale dataset is correct data that is behind,
+            which is a different thing from a build that failed. */}
+        {outOfDateNote(node) && (
+          <span style={{ color: "var(--brass)" }} data-testid="node-out-of-date">
+            {" · "}
+            {outOfDateNote(node)}
+          </span>
+        )}
       </div>
       <div
         style={{
