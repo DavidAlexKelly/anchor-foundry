@@ -49,6 +49,7 @@ Three deliberate decisions:
 """
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from typing import Any
 from uuid import UUID
@@ -87,7 +88,7 @@ async def project_graph(
         conn,
         """
         SELECT d.id, d.name, d.slug, d.origin, d.row_count, d.current_version,
-               d.updated_at,
+               d.updated_at, d.table_schema,
                (SELECT v.expectation_results FROM dataset_versions v
                  WHERE v.dataset_id = d.id
                  ORDER BY v.version_number DESC LIMIT 1) AS expectation_results,
@@ -318,6 +319,14 @@ async def project_graph(
                 "cardinality": row["cardinality"],
             })
 
+    # **p.54-55's frequent columns**, over the graph as it stands (§353) — so
+    # after the focus narrowing, for the reason `links` are: a lineage view
+    # asks about the datasets it drew, not about the whole project.
+    columns = _frequent_columns(
+        [n for n in nodes if n["kind"] == "dataset"],
+        {str(d["id"]): d["table_schema"] for d in datasets},
+    )
+
     _mark_out_of_date(nodes, edges)
 
     layers, cycles = _layer(known, edges)
@@ -340,9 +349,70 @@ async def project_graph(
         "edges": edges,
         # Beside the edges rather than among them — see where they are built.
         "links": links,
+        "columns": columns,
         "cycles": cycles,
         "layer_count": (max(layers.values()) + 1) if layers else 0,
     }
+
+
+def _frequent_columns(
+    datasets: list[dict[str, Any]], schemas: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """p.54-55's Frequent Columns, for the datasets on the graph.
+
+    > "Under the Frequent Columns section, you can see the **most frequent
+    >  columns by name** in your selection. Click one of the columns to
+    >  **highlight the datasets in your selection that contain this column**."
+    >  (p.55)
+
+    **The answer is which datasets, not how many.** A count is what the section
+    is *sorted* by, and `len(datasets)` is that count — sending the ids is what
+    makes p.55's click possible at all, and sending a number beside them would
+    be a second copy of something already in the list.
+
+    **By name only, not by name and type.** p.55 says "by name", and that is
+    also the question somebody changing a schema is asking: *where else does
+    `customer_id` appear*, whatever it is typed as there. A column that is a
+    string in one dataset and an integer in another is exactly the case worth
+    finding, and keying on the pair would hide it.
+
+    Ordered most frequent first and then by name, which is p.55's own ordering
+    with a tiebreak added — without one two equally common columns come back in
+    whatever order the schemas happened to list them, and a reader loses their
+    place for no reason.
+
+    **Three lines here are unfalsifiable, and a sweep is what established
+    that** (§213). The `isinstance` check on a schema row and the `not in`
+    before appending both guard against shapes the write path cannot produce:
+    db 0003's rows are `{"name", "type", "nullable"}` objects, and DuckDB
+    renames a CSV's duplicate column rather than passing two of the same name
+    through (`id, id` arrives as `id, id_1`). They stay for §352's reason:
+    this is a read path, so a hand-edited schema costs two lines here against a
+    `TypeError` that would be a 500 on the page. The `kind == "dataset"` filter
+    at the call site is the third — an object type's `resource_id` is not a
+    dataset id, so `schemas.get` would miss anyway — and it is kept as a
+    statement of what this counts rather than as a check that does anything.
+    """
+    where: dict[str, list[str]] = defaultdict(list)
+    for node in datasets:
+        held = schemas.get(node["resource_id"])
+        if isinstance(held, str):
+            held = json.loads(held)
+        for column in held or []:
+            # A schema row is `{"name", "type", "nullable"}` (db 0003), and a
+            # hand-edited one that is not gets skipped rather than crashing a
+            # graph: this is a read path, and one malformed dataset must not
+            # take the page down with it.
+            if isinstance(column, dict) and isinstance(column.get("name"), str):
+                name = column["name"]
+                if node["id"] not in where[name]:
+                    where[name].append(node["id"])
+    return [
+        {"name": name, "datasets": sorted(ids)}
+        for name, ids in sorted(
+            where.items(), key=lambda item: (-len(item[1]), item[0])
+        )
+    ]
 
 
 #: p.51's two answerable questions, as the two states a dataset can be in.
