@@ -29,6 +29,17 @@ Three deliberate decisions:
     decision about model edits, flagged in ROADMAP rather than smuggled in
     here.
 
+  * **Ontology entities are on the graph, and link types are beside it**
+    (§351; `data-lineage` p.30-32). Foundry's lineage is not dataset-only:
+    "find object types defined by datasets in your lineage graph" (p.31), and
+    the object types a dataset backs are what turn this from a pipeline view
+    into the answer to "if I change this column, what breaks?". A sync is a
+    flow, so a dataset→object type arrow is an ordinary edge; a **link type
+    is not**, so it travels in `links` where it cannot be mistaken for a build
+    dependency. p.30's *Related artifacts* panel is ○ rather than half-built:
+    it lists Contour visualizations and Slate applications, and this platform
+    has neither.
+
   * **Nothing is computed that isn't already stored.** Dataset health
     (§26) is read from the cached column only, never computed: this is one
     request for a whole project, and evaluating expectations for every
@@ -46,6 +57,17 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all
 from ..lib.errors import NotFoundError
+
+
+#: How bad each sync state is, worst first (§351; db 0003's
+#: `object_sync_status`). An object type backed by several datasets reports the
+#: **worst** of their syncs, because the question this graph answers is "what is
+#: wrong downstream of here" and an `ok` beside an `error` would answer it with
+#: the reassuring half.
+#:
+#: Module-level so the ordering is a named decision a test can read, rather than
+#: a literal inside a loop that nothing can ask about.
+_WORST = {"error": 0, "never_synced": 1, "syncing": 2, "ok": 3}
 
 
 async def project_graph(
@@ -100,6 +122,28 @@ async def project_graph(
         """,
         {"pid": str(project_id)},
     )
+    # **The ontology entities** (§351; `data-lineage` p.30-32, TOC §7). One
+    # row per *source*, not per object type: db 0003 allows an object type to
+    # be backed by several datasets, and a type backed by two of this
+    # project's datasets is downstream of both — which is the whole point of
+    # drawing it here.
+    #
+    # `object_type_sources` has no project of its own; it is project-scoped by
+    # the dataset it names, which is why this joins through `datasets` rather
+    # than filtering the mapping directly.
+    ontology = await fetch_all(
+        conn,
+        """
+        SELECT ots.dataset_id, ot.id, ot.api_name, ot.display_name, ot.icon,
+               ots.sync_status::text AS sync_status, ots.last_synced_at
+          FROM object_type_sources ots
+          JOIN datasets d ON d.id = ots.dataset_id
+          JOIN object_types ot ON ot.id = ots.object_type_id
+         WHERE d.project_id = :pid
+         ORDER BY ot.display_name, ots.dataset_id
+        """,
+        {"pid": str(project_id)},
+    )
 
     nodes: list[dict[str, Any]] = []
     for d in datasets:
@@ -138,8 +182,62 @@ async def project_graph(
             "last_run_at": m["last_run_at"],
         })
 
+    # **One node per object type, whatever its sources number** (§351). The
+    # query above is per source because the *edges* are, and folding here is
+    # what keeps a type backed by three datasets one node with three arrows in
+    # rather than three nodes with the same name.
+    #
+    # The fields are the node shape's own, used for what they say: an object
+    # type's sync *is* its last run, so `last_run_status` carries db 0003's
+    # `sync_status` and the view colours it the way it colours a model's. A
+    # type with several sources reports the **worst** of them, because the
+    # question this graph answers is "what is wrong downstream of here" and an
+    # `ok` beside an `error` would answer it with the reassuring half.
+    by_type: dict[str, dict[str, Any]] = {}
+    for row in ontology:
+        oid = str(row["id"])
+        held = by_type.get(oid)
+        status = str(row["sync_status"])
+        if held is None:
+            by_type[oid] = {
+                "id": f"object_type:{oid}",
+                "kind": "object_type",
+                "resource_id": oid,
+                "name": row["display_name"] or row["api_name"],
+                "slug": row["api_name"],
+                "origin": None,
+                "row_count": None,
+                "current_version": None,
+                "updated_at": row["last_synced_at"],
+                "health_status": None,
+                "language": None,
+                "trigger_mode": None,
+                "last_run_status": status,
+                "last_run_at": row["last_synced_at"],
+            }
+            continue
+        if _WORST.get(status, 9) < _WORST.get(str(held["last_run_status"]), 9):
+            held["last_run_status"] = status
+        # The most recent sync of any source, so "when was this type last
+        # written" reads as a fact about the type rather than about whichever
+        # source the ordering happened to put last.
+        if row["last_synced_at"] is not None and (
+            held["last_run_at"] is None or row["last_synced_at"] > held["last_run_at"]
+        ):
+            held["last_run_at"] = row["last_synced_at"]
+            held["updated_at"] = row["last_synced_at"]
+    nodes.extend(by_type.values())
+
     known = {n["id"] for n in nodes}
     edges: list[dict[str, Any]] = []
+    for row in ontology:
+        # **A real flow, not a cross-reference**, which is why it belongs in
+        # `edges` beside a model's: the sync reads the dataset and writes the
+        # object type's instances, so the type is downstream of it exactly as
+        # a model's output dataset is downstream of the model.
+        src, dst = f"dataset:{row['dataset_id']}", f"object_type:{row['id']}"
+        if src in known and dst in known:
+            edges.append({"from": src, "to": dst, "label": None})
     for i in inputs:
         src, dst = f"dataset:{i['dataset_id']}", f"model:{i['model_id']}"
         # A model may read a dataset from another project only if something
@@ -161,6 +259,46 @@ async def project_graph(
         edges = [e for e in edges if e["from"] in component and e["to"] in component]
         known = component
 
+    # **p.32's link types, and they are deliberately *not* edges** (§351).
+    #
+    # > "You can then view link types related to the object type and use the
+    # >  graph to visualize connections between your datasets and the newly
+    # >  added object type." (p.32)
+    #
+    # `edges` means *data flows this way*: it is what `_layer` builds the
+    # build order from and what `cycles` reports on. A link type is a
+    # relationship between two object types, not a dependency between them —
+    # so putting one in `edges` would make two types that reference each other
+    # a reported "cycle" in a pipeline, which is an ordinary and correct
+    # ontology and a false alarm about the data.
+    #
+    # It is also why they are resolved *after* the focus narrowing rather than
+    # before: a link must not drag a dataset into a lineage view that has no
+    # data path to the focus. Both ends have to be on the graph already, which
+    # is the same `known` guard every other edge here passes through.
+    on_graph = [n["resource_id"] for n in nodes if n["kind"] == "object_type"]
+    links: list[dict[str, Any]] = []
+    if on_graph:
+        for row in await fetch_all(
+            conn,
+            """
+            SELECT id, api_name, display_name, cardinality::text AS cardinality,
+                   from_object_type_id, to_object_type_id
+              FROM link_types
+             WHERE from_object_type_id = ANY(CAST(:ids AS uuid[]))
+               AND to_object_type_id = ANY(CAST(:ids AS uuid[]))
+             ORDER BY display_name, api_name
+            """,
+            {"ids": on_graph},
+        ):
+            links.append({
+                "id": str(row["id"]),
+                "from": f"object_type:{row['from_object_type_id']}",
+                "to": f"object_type:{row['to_object_type_id']}",
+                "name": row["display_name"] or row["api_name"],
+                "cardinality": row["cardinality"],
+            })
+
     layers, cycles = _layer(known, edges)
     for node in nodes:
         node["layer"] = layers[node["id"]]
@@ -179,6 +317,8 @@ async def project_graph(
     return {
         "nodes": sorted(nodes, key=lambda n: (n["layer"], n["position"])),
         "edges": edges,
+        # Beside the edges rather than among them — see where they are built.
+        "links": links,
         "cycles": cycles,
         "layer_count": (max(layers.values()) + 1) if layers else 0,
     }

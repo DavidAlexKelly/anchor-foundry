@@ -861,12 +861,22 @@ async def lineage_for_dataset(
     conn: AsyncConnection, project_id: UUID, dataset_id: UUID
 ) -> dict[str, Any]:
     """Bidirectional walk over dataset↔model edges within the project.
-    Returns nodes (datasets + models) and directed edges, plus a Mermaid
-    rendering (§"Models": "Exportable as JSON or Mermaid diagram")."""
+    Returns nodes (datasets + models + object types) and directed edges, plus a
+    Mermaid rendering (§"Models": "Exportable as JSON or Mermaid diagram").
+
+    **Object types are leaves, and link types are not here at all** (§351;
+    `data-lineage` p.31). The question this answers is "what touches *this
+    dataset*", and the frontier it walks is datasets — a sync makes an object
+    type downstream of one, so it belongs, but a link type joins two object
+    types rather than touching any dataset, and following one would turn a
+    provenance walk into a walk through the ontology. `pipeline.project_graph`
+    is where links are drawn, beside the edges rather than among them.
+    """
     await ds_service.get(conn, project_id, dataset_id)
 
     datasets_seen: dict[str, dict[str, Any]] = {}
     models_seen: dict[str, dict[str, Any]] = {}
+    object_types_seen: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, str]] = []
     frontier = [str(dataset_id)]
 
@@ -902,6 +912,27 @@ async def lineage_for_dataset(
                 edges.append({"from": f"dataset:{did}", "to": f"model:{mid}"})
                 frontier.append(did)
 
+        # Downstream: the object types this dataset backs (p.31). Leaves, so
+        # nothing joins the frontier - the walk follows data, and an object
+        # type is where the data stops being a dataset.
+        for ot in await fetch_all(
+            conn,
+            """
+            SELECT ot.id, ot.api_name, ot.display_name
+              FROM object_type_sources ots
+              JOIN object_types ot ON ot.id = ots.object_type_id
+             WHERE ots.dataset_id = :did
+            """,
+            {"did": current},
+        ):
+            oid = str(ot["id"])
+            object_types_seen.setdefault(oid, {
+                "id": ot["id"],
+                "api_name": ot["api_name"],
+                "name": ot["display_name"] or ot["api_name"],
+            })
+            edges.append({"from": f"dataset:{current}", "to": f"object_type:{oid}"})
+
         # Downstream: models consuming this dataset, and their outputs.
         consumers = await fetch_all(
             conn,
@@ -931,16 +962,23 @@ async def lineage_for_dataset(
         lines.append(f'    D{short(did)}["{d["name"]}"]')
     for mid, m in models_seen.items():
         lines.append(f'    M{short(mid)}{{{{"{m["name"]}"}}}}')
+    # A third shape, so a reader of the diagram can tell an object type from
+    # the dataset that backs it - Mermaid's stadium, which is neither the
+    # dataset's box nor the model's hexagon.
+    for oid, o in object_types_seen.items():
+        lines.append(f'    O{short(oid)}(["{o["name"]}"])')
     for e in sorted(unique_edges, key=lambda x: (x["from"], x["to"])):
         src_kind, src_id = e["from"].split(":", 1)
         dst_kind, dst_id = e["to"].split(":", 1)
-        src = ("D" if src_kind == "dataset" else "M") + short(src_id)
-        dst = ("D" if dst_kind == "dataset" else "M") + short(dst_id)
+        prefix = {"dataset": "D", "model": "M", "object_type": "O"}
+        src = prefix[src_kind] + short(src_id)
+        dst = prefix[dst_kind] + short(dst_id)
         lines.append(f"    {src} --> {dst}")
 
     return {
         "datasets": list(datasets_seen.values()),
         "models": list(models_seen.values()),
+        "object_types": list(object_types_seen.values()),
         "edges": unique_edges,
         "mermaid": "\n".join(lines),
     }

@@ -20,6 +20,7 @@ import { useRouter } from "next/navigation";
 import { datasets as datasetApi, models as modelApi } from "@/lib/api";
 import { useUrlState } from "@/components/use-url-state";
 import { PipelineGraphView } from "@/components/pipeline-graph";
+import { nodePath } from "@/lib/pipeline-graph";
 import type { ResolvedResource, TabularResult } from "@/lib/types";
 
 const TABS = ["preview", "schema", "history", "lineage", "details"] as const;
@@ -395,9 +396,12 @@ function LineageTab({ resource }: { resource: ResolvedResource }) {
         graph={graph.data}
         maxHeight={520}
         onOpen={(node) => {
-          if (node.kind === "model") {
+          // The dataset itself is what this app is already showing, so only
+          // the other kinds navigate — an object type among them since §351
+          // (p.32's "view its configuration in a new Ontology manager tab").
+          if (node.kind !== "dataset") {
             router.push(
-              `/${resource.workspace_slug}/${resource.project_slug}/models`,
+              nodePath(node, resource.workspace_slug, resource.project_slug!),
             );
           }
         }}

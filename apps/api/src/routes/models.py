@@ -514,9 +514,29 @@ class GraphEdge(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class GraphLink(BaseModel):
+    """A link type between two object types on the graph (§351;
+    `data-lineage` p.32).
+
+    **Not a `GraphEdge`**, and the difference is the whole reason it has a
+    model of its own: an edge means *data flows this way* and is what the
+    layering and the cycle report are built from. A link type is a
+    relationship between two object types, so two types referring to each
+    other are an ordinary ontology rather than a cycle in a pipeline."""
+
+    id: UUID
+    from_: str = Field(alias="from")
+    to: str
+    name: str
+    cardinality: str
+
+    model_config = {"populate_by_name": True}
+
+
 class PipelineGraph(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
+    links: list[GraphLink] = []
     cycles: list[list[str]]
     layer_count: int
 
@@ -530,14 +550,20 @@ async def pipeline_graph(
     level, like the other read surfaces - it exposes nothing a viewer can't
     already list one resource at a time.
 
-    `focus` ("dataset:<uuid>" or "model:<uuid>") narrows the result to that
+    `focus` ("dataset:<uuid>", "model:<uuid>" or "object_type:<uuid>") narrows the result to that
     node's connected component, which is what the lineage view asks for -
     one endpoint rather than two, since a project graph and a lineage graph
     are the same question from different entry points."""
     if focus is not None and not re.fullmatch(
-        r"(dataset|model):[0-9a-fA-F-]{36}", focus
+        r"(dataset|model|object_type):[0-9a-fA-F-]{36}", focus
     ):
-        raise ValueError("focus must be 'dataset:<uuid>' or 'model:<uuid>'")
+        # `object_type` joined the two in §351: an object type is a node on
+        # this graph now, and a node the view draws and cannot centre on is a
+        # node whose neighbours are unreachable from it.
+        raise ValueError(
+            "focus must be 'dataset:<uuid>', 'model:<uuid>' or "
+            "'object_type:<uuid>'"
+        )
     async with user_connection(access.auth.user_id) as conn:
         return PipelineGraph(
             **await pipeline_service.project_graph(conn, access.project_id, focus=focus)

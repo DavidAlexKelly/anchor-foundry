@@ -299,8 +299,343 @@ def test_an_empty_project_is_an_empty_graph(client: TestClient, fx: Fixture) -> 
         f"/api/workspaces/{fx.workspace}/projects/{empty}/pipeline", headers=hdr(fx.owner_sub)
     )
     assert r.status_code == 200, r.text
-    assert r.json() == {"nodes": [], "edges": [], "cycles": [], "layer_count": 0}
+    # `links` joined this shape in §351. Asserted as the **whole** dict on
+    # purpose: an empty graph is the one case where every key can be named,
+    # so a key added without a thought about what "empty" means for it fails
+    # here rather than reaching a client that did not expect it.
+    assert r.json() == {"nodes": [], "edges": [], "links": [], "cycles": [],
+                        "layer_count": 0}
 
 
 def test_an_outsider_cannot_read_the_graph(client: TestClient, fx: Fixture) -> None:
     assert client.get(f"{base(fx)}/pipeline", headers=hdr(fx.outsider_sub)).status_code == 404
+
+
+# ---- ontology entities (§351; `data-lineage` p.30-32) ------------------------
+@pytest.fixture(scope="module")
+def ontology(client: TestClient, fx: Fixture, chain: dict[str, str]) -> dict[str, str]:
+    """Two object types on this project's data, joined by a link type.
+
+    `sites` is backed by **both** the source and A's output, which is the case
+    db 0003's `UNIQUE (object_type_id, dataset_id)` allows and the one that
+    decides whether a type is one node or several. `visits` is backed by the
+    source alone, so there is a link with both ends on the graph.
+    """
+    wbase = f"/api/workspaces/{fx.workspace}"
+    made: dict[str, str] = {}
+    for name, columns in (("sites", ["id"]), ("visits", ["id"])):
+        r = client.post(
+            f"{wbase}/object-types", headers=hdr(fx.editor_sub),
+            json={"api_name": f"{name}_{fx.tag}",
+                  "display_name": f"{name.title()} {fx.tag}",
+                  "properties": [{"api_name": c, "data_type": "string"} for c in columns],
+                  "title_property": "id"},
+        )
+        assert r.status_code == 201, r.text
+        made[name] = r.json()["id"]
+
+    sources: dict[tuple[str, str], str] = {}
+    for object_type, dataset in (
+        (made["sites"], chain["source"]),
+        (made["sites"], chain["a_out"]),
+        (made["visits"], chain["source"]),
+    ):
+        r = client.post(
+            f"{base(fx)}/object-type-sources", headers=hdr(fx.editor_sub),
+            json={"object_type_id": object_type, "dataset_id": dataset,
+                  "primary_key_column": "id", "column_mappings": {"id": "id"}},
+        )
+        assert r.status_code == 201, r.text
+        sources[(object_type, dataset)] = r.json()["id"]
+
+    # **One of `sites`' two sources is synced and the other is not**, which is
+    # what gives the fold something to fold. A sweep found the version of this
+    # fixture where both were `never_synced`: the mutant that stopped folding
+    # survived, because with two identical states there is nothing a fold can
+    # do that not folding does differently (§213).
+    synced = sources[(made["sites"], chain["source"])]
+    r = client.post(
+        f"{base(fx)}/object-type-sources/{synced}/sync", headers=hdr(fx.editor_sub)
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.post(
+        f"{wbase}/link-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"visited_{fx.tag}", "display_name": f"Visited {fx.tag}",
+              "from_type_id": made["sites"], "to_type_id": made["visits"],
+              "cardinality": "one_to_many"},
+    )
+    assert r.status_code == 201, r.text
+    made["link"] = r.json()["id"]
+    return made
+
+
+def test_an_object_type_is_downstream_of_every_dataset_backing_it(
+    client: TestClient, fx: Fixture, chain: dict[str, str], ontology: dict[str, str]
+) -> None:
+    """p.31's "find object types defined by datasets in your lineage graph",
+    which is what turns this view into the answer to "if I change this column,
+    what breaks?".
+
+    **One node with two arrows in, not two nodes.** A type backed by two of
+    this project's datasets is one thing downstream of both, and the query
+    behind this is per *source* — so folding is a real step and getting it
+    wrong would draw the same object type twice under the same name.
+    """
+    g = graph(client, fx)
+    sites = node(g, f"Sites {fx.tag}", "object_type")
+    assert sites["resource_id"] == ontology["sites"]
+    assert sites["slug"] == f"sites_{fx.tag}"
+
+    into = {e["from"] for e in g["edges"] if e["to"] == sites["id"]}
+    assert into == {f"dataset:{chain['source']}", f"dataset:{chain['a_out']}"}, into
+    # And it is an ordinary edge, so the layering promise still holds over it:
+    # a sync reads the dataset and writes the type, which is a flow.
+    layers = {n["id"]: n["layer"] for n in g["nodes"]}
+    for e in g["edges"]:
+        assert layers[e["to"]] > layers[e["from"]], e
+
+
+def test_an_object_type_reports_the_worst_of_its_syncs(
+    client: TestClient, fx: Fixture, ontology: dict[str, str]
+) -> None:
+    """Never synced beside never synced is never synced — the interesting half
+    is that a type with several sources answers with **one** state, and which
+    one is a decision rather than whichever row sorted last.
+
+    The question this graph answers is "what is wrong downstream of here", so
+    an `ok` beside an `error` has to read as the error.
+    """
+    from src.services import pipeline as pipeline_service
+
+    g = graph(client, fx)
+    sites = node(g, f"Sites {fx.tag}", "object_type")
+    visits = node(g, f"Visits {fx.tag}", "object_type")
+
+    # `sites` has one source synced and one never synced, so the two halves of
+    # the fold answer from **different rows** — and that pairing is what makes
+    # this test able to fail. Without folding the node takes whichever row the
+    # query returned last, which gives either ("ok", a timestamp) or
+    # ("never_synced", None); neither is this.
+    assert sites["last_run_status"] == "never_synced", sites
+    assert sites["last_run_at"] is not None, sites
+
+    # The control: a type whose one source is untouched says so plainly, which
+    # is what stops the assertion above from passing on a build that reports
+    # "never_synced" for everything.
+    assert visits["last_run_status"] == "never_synced"
+    assert visits["last_run_at"] is None, visits
+
+    # And the ordering itself, named so the decision is readable rather than a
+    # literal inside a loop.
+    ranked = ["error", "never_synced", "syncing", "ok"]
+    assert ranked == sorted(ranked, key=lambda s: pipeline_service._WORST[s]), (
+        "the order that decides which of a type's syncs it reports"
+    )
+
+
+def test_a_link_type_is_drawn_beside_the_edges_and_not_among_them(
+    client: TestClient, fx: Fixture, ontology: dict[str, str]
+) -> None:
+    """> "You can then view link types related to the object type and use the
+    > graph to visualize connections between your datasets and the newly added
+    > object type." (p.32)
+
+    **The separation is the assertion.** `edges` is what the layering and the
+    cycle report are built from, and a link type is a relationship rather than
+    a dependency — so two object types that reference each other are an
+    ordinary ontology, and putting the link in `edges` would report them as a
+    cycle in the *pipeline*.
+    """
+    g = graph(client, fx)
+    sites = node(g, f"Sites {fx.tag}", "object_type")
+    visits = node(g, f"Visits {fx.tag}", "object_type")
+
+    assert g["links"] == [{
+        "id": ontology["link"],
+        "from": sites["id"], "to": visits["id"],
+        "name": f"Visited {fx.tag}", "cardinality": "one_to_many",
+    }], g["links"]
+    # Nowhere in `edges`, which is the half that keeps `cycles` meaning what it
+    # says.
+    assert not [e for e in g["edges"]
+                if {e["from"], e["to"]} == {sites["id"], visits["id"]}]
+    assert g["cycles"] == []
+
+
+def test_a_lineage_view_carries_the_object_types_its_data_backs(
+    client: TestClient, fx: Fixture, chain: dict[str, str], ontology: dict[str, str]
+) -> None:
+    """Focused on one dataset, which is how the dataset app asks. The object
+    types the focus feeds are part of its component, because the edge into them
+    is a real one."""
+    r = client.get(
+        f"{base(fx)}/pipeline?focus=dataset:{chain['source']}",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    g = r.json()
+    kinds = {(n["kind"], n["name"]) for n in g["nodes"]}
+    assert ("object_type", f"Sites {fx.tag}") in kinds
+    assert ("object_type", f"Visits {fx.tag}") in kinds
+    assert g["links"], "both ends are on this component, so the link is drawn"
+
+
+@pytest.fixture(scope="module")
+def apart(client: TestClient, fx: Fixture, ontology: dict[str, str]) -> dict[str, str]:
+    """An object type on a dataset **no model touches**, linked to `sites`.
+
+    The chain is one connected component from end to end — `_connected_
+    component` is undirected on purpose, so focusing its last dataset still
+    reaches its first. Testing that a link does not widen a component therefore
+    needs a second component, which is what this is.
+    """
+    r = client.post(
+        f"{base(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Aside {fx.tag}"},
+        files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    dataset = r.json()["id"]
+
+    wbase = f"/api/workspaces/{fx.workspace}"
+    r = client.post(
+        f"{wbase}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"aside_{fx.tag}", "display_name": f"Aside {fx.tag}",
+              "properties": [{"api_name": "id", "data_type": "string"}],
+              "title_property": "id"},
+    )
+    assert r.status_code == 201, r.text
+    object_type = r.json()["id"]
+    r = client.post(
+        f"{base(fx)}/object-type-sources", headers=hdr(fx.editor_sub),
+        json={"object_type_id": object_type, "dataset_id": dataset,
+              "primary_key_column": "id", "column_mappings": {"id": "id"}},
+    )
+    assert r.status_code == 201, r.text
+    r = client.post(
+        f"{wbase}/link-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"aside_of_{fx.tag}", "display_name": f"Aside of {fx.tag}",
+              "from_type_id": ontology["sites"], "to_type_id": object_type,
+              "cardinality": "one_to_many"},
+    )
+    assert r.status_code == 201, r.text
+    return {"dataset": dataset, "object_type": object_type}
+
+
+def test_a_link_never_widens_the_component_it_is_drawn_on(
+    client: TestClient, fx: Fixture, chain: dict[str, str],
+    ontology: dict[str, str], apart: dict[str, str],
+) -> None:
+    """**The reason links are resolved after the narrowing, not before.**
+
+    A link is not a data path, so it must not pull a dataset into a lineage
+    view that has no flow to the focus. `Aside` is linked to `Sites` and sits
+    on a dataset nothing in the chain touches — so focusing the chain must
+    leave it out, link and all.
+
+    The whole-project graph is the control: the link *is* real, and a test that
+    only looked for its absence would pass against a build that never drew one.
+    """
+    whole = graph(client, fx)
+    assert any(l["to"] == f"object_type:{apart['object_type']}"
+               for l in whole["links"]), whole["links"]
+
+    r = client.get(
+        f"{base(fx)}/pipeline?focus=dataset:{chain['b_out']}",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    g = r.json()
+    # The positive wait first: the component is real and contains the focus.
+    assert any(n["id"] == f"dataset:{chain['b_out']}" for n in g["nodes"])
+    # `Sites` is here — it is downstream of the chain's source — and `Aside` is
+    # not, because the only thing joining them is a link.
+    drawn = {n["name"] for n in g["nodes"] if n["kind"] == "object_type"}
+    assert f"Sites {fx.tag}" in drawn, drawn
+    assert f"Aside {fx.tag}" not in drawn, drawn
+    assert not [l for l in g["links"]
+                if l["to"] == f"object_type:{apart['object_type']}"]
+
+
+def test_an_object_type_is_a_node_a_lineage_view_can_centre_on(
+    client: TestClient, fx: Fixture, ontology: dict[str, str]
+) -> None:
+    """A node the graph draws and cannot be centred on is a node whose
+    neighbours are unreachable from it — so `focus` takes an object type too
+    (§351), and the datasets backing it are what comes back."""
+    r = client.get(
+        f"{base(fx)}/pipeline?focus=object_type:{ontology['sites']}",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    g = r.json()
+    sites = node(g, f"Sites {fx.tag}", "object_type")
+    assert sites["is_focus"] is True
+    assert {n["kind"] for n in g["nodes"]} >= {"dataset", "object_type"}
+
+    # And a shape the regex used to refuse outright is now a 404 about *this*
+    # workspace rather than a 422 about the spelling — the distinction §9 draws.
+    import uuid as _uuid
+    missing = client.get(
+        f"{base(fx)}/pipeline?focus=object_type:{_uuid.uuid4()}",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert missing.status_code == 404, missing.text
+
+
+def test_an_object_type_backed_by_another_projects_data_is_not_here(
+    client: TestClient, fx: Fixture, ontology: dict[str, str]
+) -> None:
+    """The boundary this graph has always had, stated for the ontology (§351).
+
+    `object_types` are **workspace**-scoped and this graph is a *project's*, so
+    a type reached through another project's dataset is not this project's
+    lineage — the same line `_validate_and_set_inputs` draws for a model's
+    inputs. A link to it is not drawn either, because both ends must be on the
+    graph.
+    """
+    other = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.owner_sub),
+        json={"name": f"Elsewhere {fx.tag}", "slug": f"elsewhere-{fx.tag}"},
+    )
+    assert other.status_code == 201, other.text
+    g = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{other.json()['id']}/pipeline",
+        headers=hdr(fx.owner_sub),
+    ).json()
+    # `sites` is a workspace resource and is perfectly visible from here — it
+    # is simply not on *this* project's graph, because no dataset here backs it.
+    assert [n for n in g["nodes"] if n["kind"] == "object_type"] == []
+    assert g["links"] == []
+
+
+def test_the_mermaid_walk_carries_object_types_too(
+    client: TestClient, fx: Fixture, chain: dict[str, str], ontology: dict[str, str]
+) -> None:
+    """The *other* lineage builder (§351). `models.lineage_for_dataset` answers
+    "what touches this dataset" as a walk plus a Mermaid rendering, and the
+    graph the browser draws comes from `project_graph` — two builders, one
+    question, and a feature added to one of them is a feature half the product
+    does not have.
+
+    **Link types are deliberately absent here** and that is asserted: the walk
+    follows data, an object type is where the data stops being a dataset, and a
+    link type joins two object types rather than touching any dataset.
+    """
+    r = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/datasets/{chain['source']}/lineage",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    g = r.json()
+    names = {o["name"] for o in g["object_types"]}
+    assert f"Sites {fx.tag}" in names and f"Visits {fx.tag}" in names, names
+    assert {"from": f"dataset:{chain['source']}",
+            "to": f"object_type:{ontology['sites']}"} in g["edges"]
+    # A third Mermaid shape, so the diagram can be read: `([...])` is neither
+    # the dataset's box nor the model's hexagon.
+    assert "([" in g["mermaid"], g["mermaid"]
+    # And no link type anywhere in it.
+    assert f"Visited {fx.tag}" not in g["mermaid"]

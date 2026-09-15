@@ -96,15 +96,23 @@ Foundry's navigation has six regions (`data-lineage` p.6): lineage graph, branch
 
 ### 2.4 Ontology entities in lineage
 
-"Explore artifacts and ontology entities" (TOC §7). Foundry's lineage graph is not dataset-only — object types and their backing datasets appear in the same graph. Ours stops at datasets. ○
+"Explore artifacts and ontology entities" (TOC §7; `data-lineage` p.30-32). Foundry's lineage graph is not dataset-only — object types and their backing datasets appear in the same graph. ◑ §351.
 
-That is the item to prioritise: it is what turns lineage from a pipeline tool into the answer to "if I change this column, what breaks?"
+**Built:** an object type a project's dataset backs is a node on the graph, and the sync is an ordinary **edge** into it — a sync reads the dataset and writes the type's instances, so the type is downstream of it exactly as a model's output dataset is downstream of the model. A type backed by several of the project's datasets is **one** node with an arrow from each (db 0003 allows it), reporting the **worst** of their syncs: the question this view answers is "what is wrong downstream of here", and an `ok` beside an `error` would answer it with the reassuring half. p.32's **link types are drawn beside the edges, never among them** — `edges` is what the layering and the cycle report are built from, and a link type is a relationship rather than a dependency, so putting one there would report two object types that reference each other as a cycle in a *pipeline*, which is an ordinary and correct ontology. They are also resolved **after** the focus narrowing, so a link cannot drag a dataset into a lineage view that has no data path to the focus; both ends must already be on the graph. An object type is a node the graph can be **centred on** too, because a node a view draws and cannot centre on is one whose neighbours are unreachable from it.
+
+**The boundary is the one this graph always had, stated for the ontology:** `object_types` and `link_types` are *workspace*-scoped and this graph is a *project's*, so a type reached through another project's dataset is not this project's lineage — the same line `_validate_and_set_inputs` draws for a model's inputs. `object_type_sources` has no project of its own; it is project-scoped by the dataset it names.
+
+**Both builders, because there are two.** `pipeline.project_graph` is what the browser draws and `models.lineage_for_dataset` is the Mermaid/JSON export, and a feature added to one of them is a feature half the product does not have — the kind of split §216 exists to catch. Object types are in both; **link types are deliberately only in the first**, because the export's question is "what touches *this dataset*" and a link type joins two object types rather than touching any dataset.
+
+**○ — p.30's Related artifacts panel**, and the reason is structural rather than effort: it lists "Contour visualizations and Slate applications", and this platform has neither. Building a panel with a badge counting nothing would be §214's control that cannot work.
+
+**The sweep scored 17/1 with one no-op, and re-swept 3/0.** The survivor was a fixture that could not tell the difference: `sites` had two sources and both were `never_synced`, so the mutant that stopped folding them survived — with two identical states there is nothing a fold does that not folding does differently (§213). One source is synced now, which makes the two halves of the fold answer from *different rows*: a build that took whichever row came last would report either `ok` with a timestamp or `never_synced` with none, and the node reports `never_synced` **with** a timestamp. The no-op was a mutant whose anchor had drifted from the SQL, re-run separately rather than counted as a catch. And the harness tripped §350's own lesson twice — the browser stage's freshness guard fires once a sweep has restored anything under `apps/api/src`, so the server mutants are scored on the pytest stage and the stack is restarted before each baseline.
 
 ---
 
 ## 3. Build order
 
-1. **Ontology entities in the lineage graph.** Turns lineage into an impact-analysis tool.
+1. ~~**Ontology entities in the lineage graph.**~~ — **done (§351)**, and it turned lineage into the impact-analysis tool this line said it would. What §2.4 now records that this line could not have: the interesting decision was **not** which nodes to add but which arrows *are not edges* — a link type between two object types is a relationship, and `edges` means data flows this way. Struck in the commit that finished it, per §216. p.30's Related artifacts panel stays ○ with its reason on the row.
 2. **Out-of-date datasets**, and **find datasets with a given column**. Both cheap; both directly useful during a schema change.
 3. **Search & Browse helper**, node expansion, drag-select.
 4. **Branch from a historical transaction** (Dataset Preview) — the missing half of §56.
