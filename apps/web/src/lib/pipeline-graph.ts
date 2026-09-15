@@ -132,6 +132,12 @@ export function isDrag(rect: Rect): boolean {
  * has selected it as far as the person drawing it is concerned; requiring the
  * whole card means dragging past the edge of a graph you cannot see the end of
  * to pick up the node you are looking at.
+ *
+ * The order of the result is the graph's and **nothing promises it**, unlike
+ * `toggleSelected`'s, because a rectangle has no order a reader chose. §356's
+ * sweep confirmed it: sorting this output fails no test, and that is correct
+ * rather than a gap (§213). A consumer that comes to need an order has to ask
+ * for one here rather than assume this.
  */
 export function nodesInRect(
   nodes: readonly Pick<PipelineNode, "id" | "layer" | "position">[],
@@ -299,4 +305,61 @@ export function relatives(
     frontier = found;
   }
   return grown;
+}
+
+/* ------------------------------------------------------------------ *
+ * Finding nodes on the graph (§356; `data-lineage` p.8)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The nodes a search matches (p.8's search helper, minus the half that has
+ * nowhere to go here).
+ *
+ * > "Use the search helper to find Foundry resources **and add them to the
+ * > graph**. Use the free-text search or browse the tree to find resources.
+ * > Add a resource by clicking on it or use the buttons at the bottom of the
+ * > view to **add all search results**... Use the **Advanced** tab to add
+ * > filters to your search and sort your results." (p.8)
+ *
+ * **Find carries over; add does not.** p.8's helper does two things, and the
+ * adding is only there because Foundry's graph starts empty over an
+ * enterprise. This graph is a project drawn whole (§355 settled that), so
+ * every result is already on it — which leaves *finding* one by name, still
+ * real on a graph with forty cards, and turns "add all search results" into
+ * **select all of them**, where §354's histogram and §355's expansions can
+ * take it further.
+ *
+ * `kinds` is p.8's Advanced tab: an empty set is no restriction, which is what
+ * a reader who has not touched it means.
+ *
+ * **Nothing matches nothing.** An empty query with no kind chosen returns no
+ * results rather than every node, because the page opens in that state and a
+ * search that starts by highlighting the whole graph has said nothing. A kind
+ * on its own *is* a question, though — "show me the models" — so it answers.
+ *
+ * Name **and** slug, because the slug is what somebody writing a transform or
+ * an action against an object type actually types, and it is the line the card
+ * already shows them (§351).
+ *
+ * Results come back in the nodes' own order, which is the graph's: the layer
+ * order the server sorted them into, so "the first match" means the one
+ * furthest upstream rather than whichever the search happened to reach first.
+ */
+export function search(
+  nodes: readonly Pick<PipelineNode, "id" | "kind" | "name" | "slug">[],
+  query: string,
+  kinds: readonly PipelineNode["kind"][] = [],
+): string[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === "" && kinds.length === 0) return [];
+  const wanted = new Set(kinds);
+  return nodes
+    .filter((node) => {
+      if (wanted.size > 0 && !wanted.has(node.kind)) return false;
+      if (needle === "") return true;
+      const name = node.name.toLowerCase();
+      const slug = (node.slug ?? "").toLowerCase();
+      return name.includes(needle) || slug.includes(needle);
+    })
+    .map((node) => node.id);
 }
