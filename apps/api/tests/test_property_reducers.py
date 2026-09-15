@@ -731,3 +731,144 @@ def test_an_object_type_with_no_reducers_reduces_nothing(
     listed = client.get(f"{wbase(fx)}/object-types/{type_id}/instances",
                         headers=hdr(fx.viewer_sub)).json()
     assert listed["items"][0]["reduced"] == {}
+
+
+# ---- p.132's interface sentence (§350) ---------------------------------------
+def test_what_a_property_presents_to_an_interface() -> None:
+    """> "Array properties require non-array types to satisfactorily implement
+    > interface properties." (p.132)
+
+    **The element type, because `reduce` answers with an element.** p.131 says
+    "a single value *in* the array", so a reduced list of dates is a date —
+    and a reduced list of *structs* is a struct, not the field it reduced by,
+    which is the distinction p.133 draws and the one an implementation would
+    otherwise get wrong in the direction that looks right.
+    """
+    presents = property_reducers.implements_as
+    assert presents({"data_type": "string"}) == "string"
+    assert presents({"data_type": "array", "array_of": "date",
+                     "reducers": [{"operation": "latest", "field": None}]}) == "date"
+    # p.133's struct array reduces *by* a field and answers with the element,
+    # so what it presents is `struct` — which is itself not an interface type.
+    assert presents({"data_type": "array", "array_of": "struct",
+                     "reducers": [{"operation": "latest", "field": "on"}]}) == "struct"
+
+
+def test_an_array_with_no_reducer_presents_as_an_array() -> None:
+    """p.132's sentence doing its work rather than a fallback: there is no
+    single value, so there is nothing a non-array interface property could be
+    satisfied by. **This is the assertion the whole feature turns on** — if an
+    unreduced array presented its element type, every array would silently
+    satisfy an interface it cannot answer for.
+    """
+    presents = property_reducers.implements_as
+    assert presents({"data_type": "array", "array_of": "date"}) == "array"
+    assert presents({"data_type": "array", "array_of": "date",
+                     "reducers": []}) == "array"
+    assert presents({"data_type": "array", "array_of": "date",
+                     "reducers": None}) == "array"
+
+
+def test_a_reduced_array_implements_an_interface_property(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.132 end to end, which is the wiring the pure test above cannot speak
+    for: whether `set_implementations` builds its map through `implements_as`
+    at all.
+
+    The same object type twice — refused, then accepted after a reducer is
+    added and nothing else changes. **That order is the test**: asserting only
+    that the reduced one is accepted would pass against a build that never
+    compared base types.
+    """
+    tag = uuid.uuid4().hex[:6]
+    made = client.post(
+        f"{wbase(fx)}/interfaces", headers=hdr(fx.editor_sub),
+        json={"api_name": f"Inspectable{tag}", "display_name": f"Inspectable {tag}",
+              "properties": [{"api_name": "last_checked", "data_type": "date"}]},
+    )
+    assert made.status_code == 201, made.text
+    interface_id = made.json()["id"]
+
+    unreduced = [
+        {"api_name": "code", "data_type": "string"},
+        {"api_name": "checks", "data_type": "array", "array_of": "date"},
+    ]
+    typed = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"insp_{tag}", "display_name": f"Inspected {tag}",
+              "properties": unreduced, "title_property": "code"},
+    )
+    assert typed.status_code == 201, typed.text
+    type_id = typed.json()["id"]
+
+    def implement():
+        return client.put(
+            f"{wbase(fx)}/object-types/{type_id}/interfaces",
+            headers=hdr(fx.editor_sub),
+            json=[{"interface_id": interface_id,
+                   "property_mapping": {"last_checked": "checks"}}],
+        )
+
+    refused = implement()
+    assert refused.status_code == 422, refused.text
+    # The message names p.132 and the fix, because the fix is not "map a
+    # different property" the way every other mismatch's is.
+    assert "no reducer" in refused.text and "p.132" in refused.text, refused.text
+
+    reduced = [
+        {"api_name": "code", "data_type": "string"},
+        {"api_name": "checks", "data_type": "array", "array_of": "date",
+         "reducers": [{"operation": "latest"}]},
+    ]
+    edited = client.patch(
+        f"{wbase(fx)}/object-types/{type_id}", headers=hdr(fx.editor_sub),
+        json={"display_name": f"Inspected {tag}", "properties": reduced},
+    )
+    assert edited.status_code == 200, edited.text
+
+    accepted = implement()
+    assert accepted.status_code == 200, accepted.text
+    held = client.get(f"{wbase(fx)}/object-types/{type_id}/interfaces",
+                      headers=hdr(fx.viewer_sub)).json()
+    assert [e["property_mapping"] for e in held] == [{"last_checked": "checks"}], held
+
+
+def test_a_reduced_array_still_has_to_reduce_to_the_right_type(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The negative control the test above needs: a build that stopped checking
+    base types once a reducer was present would satisfy every assertion up
+    there. An array of *strings* reduces to a string, and a `date` interface
+    property is still not satisfied by it.
+    """
+    tag = uuid.uuid4().hex[:6]
+    made = client.post(
+        f"{wbase(fx)}/interfaces", headers=hdr(fx.editor_sub),
+        json={"api_name": f"Dated{tag}", "display_name": f"Dated {tag}",
+              "properties": [{"api_name": "last_checked", "data_type": "date"}]},
+    )
+    assert made.status_code == 201, made.text
+    typed = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"tags_{tag}", "display_name": f"Tagged {tag}",
+              "properties": [
+                  {"api_name": "code", "data_type": "string"},
+                  {"api_name": "tags", "data_type": "array",
+                   "array_of": "string",
+                   "reducers": [{"operation": "first"}]},
+              ],
+              "title_property": "code"},
+    )
+    assert typed.status_code == 201, typed.text
+    r = client.put(
+        f"{wbase(fx)}/object-types/{typed.json()['id']}/interfaces",
+        headers=hdr(fx.editor_sub),
+        json=[{"interface_id": made.json()["id"],
+               "property_mapping": {"last_checked": "tags"}}],
+    )
+    assert r.status_code == 422, r.text
+    # The *ordinary* mismatch message, not p.132's — this one is answered by
+    # mapping a different property, and saying "no reducer" would be wrong.
+    assert "base types must match" in r.text, r.text
+    assert "no reducer" not in r.text, r.text

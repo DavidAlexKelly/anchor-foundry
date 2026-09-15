@@ -281,6 +281,53 @@ def reduce(value: Any, reducers: Any) -> Any:
     return candidates[0] if answered else None
 
 
+def implements_as(prop: dict[str, Any]) -> str:
+    """The base type this property presents to an interface (p.131-132).
+
+    > "A property reducer enables you to transform an array property into a
+    >  single value in the array for display and **interface implementation
+    >  purposes**." (p.131)
+
+    > "Array properties require non-array types to satisfactorily implement
+    >  interface properties." (p.132)
+
+    **The element type, because `reduce` answers with an element.** p.131's
+    words are "a single value *in* the array", so reducing a list of dates
+    yields a date and the property can satisfy an interface property declared
+    `date`. Not the struct field's type on a struct array: reducing *by* a
+    field still answers with the whole struct (p.133), which is the same
+    distinction `reduce` makes and the reason this is one line rather than a
+    walk through the reducer list.
+
+    **An array with no reducer presents as `array`**, which is p.132's sentence
+    doing its work rather than a fallback: there is no single value, so there
+    is nothing for a non-array interface property to be satisfied by. The
+    refusal `interfaces.check_implementation` writes says which of the two it
+    is, because "is array" and "is an array nobody said how to reduce" send a
+    reader to different places.
+
+    Every other property answers with its own base type, so this is safe to put
+    in front of *every* implementing property rather than only the arrays.
+
+    Takes a stored property row. It used to open with an `isinstance` guard
+    answering `""` for anything else, and an adversarial sweep found that
+    nothing could make it fail: every caller hands over a `list_properties`
+    row. A guard that cannot fail is not a guard (§213), and a `TypeError` from
+    a caller that invented a new shape is the louder, more useful failure.
+    """
+    data_type = str(prop.get("data_type") or "")
+    if data_type != "array" or not prop.get("reducers"):
+        return data_type
+    # **`array_of` is never absent on an array**, so there is no third branch
+    # here and nothing to test for one: db 0087's pairing is checked in both
+    # directions by `array_properties.parse` on every write path. An adversarial
+    # sweep found the fallback this line used to carry — `or data_type` — and
+    # nothing could make it fail, which is the tell (§213). A row that reached
+    # the database without going through that check answers `""`, and `""` and
+    # `"array"` satisfy exactly the same set of interface properties: none.
+    return str(prop.get("array_of") or "")
+
+
 def reduce_all(
     values: Any, by_property: dict[str, Any] | None
 ) -> dict[str, Any]:

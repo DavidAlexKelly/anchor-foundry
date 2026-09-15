@@ -16,6 +16,7 @@ claims to be.
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -25,9 +26,17 @@ from api import Module
 from conftest import WEB_BASE
 from ontology_page import find_type_row, pick_type
 
+#: Two date *arrays* beside the plain date column, and only one of them
+#: reduces — which is p.132's sentence as a fixture (§350). `checks` can answer
+#: a `date` interface property and `history` cannot, and the difference is
+#: invisible in the stored value.
+SERVICED = json.dumps(["2026-01-04", "2026-03-09"])
+
 VEHICLES = [
-    {"id": "V1", "name": "Truck", "checked_on": "2026-01-04"},
-    {"id": "V2", "name": "Van", "checked_on": "2026-02-11"},
+    {"id": "V1", "name": "Truck", "checked_on": "2026-01-04",
+     "checks": SERVICED, "history": SERVICED},
+    {"id": "V2", "name": "Van", "checked_on": "2026-02-11",
+     "checks": SERVICED, "history": SERVICED},
 ]
 
 
@@ -35,8 +44,11 @@ VEHICLES = [
 def module(api):
     vehicles = Module(api, "Interfaces")
     vehicles.object_type(
-        columns=["id", "name", "checked_on"], rows=VEHICLES, key="id", title="name",
-        types={"checked_on": "date"},
+        columns=["id", "name", "checked_on", "checks", "history"],
+        rows=VEHICLES, key="id", title="name",
+        types={"checked_on": "date", "checks": "array", "history": "array"},
+        array_of={"checks": "date", "history": "date"},
+        reducers={"checks": [{"operation": "latest"}]},
     )
     return vehicles
 
@@ -465,3 +477,52 @@ def test_the_editor_offers_nothing_until_it_has_the_interface(page, module):
         expect(page.get_by_test_id("iface-loading")).to_have_count(0)
     finally:
         page.unroute("**/interfaces/*")
+
+
+def test_an_array_answers_an_interface_property_only_once_it_reduces(page, module):
+    """**p.132's sentence, on the screen** (§350).
+
+    > "Array properties require non-array types to satisfactorily implement
+    > interface properties." (`object-link-types` p.132)
+
+    The fixture carries two date arrays holding the same values, and only one
+    of them has a reducer. That is the whole test: a reduced array presents its
+    *element* type (p.131's "a single value in the array"), so it can answer a
+    `date` promise; an unreduced one presents as an array and cannot.
+
+    **Both directions, because the claim is a difference.** Asserting only that
+    `checks` is offered would pass against a dialog that offered every property
+    it had, which is exactly the build this replaced — `propertyTypes` used to
+    be `p.data_type` and neither array was ever a candidate.
+    """
+    name = f"Serviced {uuid.uuid4().hex[:4]}"
+    api_name = declare(page, module, name=name, properties=[
+        ("Last service", "date", True),
+    ])
+
+    page.get_by_role("button", name=f"Implement {api_name}").click()
+    pick_type(page, "impl-type", {
+        "id": module.object_type_id, "api_name": f"seed_{module.tag}",
+    })
+    expect(page.get_by_test_id("impl-rows")).to_be_visible(timeout=15000)
+
+    options = page.get_by_role(
+        "combobox", name="Answered by for last_service"
+    ).locator("option")
+    labels = [options.nth(i).inner_text() for i in range(options.count())]
+    assert "checks" in labels, labels
+    assert "history" not in labels, labels
+    # And the plain date column is still there, so this is not a dropdown that
+    # has started offering only arrays.
+    assert "checked_on" in labels, labels
+
+    # Saved through the array, which is the half a candidate list cannot claim:
+    # the server decides the same way or this is a mapping the dialog offered
+    # and the save refuses.
+    page.get_by_role(
+        "combobox", name="Answered by for last_service"
+    ).select_option("checks")
+    page.get_by_test_id("impl-save").click()
+    expect(page.get_by_test_id(f"iface-impls-{api_name}")).to_have_text(
+        "1 object type", timeout=15000
+    )

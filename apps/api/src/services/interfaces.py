@@ -52,7 +52,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import NotFoundError
-from . import ontology_status
+from . import ontology_status, property_reducers
 
 #: An interface is "an Ontology type" (p.4), so it is named like one - the same
 #: rule `object_types.api_name` has, which is what makes `Inspectable` and
@@ -64,6 +64,54 @@ _INTERFACE_API_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,99}$")
 _PROPERTY_API_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 
 MAX_PROPERTIES = 100
+
+#: Base types an interface property may **not** be declared as, and why there
+#: are exactly two (§350).
+#:
+#: This list existed in the editor from §245 and did not exist here, which is
+#: §191's failure in its purest form: the dropdown refused what the API
+#: accepted, so the rule held for everybody who used the dialog and for nobody
+#: who used the API. `test_interfaces.py` compares the two against *this* list,
+#: which is the direction that catches an addition.
+#:
+#: * `struct` (§245) — a struct's *fields* are the whole of what it promises,
+#:   and `check_implementation` compares base types, so an interface declaring
+#:   `address` as a struct is satisfied by any struct at all, including one
+#:   with none of the same fields. A promise nothing enforces is the thing this
+#:   whole resource exists to avoid.
+#: * `array` (§347, §350) — p.132: "array properties require **non-array
+#:   types** to satisfactorily implement interface properties". The sentence is
+#:   about the implementing side, and it settles this side too: if no array can
+#:   satisfy an interface property, an interface property that *is* an array is
+#:   one nothing could ever implement.
+#:
+#: **Not lifted by property reducers**, which is what §347's comment in
+#: `lib/interfaces.ts` got wrong and §350 corrects: a reducer lets an array
+#: property *implement* a non-array interface property. It says nothing about
+#: what an interface may declare, and p.132's "non-array types" is unchanged
+#: either way.
+NOT_INTERFACE_TYPES = ("array", "struct")
+
+#: The sentence each refusal carries. Separate from the list because the list
+#: is what the drift guard compares and these are what a reader needs.
+_WHY_NOT = {
+    "struct": (
+        "an interface compares base types, so a struct here would be satisfied "
+        "by any struct at all, including one with none of the same fields"
+    ),
+    "array": (
+        '"array properties require non-array types to satisfactorily implement '
+        'interface properties" (object-link-types p.132), so nothing could '
+        "implement it"
+    ),
+}
+
+
+def _an(data_type: str) -> str:
+    """"a struct" or "an array" — `struct_fields._an`, for its reason: the
+    message is the point of the refusal, and "cannot be a array" is the kind of
+    thing a reader stops on."""
+    return f"an {data_type}" if data_type[:1] in "aeiou" else f"a {data_type}"
 MAX_EXTENDS = 10
 
 
@@ -147,8 +195,16 @@ def check_implementation(
     """Whether this object type can claim to implement this interface.
 
     `required` is the interface's effective properties, `property_types` is
-    `{api_name: data_type}` for the object type, and `mapping` is
-    `{interface property: the type's property}`.
+    `{api_name: the base type it presents}` for the object type, and `mapping`
+    is `{interface property: the type's property}`.
+
+    **"Presents" rather than "has"**, since §350: p.131 gives an array property
+    with a reducer a single value "for display and interface implementation
+    purposes", so such a property presents its *element* type here and can
+    satisfy a non-array interface property. `property_reducers.implements_as`
+    is what decides that, and the caller applies it — this function compares
+    two base types and does not need to know which of them came from a
+    reduction.
 
     Three refusals, and each is a promise that would otherwise be unenforced:
 
@@ -186,6 +242,19 @@ def check_implementation(
                 "does not have"
             )
         if property_types[target] != str(prop["data_type"]):
+            if property_types[target] == "array":
+                # **p.132's own sentence, because the fix is a different one.**
+                # Every other mismatch here is answered by mapping a different
+                # property; this one is answered by giving *this* property a
+                # reducer, and a message that only said "is array" would send
+                # somebody looking for another column instead.
+                raise InterfaceError(
+                    f"{interface_name} declares {name!r} as "
+                    f"{prop['data_type']} and {target!r} is an array with no "
+                    "reducer - \"array properties require non-array types to "
+                    "satisfactorily implement interface properties\" "
+                    "(object-link-types p.132), so reduce it to one value first"
+                )
             raise InterfaceError(
                 f"{interface_name} declares {name!r} as {prop['data_type']} "
                 f"and {target!r} is {property_types[target]} - an interface's "
@@ -220,6 +289,14 @@ def parse_properties(raw: Any) -> list[dict[str, Any]]:
             raise InterfaceError(f"duplicate interface property {api!r}")
         seen.add(api)
         data_type = str(item.get("data_type") or "")
+        if data_type in NOT_INTERFACE_TYPES:
+            # **Its own message, not "unknown type"** — the type exists and is
+            # a perfectly ordinary property type, so a refusal that read as a
+            # typo would send somebody to check their spelling.
+            raise InterfaceError(
+                f"interface property {api!r} cannot be {_an(data_type)}: "
+                + _WHY_NOT[data_type]
+            )
         if data_type not in ontology_service.PROPERTY_TYPES:
             raise InterfaceError(
                 f"interface property {api!r} has type {data_type!r}; expected "
@@ -685,7 +762,14 @@ async def set_implementations(
     from . import ontology as ontology_service
 
     declared = await ontology_service.list_properties(conn, object_type_id)
-    property_types = {str(p["api_name"]): str(p["data_type"]) for p in declared}
+    # **What each property *presents*, not what it is** (§350; p.131-132). An
+    # array with a reducer presents its element type, which is what lets one
+    # implement a non-array interface property; everything else presents its
+    # own base type, so this sits in front of all of them rather than only the
+    # arrays.
+    property_types = {
+        str(p["api_name"]): property_reducers.implements_as(p) for p in declared
+    }
     own, graph = await _graph(conn, workspace_id)
 
     checked: list[tuple[UUID, dict[str, str]]] = []

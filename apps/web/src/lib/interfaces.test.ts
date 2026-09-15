@@ -142,15 +142,19 @@ describe("interfacePropertyTypes", () => {
     expect(NOT_INTERFACE_TYPES).toContain("struct");
   });
 
-  it("holds back array, which p.132 says needs a reducer first", () => {
+  it("holds back array, and reducers did not change that", () => {
     // > "Array properties require non-array types to satisfactorily implement
     // > interface properties." (`object-link-types` p.132)
     //
-    // The sentence is in the *reducers* section: an array implements an
-    // interface property by reducing to a non-array value, and this platform
-    // has nothing to reduce with. Asserted apart from `struct` above because
-    // they are two entries for two reasons, and one check covering both would
-    // pass with either deleted.
+    // §347 wrote that this entry would be lifted once the platform had
+    // reducers. It has them (§348, §349) and the entry stays, because the two
+    // sides were never the same question: p.132 is about what may *implement*
+    // an interface property, and this list is about what one may *be*. A
+    // reduced array satisfies a `date` interface property (`implementsAs`);
+    // an interface property that is itself an array is one nothing could ever
+    // satisfy. Asserted apart from `struct` above because they are two entries
+    // for two reasons, and one check covering both would pass with either
+    // deleted.
     const all = ["string", "array", "date"] as PropertyDataType[];
     expect(interfacePropertyTypes(all)).toEqual(["string", "date"]);
     expect(NOT_INTERFACE_TYPES).toContain("array");

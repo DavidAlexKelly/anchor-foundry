@@ -583,23 +583,98 @@ def test_the_interface_dropdown_is_narrower_than_the_object_type_one() -> None:
     assert "struct" in excluded
 
 
-def test_a_struct_interface_property_would_promise_nothing(
+def test_a_struct_interface_property_is_refused_by_the_server_now(
     client: TestClient, fx: Fixture
 ) -> None:
-    """Why `struct` is off that list, stated as the failure it would cause.
+    """**This test used to assert the opposite, and that is the point of it.**
 
-    The server **accepts** the declaration - `interface_properties.data_type`
-    is the full `property_data_type` enum - and then `check_implementation`
-    compares base types, so any struct at all satisfies it. This test asserts
-    that hole exists rather than pretending it does not, and the dropdown is
-    where it is closed.
+    §245 put `struct` on the editor's `NOT_INTERFACE_TYPES` and left the server
+    accepting it, and this test was written to record the hole honestly: it
+    called `check_implementation` with a struct on both sides and asserted no
+    refusal, with a docstring saying "the dropdown is where it is closed".
+
+    A rule held by a dropdown is held for everybody who uses the dialog and for
+    nobody who uses the API, which is §191 in its purest form. §350 moved it to
+    the server, where `parse_properties` is what every client goes through.
+
+    The reason is unchanged and is what the refusal now says: an interface
+    compares base types, so a struct here is satisfied by any struct at all.
     """
-    interfaces_service.check_implementation(
-        interface_name="Addressable",
-        required=[{"api_name": "address", "data_type": "struct", "required": True}],
-        property_types={"postal": "struct"},
-        mapping={"address": "postal"},
-    )  # no refusal, whatever fields either side declares
+    r = client.post(
+        f"{wbase(fx)}/interfaces", headers=hdr(fx.editor_sub),
+        json={"api_name": f"Addressable{uuid.uuid4().hex[:6]}",
+              "display_name": "Addressable",
+              "properties": [{"api_name": "address", "data_type": "struct"}]},
+    )
+    assert r.status_code == 422, r.text
+    assert "any struct at all" in r.text, r.text
+
+    # And the same refusal reaches the pure function, which is where a client
+    # that bypassed the route would land.
+    with pytest.raises(interfaces_service.InterfaceError, match="any struct"):
+        interfaces_service.parse_properties(
+            [{"api_name": "address", "data_type": "struct"}]
+        )
+
+
+def test_the_editor_holds_back_exactly_what_the_server_refuses() -> None:
+    """§190's drift guard, one resource over (§350).
+
+    `lib/interfaces.ts` names what the declaration dialog holds back, and it
+    named it **two units before the server did** — which is how the hole above
+    lasted from §245 to §350. Compared against *this module's* list rather than
+    against a second copy of the editor's, which is the direction that catches
+    an addition: a base type refused here with no entry in the dropdown is a
+    save that fails after the form is filled in.
+    """
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(
+        os.path.join(root, "web", "src", "lib", "interfaces.ts"), encoding="utf-8"
+    ).read()
+    listed = re.search(
+        r"export const NOT_INTERFACE_TYPES: string\[\] = \[(.*?)\n\];", source, re.S
+    )
+    assert listed, "NOT_INTERFACE_TYPES not found - has interfaces.ts moved?"
+    held = set(re.findall(r'"([a-z_]+)"', listed.group(1)))
+    assert held == set(interfaces_service.NOT_INTERFACE_TYPES), (
+        f"the editor holds back {sorted(held)}, the server refuses "
+        f"{sorted(interfaces_service.NOT_INTERFACE_TYPES)}"
+    )
+
+
+#: The refusal each held-back type reads with, *in full for the article*. An
+#: adversarial sweep dropped `_an` from the message and nothing noticed, which
+#: made the helper decoration — "cannot be a array" is exactly the kind of thing
+#: `struct_fields._an` exists to stop a reader tripping over.
+_REFUSALS = {
+    "struct": ("cannot be a struct", "any struct at all"),
+    "array": ("cannot be an array", "p.132"),
+}
+
+
+def test_every_type_the_server_refuses_says_why() -> None:
+    """The other half, and the half the list alone cannot hold: a refusal with
+    no sentence behind it would be a `KeyError` on the way to a 500, and the
+    reasons are the whole reason these two are refused rather than absent.
+
+    The phrases are written out rather than read off `_WHY_NOT`, which would
+    make this a test of `in` rather than of what either sentence says."""
+    assert set(_REFUSALS) == set(interfaces_service.NOT_INTERFACE_TYPES), (
+        "a held-back type with no expected sentence here is one nobody has read"
+    )
+    for data_type, (article, because) in _REFUSALS.items():
+        with pytest.raises(interfaces_service.InterfaceError) as caught:
+            interfaces_service.parse_properties(
+                [{"api_name": "thing", "data_type": data_type}]
+            )
+        said = str(caught.value)
+        assert article in said, said
+        assert because in said, said
+        # Not the "unknown type" message, which would read as a typo on a type
+        # that exists and is perfectly ordinary everywhere else.
+        assert "expected one of" not in said, said
 
 
 def test_an_interface_that_is_not_here_is_404_rather_than_500(

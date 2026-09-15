@@ -68,21 +68,25 @@ export function toPropertyApiName(display: string): string {
  * writes down why not. */
 export const NOT_INTERFACE_TYPES: string[] = [
   "struct",
-  /** **p.132, and it is a rule about reducers rather than about arrays.**
+  /** **p.132, and it stays here permanently — §347's note said otherwise and
+   * was wrong.**
    *
    * > "Array properties require non-array types to satisfactorily implement
    * > interface properties." (`object-link-types` p.132)
    *
-   * The sentence sits in the property-reducers section: an array implements an
-   * interface property by *reducing* to a non-array value — highest, most
-   * recent, first lexicographically (p.132-133's table). This platform has no
-   * reducers, so there is nothing for an array to reduce *to*, and offering
-   * one here would be offering an implementation that cannot be satisfied.
+   * That sentence is about the **implementing** side, and §350 built it: an
+   * object type's array property with a reducer presents its element type and
+   * can satisfy a `date` interface property (`implementsAs`). This list is the
+   * *declaring* side — what an interface property may be — and p.132 settles
+   * it in the same breath: if no array can satisfy an interface property, an
+   * interface property that **is** an array is one nothing could ever
+   * implement.
    *
-   * Named the day the editor started offering the type at all (§347), because
-   * until then it was absent from this dropdown for the unrelated reason that
-   * it was absent from every dropdown. The reducers row in
-   * `docs/parity/ontology.md` is the ○ that lifts this. */
+   * §347 named this entry the day the editor started offering the type at all,
+   * and wrote that the reducers row was "the ○ that lifts this". Reducers
+   * arrived in §348 and lifted nothing here, because the two sides were never
+   * the same question. Kept as a correction rather than deleted: the wrong
+   * reason is the one a reader would otherwise reconstruct. */
   "array",
 ];
 
