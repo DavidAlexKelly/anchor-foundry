@@ -5917,6 +5917,24 @@ until `fresh-e2e.sh` agrees**, and the cheap way to ask is to remove the line
 by hand and run that script — which is what turned a guard about to be
 deleted as unfalsifiable into one that is held.
 
+**And the same stage lies in the other direction** (§350), which is the more
+dangerous half because it reports success. The browser suite refuses to run
+when the running API is older than `apps/api/src` — a real guard, added so a
+suite cannot silently test the previous build. A mutation harness *restores*
+every file it touched, and a restore bumps the file's mtime: so from the
+second mutant onwards, any sweep touching `apps/api/src` makes that guard fire
+and every browser run ends in errors, which a harness scores as **caught**.
+§350's sweep came back 13/0 on the first pass and one of those thirteen — the
+only mutant with no unit test behind it — could have been an artefact of that.
+It was checked by hand (restart the stack, apply the one mutant, run the one
+test) and was real. **A clean first-pass sweep is a reason to look at the
+harness, not to celebrate**: the cheap checks are whether every mutant is
+answered by a stage that runs in a fresh process, and whether the mutant list
+was drawn from the code or from the tests. §350's was drawn from the tests,
+which four adversarial mutants proved by all surviving — two unfalsifiable
+branches that are now deleted with their reasoning in place (§213), and a
+message helper nothing asserted.
+
 **No mutation harness, and the reason is not that this was tidying.** §271
 changed no production source: every edit is a test, a document, or a script.
 A harness answers "would the tests notice if this line were wrong", and there

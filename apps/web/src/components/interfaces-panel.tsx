@@ -39,6 +39,7 @@ import {
 import {
   canPage, depthNote, readSummary,
 } from "@/lib/interface-set";
+import { implementsAs } from "@/lib/property-reducer";
 import { canDelete, deleteBlockedReason } from "@/lib/ontology-status";
 import type {
   Deprecation, InterfaceSummary, ObjectTypeSummary, OntologyStatus,
@@ -438,8 +439,14 @@ function ImplementDialog({
   });
 
   const effective = detail.data?.effective_properties ?? [];
+  // **What each property *presents*, not what it is** (§350; p.131–132). An
+  // array with a reducer presents its element type, so it belongs in the
+  // candidate list for a `date` interface property — and one without a reducer
+  // presents as `array`, which is in no candidate list at all. The server
+  // decides the same way (`property_reducers.implements_as`); this is what
+  // stops the dialog offering a mapping the save would refuse.
   const propertyTypes: Record<string, string> = Object.fromEntries(
-    (objectType.data?.properties ?? []).map((p) => [p.api_name, p.data_type]),
+    (objectType.data?.properties ?? []).map((p) => [p.api_name, implementsAs(p)]),
   );
 
   // Opening mapping: whatever this type already claimed, else the suggestion.

@@ -227,6 +227,34 @@ export function problem(
   return null;
 }
 
+/**
+ * The base type this property presents to an interface (§350; p.131–132).
+ *
+ * > "A property reducer enables you to transform an array property into a
+ * > single value in the array for display and **interface implementation
+ * > purposes**." (p.131)
+ *
+ * **The element type, because reduction answers with an element** — p.131's
+ * words are "a single value *in* the array", so a reduced list of dates is a
+ * date. An array with no reducer presents as `array`, which satisfies no
+ * interface property and is p.132's sentence rather than a fallback.
+ *
+ * A mirror of `property_reducers.implements_as` on the server, which is the
+ * one that refuses; this is what lets the mapping dialog *offer* the property
+ * before anybody waits for the refusal. Every non-array answers with its own
+ * base type, so callers can put it in front of every property rather than
+ * branching first.
+ */
+export function implementsAs(property: Row): string {
+  if (property.data_type !== "array" || !property.reducers?.length) {
+    return property.data_type;
+  }
+  // No fallback, for the reason the server's has none: db 0087's pairing means
+  // an array always says what of, so `?? property.data_type` was a branch
+  // nothing could make fail — an adversarial sweep is what found it (§213).
+  return property.array_of ?? "";
+}
+
 /** What a row's button says: the count, because a property with reducers and
  * one without are different declarations and the difference should be legible
  * without opening anything. */

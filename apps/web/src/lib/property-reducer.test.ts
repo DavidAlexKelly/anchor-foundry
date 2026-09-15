@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 import {
   OPERATIONS, OPERATION_LABELS, basisOf, blankReducer, canReduce,
-  operationsFor, problem, reducerSummary, reducible, reducibleFields,
+  implementsAs, operationsFor, problem, reducerSummary, reducible, reducibleFields,
   withField,
 } from "./property-reducer";
 import type { PropertyDataType, StructField } from "@/lib/types";
@@ -231,5 +231,36 @@ describe("what a row's button says", () => {
     expect(reducerSummary(row({ reducers: [] }))).toBe("");
     expect(reducerSummary(row({ reducers: [{ operation: "latest", field: null }] })))
       .toBe(" (1)");
+  });
+});
+
+describe("what a property presents to an interface (p.131-132, §350)", () => {
+  it("its own base type, for everything that is not an array", () => {
+    expect(implementsAs(row({ data_type: "string", array_of: null }))).toBe("string");
+    expect(implementsAs(structs({ data_type: "struct", array_of: null }))).toBe("struct");
+  });
+
+  it("the element type, once it has a reducer", () => {
+    // p.131's "a single value *in* the array" — reduction answers with an
+    // element, so a reduced list of dates is a date.
+    expect(implementsAs(row({ reducers: [{ operation: "latest", field: null }] })))
+      .toBe("date");
+  });
+
+  it("array, while it has none", () => {
+    // **The assertion the feature turns on.** If an unreduced array presented
+    // its element type, every array would silently satisfy an interface
+    // property it cannot answer for — which is what p.132's sentence forbids.
+    expect(implementsAs(row())).toBe("array");
+    expect(implementsAs(row({ reducers: [] }))).toBe("array");
+    expect(implementsAs(row({ reducers: null }))).toBe("array");
+  });
+
+  it("struct, for a reduced struct array", () => {
+    // Reducing *by* a field still answers with the whole element (p.133), so
+    // what a struct array presents is `struct` — which is itself not something
+    // an interface property may be.
+    expect(implementsAs(structs({ reducers: [{ operation: "latest", field: "on" }] })))
+      .toBe("struct");
   });
 });
