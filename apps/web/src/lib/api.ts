@@ -2473,6 +2473,12 @@ export const code = {
     request<import("./types").CodeProposalDetail>(
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}`,
     ),
+  /** Which datasets this proposal's transforms produce (§364;
+   *  `code-repositories` p.53). Reads; runs nothing. */
+  proposalImpact: (wid: string, pid: string, id: string) =>
+    request<import("./types").AffectedDataset[]>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/impact`,
+    ),
   propose: (
     wid: string,
     pid: string,

@@ -149,7 +149,7 @@ The docs add a note we should honour: "You should not delete any branches that y
 | Create a PR, choosing the base branch | ◑ | the base is the repository's default branch and is not chosen. **Applying a proposal now lands the commit on it (§283)** — before that it published and stopped there, which was invisible while everything was committed to `main` first and would have made §2.1's protected-branch rule unworkable |
 | **Line-by-line review with comments** | ◑ | §52 built a review surface; verify it is line-level, not file-level |
 | Require at least one approving review before merge, per repository settings | ✅ | §28 review-gated promotion |
-| **See how changes affect datasets** when reviewing transform code | ○ | see §4.1 |
+| **See how changes affect datasets** when reviewing transform code | ◑ §364 | see §4.1 |
 
 ### 4.1 Impact analysis (p.52–55)
 
@@ -159,8 +159,8 @@ Impact analysis requires the affected datasets to have been built on **both** th
 
 | Feature | Status | Notes |
 |---|---|---|
-| List of directly affected datasets | ○ | Python repos derive this from Transforms Level Logic Versioning; Java treats a dataset as affected if its source file changed (p.53) |
-| **Add datasets to analysis** — pull derived datasets in, plus every intermediate between (p.54) | ○ | |
+| **List of directly affected datasets** | ✅ §364 | (p.53) — **Java's rule is the one that translates**, and it was directly computable: `models.output_dataset_id` is the model → dataset edge, so the datasets a proposal affects are the outputs of the transforms whose files it changes. Python's rule (Transforms Level Logic Versioning) is a Foundry build-system artefact with nothing on this side to derive it from, so it is not a gap but a mechanism that does not exist here. **Three states, not two** (§357's lesson on a different resource): a transform with an output dataset, a transform that has never been built, and — on a commit-backed proposal (db 0039) — a file that would create a transform that does not exist yet. All three appear, because **the list is as long as the diff**: dropping the rows with no dataset would make it shorter than the change and leave a reader to work out which files were silently not considered. Read through `code.proposal_files`, the one place that knows a proposal has two shapes, so a commit-backed proposal cannot report "nothing changes" when what happened was that nobody implemented it. |
+| **Add datasets to analysis** — pull derived datasets in, plus every intermediate between (p.54) | ○ | §364 states the limit on the panel rather than leaving it to be discovered — "only the datasets these transforms produce; anything built from them downstream is not analysed" — because a partial answer shown as a whole one is §214 in its quietest form. The lineage graph (§14) already walks the edges this would need. |
 | **Code** — changes to the source file only | ◑ | our diff is the source file |
 | **Schema** — column changes on the output dataset | ○ | we detect schema drift on syncs (§5); this is the same question asked of a proposal |
 | **Security** — changes to markings applied to the output | ○ | |
@@ -236,6 +236,7 @@ Foundry supports several; two matter here (p.3):
 7. ~~**Tags**, branch checks column, PR column~~ — **done (§299, §300)**. Tags brought p.17's `repoSettings.json` naming convention with them; the two columns arrive in one request, because twenty branches would otherwise be twenty round trips and that is how a column becomes something people wait for rather than glance at.
 8. ~~**Foundry Explorer equivalent**, SQL Scratchpad history and favourites~~ — **done (§303–§306)**.
 9. ~~**Status bar**~~ — **done (§307)**. Last, because it reports on the things above and is meaningless before they exist — and building it last is what let it reuse their answers rather than recompute them.
+10. ~~**The list of directly affected datasets**~~ — **done (§364)**, and it was not on this list: it came off §4.1's first row, which this file calls "the largest single gap… the one that most changes what a review *is*". The line's own framing turned out to be the useful part — *ours reviews text; Foundry reviews the consequences of text* — and the first consequence was cheap, because the model → dataset edge was already there. **What the sweep was worth here**: four survivors on the first pass, and three of them were about the fixtures rather than the code. A model's first run names its output dataset after the model, so every test had a dataset and a transform with the same name and could not tell one from the other; the never-built row's name was never asserted; and the commit-backed state had no test at all, because every proposal in the file changed a model that already existed. The fourth was a `LEFT JOIN` doing nothing — it and the `IS NULL` branch below it were one statement written twice, which is why no mutant could tell them apart.
 
 Deferred indefinitely: Debugger, Build helper, IntelliSense over platform types, sub-projects, repository upgrades.
 

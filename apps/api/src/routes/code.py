@@ -27,6 +27,7 @@ from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import code as code_service
 from ..services import code_checks as check_service
+from ..services import impact as impact_service
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/projects/{project_id}/code",
@@ -417,6 +418,46 @@ async def get_proposal(
     async with user_connection(access.auth.user_id) as conn:
         row = await code_service.get_proposal(conn, access.project_id, proposal_id)
     return _detail(row)
+
+
+class AffectedDatasetOut(BaseModel):
+    """One file of a proposal, and the dataset it changes if there is one."""
+
+    state: str
+    model_id: UUID | None = None
+    model_name: str | None = None
+    path: str | None = None
+    dataset: dict[str, Any] | None = None
+
+
+class SchemaChangeOut(BaseModel):
+    """What the proposed code would do to the output dataset's columns."""
+
+    model_id: UUID
+    dataset_id: UUID
+    ok: bool
+    error: str | None = None
+    changes: dict[str, Any] | None = None
+    sampled_rows: int = 0
+
+
+@router.get("/proposals/{proposal_id}/impact", response_model=list[AffectedDatasetOut])
+async def proposal_impact(
+    proposal_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[AffectedDatasetOut]:
+    """p.53's list of directly affected datasets.
+
+    Viewer, because it answers a question about a review and a review is
+    something anybody who can read the project takes part in. It reads the
+    proposal's files and the models' outputs and runs nothing.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        proposal = await code_service.get_proposal(conn, access.project_id, proposal_id)
+        rows = await impact_service.affected_datasets(
+            conn, access.project_id, proposal_id, list(proposal["files"])
+        )
+    return [AffectedDatasetOut(**r) for r in rows]
 
 
 @router.post("/proposals", response_model=ProposalDetail, status_code=201)
