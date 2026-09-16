@@ -1019,6 +1019,23 @@ export interface DatasetRetention {
 
 /** How to read an uploaded delimited file (§362; `dataset-preview` p.14,
  *  p.25-27). Every field defaults to what the upload already did. */
+/** One file of a proposal, and the dataset it changes if there is one
+ *  (§364; `code-repositories` p.53). The three states are different answers,
+ *  not degrees of one. */
+export interface AffectedDataset {
+  state: "affected" | "never_built" | "new_transform";
+  model_id?: string | null;
+  model_name?: string | null;
+  path?: string | null;
+  dataset?: {
+    id: string;
+    name: string;
+    slug: string;
+    row_count: number;
+    current_version: number;
+  } | null;
+}
+
 export interface DatasetParseOptions {
   delimiter?: string | null;
   quote?: string | null;

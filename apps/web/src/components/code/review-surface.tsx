@@ -29,6 +29,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, code as codeApi } from "@/lib/api";
 import {
+  DERIVED_NOTE,
+  describeImpact,
+  impactSummary,
+} from "@/lib/proposal-impact";
+import {
   divergenceRemedy,
   landingIsAProblem,
   landingNote,
@@ -200,6 +205,12 @@ export function ReviewSurface({
         onRun={() => check.mutate()}
       />
 
+      <ImpactPanel
+        workspaceId={workspaceId}
+        projectId={projectId}
+        proposalId={proposalId}
+      />
+
       {p.files.map((file) => (
         <FileReview
           // Not `model_id`: a commit-backed proposal's files may all have none
@@ -291,7 +302,62 @@ export function ReviewSurface({
   );
 }
 
-/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing
+/** p.53's impact analysis: which datasets this proposal's transforms produce.
+ *
+ *  `code-repositories.md` §4.1 puts it plainly — "ours reviews text; Foundry
+ *  reviews the consequences of text" — and this is the first half of the
+ *  consequences: *which* datasets, and what state each of them is in.
+ *
+ *  **Its own query rather than a field on the proposal.** The review surface
+ *  sets its cached proposal from every mutation's response (approve, apply,
+ *  comment), and folding the impact into that payload would make each of those
+ *  responses carry a join nobody asked for — and would silently drop it from
+ *  any response that forgot. A separate read is refetched when the files
+ *  change and left alone when a comment lands.
+ */
+function ImpactPanel({
+  workspaceId,
+  projectId,
+  proposalId,
+}: {
+  workspaceId: string;
+  projectId: string;
+  proposalId: string;
+}) {
+  const impact = useQuery({
+    queryKey: ["code-proposal-impact", proposalId],
+    queryFn: () => codeApi.proposalImpact(workspaceId, projectId, proposalId),
+  });
+
+  if (impact.isPending) return <div className="state">Working out the impact…</div>;
+  if (impact.isError) {
+    return <div className="state error">Couldn&apos;t work out what this changes.</div>;
+  }
+
+  return (
+    <section className="review-impact" data-testid="impact-panel">
+      <h3>
+        Impact <span className="soft" data-testid="impact-summary">{impactSummary(impact.data)}</span>
+      </h3>
+      <ul>
+        {impact.data.map((row, i) => (
+          <li
+            key={row.model_id ?? row.path ?? i}
+            data-testid="impact-row"
+            data-state={row.state}
+          >
+            <strong>{row.dataset?.name ?? row.model_name ?? row.path}</strong>
+            <span className="soft"> {describeImpact(row)}</span>
+          </li>
+        ))}
+      </ul>
+      {/* Said, not left to be discovered by trusting a short list. */}
+      <p className="soft" data-testid="impact-limit">{DERIVED_NOTE}</p>
+    </section>
+  );
+}
+
+/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing
  * has run against the code as it now stands.
  *
  * Silence is the thing this panel exists to stop being mistaken for a pass. A
