@@ -1019,6 +1019,22 @@ export interface DatasetRetention {
 
 /** How to read an uploaded delimited file (§362; `dataset-preview` p.14,
  *  p.25-27). Every field defaults to what the upload already did. */
+/** What a proposal's code would do to a dataset's columns (§365;
+ *  `code-repositories` p.54). `ok: false` means the code does not run, which
+ *  is a more important answer than any diff. */
+export interface ProposalSchemaChange {
+  model_id: string;
+  dataset_id: string;
+  ok: boolean;
+  error?: string | null;
+  changes?: {
+    added?: { name: string; data_type: string }[];
+    removed?: { name: string; data_type: string }[];
+    retyped?: { name: string; from: string; to: string }[];
+  } | null;
+  sampled?: { alias: string; rows_used: number; rows_available: number }[];
+}
+
 /** One file of a proposal, and the dataset it changes if there is one
  *  (§364; `code-repositories` p.53). The three states are different answers,
  *  not degrees of one. */

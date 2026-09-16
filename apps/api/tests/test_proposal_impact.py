@@ -309,3 +309,194 @@ def test_a_file_that_would_create_a_new_transform_has_no_dataset_yet(
     assert rows[0]["model_id"] is None
     assert rows[0]["dataset"] is None
     assert rows[0]["path"] == "src/fresh.sql"
+
+
+# ---- p.54's Schema: what the proposed code does to the columns (§365) --------
+
+def schema_change(client: TestClient, fx: Fixture, proposal_id: str, model_id: str,
+                  sub: str | None = None):
+    return client.get(
+        f"{cbase(fx)}/proposals/{proposal_id}/impact/{model_id}/schema",
+        headers=hdr(sub or fx.viewer_sub),
+    )
+
+
+def test_a_dropped_column_is_reported_as_removed(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """p.54's question, and the answer that matters most to a reviewer: this
+    change takes a column away from everything downstream."""
+    model_id = make_model(client, fx, source, "SELECT id, val FROM raw")
+    run(client, fx, model_id)
+    proposal = propose(client, fx, [{"model_id": model_id, "code": "SELECT id FROM raw"}])
+
+    r = schema_change(client, fx, proposal["id"], model_id)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert [c["name"] for c in body["changes"]["removed"]] == ["val"]
+    assert "added" not in body["changes"]
+
+
+def test_a_new_column_is_reported_as_added(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    model_id = make_model(client, fx, source, "SELECT id FROM raw")
+    run(client, fx, model_id)
+    proposal = propose(
+        client, fx, [{"model_id": model_id, "code": "SELECT id, val FROM raw"}]
+    )
+
+    body = schema_change(client, fx, proposal["id"], model_id).json()
+    assert [c["name"] for c in body["changes"]["added"]] == ["val"]
+
+
+def test_a_changed_type_is_reported_as_retyped(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """The change a reader is least likely to spot in a diff, and the one most
+    likely to break something downstream that was summing a number."""
+    model_id = make_model(client, fx, source, "SELECT id, val FROM raw")
+    run(client, fx, model_id)
+    proposal = propose(
+        client, fx,
+        [{"model_id": model_id, "code": "SELECT id, CAST(val AS VARCHAR) AS val FROM raw"}],
+    )
+
+    body = schema_change(client, fx, proposal["id"], model_id).json()
+    retyped = body["changes"]["retyped"]
+    assert [c["name"] for c in retyped] == ["val"]
+    assert retyped[0]["from"] == "BIGINT"
+    assert retyped[0]["to"] == "VARCHAR"
+
+
+def test_no_change_is_said_rather_than_left_blank(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """**The answer a reviewer most wants to be told.** A proposal that rewrites
+    a query without moving a column is the common case, and an endpoint that
+    returned nothing for it would be indistinguishable from one that failed."""
+    model_id = make_model(client, fx, source, "SELECT id, val FROM raw")
+    run(client, fx, model_id)
+    proposal = propose(
+        client, fx,
+        [{"model_id": model_id, "code": "SELECT id, val FROM raw WHERE id > 0"}],
+    )
+
+    body = schema_change(client, fx, proposal["id"], model_id).json()
+    assert body["ok"] is True
+    assert body["changes"] is None
+    assert body["error"] is None
+
+
+def test_code_that_does_not_run_says_so_where_the_schema_would_be(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """**p.52's "validate that the code builds properly", for the price of a
+    preview rather than two builds.** It belongs beside the schema because a
+    reviewer asking what this does to the columns is owed "it does not run" in
+    the same place, not in a check they have to go and find."""
+    model_id = make_model(client, fx, source, "SELECT id, val FROM raw")
+    run(client, fx, model_id)
+    proposal = propose(
+        client, fx, [{"model_id": model_id, "code": "SELECT nope FROM raw"}]
+    )
+
+    r = schema_change(client, fx, proposal["id"], model_id)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is False
+    assert body["changes"] is None
+    assert "nope" in body["error"]
+
+
+def test_the_sample_it_read_is_reported_rather_than_implied(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """A reviewer told "this came from a sample" and not told how big a one has
+    been handed a disclaimer rather than a fact. The columns do not depend on
+    it — measured at 10, 1000 and 5000 rows — but saying so needs the number."""
+    model_id = make_model(client, fx, source, "SELECT id, val FROM raw")
+    run(client, fx, model_id)
+    proposal = propose(client, fx, [{"model_id": model_id, "code": "SELECT id FROM raw"}])
+
+    body = schema_change(client, fx, proposal["id"], model_id).json()
+    assert len(body["sampled"]) == 1
+    assert body["sampled"][0]["alias"] == "raw"
+    assert body["sampled"][0]["rows_available"] == 3
+    assert body["sampled"][0]["rows_used"] == 3
+
+
+def test_the_preview_reads_this_transform_s_inputs_and_not_the_project_s(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**A fixture that can tell them apart.** Every other test here gives its
+    models the same single input under the same alias, so a query that pulled
+    in every input row in the project would return the same pair and look
+    right. This gives the other transform an input of its own, under an alias
+    nothing else uses (§190).
+    """
+    mine = client.post(
+        f"{pbase(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Mine {uuid.uuid4().hex[:6]}"},
+        files={"file": ("rows.csv", io.BytesIO(b"id,val\n1,10\n"), "text/csv")},
+    ).json()["id"]
+    theirs = client.post(
+        f"{pbase(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Theirs {uuid.uuid4().hex[:6]}"},
+        files={"file": ("rows.csv", io.BytesIO(b"id,val\n1,10\n2,20\n"), "text/csv")},
+    ).json()["id"]
+
+    model_id = make_model(client, fx, mine, "SELECT id, val FROM raw")
+    other = client.post(
+        f"{pbase(fx)}/models", headers=hdr(fx.editor_sub),
+        json={"name": f"Neighbour {uuid.uuid4().hex[:6]}", "code": "SELECT id FROM elsewhere",
+              "inputs": [{"dataset_id": theirs, "input_alias": "elsewhere"}]},
+    )
+    assert other.status_code == 201, other.text
+    run(client, fx, model_id)
+
+    proposal = propose(client, fx, [{"model_id": model_id, "code": "SELECT id FROM raw"}])
+    body = schema_change(client, fx, proposal["id"], model_id).json()
+    assert [s["alias"] for s in body["sampled"]] == ["raw"], body["sampled"]
+
+
+def test_a_transform_that_has_never_been_built_has_no_schema_to_compare(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """The same condition the list reports as `never_built`, refused here by
+    name rather than answered with an empty diff — which would read as "no
+    columns change"."""
+    model_id = make_model(client, fx, source)
+    proposal = propose(client, fx, [{"model_id": model_id, "code": "SELECT val FROM raw"}])
+
+    r = schema_change(client, fx, proposal["id"], model_id)
+    assert r.status_code == 409, r.text
+    assert "never been built" in r.text
+
+
+def test_a_file_the_proposal_does_not_change_is_not_answerable(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """Without this, the schema of any model in any project the caller can
+    reach could be asked for through a proposal that has nothing to do with it
+    — and the answer would be a diff against code nobody proposed."""
+    changed = make_model(client, fx, source)
+    other = make_model(client, fx, source)
+    run(client, fx, changed)
+    run(client, fx, other)
+    proposal = propose(client, fx, [{"model_id": changed, "code": "SELECT val FROM raw"}])
+
+    r = schema_change(client, fx, proposal["id"], other)
+    assert r.status_code == 404, r.text
+
+
+def test_an_outsider_cannot_ask_for_a_schema_change(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    model_id = make_model(client, fx, source)
+    run(client, fx, model_id)
+    proposal = propose(client, fx, [{"model_id": model_id, "code": "SELECT val FROM raw"}])
+    assert schema_change(
+        client, fx, proposal["id"], model_id, sub=fx.outsider_sub
+    ).status_code == 404

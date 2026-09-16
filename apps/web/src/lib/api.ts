@@ -2479,6 +2479,13 @@ export const code = {
     request<import("./types").AffectedDataset[]>(
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/impact`,
     ),
+  /** What the proposed code does to one dataset's columns (§365;
+   *  `code-repositories` p.54). Asked per dataset, because previewing is real
+   *  work and opening a review should not cost every transform in it. */
+  proposalSchemaChange: (wid: string, pid: string, id: string, modelId: string) =>
+    request<import("./types").ProposalSchemaChange>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/impact/${modelId}/schema`,
+    ),
   propose: (
     wid: string,
     pid: string,

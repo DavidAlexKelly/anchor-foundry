@@ -31,6 +31,8 @@ import { ApiError, code as codeApi } from "@/lib/api";
 import {
   DERIVED_NOTE,
   describeImpact,
+  describeSample,
+  describeSchemaChange,
   impactSummary,
 } from "@/lib/proposal-impact";
 import {
@@ -348,6 +350,14 @@ function ImpactPanel({
           >
             <strong>{row.dataset?.name ?? row.model_name ?? row.path}</strong>
             <span className="soft"> {describeImpact(row)}</span>
+            {row.state === "affected" && row.model_id && (
+              <SchemaChange
+                workspaceId={workspaceId}
+                projectId={projectId}
+                proposalId={proposalId}
+                modelId={row.model_id}
+              />
+            )}
           </li>
         ))}
       </ul>
@@ -357,7 +367,88 @@ function ImpactPanel({
   );
 }
 
-/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing
+/** p.54's **Schema**: what the proposed code does to one dataset's columns.
+ *
+ *  **Asked when it is asked for, not when the panel opens.** Answering means
+ *  running the proposed transform over a sample of its inputs, and a review
+ *  surface that did that for every file before drawing its first screen would
+ *  cost more to open the more it changes — which is exactly backwards.
+ *
+ *  Three answers, and the wording of each is `lib/proposal-impact`'s: the
+ *  columns moved, the columns did not, or **the code does not run**, which is
+ *  reported alone because "no column changes" for a transform that fails to
+ *  compile is true and useless.
+ */
+function SchemaChange({
+  workspaceId,
+  projectId,
+  proposalId,
+  modelId,
+}: {
+  workspaceId: string;
+  projectId: string;
+  proposalId: string;
+  modelId: string;
+}) {
+  const [asked, setAsked] = useState(false);
+  const change = useQuery({
+    queryKey: ["code-proposal-schema", proposalId, modelId],
+    queryFn: () =>
+      codeApi.proposalSchemaChange(workspaceId, projectId, proposalId, modelId),
+    enabled: asked,
+  });
+
+  if (!asked) {
+    return (
+      <>
+        {" "}
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="schema-ask"
+          data-model={modelId}
+          onClick={() => setAsked(true)}
+        >
+          Columns
+        </button>
+      </>
+    );
+  }
+  if (change.isPending) return <span className="soft"> Running it…</span>;
+  if (change.isError) {
+    return (
+      <span className="soft" data-testid="schema-error">
+        {" "}
+        {change.error instanceof ApiError
+          ? change.error.message
+          : "Couldn't work out the columns."}
+      </span>
+    );
+  }
+
+  const sample = describeSample(change.data.sampled);
+  return (
+    <div
+      className="review-schema"
+      data-testid="schema-change"
+      data-model={modelId}
+      data-ok={change.data.ok ? "true" : "false"}
+    >
+      <ul>
+        {describeSchemaChange(change.data).map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      {sample && (
+        <p className="soft" data-testid="schema-sample">
+          {sample}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing
  * has run against the code as it now stands.
  *
  * Silence is the thing this panel exists to stop being mistaken for a pass. A
