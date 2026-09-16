@@ -653,6 +653,11 @@ function ScheduledSyncDialog({
   const [datasetName, setDatasetName] = useState("");
   const [pkColumn, setPkColumn] = useState("");
   const [cursorColumn, setCursorColumn] = useState("");
+  // p.175's "initial value". Deliberately **not** seeded from the stored
+  // progress: the field means "start here", and pre-filling it with where
+  // the sync got to would send that value back on every save, turning a
+  // display into a write and hiding the fact that blank leaves it alone.
+  const [cursorStart, setCursorStart] = useState("");
   const [cronSchedule, setCronSchedule] = useState("*/15 * * * *");
 
   useEffect(() => {
@@ -691,14 +696,34 @@ function ScheduledSyncDialog({
         dataset_name: datasetName || undefined,
         primary_key_column: mode === "incremental" ? pkColumn : undefined,
         cursor_column: mode === "incremental" ? cursorColumn : undefined,
+        cursor_start_value:
+          mode === "incremental" && cursorStart ? cursorStart : undefined,
         cron_schedule: cronSchedule || undefined,
       });
     },
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      await invalidate();
+      // **Emptied once it has been applied**, because the box means "start
+      // here" and not "here is where you are". Left holding its value, the
+      // next Save — of a cron change, say — would send it again and rewind a
+      // sync that had moved well past it, which is the exact failure this
+      // field exists to prevent, caused by the field itself.
+      setCursorStart("");
+    },
   });
   const clear = useMutation({
     mutationFn: () => scheduledSyncApi.clear(workspaceId, projectId, connection.id),
     onSuccess: invalidate,
+  });
+  const forget = useMutation({
+    mutationFn: () => scheduledSyncApi.forgetCursor(workspaceId, projectId, connection.id),
+    onSuccess: async () => {
+      await invalidate();
+      // The box is about where to *start*, and the sync no longer has a
+      // position — leaving a typed value behind would have it sent again on
+      // the next save, which is the opposite of what was just asked for.
+      setCursorStart("");
+    },
   });
   const runNow = useMutation({
     mutationFn: () => scheduledSyncApi.run(workspaceId, projectId, connection.id),
@@ -824,6 +849,41 @@ function ScheduledSyncDialog({
                     ))}
                   </select>
                 </Field>
+                {/* p.175 step 4: the incremental state is a column *and* an
+                    initial value. Without one, converting a table that is
+                    already loaded re-reads all of it on the first run. */}
+                <Field
+                  label="Start after"
+                  hint={
+                    schedule.data?.sync_last_cursor_value
+                      ? `Leave blank to carry on from ${schedule.data.sync_last_cursor_value}`
+                      : "Leave blank to read the whole table on the first run"
+                  }
+                >
+                  <input
+                    type="text"
+                    data-testid="cursor-start"
+                    value={cursorStart}
+                    onChange={(e) => setCursorStart(e.target.value)}
+                    placeholder={schedule.data?.sync_last_cursor_value ?? "2000"}
+                  />
+                </Field>
+                {schedule.data?.sync_last_cursor_value && (
+                  <p className="soft" style={{ margin: "-6px 0 10px" }}>
+                    <span data-testid="cursor-position">
+                      Synced up to {schedule.data.sync_last_cursor_value}.
+                    </span>{" "}
+                    <button
+                      type="button"
+                      className="btn quiet"
+                      data-testid="forget-cursor"
+                      disabled={forget.isPending}
+                      onClick={() => forget.mutate()}
+                    >
+                      Forget this position
+                    </button>
+                  </p>
+                )}
               </>
             )}
             <Field label="Cron schedule" hint="Leave a schedule to run automatically; clear it to sync manually only">

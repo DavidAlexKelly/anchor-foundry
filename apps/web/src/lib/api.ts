@@ -862,6 +862,10 @@ export const scheduledSync = {
       dataset_name?: string;
       primary_key_column?: string;
       cursor_column?: string;
+      /** p.175's "initial value": where an incremental sync starts reading
+       *  from. Absent leaves the stored progress alone — it is not a request
+       *  to re-read the table (§363). */
+      cursor_start_value?: string;
       cron_schedule?: string;
     },
   ) =>
@@ -872,6 +876,13 @@ export const scheduledSync = {
   clear: (wid: string, pid: string, cid: string) =>
     request<import("./types").ScheduledSync>(
       `/workspaces/${wid}/projects/${pid}/connections/${cid}/scheduled-sync`,
+      { method: "DELETE" },
+    ),
+  /** Forget where the last incremental sync got to, keeping the rest of the
+   *  configuration (§363; `data-connection` p.176). */
+  forgetCursor: (wid: string, pid: string, cid: string) =>
+    request<import("./types").ScheduledSync>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/scheduled-sync/cursor`,
       { method: "DELETE" },
     ),
   run: (wid: string, pid: string, cid: string) =>
