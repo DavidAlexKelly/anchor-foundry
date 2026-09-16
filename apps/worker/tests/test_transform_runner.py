@@ -219,3 +219,78 @@ def test_a_run_staged_without_anchor_is_infrastructure_not_the_transform(tmp_pat
     with pytest.raises(RuntimeError, match="anchor.py was not staged"):
         runner.main()
     assert not os.path.exists(os.path.join(work, runner.RESULT_FILE))
+
+
+# ---- what the transform printed, in the container (§358) ---------------------
+#
+# **The half that is only exercised in production** (§292). Development runs
+# the subprocess path, so a log kept only there would have been green in this
+# suite and missing in every real deployment - which is the failure §292 spent
+# a session undoing, in the same two files.
+
+def test_the_container_keeps_what_a_transform_printed(tmp_path) -> None:
+    work = stage(
+        tmp_path,
+        """
+        print("rows in:", len(orders))
+        output = orders
+        """,
+        inputs={"orders": "orders.parquet"},
+    )
+    make_parquet(work, "orders.parquet",
+                 [{"id": 1, "region": "north"}, {"id": 2, "region": "south"}])
+    os.environ[runner.WORK_DIR_ENV] = work
+
+    assert runner.main() == 0
+    assert result(work)["log"].strip() == "rows in: 2"
+
+
+def test_a_failing_transform_carries_its_log_into_the_result(tmp_path) -> None:
+    """**The run whose log is worth most**, and the one a result file written
+    from the exception handler would drop."""
+    work = stage(tmp_path, 'print("got this far")\noutput = 1 / 0\n')
+    os.environ[runner.WORK_DIR_ENV] = work
+
+    assert runner.main() == 1
+    payload = result(work)
+    assert payload["status"] == "failed"
+    assert "got this far" in payload["log"]
+    # The error stays the one-line answer it was; a log is not a summary.
+    assert "ZeroDivisionError" in payload["error"]
+
+
+def test_stderr_is_kept_and_labelled_here_too(tmp_path) -> None:
+    work = stage(
+        tmp_path,
+        """
+        import sys
+        print("to err", file=sys.stderr)
+        output = 1 / 0
+        """,
+    )
+    os.environ[runner.WORK_DIR_ENV] = work
+    assert runner.main() == 1
+    assert "--- stderr ---" in result(work)["log"]
+    assert "to err" in result(work)["log"]
+
+
+def test_a_quiet_transform_writes_no_log_key_at_all(tmp_path) -> None:
+    """Absent rather than empty, so the caller stores nothing and the control
+    offering a log stays away (§214)."""
+    work = stage(tmp_path, "output = orders\n", inputs={"orders": "orders.parquet"})
+    make_parquet(work, "orders.parquet", [{"id": 1, "region": "north"}])
+    os.environ[runner.WORK_DIR_ENV] = work
+
+    assert runner.main() == 0
+    assert "log" not in result(work)
+
+
+def test_the_runner_s_own_failure_message_is_not_in_the_transform_s_log(tmp_path) -> None:
+    """`main` prints the error to the container's stderr so the task shows as
+    failed in ECS as well as in the result file. That print happens outside the
+    capture, and it has to: a log that repeated the platform's own message back
+    would read as something the transform said."""
+    work = stage(tmp_path, "output = 1 / 0\n")
+    os.environ[runner.WORK_DIR_ENV] = work
+    assert runner.main() == 1
+    assert "ZeroDivisionError" not in result(work).get("log", "")

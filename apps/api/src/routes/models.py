@@ -20,6 +20,7 @@ from uuid import UUID
 
 import anyio
 from fastapi import APIRouter, Depends, Request, status
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
@@ -122,6 +123,12 @@ class RunOut(BaseModel):
     # The definition this run executed (migration 0024). NULL for runs that
     # predate it - unknown, not v1.
     model_version: UUID | None = None
+    # Whether this run printed anything worth keeping (§358). A boolean rather
+    # than the storage key: the key is an internal path, and a response
+    # carrying one invites a caller to ask for an arbitrary key rather than a
+    # run id. False for every SQL run, which has no stdout to capture, and for
+    # a Python run that printed nothing.
+    has_log: bool = False
     # What the gate saw per input, captured at run time; NULL when the run
     # was not gated (migration 0022).
     input_health: list[dict[str, Any]] | None = None
@@ -480,6 +487,29 @@ async def run_history(
         await model_service.get(conn, access.project_id, model_id)
         rows = await model_service.list_runs(conn, model_id)
     return [RunOut(**r) for r in rows]
+
+
+@router.get("/{model_id}/runs/{run_id}/log", response_class=PlainTextResponse)
+async def run_log(
+    model_id: UUID,
+    run_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> str:
+    """What this run printed (§358; `dataset-preview` p.3).
+
+    **Plain text, not JSON.** It is already text, it is the only thing in the
+    response, and a reader who wants to pipe it somewhere should not have to
+    unwrap a string from an object first.
+
+    Viewer level: a log is a read of a run the caller can already see, and
+    nothing in it is more privileged than the model's own code, which a viewer
+    reads too.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await model_service.get(conn, access.project_id, model_id)
+        return await model_service.run_log(
+            conn, _dataset_storage(), model_id=model_id, run_id=run_id
+        )
 
 
 # ---- pipeline graph (ROADMAP Models item 2) ---------------------------------

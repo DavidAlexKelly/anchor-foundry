@@ -88,15 +88,19 @@ def through_the_sandbox(tmp_path, code: str, with_input: bool) -> dict:
     if with_input:
         inputs["orders"] = make_parquet(os.path.join(work, "orders.parquet"), ROWS)
     destination = os.path.join(work, "out", "output.parquet")
+    log_path = os.path.join(work, "run.log")
     try:
-        schema, row_count = python_sandbox.run_python_transform(inputs, code, destination)
+        schema, row_count = python_sandbox.run_python_transform(
+            inputs, code, destination, log_path=log_path
+        )
     except DatasetEngineError as exc:
-        return {"ok": False, "error": _normalise(str(exc))}
+        return {"ok": False, "error": _normalise(str(exc)), "log": _log(log_path)}
     return {
         "ok": True,
         "row_count": row_count,
         "schema": [(column.name, column.data_type) for column in schema],
         "rows": read_parquet(destination),
+        "log": _log(log_path),
     }
 
 
@@ -127,13 +131,29 @@ def through_the_container(tmp_path, code: str, with_input: bool) -> dict:
     with open(os.path.join(handle.work_dir, runner.RESULT_FILE)) as answer:
         result = json.load(answer)
     if code_returned != 0:
-        return {"ok": False, "error": _normalise(result["error"])}
+        return {"ok": False, "error": _normalise(result["error"]),
+                "log": result.get("log", "")}
     return {
         "ok": True,
         "row_count": result["row_count"],
         "schema": [(column["name"], column["data_type"]) for column in result["schema"]],
         "rows": read_parquet(os.path.join(handle.work_dir, handle.output_filename)),
+        "log": result.get("log", ""),
     }
+
+
+def _log(path: str) -> str:
+    """What the subprocess path kept, or `""` when it kept nothing (§358).
+
+    The container reports its log inside the result payload and this one writes
+    a file, so the comparison has to read them the same way — and both mean the
+    same thing by nothing: absent, not empty.
+    """
+    try:
+        with open(path) as handle:
+            return handle.read()
+    except FileNotFoundError:
+        return ""
 
 
 def both(tmp_path, code: str, with_input: bool = True) -> tuple[dict, dict]:
@@ -343,3 +363,37 @@ def test_the_comparison_catches_a_real_divergence(tmp_path, monkeypatch) -> None
     assert "subprocess (development)" in str(caught.value)
     assert "container  (deployment)" in str(caught.value)
     assert "row limit" in str(caught.value)
+
+
+# ---- what the transform printed (§358) ---------------------------------------
+
+def test_both_paths_keep_the_same_log(tmp_path) -> None:
+    """**The capture differs on purpose, so the comparison is worth making.**
+
+    The subprocess runner redirects inside its generated script and writes a
+    file; the container redirects around its own `exec` and reports the text in
+    `result.json`. Two mechanisms for one promise is exactly the arrangement
+    §292 found broken in production and green in this suite — and the shared
+    rules in `run_logs.py` are why the two answers can be compared at all.
+    """
+    agreed = assert_agree(*both(
+        tmp_path,
+        'print("rows in:", len(orders))\noutput = orders\n',
+    ))
+    assert agreed["log"].strip() == f"rows in: {len(ROWS)}"
+
+
+def test_both_paths_keep_the_log_of_a_transform_that_failed(tmp_path) -> None:
+    """The run whose log is worth most, on both sides."""
+    sandbox, container = both(
+        tmp_path, 'print("got this far")\noutput = 1 / 0\n',
+    )
+    assert sandbox["ok"] is False and container["ok"] is False
+    assert "got this far" in sandbox["log"]
+    assert sandbox["log"] == container["log"]
+
+
+def test_both_paths_agree_that_a_quiet_transform_has_no_log(tmp_path) -> None:
+    """Nothing printed is nothing stored, and the two say it the same way."""
+    agreed = assert_agree(*both(tmp_path, "output = orders\n"))
+    assert agreed["log"] == ""

@@ -256,3 +256,80 @@ def test_a_comment_declared_script_runs_as_the_script_it_is(
         f"SELECT * FROM read_parquet('{dest}') ORDER BY id"
     ).fetchall()
     assert result == [(1, "a"), (2, "b")]
+
+
+# ---- what the transform printed (§358; `dataset-preview` p.3) ----------------
+
+def test_what_a_transform_printed_is_kept(input_parquet: str, tmp_path) -> None:
+    """The first thing anybody reaches for when a transform misbehaves, and
+    until §358 it went into the void."""
+    dest, log = str(tmp_path / "out.parquet"), str(tmp_path / "run.log")
+    run_python_transform(
+        {"t": input_parquet},
+        "print('rows in:', len(t))\noutput = t.copy()",
+        dest, log_path=log,
+    )
+    assert open(log).read().strip() == "rows in: 2"
+
+
+def test_a_failed_run_keeps_what_it_printed_before_it_failed(
+    input_parquet: str, tmp_path
+) -> None:
+    """**The case the log exists for.** A run that worked needs no explaining;
+    one that raised halfway through is where the prints before it are the
+    whole story — and a log written only on success would be missing exactly
+    then."""
+    dest, log = str(tmp_path / "out.parquet"), str(tmp_path / "run.log")
+    with pytest.raises(DatasetEngineError):
+        run_python_transform(
+            {"t": input_parquet},
+            "print('got this far')\noutput = 1 / 0",
+            dest, log_path=log,
+        )
+    assert "got this far" in open(log).read()
+
+
+def test_the_traceback_is_in_the_log_and_labelled(input_parquet: str, tmp_path) -> None:
+    """stderr is kept too, under its own heading — unlabelled, a traceback
+    reads as something the transform printed on purpose."""
+    dest, log = str(tmp_path / "out.parquet"), str(tmp_path / "run.log")
+    with pytest.raises(DatasetEngineError):
+        run_python_transform(
+            {"t": input_parquet},
+            "import sys\nprint('to err', file=sys.stderr)\noutput = 1 / 0",
+            dest, log_path=log,
+        )
+    text = open(log).read()
+    assert "--- stderr ---" in text
+    assert "to err" in text
+
+
+def test_a_quiet_transform_writes_no_log_at_all(input_parquet: str, tmp_path) -> None:
+    """**Not an empty file.** Nothing printed means nothing to store, so the
+    caller records no `log_s3_key` and the control offering a log stays absent
+    rather than opening on blankness (§214)."""
+    dest, log = str(tmp_path / "out.parquet"), str(tmp_path / "run.log")
+    run_python_transform({"t": input_parquet}, "output = t.copy()", dest, log_path=log)
+    assert not os.path.exists(log)
+
+
+def test_the_payload_is_not_in_the_log(input_parquet: str, tmp_path) -> None:
+    """The runner reports its schema and row count on stdout, and that is a
+    protocol between two halves of this module rather than something the
+    transform's author wrote. Capturing the user's prints separately is what
+    keeps it out — a build reading the raw pipe would put JSON in the log."""
+    dest, log = str(tmp_path / "out.parquet"), str(tmp_path / "run.log")
+    run_python_transform(
+        {"t": input_parquet}, "print('mine')\noutput = t.copy()", dest, log_path=log,
+    )
+    text = open(log).read()
+    assert "mine" in text
+    assert "row_count" not in text, text
+
+
+def test_a_caller_that_wants_no_log_is_unaffected(input_parquet: str, tmp_path) -> None:
+    """`log_path` is optional, which is what let this land without touching
+    twenty existing call sites."""
+    dest = str(tmp_path / "out.parquet")
+    _, rows = run_python_transform({"t": input_parquet}, "print('x')\noutput = t.copy()", dest)
+    assert rows == 2

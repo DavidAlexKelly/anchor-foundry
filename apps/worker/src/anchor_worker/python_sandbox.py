@@ -52,6 +52,7 @@ from typing import Any
 
 from . import user_api
 from .limits import MAX_OUTPUT_ROWS, too_many_rows
+from .run_logs import capped, combine
 from .dataset_engine import ColumnSchema, DatasetEngineError
 
 DEFAULT_TIMEOUT_S = 300
@@ -61,10 +62,26 @@ CPU_LIMIT_S = 120
 # Re-exported here under the name callers already use.
 
 _RUNNER_TEMPLATE = """
+import contextlib
+import io
 import json
 import sys
 
 import duckdb
+
+# §358: what the transform prints is kept. Captured **raw** into two files and
+# formatted by the caller - this script runs in a bare temp directory with only
+# `anchor.py` beside it, so it cannot import `run_logs`, and a second copy of
+# those rules written out here is the divergence §292 spent a session undoing.
+_user_out = io.StringIO()
+_user_err = io.StringIO()
+
+
+def _keep_log():
+    with open({out_log_path!r}, "w") as _h:
+        _h.write(_user_out.getvalue())
+    with open({err_log_path!r}, "w") as _h:
+        _h.write(_user_err.getvalue())
 
 _inputs = {inputs!r}
 _namespace: dict = {{}}
@@ -93,8 +110,10 @@ with open({code_path!r}) as _f:
     _user_code = _f.read()
 
 try:
-    exec(compile(_user_code, "<model>", "exec"), _namespace)
+    with contextlib.redirect_stdout(_user_out), contextlib.redirect_stderr(_user_err):
+        exec(compile(_user_code, "<model>", "exec"), _namespace)
 except Exception as exc:
+    _keep_log()
     print(f"MODEL_ERROR: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
     sys.exit(1)
 
@@ -105,9 +124,11 @@ except Exception as exc:
 try:
     _output = anchor.resolve_output(_namespace)
 except anchor.ShapeError as exc:
+    _keep_log()
     print(f"MODEL_ERROR: {{exc}}", file=sys.stderr)
     sys.exit(1)
 except Exception as exc:
+    _keep_log()
     print(f"MODEL_ERROR: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
     sys.exit(1)
 
@@ -118,14 +139,42 @@ try:
     _schema = _con.execute("DESCRIBE _output_df").fetchall()
     _row_count = _con.execute("SELECT count(*) FROM _output_df").fetchone()[0]
 except duckdb.Error as exc:
+    _keep_log()
     print(f"MODEL_ERROR: output is not a valid table: {{exc}}", file=sys.stderr)
     sys.exit(1)
 
+_keep_log()
 print(json.dumps({{
     "schema": [{{"name": r[0], "data_type": r[1]}} for r in _schema],
     "row_count": int(_row_count),
 }}))
 """
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path) as handle:
+            return handle.read()
+    except FileNotFoundError:
+        # The runner died before it could write this one. Nothing captured is
+        # a real answer, and it is not worth failing a run over.
+        return ""
+
+
+def _write_log(log_path: str, out_log: str, err_log: str) -> None:
+    """The two raw streams, through the shared rules, into one file.
+
+    `combine` and `capped` rather than a formatting of its own: the container
+    runner writes the same file from a different capture, and a second copy of
+    these rules is the divergence §292 spent a session undoing.
+    """
+    text = capped(combine(_read(out_log), _read(err_log)))
+    if not text:
+        # Nothing printed means no log, not an empty one — so the caller stores
+        # nothing and the control offering it stays absent (§214).
+        return
+    with open(log_path, "w") as handle:
+        handle.write(text)
 
 
 def _limit_resources() -> None:
@@ -138,16 +187,29 @@ def run_python_transform(
     code: str,
     dest_parquet: str,
     timeout_s: int = DEFAULT_TIMEOUT_S,
+    log_path: str | None = None,
 ) -> tuple[list[ColumnSchema], int]:
+    """Run a transform; with `log_path`, also keep what it printed (§358).
+
+    An out-parameter beside `dest_parquet`, in the same style and for the same
+    reason: the log has to survive a *failed* run, and a return value does not
+    come back from one. Callers that do not want it pass nothing and are
+    unaffected — which is most of the tests, and the point.
+    """
     os.makedirs(os.path.dirname(dest_parquet), exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         user_api.write_into(tmp)
         code_path = os.path.join(tmp, "model.py")
         with open(code_path, "w") as f:
             f.write(code)
+        out_log = os.path.join(tmp, "user.out")
+        err_log = os.path.join(tmp, "user.err")
         runner_path = os.path.join(tmp, "runner.py")
         with open(runner_path, "w") as f:
-            f.write(_RUNNER_TEMPLATE.format(inputs=inputs, code_path=code_path, dest_path=dest_parquet))
+            f.write(_RUNNER_TEMPLATE.format(
+                inputs=inputs, code_path=code_path, dest_path=dest_parquet,
+                out_log_path=out_log, err_log_path=err_log,
+            ))
 
         env = {"PATH": "/usr/bin:/bin", "HOME": tmp}
         try:
@@ -161,7 +223,15 @@ def run_python_transform(
                 preexec_fn=_limit_resources if os.name == "posix" else None,
             )
         except subprocess.TimeoutExpired as exc:
+            # No log: the runner was killed mid-flight and never reached
+            # `_keep_log`. Saying so is the honest answer — an empty log would
+            # read as "it printed nothing", which is a different fact.
             raise DatasetEngineError(f"transform exceeded the {timeout_s}s time limit") from exc
+
+        # Before the refusal below, because a failed run is the one whose log
+        # somebody actually wants.
+        if log_path is not None:
+            _write_log(log_path, out_log, err_log)
 
         if result.returncode != 0:
             message = next(

@@ -6,7 +6,9 @@ from __future__ import annotations
 import io
 import os
 import sys
+import uuid
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,6 +19,11 @@ from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 from src.routes import datasets as ds_routes  # noqa: E402
 from src.services.storage import LocalStorageGateway  # noqa: E402
+
+ADMIN_DSN = os.environ.get(
+    "TEST_ADMIN_DSN",
+    "postgresql://platform:devpass@localhost:5432/platform?sslmode=disable",
+)
 
 ORDERS = b"order_id,customer_id,total_pence\n1,10,1200\n2,11,80\n3,10,455\n4,12,3100\n"
 CUSTOMERS = b"customer_id,region\n10,north\n11,south\n12,north\n"
@@ -471,3 +478,139 @@ def test_model_actions_audited(client: TestClient, fx: Fixture) -> None:
     r = client.get("/api/org/audit?limit=200", headers=hdr(fx.admin_sub))
     actions = {e["action"] for e in r.json()}
     assert {"model.create", "model.run", "model.update", "model.delete"} <= actions
+
+
+# ---- what a run printed (§358; `dataset-preview` p.3) ------------------------
+
+@pytest.fixture()
+def logged_model(client: TestClient, fx: Fixture, input_datasets: dict[str, str]) -> str:
+    """A model of this section's own.
+
+    Not the module's shared `model_id`: an earlier test in this file deletes
+    it, so by the time these run the foreign key has nothing to point at — and
+    a run row cannot exist without its model.
+    """
+    r = client.post(
+        mbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Logged {uuid.uuid4().hex[:6]}", "code": "SELECT 1 AS x",
+              "inputs": [{"dataset_id": list(input_datasets.values())[0],
+                          "input_alias": "orders"}]},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+@pytest.fixture()
+def storage_root(client: TestClient) -> str:
+    """Where this module's gateway keeps its bytes.
+
+    Reached through the configured gateway rather than remembered separately,
+    so a test writing a log writes it where the endpoint will look.
+    """
+    from src.routes import datasets as ds_routes
+
+    return str(ds_routes._storage._root)
+
+
+def _run_with_log(model: str, log_key: str | None) -> str:
+    """A finished run row, written directly.
+
+    Directly because the API cannot make one: a Python run is *queued* here and
+    executed by the worker, which is the half that writes a log. The worker's
+    own suite proves it writes one (`test_model_runs.py`); this side proves
+    what happens when somebody asks for it.
+    """
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        return str(conn.execute(
+            "INSERT INTO model_runs (model_id, status, trigger_kind, finished_at, "
+            "rows_produced, log_s3_key) "
+            "VALUES (%s,'succeeded','manual',now(),1,%s) RETURNING id",
+            (model, log_key),
+        ).fetchone()[0])
+
+
+def test_a_run_log_comes_back_as_text(
+    client: TestClient, fx: Fixture, logged_model: str, storage_root: str
+) -> None:
+    """p.3's build logs, from the endpoint's side.
+
+    Plain text rather than JSON: it is already text, it is the whole response,
+    and a reader piping it somewhere should not have to unwrap a string first.
+    """
+    key = f"workspaces/ws-{fx.tag}/runs/{uuid.uuid4()}/log.txt"
+    path = os.path.join(storage_root, key)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as handle:
+        handle.write("rows in: 4\n")
+    run = _run_with_log(logged_model, key)
+
+    r = client.get(f"{mbase(fx)}/{logged_model}/runs/{run}/log", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    assert r.text == "rows in: 4\n"
+    assert r.headers["content-type"].startswith("text/plain")
+
+
+def test_a_run_that_printed_nothing_says_so_rather_than_returning_nothing(
+    client: TestClient, fx: Fixture, logged_model: str
+) -> None:
+    """**A blank page does not say which of two things happened.** A 200 with
+    an empty body reads the same whether the run printed nothing or the log was
+    lost, so a run with no log is a 404 about the log."""
+    run = _run_with_log(logged_model, None)
+    r = client.get(f"{mbase(fx)}/{logged_model}/runs/{run}/log", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 404, r.text
+    # **Which 404**, because the run exists and only the log does not — and a
+    # message saying the run was not found would send a reader looking for a
+    # deleted run rather than a quiet one.
+    assert "run log" in r.json()["detail"], r.text
+
+
+def test_a_log_whose_bytes_are_gone_is_not_a_miss(
+    client: TestClient, fx: Fixture, logged_model: str
+) -> None:
+    """The same distinction §357 drew on the fork path, for the same reason:
+    the row says there is a log, so "not found" sends a reader looking for a
+    deletion that did not happen."""
+    key = f"workspaces/ws-{fx.tag}/runs/{uuid.uuid4()}/log.txt"
+    run = _run_with_log(logged_model, key)
+    r = client.get(f"{mbase(fx)}/{logged_model}/runs/{run}/log", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 409, r.text
+    assert "missing from storage" in r.json()["detail"]
+
+
+def test_a_run_is_read_through_the_model_it_belongs_to(
+    client: TestClient, fx: Fixture, logged_model: str, input_datasets: dict[str, str]
+) -> None:
+    """**The check that makes the run id safe to pass.** `model_runs.id` is a
+    primary key over every model in the deployment, so a lookup by run alone
+    would let a run from one model be read through another the caller happens
+    to have."""
+    other = client.post(
+        mbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Other {uuid.uuid4().hex[:6]}", "code": "SELECT 1 AS x",
+              "inputs": [{"dataset_id": list(input_datasets.values())[0],
+                          "input_alias": "orders"}]},
+    )
+    assert other.status_code == 201, other.text
+    run = _run_with_log(logged_model, None)
+    r = client.get(
+        f"{mbase(fx)}/{other.json()['id']}/runs/{run}/log", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 404, r.text
+    # And it is the *run* that was not found, not the log: through this model
+    # there is no such run at all.
+    assert "model run" in r.json()["detail"], r.text
+
+
+def test_the_run_list_says_which_runs_have_a_log(
+    client: TestClient, fx: Fixture, logged_model: str
+) -> None:
+    """So a reader knows which rows are worth opening, without a request per
+    row that mostly comes back empty."""
+    with_log = _run_with_log(logged_model, f"workspaces/ws-{fx.tag}/runs/{uuid.uuid4()}/log.txt")
+    without = _run_with_log(logged_model, None)
+    runs = {r["id"]: r for r in client.get(
+        f"{mbase(fx)}/{logged_model}/runs", headers=hdr(fx.viewer_sub)
+    ).json()}
+    assert runs[with_log]["has_log"] is True
+    assert runs[without]["has_log"] is False

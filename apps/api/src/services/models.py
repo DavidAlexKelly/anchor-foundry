@@ -20,8 +20,14 @@ Scope, each deviation flagged:
     mode changes, so switching a model to 'upstream' fires it once and then
     reacts to genuinely new data. The cancel endpoint remains out of scope:
     a synchronous SQL run has no meaningful cancel.
-  * Run logs live in error_message/rows_produced; log_s3_key is written by
-    the worker runtime for long runs.
+  * A run's one-line outcome is error_message/rows_produced. **What the
+    transform printed** is `log_s3_key` (§358) - which until then this comment
+    claimed "is written by the worker runtime for long runs", and no runtime
+    had ever written it: the column had existed unused since migration 0003
+    and the sentence was never measured. The worker writes it now, for Python
+    runs that printed something; a SQL transform has no stdout to capture and
+    a quiet run stores nothing, so NULL means "nothing to show" rather than
+    "not kept".
 
 Output semantics mirror connection sync: first successful run creates the
 output dataset (origin='model_output', slug from the model name) and links
@@ -37,6 +43,7 @@ from __future__ import annotations
 
 from typing import Any
 from uuid import UUID, uuid4
+from anyio import to_thread
 
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -724,7 +731,11 @@ async def list_runs(conn: AsyncConnection, model_id: UUID) -> list[dict[str, Any
         """
         SELECT id, status, trigger_kind, queued_at, started_at, finished_at,
                rows_produced, error_message, output_version, input_health,
-               model_version
+               model_version,
+               -- Whether there is a log, not where it is: the key is a storage
+               -- path, and a response carrying one invites a caller to ask for
+               -- an arbitrary key instead of a run id (§358).
+               (log_s3_key IS NOT NULL) AS has_log
           FROM model_runs
          WHERE model_id = :mid
          ORDER BY queued_at DESC
@@ -732,6 +743,48 @@ async def list_runs(conn: AsyncConnection, model_id: UUID) -> list[dict[str, Any
         """,
         {"mid": str(model_id)},
     )
+
+
+async def run_log(
+    conn: AsyncConnection,
+    storage: StorageGateway,
+    *,
+    model_id: UUID,
+    run_id: UUID,
+) -> str:
+    """What one run printed (§358; `dataset-preview` p.3).
+
+    Keyed by the run, and the run is checked against the model the caller
+    reached it through: `model_runs.id` is a primary key over every model in
+    the deployment, so looking it up alone would let a run id from one project
+    be read through another the caller happens to have.
+
+    **Three states, said differently**, the way §357 left the fork path: no
+    such run is a 404; a run with no log is a 404 about the log rather than a
+    200 with nothing in it, because a blank page does not say which of the two
+    happened; and a log whose bytes are gone is a conflict, not a miss.
+    """
+    row = await fetch_one(
+        conn,
+        "SELECT log_s3_key FROM model_runs WHERE id = :rid AND model_id = :mid",
+        {"rid": str(run_id), "mid": str(model_id)},
+    )
+    if row is None:
+        raise NotFoundError("model run")
+    key = row["log_s3_key"]
+    if not key:
+        raise NotFoundError("run log")
+    try:
+        return (await to_thread.run_sync(storage.read, str(key))).decode("utf-8", "replace")
+    except FileNotFoundError as exc:
+        # The row says there is a log and the object is not there - the same
+        # state §357 gave its own sentence on the fork path, and the same
+        # reason: "not found" about a run whose output and timings are right
+        # there sends a reader looking for a deletion that did not happen.
+        raise ConflictError(
+            "this run's log is missing from storage. The run itself, its "
+            "outcome and its timings are intact."
+        ) from exc
 
 
 async def record_output(

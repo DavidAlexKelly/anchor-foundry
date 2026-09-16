@@ -17,6 +17,7 @@ import type { Model } from "@/lib/types";
 import { authoredInRepository, canAdopt, pathProblem, readOnlyReason } from "@/lib/model-authoring";
 import { canMove, chosen, defaultMessage, moveLabel } from "@/lib/bulk-adoption";
 import { attribution, emptyNote, isChangeSet, scopeLabel } from "@/lib/transform-history";
+import { runDuration, whyNoLog } from "@/lib/run-logs";
 import {
   describe as describeProposal,
   unrepositoried,
@@ -101,6 +102,140 @@ function ScheduleSummary({ model }: { model: Model }) {
       <span className="chip">{model.cron_schedule}</span>
       <div className="slug">next: {next}</div>
     </span>
+  );
+}
+
+/** p.3's History tab, for one model: a list of jobs with their statuses and
+ *  durations, and a detail view for the one selected.
+ *
+ *  **`modelApi.runs` existed and nothing called it.** The endpoint has been
+ *  there since the models layer was written and the front end never asked —
+ *  so a person could see that the last run failed and not what happened on any
+ *  run before it. §358 gave it a reason to exist by giving runs something
+ *  worth opening.
+ */
+function RunsDialog({
+  workspaceId,
+  projectId,
+  model,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  model: Model;
+  onClose: () => void;
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const runs = useQuery({
+    queryKey: ["model-runs", model.id],
+    queryFn: () => modelApi.runs(workspaceId, projectId, model.id),
+  });
+  const run = runs.data?.find((r) => r.id === selected) ?? null;
+  const log = useQuery({
+    queryKey: ["model-run-log", model.id, selected],
+    queryFn: () => modelApi.runLog(workspaceId, projectId, model.id, selected!),
+    // Only asked for when there is one to ask for: a request per selected run
+    // that mostly 404s is a worse way to find out than the flag the list
+    // already carries.
+    enabled: run?.has_log === true,
+  });
+
+  return (
+    <Dialog open wide title={`${model.name} — runs`} onClose={onClose}>
+      <p className="login-note" style={{ marginTop: 0 }}>
+        Every run, newest first. Selecting one shows what it did and what it
+        printed.
+      </p>
+      {runs.isPending && <div className="state">Loading runs…</div>}
+      {runs.data?.length === 0 && (
+        <div className="state" data-testid="no-runs">
+          This model has not run yet.
+        </div>
+      )}
+      {runs.data && runs.data.length > 0 && (
+        <div className="data-grid">
+          <table>
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Trigger</th>
+                <th>Rows</th>
+                <th>Took</th>
+                <th>When</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {runs.data.map((r) => (
+                <tr
+                  key={r.id}
+                  data-testid="run-row"
+                  data-run-id={r.id}
+                  data-run-status={r.status}
+                >
+                  <td>{r.status}</td>
+                  <td>{r.trigger_kind}</td>
+                  <td>{r.rows_produced?.toLocaleString() ?? "—"}</td>
+                  <td data-testid="run-duration">{runDuration(r) || "—"}</td>
+                  <td>{new Date(r.queued_at).toLocaleString()}</td>
+                  <td>
+                    <button
+                      className="btn quiet"
+                      style={{ padding: "3px 9px", fontSize: 12 }}
+                      data-testid="open-run"
+                      onClick={() => setSelected(r.id === selected ? null : r.id)}
+                    >
+                      {r.id === selected ? "Close" : "Open"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {run && (
+        <div data-testid="run-detail" style={{ marginTop: 12 }}>
+          <div className="slug" style={{ marginBottom: 4 }}>
+            Build log
+          </div>
+          {run.error_message && (
+            <div className="form-error" data-testid="run-error">
+              {run.error_message}
+            </div>
+          )}
+          {/* **Absent with a reason, rather than present and empty** (§214).
+              The four reasons are four different sentences because they send a
+              reader to different places — see `whyNoLog`. */}
+          {whyNoLog(run, model.language) ? (
+            <p className="login-note" data-testid="run-no-log">
+              No log: {whyNoLog(run, model.language)}.
+            </p>
+          ) : log.isError ? (
+            <div className="form-error" data-testid="run-log-error">
+              {log.error instanceof ApiError ? log.error.message : "Couldn't read the log."}
+            </div>
+          ) : (
+            <pre
+              data-testid="run-log"
+              style={{
+                margin: 0,
+                padding: 10,
+                background: "var(--panel)",
+                border: "1px solid var(--line)",
+                borderRadius: "var(--radius)",
+                fontSize: 12,
+                maxHeight: 260,
+                overflow: "auto",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {log.isPending ? "Loading…" : log.data}
+            </pre>
+          )}
+        </div>
+      )}
+    </Dialog>
   );
 }
 
@@ -705,6 +840,7 @@ function ModelRow({
   const [editing, setEditing] = useState(false);
   const [adopting, setAdopting] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showRuns, setShowRuns] = useState(false);
   const queryClient = useQueryClient();
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: ["models", projectId] });
@@ -811,6 +947,17 @@ function ModelRow({
             >
               History
             </button>
+            {/* p.3's job list. Separate from History, which is the model's
+                *definition* over time — a run is a different question from a
+                version, and a dialog answering both would answer neither. */}
+            <button
+              className="btn quiet"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              data-testid="model-runs"
+              onClick={() => setShowRuns(true)}
+            >
+              Runs
+            </button>
             {canAdopt(model) && (
               <button
                 className="btn quiet"
@@ -834,6 +981,14 @@ function ModelRow({
               Delete
             </button>
           </div>
+        )}
+        {showRuns && (
+          <RunsDialog
+            workspaceId={workspaceId}
+            projectId={projectId}
+            model={model}
+            onClose={() => setShowRuns(false)}
+          />
         )}
         {showHistory && (
           <HistoryDialog
