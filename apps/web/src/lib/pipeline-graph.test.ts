@@ -18,6 +18,7 @@ import {
   outOfDateNote,
   PAD,
   relatives,
+  search,
   toggleSelected,
 } from "./pipeline-graph";
 
@@ -315,5 +316,86 @@ describe("growing a selection along the lineage (p.7, p.52, §355)", () => {
 
   it("an empty selection grows into nothing", () => {
     expect(relatives(edges, [], "downstream", Infinity)).toEqual([]);
+  });
+});
+
+describe("finding nodes on the graph (p.8, §356)", () => {
+  const nodes = [
+    { id: "dataset:1", kind: "dataset", name: "Orders raw", slug: "orders-raw" },
+    { id: "model:1", kind: "model", name: "Clean orders", slug: "clean-orders" },
+    { id: "dataset:2", kind: "dataset", name: "Clean orders", slug: "clean-orders-out" },
+    { id: "object_type:1", kind: "object_type", name: "Customer", slug: "customer" },
+    // **A name and a slug that share nothing**, which is the only arrangement
+    // that can tell "searched the name" from "searched the slug": everywhere
+    // else in this repo a slug is derived from the name, so a build reading
+    // only one of the two finds the same nodes as a build reading both.
+    { id: "dataset:3", kind: "dataset", name: "Refunds", slug: "rf-2024" },
+  ] as const;
+
+  it("matches part of a name, in any case", () => {
+    expect(search(nodes, "orders")).toEqual(["dataset:1", "model:1", "dataset:2"]);
+    expect(search(nodes, "ORDERS")).toEqual(["dataset:1", "model:1", "dataset:2"]);
+    expect(search(nodes, "  orders  ")).toEqual(["dataset:1", "model:1", "dataset:2"]);
+  });
+
+  it("matches the slug as well as the name", () => {
+    // The slug is what somebody writing a transform against an object type
+    // types, and it is the line the card already shows them (§351). Searched
+    // on a node whose *name* cannot match, so a build reading only the name
+    // fails here.
+    expect(search(nodes, "orders-raw")).toEqual(["dataset:1"]);
+    expect(search(nodes, "rf-2024")).toEqual(["dataset:3"]);
+  });
+
+  it("matches the name as well as the slug", () => {
+    // The other direction, and not the same assertion: `Refunds` is nowhere
+    // in `rf-2024`, so a build that searched only slugs finds nothing here.
+    expect(search(nodes, "refunds")).toEqual(["dataset:3"]);
+    expect(search(nodes, "customer")).toEqual(["object_type:1"]);
+  });
+
+  it("finds nothing when nothing matches", () => {
+    // The negative control: a search that always returned everything would
+    // satisfy both assertions above.
+    expect(search(nodes, "invoices")).toEqual([]);
+  });
+
+  it("says nothing at all before it has been asked anything", () => {
+    // **The state the page opens in.** A search that starts by highlighting
+    // the whole graph has said nothing, and would dim nothing while claiming
+    // to have found forty things.
+    expect(search(nodes, "")).toEqual([]);
+    expect(search(nodes, "   ")).toEqual([]);
+  });
+
+  it("narrows to the kinds asked for (p.8's Advanced tab)", () => {
+    expect(search(nodes, "orders", ["model"])).toEqual(["model:1"]);
+    expect(search(nodes, "orders", ["dataset"])).toEqual(["dataset:1", "dataset:2"]);
+  });
+
+  it("takes several kinds at once", () => {
+    expect(search(nodes, "orders", ["dataset", "model"]))
+      .toEqual(["dataset:1", "model:1", "dataset:2"]);
+  });
+
+  it("treats no kind chosen as no restriction", () => {
+    // Not as "match nothing": a reader who has not touched the filter means
+    // all of them, and an empty array is what that looks like in state.
+    expect(search(nodes, "orders", [])).toEqual(["dataset:1", "model:1", "dataset:2"]);
+  });
+
+  it("answers a kind on its own, with no text", () => {
+    // "Show me the models" is a question even with the box empty — which is
+    // why the nothing-matches-nothing rule above is about *both* being empty
+    // rather than about the query alone.
+    expect(search(nodes, "", ["object_type"])).toEqual(["object_type:1"]);
+  });
+
+  it("returns results in the graph's own order", () => {
+    // The nodes arrive in the layer order the server sorted them into, so
+    // "the first match" is the one furthest upstream. Asserted against a
+    // shuffled input so a build that re-sorted by name or by id fails.
+    const shuffled = [nodes[2], nodes[0], nodes[1]];
+    expect(search(shuffled, "orders")).toEqual(["dataset:2", "dataset:1", "model:1"]);
   });
 });

@@ -15,6 +15,7 @@ import {
   outOfDateNote,
   PAD,
   relatives,
+  search,
   toggleSelected,
   type Rect,
 } from "@/lib/pipeline-graph";
@@ -93,6 +94,7 @@ function NodeCard({
   node,
   selected,
   lit = false,
+  matched = false,
   dimmed = false,
   onSelect,
 }: {
@@ -100,7 +102,10 @@ function NodeCard({
   selected: boolean;
   /** This dataset has the column p.55's list has highlighted. */
   lit?: boolean;
-  /** Some column is highlighted and this node is not one of its datasets. */
+  /** This node is one of p.8's search results (§356). */
+  matched?: boolean;
+  /** Something is being looked at — a column's datasets, a search's results —
+   *  and this node is not part of it. */
   dimmed?: boolean;
   /** Told whether Ctrl/Cmd was held, which is p.54's "select multiple nodes
    *  at once" — the modifier is read here rather than in the handler because
@@ -139,6 +144,13 @@ function NodeCard({
         // column, and dimming the rest is what makes that readable on a graph
         // with forty nodes on it.
         opacity: dimmed ? 0.35 : 1,
+        // A search result says so on its own as well as by everything else
+        // fading, because the two are not the same picture: filter to a kind
+        // that covers the whole graph and nothing is dimmed at all, and a
+        // reader would be looking at forty undimmed cards wondering which
+        // ones the count meant (§356).
+        outline: matched ? "2px solid var(--accent)" : undefined,
+        outlineOffset: 1,
       }}
       data-testid="graph-node"
       // Which nodes are in the selection, as an attribute rather than only a
@@ -146,6 +158,7 @@ function NodeCard({
       // say *which*, and a border is not something a test can read without
       // asserting on a colour (§353's note, one attribute over).
       data-selected={selected ? "true" : undefined}
+      data-match={matched ? "true" : undefined}
       data-lit={lit ? "true" : undefined}
     >
       <div
@@ -278,6 +291,10 @@ export function PipelineGraphView({
   // page that opens in a mode where dragging selects would have them draw a
   // rectangle every time they meant to look further right.
   const [tool, setTool] = useState<"pan" | "select">("pan");
+  // p.8's search helper, minus the half that has nowhere to go here: every
+  // result is already on the graph (§355), so this finds rather than adds.
+  const [query, setQuery] = useState("");
+  const [kinds, setKinds] = useState<PipelineNode["kind"][]>([]);
   // p.55's "click one of the columns to highlight the datasets in your
   // selection that contain this column" (§353). One at a time, because the
   // question it answers is "where else is *this* column" — two highlighted at
@@ -315,6 +332,11 @@ export function PipelineGraphView({
     () => new Set(columns.find((c) => c.name === column)?.datasets ?? []),
     [columns, column],
   );
+  const found = useMemo(
+    () => search(graph.nodes, query, kinds),
+    [graph.nodes, query, kinds],
+  );
+  const matched = useMemo(() => new Set(found), [found]);
 
   /** Where a pointer is on the graph, undoing the pan and the zoom the
    *  canvas is drawn with — the rectangle has to be in the same coordinates
@@ -359,6 +381,71 @@ export function PipelineGraphView({
           cycle set to run on new input data will re-trigger itself indefinitely.
         </div>
       )}
+      {/* p.8's search helper as a row rather than a side panel, for the reason
+          Frequent Columns is one: this graph is a page, not an app with six
+          regions. The tree browse has nowhere to go — there is no folder
+          hierarchy under a project — so the free-text half is the whole of it,
+          with the Advanced tab's filters as the three kinds this graph draws. */}
+      <div style={{ marginBottom: 8 }} data-testid="graph-search">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+          <input
+            // Styled here rather than with a class: `.field input` is the
+            // repo's rule and it carries `width: 100%`, which is right inside
+            // a form column and wrong in a row of chips.
+            style={{
+              width: 240,
+              padding: "6px 9px",
+              border: "1px solid var(--line-strong)",
+              borderRadius: "var(--radius)",
+              font: "inherit",
+              fontSize: 13.5,
+              background: "var(--panel)",
+              color: "var(--ink)",
+            }}
+            placeholder="Find a node by name…"
+            data-testid="search-query"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {(["dataset", "model", "object_type"] as const).map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              className={kinds.includes(kind) ? "chip on" : "chip"}
+              data-testid={`search-kind-${kind}`}
+              aria-pressed={kinds.includes(kind)}
+              onClick={() =>
+                setKinds((current) =>
+                  current.includes(kind)
+                    ? current.filter((each) => each !== kind)
+                    : [...current, kind],
+                )
+              }
+            >
+              {kind === "object_type" ? "object types" : `${kind}s`}
+            </button>
+          ))}
+          {(query.trim() !== "" || kinds.length > 0) && (
+            <>
+              <span className="slug" data-testid="search-count">
+                {found.length} of {graph.nodes.length}
+              </span>
+              {/* p.8's "buttons at the bottom of the view to add all search
+                  results", which here means select them: the results are
+                  already drawn, and a selection is what §354's histogram and
+                  §355's expansions can carry further. */}
+              <button
+                className="btn quiet"
+                data-testid="search-select-all"
+                disabled={found.length === 0}
+                onClick={() => setSelected(found)}
+              >
+                Select all
+              </button>
+            </>
+          )}
+        </div>
+      </div>
       {columns.length > 0 && (
         /* p.54-55's Frequent Columns. **Most frequent first**, which is the
            server's ordering, and the count beside each name is what that
@@ -611,7 +698,17 @@ export function PipelineGraphView({
                 node={n}
                 selected={chosen.has(n.id)}
                 lit={lit.has(n.id)}
-                dimmed={lit.size > 0 && !lit.has(n.id)}
+                matched={matched.has(n.id)}
+                // **Dim means "not in what you are looking at", and two
+                // questions at once narrow rather than compete**: a node the
+                // search missed is out whether or not it has the highlighted
+                // column, and vice versa. One dimming language, because a
+                // second one would have a reader guessing which faded card
+                // faded for which reason.
+                dimmed={
+                  (lit.size > 0 && !lit.has(n.id)) ||
+                  (matched.size > 0 && !matched.has(n.id))
+                }
                 onSelect={(additive) =>
                   setSelected((current) => toggleSelected(current, n.id, additive))
                 }
