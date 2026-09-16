@@ -631,6 +631,14 @@ export const datasets = {
     request<import("./types").DatasetVersion[]>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/versions`,
     ),
+  /** Put the data back to an earlier version (§361; `data-lineage` p.75-76).
+   *  Returns the dataset as it now stands — the version number it answers with
+   *  is the *new* one, because a rollback appends rather than rewinds. */
+  rollBack: (wid: string, pid: string, did: string, versionNumber: number) =>
+    request<import("./types").Dataset>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/rollback`,
+      { method: "POST", body: JSON.stringify({ version_number: versionNumber }) },
+    ),
   upload: (wid: string, pid: string, input: { name: string; file: File }) => {
     const form = new FormData();
     form.set("name", input.name);

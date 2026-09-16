@@ -1021,9 +1021,14 @@ export interface DatasetVersion {
    * row says it is — a different state from "this version is small". */
   size_bytes?: number | null;
   table_schema: { name: string; data_type: string }[];
-  /** What produced it: an upload, a sync, a model run. Null for versions
-   * written before this was recorded. */
+  /** What produced it: an upload, a sync, a model run, a rollback. Null for
+   * versions written before this was recorded. */
   produced_by_kind: string | null;
+  /** On a version a rollback produced, the version it took its data from
+   * (§361). Null on every other kind. Foundry crosses the skipped
+   * transactions out instead (`data-lineage` p.70); this says the same thing
+   * forwards, without editing the past. */
+  rolled_back_to?: number | null;
   created_at: string;
 }
 

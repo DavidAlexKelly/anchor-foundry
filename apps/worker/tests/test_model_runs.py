@@ -189,10 +189,25 @@ def test_cron_model_is_enqueued_and_rescheduled(workspace: dict) -> None:
     assert next_run_at is not None and next_run_at > past
 
 
-def _add_version(dataset_id, version_number: int, *, produced_by=None) -> None:
+def _add_version(
+    dataset_id, version_number: int, *, produced_by=None, kind: str | None = None
+) -> None:
     """Record a dataset version. The `workspace` fixture creates its input
     dataset without one (nothing read dataset_versions before upstream
-    triggers existed), so upstream tests add them explicitly."""
+    triggers existed), so upstream tests add them explicitly.
+
+    `kind` names what produced it where that is not a model — 'rollback', say
+    (§361), whose whole point is that it is a new version of an input.
+    """
+    if kind is not None:
+        with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+            conn.execute(
+                """INSERT INTO dataset_versions (dataset_id, version_number,
+                                                 produced_by_kind, produced_by_id)
+                   VALUES (%s,%s,%s,%s)""",
+                (dataset_id, version_number, kind, produced_by),
+            )
+        return
     kind, pid = ("model", produced_by) if produced_by else (None, None)
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute(
@@ -253,6 +268,40 @@ def test_upstream_model_does_not_refire_without_a_new_version(workspace: dict) -
     run_model_runs(_ctx())
     runs = _runs(mid)
     assert len(runs) == 2 and runs[1][1] == "upstream"
+    assert _watermark(mid) > first_watermark
+
+
+def test_a_rolled_back_input_rebuilds_what_it_feeds(workspace: dict) -> None:
+    """**This platform's answer to the pipeline rollback Foundry is retiring**
+    (§361; `data-lineage` p.64, which puts *Roll back a pipeline* in planned
+    deprecation and points at rolling back a dataset instead).
+
+    Foundry walks the provenance of the upstream transaction and rewrites each
+    downstream dataset to a matching historical transaction. Here a rollback is
+    a new version of the input like any other, so a model set to build on
+    upstream change recomputes from the restored data — the downstream result
+    is derived again rather than restored, which is the stronger guarantee when
+    the logic has changed since.
+
+    Asserted rather than claimed: the exclusion in `run_model_runs` is written
+    against versions the model produced *itself*, and it would be easy for a
+    rollback to land on the wrong side of it.
+    """
+    mid = _create_model(
+        workspace, language="sql", code="SELECT * FROM t", trigger_mode="upstream"
+    )
+    _add_version(workspace["input_dataset_id"], 1)
+    run_model_runs(_ctx())
+    assert len(_runs(mid)) == 1
+    first_watermark = _watermark(mid)
+
+    # Somebody rolls the input back to v1. The data is v1's; the version is new.
+    _add_version(workspace["input_dataset_id"], 2, kind="rollback")
+
+    run_model_runs(_ctx())
+    runs = _runs(mid)
+    assert len(runs) == 2, "a rollback upstream is a change worth rebuilding for"
+    assert runs[1][1] == "upstream"
     assert _watermark(mid) > first_watermark
 
 

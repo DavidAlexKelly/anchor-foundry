@@ -120,6 +120,9 @@ class VersionOut(BaseModel):
     # because it is the difference between "this version is expensive" and
     # "this version cannot be read".
     size_bytes: int | None = None
+    # Set on a version a rollback produced, naming the version it took its data
+    # from (§361; `data-lineage` p.73). None on every other kind.
+    rolled_back_to: int | None = None
 
 
 class RetentionOut(BaseModel):
@@ -757,6 +760,50 @@ async def list_versions(
         )
         out.append(VersionOut(**data))
     return out
+
+
+class RollbackIn(BaseModel):
+    version_number: int = Field(ge=1)
+
+
+@router.post("/{dataset_id}/rollback", response_model=DatasetOut)
+async def roll_back_dataset(
+    dataset_id: UUID,
+    body: RollbackIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> DatasetOut:
+    """p.75-76's **Rollback to transaction**, from the History tab.
+
+    Editor, which is p.74's own rule ("you can only roll back a dataset on
+    which you have the Editor role") and would be this platform's answer
+    anyway: a rollback changes what every reader of the dataset sees, and
+    everything downstream that rebuilds on upstream change will act on it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        rolled = await ds_service.roll_back(
+            conn, access.project_id, dataset_id, body.version_number,
+            rolled_back_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="dataset.rollback",
+            resource_type="dataset",
+            resource_id=dataset_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"rolled_back_to": body.version_number,
+                      "new_version": rolled["current_version"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+        # Read back rather than shaping `rolled` into a DatasetOut: the row a
+        # rollback returns is the four columns it wrote, and a response
+        # assembled from those would be a second, quietly narrower definition
+        # of what a dataset is.
+        return _out(await ds_service.get(conn, access.project_id, dataset_id))
 
 
 # ---- lineage (spec §"Models": automatic tracking, Mermaid export) -----------

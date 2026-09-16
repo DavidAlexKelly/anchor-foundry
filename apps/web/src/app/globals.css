@@ -1046,6 +1046,11 @@ button { font: inherit; cursor: pointer; }
 .ds-tab.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
 
 .ds-note { font-size: 12.5px; margin: 0 0 10px; }
+/* The rollback confirmation's sentences (§361). A list rather than a
+   paragraph because each line is a separate consequence, and one of the three
+   only appears for datasets something rebuilds. */
+.ds-rollback-summary { margin: 0 0 14px; padding-left: 18px; font-size: 13px; line-height: 1.55; }
+.ds-rollback-summary li + li { margin-top: 6px; }
 /* ---- the Ontology Manager (ROADMAP phase 2, 4.2) --------------------------- */
 .ot-paging { display: flex; gap: 8px; margin-top: 10px; }
 .ot-paging button {

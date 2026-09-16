@@ -21,6 +21,7 @@ import { useRouter } from "next/navigation";
 import { ApiError, datasets as datasetApi, models as modelApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { branchName, whyNotBranchable } from "@/lib/branch-from-version";
+import { rollbackSummary, whyNotRollbackable } from "@/lib/dataset-rollback";
 import { useUrlState } from "@/components/use-url-state";
 import { PipelineGraphView } from "@/components/pipeline-graph";
 import { nodePath } from "@/lib/pipeline-graph";
@@ -368,6 +369,77 @@ function BranchDialog({
   );
 }
 
+/** p.76's confirmation dialog, saying what is true of *this* platform.
+ *
+ *  The wording is `lib/dataset-rollback`'s, because vitest cannot parse `.tsx`
+ *  and a sentence that only a browser test can reach is a sentence with no
+ *  unit test. What it says, and what it pointedly does not, is argued there.
+ */
+function RollbackDialog({
+  wid,
+  pid,
+  did,
+  version,
+  currentVersion,
+  origin,
+  onClose,
+}: {
+  wid: string;
+  pid: string;
+  did: string;
+  version: number;
+  currentVersion: number;
+  origin: string;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const roll = useMutation({
+    mutationFn: () => datasetApi.rollBack(wid, pid, did, version),
+    onSuccess: async () => {
+      // Everything that reads the dataset's data is now out of date: the
+      // history has a new row, the preview and the profile are a different
+      // version's, and the detail row's version number moved.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["ds-versions", did] }),
+        queryClient.invalidateQueries({ queryKey: ["ds-preview", did] }),
+        queryClient.invalidateQueries({ queryKey: ["ds-profile", did] }),
+        queryClient.invalidateQueries({ queryKey: ["ds-detail", did] }),
+        queryClient.invalidateQueries({ queryKey: ["ds-retention", did] }),
+      ]);
+      onClose();
+    },
+  });
+
+  return (
+    <Dialog open title={`Roll back to v${version}`} onClose={onClose}>
+      <ul className="ds-rollback-summary" data-testid="rollback-summary">
+        {rollbackSummary(version, currentVersion, origin).map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      {roll.isError && (
+        <div className="form-error" data-testid="rollback-error">
+          {roll.error instanceof ApiError ? roll.error.message : "Couldn't roll back."}
+        </div>
+      )}
+      <div className="form-actions">
+        <button type="button" className="btn quiet" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn"
+          data-testid="rollback-confirm"
+          disabled={roll.isPending}
+          onClick={() => roll.mutate()}
+        >
+          Roll back
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 function HistoryTab({
   wid,
   pid,
@@ -389,9 +461,21 @@ function HistoryTab({
   // chooses it by pressing a row — asking again would be the datasets list's
   // dropdown, which is the thing this replaces.
   const [branching, setBranching] = useState<number | null>(null);
+  // Which transaction is being rolled back to, chosen the same way and for the
+  // same reason (§361; `data-lineage` p.75: "Select the transaction to roll
+  // back to. Select Rollback to transaction").
+  const [rollingBack, setRollingBack] = useState<number | null>(null);
   const versions = useQuery({
     queryKey: ["ds-versions", did],
     queryFn: () => datasetApi.versions(wid, pid, did),
+  });
+  // Shares `ds-detail` with the Details tab, so reading the history does not
+  // fetch the dataset a second time. Only one field is wanted: whether
+  // something rebuilds this dataset, which decides whether p.74's warning
+  // about the logic is true of it.
+  const detail = useQuery({
+    queryKey: ["ds-detail", did],
+    queryFn: () => datasetApi.get(wid, pid, did),
   });
   const retention = useQuery({
     queryKey: ["ds-retention", did],
@@ -399,7 +483,13 @@ function HistoryTab({
   });
   if (versions.isPending) return <p className="state">Loading history…</p>;
   if (versions.isError) return <p className="state error">{(versions.error as Error).message}</p>;
-  if (versions.data.length === 0) return <p className="state">No versions recorded yet.</p>;
+  // The version the dataset is on, bound once. `[0]` rather than a second
+  // query: the list is ordered newest first, so the answer is already here,
+  // and a separate source for it could disagree with the rows being drawn.
+  // Written as a check on the row rather than on the length so the compiler
+  // knows it too — the two say the same thing.
+  const newest = versions.data[0];
+  if (newest === undefined) return <p className="state">No versions recorded yet.</p>;
 
   return (
     <>
@@ -424,6 +514,7 @@ function HistoryTab({
           <tbody>
             {versions.data.map((v, i) => {
               const previous = versions.data[i + 1];
+              const current = newest.version_number;
               const delta = previous ? v.row_count - previous.row_count : null;
               return (
                 <tr key={v.id}>
@@ -438,7 +529,20 @@ function HistoryTab({
                     )}
                   </td>
                   <td>{v.table_schema.length}</td>
-                  <td>{v.produced_by_kind ?? <span className="soft">—</span>}</td>
+                  <td>
+                    {v.produced_by_kind ?? <span className="soft">—</span>}
+                    {/* Where a rollback took its data from. Foundry crosses
+                        the skipped transactions out (p.70); saying which
+                        version came back is the same fact written forwards,
+                        and it is the only thing that distinguishes this row
+                        from a build nobody can account for. */}
+                    {v.rolled_back_to != null && (
+                      <span className="soft" data-testid="rolled-back-to">
+                        {" "}
+                        → v{v.rolled_back_to}
+                      </span>
+                    )}
+                  </td>
                   <td>
                     {v.size_bytes == null ? (
                       // Not the same as "small": the object is not where the
@@ -483,6 +587,22 @@ function HistoryTab({
                     >
                       Branch
                     </button>
+                    {/* p.75-76's **Rollback to transaction**, on the row rather
+                        than in a menu, for p.4's reason: the version is not a
+                        question, it is what was pressed. The wording of the
+                        refusal is `whyNotRollbackable`'s, next to the one it
+                        shares its shape with. */}
+                    <button
+                      type="button"
+                      className="ds-view-version"
+                      data-testid="rollback-version"
+                      data-version={v.version_number}
+                      disabled={whyNotRollbackable(v, current) !== ""}
+                      title={whyNotRollbackable(v, current) || undefined}
+                      onClick={() => setRollingBack(v.version_number)}
+                    >
+                      Roll back
+                    </button>
                   </td>
                 </tr>
               );
@@ -490,6 +610,17 @@ function HistoryTab({
           </tbody>
         </table>
       </div>
+      {rollingBack !== null && (
+        <RollbackDialog
+          wid={wid}
+          pid={pid}
+          did={did}
+          version={rollingBack}
+          currentVersion={newest.version_number}
+          origin={detail.data?.origin ?? ""}
+          onClose={() => setRollingBack(null)}
+        />
+      )}
       {branching !== null && (
         <BranchDialog
           wid={wid}
