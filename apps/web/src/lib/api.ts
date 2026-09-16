@@ -631,6 +631,25 @@ export const datasets = {
     request<import("./types").DatasetVersion[]>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/versions`,
     ),
+  /** p.24's rehearsal: what these parsing options would produce, with nothing
+   *  written (§362). */
+  previewParse: (
+    wid: string, pid: string, did: string,
+    options: import("./types").DatasetParseOptions,
+  ) =>
+    request<import("./types").DatasetParsePreview>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/parse/preview`,
+      { method: "POST", body: JSON.stringify(options) },
+    ),
+  /** The same parse, kept — as a new version, following §361. */
+  parseAgain: (
+    wid: string, pid: string, did: string,
+    options: import("./types").DatasetParseOptions,
+  ) =>
+    request<import("./types").Dataset>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/parse`,
+      { method: "POST", body: JSON.stringify(options) },
+    ),
   /** Put the data back to an earlier version (§361; `data-lineage` p.75-76).
    *  Returns the dataset as it now stands — the version number it answers with
    *  is the *new* one, because a rollback appends rather than rewinds. */
