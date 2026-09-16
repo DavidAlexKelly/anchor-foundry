@@ -217,8 +217,22 @@ async def fork(
         """,
         {"did": str(dataset_id), "v": target_version},
     )
-    if version is None or not version["s3_manifest_key"]:
+    if version is None:
         raise NotFoundError("dataset version")
+    if not version["s3_manifest_key"]:
+        # **Three states, not two** (§357; `dataset-preview` p.4). A version
+        # that was never asked for is a 404; one whose bytes are unaddressable
+        # is not missing, it is unreadable, and saying "not found" about a
+        # version whose row, schema and count are all right there sends a
+        # reader looking for a deletion that did not happen. The read path
+        # already draws this distinction (`_parquet_path` in routes/datasets);
+        # this one collapsed both into the 404, which is §191's hazard in the
+        # direction that matters - the two paths disagreed about the same
+        # state, and only one of them was right.
+        raise ConflictError(
+            f"version {target_version} has no stored file recorded, so there is "
+            "nothing to copy. Its schema and row count are still what it reported."
+        )
 
     slug = slugify(name)
     clash = await fetch_one(
@@ -242,7 +256,28 @@ async def fork(
     # Storage first, row second - the same ordering create_from_upload uses,
     # and for the same reason: an orphaned file is recoverable garbage, a row
     # without its file is a broken dataset.
-    storage.put(parquet_key, storage.read(str(version["s3_manifest_key"])))
+    try:
+        storage.put(parquet_key, storage.read(str(version["s3_manifest_key"])))
+    except FileNotFoundError as exc:
+        # The row exists and its bytes do not - storage cleared under a dev
+        # machine, a bucket lifecycle rule, a database restored against the
+        # wrong bucket. §56 named this failure and turned it into a sentence on
+        # the *read* path; forking one endpoint over still raised it, which is
+        # a 500 and a traceback on a button somebody pressed deliberately.
+        #
+        # Nothing has been written yet when this fires: storage comes before
+        # the row precisely so that a failure here leaves no dataset behind.
+        #
+        # p.4 scopes branching to transactions "that have not been deleted by a
+        # retention policy". This platform has no retention policy at all
+        # (docs/decisions/0005 - nothing deletes an old version today), so there
+        # is no policy to name; the same *state* arrives by the routes above,
+        # and this is the sentence for it.
+        raise ConflictError(
+            f"version {target_version}'s underlying file is missing from storage, "
+            "so there is nothing to copy. The dataset's metadata and history are "
+            "intact; rebuilding or re-uploading it will restore the data."
+        ) from exc
 
     row = await fetch_one(
         conn,
