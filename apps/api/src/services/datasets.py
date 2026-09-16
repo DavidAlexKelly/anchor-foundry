@@ -438,14 +438,142 @@ async def list_versions(
     return await fetch_all(
         conn,
         """
-        SELECT id, version_number, row_count, table_schema, produced_by_kind,
-               s3_manifest_key, created_at
-          FROM dataset_versions
-         WHERE dataset_id = :did
-         ORDER BY version_number DESC
+        SELECT v.id, v.version_number, v.row_count, v.table_schema,
+               v.produced_by_kind, v.s3_manifest_key, v.created_at,
+               -- Where a rollback took its data from, resolved to the number
+               -- the history shows rather than the row id it stores, so the
+               -- reader sees "rolled back to v3" instead of a uuid. Foundry
+               -- crosses the skipped transactions out (p.70); saying which
+               -- version came back is the same fact without editing the past.
+               src.version_number AS rolled_back_to
+          FROM dataset_versions v
+          LEFT JOIN dataset_versions src
+                 ON v.produced_by_kind = 'rollback' AND src.id = v.produced_by_id
+         WHERE v.dataset_id = :did
+         ORDER BY v.version_number DESC
         """,
         {"did": str(dataset_id)},
     )
+
+
+async def roll_back(
+    conn: AsyncConnection,
+    project_id: UUID,
+    dataset_id: UUID,
+    version_number: int,
+    *,
+    rolled_back_by: UUID,
+) -> dict[str, Any]:
+    """Put a dataset's data back to an earlier version (§361; `data-lineage`
+    p.73, p.75-76).
+
+    > "The dataset rollback feature allows you to update the data and job
+    >  history of a dataset." (p.73)
+
+    **A rollback appends a version; it never rewinds the pointer.** That is
+    this repository's convention already — `models.restore_version` (db 0024)
+    and `ontology.restore_type_version` (db 0028) both record the restore as a
+    *new* version so the history stays a true record — and it is the better of
+    the two readings, because a model run stamped with v7 has to keep resolving
+    to what v7 was however many times somebody has rolled back since. Foundry
+    crosses the rolled-back transactions out instead (p.70, p.76); the version
+    this writes says where it came from, which is the same information without
+    editing the past.
+
+    **No bytes are copied.** Every version has always been written to its own
+    key and nothing is overwritten (`version_location`), so rolling back to v3
+    writes a row pointing at v3's file. Two consequences worth naming: it costs
+    nothing on a large dataset, and — unlike Foundry's, which warns that "a
+    rollback cannot easily be undone" (p.76) — **this one is undoable**, by
+    rolling back to the version you were on.
+
+    Provenance goes in `produced_by_kind`/`produced_by_id`, which already mean
+    "what produced this version", pointing at the version row it was taken
+    from. A second column beside them would be a parallel provenance field that
+    is null for every other kind.
+
+    p.74's "you are only able to roll back to a successful transaction" needs
+    no check: a `dataset_versions` row exists only for a write that committed
+    (`commit_versions`). p.72's "uploaded datasets are not supported" is not
+    carried over — Foundry excludes them because there is no logic to rebuild
+    from, and here an earlier upload is exactly what somebody who uploaded the
+    wrong file wants back.
+    """
+    dataset = await get(conn, project_id, dataset_id)
+    current = int(dataset["current_version"])
+    source = await fetch_one(
+        conn,
+        """
+        SELECT id, version_number, s3_manifest_key, table_schema, row_count
+          FROM dataset_versions
+         WHERE dataset_id = :did AND version_number = :v
+        """,
+        {"did": str(dataset_id), "v": version_number},
+    )
+    if source is None:
+        raise NotFoundError("dataset version")
+    if version_number == current:
+        # Not an error worth a traceback and not a silent no-op either: a
+        # rollback that quietly wrote a duplicate version would put a row in
+        # the history saying something happened when nothing did.
+        raise ConflictError(
+            f"this dataset is already at v{current}, so there is nothing to roll back to"
+        )
+    if not source["s3_manifest_key"]:
+        # §357's three states, and the same refusal `fork` makes for the same
+        # reason: a version whose bytes are unaddressable is not missing, and
+        # calling it "not found" sends a reader looking for a deletion that did
+        # not happen.
+        raise ConflictError(
+            f"version {version_number} has no stored file recorded, so there is "
+            "nothing to roll back to. Its schema and row count are still what "
+            "it reported."
+        )
+
+    import json
+
+    schema = source["table_schema"]
+    schema_json = schema if isinstance(schema, str) else json.dumps(schema)
+    # **The UPDATE takes the number, and it takes the row lock with it.** Two
+    # rollbacks landing together would otherwise both read v7 and both insert
+    # v8, and the loser would get a unique-violation traceback instead of
+    # waiting its turn. `commit_versions` solves the same race by refusing;
+    # here there is nothing staged to invalidate, so the second one can simply
+    # go next.
+    row = await fetch_one(
+        conn,
+        """
+        UPDATE datasets
+           SET current_version = current_version + 1,
+               s3_location = :loc,
+               table_schema = CAST(:schema AS jsonb),
+               row_count = :rows
+         WHERE id = :did
+        RETURNING id, project_id, name, slug, row_count, current_version
+        """,
+        {
+            "loc": source["s3_manifest_key"], "schema": schema_json,
+            "rows": source["row_count"], "did": str(dataset_id),
+        },
+    )
+    assert row is not None
+    await fetch_one(
+        conn,
+        """
+        INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
+                                      table_schema, row_count, produced_by_kind,
+                                      produced_by_id, created_by)
+        VALUES (:did, :v, :key, CAST(:schema AS jsonb), :rows, 'rollback', :src, :by)
+        RETURNING id
+        """,
+        {
+            "did": str(dataset_id), "v": int(row["current_version"]),
+            "key": source["s3_manifest_key"], "schema": schema_json,
+            "rows": source["row_count"], "src": str(source["id"]),
+            "by": str(rolled_back_by),
+        },
+    )
+    return {**dict(row), "rolled_back_to": version_number}
 
 
 async def version_location(
