@@ -487,3 +487,61 @@ def test_the_module_customer_code_imports_is_staged_beside_it(scratch) -> None:
     staged = os.path.join(handle.work_dir, "anchor.py")
     assert os.path.exists(staged), "the runner would find no `anchor` to import"
     assert open(staged, "rb").read() == open(user_api.__file__, "rb").read()
+
+
+# ---- what the transform printed, through the runner (§358) -------------------
+#
+# `run_python_transform` is where the two isolation modes meet, and its two
+# halves keep a log differently: the subprocess one writes the file itself, the
+# runner one reads the text out of `result.json` and writes it here. The
+# subprocess half is covered by `test_python_sandbox`; this is the half that
+# only runs in a deployment, which is the half §292 found broken.
+
+def test_a_model_run_through_the_runner_keeps_what_it_printed(
+    model_run_env, ecs, tmp_path, monkeypatch
+) -> None:
+    _run_the_container_when_staged(monkeypatch)
+    orders = make_parquet(str(tmp_path / "orders.parquet"), [(1, "north"), (2, "south")])
+    log = str(tmp_path / "run.log")
+
+    dispatch.run_python_transform(
+        {"orders": orders}, 'print("rows in:", len(orders))\noutput = orders\n',
+        str(tmp_path / "out.parquet"), log_path=log,
+    )
+    with open(log) as handle:
+        assert handle.read().strip() == "rows in: 2"
+
+
+def test_a_failing_model_run_through_the_runner_keeps_its_log_too(
+    model_run_env, ecs, tmp_path, monkeypatch
+) -> None:
+    """**Before the refusal, not after it.** The log is written on the way out
+    of the failure path, because a run that raised is the one whose prints
+    somebody actually goes looking for."""
+    from anchor_worker.dataset_engine import DatasetEngineError
+
+    _run_the_container_when_staged(monkeypatch)
+    log = str(tmp_path / "run.log")
+    with pytest.raises(DatasetEngineError):
+        dispatch.run_python_transform(
+            {}, 'print("got this far")\noutput = 1 / 0\n',
+            str(tmp_path / "out.parquet"), log_path=log,
+        )
+    with open(log) as handle:
+        assert "got this far" in handle.read()
+
+
+def test_a_quiet_model_run_through_the_runner_writes_no_log_file(
+    model_run_env, ecs, tmp_path, monkeypatch
+) -> None:
+    """Nothing printed is no file, which is what the caller reads as "store no
+    `log_s3_key`" (§214)."""
+    _run_the_container_when_staged(monkeypatch)
+    orders = make_parquet(str(tmp_path / "orders.parquet"), [(1, "north")])
+    log = str(tmp_path / "run.log")
+
+    dispatch.run_python_transform(
+        {"orders": orders}, "output = orders\n", str(tmp_path / "out.parquet"),
+        log_path=log,
+    )
+    assert not os.path.exists(log)

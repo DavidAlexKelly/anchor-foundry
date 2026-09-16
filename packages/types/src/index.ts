@@ -1282,6 +1282,11 @@ export interface ModelRun {
   /** The definition this run executed (migration 0024). Null for runs that
    *  predate it — unknown, not v1. */
   model_version: string | null;
+  /** Whether this run printed anything worth keeping (§358). A boolean rather
+   *  than the storage key, which is an internal path. False for every SQL run
+   *  — DuckDB executing a query has no stdout — and for a Python run that
+   *  printed nothing. */
+  has_log: boolean;
 }
 
 /** One entry in a model's definition history. Append-only: restoring an

@@ -67,6 +67,10 @@ def upload(client: TestClient, fx: Fixture, sub: str, *, name: str,
 def test_storage_keys_reject_traversal() -> None:
     good = f"workspaces/ops-abc123/datasets/{uuid.uuid4()}/v1/data.parquet"
     assert validate_key(good) == good
+    # A model run's log (§358), which the worker writes and this service reads
+    # — so this validator has to accept a shape it never produces.
+    log = f"workspaces/ops-abc123/runs/{uuid.uuid4()}/log.txt"
+    assert validate_key(log) == log
     for bad in [
         "workspaces/ops/datasets/../../etc/passwd",
         "/etc/passwd",

@@ -48,7 +48,7 @@ from dagster import OpExecutionContext, job, op
 from .. import dataset_engine as engine
 from ..transform_dispatch import run_python_transform
 from ..resources import PlatformDatabase
-from ..storage import gateway_from_env, slugify, storage_prefix
+from ..storage import gateway_from_env, run_log_key, slugify, storage_prefix
 
 
 def _workspace_s3_prefix(cur, workspace_id: UUID) -> str:
@@ -387,33 +387,61 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
             conn.commit()
 
         ok, error, rows_produced, output_version_id = True, None, 0, None
-        try:
-            if not str(code).strip():
-                raise engine.DatasetEngineError("the model has no code")
-            if not input_rows:
-                raise engine.DatasetEngineError("the model has no input datasets")
-            input_paths = {alias: storage.local_path(loc) for alias, loc in input_rows}
-            with tempfile.TemporaryDirectory() as tmp:
+        log_text = ""
+        # **The temp directory wraps the `except`, not the other way round**
+        # (§358). The runner writes the log into this directory, and the run
+        # that most needs one is the run that raised - so a scope ending before
+        # the handler would delete exactly the log somebody went looking for.
+        with tempfile.TemporaryDirectory() as tmp:
+            log_file = os.path.join(tmp, "run.log")
+            try:
+                if not str(code).strip():
+                    raise engine.DatasetEngineError("the model has no code")
+                if not input_rows:
+                    raise engine.DatasetEngineError("the model has no input datasets")
+                input_paths = {alias: storage.local_path(loc) for alias, loc in input_rows}
                 dest = os.path.join(tmp, "out.parquet")
                 if language == "sql":
+                    # **No log, and not an empty one** (§358). A SQL transform
+                    # is DuckDB executing a query; there is no `print` in it and
+                    # nothing to capture, so `log_s3_key` stays NULL and the
+                    # control offering a log is absent for a SQL model rather
+                    # than opening on nothing (§214).
                     schema, rows_produced = engine.run_sql_transform(input_paths, code, dest)
                 else:
-                    schema, rows_produced = run_python_transform(input_paths, code, dest)
+                    schema, rows_produced = run_python_transform(
+                        input_paths, code, dest, log_path=log_file
+                    )
                 with open(dest, "rb") as handle:
                     parquet_bytes = handle.read()
 
+                with platform_db.connect_scoped_to(workspace_id) as conn:
+                    with conn.cursor() as cur:
+                        _, output_version_id = _record_output(
+                            cur, storage,
+                            model_id=UUID(str(model_id)), model_name=model_name,
+                            output_dataset_id=(
+                                UUID(str(output_dataset_id)) if output_dataset_id else None
+                            ),
+                            project_id=UUID(str(project_id)),
+                            workspace_id=UUID(str(workspace_id)),
+                            parquet_bytes=parquet_bytes, schema=schema,
+                            row_count=rows_produced,
+                        )
+                    conn.commit()
+            except (engine.DatasetEngineError, FileNotFoundError) as exc:
+                ok, error = False, str(exc)
+            if os.path.exists(log_file):
+                with open(log_file) as handle:
+                    log_text = handle.read()
+
+        log_key = None
+        if log_text:
             with platform_db.connect_scoped_to(workspace_id) as conn:
                 with conn.cursor() as cur:
-                    _, output_version_id = _record_output(
-                        cur, storage,
-                        model_id=UUID(str(model_id)), model_name=model_name,
-                        output_dataset_id=UUID(str(output_dataset_id)) if output_dataset_id else None,
-                        project_id=UUID(str(project_id)), workspace_id=UUID(str(workspace_id)),
-                        parquet_bytes=parquet_bytes, schema=schema, row_count=rows_produced,
-                    )
-                conn.commit()
-        except (engine.DatasetEngineError, FileNotFoundError) as exc:
-            ok, error = False, str(exc)
+                    ws_prefix = _workspace_s3_prefix(cur, UUID(str(workspace_id)))
+            log_key = run_log_key(ws_prefix, run_id)
+            storage.put(log_key, log_text.encode("utf-8"))
 
         with platform_db.connect_scoped_to(workspace_id) as conn:
             with conn.cursor() as cur:
@@ -421,7 +449,7 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
                     """
                     UPDATE model_runs
                        SET status = %s, finished_at = now(), rows_produced = %s,
-                           error_message = %s, output_version = %s
+                           error_message = %s, output_version = %s, log_s3_key = %s
                      WHERE id = %s
                     """,
                     (
@@ -429,6 +457,7 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
                         rows_produced if ok else None,
                         error,
                         str(output_version_id) if output_version_id else None,
+                        log_key,
                         run_id,
                     ),
                 )

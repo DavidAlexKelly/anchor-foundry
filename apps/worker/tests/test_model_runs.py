@@ -568,3 +568,80 @@ def test_manual_trigger_model_is_not_auto_enqueued(workspace: dict) -> None:
             "SELECT count(*) FROM model_runs WHERE model_id=%s", (mid,)
         ).fetchone()[0]
     assert count == 0
+
+
+# ---- what a run printed, kept (§358; `dataset-preview` p.3) ------------------
+
+def _log_key(run_id: uuid.UUID):
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        return conn.execute(
+            "SELECT log_s3_key FROM model_runs WHERE id=%s", (run_id,)
+        ).fetchone()[0]
+
+
+def test_a_python_run_stores_what_it_printed(workspace: dict, storage_root: str) -> None:
+    """**`model_runs.log_s3_key`'s first writer.**
+
+    The column has existed since migration 0003 and nothing had ever written
+    it; `services/models.py` said it was "written by the worker runtime for
+    long runs", which was true of no runtime. This is that sentence becoming
+    true.
+    """
+    mid = _create_model(
+        workspace, language="python",
+        code="print('rows in:', len(t))\noutput = t.copy()",
+    )
+    run_id = _queue_run(mid)
+    run_model_runs(_ctx())
+    assert _run_row(run_id)[0] == "succeeded"
+
+    key = _log_key(run_id)
+    assert key is not None, "a run that printed should record where its log went"
+    assert os.path.exists(os.path.join(storage_root, key)), key
+    with open(os.path.join(storage_root, key)) as handle:
+        assert "rows in: 2" in handle.read()
+
+
+def test_a_failed_run_keeps_its_log_too(workspace: dict, storage_root: str) -> None:
+    """**The run whose log is worth most.** The temp directory the runner
+    writes into wraps the exception handler for exactly this: a scope that
+    ended first would delete the log of every run that failed."""
+    mid = _create_model(
+        workspace, language="python",
+        code="print('before the fall')\noutput = 1 / 0",
+    )
+    run_id = _queue_run(mid)
+    run_model_runs(_ctx())
+    status, error, _, _ = _run_row(run_id)
+    assert status == "failed" and "ZeroDivisionError" in error
+
+    key = _log_key(run_id)
+    assert key is not None, "a failed run's log is the one somebody opens"
+    with open(os.path.join(storage_root, key)) as handle:
+        text = handle.read()
+    assert "before the fall" in text
+    # The one-line `error_message` stays what it was: a log is not a summary,
+    # and the list view has no room for a traceback.
+    assert error != text
+
+
+def test_a_quiet_run_records_no_log(workspace: dict) -> None:
+    """Nothing printed means no log, not an empty one — so the control
+    offering it can be absent rather than opening on blankness (§214)."""
+    mid = _create_model(workspace, language="python", code="output = t.copy()")
+    run_id = _queue_run(mid)
+    run_model_runs(_ctx())
+    assert _run_row(run_id)[0] == "succeeded"
+    assert _log_key(run_id) is None
+
+
+def test_a_sql_run_records_no_log(workspace: dict) -> None:
+    """**A SQL transform has nothing to capture.** It is DuckDB executing a
+    query — there is no `print` in it — so the absence here is a fact about SQL
+    models rather than a gap, and it is what lets the log control stay away for
+    them instead of offering an empty file."""
+    mid = _create_model(workspace, language="sql", code="SELECT id, val FROM t")
+    run_id = _queue_run(mid)
+    run_model_runs(_ctx())
+    assert _run_row(run_id)[0] == "succeeded"
+    assert _log_key(run_id) is None

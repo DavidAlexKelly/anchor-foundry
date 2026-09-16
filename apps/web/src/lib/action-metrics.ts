@@ -140,17 +140,11 @@ export function needsAttention(metrics: ActionMetrics): boolean {
 /**
  * p.164's P95, as a duration somebody can read.
  *
- * Seconds under a minute, and minutes above — an action taking "212.4s" is one
- * the reader has to do arithmetic on to know it is nearly four minutes.
+ * **Moved to `lib/duration` in §358 and re-exported here**, because a second
+ * copy had grown for model runs and the two disagreed on whole minutes. This
+ * module's callers and tests are unchanged; there is simply one of it now.
  */
-export function durationText(seconds: number | null): string {
-  if (seconds === null) return "—";
-  if (seconds < 1) return `${Math.round(seconds * 1000)}ms`;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const mins = Math.floor(seconds / 60);
-  const rest = Math.round(seconds % 60);
-  return rest === 0 ? `${mins}m` : `${mins}m ${rest}s`;
-}
+export { durationText } from "./duration";
 
 /**
  * The failure breakdown with each category's share, biggest first.

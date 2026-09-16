@@ -78,9 +78,12 @@ class TransformFailed(Exception):
     """The transform ran and was wrong. `error` is the runner's own message,
     written by whoever's code raised."""
 
-    def __init__(self, error: str) -> None:
+    def __init__(self, error: str, log: str = "") -> None:
         super().__init__(error)
         self.error = error
+        # What the transform printed before it went wrong (§358). Empty when it
+        # printed nothing, which is a different fact from "no log was kept".
+        self.log = log
 
 
 @dataclass(frozen=True)
@@ -296,7 +299,10 @@ def collect(handle: RunHandle, *, output_path: str | None = None, stopped_reason
         payload = json.load(handle_in)
 
     if payload.get("status") == "failed":
-        raise TransformFailed(str(payload.get("error") or "the transform failed without a message"))
+        raise TransformFailed(
+            str(payload.get("error") or "the transform failed without a message"),
+            str(payload.get("log") or ""),
+        )
     if payload.get("status") != "ok":
         raise DispatchError(f"the result file has an unrecognised status: {payload.get('status')!r}")
 
@@ -368,10 +374,21 @@ def isolation_mode() -> str:
     )
 
 
-def run_python_transform(input_paths: dict[str, str], code: str, dest_parquet: str):
+def run_python_transform(
+    input_paths: dict[str, str],
+    code: str,
+    dest_parquet: str,
+    log_path: str | None = None,
+):
     """The single place that decides where customer Python runs, with the
     signature `python_sandbox.run_python_transform` already had so the model
     run path does not care which it got.
+
+    **`log_path` is honoured on both sides, and that is the point** (§358).
+    The two capture differently — the subprocess runner writes the file itself,
+    the container hands its text back in `result.json` — and a build that did
+    only one of them would keep logs in development and silently keep none in
+    production, which is §292's failure exactly: the half nobody re-checks.
 
     Errors are normalised to `DatasetEngineError` - the model run records one
     message either way - but an infrastructure failure is prefixed so the
@@ -385,17 +402,34 @@ def run_python_transform(input_paths: dict[str, str], code: str, dest_parquet: s
     if isolation_mode() == "subprocess":
         from .python_sandbox import run_python_transform as in_process
 
-        return in_process(input_paths, code, dest_parquet)
+        return in_process(input_paths, code, dest_parquet, log_path=log_path)
 
     try:
         payload = run_transform(
             TransformJob(code=code, inputs=dict(input_paths)), output_path=dest_parquet
         )
     except TransformFailed as exc:
+        # Before the refusal, because a failed run is the one whose log
+        # somebody actually wants.
+        _keep_log(log_path, exc.log)
         raise DatasetEngineError(exc.error[:500]) from exc
     except DispatchError as exc:
         raise DatasetEngineError(f"the platform could not run this transform: {exc}") from exc
+    _keep_log(log_path, str(payload.get("log") or ""))
     schema = [
         ColumnSchema(name=c["name"], data_type=c["data_type"]) for c in payload.get("schema", [])
     ]
     return schema, int(payload.get("row_count", 0))
+
+
+def _keep_log(log_path: str | None, text: str) -> None:
+    """Write the runner's log where the caller asked, if there is one.
+
+    No file when there is nothing to write: a transform that printed nothing
+    has no log, which is not the same as an empty one, and the caller reads the
+    file's absence as "store no `log_s3_key`" (§214).
+    """
+    if log_path is None or not text:
+        return
+    with open(log_path, "w") as handle:
+        handle.write(text)

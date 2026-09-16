@@ -17,14 +17,19 @@ import shutil
 from pathlib import Path
 from typing import Protocol
 
-# Two shapes, both anchored to a workspace's own prefix (§16's isolation
-# anchor): dataset bytes, and object attachments (roadmap Objects item 4).
-# Widening this grammar is the only way to store a new *kind* of byte, which
-# is the point - a key that does not match one of these named shapes cannot
-# be written or read at all, so a fabricated key from a request body fails
-# here rather than reaching the bucket.
+# Three shapes, all anchored to a workspace's own prefix (§16's isolation
+# anchor): dataset bytes, object attachments (roadmap Objects item 4), and a
+# model run's log (§358). Widening this grammar is the only way to store a new
+# *kind* of byte, which is the point - a key that does not match one of these
+# named shapes cannot be written or read at all, so a fabricated key from a
+# request body fails here rather than reaching the bucket.
+#
+# **`runs` was added on both sides in one commit**, and the comment above the
+# worker's copy is why: a validator narrower than the writer's is how a key
+# written by one service becomes unreadable by the other, and the worker writes
+# these while the API reads them.
 _KEY_RE = re.compile(
-    r"^workspaces/[a-z0-9-]+/(datasets|attachments)/[0-9a-f-]{36}/[A-Za-z0-9._/-]+$"
+    r"^workspaces/[a-z0-9-]+/(datasets|attachments|runs)/[0-9a-f-]{36}/[A-Za-z0-9._/-]+$"
 )
 
 

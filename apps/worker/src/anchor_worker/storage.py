@@ -13,11 +13,13 @@ from pathlib import Path
 from typing import Protocol
 
 # Kept in step with the API's copy (roadmap Objects item 4 widened it to
-# cover object attachments). The worker never reads an attachment today, but
-# a validator that is *narrower* than the writer's is how a key written by
-# one service becomes unreadable by the other.
+# cover object attachments; §358 added `runs` for a model run's log). The
+# worker never reads an attachment today, but a validator that is *narrower*
+# than the writer's is how a key written by one service becomes unreadable by
+# the other — and §358 is that case pointed the other way, since the worker
+# writes run logs and only the API reads them.
 _KEY_RE = re.compile(
-    r"^workspaces/[a-z0-9-]+/(datasets|attachments)/[0-9a-f-]{36}/[A-Za-z0-9._/-]+$"
+    r"^workspaces/[a-z0-9-]+/(datasets|attachments|runs)/[0-9a-f-]{36}/[A-Za-z0-9._/-]+$"
 )
 
 
@@ -133,6 +135,24 @@ class S3StorageGateway:
 
 def storage_prefix(ws_s3_prefix: str, dataset_id) -> str:
     return f"{ws_s3_prefix}datasets/{dataset_id}/"
+
+
+def run_log_key(ws_s3_prefix: str, run_id) -> str:
+    """Where a model run's log lives (§358).
+
+    **Keyed by the run, not by the dataset it produced**, and that is the
+    load-bearing part: a failed run produces no dataset at all, and its log is
+    the one most worth keeping — so a key derived from output would have
+    nowhere to put exactly the logs somebody goes looking for.
+
+    The `runs/` segment itself is a name rather than a mechanism, and §358's
+    sweep said so: a mutant filing the same log under `datasets/` survived,
+    correctly. Nothing collides either way, because a run id is not a dataset
+    id, and `delete_prefix` for a dataset names that dataset's own id. What the
+    grammar *does* enforce is the workspace prefix, and a mutant dropping that
+    is caught — see `validate_key` and `test_storage_key_parity`.
+    """
+    return f"{ws_s3_prefix}runs/{run_id}/log.txt"
 
 
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?$")

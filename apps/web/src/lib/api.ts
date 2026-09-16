@@ -57,6 +57,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** A GET whose body is text rather than JSON (§358's run log).
+ *
+ * Deliberately not `request`: that one ends in `res.json()`, which would throw
+ * on a log that happens to start with a digit. The error handling is shared by
+ * delegating the failure path to it — a non-2xx response has a JSON body here
+ * as everywhere else, so there is one place that turns a `detail` into an
+ * `ApiError` and this is not a second one.
+ */
+async function requestText(path: string): Promise<string> {
+  const res = await fetch(`/api${path}`, {
+    credentials: "same-origin",
+    headers: { ...SESSION_HEADERS },
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      /* non-JSON error body - keep statusText */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return await res.text();
+}
+
 /** A multipart POST. Deliberately not `request`: the browser has to set the
  * multipart boundary itself, so this path must *not* send a Content-Type. */
 async function requestForm<T>(path: string, form: FormData): Promise<T> {
@@ -908,6 +934,12 @@ export const models = {
   runs: (wid: string, pid: string, mid: string) =>
     request<import("./types").ModelRun[]>(
       `/workspaces/${wid}/projects/${pid}/models/${mid}/runs`,
+    ),
+  /** What one run printed (§358; `dataset-preview` p.3). Plain text, not
+   *  JSON — it is already text and it is the whole response. */
+  runLog: (wid: string, pid: string, mid: string, rid: string) =>
+    requestText(
+      `/workspaces/${wid}/projects/${pid}/models/${mid}/runs/${rid}/log`,
     ),
   remove: (wid: string, pid: string, mid: string) =>
     request<void>(`/workspaces/${wid}/projects/${pid}/models/${mid}`, { method: "DELETE" }),

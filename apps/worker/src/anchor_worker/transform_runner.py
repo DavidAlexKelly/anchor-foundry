@@ -41,6 +41,8 @@ implementations of "which shape is this" is how they came to disagree.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -62,11 +64,20 @@ RESULT_FILE = "result.json"
 # Re-exported under the old name so `MAX_OUTPUT_ROWS` still means this module's
 # cap to anything that reads it, including the test that lowers it.
 from .limits import MAX_OUTPUT_ROWS, too_many_rows  # noqa: E402
+from .run_logs import capped, combine  # noqa: E402
 
 
 class TransformError(Exception):
     """The transform is wrong. Distinct from anything that goes wrong *around*
-    the transform, which does not produce a result file at all."""
+    the transform, which does not produce a result file at all.
+
+    Carries `log` (§358): what the transform printed before it went wrong,
+    which is the case a log exists for. An attribute rather than a second
+    argument at every raise site, because every one of them is about the error
+    and only the boundary cares about the log.
+    """
+
+    log: str = ""
 
 
 @dataclass(frozen=True)
@@ -174,12 +185,27 @@ def execute(work_dir: str, job: Job) -> dict[str, Any]:
     namespace["transform"] = anchor.transform
     namespace["anchor"] = anchor
 
+    # §358: what the transform prints is kept, here as in the subprocess
+    # runner. The capture differs — that one redirects inside its generated
+    # script, this one around its own `exec` — and the *rules* are `run_logs`',
+    # imported by both, because two wordings for one thing is what §292 and
+    # §298 each spent a session undoing.
+    user_out, user_err = io.StringIO(), io.StringIO()
+
+    def _log() -> str:
+        return capped(combine(user_out.getvalue(), user_err.getvalue()))
+
     try:
-        exec(compile(source, "<transform>", "exec"), namespace)
+        with contextlib.redirect_stdout(user_out), contextlib.redirect_stderr(user_err):
+            exec(compile(source, "<transform>", "exec"), namespace)
     except Exception as exc:
         # The author's own error. Carry the traceback but not this module's
         # frames - they are noise to whoever wrote the transform.
-        raise TransformError(f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=-3)}") from exc
+        failed = TransformError(
+            f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=-3)}"
+        )
+        failed.log = _log()
+        raise failed from exc
 
     # One implementation of "which shape did this file use", in the module both
     # runners import. It used to be written out twice, and the two disagreed
@@ -187,7 +213,9 @@ def execute(work_dir: str, job: Job) -> dict[str, Any]:
     try:
         output = anchor.resolve_output(namespace)
     except anchor.ShapeError as exc:
-        raise TransformError(str(exc)) from exc
+        failed = TransformError(str(exc))
+        failed.log = _log()
+        raise failed from exc
 
     connection.register("_output", output)
     try:
@@ -207,6 +235,9 @@ def execute(work_dir: str, job: Job) -> dict[str, Any]:
         "row_count": row_count,
         "schema": [{"name": row[0], "data_type": row[1]} for row in schema],
         "output_path": job.output_path,
+        # Absent rather than empty when the transform printed nothing, so the
+        # caller stores no log and the control offering one stays away (§214).
+        **({"log": _log()} if _log() else {}),
     }
 
 
@@ -221,7 +252,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         payload = execute(work_dir, job)
     except TransformError as exc:
-        write_result(work_dir, {"status": "failed", "error": str(exc)})
+        failure: dict[str, Any] = {"status": "failed", "error": str(exc)}
+        if exc.log:
+            failure["log"] = exc.log
+        write_result(work_dir, failure)
         # Non-zero so the task shows as failed in ECS as well as in the result
         # file - two places, because whoever is looking at one is often not
         # looking at the other.
