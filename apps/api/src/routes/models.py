@@ -30,6 +30,7 @@ from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import models as model_service
 from ..services import pipeline as pipeline_service
+from ..services import saved_graphs
 from ..services import transform_adoption as adoption_service
 from ..services.dataset_engine import DatasetEngineError
 
@@ -543,6 +544,89 @@ async def run_log(
         )
 
 
+# ---- saved graphs (§360; `data-lineage` p.12) --------------------------------
+class SavedGraphOut(BaseModel):
+    id: UUID
+    name: str
+    description: str
+    #: The view this reopens, never the nodes — see db 0089.
+    view: dict[str, Any]
+    created_by: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SavedGraphCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    view: dict[str, Any] = Field(default_factory=dict)
+
+
+@project_router.get("/saved-graphs", response_model=list[SavedGraphOut])
+async def list_saved_graphs(
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[SavedGraphOut]:
+    """Shared within the project rather than private to whoever saved them,
+    which is db 0040's decision for saved searches and its reason: one only its
+    author can see gets reinvented slightly differently by everybody else.
+
+    **There is no route for a single saved graph, deliberately.** A view is a
+    handful of ids and a search box, so this returns each one whole and the
+    Open dialog opens straight out of the list. The `GET /saved-graphs/{id}`
+    this once had, and the client function that was its only caller, were
+    written before that was true of the list and then never called by anything
+    — §358 shipped a `modelApi.runs` in exactly that state. Add one back when
+    something needs it, not in case."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await saved_graphs.list_graphs(conn, access.project_id)
+    return [SavedGraphOut(**r) for r in rows]
+
+
+@project_router.post("/saved-graphs", response_model=SavedGraphOut,
+                     status_code=status.HTTP_201_CREATED)
+async def save_graph(
+    body: SavedGraphCreate,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> SavedGraphOut:
+    """p.12's "Save". Editor level: it creates a resource shared with the
+    project, and reading a graph you can already read is not the operative
+    permission."""
+    async with user_connection(access.auth.user_id) as conn:
+        try:
+            row = await saved_graphs.create(
+                conn, project_id=access.project_id, name=body.name.strip(),
+                description=body.description, view=body.view,
+                created_by=access.auth.user_id,
+            )
+        except saved_graphs.GraphViewError as exc:
+            raise ValueError(str(exc)) from exc
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="graph.save",
+            resource_type="saved_graph",
+            resource_id=row["id"],
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"name": row["name"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return SavedGraphOut(**row)
+
+
+@project_router.delete("/saved-graphs/{graph_id}", status_code=status.HTTP_204_NO_CONTENT,
+                       response_model=None)
+async def delete_saved_graph(
+    graph_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> None:
+    async with user_connection(access.auth.user_id) as conn:
+        await saved_graphs.remove(conn, access.project_id, graph_id)
+
+
 # ---- pipeline graph (ROADMAP Models item 2) ---------------------------------
 class GraphNode(BaseModel):
     id: str                       # "dataset:<uuid>" / "model:<uuid>"
@@ -642,12 +726,14 @@ async def pipeline_graph(
     node's connected component, which is what the lineage view asks for -
     one endpoint rather than two, since a project graph and a lineage graph
     are the same question from different entry points."""
-    if focus is not None and not re.fullmatch(
-        r"(dataset|model|object_type):[0-9a-fA-F-]{36}", focus
-    ):
-        # `object_type` joined the two in §351: an object type is a node on
-        # this graph now, and a node the view draws and cannot centre on is a
-        # node whose neighbours are unreachable from it.
+    # **The grammar is `saved_graphs.NODE_ID`'s, read rather than repeated**
+    # (§360). A saved graph holds a `focus`, so the rule now has two callers —
+    # and db 0040's lesson is that a definition validated in one place and
+    # saved in another lets somebody store a view that cannot open, learning
+    # about it later and somewhere else. `object_type` joined the two in §351:
+    # an object type is a node on this graph now, and a node the view draws and
+    # cannot centre on is a node whose neighbours are unreachable from it.
+    if focus is not None and not saved_graphs.NODE_ID.fullmatch(focus):
         raise ValueError(
             "focus must be 'dataset:<uuid>', 'model:<uuid>' or "
             "'object_type:<uuid>'"

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   columnsIn,
   DRAG_FLOOR,
+  GRAPH_KINDS,
   GAP_X,
   isDrag,
   NODE_W,
@@ -17,9 +18,11 @@ import {
   nodesInRect,
   outOfDateNote,
   PAD,
+  kindsIn,
   relatives,
   search,
   toggleSelected,
+  viewOf,
 } from "./pipeline-graph";
 
 describe("where a pipeline node opens", () => {
@@ -397,5 +400,67 @@ describe("finding nodes on the graph (p.8, §356)", () => {
     // shuffled input so a build that re-sorted by name or by id fails.
     const shuffled = [nodes[2], nodes[0], nodes[1]];
     expect(search(shuffled, "orders")).toEqual(["dataset:2", "dataset:1", "model:1"]);
+  });
+});
+
+describe("the view a graph is saved or shared at (p.12, §360)", () => {
+  it("carries what was chosen", () => {
+    expect(viewOf({
+      selected: ["dataset:1"], column: "id", query: "orders", kinds: ["model"],
+    })).toEqual({
+      selected: ["dataset:1"], column: "id", query: "orders", kinds: ["model"],
+    });
+  });
+
+  it("leaves out the parts nobody chose", () => {
+    // **Omitted, not empty.** A view carrying `query: ""` and `selected: []`
+    // saves as a filter nobody set and reopens looking deliberate.
+    expect(viewOf({ selected: [], column: null, query: "", kinds: [] })).toEqual({});
+  });
+
+  it("treats a blank search as no search", () => {
+    expect(viewOf({ selected: [], column: null, query: "   ", kinds: [] })).toEqual({});
+  });
+
+  it("copies rather than aliasing what it was given", () => {
+    // The caller's arrays are React state; a view holding a reference to them
+    // is a saved graph that changes after it was saved.
+    const selected = ["dataset:1"];
+    const view = viewOf({ selected, column: null, query: "", kinds: [] });
+    selected.push("dataset:2");
+    expect(view.selected).toEqual(["dataset:1"]);
+  });
+
+  it("keeps a column that is there and drops one that is not", () => {
+    // The negative control: `column` is the one field whose empty value is
+    // `null` rather than a length, so it needs saying separately.
+    expect(viewOf({ selected: [], column: "id", query: "", kinds: [] }))
+      .toEqual({ column: "id" });
+  });
+});
+
+describe("the kinds a stored view names", () => {
+  it("keeps the ones this graph draws", () => {
+    expect(kindsIn({ kinds: ["dataset", "object_type"] }))
+      .toEqual(["dataset", "object_type"]);
+  });
+
+  it("drops one this build does not draw", () => {
+    // **A view saved by a later build**, or by one that drew a kind since
+    // removed, would otherwise put a filter on the graph matching nothing,
+    // with no way to see that it had.
+    expect(kindsIn({ kinds: ["dataset", "sandwich"] })).toEqual(["dataset"]);
+  });
+
+  it("reads a view with no kinds, and no view at all, as no filter", () => {
+    expect(kindsIn({})).toEqual([]);
+    expect(kindsIn(undefined)).toEqual([]);
+  });
+
+  it("names every kind the graph can draw", () => {
+    // `PipelineNode["kind"]` is the list, and a kind missing here is one a
+    // saved view could never filter to (§191's direction: guard the mirror
+    // against the thing it mirrors).
+    expect(new Set(GRAPH_KINDS)).toEqual(new Set(["dataset", "model", "object_type"]));
   });
 });

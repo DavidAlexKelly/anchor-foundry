@@ -1,24 +1,50 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
-import { models as modelApi } from "@/lib/api";
+import { useRef, useState } from "react";
+import { ApiError, models as modelApi } from "@/lib/api";
 import { PipelineGraphView } from "@/components/pipeline-graph";
-import { nodePath } from "@/lib/pipeline-graph";
+import { Dialog, Field } from "@/components/dialog";
+import { nodePath, type GraphView } from "@/lib/pipeline-graph";
+import { fromParams, toParams } from "@/lib/graph-link";
+import { CopyLinkButton, useUrlState } from "@/components/use-url-state";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
-import type { PipelineGraph, PipelineNode } from "@/lib/types";
+import type { PipelineGraph, PipelineNode, SavedGraph } from "@/lib/types";
 
 export default function PipelinePage() {
   const params = useParams<{ workspace: string; project: string }>();
   const router = useRouter();
+  const url = useUrlState();
   const { workspace } = useWorkspaceBySlug(params.workspace);
   const { project } = useProjectBySlug(workspace?.id, params.project);
+  const [saving, setSaving] = useState(false);
+  const [opening, setOpening] = useState(false);
 
   const graph = useQuery<PipelineGraph>({
     queryKey: ["pipeline", project?.id],
     queryFn: () => modelApi.pipeline(workspace!.id, project!.id),
     enabled: !!workspace && !!project,
   });
+
+  // **The view arrives from the URL, and is read once.** p.12's "quick share
+  // link" is a link, so the parameters have to be *in* one — and putting them
+  // there fixes reload-loses-everything as a side effect, which this page had
+  // since it was written.
+  //
+  // Initialised once rather than read every render: re-reading would fight the
+  // graph for control of its own selection the moment somebody clicked, since
+  // the URL is written *from* the graph a beat later.
+  const [opened, setOpened] = useState<GraphView>(() => fromParams(url.params));
+  // Bumped when a saved graph is opened, which remounts the graph so it reads
+  // the new view as its initial one. A remount rather than a reload: a
+  // `router.replace` has not landed by the time `location.reload()` would
+  // fire, so reloading would race the URL it is meant to be applying.
+  const [openedKey, setOpenedKey] = useState(0);
+
+  // The view as it stands, for Save. A ref because nothing on this page needs
+  // to re-render when it changes — the graph is already drawing it.
+  const live = useRef<GraphView>(opened);
 
   function open(node: PipelineNode) {
     // One rule for the three graphs that draw these nodes — see
@@ -37,11 +63,216 @@ export default function PipelinePage() {
             Every dataset and model in this project, flowing left to right.
           </p>
         </div>
+        {graph.data && (
+          <div className="form-actions" style={{ marginTop: 0 }}>
+            {/* p.12's "quick share link", and **not a new button**: this one
+                copies the address bar, which is true because the view is kept
+                there. A second button rebuilding the link from state could
+                disagree with the URL — its own docstring says so. */}
+            <CopyLinkButton label="Copy link to this view" />
+            <button
+              className="btn quiet"
+              data-testid="graph-open"
+              onClick={() => setOpening(true)}
+            >
+              Open graph
+            </button>
+            <button
+              className="btn"
+              data-testid="graph-save"
+              onClick={() => setSaving(true)}
+            >
+              Save graph
+            </button>
+          </div>
+        )}
       </div>
 
       {graph.isPending && <div className="state">Loading the pipeline…</div>}
       {graph.isError && <div className="state error">Couldn&apos;t load the pipeline.</div>}
-      {graph.data && <PipelineGraphView graph={graph.data} onOpen={open} />}
+      {graph.data && (
+        <PipelineGraphView
+          key={openedKey}
+          graph={graph.data}
+          onOpen={open}
+          initialView={opened}
+          onViewChange={(view) => {
+            live.current = view;
+            // The URL follows the view, so the link is already right when
+            // somebody presses Copy. `set` removes the keys a view has
+            // stopped carrying rather than leaving them blank.
+            url.set(toParams(view));
+          }}
+        />
+      )}
+
+      {saving && workspace && project && (
+        <SaveGraphDialog
+          workspaceId={workspace.id}
+          projectId={project.id}
+          view={live.current}
+          onClose={() => setSaving(false)}
+        />
+      )}
+      {opening && workspace && project && (
+        <OpenGraphDialog
+          workspaceId={workspace.id}
+          projectId={project.id}
+          onOpen={(saved) => {
+            // **The graph only, and the URL follows from it.** The address bar
+            // has to say what is being looked at — that is what makes the copy
+            // button honest — but writing it here as well would be a second
+            // copy of the same fact: the remounted graph reports its view on
+            // its first effect, and that report is what writes the URL.
+            //
+            // Found by mutation rather than by reading: a build with the write
+            // here removed passed every test, including the one that asserts
+            // the address bar right after Open (§213). The report is also the
+            // *better* of the two, because it writes the view the graph could
+            // actually draw — `kindsIn` drops a kind this build does not have,
+            // and the copy taken from the stored view would have put it in the
+            // link anyway.
+            setOpened(saved.view);
+            setOpenedKey((k) => k + 1);
+            setOpening(false);
+          }}
+          onClose={() => setOpening(false)}
+        />
+      )}
     </>
+  );
+}
+
+/** p.12's **Save**. The name is the whole form: the view is whatever is on the
+ *  screen, which is the point of a save button rather than a builder. */
+function SaveGraphDialog({
+  workspaceId,
+  projectId,
+  view,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  view: GraphView;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState("");
+  const queryClient = useQueryClient();
+  const save = useMutation({
+    mutationFn: () => modelApi.saveGraph(workspaceId, projectId, { name, view }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["saved-graphs", projectId] });
+      onClose();
+    },
+  });
+
+  return (
+    <Dialog open title="Save graph" onClose={onClose}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          save.mutate();
+        }}
+      >
+        <p className="login-note" style={{ marginTop: 0 }}>
+          Saves what you are looking at — the focus, the highlighted column, the
+          selection and the search — not the nodes themselves. The pipeline
+          keeps changing; the question does not.
+        </p>
+        <Field label="Name">
+          <input
+            type="text"
+            data-testid="graph-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            maxLength={200}
+          />
+        </Field>
+        {save.isError && (
+          <div className="form-error" data-testid="graph-save-error">
+            {save.error instanceof ApiError ? save.error.message : "Couldn't save."}
+          </div>
+        )}
+        <div className="form-actions">
+          <button type="button" className="btn quiet" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="btn" disabled={save.isPending}>
+            Save
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+/** p.12's **Open graph**. Shared within the project, following db 0040. */
+function OpenGraphDialog({
+  workspaceId,
+  projectId,
+  onOpen,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  onOpen: (saved: SavedGraph) => void;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const saved = useQuery({
+    queryKey: ["saved-graphs", projectId],
+    queryFn: () => modelApi.savedGraphs(workspaceId, projectId),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => modelApi.deleteSavedGraph(workspaceId, projectId, id),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["saved-graphs", projectId] }),
+  });
+
+  return (
+    <Dialog open title="Open graph" onClose={onClose}>
+      {saved.isPending && <div className="state">Loading…</div>}
+      {saved.data?.length === 0 && (
+        <div className="state" data-testid="no-saved-graphs">
+          Nothing saved yet. Set the graph up the way you want it and press Save
+          graph.
+        </div>
+      )}
+      {saved.data && saved.data.length > 0 && (
+        <div className="data-grid">
+          <table>
+            <tbody>
+              {saved.data.map((g) => (
+                <tr key={g.id} data-testid="saved-graph" data-name={g.name}>
+                  <td>{g.name}</td>
+                  <td style={{ textAlign: "right" }}>
+                    <button
+                      className="btn quiet"
+                      data-testid="open-saved-graph"
+                      onClick={() => onOpen(g)}
+                    >
+                      Open
+                    </button>
+                    <button
+                      className="btn quiet"
+                      data-testid="delete-saved-graph"
+                      onClick={() => remove.mutate(g.id)}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="form-actions">
+        <button type="button" className="btn quiet" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Dialog>
   );
 }

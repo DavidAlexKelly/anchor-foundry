@@ -1,9 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PipelineGraph, PipelineNode } from "@/lib/types";
 import {
   columnsIn,
+  kindsIn,
+  viewOf,
+  type GraphView,
   GAP_X,
   GAP_Y,
   isDrag,
@@ -280,12 +283,21 @@ export function PipelineGraphView({
   graph,
   onOpen,
   maxHeight = 560,
+  initialView,
+  onViewChange,
 }: {
   graph: PipelineGraph;
   onOpen: (node: PipelineNode) => void;
   maxHeight?: number;
+  /** A saved or shared view to open at (§360; `data-lineage` p.12). Read once,
+   *  as the name says: a prop that kept overwriting the state would make the
+   *  graph un-drivable the moment somebody clicked. */
+  initialView?: GraphView;
+  /** The view as it stands, for whoever wants to save or share it. Not fired
+   *  for pan or zoom, which are not in a saved view — see db 0089. */
+  onViewChange?: (view: GraphView) => void;
 }) {
-  const [selected, setSelected] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string[]>(initialView?.selected ?? []);
   // p.7's two modes. **Panning is the default**, as it is in Foundry: the
   // gesture a reader makes without thinking is moving the graph around, and a
   // page that opens in a mode where dragging selects would have them draw a
@@ -293,13 +305,13 @@ export function PipelineGraphView({
   const [tool, setTool] = useState<"pan" | "select">("pan");
   // p.8's search helper, minus the half that has nowhere to go here: every
   // result is already on the graph (§355), so this finds rather than adds.
-  const [query, setQuery] = useState("");
-  const [kinds, setKinds] = useState<PipelineNode["kind"][]>([]);
+  const [query, setQuery] = useState(initialView?.query ?? "");
+  const [kinds, setKinds] = useState<PipelineNode["kind"][]>(kindsIn(initialView));
   // p.55's "click one of the columns to highlight the datasets in your
   // selection that contain this column" (§353). One at a time, because the
   // question it answers is "where else is *this* column" — two highlighted at
   // once would light up a union nobody asked about.
-  const [column, setColumn] = useState<string | null>(null);
+  const [column, setColumn] = useState<string | null>(initialView?.column ?? null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
@@ -316,6 +328,15 @@ export function PipelineGraphView({
     const rows = Math.max(1, ...graph.nodes.map((n) => n.position + 1));
     return { width: Math.max(width, 400), height: PAD * 2 + rows * (NODE_H + GAP_Y) };
   }, [graph]);
+
+  // **Reported after the render that changed it, not during.** Calling a
+  // parent's setter while rendering is how a graph that reports its view ends
+  // up re-rendering its parent forever.
+  const report = useRef(onViewChange);
+  report.current = onViewChange;
+  useEffect(() => {
+    report.current?.(viewOf({ selected, column, query, kinds }));
+  }, [selected, column, query, kinds]);
 
   const chosen = useMemo(() => new Set(selected), [selected]);
   // The detail bar answers about *a* node, so it appears for exactly one.
