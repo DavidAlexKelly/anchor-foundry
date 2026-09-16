@@ -956,6 +956,11 @@ class ScheduledSyncSet(BaseModel):
     dataset_name: str | None = Field(default=None, min_length=1, max_length=200)
     primary_key_column: str | None = Field(default=None, min_length=1, max_length=200)
     cursor_column: str | None = Field(default=None, min_length=1, max_length=200)
+    # p.175's "initial value": where an incremental sync starts reading from,
+    # so converting a table that is already loaded does not re-read all of it.
+    # Absent means "leave the stored progress alone" — see `set_schedule`,
+    # which is where that decision and its two siblings are argued.
+    cursor_start_value: str | None = Field(default=None, min_length=1, max_length=200)
     cron_schedule: str | None = Field(default=None, min_length=1, max_length=100)
 
 
@@ -1003,7 +1008,7 @@ async def set_scheduled_sync(
             mode=body.mode, source_schema=body.source_schema, source_table=body.source_table,
             dataset_name=body.dataset_name, primary_key_column=body.primary_key_column,
             cursor_column=body.cursor_column, cron_schedule=body.cron_schedule,
-            next_run_at=next_run_at,
+            next_run_at=next_run_at, cursor_start_value=body.cursor_start_value,
         )
         await audit.record(
             conn,
@@ -1017,7 +1022,44 @@ async def set_scheduled_sync(
             metadata={
                 "mode": body.mode, "table": f"{body.source_schema}.{body.source_table}",
                 "cron_schedule": body.cron_schedule,
+                "cursor_start_value": body.cursor_start_value,
             },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ScheduledSyncOut(**row)
+
+
+@router.delete("/{connection_id}/scheduled-sync/cursor", response_model=ScheduledSyncOut)
+async def forget_sync_cursor(
+    connection_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ScheduledSyncOut:
+    """Forget where the last incremental sync got to (§363; p.176).
+
+    Its own route rather than a blank field on the setter, because it is a
+    different intention — "start from the beginning" against "start here" —
+    and because `run_incremental_sync`'s own refusal already tells people to do
+    this. Until now it named a remedy nobody could perform.
+
+    Editor, matching the setter: the next sync reads the whole table again, and
+    a viewer cannot make a connection do work.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await conn_service.forget_cursor(
+            conn, access.workspace_id, access.project_id, connection_id
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="connection.scheduled_sync.forget_cursor",
+            resource_type="connection",
+            resource_id=connection_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )

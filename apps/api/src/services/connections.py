@@ -236,12 +236,34 @@ async def set_schedule(
     cursor_column: str | None,
     cron_schedule: str | None,
     next_run_at,
+    cursor_start_value: str | None = None,
 ) -> dict[str, Any]:
     """Define (or redefine) the one managed sync target a connection can
     carry - spec-shaped, flagged in migration 0014: a connection supports at
     most one scheduled/incremental sync target, not several independently
-    scheduled tables."""
-    await get(conn, workspace_id, project_id, connection_id)
+    scheduled tables.
+
+    **`cursor_start_value` is p.175's "initial value"** (§363;
+    `data-connection` p.175-176), and how it behaves when it is *not* given is
+    the decision this function turns on:
+
+    * **Blank leaves the progress alone.** Editing a cron expression on a sync
+      that has been running for a month must not silently re-read the whole
+      table, which is the cost incremental syncs exist to avoid (p.174).
+      Forgetting it is the common case; wiping the cursor is never what
+      somebody changing a schedule meant.
+    * **Changing the cursor column clears it.** A value read from `id` means
+      nothing against `update_time`, and carrying it across would filter the
+      next sync on a comparison nobody intended - skipping rows silently,
+      which is the one failure an incremental sync must not have. Cleared
+      rather than refused, because the new column's own starting point is what
+      the caller is entitled to set in the same request.
+    * **Clearing on purpose is `forget_cursor`**, not a blank field here,
+      because those two are different intentions and `run_incremental_sync`'s
+      own refusal already tells people to perform the second one.
+    """
+    before = await get_schedule(conn, workspace_id, project_id, connection_id)
+    column_changed = (before["sync_cursor_column"] or None) != (cursor_column or None)
     row = await fetch_one(
         conn,
         f"""
@@ -252,6 +274,14 @@ async def set_schedule(
                sync_dataset_name = :dsname,
                sync_primary_key_column = :pk,
                sync_cursor_column = :cursor,
+               -- Cast on the parameter, not on the branch: Postgres cannot
+               -- infer a type for a placeholder that only ever appears beside
+               -- NULL, and says so ("could not determine data type").
+               sync_last_cursor_value = CASE
+                   WHEN CAST(:start AS text) IS NOT NULL THEN CAST(:start AS text)
+                   WHEN CAST(:column_changed AS boolean) THEN NULL
+                   ELSE sync_last_cursor_value
+               END,
                sync_schedule = :cron,
                sync_next_run_at = :next_run
          WHERE id = :cid
@@ -260,8 +290,38 @@ async def set_schedule(
         {
             "mode": mode, "schema": source_schema, "table": source_table,
             "dsname": dataset_name, "pk": primary_key_column, "cursor": cursor_column,
+            "start": cursor_start_value, "column_changed": column_changed,
             "cron": cron_schedule, "next_run": next_run_at, "cid": str(connection_id),
         },
+    )
+    assert row is not None
+    return row
+
+
+async def forget_cursor(
+    conn: AsyncConnection, workspace_id: UUID, project_id: UUID, connection_id: UUID
+) -> dict[str, Any]:
+    """Forget where the last incremental sync got to (§363; p.176).
+
+    **The remedy `run_incremental_sync` already names.** Its refusal for a
+    connection that carries a cursor but has lost its dataset reads "clear the
+    schedule's stored cursor and run a full sync first" - and until this
+    existed there was no way to do that, which is a refusal pointing at a
+    button nobody has (§214, aimed at an error message rather than a control).
+
+    Separate from a blank `cursor_start_value` because the two are different
+    intentions: one is "start here", the other is "start from the beginning",
+    and leaving a field empty is neither.
+    """
+    await get(conn, workspace_id, project_id, connection_id)
+    row = await fetch_one(
+        conn,
+        f"""
+        UPDATE connections SET sync_last_cursor_value = NULL
+         WHERE id = :cid
+        RETURNING id, {_SCHEDULE_COLUMNS}
+        """,
+        {"cid": str(connection_id)},
     )
     assert row is not None
     return row
