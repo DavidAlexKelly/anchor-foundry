@@ -13,11 +13,12 @@ import {
 } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
-import type { Model } from "@/lib/types";
+import type { Model, ModelRunDay } from "@/lib/types";
 import { authoredInRepository, canAdopt, pathProblem, readOnlyReason } from "@/lib/model-authoring";
 import { canMove, chosen, defaultMessage, moveLabel } from "@/lib/bulk-adoption";
 import { attribution, emptyNote, isChangeSet, scopeLabel } from "@/lib/transform-history";
 import { runDuration, whyNoLog } from "@/lib/run-logs";
+import { nothingToShow, overWindow, tallest } from "@/lib/run-summary";
 import {
   describe as describeProposal,
   unrepositoried,
@@ -105,6 +106,84 @@ function ScheduleSummary({ model }: { model: Model }) {
   );
 }
 
+/** p.3's Summary view: aggregated job statuses over time.
+ *
+ *  **Drawn with CSS, not a chart library.** Thirty stacked bars is the whole
+ *  of it, and this repository has no charting dependency — adding one for a
+ *  sparkline would be a decision every later chart inherits.
+ */
+function RunSummaryChart({
+  days,
+  windowDays,
+}: {
+  days: ModelRunDay[];
+  windowDays: number;
+}) {
+  // `new Date()` here rather than inside the rule: `overWindow` is a function
+  // of its arguments so a test can ask about a Tuesday in March.
+  const bars = overWindow(days, windowDays, new Date());
+  const empty = nothingToShow(bars, windowDays);
+  const height = tallest(bars);
+
+  return (
+    <div data-testid="run-summary" style={{ marginBottom: 12 }}>
+      <div className="slug" style={{ marginBottom: 4 }}>
+        Last {windowDays} days
+      </div>
+      {empty ? (
+        <p className="login-note" data-testid="summary-empty" style={{ margin: 0 }}>
+          {empty}
+        </p>
+      ) : (
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 48 }}>
+          {bars.map((bar) => (
+            <div
+              key={bar.day}
+              data-testid="summary-day"
+              data-day={bar.day}
+              data-total={bar.total}
+              title={`${bar.day}: ${bar.succeeded} succeeded, ${bar.failed} failed${
+                bar.unfinished ? `, ${bar.unfinished} unfinished` : ""
+              }`}
+              style={{
+                flex: 1,
+                minWidth: 3,
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "flex-end",
+              }}
+            >
+              {/* Failures on top, because a day that half-failed should read
+                  as a day that half-failed at a glance rather than as a tall
+                  green bar with something underneath it. */}
+              <div
+                data-testid="summary-failed"
+                style={{
+                  height: `${(bar.failed / height) * 100}%`,
+                  background: "var(--danger)",
+                }}
+              />
+              <div
+                style={{
+                  height: `${(bar.unfinished / height) * 100}%`,
+                  background: "var(--line-strong)",
+                }}
+              />
+              <div
+                style={{
+                  height: `${(bar.succeeded / height) * 100}%`,
+                  background: "var(--accent)",
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** p.3's History tab, for one model: a list of jobs with their statuses and
  *  durations, and a detail view for the one selected.
  *
@@ -130,6 +209,10 @@ function RunsDialog({
     queryKey: ["model-runs", model.id],
     queryFn: () => modelApi.runs(workspaceId, projectId, model.id),
   });
+  const summary = useQuery({
+    queryKey: ["model-run-summary", model.id],
+    queryFn: () => modelApi.runSummary(workspaceId, projectId, model.id),
+  });
   const run = runs.data?.find((r) => r.id === selected) ?? null;
   const log = useQuery({
     queryKey: ["model-run-log", model.id, selected],
@@ -146,6 +229,12 @@ function RunsDialog({
         Every run, newest first. Selecting one shows what it did and what it
         printed.
       </p>
+      {summary.data && (
+        <RunSummaryChart
+          days={summary.data.days}
+          windowDays={summary.data.window_days}
+        />
+      )}
       {runs.isPending && <div className="state">Loading runs…</div>}
       {runs.data?.length === 0 && (
         <div className="state" data-testid="no-runs">

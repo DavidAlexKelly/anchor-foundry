@@ -42,6 +42,7 @@ them both ways from any dataset.
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 from anyio import to_thread
 
@@ -743,6 +744,81 @@ async def list_runs(conn: AsyncConnection, model_id: UUID) -> list[dict[str, Any
         """,
         {"mid": str(model_id)},
     )
+
+
+#: p.3's Summary view window. Thirty days, matching the action metrics' own
+#: window (§323) rather than picking a second number: a platform where "recent"
+#: means one thing on an action and another on a model is one a reader has to
+#: keep two definitions for.
+SUMMARY_DAYS = 30
+
+
+async def run_summary(
+    conn: AsyncConnection, model_id: UUID
+) -> dict[str, Any]:
+    """p.3's Summary view: job statuses over time, a day at a time.
+
+    > "A Summary view on the right side of the page shows aggregated
+    > information on job statuses over time." (p.3)
+
+    **Aggregated on the server, not folded from the run list.** `list_runs` is
+    `LIMIT 50`, so a summary computed from what the page already has is a
+    summary of the last fifty runs wearing the words "over time" — for a model
+    that runs hourly, two days of it. §323 settled the shape for this exact
+    problem one resource over: count over a real window, and **send the window
+    with the answer** so a screen cannot hard-code a number that later moves.
+
+    **By `queued_at`, where the action metrics use `started_at`**, and the
+    difference is deliberate rather than an inconsistency: a queued run has no
+    `started_at`, so filtering on it would drop precisely the runs whose status
+    is the thing being counted. What a day's bucket answers is "what work was
+    asked for that day and what became of it".
+
+    **Three counts, not five.** `succeeded` and `failed` are outcomes;
+    `unfinished` is queued and running together, because in a bucket from three
+    weeks ago the difference between a run still queued and one still going is
+    not a fact about that day — both mean the work never landed. §323 reports
+    `running` on its own for the opposite reason: it is a snapshot of now, not
+    a history.
+
+    **No `cancelled`,** though the enum has it since migration 0003: nothing in
+    this platform writes it — there is no cancel endpoint, because a
+    synchronous SQL run has no meaningful cancel — and a count that can only
+    ever be nought is a category that sits in every bucket and never appears
+    (§214, and the same call §323 made about p.166's function-backed
+    categories).
+
+    Only days that have runs come back. Which days the window *covers* is the
+    reader's question and the client's rule, tested where a gap in a chart can
+    be made to fail cheaply.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=SUMMARY_DAYS)
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT date_trunc('day', queued_at) AS day,
+               count(*) FILTER (WHERE status = 'succeeded')            AS succeeded,
+               count(*) FILTER (WHERE status = 'failed')               AS failed,
+               count(*) FILTER (WHERE status IN ('queued', 'running')) AS unfinished
+          FROM model_runs
+         WHERE model_id = :mid AND queued_at >= :since
+      GROUP BY 1
+      ORDER BY 1
+        """,
+        {"mid": str(model_id), "since": since},
+    )
+    return {
+        "days": [
+            {
+                "day": row["day"],
+                "succeeded": int(row["succeeded"]),
+                "failed": int(row["failed"]),
+                "unfinished": int(row["unfinished"]),
+            }
+            for row in rows
+        ],
+        "window_days": SUMMARY_DAYS,
+    }
 
 
 async def run_log(

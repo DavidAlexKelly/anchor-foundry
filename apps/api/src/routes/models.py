@@ -489,6 +489,37 @@ async def run_history(
     return [RunOut(**r) for r in rows]
 
 
+class RunDay(BaseModel):
+    """One day's runs, by what became of them (§359; `dataset-preview` p.3)."""
+
+    day: datetime
+    succeeded: int
+    failed: int
+    #: Queued and running together — in a bucket from three weeks ago the
+    #: difference is not a fact about that day.
+    unfinished: int
+
+
+class RunSummary(BaseModel):
+    #: Only the days that have runs. Which days the window covers is the
+    #: client's rule, so a gap in the chart can be made to fail in vitest.
+    days: list[RunDay]
+    #: Sent rather than assumed, for §323's reason: a screen that hard-codes
+    #: "30 days" is one that lies the day the constant moves.
+    window_days: int
+
+
+@router.get("/{model_id}/run-summary", response_model=RunSummary)
+async def run_summary(
+    model_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> RunSummary:
+    """p.3's Summary view: aggregated job statuses over time."""
+    async with user_connection(access.auth.user_id) as conn:
+        await model_service.get(conn, access.project_id, model_id)
+        return RunSummary(**await model_service.run_summary(conn, model_id))
+
+
 @router.get("/{model_id}/runs/{run_id}/log", response_class=PlainTextResponse)
 async def run_log(
     model_id: UUID,
