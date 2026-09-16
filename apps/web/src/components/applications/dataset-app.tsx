@@ -15,9 +15,12 @@
  * third tab".
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { datasets as datasetApi, models as modelApi } from "@/lib/api";
+import { ApiError, datasets as datasetApi, models as modelApi } from "@/lib/api";
+import { Dialog, Field } from "@/components/dialog";
+import { branchName, whyNotBranchable } from "@/lib/branch-from-version";
 import { useUrlState } from "@/components/use-url-state";
 import { PipelineGraphView } from "@/components/pipeline-graph";
 import { nodePath } from "@/lib/pipeline-graph";
@@ -85,6 +88,7 @@ export function DatasetApplication({ resource }: { resource: ResolvedResource })
             wid={wid}
             pid={pid}
             did={did}
+            name={resource.name}
             viewing={version}
             onView={(n) => setParams({ version: String(n), tab: "preview" })}
           />
@@ -268,19 +272,123 @@ function bytes(n: number): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
 }
 
+/** p.4's **Create branch**, taken from the transaction the reader pressed.
+ *
+ *  The version is not a field: it is the row. Asking again is what the
+ *  datasets list's dropdown does, and moving the action next to the history is
+ *  the whole of what p.4 adds over it — everything underneath has existed
+ *  since migration 0025.
+ */
+function BranchDialog({
+  wid,
+  pid,
+  did,
+  source,
+  version,
+  onClose,
+}: {
+  wid: string;
+  pid: string;
+  did: string;
+  source: string;
+  version: number;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(branchName(source, version));
+  const [made, setMade] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const branch = useMutation({
+    mutationFn: () =>
+      datasetApi.fork(wid, pid, did, { name, version_number: version }),
+    onSuccess: async (created) => {
+      // Not a redirect. A reader who branched from the history was reading the
+      // history, and taking them somewhere else loses the place they were in —
+      // so this says what happened and leaves them where they are.
+      setMade(created.name);
+      await queryClient.invalidateQueries({ queryKey: ["datasets", pid] });
+      await queryClient.invalidateQueries({ queryKey: ["project", wid] });
+    },
+  });
+
+  return (
+    <Dialog open title={`Branch from v${version}`} onClose={onClose}>
+      {made === null ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            branch.mutate();
+          }}
+        >
+          <p className="login-note" style={{ marginTop: 0 }}>
+            A branch is an independent copy of this dataset as it was at v
+            {version} — its own versions, its own schema policy, its own data.
+            Changing one never changes the other.
+          </p>
+          <Field label="New dataset name">
+            <input
+              type="text"
+              data-testid="branch-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              maxLength={200}
+            />
+          </Field>
+          {branch.isError && (
+            <div className="form-error" data-testid="branch-error">
+              {branch.error instanceof ApiError
+                ? branch.error.message
+                : "Couldn't branch."}
+            </div>
+          )}
+          <div className="form-actions">
+            <button type="button" className="btn quiet" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" className="btn" disabled={branch.isPending}>
+              {branch.isPending ? "Branching…" : "Create branch"}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <>
+          <p className="login-note" data-testid="branch-made">
+            Branched v{version} into <strong>{made}</strong>. It is in this
+            project&apos;s datasets, independent from this one.
+          </p>
+          <div className="form-actions">
+            <button type="button" className="btn" onClick={onClose}>
+              Done
+            </button>
+          </div>
+        </>
+      )}
+    </Dialog>
+  );
+}
+
 function HistoryTab({
   wid,
   pid,
   did,
+  name,
   viewing,
   onView,
 }: {
   wid: string;
   pid: string;
   did: string;
+  /** The source dataset's name, which is half of what a branch is called. */
+  name: string;
   viewing: number | null;
   onView: (version: number) => void;
 }) {
+  // Which transaction a branch is being taken from, or null for none. The
+  // version is state rather than a field in the dialog, because p.4's flow
+  // chooses it by pressing a row — asking again would be the datasets list's
+  // dropdown, which is the thing this replaces.
+  const [branching, setBranching] = useState<number | null>(null);
   const versions = useQuery({
     queryKey: ["ds-versions", did],
     queryFn: () => datasetApi.versions(wid, pid, did),
@@ -350,6 +458,31 @@ function HistoryTab({
                     >
                       {viewing === v.version_number ? "Viewing" : "View"}
                     </button>
+                    {/* p.4's Create branch, on the transaction rather than in
+                        a dropdown that asks again which one you meant. The
+                        same refusal the View button already makes, for the
+                        same reason and in the same place: branching copies
+                        the bytes this row could not find.
+
+                        **The disabled half has no browser test, deliberately.**
+                        Reaching it needs a version whose object is gone, and
+                        nothing the browser can call removes one — the API owns
+                        that state (`test_dataset_forks`) and `whyNotBranchable`
+                        owns the wording. A test that pretended to exercise it
+                        here would be the theatre §213 is about; the enabled
+                        half *is* asserted, which is the part a browser can
+                        reach. */}
+                    <button
+                      type="button"
+                      className="ds-view-version"
+                      data-testid="branch-version"
+                      data-version={v.version_number}
+                      disabled={whyNotBranchable(v) !== ""}
+                      title={whyNotBranchable(v) || undefined}
+                      onClick={() => setBranching(v.version_number)}
+                    >
+                      Branch
+                    </button>
                   </td>
                 </tr>
               );
@@ -357,6 +490,16 @@ function HistoryTab({
           </tbody>
         </table>
       </div>
+      {branching !== null && (
+        <BranchDialog
+          wid={wid}
+          pid={pid}
+          did={did}
+          source={name}
+          version={branching}
+          onClose={() => setBranching(null)}
+        />
+      )}
       {retention.data && (
         <p className="ds-retention">
           Keeping {retention.data.versions} version
