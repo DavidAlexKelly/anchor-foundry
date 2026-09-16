@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "TZ=America/New_York vitest run"
   },
   "dependencies": {
     "@craftjs/core": "^0.2.12",

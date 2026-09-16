@@ -614,3 +614,126 @@ def test_the_run_list_says_which_runs_have_a_log(
     ).json()}
     assert runs[with_log]["has_log"] is True
     assert runs[without]["has_log"] is False
+
+
+# ---- p.3's Summary view (§359) -----------------------------------------------
+
+def _run_on(model: str, *, status: str, days_ago: int) -> None:
+    """A run queued this many days ago.
+
+    Directly, because the API cannot make a *failed* run or an old one: a run
+    is queued now and finished by the worker, and a summary over a window needs
+    runs spread across it.
+    """
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO model_runs (model_id, status, trigger_kind, queued_at) "
+            "VALUES (%s, %s, 'manual', now() - (%s || ' days')::interval)",
+            (model, status, days_ago),
+        )
+
+
+def test_the_summary_counts_a_day_s_runs_by_what_became_of_them(
+    client: TestClient, fx: Fixture, logged_model: str
+) -> None:
+    """p.3: "aggregated information on job statuses over time"."""
+    _run_on(logged_model, status="succeeded", days_ago=1)
+    _run_on(logged_model, status="succeeded", days_ago=1)
+    _run_on(logged_model, status="failed", days_ago=1)
+    _run_on(logged_model, status="running", days_ago=1)
+
+    r = client.get(f"{mbase(fx)}/{logged_model}/run-summary", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["days"]) == 1, body
+    day = body["days"][0]
+    assert (day["succeeded"], day["failed"], day["unfinished"]) == (2, 1, 1)
+
+
+def test_each_day_is_its_own_bucket(
+    client: TestClient, fx: Fixture, logged_model: str
+) -> None:
+    """**The "over time" half.** A summary that folded every run into one
+    number would satisfy the counts above and say nothing about when."""
+    _run_on(logged_model, status="succeeded", days_ago=1)
+    _run_on(logged_model, status="failed", days_ago=3)
+
+    days = client.get(
+        f"{mbase(fx)}/{logged_model}/run-summary", headers=hdr(fx.viewer_sub)
+    ).json()["days"]
+    assert len(days) == 2, days
+    # Oldest first, so a chart can be drawn straight from it.
+    assert days[0]["day"] < days[1]["day"]
+    assert (days[0]["failed"], days[1]["succeeded"]) == (1, 1)
+
+
+def test_runs_older_than_the_window_are_not_counted(
+    client: TestClient, fx: Fixture, logged_model: str
+) -> None:
+    """The window is the claim the screen makes, so it has to be real."""
+    _run_on(logged_model, status="succeeded", days_ago=1)
+    _run_on(logged_model, status="succeeded", days_ago=40)
+
+    body = client.get(
+        f"{mbase(fx)}/{logged_model}/run-summary", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert sum(d["succeeded"] for d in body["days"]) == 1, body
+
+
+def test_the_window_comes_back_with_the_answer(
+    client: TestClient, fx: Fixture, logged_model: str
+) -> None:
+    """§323's rule, applied here: a screen that hard-codes "30 days" is one
+    that lies the day the constant moves."""
+    body = client.get(
+        f"{mbase(fx)}/{logged_model}/run-summary", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert body["window_days"] == 30
+
+
+def test_a_model_that_has_not_run_has_an_empty_summary(
+    client: TestClient, fx: Fixture, logged_model: str
+) -> None:
+    """Empty, not absent and not a row of noughts: there is nothing to
+    aggregate, and saying so is the client's to word."""
+    body = client.get(
+        f"{mbase(fx)}/{logged_model}/run-summary", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert body["days"] == []
+
+
+def test_a_queued_run_is_counted_though_it_never_started(
+    client: TestClient, fx: Fixture, logged_model: str
+) -> None:
+    """**Why this buckets by `queued_at` where §323 filters on `started_at`.**
+
+    A queued run has no `started_at`, so a window over that column drops
+    precisely the runs whose status is the thing being counted — and a model
+    whose runs are all stuck queued would show an empty summary while the
+    reader stared at a backlog.
+    """
+    _run_on(logged_model, status="queued", days_ago=2)
+    body = client.get(
+        f"{mbase(fx)}/{logged_model}/run-summary", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert len(body["days"]) == 1, body
+    assert body["days"][0]["unfinished"] == 1
+
+
+def test_another_model_s_runs_are_not_in_this_one_s_summary(
+    client: TestClient, fx: Fixture, logged_model: str, input_datasets: dict[str, str]
+) -> None:
+    """The negative control for the scoping: a summary over every run in the
+    deployment would pass every assertion above."""
+    other = client.post(
+        mbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Neighbour {uuid.uuid4().hex[:6]}", "code": "SELECT 1 AS x",
+              "inputs": [{"dataset_id": list(input_datasets.values())[0],
+                          "input_alias": "orders"}]},
+    ).json()["id"]
+    _run_on(other, status="succeeded", days_ago=1)
+
+    body = client.get(
+        f"{mbase(fx)}/{logged_model}/run-summary", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert body["days"] == [], body

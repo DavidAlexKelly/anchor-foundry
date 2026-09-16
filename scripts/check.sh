@@ -101,7 +101,12 @@ with psycopg.connect(for_database(admin, "postgres"), autocommit=True) as conn:
 run_types() { ( cd "$ROOT/apps/web" && npx tsc --noEmit -p tsconfig.json ); }
 # Pure functions only, and fast enough to be run on every save - see
 # `apps/web/src/components/canvas/pure.ts` for why the boundary is drawn there.
-run_unit()  { ( cd "$ROOT/apps/web" && npx vitest run ); }
+# Through `npm test` rather than `npx vitest run`, because the suite's
+# timezone has to be set before Node starts and the script is the one place
+# that does it — see apps/web/vitest.config.ts for why it is not UTC, and
+# §359 for the morning it was discovered that setting it in the config did
+# nothing at all.
+run_unit()  { ( cd "$ROOT/apps/web" && npm test --silent ); }
 # `-p no:randomly`-free and deliberately serial: these drive one dev stack, and
 # two of them at once would each be seeding into the other's workspace.
 #

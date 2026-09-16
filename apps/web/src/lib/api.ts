@@ -935,6 +935,11 @@ export const models = {
     request<import("./types").ModelRun[]>(
       `/workspaces/${wid}/projects/${pid}/models/${mid}/runs`,
     ),
+  /** p.3's Summary view: job statuses over time (§359). */
+  runSummary: (wid: string, pid: string, mid: string) =>
+    request<import("./types").ModelRunSummary>(
+      `/workspaces/${wid}/projects/${pid}/models/${mid}/run-summary`,
+    ),
   /** What one run printed (§358; `dataset-preview` p.3). Plain text, not
    *  JSON — it is already text and it is the whole response. */
   runLog: (wid: string, pid: string, mid: string, rid: string) =>

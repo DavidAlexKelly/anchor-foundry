@@ -3119,6 +3119,26 @@ export interface ActionMetrics {
   failures: ActionFailureCount[];
 }
 
+/** One day's model runs, by what became of them (§359; `dataset-preview` p.3). */
+export interface ModelRunDay {
+  day: string;
+  succeeded: number;
+  failed: number;
+  /** Queued and running together — in a bucket from three weeks ago the
+   *  difference between them is not a fact about that day. */
+  unfinished: number;
+}
+
+/** p.3's Summary view: aggregated job statuses over time. */
+export interface ModelRunSummary {
+  /** Only the days that had runs; which days the window *covers* is the
+   *  client's rule, so a gap in the chart can be made to fail in vitest. */
+  days: ModelRunDay[];
+  /** Sent rather than assumed, for §323's reason: a screen that hard-codes
+   *  "30 days" is one that lies the day the constant moves. */
+  window_days: number;
+}
+
 /** One row of p.164's seven-day run history. */
 export interface ActionRunHistory {
   id: string;
