@@ -1046,6 +1046,17 @@ button { font: inherit; cursor: pointer; }
 .ds-tab.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
 
 .ds-note { font-size: 12.5px; margin: 0 0 10px; }
+/* The parsing-options panel (§362). Sits above the preview table it is about
+   to change, so it is boxed rather than floated: a dialog would hide the rows
+   somebody is comparing against. */
+.ds-parse { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin: 0 0 14px; }
+.ds-parse-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 14px; }
+.ds-parse-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.ds-parse-grid input, .ds-parse-grid select, .ds-parse-grid textarea { width: 100%; }
+.ds-parse-wide { grid-column: 1 / -1; }
+.ds-parse-switches { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 12px 0 0; font-size: 12.5px; }
+.ds-parse-switches label { display: flex; align-items: center; gap: 6px; }
+
 /* The rollback confirmation's sentences (§361). A list rather than a
    paragraph because each line is a separate consequence, and one of the three
    only appears for datasets something rebuilds. */

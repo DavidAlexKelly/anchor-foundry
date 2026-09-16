@@ -22,6 +22,14 @@ import { ApiError, datasets as datasetApi, models as modelApi } from "@/lib/api"
 import { Dialog, Field } from "@/components/dialog";
 import { branchName, whyNotBranchable } from "@/lib/branch-from-version";
 import { rollbackSummary, whyNotRollbackable } from "@/lib/dataset-rollback";
+import {
+  DEFAULT_OPTIONS,
+  ENCODINGS,
+  describeOptions,
+  parseNullMarkers,
+  whyNotParseable,
+  type ParseOptions,
+} from "@/lib/parse-options";
 import { useUrlState } from "@/components/use-url-state";
 import { PipelineGraphView } from "@/components/pipeline-graph";
 import { nodePath } from "@/lib/pipeline-graph";
@@ -179,23 +187,256 @@ function PreviewTab({
   did: string;
   version: number | null;
 }) {
+  const [parsing, setParsing] = useState(false);
   const preview = useQuery({
     // The version is part of the key: without it, switching versions would
     // serve the previous one's rows from cache under a banner naming the new.
     queryKey: ["ds-preview", did, version],
     queryFn: () => datasetApi.preview(wid, pid, did, version ?? undefined),
   });
+  // Shared with the Details and History tabs. Only two fields are wanted here:
+  // whether there is an uploaded file to read again, and what it was called.
+  const detail = useQuery({
+    queryKey: ["ds-detail", did],
+    queryFn: () => datasetApi.get(wid, pid, did),
+  });
   if (preview.isPending) return <p className="state">Loading rows…</p>;
   if (preview.isError) return <p className="state error">{(preview.error as Error).message}</p>;
+  // p.24 puts the Edit Schema UI on the preview tab, which is the right place
+  // for the same reason p.4's Create branch belongs on a History row: this is
+  // where somebody is looking at the parse that went wrong.
+  //
+  // **Offered only where it can work.** `whyNotParseable` is the server's own
+  // two refusals, said before the press — a panel that opened and then
+  // apologised would be §214's shape.
+  const cannotParse = detail.data ? whyNotParseable(detail.data) : "";
+  const offerParsing = version === null && detail.data !== undefined && cannotParse === "";
   return (
     <>
       <p className="soft ds-note">
         {preview.data.truncated
           ? `First ${preview.data.rows.length} rows of ${preview.data.total_rows.toLocaleString()}.`
           : `All ${preview.data.total_rows.toLocaleString()} rows.`}
+        {offerParsing && (
+          <>
+            {" "}
+            <button
+              type="button"
+              className="btn quiet"
+              data-testid="parse-again"
+              onClick={() => setParsing((open) => !open)}
+            >
+              {parsing ? "Close parsing options" : "Parsing options"}
+            </button>
+          </>
+        )}
       </p>
+      {parsing && offerParsing && (
+        <ParsePanel
+          wid={wid}
+          pid={pid}
+          did={did}
+          filename={detail.data?.original_filename ?? ""}
+          onDone={() => setParsing(false)}
+        />
+      )}
       <Table result={preview.data} />
     </>
+  );
+}
+
+/** p.14's parsing options and p.24's rehearsal, on the tab where the parse
+ *  that went wrong is visible.
+ *
+ *  **Preview and Apply are two buttons, not one**, which is p.24's own
+ *  arrangement ("this will help visualize the options available and how they
+ *  affect the output dataset"): trying an option has to be free, or nobody
+ *  tries. The wording of what Apply will do is `lib/parse-options`', because
+ *  vitest cannot parse `.tsx`.
+ */
+function ParsePanel({
+  wid,
+  pid,
+  did,
+  filename,
+  onDone,
+}: {
+  wid: string;
+  pid: string;
+  did: string;
+  filename: string;
+  onDone: () => void;
+}) {
+  const [options, setOptions] = useState<ParseOptions>(DEFAULT_OPTIONS);
+  const [nulls, setNulls] = useState("");
+  const queryClient = useQueryClient();
+  const sent = () => ({ ...options, null_values: parseNullMarkers(nulls) });
+
+  const rehearse = useMutation({
+    mutationFn: () => datasetApi.previewParse(wid, pid, did, sent()),
+  });
+  const keep = useMutation({
+    mutationFn: () => datasetApi.parseAgain(wid, pid, did, sent()),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["ds-preview", did] }),
+        queryClient.invalidateQueries({ queryKey: ["ds-versions", did] }),
+        queryClient.invalidateQueries({ queryKey: ["ds-profile", did] }),
+        queryClient.invalidateQueries({ queryKey: ["ds-detail", did] }),
+        queryClient.invalidateQueries({ queryKey: ["ds-retention", did] }),
+      ]);
+      onDone();
+    },
+  });
+
+  function set<K extends keyof ParseOptions>(key: K, value: ParseOptions[K]) {
+    setOptions((current) => ({ ...current, [key]: value }));
+    // A field changed makes the last rehearsal stale, and a preview table
+    // sitting under new options is the one thing this panel must not show.
+    rehearse.reset();
+  }
+
+  const willDo = describeOptions(sent());
+
+  return (
+    <div className="ds-parse" data-testid="parse-panel">
+      <p className="soft ds-note" style={{ marginTop: 0 }}>
+        Read <strong>{filename}</strong> again. The file is the one you
+        uploaded; this changes how it is read, not what it says.
+      </p>
+      <div className="ds-parse-grid">
+        <label>
+          Delimiter
+          <input
+            type="text"
+            data-testid="parse-delimiter"
+            maxLength={1}
+            value={options.delimiter ?? ""}
+            placeholder="detect"
+            onChange={(e) => set("delimiter", e.target.value || null)}
+          />
+        </label>
+        <label>
+          Quote character
+          <input
+            type="text"
+            data-testid="parse-quote"
+            maxLength={1}
+            value={options.quote ?? ""}
+            placeholder="detect"
+            onChange={(e) => set("quote", e.target.value || null)}
+          />
+        </label>
+        <label>
+          Skip lines
+          <input
+            type="number"
+            data-testid="parse-skip"
+            min={0}
+            max={1000}
+            value={options.skip_lines}
+            onChange={(e) => set("skip_lines", Math.max(0, Number(e.target.value) || 0))}
+          />
+        </label>
+        <label>
+          Encoding
+          <select
+            data-testid="parse-encoding"
+            value={options.encoding}
+            onChange={(e) => set("encoding", e.target.value)}
+          >
+            {ENCODINGS.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="ds-parse-wide">
+          Read as empty
+          <textarea
+            data-testid="parse-nulls"
+            rows={2}
+            value={nulls}
+            placeholder="one per line, e.g. NA"
+            onChange={(e) => {
+              setNulls(e.target.value);
+              rehearse.reset();
+            }}
+          />
+        </label>
+      </div>
+      <div className="ds-parse-switches">
+        {([
+          ["header", "First row names the columns"],
+          ["drop_bad_rows", "Drop rows that do not fit"],
+          ["add_file_path", "Add a file path column"],
+          ["add_imported_at", "Add an import time column"],
+          ["add_row_number", "Add a row number column"],
+        ] as const).map(([key, label]) => (
+          <label key={key}>
+            <input
+              type="checkbox"
+              data-testid={`parse-${key}`}
+              checked={options[key]}
+              onChange={(e) => set(key, e.target.checked)}
+            />
+            {label}
+          </label>
+        ))}
+      </div>
+
+      {willDo.length > 0 && (
+        <p className="soft ds-note" data-testid="parse-summary">
+          Reading it this way: {willDo.join("; ")}.
+        </p>
+      )}
+      {(rehearse.isError || keep.isError) && (
+        <div className="form-error" data-testid="parse-error">
+          {(rehearse.error ?? keep.error) instanceof ApiError
+            ? ((rehearse.error ?? keep.error) as ApiError).message
+            : "Couldn't read the file that way."}
+        </div>
+      )}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="parse-preview"
+          disabled={rehearse.isPending}
+          onClick={() => rehearse.mutate()}
+        >
+          Preview
+        </button>
+        <button
+          type="button"
+          className="btn"
+          data-testid="parse-apply"
+          // Only after a rehearsal: p.24's point is that you see the effect
+          // before choosing it, and a re-parse writes a version.
+          disabled={keep.isPending || !rehearse.isSuccess}
+          onClick={() => keep.mutate()}
+        >
+          Apply
+        </button>
+      </div>
+      {rehearse.isSuccess && (
+        <div data-testid="parse-result">
+          <p className="soft ds-note">
+            {rehearse.data.row_count.toLocaleString()} rows,{" "}
+            {rehearse.data.columns.length} columns, read this way.
+          </p>
+          <Table
+            result={{
+              columns: rehearse.data.columns,
+              rows: rehearse.data.rows as unknown[][],
+              total_rows: rehearse.data.row_count,
+              truncated: rehearse.data.truncated,
+            }}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -933,6 +933,10 @@ export interface Dataset {
    *  id is a historical record that survives the source being deleted. */
   forked_from_dataset_id: string | null;
   forked_from_version: number | null;
+  /** The file this was uploaded from, still in storage (§362; db 0090). Null
+   *  when there is none to read again — anything not uploaded, or uploaded
+   *  before the name was recorded. */
+  original_filename?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1011,6 +1015,30 @@ export interface DatasetRetention {
   total_bytes: number;
   unmeasured: number;
   current_version: number;
+}
+
+/** How to read an uploaded delimited file (§362; `dataset-preview` p.14,
+ *  p.25-27). Every field defaults to what the upload already did. */
+export interface DatasetParseOptions {
+  delimiter?: string | null;
+  quote?: string | null;
+  header?: boolean;
+  skip_lines?: number;
+  null_values?: string[];
+  drop_bad_rows?: boolean;
+  encoding?: string;
+  add_file_path?: boolean;
+  add_imported_at?: boolean;
+  add_row_number?: boolean;
+}
+
+/** What a set of parsing options would produce, without producing it — p.24's
+ *  "visualize … how they affect the output dataset". */
+export interface DatasetParsePreview {
+  columns: { name: string; data_type: string }[];
+  rows: unknown[][];
+  row_count: number;
+  truncated: boolean;
 }
 
 export interface DatasetVersion {

@@ -83,6 +83,11 @@ class DatasetOut(BaseModel):
     # a fork never recomputes, so this is not a pipeline-graph edge.
     forked_from_dataset_id: UUID | None = None
     forked_from_version: int | None = None
+    # The file this was uploaded from, still in storage (§362; db 0090). Null
+    # when there is none to read again — anything not uploaded, or uploaded
+    # before the name was recorded — which is what the Parse again panel reads
+    # to know whether it can offer itself at all.
+    original_filename: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -286,6 +291,10 @@ async def upload_dataset(
             schema=schema,
             row_count=row_count,
             created_by=access.auth.user_id,
+            # So the copy beside it can be found again (§362; db 0090). It has
+            # been written on every upload since the first one and nothing
+            # could reach it.
+            original_filename=original_name,
         )
         await audit.record(
             conn,
@@ -760,6 +769,143 @@ async def list_versions(
         )
         out.append(VersionOut(**data))
     return out
+
+
+class ParseOptionsIn(BaseModel):
+    """p.25-27's `TextDataFrameReader` properties, as far as this engine goes.
+
+    Every field defaults to what the upload path already does, so a request
+    that sends nothing asks for the file as it was first read — which is what
+    makes "preview the effect" mean anything: the starting point is the thing
+    on screen.
+    """
+
+    delimiter: str | None = Field(default=None, min_length=1, max_length=1)
+    quote: str | None = Field(default=None, min_length=1, max_length=1)
+    header: bool = True
+    skip_lines: int = Field(default=0, ge=0, le=1000)
+    null_values: list[str] = Field(default_factory=list, max_length=20)
+    drop_bad_rows: bool = False
+    encoding: str = "utf-8"
+    add_file_path: bool = False
+    add_imported_at: bool = False
+    add_row_number: bool = False
+
+    def to_engine(self) -> engine.ParseOptions:
+        return engine.ParseOptions(
+            delimiter=self.delimiter, quote=self.quote,
+            header=self.header, skip_lines=self.skip_lines,
+            null_values=tuple(self.null_values), drop_bad_rows=self.drop_bad_rows,
+            encoding=self.encoding, add_file_path=self.add_file_path,
+            add_imported_at=self.add_imported_at, add_row_number=self.add_row_number,
+        )
+
+
+class ParsePreviewOut(BaseModel):
+    """What these options would produce, without producing it."""
+
+    columns: list[dict[str, str]]
+    rows: list[list[Any]]
+    row_count: int
+    truncated: bool
+
+
+async def _parse_original(
+    access: ProjectAccess, dataset_id: UUID, options: ParseOptionsIn
+) -> tuple[str, list[engine.ColumnSchema], int, bytes]:
+    """Read the kept file, parse it as asked, and hand back the Parquet.
+
+    One implementation for the preview and the apply, because the whole promise
+    of p.24's "visualize … how they affect the output dataset" is that the
+    preview is the same parse — two code paths would eventually disagree, and
+    the one somebody trusted would be the preview.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        key = await ds_service.original_upload_key(conn, access.project_id, dataset_id)
+    raw = await anyio.to_thread.run_sync(_storage.read, key)
+    extension = os.path.splitext(key)[1].lower()
+
+    def work() -> tuple[str, list[engine.ColumnSchema], int, bytes]:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, f"src{extension}")
+            with open(src, "wb") as handle:
+                handle.write(raw)
+            if options.encoding != "utf-8":
+                decoded = os.path.join(tmp, f"decoded{extension}")
+                engine.decode_to_utf8(src, decoded, options.encoding)
+                src = decoded
+            dest = os.path.join(tmp, "data.parquet")
+            schema, rows = engine.parse_to_parquet(src, dest, options.to_engine())
+            preview = engine.preview(dest)
+            with open(dest, "rb") as handle:
+                return preview, schema, rows, handle.read()
+
+    result = await anyio.to_thread.run_sync(work)
+    return result
+
+
+@router.post("/{dataset_id}/parse/preview", response_model=ParsePreviewOut)
+async def preview_parse(
+    dataset_id: UUID,
+    body: ParseOptionsIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ParsePreviewOut:
+    """p.24's "visualize the options available and how they affect the output
+    dataset" — the parse, run and shown, with nothing written.
+
+    Editor rather than viewer: this reads the original file and spends real
+    work doing it, and the only reason to ask is that you are about to change
+    the dataset. A viewer who cannot apply has no use for the rehearsal.
+    """
+    preview, _schema, rows, _parquet = await _parse_original(access, dataset_id, body)
+    return ParsePreviewOut(
+        columns=[c.as_dict() for c in preview.columns],
+        rows=preview.rows,
+        row_count=rows,
+        truncated=preview.truncated,
+    )
+
+
+@router.post("/{dataset_id}/parse", response_model=DatasetOut)
+async def parse_again(
+    dataset_id: UUID,
+    body: ParseOptionsIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> DatasetOut:
+    """p.14's parsing options, applied — as a new version, following §361.
+
+    The same reasoning as a rollback: the version that was parsed wrongly stays
+    in the history and stays readable, because a run stamped with it has to
+    keep resolving to what it was. What changes is what the dataset *is* now.
+    """
+    _preview, schema, rows, parquet = await _parse_original(access, dataset_id, body)
+    async with user_connection(access.auth.user_id) as conn:
+        row = await ds_service.add_version(
+            conn, _storage,
+            dataset_id=dataset_id, workspace_id=access.workspace_id,
+            parquet_bytes=parquet, schema=schema, row_count=rows,
+            produced_by_kind="reparse", produced_by_id=None,
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="dataset.reparse",
+            resource_type="dataset",
+            resource_id=dataset_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            # The options go in the entry because they are stored nowhere else
+            # — Foundry keeps them in the schema because its datasets keep
+            # receiving files, and an uploaded dataset here receives one.
+            metadata={"options": body.model_dump(), "rows": rows,
+                      "new_version": row["current_version"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+        return _out(await ds_service.get(conn, access.project_id, dataset_id))
 
 
 class RollbackIn(BaseModel):

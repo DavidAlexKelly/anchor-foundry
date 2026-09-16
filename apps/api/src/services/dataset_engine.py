@@ -80,6 +80,166 @@ def json_safe(value: Any) -> Any:
     return str(value)
 
 
+#: Character sets a re-parse may be told to decode from (§362;
+#: `dataset-preview` p.14's "change encoding"). A named list rather than any
+#: codec Python knows, because the point of the control is to name what the
+#: file *is*, and `python -c "import codecs"` offers a hundred answers nobody
+#: is choosing between. These are the ones a spreadsheet export actually
+#: produces.
+ENCODINGS: tuple[str, ...] = ("utf-8", "utf-8-sig", "latin-1", "cp1252", "utf-16")
+
+
+@dataclass(frozen=True)
+class ParseOptions:
+    """How to read a delimited file (§362; `dataset-preview` p.14, p.25-27).
+
+    Foundry's `TextDataFrameReader` table (p.25-27) is the reference. What is
+    here is what DuckDB can actually do, **measured rather than assumed** — on
+    the version this runs (1.1.1), `encoding` is not a `read_csv` parameter at
+    all and `escape` is strictly one byte. Each field below says which of
+    Foundry's properties it is, and the ones with no field are listed in the
+    parity row with the reason.
+
+    Defaults are "what the upload path already does", so `ParseOptions()` is
+    the file as it was first read and a form opened on it starts from what
+    somebody is looking at rather than from a blank.
+    """
+
+    #: p.26 `fieldDelimiter`. None asks DuckDB to sniff it, which is what
+    #: `read_csv_auto` has always done.
+    delimiter: str | None = None
+    #: p.26 `quoteCharacter`.
+    quote: str | None = None
+    # **There is no `escape` field, and that is a finding rather than an
+    # omission.** It was built, and then no file could be found where passing
+    # it changes DuckDB 1.1.1's answer: the sniffer already handles
+    # backslash-escaped quotes (`"a\",b"` reads as `a",b` with and without
+    # it), and DuckDB refuses an escape longer than one byte anyway. A control
+    # whose mutant nothing can catch is a control that cannot be shown to work
+    # (§213), and one that looks like it works is worse than one that is
+    # absent (§214). If a file turns up that needs it, it comes back with the
+    # test that proves it.
+    #: Whether the first row names the columns. Implied by p.26's "types
+    #: specified in the header" rather than listed.
+    header: bool = True
+    #: p.26 `skipLines`.
+    skip_lines: int = 0
+    #: p.25 `nullValues`. Empty means DuckDB's own default.
+    null_values: tuple[str, ...] = ()
+    #: p.26 `jaggedRowBehavior: DROP_ROW`, which is p.14's "drop jagged rows".
+    #: It also covers p.27's `parseErrorBehavior`, because DuckDB's
+    #: `ignore_errors` does not distinguish the two — said here rather than
+    #: pretending to offer both.
+    drop_bad_rows: bool = False
+    #: p.14's "change encoding". Applied **before** DuckDB sees the file, since
+    #: this DuckDB has no such option; see `decode_to_utf8`.
+    encoding: str = "utf-8"
+    #: p.14/p.27 `addFilePath`.
+    add_file_path: bool = False
+    #: p.14/p.27 `addImportedAt`.
+    add_imported_at: bool = False
+    #: p.14's "row number". Not in p.25-27's table, which is the *reader's*
+    #: options; p.14 offers it beside the other two added columns.
+    add_row_number: bool = False
+
+
+def _sql_string(value: str) -> str:
+    """A single-quoted SQL literal. Doubling is SQL's own escape, and these
+    values are one or two characters typed into a form."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def csv_reader_expr(src_path: str, options: ParseOptions) -> str:
+    """`read_csv(...)` with the options that are not defaults.
+
+    **Only what was chosen is passed**, so a file with nothing set is read by
+    exactly the call `read_csv_auto` makes — a re-parse that changes nothing
+    has to produce what is already there, or the button is a trap.
+    """
+    args = [repr(src_path)]
+    if options.delimiter is not None:
+        args.append(f"delim={_sql_string(options.delimiter)}")
+    if options.quote is not None:
+        args.append(f"quote={_sql_string(options.quote)}")
+    if not options.header:
+        args.append("header=false")
+    if options.skip_lines:
+        args.append(f"skip={int(options.skip_lines)}")
+    if options.null_values:
+        joined = ", ".join(_sql_string(v) for v in options.null_values)
+        args.append(f"nullstr=[{joined}]")
+    if options.drop_bad_rows:
+        args.append("ignore_errors=true")
+    if options.add_file_path:
+        args.append("filename=true")
+    return f"read_csv({', '.join(args)})"
+
+
+def decode_to_utf8(src_path: str, dest_path: str, encoding: str) -> None:
+    """Rewrite a file as UTF-8, because this DuckDB cannot be told otherwise.
+
+    `read_csv` grew an `encoding` parameter in DuckDB 1.2 and this runs 1.1.1,
+    where a latin-1 file does not parse badly — it **fails outright**, with
+    "Invalid unicode (byte sequence mismatch)". So p.14's "change encoding" is
+    not a nicety here: without it there is no way to load the file at all.
+
+    Doing it here rather than waiting for the upgrade also keeps the control
+    honest in the other direction — a option that silently did nothing on the
+    version actually deployed would be §214's exact shape.
+    """
+    if encoding not in ENCODINGS:
+        raise DatasetEngineError(
+            f"unsupported encoding {encoding!r} (supported: {', '.join(ENCODINGS)})"
+        )
+    with open(src_path, "rb") as handle:
+        raw = handle.read()
+    try:
+        text = raw.decode(encoding)
+    except UnicodeDecodeError as exc:
+        raise DatasetEngineError(
+            f"this file is not {encoding} - it failed to decode at byte {exc.start}"
+        ) from exc
+    with open(dest_path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
+
+
+def parse_to_parquet(
+    src_path: str, dest_path: str, options: ParseOptions
+) -> tuple[list[ColumnSchema], int]:
+    """Read a delimited file the way `options` says, and write the Parquet.
+
+    The added columns (p.14) are `SELECT` expressions rather than reader
+    options, because only one of the three is a reader option at all —
+    `filename=true` gives the path, and the import time and the row number are
+    things this platform knows and DuckDB does not.
+    """
+    reader = csv_reader_expr(src_path, options)
+    selected = ["src.*"]
+    if options.add_imported_at:
+        selected.append("now() AS imported_at")
+    if options.add_row_number:
+        # Over the file's own order. `row_number() OVER ()` with no ORDER BY is
+        # the reading order, which is the only order a row number can mean for
+        # a file — anything else would number a sort somebody did not ask for.
+        selected.append("row_number() OVER () AS row_number")
+    con = duckdb.connect()
+    try:
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        try:
+            con.execute(f"CREATE VIEW src AS SELECT {', '.join(selected)} FROM {reader} src")
+            con.execute(f"COPY src TO '{dest_path}' (FORMAT parquet)")
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+        schema = [
+            ColumnSchema(name=row[0], data_type=row[1])
+            for row in con.execute("DESCRIBE src").fetchall()
+        ]
+        row_count = int(con.execute("SELECT count(*) FROM src").fetchone()[0])
+        return schema, row_count
+    finally:
+        con.close()
+
+
 def ingest_to_parquet(src_path: str, extension: str, dest_path: str) -> tuple[list[ColumnSchema], int]:
     """Convert an uploaded file to canonical Parquet; returns (schema, rows)."""
     reader = _reader_expr(src_path, extension)

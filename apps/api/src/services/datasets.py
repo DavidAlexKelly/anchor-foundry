@@ -54,7 +54,7 @@ _COLUMNS = """
     id, project_id, workspace_id, name, slug, description, origin,
     connection_id, s3_location, table_schema, row_count, current_version,
     schema_policy, forked_from_dataset_id, forked_from_version,
-    created_by, created_at, updated_at
+    original_filename, created_by, created_at, updated_at
 """
 
 # Migration 0023 enforces the schema policy in a BEFORE INSERT trigger on
@@ -124,6 +124,7 @@ async def create_from_upload(
     schema: list[ColumnSchema],
     row_count: int,
     created_by: UUID,
+    original_filename: str | None = None,
 ) -> dict[str, Any]:
     """Insert the dataset row + version 1 after the bytes are already in
     storage (see routes: storage first, row second - an orphaned file is
@@ -145,9 +146,9 @@ async def create_from_upload(
         f"""
         INSERT INTO datasets (id, project_id, workspace_id, name, slug, description,
                               origin, s3_location, table_schema, row_count,
-                              current_version, created_by)
+                              current_version, original_filename, created_by)
         VALUES (:id, :pid, :wid, :name, :slug, :descr, 'upload', :loc,
-                CAST(:schema AS jsonb), :rows, 1, :by)
+                CAST(:schema AS jsonb), :rows, 1, :original, :by)
         RETURNING {_COLUMNS}
         """,
         {
@@ -160,6 +161,7 @@ async def create_from_upload(
             "loc": parquet_key,
             "schema": schema_json,
             "rows": row_count,
+            "original": original_filename,
             "by": str(created_by),
         },
     )
@@ -454,6 +456,42 @@ async def list_versions(
         """,
         {"did": str(dataset_id)},
     )
+
+
+async def original_upload_key(
+    conn: AsyncConnection, project_id: UUID, dataset_id: UUID
+) -> str:
+    """Where the file somebody uploaded still is (§362; migration 0090).
+
+    **The bytes were always kept and could never be found.** The upload route
+    has written them to `{prefix}original/{filename}` since the first upload,
+    with "export everything §11 includes what you gave us" beside it — and the
+    filename went nowhere, the export route serves the Parquet, and
+    `StorageGateway` has no way to list a prefix. db 0090 records the name so
+    the copy that was already being paid for becomes reachable.
+
+    Refuses, rather than returning a key that will 404, in the two cases where
+    there is no original at all: a dataset built by a model or filled by a sync
+    was never uploaded, and one uploaded before db 0090 kept no name. The
+    second is the honest cost of not guessing — a filename rebuilt by
+    convention would point at a file that may not be there, and the error would
+    arrive as a missing object rather than as an explanation.
+    """
+    row = await get(conn, project_id, dataset_id)
+    if row["origin"] != "upload":
+        raise ConflictError(
+            f"this dataset came from a {row['origin']}, so there is no uploaded "
+            "file to read again - it is rebuilt by whatever produces it"
+        )
+    filename = row["original_filename"]
+    if not filename:
+        raise ConflictError(
+            "this dataset was uploaded before the original file was recorded, "
+            "so it cannot be parsed again. Uploading the file again makes a "
+            "dataset that can be."
+        )
+    ws_prefix = await workspace_s3_prefix(conn, UUID(str(row["workspace_id"])))
+    return f"{storage_prefix(ws_prefix, dataset_id)}original/{filename}"
 
 
 async def roll_back(
