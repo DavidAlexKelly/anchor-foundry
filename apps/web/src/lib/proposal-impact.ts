@@ -81,3 +81,69 @@ export function impactSummary(rows: AffectedDataset[]): string {
  */
 export const DERIVED_NOTE =
   "Only the datasets these transforms produce. Anything built from them downstream is not analysed.";
+
+/** `diff_schemas`' shape, as the server sends it (§365; p.54). */
+export type SchemaChange = {
+  ok: boolean;
+  error?: string | null;
+  changes?: {
+    added?: { name: string; data_type: string }[];
+    removed?: { name: string; data_type: string }[];
+    retyped?: { name: string; from: string; to: string }[];
+  } | null;
+  sampled?: { alias: string; rows_used: number; rows_available: number }[];
+};
+
+/**
+ * What the columns do, as lines — or the one line that matters more.
+ *
+ * **Three answers, and they are not degrees of one.** Code that does not run
+ * is reported first and alone: a reviewer who is shown "no column changes" for
+ * a transform that fails to compile has been told something true and useless,
+ * and will read it as a safe change.
+ *
+ * "No column changes" is said rather than left blank, because it is the answer
+ * a reviewer most wants and an empty space is indistinguishable from a panel
+ * that did not load.
+ */
+export function describeSchemaChange(result: SchemaChange): string[] {
+  if (!result.ok) {
+    return [result.error?.trim() || "This code does not run."];
+  }
+  const changes = result.changes;
+  if (!changes) return ["No column changes."];
+  const lines: string[] = [];
+  for (const column of changes.added ?? []) {
+    lines.push(`+ ${column.name} (${column.data_type})`);
+  }
+  for (const column of changes.removed ?? []) {
+    lines.push(`− ${column.name} (${column.data_type})`);
+  }
+  for (const column of changes.retyped ?? []) {
+    lines.push(`~ ${column.name}: ${column.from} → ${column.to}`);
+  }
+  // Unreachable from this server — `diff_schemas` returns null rather than an
+  // object with nothing in it — and handled anyway, because the alternative is
+  // a heading with no lines under it, which reads as a failure.
+  return lines.length > 0 ? lines : ["No column changes."];
+}
+
+/**
+ * How much of the inputs the answer was computed over.
+ *
+ * **Said because it is a fact, not because it is a caveat.** The columns do not
+ * depend on the sample — measured at 10, 1000 and 5000 rows, where only the
+ * count moved — so this is not a disclaimer about the schema. It is there
+ * because a reviewer who is told "from a sample" and not told how big a one
+ * has been handed a worry instead of a number.
+ */
+export function describeSample(
+  sampled: { alias: string; rows_used: number; rows_available: number }[] | undefined,
+): string {
+  if (!sampled || sampled.length === 0) return "";
+  const partial = sampled.filter((s) => s.rows_used < s.rows_available);
+  if (partial.length === 0) return "Run over every input row.";
+  return `Run over ${partial
+    .map((s) => `${s.rows_used.toLocaleString()} of ${s.rows_available.toLocaleString()} ${s.alias} rows`)
+    .join(", ")}. Columns do not depend on how many rows are read.`;
+}

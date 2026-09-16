@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   DERIVED_NOTE,
   describeImpact,
+  describeSample,
+  describeSchemaChange,
   impactSummary,
   type AffectedDataset,
 } from "./proposal-impact";
@@ -87,5 +89,99 @@ describe("the limit of the answer", () => {
     // rather than left to be discovered by trusting a short list.
     expect(DERIVED_NOTE).toContain("downstream");
     expect(DERIVED_NOTE).toContain("not analysed");
+  });
+});
+
+describe("what the columns do", () => {
+  it("lists what was added, removed and retyped", () => {
+    const lines = describeSchemaChange({
+      ok: true,
+      changes: {
+        added: [{ name: "total", data_type: "BIGINT" }],
+        removed: [{ name: "note", data_type: "VARCHAR" }],
+        retyped: [{ name: "val", from: "BIGINT", to: "VARCHAR" }],
+      },
+    });
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain("total");
+    expect(lines[1]).toContain("note");
+    expect(lines[2]).toContain("BIGINT");
+    expect(lines[2]).toContain("VARCHAR");
+  });
+
+  it("marks the three kinds differently", () => {
+    // A reviewer scanning a list needs to know which direction each line goes
+    // without reading it; three lines that all begin the same way are three
+    // lines that have to be read.
+    const lines = describeSchemaChange({
+      ok: true,
+      changes: {
+        added: [{ name: "a", data_type: "BIGINT" }],
+        removed: [{ name: "b", data_type: "BIGINT" }],
+        retyped: [{ name: "c", from: "BIGINT", to: "VARCHAR" }],
+      },
+    });
+    expect(new Set(lines.map((l) => l[0])).size).toBe(3);
+  });
+
+  it("says no column changes rather than nothing at all", () => {
+    // The answer a reviewer most wants, and an empty space is
+    // indistinguishable from a panel that did not load.
+    expect(describeSchemaChange({ ok: true, changes: null })).toEqual([
+      "No column changes.",
+    ]);
+  });
+
+  it("reports code that does not run instead of the columns", () => {
+    // Being shown "no column changes" for a transform that fails to compile is
+    // true and useless, and reads as a safe change.
+    const lines = describeSchemaChange({ ok: false, error: 'Referenced column "nope" not found' });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("nope");
+  });
+
+  it("has words for a failure that came with no message", () => {
+    expect(describeSchemaChange({ ok: false, error: "   " })[0]).toBe(
+      "This code does not run.",
+    );
+  });
+
+  it("does not leave a heading with nothing under it", () => {
+    // `diff_schemas` returns null rather than an empty object, so this cannot
+    // arrive from this server — and an empty list would read as a failure.
+    expect(describeSchemaChange({ ok: true, changes: {} })).toEqual([
+      "No column changes.",
+    ]);
+  });
+});
+
+describe("how much was read", () => {
+  it("says so plainly when the whole input was read", () => {
+    expect(describeSample([{ alias: "raw", rows_used: 3, rows_available: 3 }])).toBe(
+      "Run over every input row.",
+    );
+  });
+
+  it("gives the numbers when it was a sample, and says they do not matter here", () => {
+    const said = describeSample([{ alias: "raw", rows_used: 1000, rows_available: 5000 }]);
+    expect(said).toContain("1,000 of 5,000 raw rows");
+    // The point of saying it: the columns are the same either way, measured.
+    expect(said).toContain("Columns do not depend on");
+  });
+
+  it("names only the inputs that were actually sampled", () => {
+    // An input read whole is not a caveat, and listing it beside one that was
+    // sampled makes the reader work out which is which.
+    const said = describeSample([
+      { alias: "whole", rows_used: 5, rows_available: 5 },
+      { alias: "big", rows_used: 1000, rows_available: 9000 },
+    ]);
+    expect(said).toContain("big");
+    expect(said).not.toContain("whole");
+  });
+
+  it("says nothing when there is nothing to say", () => {
+    expect(describeSample([])).toBe("");
+    expect(describeSample(undefined)).toBe("");
   });
 });

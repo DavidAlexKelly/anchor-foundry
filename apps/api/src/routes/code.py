@@ -19,14 +19,17 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+import anyio
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
+from ..lib.errors import ConflictError, NotFoundError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import code as code_service
 from ..services import code_checks as check_service
+from ..services import dataset_engine as engine
 from ..services import impact as impact_service
 
 router = APIRouter(
@@ -431,14 +434,29 @@ class AffectedDatasetOut(BaseModel):
 
 
 class SchemaChangeOut(BaseModel):
-    """What the proposed code would do to the output dataset's columns."""
+    """What the proposed code would do to the output dataset's columns
+    (§365; `code-repositories` p.54).
+
+    Three answers, and the middle one is the one a reviewer wants most: the
+    code runs and the columns move (`changes`), the code runs and they do not
+    (`changes` is null with `ok`), or **the code does not run at all** — which
+    is what p.52's "build on head branch to validate that the code builds
+    properly" exists to produce, at the cost of a preview rather than a build.
+    """
 
     model_id: UUID
     dataset_id: UUID
     ok: bool
     error: str | None = None
+    #: `diff_schemas`' shape — added / removed / retyped — or null for no
+    #: change. The same function sync drift uses (§5), because it is the same
+    #: question asked of a proposal.
     changes: dict[str, Any] | None = None
-    sampled_rows: int = 0
+    #: How many input rows the preview read, per alias. The schema does not
+    #: depend on it — measured, not assumed — but a reviewer told "this is
+    #: from a sample" and not told how big a one has been given a disclaimer
+    #: rather than a fact.
+    sampled: list[dict[str, Any]] = []
 
 
 @router.get("/proposals/{proposal_id}/impact", response_model=list[AffectedDatasetOut])
@@ -458,6 +476,99 @@ async def proposal_impact(
             conn, access.project_id, proposal_id, list(proposal["files"])
         )
     return [AffectedDatasetOut(**r) for r in rows]
+
+
+@router.get(
+    "/proposals/{proposal_id}/impact/{model_id}/schema",
+    response_model=SchemaChangeOut,
+)
+async def proposal_schema_change(
+    proposal_id: UUID,
+    model_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> SchemaChangeOut:
+    """p.54's **Schema** — what the proposed code would do to the columns.
+
+    **Without p.52's two builds, and that is the decision.** Foundry needs the
+    dataset built on head and base because it compares two built outputs. This
+    runs the *proposed* code over a sample of the model's current inputs,
+    writes nothing, and diffs the columns it produces against the ones the
+    dataset has — so the answer exists on a proposal that has never been built,
+    which is the state a proposal is usually in.
+
+    **The sample does not weaken the answer, and that was measured rather than
+    assumed**: at 10, 1000 and 5000 sampled rows the columns are identical and
+    only the count moves, because they come from the query's projection over
+    already-typed parquet columns. `preview_transform`'s docstring warns that
+    its *row count* is an answer that is not the answer; carrying that warning
+    across to the schema would have been wrong, so it was checked.
+
+    One question per dataset rather than all of them at once: previewing is
+    real work, and a panel that ran every transform in a proposal to draw its
+    first screen would make opening a review expensive in proportion to how
+    much it changes.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        proposal = await code_service.get_proposal(conn, access.project_id, proposal_id)
+        proposed = next(
+            (f for f in proposal["files"] if str(f.get("model_id")) == str(model_id)),
+            None,
+        )
+        if proposed is None:
+            raise NotFoundError("that file is not part of this proposal")
+        found = await impact_service.schema_inputs(conn, access.project_id, model_id)
+        if found is None:
+            raise ConflictError(
+                "this transform has never been built, so there is no schema to "
+                "compare against yet"
+            )
+        model, inputs = found
+
+    storage = _dataset_storage()
+    paths: dict[str, str] = {}
+    for item in inputs:
+        paths[str(item["input_alias"])] = await anyio.to_thread.run_sync(
+            storage.local_path, str(item["s3_location"])
+        )
+
+    try:
+        result, previewed = await anyio.to_thread.run_sync(
+            engine.preview_transform, paths, str(proposed["code"])
+        )
+    except engine.DatasetEngineError as exc:
+        # **The most useful of the three answers.** p.52 builds the head branch
+        # "to validate that the code builds properly"; this is that, for the
+        # price of a preview, and it belongs beside the schema rather than in a
+        # separate check because a reviewer asking "what does this do to the
+        # columns" is owed "it does not run" in the same place.
+        return SchemaChangeOut(
+            model_id=model_id, dataset_id=UUID(str(model["dataset_id"])),
+            ok=False, error=str(exc),
+        )
+    except FileNotFoundError as exc:
+        raise ConflictError(
+            "one of this transform's inputs has no stored data, so the proposed "
+            "code cannot be run against it"
+        ) from exc
+
+    stored = model["table_schema"]
+    if isinstance(stored, str):
+        import json
+
+        stored = json.loads(stored)
+    return SchemaChangeOut(
+        model_id=model_id,
+        dataset_id=UUID(str(model["dataset_id"])),
+        ok=True,
+        # `diff_schemas` returns None for "nothing changed", which is exactly
+        # what this wants to report — the same function sync drift uses (§5),
+        # because it is the same question asked of a proposal.
+        changes=engine.diff_schemas(list(stored or []), result.columns),
+        sampled=[
+            {"alias": p.alias, "rows_used": p.rows_used, "rows_available": p.rows_available}
+            for p in previewed
+        ],
+    )
 
 
 @router.post("/proposals", response_model=ProposalDetail, status_code=201)

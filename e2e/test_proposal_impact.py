@@ -133,3 +133,81 @@ def test_the_panel_says_what_it_does_not_cover(page, api) -> None:
     )
     open_review(page, mod, proposal["id"])
     expect(page.get_by_test_id("impact-limit")).to_contain_text("downstream")
+
+
+# ---- p.54's Schema: what the code does to the columns (§365) -----------------
+
+def test_a_reviewer_can_ask_what_the_columns_do(page, api) -> None:
+    """**p.54, and without p.52's two builds.** Foundry needs the dataset built
+    on head and base to compare two outputs; this runs the proposed code over a
+    sample and diffs the columns, so the answer exists on a proposal nobody has
+    built."""
+    mod = Module(api, "Schema seen")
+    source = api.upload_csv(f"{mod.base}/datasets/upload", f"Src {mod.tag}", ROWS)
+    model = built_model(mod, source, f"Daily {mod.tag}")
+    proposal = propose(
+        mod, [{"model_id": model["id"], "code": "SELECT id FROM raw"}], "Drop val"
+    )
+    open_review(page, mod, proposal["id"])
+
+    # **Asked for, not computed on arrival.** Running every transform in a
+    # proposal to draw its first screen would make opening a review cost more
+    # the more it changes.
+    expect(page.get_by_test_id("schema-change")).to_have_count(0)
+    page.get_by_test_id("schema-ask").click()
+
+    change = page.get_by_test_id("schema-change")
+    expect(change).to_be_visible()
+    expect(change).to_have_attribute("data-ok", "true")
+    expect(change).to_contain_text("val")
+
+
+def test_code_that_does_not_run_is_said_where_the_columns_would_be(page, api) -> None:
+    """The most important of the three answers: a reviewer shown "no column
+    changes" for a transform that does not compile has been told something true
+    and useless."""
+    mod = Module(api, "Schema broken")
+    source = api.upload_csv(f"{mod.base}/datasets/upload", f"Src {mod.tag}", ROWS)
+    model = built_model(mod, source, f"Daily {mod.tag}")
+    proposal = propose(
+        mod, [{"model_id": model["id"], "code": "SELECT nope FROM raw"}], "Break it"
+    )
+    open_review(page, mod, proposal["id"])
+    page.get_by_test_id("schema-ask").click()
+
+    change = page.get_by_test_id("schema-change")
+    expect(change).to_be_visible()
+    expect(change).to_have_attribute("data-ok", "false")
+    expect(change).to_contain_text("nope")
+
+
+def test_no_column_change_is_said_rather_than_left_blank(page, api) -> None:
+    """An empty space is indistinguishable from a panel that did not load, and
+    "nothing moved" is the answer a reviewer most wants."""
+    mod = Module(api, "Schema same")
+    source = api.upload_csv(f"{mod.base}/datasets/upload", f"Src {mod.tag}", ROWS)
+    model = built_model(mod, source, f"Daily {mod.tag}")
+    proposal = propose(
+        mod, [{"model_id": model["id"], "code": "SELECT id, val FROM raw WHERE id > 0"}],
+        "Filter only",
+    )
+    open_review(page, mod, proposal["id"])
+    page.get_by_test_id("schema-ask").click()
+    expect(page.get_by_test_id("schema-change")).to_contain_text("No column changes")
+
+
+def test_a_transform_with_no_dataset_is_not_asked_about_its_columns(page, api) -> None:
+    """§214: the control is absent where there is nothing to compare against,
+    rather than present and then apologising."""
+    mod = Module(api, "Schema unbuilt")
+    source = api.upload_csv(f"{mod.base}/datasets/upload", f"Src {mod.tag}", ROWS)
+    model = api.call("POST", f"{mod.base}/models", {
+        "name": f"Unbuilt {mod.tag}", "code": "SELECT id FROM raw",
+        "inputs": [{"dataset_id": source["id"], "input_alias": "raw"}],
+    })
+    proposal = propose(
+        mod, [{"model_id": model["id"], "code": "SELECT val FROM raw"}], "Change it"
+    )
+    open_review(page, mod, proposal["id"])
+    expect(page.get_by_test_id("impact-row")).to_have_count(1)
+    expect(page.get_by_test_id("schema-ask")).to_have_count(0)

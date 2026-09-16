@@ -27,7 +27,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from ..lib.db import fetch_all
+from ..lib.db import fetch_all, fetch_one
 
 #: A file in a proposal is in exactly one of these states, and the three are
 #: different answers rather than degrees of one (§357's lesson, on a different
@@ -129,3 +129,41 @@ async def affected_datasets(
             },
         })
     return out
+
+
+
+async def schema_inputs(
+    conn: AsyncConnection, project_id: UUID, model_id: UUID
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """What is needed to preview a proposed transform: the output dataset and
+    the inputs it reads (§365; `code-repositories` p.54).
+
+    Returns None when there is nothing to compare against — the same condition
+    `affected_datasets` reports as `never_built`, asked here so the caller does
+    not have to re-derive it from a list it may not be holding.
+    """
+    model = await fetch_one(
+        conn,
+        """
+        SELECT m.id, m.output_dataset_id,
+               d.id AS dataset_id, d.table_schema
+          FROM models m
+          JOIN datasets d ON d.id = m.output_dataset_id
+         WHERE m.project_id = :pid AND m.id = :mid
+        """,
+        {"pid": str(project_id), "mid": str(model_id)},
+    )
+    if model is None:
+        return None
+    inputs = await fetch_all(
+        conn,
+        """
+        SELECT mi.input_alias, d.id AS dataset_id, d.s3_location
+          FROM model_inputs mi
+          JOIN datasets d ON d.id = mi.dataset_id
+         WHERE mi.model_id = :mid
+         ORDER BY mi.input_alias
+        """,
+        {"mid": str(model_id)},
+    )
+    return dict(model), [dict(r) for r in inputs]
