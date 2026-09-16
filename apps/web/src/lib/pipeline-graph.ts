@@ -363,3 +363,69 @@ export function search(
     })
     .map((node) => node.id);
 }
+
+/* ------------------------------------------------------------------ *
+ * The view a graph can be saved or shared at (§360; `data-lineage` p.12)
+ * ------------------------------------------------------------------ */
+
+/**
+ * What a person chose to look at, and nothing about where the window was.
+ *
+ * **The same shape the server stores** (migration 0089), so a saved graph
+ * round-trips without a translation layer in between — which is where the two
+ * would drift.
+ *
+ * No zoom or pan, and that is db 0089's decision: where a viewport happened to
+ * be is not what somebody means by "look at this", and a recipient whose
+ * window is a different size lands somewhere else anyway (§214).
+ */
+export interface GraphView {
+  focus?: string;
+  column?: string;
+  selected?: string[];
+  query?: string;
+  /** Wire-typed as strings because that is what comes back from the server;
+   *  `kindsIn` narrows it at the boundary. */
+  kinds?: string[];
+}
+
+/** The kinds this graph draws, which is what a stored filter may name. */
+export const GRAPH_KINDS: PipelineNode["kind"][] = ["dataset", "model", "object_type"];
+
+/**
+ * The kinds a stored view names, minus any this build does not draw.
+ *
+ * **Dropped rather than trusted.** A view saved by a later build, or by a
+ * build that drew a kind this one has since removed, would otherwise put a
+ * filter on the graph that matches nothing and offer no way to see that it
+ * had. The server validates against its own list when a view is saved; this is
+ * the same question asked at the other end, where the answer can have changed
+ * in between.
+ */
+export function kindsIn(view: GraphView | undefined): PipelineNode["kind"][] {
+  const known = new Set<string>(GRAPH_KINDS);
+  return (view?.kinds ?? []).filter(
+    (kind): kind is PipelineNode["kind"] => known.has(kind),
+  );
+}
+
+/**
+ * The view as the graph currently stands, with the empty parts left out.
+ *
+ * **Omitted rather than sent as empty**, matching what the server stores: a
+ * view carrying `query: ""` and `selected: []` would save as a filter nobody
+ * set, and reopen looking like somebody had chosen nothing on purpose.
+ */
+export function viewOf(state: {
+  selected: readonly string[];
+  column: string | null;
+  query: string;
+  kinds: readonly string[];
+}): GraphView {
+  const view: GraphView = {};
+  if (state.selected.length > 0) view.selected = [...state.selected];
+  if (state.column !== null) view.column = state.column;
+  if (state.query.trim() !== "") view.query = state.query;
+  if (state.kinds.length > 0) view.kinds = [...state.kinds];
+  return view;
+}

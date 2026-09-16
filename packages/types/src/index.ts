@@ -3119,6 +3119,28 @@ export interface ActionMetrics {
   failures: ActionFailureCount[];
 }
 
+/** The view a lineage graph is saved or shared at (§360; `data-lineage` p.12,
+ *  migration 0089). The view, never the nodes: the graph is a live question. */
+export interface GraphViewInput {
+  focus?: string;
+  column?: string;
+  selected?: string[];
+  query?: string;
+  kinds?: string[];
+}
+
+/** A saved lineage graph. Project-scoped and shared within it, following
+ *  db 0040's saved searches. */
+export interface SavedGraph {
+  id: string;
+  name: string;
+  description: string;
+  view: GraphViewInput;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** One day's model runs, by what became of them (§359; `dataset-preview` p.3). */
 export interface ModelRunDay {
   day: string;

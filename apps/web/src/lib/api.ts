@@ -935,6 +935,25 @@ export const models = {
     request<import("./types").ModelRun[]>(
       `/workspaces/${wid}/projects/${pid}/models/${mid}/runs`,
     ),
+  /** Saved lineage graphs (§360; `data-lineage` p.12). Project-scoped and
+   *  shared within it, following db 0040's saved searches. */
+  savedGraphs: (wid: string, pid: string) =>
+    request<import("./types").SavedGraph[]>(
+      `/workspaces/${wid}/projects/${pid}/saved-graphs`,
+    ),
+  saveGraph: (
+    wid: string, pid: string,
+    input: { name: string; description?: string; view: import("./types").GraphViewInput },
+  ) =>
+    request<import("./types").SavedGraph>(
+      `/workspaces/${wid}/projects/${pid}/saved-graphs`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  deleteSavedGraph: (wid: string, pid: string, id: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/saved-graphs/${id}`,
+      { method: "DELETE" },
+    ),
   /** p.3's Summary view: job statuses over time (§359). */
   runSummary: (wid: string, pid: string, mid: string) =>
     request<import("./types").ModelRunSummary>(
