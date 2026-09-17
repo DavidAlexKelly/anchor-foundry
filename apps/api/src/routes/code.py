@@ -15,6 +15,10 @@ unlocked.
 """
 from __future__ import annotations
 
+import functools
+import json
+import os
+
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -448,6 +452,65 @@ class AffectedDatasetOut(BaseModel):
     dataset: dict[str, Any] | None = None
 
 
+class DerivedImpactOut(BaseModel):
+    """What a proposal does to a dataset built *from* one it changes
+    (§372; `code-repositories` p.54).
+
+    > "Clicking on Add datasets to analysis will analyze the pull request's
+    >  impact on derived datasets. All intermediate datasets between the
+    >  selected dataset and the affected datasets will be added as well."
+    """
+
+    dataset_id: UUID
+    dataset_name: str
+    model_id: UUID
+    model_name: str
+    #: Hops from the changed dataset — 1 is directly downstream. p.54's
+    #: "intermediate datasets between" is an order a reader follows.
+    depth: int
+    ok: bool
+    #: **The most valuable answer here.** A transform below the change that no
+    #: longer runs is the consequence a reviewer is least likely to find by
+    #: reading the diff, because the code that breaks is code the diff does not
+    #: contain.
+    error: str | None = None
+    changes: dict[str, Any] | None = None
+    #: How much of each input this hop actually read, per alias.
+    #:
+    #: **The sampling compounds down the chain**, and this is where that is
+    #: said rather than only in a docstring: hop 2 reads at most
+    #: `PREVIEW_SAMPLE_ROWS` rows of hop 1's output, which was itself produced
+    #: from a sample. It does not move the *columns* — §365 measured that — but
+    #: a reviewer told "from a sample" and not told how big a one has been
+    #: handed a worry instead of a number, which is §365's argument for the
+    #: same field one endpoint over.
+    sampled: list[dict[str, Any]] = []
+
+
+class UnanalysedTransformOut(BaseModel):
+    """A transform the change reaches that cannot be analysed (§372)."""
+
+    model_id: UUID
+    model_name: str
+    reason: str
+
+
+class DerivedAnalysisOut(BaseModel):
+    """p.54's row, with its limits on it rather than left to be discovered."""
+
+    datasets: list[DerivedImpactOut] = []
+    #: **Named, not dropped.** A transform that reads the changed dataset but
+    #: has never been built has nothing to chain a preview into and no stored
+    #: schema to diff — so it has no impact to report and is still something
+    #: the change reaches. §364's rule, one layer further out.
+    not_analysed: list[UnanalysedTransformOut] = []
+    #: The walk's bound (`impact.MAX_DERIVED_DEPTH`). Reported so a short list
+    #: is not read as a whole one — §364's rule, one layer further out.
+    max_depth: int
+    #: True when the walk stopped at the bound with more below it.
+    truncated: bool = False
+
+
 class SchemaChangeOut(BaseModel):
     """What the proposed code would do to the output dataset's columns
     (§365; `code-repositories` p.54).
@@ -497,6 +560,182 @@ async def proposal_impact(
             conn, access.project_id, proposal_id, list(proposal["files"])
         )
     return [AffectedDatasetOut(**r) for r in rows]
+
+
+@router.get(
+    "/proposals/{proposal_id}/impact/{model_id}/derived",
+    response_model=DerivedAnalysisOut,
+)
+async def proposal_derived_impact(
+    proposal_id: UUID,
+    model_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> DerivedAnalysisOut:
+    """p.54's **Add datasets to analysis** — what the change does downstream.
+
+    > "Clicking on Add datasets to analysis will analyze the pull request's
+    >  impact on derived datasets. All intermediate datasets between the
+    >  selected dataset and the affected datasets will be added as well."
+
+    **Chained previews, so p.52's builds are not needed here either.** Foundry
+    requires the added datasets to be built — "the added datasets must not be
+    stale in order to show impact information" — because it compares built
+    outputs. This runs the proposed transform over a sample, spills that result
+    to a scratch file, and runs the next transform down over *that*, hop by
+    hop. Nothing is registered, nothing is versioned, and the scratch goes with
+    the request.
+
+    **A hop that no longer runs is the answer worth the whole endpoint.** The
+    code that breaks is code the diff does not contain, so it is the one
+    consequence a reviewer cannot find by reading carefully.
+
+    The sample compounds down the chain and that is said plainly in the type:
+    each hop reads at most `PREVIEW_SAMPLE_ROWS` of the hop above. It does not
+    weaken the *columns*, which is what this reports — §365 measured that the
+    columns of a preview do not move with the sample size, because they come
+    from the query's projection over already-typed columns.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        proposal = await code_service.get_proposal(conn, access.project_id, proposal_id)
+        proposed = next(
+            (f for f in proposal["files"] if str(f.get("model_id")) == str(model_id)),
+            None,
+        )
+        if proposed is None:
+            raise NotFoundError("that file is not part of this proposal")
+        found = await impact_service.schema_inputs(conn, access.project_id, model_id)
+        if found is None:
+            raise ConflictError(
+                "this transform has never been built, so there is nothing "
+                "downstream of it to analyse yet"
+            )
+        model, inputs = found
+        head_dataset_id = str(model["dataset_id"])
+        chain = await impact_service.derived_chain(
+            conn, access.project_id, UUID(head_dataset_id)
+        )
+        unbuilt = await impact_service.unbuilt_consumers(
+            conn, access.project_id, UUID(head_dataset_id)
+        )
+        # Whether the bound cut anything off, asked one level deeper than the
+        # walk went. A limit nobody is told about is a short answer wearing a
+        # complete one's clothes.
+        deeper = await impact_service.derived_chain(
+            conn, access.project_id, UUID(head_dataset_id),
+            max_depth=impact_service.MAX_DERIVED_DEPTH + 1,
+        )
+
+    not_analysed = [
+        UnanalysedTransformOut(
+            model_id=UUID(str(m["model_id"])), model_name=str(m["model_name"]),
+            reason="it has never been built, so it has no schema to compare against",
+        )
+        for m in unbuilt
+    ]
+    if not chain:
+        return DerivedAnalysisOut(
+            datasets=[], not_analysed=not_analysed,
+            max_depth=impact_service.MAX_DERIVED_DEPTH, truncated=False,
+        )
+
+    storage = _dataset_storage()
+
+    async def _local(location: str) -> str:
+        return await anyio.to_thread.run_sync(storage.local_path, location)
+
+    import tempfile
+
+    out: list[DerivedImpactOut] = []
+    with tempfile.TemporaryDirectory(prefix="anchor-derived-") as scratch:
+        # The head hop: the *proposed* code over the real inputs, spilled so
+        # the transforms below it read what the change would produce.
+        head_paths = {
+            str(i["input_alias"]): await _local(str(i["s3_location"])) for i in inputs
+        }
+        head_spill = os.path.join(scratch, "head.parquet")
+        try:
+            await anyio.to_thread.run_sync(
+                functools.partial(
+                    engine.preview_transform, spill_to=head_spill
+                ),
+                head_paths,
+                str(proposed["code"]),
+            )
+        except engine.DatasetEngineError as exc:
+            # The changed transform itself does not run, so nothing below it
+            # can be analysed. §365's endpoint already says this where a
+            # reviewer asks about *these* columns; repeating the reason here
+            # beats an empty list that reads as "nothing downstream".
+            raise ConflictError(
+                f"the proposed code does not run, so nothing downstream of it "
+                f"can be analysed: {exc}"
+            ) from exc
+        except FileNotFoundError as exc:
+            raise ConflictError(
+                "one of this transform's inputs has no stored data, so the "
+                "proposed code cannot be run against it"
+            ) from exc
+
+        spills: dict[str, str] = {head_dataset_id: head_spill}
+        for hop in chain:
+            paths: dict[str, str] = {}
+            missing = False
+            for item in hop["inputs"]:
+                changed = spills.get(str(item["dataset_id"]))
+                if changed is not None:
+                    paths[str(item["input_alias"])] = changed
+                    continue
+                try:
+                    paths[str(item["input_alias"])] = await _local(str(item["s3_location"]))
+                except FileNotFoundError:
+                    missing = True
+                    break
+            row = {
+                "dataset_id": UUID(str(hop["dataset_id"])),
+                "dataset_name": str(hop["dataset_name"]),
+                "model_id": UUID(str(hop["model_id"])),
+                "model_name": str(hop["model_name"]),
+                "depth": int(hop["depth"]),
+            }
+            if missing:
+                out.append(DerivedImpactOut(
+                    **row, ok=False,
+                    error="one of this transform's other inputs has no stored data",
+                ))
+                continue
+            spill = os.path.join(scratch, f"hop-{hop['dataset_id']}.parquet")
+            try:
+                result, previewed = await anyio.to_thread.run_sync(
+                    functools.partial(engine.preview_transform, spill_to=spill),
+                    paths,
+                    str(hop["code"]),
+                )
+            except engine.DatasetEngineError as exc:
+                # **This is the finding.** The transform below the change no
+                # longer runs against what the change produces. Nothing further
+                # down is analysed, because there is nothing to feed it.
+                out.append(DerivedImpactOut(**row, ok=False, error=str(exc)))
+                continue
+            spills[str(hop["dataset_id"])] = spill
+            stored = hop["table_schema"]
+            if isinstance(stored, str):
+                stored = json.loads(stored)
+            out.append(DerivedImpactOut(
+                **row, ok=True,
+                changes=engine.diff_schemas(list(stored or []), result.columns),
+                sampled=[
+                    {"alias": p.alias, "rows_used": p.rows_used,
+                     "rows_available": p.rows_available}
+                    for p in previewed
+                ],
+            ))
+
+    return DerivedAnalysisOut(
+        datasets=out,
+        not_analysed=not_analysed,
+        max_depth=impact_service.MAX_DERIVED_DEPTH,
+        truncated=len(deeper) > len(chain),
+    )
 
 
 @router.get(
@@ -581,8 +820,6 @@ async def proposal_schema_change(
 
     stored = model["table_schema"]
     if isinstance(stored, str):
-        import json
-
         stored = json.loads(stored)
     changes = engine.diff_schemas(list(stored or []), result.columns)
     return SchemaChangeOut(

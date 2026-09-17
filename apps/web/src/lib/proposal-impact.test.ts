@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DERIVED_NOTE,
+  derivedSummary,
+  describeDerived,
   describeExpectationsAtRisk,
   describeImpact,
   describeSample,
@@ -9,6 +11,8 @@ import {
   expectationsAtRiskSummary,
   impactSummary,
   type AffectedDataset,
+  type DerivedAnalysis,
+  type DerivedImpact,
   type ExpectationAtRisk,
 } from "./proposal-impact";
 
@@ -267,6 +271,82 @@ describe("the line above that list (§371)", () => {
     // a reviewer holding "3 at risk" cannot tell how many of those stop it.
     expect(expectationsAtRiskSummary([rule("warn"), rule("error"), rule("error")])).toBe(
       "3 expectations at risk, 2 of which would stop this build",
+    );
+  });
+});
+
+describe("what the change does downstream (§372)", () => {
+  const hop = (patch: Partial<DerivedImpact> = {}): DerivedImpact => ({
+    dataset_name: "Ledger", model_name: "Roll up", depth: 1, ok: true, ...patch,
+  });
+
+  it("says the transform no longer runs, first and alone", () => {
+    // The code that breaks here is code the diff does not contain, so "no
+    // column changes" for it would answer a question nobody asked.
+    expect(describeDerived(hop({ ok: false, error: 'Referenced column "val" not found' })))
+      .toEqual(['Referenced column "val" not found']);
+  });
+
+  it("falls back to a sentence when the failure carried no message", () => {
+    expect(describeDerived(hop({ ok: false, error: "  " })))
+      .toEqual(["This transform no longer runs."]);
+  });
+
+  it("says so plainly when the columns did not move", () => {
+    expect(describeDerived(hop({ changes: null }))).toEqual(["No column changes."]);
+  });
+
+  it("reuses the schema wording rather than a second copy of it", () => {
+    // §292: one description of a column change, so the downstream list and the
+    // panel above it cannot come to word the same fact differently.
+    expect(describeDerived(hop({ changes: { retyped: [{ name: "val", from: "BIGINT", to: "DECIMAL(21,1)" }] } })))
+      .toEqual(["~ val: BIGINT → DECIMAL(21,1)"]);
+  });
+});
+
+describe("the line above the downstream list (§372)", () => {
+  const analysis = (patch: Partial<DerivedAnalysis> = {}): DerivedAnalysis => ({
+    datasets: [], not_analysed: [], max_depth: 3, truncated: false, ...patch,
+  });
+  const one = { dataset_name: "Ledger", model_name: "Roll up", depth: 1, ok: true };
+
+  it("says when nothing is built from the dataset", () => {
+    expect(derivedSummary(analysis())).toBe("Nothing is built from this dataset.");
+  });
+
+  it("counts one in the singular", () => {
+    expect(derivedSummary(analysis({ datasets: [one] })))
+      .toBe("1 dataset built from this one.");
+  });
+
+  it("says when the walk stopped short", () => {
+    // A bounded list with no sign of its bound is a short answer wearing a
+    // complete one's clothes.
+    expect(derivedSummary(analysis({ datasets: [one, one], truncated: true })))
+      .toBe("2 datasets built from this one; stopping 3 steps down — there is more below.");
+  });
+
+  it("counts what could not be analysed at all", () => {
+    expect(
+      derivedSummary(analysis({
+        datasets: [one],
+        not_analysed: [{ model_name: "Draft", reason: "never built" }],
+      })),
+    ).toBe("1 dataset built from this one; 1 transform could not be analysed.");
+  });
+
+  it("carries both limits at once", () => {
+    expect(
+      derivedSummary(analysis({
+        datasets: [one], truncated: true,
+        not_analysed: [
+          { model_name: "A", reason: "x" },
+          { model_name: "B", reason: "y" },
+        ],
+      })),
+    ).toBe(
+      "1 dataset built from this one; stopping 3 steps down — there is more below; " +
+      "2 transforms could not be analysed.",
     );
   });
 });

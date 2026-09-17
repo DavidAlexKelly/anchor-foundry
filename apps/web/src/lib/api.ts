@@ -2486,6 +2486,13 @@ export const code = {
     request<import("./types").ProposalSchemaChange>(
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/impact/${modelId}/schema`,
     ),
+  /** What the change does *downstream* (§372; `code-repositories` p.54).
+   *  Asked for rather than computed on arrival, and more expensive than the
+   *  schema call it sits beside: it previews one transform per hop. */
+  proposalDerived: (wid: string, pid: string, id: string, modelId: string) =>
+    request<import("./types").DerivedAnalysis>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/impact/${modelId}/derived`,
+    ),
   propose: (
     wid: string,
     pid: string,
