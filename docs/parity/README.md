@@ -102,7 +102,7 @@ Parity is a large target, so the order matters more than usual. Four principles:
 - **Pillar pages become filtered views** — the mechanism is in: the resource
   browser's kind filter lives in the URL (`?kind=dataset&kind=model`), so a
   pillar page can *be* the browser with a filter applied. Rules in
-  `resource-filter.ts` with unit tests; behaviour in
+  `components/resource-filter.ts` with unit tests; behaviour in
   `e2e/test_resource_filter.py`. Pointing each pillar page at it is the
   remaining half, and it is not uniform: `dataset`, `object_type`,
   `canvas_app` and `code_repo` have applications to open into, while `model`
@@ -170,7 +170,7 @@ cannot honestly be listed under one, and the Pull requests tab's empty state
 literally said they were "reviewed on the Code screen", a sentence the deletion
 would have turned into a lie with nothing to notice.
 
-What remains before the deletion is the deletion.
+**And the deletion happened (§291), so stage 1 is done.** This paragraph went on saying otherwise for the same reason `data-connection.md`'s item 7 did (§363): the bullet above it was struck through and the prose under it was not, so a reader following the argument reached a sentence telling them to do work that was finished. `code/page.tsx` is the project's repositories now and its header says so in the first line. **The deletion also exposed a hole worth keeping on the record**: nothing in `apps/web` had ever called `POST /repositories`, so every repository in the product had been made by a script and none could be listed anywhere — the old file opened by calling the absence of a "new repository" button *the design*, which had been true under decision 0001 and false since §94. The pillar became what it should have been.
 
 #### Stage 2 progress
 
@@ -225,7 +225,7 @@ What remains before the deletion is the deletion.
   model: two heads of one module, and a rule for what a conflict is.
 | **2** | Workshop structural: the three config tabs, six section layouts, vertical header, ~~external IDs~~ **done, §116**, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
 | **3** | Ontology depth: property types and formatting, link types, action types, Object Views | Upstream of Workshop's object widgets. Object Views are the highest value per unit of work in the whole set. |
-| **4** | ~~Code Repositories: five tabs, sandbox branches, multi-file tabs, the nine helper panels~~ — **its nine-item build order is finished (§307)** — which is not the same as the application being finished, and the difference is worth keeping visible: **43 rows in `code-repositories.md` are still ○ or ◑**, each with its reason. §10 lists what each closed item was checked with | Self-contained, and being self-contained is what let it run to completion while stages 2–3 sat still. Nine items, closed in the order that document set: the last two were the Explorer and the SQL Scratchpad (§303–§306), then the status bar (§307) — **last on purpose, because it reports on the other eight and building it last is what let it reuse their answers rather than recompute them.** Four of the nine helper panels stay ○ with reasons on their rows: Debugger and Build assume Foundry's own transform-debugging and build orchestration, Docs is language reference in-product, and Preview is ◑ pending Python. |
+| **4** | ~~Code Repositories: five tabs, sandbox branches, multi-file tabs, the nine helper panels~~ — **its nine-item build order is finished (§307)** — which is not the same as the application being finished, and the difference is worth keeping visible: **41 rows in `code-repositories.md` are still ○ or ◑**, each with its reason — a count that moves, so it is re-derived with `grep -cE '^\|[^|]*\|[^|]*(○|◑)' docs/parity/code-repositories.md` rather than trusted. It read 43 until §373 checked it; §4.1 closed in the meantime and nothing updated the number, which is the same failure as the stale line in stage 1 wearing arithmetic instead of prose. §10 lists what each closed item was checked with | Self-contained, and being self-contained is what let it run to completion while stages 2–3 sat still. Nine items, closed in the order that document set: the last two were the Explorer and the SQL Scratchpad (§303–§306), then the status bar (§307) — **last on purpose, because it reports on the other eight and building it last is what let it reuse their answers rather than recompute them.** Four of the nine helper panels stay ○ with reasons on their rows: Debugger and Build assume Foundry's own transform-debugging and build orchestration, Docs is language reference in-product, and Preview is ◑ pending Python. |
 | **5** | Widget library, in the priority order given in `workshop.md` | Long, cheap, parallel, and it should never block. |
 | **6** | Datasets and Lineage, then Data Connection | Lowest felt urgency; Data Connection is mostly plumbing users rarely see. |
 
