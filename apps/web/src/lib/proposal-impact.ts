@@ -92,6 +92,21 @@ export type SchemaChange = {
     retyped?: { name: string; from: string; to: string }[];
   } | null;
   sampled?: { alias: string; rows_used: number; rows_available: number }[];
+  expectations_at_risk?: ExpectationAtRisk[];
+};
+
+/** One of the dataset's rules that the proposed columns would stop (§371).
+ *
+ *  Structural, like everything else in this file: the shape is what the
+ *  endpoint sends, and stating it here keeps the wording testable without
+ *  dragging the whole API contract into a unit test. */
+export type ExpectationAtRisk = {
+  rule_type: string;
+  column_name: string;
+  severity: string;
+  outcome: "fail" | "error";
+  reason: "removed" | "retyped";
+  new_type?: string;
 };
 
 /**
@@ -146,4 +161,54 @@ export function describeSample(
   return `Run over ${partial
     .map((s) => `${s.rows_used.toLocaleString()} of ${s.rows_available.toLocaleString()} ${s.alias} rows`)
     .join(", ")}. Columns do not depend on how many rows are read.`;
+}
+
+/**
+ * p.54's **Expectations**, in the words a reviewer needs (§371).
+ *
+ * > "Build on head branch (development) to validate that the code builds
+ * >  properly, the outputs appear as expected, and that **all Data
+ * >  Expectations are met**." (p.52)
+ *
+ * **Two outcomes that look alike and are not**, which the server keeps apart
+ * and so does this: a `column_exists` rule on a column the change removes
+ * *fails* — that rule's whole job — while every other rule *errors*, because
+ * "the column is not there" is not a statement about the data. Saying "fails"
+ * for both would tell a reviewer their data went bad when their rule stopped
+ * applying, and send them looking in the wrong place.
+ *
+ * The severity is carried through because it is the difference between a rule
+ * that blocks a build and one that notes something (db 0020), and a reviewer
+ * deciding whether a change can land needs to know which they are holding.
+ */
+export function describeExpectationsAtRisk(at_risk: ExpectationAtRisk[]): string[] {
+  return at_risk.map((rule) => {
+    const what = `${rule.rule_type} on ${rule.column_name}`;
+    const said =
+      rule.outcome === "fail"
+        ? `${what} fails: the column is removed`
+        : rule.reason === "removed"
+          ? `${what} can no longer run: the column is removed`
+          : `${what} can no longer run: the column becomes ${rule.new_type || "another type"}`;
+    // The severity last and in its own words, because "error"/"warn" beside a
+    // sentence about an error reads as a repetition of it rather than as the
+    // separate thing it is.
+    return rule.severity === "warn" ? `${said} (a warning)` : `${said} (blocks a build)`;
+  });
+}
+
+/** One line above the list, or "" when nothing is at risk.
+ *
+ *  **Silence when there is nothing**, because a heading reading "0 expectations
+ *  at risk" on every review of a logic change is a panel that has to be read
+ *  and dismissed rather than one that speaks when it matters. */
+export function expectationsAtRiskSummary(at_risk: ExpectationAtRisk[]): string {
+  if (at_risk.length === 0) return "";
+  const blocking = at_risk.filter((r) => r.severity !== "warn").length;
+  const count = `${at_risk.length} expectation${at_risk.length === 1 ? "" : "s"}`;
+  return blocking === at_risk.length
+    ? `${count} would stop this build`
+    : blocking === 0
+      ? `${count} would stop reporting`
+      : `${count} at risk, ${blocking} of which would stop this build`;
 }

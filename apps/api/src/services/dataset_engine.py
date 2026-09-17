@@ -427,6 +427,100 @@ def profile_columns(parquet_path: str) -> list[dict[str, Any]]:
 RULE_TYPES = ("not_null", "unique", "value_in_range", "regex_match", "column_exists")
 
 
+#: Types a `value_in_range` comparison against a number binds against.
+#:
+#: **Measured, not recalled.** `CAST(NULL AS <type>) < 5` was run against every
+#: type this platform can produce, and these are the ones DuckDB accepts:
+#: the integer family, the float family, DECIMAL, and BOOLEAN — which coerces,
+#: and is the one nobody would have guessed. VARCHAR, DATE, TIMESTAMP, TIME,
+#: BLOB, UUID and INTERVAL all raise a binder error instead.
+#:
+#: Prefixes, because DECIMAL carries its precision ("DECIMAL(21,1)") and the
+#: integer types do not.
+_COMPARABLE_TO_A_NUMBER = (
+    "BIGINT", "INTEGER", "SMALLINT", "TINYINT", "HUGEINT",
+    "UBIGINT", "UINTEGER", "USMALLINT", "UTINYINT",
+    "DOUBLE", "FLOAT", "REAL", "DECIMAL", "NUMERIC", "BOOLEAN",
+)
+
+
+def compares_to_a_number(data_type: str) -> bool:
+    """Whether `value_in_range` can run against a column of this type."""
+    upper = (data_type or "").strip().upper()
+    return upper.startswith(_COMPARABLE_TO_A_NUMBER)
+
+
+def expectations_at_risk(
+    rules: list[dict[str, Any]], changes: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    """Which of a dataset's expectations the proposed columns would stop
+    (`code-repositories` p.52, p.54; §371).
+
+    > "Build on head branch (development) to validate that the code builds
+    >  properly, the outputs appear as expected, and that **all Data
+    >  Expectations are met**." (p.52)
+
+    **Predicted from the schema rather than measured by running them**, which
+    is what makes it answerable at all: evaluating a rule needs the proposed
+    data, and producing that needs p.52's build. The columns come from §365's
+    preview, so this costs nothing beyond it.
+
+    Deliberately narrow. Only two things here are certain from a column list,
+    and both are read out of `_evaluate_one` below rather than assumed:
+
+    * **A removed column.** `column_exists` *fails* on it — that rule's whole
+      job — and every other rule *errors*, because "the column is not in this
+      version" is not a statement about the data. The two are different
+      outcomes and are reported as different things; collapsing them would
+      tell a reviewer their data went bad when their rule stopped applying.
+    * **A retype away from a numeric type**, which breaks `value_in_range` and
+      nothing else. `regex_match` casts to VARCHAR before matching, so no
+      retype can touch it, and `not_null`, `unique` and `column_exists` do not
+      look at the type at all.
+
+    Everything else a schema change can do is a question about *data*, which a
+    column list cannot answer — so nothing is claimed about it. A panel that
+    guessed here would be worse than one that stayed quiet: a reviewer told a
+    rule is safe when it is not has been given a reason not to look.
+    """
+    if not changes:
+        return []
+    removed = {str(c["name"]) for c in changes.get("removed", []) if c.get("name")}
+    retyped = {
+        str(c["name"]): str(c.get("to") or "")
+        for c in changes.get("retyped", [])
+        if c.get("name")
+    }
+
+    at_risk: list[dict[str, Any]] = []
+    for rule in rules:
+        column = str(rule.get("column_name") or "")
+        rule_type = str(rule.get("rule_type") or "")
+        if column in removed:
+            at_risk.append({
+                "expectation_id": str(rule.get("id")),
+                "rule_type": rule_type,
+                "column_name": column,
+                "severity": str(rule.get("severity") or "error"),
+                # p.55's distinction, kept: the rule that asserts the column is
+                # there has an answer when it goes, and the rest do not.
+                "outcome": "fail" if rule_type == "column_exists" else "error",
+                "reason": "removed",
+            })
+        elif rule_type == "value_in_range" and column in retyped:
+            if not compares_to_a_number(retyped[column]):
+                at_risk.append({
+                    "expectation_id": str(rule.get("id")),
+                    "rule_type": rule_type,
+                    "column_name": column,
+                    "severity": str(rule.get("severity") or "error"),
+                    "outcome": "error",
+                    "reason": "retyped",
+                    "new_type": retyped[column],
+                })
+    return at_risk
+
+
 def evaluate_expectations(
     parquet_path: str, rules: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:

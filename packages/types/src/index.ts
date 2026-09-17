@@ -1033,6 +1033,22 @@ export interface ProposalSchemaChange {
     retyped?: { name: string; from: string; to: string }[];
   } | null;
   sampled?: { alias: string; rows_used: number; rows_available: number }[];
+  /** p.54's **Expectations**, answered as p.52 asks the question (§371): the
+   *  dataset's rules these columns would stop. `outcome` keeps the
+   *  distinction the evaluator makes — `fail` is `column_exists` doing its
+   *  job when its column goes, `error` is a rule that stops being answerable
+   *  at all. */
+  expectations_at_risk?: ExpectationAtRisk[];
+}
+
+export interface ExpectationAtRisk {
+  expectation_id: string;
+  rule_type: string;
+  column_name: string;
+  severity: string;
+  outcome: "fail" | "error";
+  reason: "removed" | "retyped";
+  new_type?: string;
 }
 
 /** One file of a proposal, and the dataset it changes if there is one
