@@ -1300,6 +1300,9 @@ async def resolve_comment(
     return await get_proposal(conn, project_id, proposal_id)
 
 
+FILE_VERDICTS = ("approved", "rejected")
+
+
 async def mark_file_read(
     conn: AsyncConnection,
     project_id: UUID,
@@ -1309,26 +1312,45 @@ async def mark_file_read(
     source_path: str | None,
     read: bool,
     reviewer_id: UUID,
+    verdict: str | None = None,
 ) -> dict[str, Any]:
-    """"I have read this file", per reviewer, against a particular version.
+    """"I have read this file", per reviewer, against a particular version —
+    and since §366, optionally what they think of it (`code-repositories`
+    p.55: "you can approve or reject each file individually").
 
     Upserted rather than toggled through a delete, so re-marking a file after
     the proposal changed is one statement and cannot leave a half-state.
+
+    **`verdict=None` is a mark without one**, which is what every mark meant
+    before db 0091 and is still a real position: "I have read this and I am not
+    sure yet" is where a reviewer spends most of a large diff. Clearing a
+    verdict is therefore marking the file again with none, not a separate act.
+
+    The anchor does the work that makes any of this safe, and it did before
+    this function grew a verdict: a mark — with or without one — is dropped by
+    `_file_marks` once the file it was about has been edited, because approving
+    code that has since changed is the failure a per-file verdict could most
+    easily introduce.
     """
     proposal = await _assert_open_proposal(conn, project_id, proposal_id)
     await _assert_proposal_file(conn, project_id, proposal_id, model_id, source_path)
+    if verdict is not None and verdict not in FILE_VERDICTS:
+        raise ValueError(
+            f"a file verdict is {' or '.join(FILE_VERDICTS)}, not {verdict!r}"
+        )
     mid = str(model_id) if model_id else None
     if read:
         await conn.exec_driver_sql(
             """
             INSERT INTO code_proposal_file_marks
-                (proposal_id, model_id, source_path, reviewer_id, anchored_at)
-            VALUES (%s, %s, %s, %s, %s)
+                (proposal_id, model_id, source_path, reviewer_id, anchored_at, verdict)
+            VALUES (%s, %s, %s, %s, %s, CAST(%s AS code_file_verdict))
             ON CONFLICT (proposal_id, model_id, source_path, reviewer_id)
-            DO UPDATE SET marked_at = now(), anchored_at = EXCLUDED.anchored_at
+            DO UPDATE SET marked_at = now(), anchored_at = EXCLUDED.anchored_at,
+                          verdict = EXCLUDED.verdict
             """,
             (str(proposal_id), mid, source_path, str(reviewer_id),
-             proposal["files_updated_at"]),
+             proposal["files_updated_at"], verdict),
         )
     else:
         await conn.exec_driver_sql(
@@ -1386,6 +1408,7 @@ async def _file_marks(conn: AsyncConnection, proposal_id: UUID,
         conn,
         """
         SELECT m.model_id, m.source_path, m.reviewer_id, m.marked_at, m.anchored_at,
+               m.verdict,
                (SELECT u.email FROM users u WHERE u.id = m.reviewer_id) AS reviewer_email
           FROM code_proposal_file_marks m
          WHERE m.proposal_id = :pid

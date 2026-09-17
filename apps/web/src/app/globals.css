@@ -1046,6 +1046,10 @@ button { font: inherit; cursor: pointer; }
 .ds-tab.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
 
 .ds-note { font-size: 12.5px; margin: 0 0 10px; }
+/* p.55's per-file verdict controls, beside the read mark they extend (§366). */
+.review-marks { display: inline-flex; gap: 4px; margin-left: auto; }
+.review-marks .review-mark[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
 /* The impact panel on a proposal (§364). Sits under the checks, above the
    diff: it is the summary somebody wants before reading any code. */
 .review-impact { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 0 0 14px; }
