@@ -211,3 +211,87 @@ def test_a_transform_with_no_dataset_is_not_asked_about_its_columns(page, api) -
     open_review(page, mod, proposal["id"])
     expect(page.get_by_test_id("impact-row")).to_have_count(1)
     expect(page.get_by_test_id("schema-ask")).to_have_count(0)
+
+
+# ---- p.54's Expectations, answered as p.52 asks it (§371) --------------------
+
+def add_rule(mod: Module, dataset_id: str, rule_type: str, column: str,
+             config: dict | None = None, severity: str = "error") -> dict:
+    return mod.api.call(
+        "POST", f"{mod.base}/datasets/{dataset_id}/expectations",
+        {"rule_type": rule_type, "column_name": column,
+         "config": config or {}, "severity": severity},
+    )
+
+
+def output_of(mod: Module, model: dict) -> str:
+    return str(mod.api.call("GET", f"{mod.base}/models/{model['id']}")["output_dataset_id"])
+
+
+def test_a_reviewer_is_told_which_expectations_this_change_would_stop(page, api) -> None:
+    """**What p.52 asks and p.54 lists, in one place.**
+
+    Foundry builds the head branch to find out whether "all Data Expectations
+    are met". This predicts the answer from the columns §365 already computes,
+    so it costs nothing beyond the schema — and it is the reason the panel is
+    worth opening at all on a dataset that has rules.
+
+    Two rules on the removed column, because the outcomes differ and a reviewer
+    reading one sentence for both has been told the wrong thing: the rule that
+    *asserts the column* fails, and the rule that *needs* it stops being
+    answerable. A third rule on a column the change keeps is what makes "the
+    right ones are listed" distinguishable from "everything is" (§190).
+    """
+    mod = Module(api, "Expectations at risk")
+    source = api.upload_csv(f"{mod.base}/datasets/upload", f"Src {mod.tag}", ROWS)
+    model = built_model(mod, source, f"Daily {mod.tag}")
+    dataset_id = output_of(mod, model)
+    add_rule(mod, dataset_id, "column_exists", "val")
+    add_rule(mod, dataset_id, "not_null", "val", severity="warn")
+    add_rule(mod, dataset_id, "not_null", "id")
+
+    proposal = propose(
+        mod, [{"model_id": model["id"], "code": "SELECT id FROM raw"}], "Drop val"
+    )
+    open_review(page, mod, proposal["id"])
+    page.get_by_test_id("schema-ask").click()
+
+    listed = page.get_by_test_id("schema-expectations")
+    expect(listed).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("schema-expectations-summary")).to_have_text(
+        "2 expectations at risk, 1 of which would stop this build"
+    )
+    # The two outcomes said differently, which is the whole point of the pair.
+    expect(listed).to_contain_text("column_exists on val fails: the column is removed")
+    expect(listed).to_contain_text("not_null on val can no longer run")
+    # And the rule on the column that stays is not dragged in.
+    expect(listed).not_to_contain_text("not_null on id")
+
+
+def test_a_change_that_stops_no_expectations_says_nothing_about_them(page, api) -> None:
+    """The silence is the feature. A dataset with a rule on it and a change
+    that leaves the columns alone must not produce a panel reading "0
+    expectations affected" — one that speaks on every review is one that gets
+    dismissed on every review.
+
+    The schema panel itself is asserted visible first, so this is a claim about
+    the expectations block being absent rather than about the page not having
+    loaded (§318).
+    """
+    mod = Module(api, "Expectations quiet")
+    source = api.upload_csv(f"{mod.base}/datasets/upload", f"Src {mod.tag}", ROWS)
+    model = built_model(mod, source, f"Daily {mod.tag}")
+    add_rule(mod, output_of(mod, model), "not_null", "val")
+
+    proposal = propose(
+        mod,
+        [{"model_id": model["id"], "code": "SELECT id, val FROM raw WHERE id > 0"}],
+        "Filter only",
+    )
+    open_review(page, mod, proposal["id"])
+    page.get_by_test_id("schema-ask").click()
+
+    change = page.get_by_test_id("schema-change")
+    expect(change).to_be_visible(timeout=30000)
+    expect(change).to_contain_text("No column changes.")
+    expect(page.get_by_test_id("schema-expectations")).to_have_count(0)

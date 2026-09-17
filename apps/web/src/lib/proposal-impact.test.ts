@@ -2,11 +2,14 @@
 import { describe, expect, it } from "vitest";
 import {
   DERIVED_NOTE,
+  describeExpectationsAtRisk,
   describeImpact,
   describeSample,
   describeSchemaChange,
+  expectationsAtRiskSummary,
   impactSummary,
   type AffectedDataset,
+  type ExpectationAtRisk,
 } from "./proposal-impact";
 
 const affected = (name: string, version = 3, rows = 1200): AffectedDataset => ({
@@ -183,5 +186,87 @@ describe("how much was read", () => {
   it("says nothing when there is nothing to say", () => {
     expect(describeSample([])).toBe("");
     expect(describeSample(undefined)).toBe("");
+  });
+});
+
+describe("p.54's expectations, in the words a reviewer needs (§371)", () => {
+  const at = (
+    patch: Partial<ExpectationAtRisk> & Pick<ExpectationAtRisk, "outcome" | "reason">,
+  ): ExpectationAtRisk => ({
+    rule_type: "not_null", column_name: "amount", severity: "error", ...patch,
+  });
+
+  it("says a column_exists rule fails, because that is it working", () => {
+    // The distinction the server keeps and this must not lose: `fail` is the
+    // rule doing its job, `error` is the rule no longer applying.
+    expect(
+      describeExpectationsAtRisk([
+        at({ rule_type: "column_exists", outcome: "fail", reason: "removed" }),
+      ]),
+    ).toEqual(["column_exists on amount fails: the column is removed (blocks a build)"]);
+  });
+
+  it("says every other rule can no longer run", () => {
+    expect(
+      describeExpectationsAtRisk([at({ outcome: "error", reason: "removed" })]),
+    ).toEqual([
+      "not_null on amount can no longer run: the column is removed (blocks a build)",
+    ]);
+  });
+
+  it("names the type a retype moved to", () => {
+    expect(
+      describeExpectationsAtRisk([
+        at({
+          rule_type: "value_in_range", outcome: "error", reason: "retyped",
+          new_type: "VARCHAR",
+        }),
+      ]),
+    ).toEqual([
+      "value_in_range on amount can no longer run: the column becomes VARCHAR (blocks a build)",
+    ]);
+  });
+
+  it("carries the severity, because it decides whether this can land", () => {
+    expect(
+      describeExpectationsAtRisk([
+        at({ severity: "warn", outcome: "error", reason: "removed" }),
+      ]),
+    ).toEqual([
+      "not_null on amount can no longer run: the column is removed (a warning)",
+    ]);
+  });
+});
+
+describe("the line above that list (§371)", () => {
+  const rule = (severity: string): ExpectationAtRisk => ({
+    rule_type: "not_null", column_name: "amount", severity,
+    outcome: "error", reason: "removed",
+  });
+
+  it("is silent when nothing is at risk", () => {
+    // A heading reading "0 at risk" on every logic change is a panel to be
+    // dismissed rather than one that speaks when it matters.
+    expect(expectationsAtRiskSummary([])).toBe("");
+  });
+
+  it("counts one in the singular", () => {
+    expect(expectationsAtRiskSummary([rule("error")])).toBe(
+      "1 expectation would stop this build",
+    );
+  });
+
+  it("says so when every one of them is only a warning", () => {
+    expect(expectationsAtRiskSummary([rule("warn"), rule("warn")])).toBe(
+      "2 expectations would stop reporting",
+    );
+  });
+
+  it("splits the count when they are mixed", () => {
+    // The number that decides whether this can land is the blocking one, and
+    // a reviewer holding "3 at risk" cannot tell how many of those stop it.
+    expect(expectationsAtRiskSummary([rule("warn"), rule("error"), rule("error")])).toBe(
+      "3 expectations at risk, 2 of which would stop this build",
+    );
   });
 });

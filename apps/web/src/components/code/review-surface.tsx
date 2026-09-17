@@ -45,9 +45,11 @@ import {
 } from "@/lib/file-verdict";
 import {
   DERIVED_NOTE,
+  describeExpectationsAtRisk,
   describeImpact,
   describeSample,
   describeSchemaChange,
+  expectationsAtRiskSummary,
   impactSummary,
 } from "@/lib/proposal-impact";
 import {
@@ -592,6 +594,7 @@ function SchemaChange({
   }
 
   const sample = describeSample(change.data.sampled);
+  const atRisk = change.data.expectations_at_risk ?? [];
   return (
     <div
       className="review-schema"
@@ -604,6 +607,23 @@ function SchemaChange({
           <li key={line}>{line}</li>
         ))}
       </ul>
+      {/* p.54's **Expectations**, answered as p.52 asks the question (§371).
+          Under the columns rather than beside them, because every line here
+          is a consequence of one of the lines above — and silent when nothing
+          is at risk, since "0 expectations affected" on every logic change is
+          a panel to be dismissed rather than one that speaks when it matters. */}
+      {atRisk.length > 0 && (
+        <div data-testid="schema-expectations">
+          <p className="soft" data-testid="schema-expectations-summary">
+            {expectationsAtRiskSummary(atRisk)}
+          </p>
+          <ul>
+            {describeExpectationsAtRisk(atRisk).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {sample && (
         <p className="soft" data-testid="schema-sample">
           {sample}
@@ -613,7 +633,7 @@ function SchemaChange({
   );
 }
 
-/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing
+/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing
  * has run against the code as it now stands.
  *
  * Silence is the thing this panel exists to stop being mistaken for a pass. A

@@ -30,6 +30,7 @@ from ..services import audit
 from ..services import code as code_service
 from ..services import code_checks as check_service
 from ..services import dataset_engine as engine
+from ..services import expectations as expectations_service
 from ..services import impact as impact_service
 
 router = APIRouter(
@@ -471,6 +472,12 @@ class SchemaChangeOut(BaseModel):
     #: from a sample" and not told how big a one has been given a disclaimer
     #: rather than a fact.
     sampled: list[dict[str, Any]] = []
+    #: p.54's **Expectations**, answered as p.52 asks the question (§371): the
+    #: dataset's rules that these columns would stop. Beside the schema rather
+    #: than on their own, for the reason the compile error is here too — a
+    #: reviewer asking what this does to the columns is owed "and here is the
+    #: rule it breaks" in the same place.
+    expectations_at_risk: list[dict[str, Any]] = []
 
 
 @router.get("/proposals/{proposal_id}/impact", response_model=list[AffectedDatasetOut])
@@ -537,6 +544,13 @@ async def proposal_schema_change(
                 "compare against yet"
             )
         model, inputs = found
+        # Here rather than after the preview, because this connection is
+        # already open and the rules are a read against the same dataset the
+        # schema is about — a second one would be a second round trip for an
+        # answer this one already has in hand.
+        rules = await expectations_service.list_rules(
+            conn, access.project_id, UUID(str(model["dataset_id"]))
+        )
 
     storage = _dataset_storage()
     paths: dict[str, str] = {}
@@ -570,6 +584,7 @@ async def proposal_schema_change(
         import json
 
         stored = json.loads(stored)
+    changes = engine.diff_schemas(list(stored or []), result.columns)
     return SchemaChangeOut(
         model_id=model_id,
         dataset_id=UUID(str(model["dataset_id"])),
@@ -577,7 +592,8 @@ async def proposal_schema_change(
         # `diff_schemas` returns None for "nothing changed", which is exactly
         # what this wants to report — the same function sync drift uses (§5),
         # because it is the same question asked of a proposal.
-        changes=engine.diff_schemas(list(stored or []), result.columns),
+        changes=changes,
+        expectations_at_risk=engine.expectations_at_risk(rules, changes),
         sampled=[
             {"alias": p.alias, "rows_used": p.rows_used, "rows_available": p.rows_available}
             for p in previewed

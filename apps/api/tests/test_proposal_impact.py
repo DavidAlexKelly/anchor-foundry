@@ -338,6 +338,138 @@ def test_a_dropped_column_is_reported_as_removed(
     assert "added" not in body["changes"]
 
 
+# ---- p.54's Expectations, answered as p.52 asks it (§371) -------------------
+
+def add_rule(client: TestClient, fx: Fixture, dataset_id: str, rule_type: str,
+             column: str, config: dict | None = None, severity: str = "error") -> dict:
+    r = client.post(
+        f"{pbase(fx)}/datasets/{dataset_id}/expectations",
+        headers=hdr(fx.editor_sub),
+        json={"rule_type": rule_type, "column_name": column,
+              "config": config or {}, "severity": severity},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def output_of(client: TestClient, fx: Fixture, model_id: str) -> str:
+    r = client.get(f"{pbase(fx)}/models/{model_id}", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return str(r.json()["output_dataset_id"])
+
+
+def test_a_removed_column_fails_the_rule_that_asserts_it_and_breaks_the_rest(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """**The distinction the panel exists to keep**, read out of
+    `_evaluate_one` rather than assumed: `column_exists` on a removed column
+    *fails* — that is the rule doing its job — and every other rule *errors*,
+    because "the column is not in this version" is not a statement about the
+    data. Collapsing the two would tell a reviewer their data went bad when
+    their rule stopped applying.
+    """
+    model_id = make_model(client, fx, source, "SELECT id, val FROM raw")
+    run(client, fx, model_id)
+    dataset_id = output_of(client, fx, model_id)
+    asserts_it = add_rule(client, fx, dataset_id, "column_exists", "val")
+    needs_it = add_rule(client, fx, dataset_id, "not_null", "val", severity="warn")
+    # A rule on a column the change keeps, so "everything is at risk" is
+    # distinguishable from "the right things are" (§190).
+    add_rule(client, fx, dataset_id, "not_null", "id")
+
+    proposal = propose(client, fx, [{"model_id": model_id, "code": "SELECT id FROM raw"}])
+    body = schema_change(client, fx, proposal["id"], model_id).json()
+
+    at_risk = {r["expectation_id"]: r for r in body["expectations_at_risk"]}
+    assert set(at_risk) == {asserts_it["id"], needs_it["id"]}
+    assert at_risk[asserts_it["id"]]["outcome"] == "fail"
+    assert at_risk[needs_it["id"]]["outcome"] == "error"
+    assert at_risk[needs_it["id"]]["severity"] == "warn"
+    assert {r["reason"] for r in at_risk.values()} == {"removed"}
+
+
+def test_a_retype_breaks_a_range_rule_and_leaves_a_regex_rule_alone(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """**Measured before it was claimed.** `value_in_range` compiles to
+    `col < 5`, which DuckDB refuses to bind against VARCHAR; `regex_match`
+    casts to VARCHAR first, so no retype can reach it. Both rules sit on the
+    same retyped column here, which is what makes the pair a check rather than
+    two separate half-checks.
+    """
+    model_id = make_model(client, fx, source, "SELECT id, val FROM raw")
+    run(client, fx, model_id)
+    dataset_id = output_of(client, fx, model_id)
+    ranged = add_rule(client, fx, dataset_id, "value_in_range", "val",
+                      {"min": 0, "max": 100})
+    add_rule(client, fx, dataset_id, "regex_match", "val", {"pattern": "^[0-9]+$"})
+
+    proposal = propose(client, fx, [
+        {"model_id": model_id, "code": "SELECT id, CAST(val AS VARCHAR) AS val FROM raw"},
+    ])
+    body = schema_change(client, fx, proposal["id"], model_id).json()
+
+    assert [c["name"] for c in body["changes"]["retyped"]] == ["val"]
+    at_risk = body["expectations_at_risk"]
+    assert [r["expectation_id"] for r in at_risk] == [ranged["id"]]
+    assert at_risk[0]["reason"] == "retyped"
+    assert at_risk[0]["new_type"] == "VARCHAR"
+
+
+def test_a_retype_that_stays_numeric_breaks_nothing(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """The half that stops this being "any retype is trouble". A range check
+    against DECIMAL binds exactly as it does against BIGINT — measured across
+    every type this platform produces, and the surprise was BOOLEAN, which
+    also binds."""
+    model_id = make_model(client, fx, source, "SELECT id, val FROM raw")
+    run(client, fx, model_id)
+    dataset_id = output_of(client, fx, model_id)
+    add_rule(client, fx, dataset_id, "value_in_range", "val", {"min": 0, "max": 100})
+
+    proposal = propose(client, fx, [
+        {"model_id": model_id, "code": "SELECT id, val * 1.5 AS val FROM raw"},
+    ])
+    body = schema_change(client, fx, proposal["id"], model_id).json()
+
+    assert [c["name"] for c in body["changes"]["retyped"]] == ["val"]
+    assert body["expectations_at_risk"] == []
+
+
+def test_a_change_that_moves_no_columns_puts_nothing_at_risk(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """A dataset with rules on it and a proposal that leaves the columns
+    alone: the panel has to be silent, or every review of a logic change would
+    come with a list of rules that are perfectly fine."""
+    model_id = make_model(client, fx, source, "SELECT id, val FROM raw")
+    run(client, fx, model_id)
+    dataset_id = output_of(client, fx, model_id)
+    add_rule(client, fx, dataset_id, "not_null", "val")
+
+    proposal = propose(client, fx, [
+        {"model_id": model_id, "code": "SELECT id, val FROM raw WHERE id > 0"},
+    ])
+    body = schema_change(client, fx, proposal["id"], model_id).json()
+
+    assert body["changes"] is None
+    assert body["expectations_at_risk"] == []
+
+
+def test_a_dataset_with_no_rules_says_nothing_rather_than_failing(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """Most datasets have no expectations, so this is the common path."""
+    model_id = make_model(client, fx, source, "SELECT id, val FROM raw")
+    run(client, fx, model_id)
+    proposal = propose(client, fx, [{"model_id": model_id, "code": "SELECT id FROM raw"}])
+    body = schema_change(client, fx, proposal["id"], model_id).json()
+
+    assert body["changes"]["removed"][0]["name"] == "val"
+    assert body["expectations_at_risk"] == []
+
+
 def test_a_new_column_is_reported_as_added(
     client: TestClient, fx: Fixture, source: str
 ) -> None:
