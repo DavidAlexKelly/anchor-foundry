@@ -18,6 +18,7 @@ connection at the platform's own database.
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import psycopg
@@ -102,6 +103,89 @@ def open_sync_panel(page, synced) -> None:
     expect(row).to_be_visible(timeout=30000)
     row.get_by_role("button", name="Scheduled sync").click()
     expect(page.get_by_test_id("cursor-start")).to_be_visible()
+    # **The panel is not ready when its fields appear.** The stored schedule
+    # fills them in; the *source schema* arrives separately, and until it does
+    # the form cannot be submitted. Waiting on Save rather than on a field is
+    # what makes "open the panel" mean "the panel can be used" - without it a
+    # test types into a box and presses a button that does nothing, which is
+    # how this helper's callers failed in CI and nowhere else (§318).
+    expect(page.get_by_role("button", name="Save schedule")).to_be_enabled(timeout=30000)
+
+
+def test_save_is_not_offered_until_the_source_schema_has_been_read(page, synced) -> None:
+    """**§214, and the reason a test in this file went red in CI and nowhere
+    else.**
+
+    A configured schedule fills the form from what is stored, so `table` is set
+    the moment the panel loads - but resolving it needs `discover`, which is a
+    live round trip to the customer's database and answers later. Save was
+    enabled in that window and submitted *nothing*: in incremental mode the
+    column pickers are `required` and held values whose options did not exist
+    yet, so the browser refused the form into a native bubble that no assertion
+    and no reader ever sees. Not a slow save - a press that was never going to
+    do anything. (In full mode the same press reached `save.mutate` and failed
+    with "Couldn't save the schedule.", which is a worse sentence than silence:
+    it blames the save for a request that was never sent.)
+
+    Held rather than slowed, because a delay races the test back - a sleeping
+    route handler blocks the dispatcher, so the click lands *after* discovery
+    and the panel is in the state this test exists to avoid.
+    """
+    held = []
+    page.route("**/discover", lambda route: held.append(route))
+    save = page.get_by_role("button", name="Save schedule")
+    try:
+        mod = synced["mod"]
+        page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/connections")
+        row = page.get_by_role("row").filter(has_text=synced["connection"]["name"])
+        expect(row).to_be_visible(timeout=30000)
+        row.get_by_role("button", name="Scheduled sync").click()
+
+        # The form is on screen and filled in from the schedule...
+        expect(page.get_by_test_id("cursor-start")).to_be_visible()
+        expect(page.get_by_text("Reading the source schema")).to_be_visible()
+        # ...and Save says so, instead of accepting a press it cannot honour.
+        expect(save).to_be_disabled()
+    finally:
+        for route in held:
+            route.continue_()
+
+    # And it is a wait, not a dead control - the pair matters, because a button
+    # disabled for good would satisfy the assertion above and satisfy nobody.
+    expect(save).to_be_enabled()
+    assert len(held) == 1, held
+
+
+def test_a_source_that_cannot_be_read_says_so_rather_than_leaving_a_dead_save(
+    page, synced
+) -> None:
+    """The other half of the one above, and its cost.
+
+    Save waiting on the source schema means a discovery that never succeeds
+    leaves it disabled for good - so the panel has to say why, or a reader is
+    left pressing a button that will never respond and told nothing. The
+    message is the one the API sent, not a house sentence over the top of it:
+    "could not connect" and "permission denied for table orders" are different
+    problems with different remedies.
+
+    The failure is injected rather than arranged, because what is under test is
+    the page's response to it; `apps/api/tests/test_connections.py` owns what a
+    source that is really unreachable returns.
+    """
+    page.route("**/discover", lambda route: route.fulfill(
+        status=502,
+        content_type="application/json",
+        body=json.dumps({"detail": "could not connect to the source"}),
+    ))
+
+    mod = synced["mod"]
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/connections")
+    row = page.get_by_role("row").filter(has_text=synced["connection"]["name"])
+    expect(row).to_be_visible(timeout=30000)
+    row.get_by_role("button", name="Scheduled sync").click()
+
+    expect(page.get_by_text("could not connect to the source")).to_be_visible()
+    expect(page.get_by_role("button", name="Save schedule")).to_be_disabled()
 
 
 def test_the_start_value_typed_in_is_the_one_that_is_stored(page, synced) -> None:

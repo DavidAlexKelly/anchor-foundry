@@ -512,16 +512,26 @@ function SyncDialog({
     retry: false,
   });
 
+  // The precondition for submitting, said once: `ScheduledSyncDialog` gates
+  // its Save on the same expression, for a failure that is real over there.
+  //
+  // **It cannot happen here, and that is why there is no test for it.** The
+  // only way this dialog arrives with a table already chosen is from the
+  // explorer, which reads `["discover", connection.id]` itself to draw the
+  // tree you picked in - so the cache is warm before this mounts, and
+  // `!picked` and `!table` are the same condition. Written this way because
+  // it lets the mutation take what it needs instead of re-resolving it and
+  // throwing on a state the button already excludes (§213: that throw could
+  // not be reached, and a check that cannot fail is not a check).
+  const picked = resolveTable(discover.data, table);
+
   const run = useMutation({
-    mutationFn: () => {
-      const picked = resolveTable(discover.data, table);
-      if (!picked) throw new Error("pick a table");
-      return syncApi.trigger(workspaceId, projectId, connection.id, {
+    mutationFn: (picked: { schema: string; name: string }) =>
+      syncApi.trigger(workspaceId, projectId, connection.id, {
         source_schema: picked.schema,
         source_table: picked.name,
         dataset_name: datasetName || undefined,
-      });
-    },
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["datasets", projectId] });
       await queryClient.invalidateQueries({ queryKey: ["connections", projectId] });
@@ -559,7 +569,7 @@ function SyncDialog({
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            run.mutate();
+            if (picked) run.mutate(picked);
           }}
         >
           <p className="login-note" style={{ marginTop: 0 }}>
@@ -612,7 +622,7 @@ function SyncDialog({
             <button type="button" className="btn quiet" onClick={onClose}>
               Cancel
             </button>
-            <button type="submit" className="btn" disabled={run.isPending || !table}>
+            <button type="submit" className="btn" disabled={run.isPending || !picked}>
               {run.isPending ? "Syncing…" : "Sync now"}
             </button>
           </div>
@@ -678,6 +688,15 @@ function ScheduledSyncDialog({
   }, [schedule.data]);
 
   const columns = discover.data?.find((t) => tableKey(t) === table)?.columns ?? [];
+  // **Not `table`**, which an existing schedule fills in from the stored
+  // configuration the moment it loads - well before `discover` has come back
+  // with anything to resolve it against, or to fill the column pickers with.
+  // A Save enabled in that window submits nothing at all: the column selects
+  // are `required` and hold values whose options do not exist yet, so the
+  // browser refuses the form and says so in a bubble no test and no reader
+  // sees. §214 - a control that looks like it works is worse than one that is
+  // absent, and this one was silent.
+  const picked = resolveTable(discover.data, table);
 
   const invalidate = async () => {
     await queryClient.invalidateQueries({ queryKey: ["scheduled-sync", connection.id] });
@@ -686,10 +705,8 @@ function ScheduledSyncDialog({
   };
 
   const save = useMutation({
-    mutationFn: () => {
-      const picked = resolveTable(discover.data, table);
-      if (!picked) throw new Error("pick a table");
-      return scheduledSyncApi.set(workspaceId, projectId, connection.id, {
+    mutationFn: (picked: { schema: string; name: string }) =>
+      scheduledSyncApi.set(workspaceId, projectId, connection.id, {
         mode,
         source_schema: picked.schema,
         source_table: picked.name,
@@ -699,8 +716,7 @@ function ScheduledSyncDialog({
         cursor_start_value:
           mode === "incremental" && cursorStart ? cursorStart : undefined,
         cron_schedule: cronSchedule || undefined,
-      });
-    },
+      }),
     onSuccess: async () => {
       await invalidate();
       // **Emptied once it has been applied**, because the box means "start
@@ -796,7 +812,7 @@ function ScheduledSyncDialog({
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              save.mutate();
+              if (picked) save.mutate(picked);
             }}
           >
             <Field label="Mode">
@@ -806,6 +822,16 @@ function ScheduledSyncDialog({
               </select>
             </Field>
             {discover.isPending && <div className="state">Reading the source schema…</div>}
+            {/* Said here as well as in `SyncNowDialog`, because Save is now
+                disabled until the source schema arrives: a discovery that
+                failed would otherwise leave a dead button and no reason. */}
+            {discover.isError && (
+              <div className="form-error">
+                {discover.error instanceof ApiError
+                  ? discover.error.message
+                  : "Couldn't read the source schema."}
+              </div>
+            )}
             {discover.data && (
               <Field label="Table">
                 <select value={table ?? ""} onChange={(e) => setTable(e.target.value || null)} required>
@@ -904,7 +930,7 @@ function ScheduledSyncDialog({
               <button type="button" className="btn quiet" onClick={onClose}>
                 Close
               </button>
-              <button type="submit" className="btn" disabled={save.isPending || !table}>
+              <button type="submit" className="btn" disabled={save.isPending || !picked}>
                 {save.isPending ? "Saving…" : "Save schedule"}
               </button>
             </div>
