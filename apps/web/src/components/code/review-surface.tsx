@@ -26,8 +26,17 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { ApiError, api, code as codeApi } from "@/lib/api";
+import { useState, type ReactNode } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { ApiError, api, code as codeApi, models as modelApi } from "@/lib/api";
+import { PipelineGraphView } from "@/components/pipeline-graph";
+import { nodePath } from "@/lib/pipeline-graph";
+import {
+  missingNote,
+  notOnGraph,
+  reviewByNode,
+  rowForNode,
+} from "@/lib/pipeline-review";
 import {
   fileState,
   markRequest,
@@ -165,6 +174,8 @@ export function ReviewSurface({
     onError: fail,
   });
 
+  const [tab, setTab] = useState<"files" | "pipeline">("files");
+
   const check = useMutation({
     mutationFn: () => codeApi.runChecks(workspaceId, projectId, proposalId),
     onSuccess: landed,
@@ -177,6 +188,26 @@ export function ReviewSurface({
   const p = detail.data;
   const open = p.state === "open";
   const unresolved = p.comments.filter((c) => !c.resolved_at && !c.outdated).length;
+
+  /** **One implementation, handed to both tabs** (§292). p.55 reviews a file
+   *  from the graph — same diff, same comments, same verdict buttons — and a
+   *  second rendering of a file would be a second place for a reviewer's
+   *  controls to fall behind. */
+  const drawFile = (file: CodeProposalFile) => (
+    <FileReview
+      // Not `model_id`: a commit-backed proposal's files may all have none
+      // until it is applied, and React silently duplicates or drops
+      // children that share a key.
+      key={file.model_id ?? file.path}
+      file={file}
+      open={open}
+      onSay={(side, line, body) => say.mutate({ ...anchorOf(file), side, line, body })}
+      onSettle={(id, resolved) => settle.mutate({ id, resolved })}
+      onMark={(request) => mark.mutate({ ...anchorOf(file), ...request })}
+      myId={me.data?.user_id}
+      busy={say.isPending || mark.isPending}
+    />
+  );
 
   return (
     <div className="review">
@@ -223,23 +254,36 @@ export function ReviewSurface({
         proposalId={proposalId}
       />
 
-      {p.files.map((file) => (
-        <FileReview
-          // Not `model_id`: a commit-backed proposal's files may all have none
-          // until it is applied, and React silently duplicates or drops
-          // children that share a key.
-          key={file.model_id ?? file.path}
-          file={file}
-          open={open}
-          onSay={(side, line, body) =>
-            say.mutate({ ...anchorOf(file), side, line, body })
-          }
-          onSettle={(id, resolved) => settle.mutate({ id, resolved })}
-          onMark={(request) => mark.mutate({ ...anchorOf(file), ...request })}
+      {/* p.54's two ways of reading the same change: the files in order, or
+          the datasets they produce laid out in the order the data flows
+          (p.55). A switch rather than two screens, because it is one review. */}
+      <nav className="ds-tabs" aria-label="Review views">
+        {(["files", "pipeline"] as const).map((which) => (
+          <button
+            key={which}
+            type="button"
+            className={`ds-tab${tab === which ? " on" : ""}`}
+            aria-current={tab === which}
+            data-testid={`review-tab-${which}`}
+            onClick={() => setTab(which)}
+          >
+            {which === "files" ? "Files" : "Pipeline review"}
+          </button>
+        ))}
+      </nav>
+
+      {tab === "files" && p.files.map((file) => drawFile(file))}
+
+      {tab === "pipeline" && (
+        <PipelineReview
+          workspaceId={workspaceId}
+          projectId={projectId}
+          proposalId={proposalId}
+          files={p.files}
           myId={me.data?.user_id}
-          busy={say.isPending || mark.isPending}
+          drawFile={drawFile}
         />
-      ))}
+      )}
 
       {p.reviews.length > 0 && (
         <ul className="review-verdicts">
@@ -328,6 +372,116 @@ export function ReviewSurface({
  *  any response that forgot. A separate read is refetched when the files
  *  change and left alone when a comment lands.
  */
+/** p.54-55's **Pipeline review** tab: the affected datasets on the project's
+ *  lineage graph, each carrying p.55's verdict indicator, and the selected
+ *  node's file reviewed in place.
+ *
+ *  **The graph is the project's, not a narrowed one**, for the reason
+ *  `lib/pipeline-review` gives: p.55 asks to navigate the affected datasets
+ *  "in the order of data flow", which is a claim about the edges between them,
+ *  and a view holding only the affected ones would be a scatter of
+ *  unconnected cards.
+ */
+function PipelineReview({
+  workspaceId,
+  projectId,
+  proposalId,
+  files,
+  myId,
+  drawFile,
+}: {
+  workspaceId: string;
+  projectId: string;
+  proposalId: string;
+  files: CodeProposalFile[];
+  myId: string | undefined;
+  drawFile: (file: CodeProposalFile) => ReactNode;
+}) {
+  const [picked, setPicked] = useState<string | null>(null);
+  const router = useRouter();
+  const params = useParams<{ workspace: string; project: string }>();
+  const workspaceSlug = params.workspace;
+  const projectSlug = params.project;
+
+  const impact = useQuery({
+    queryKey: ["code-proposal-impact", proposalId],
+    queryFn: () => codeApi.proposalImpact(workspaceId, projectId, proposalId),
+  });
+  const graph = useQuery({
+    queryKey: ["pipeline", projectId],
+    queryFn: () => modelApi.pipeline(workspaceId, projectId),
+  });
+
+  if (impact.isPending || graph.isPending) {
+    return <div className="state">Drawing the pipeline…</div>;
+  }
+  if (impact.isError || graph.isError) {
+    return <div className="state error">Couldn&apos;t draw the pipeline for this review.</div>;
+  }
+
+  const review = reviewByNode(impact.data, files, myId);
+  const missing = notOnGraph(impact.data, graph.data.nodes.map((n) => n.id));
+  const row = rowForNode(impact.data, picked);
+  const file = row?.path ? files.find((f) => f.path === row.path) : undefined;
+
+  return (
+    <section className="review-pipeline" data-testid="pipeline-review">
+      <PipelineGraphView
+        graph={graph.data}
+        review={review}
+        maxHeight={420}
+        // **Selection, which is p.55's own word** ("when one of the dataset
+        // nodes is selected"), and it is also the graph's: one node selected
+        // is the question its detail bar already answers, several is a
+        // different one, and this tab is about a single file at a time.
+        onViewChange={(view) =>
+          setPicked(view.selected?.length === 1 ? view.selected[0] ?? null : null)
+        }
+        // The dataset's own page, which is the one rule the three graphs that
+        // draw these nodes share (`lib/pipeline-graph`). Reviewing a change is
+        // exactly when somebody wants to look at what it changes.
+        onOpen={(node) => router.push(nodePath(node, workspaceSlug, projectSlug))}
+      />
+      {/* Said, never left to be counted off the picture (§364's rule, arriving
+          through a drawing instead of a list). */}
+      {missing.length > 0 && (
+        <p className="soft" data-testid="pipeline-review-missing">
+          {missingNote(missing)}
+        </p>
+      )}
+      {picked === null ? (
+        <p className="soft" data-testid="pipeline-review-hint">
+          Select a dataset to see the code and schema changes that produced it.
+        </p>
+      ) : row === undefined ? (
+        // A node off the proposal is a perfectly ordinary thing to click on a
+        // graph of the whole project, and saying so beats drawing nothing.
+        <p className="soft" data-testid="pipeline-review-untouched">
+          This proposal does not change what builds that dataset.
+        </p>
+      ) : (
+        <>
+          {row.model_id && (
+            <SchemaChange
+              workspaceId={workspaceId}
+              projectId={projectId}
+              proposalId={proposalId}
+              modelId={row.model_id}
+            />
+          )}
+          {file ? (
+            drawFile(file)
+          ) : (
+            <p className="soft" data-testid="pipeline-review-nofile">
+              {describeImpact(row)}
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function ImpactPanel({
   workspaceId,
   projectId,
