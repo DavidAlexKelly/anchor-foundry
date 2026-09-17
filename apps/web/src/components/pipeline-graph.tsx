@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { FileState } from "@/lib/file-verdict";
 import type { PipelineGraph, PipelineNode } from "@/lib/types";
 import {
   columnsIn,
@@ -99,12 +100,21 @@ function NodeCard({
   lit = false,
   matched = false,
   dimmed = false,
+  review,
   onSelect,
 }: {
   node: PipelineNode;
   selected: boolean;
   /** This dataset has the column p.55's list has highlighted. */
   lit?: boolean;
+  /** `code-repositories` p.55's indicator: where the reviewer has got to with
+   *  the transform file that generates this dataset, on a proposal.
+   *
+   *  **Absent is not "unread"**, and the two must not be drawn the same way: a
+   *  node with no verdict is one the proposal does not touch, while `unread`
+   *  is one it does touch and nobody has looked at. Undefined on every graph
+   *  outside a review, which is most of them. */
+  review?: FileState;
   /** This node is one of p.8's search results (§356). */
   matched?: boolean;
   /** Something is being looked at — a column's datasets, a search's results —
@@ -163,6 +173,7 @@ function NodeCard({
       data-selected={selected ? "true" : undefined}
       data-match={matched ? "true" : undefined}
       data-lit={lit ? "true" : undefined}
+      data-review={review}
     >
       <div
         style={{
@@ -174,6 +185,19 @@ function NodeCard({
       >
         {node.kind === "object_type" ? "object type" : node.kind}
         {node.in_cycle && <span style={{ color: "var(--danger)" }}> · in a cycle</span>}
+        {/* p.55's indicator. Named rather than coloured alone: "approved" and
+            "rejected" are the two a reader most needs to tell apart at a
+            glance, and a red and a green dot are the one pair a sizeable
+            minority of readers cannot. */}
+        {review && (
+          <span
+            data-testid="node-review"
+            style={{ color: review === "rejected" ? "var(--danger)" : "var(--ink-soft)" }}
+          >
+            {" · "}
+            {review === "unread" ? "not reviewed" : review}
+          </span>
+        )}
         {/* p.51's out-of-date state (§352), beside the cycle warning because
             both answer "why does this node need my attention". `--brass` and
             not `--danger`: a stale dataset is correct data that is behind,
@@ -285,6 +309,7 @@ export function PipelineGraphView({
   maxHeight = 560,
   initialView,
   onViewChange,
+  review,
 }: {
   graph: PipelineGraph;
   onOpen: (node: PipelineNode) => void;
@@ -296,6 +321,10 @@ export function PipelineGraphView({
   /** The view as it stands, for whoever wants to save or share it. Not fired
    *  for pan or zoom, which are not in a saved view — see db 0089. */
   onViewChange?: (view: GraphView) => void;
+  /** `code-repositories` p.55's indicators, keyed by node id — built by
+   *  `lib/pipeline-review`. A node absent from the map gets none, which is
+   *  how "this proposal does not touch it" is said. */
+  review?: Map<string, FileState>;
 }) {
   const [selected, setSelected] = useState<string[]>(initialView?.selected ?? []);
   // p.7's two modes. **Panning is the default**, as it is in Foundry: the
@@ -720,6 +749,7 @@ export function PipelineGraphView({
                 selected={chosen.has(n.id)}
                 lit={lit.has(n.id)}
                 matched={matched.has(n.id)}
+                review={review?.get(n.id)}
                 // **Dim means "not in what you are looking at", and two
                 // questions at once narrow rather than compete**: a node the
                 // search missed is out whether or not it has the highlighted

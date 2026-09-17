@@ -3033,3 +3033,9 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   padding: 0 2px;
 }
 .comments-panel textarea { width: 100%; min-height: 64px; }
+
+/* ---- p.54-55's Pipeline review tab (§369) --------------------------------- */
+/* The graph draws itself; this is only the space around it and the sentences
+   underneath, which sit where the file list would otherwise start. */
+.review-pipeline { margin-top: 12px; }
+.review-pipeline > .soft { margin: 8px 0 0; font-size: 12.5px; }
