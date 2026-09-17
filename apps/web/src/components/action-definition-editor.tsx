@@ -66,7 +66,7 @@ import {
   valueOptions,
 } from "@/lib/webhook-rule";
 import { webhooks as webhookApi } from "@/lib/api";
-import { actions as actionApi, objects as objApi, type ActionDefinitionInput } from "@/lib/api";
+import { ApiError, actions as actionApi, objects as objApi, type ActionDefinitionInput } from "@/lib/api";
 import {
   CURRENT_USER, blankBlock, conditionDraft as overrideConditionDraft,
   conditionValue as overrideConditionValue, formOrder, ifSummary, moveBlock,
@@ -590,6 +590,13 @@ export function ActionDefinitionEditor({
     queryKey: ["action-sections", action.id],
     queryFn: () => actionApi.sections(workspaceId, action.id),
   });
+  // Save waits on this, so a read that never succeeds has to say so rather
+  // than leave a button that will not respond and no reason why.
+  const sectionsProblem =
+    savedSections.isError &&
+    (savedSections.error instanceof ApiError
+      ? savedSections.error.message
+      : "Couldn't read this action's form layout.");
   const [sections, setSections] = useState<FormSection[] | null>(null);
   if (sections === null && savedSections.data) setSections(savedSections.data);
   const patchSection = (index: number, patch: Partial<FormSection>) =>
@@ -650,19 +657,21 @@ export function ActionDefinitionEditor({
   };
 
   const save = useMutation({
-    mutationFn: async () => {
+    // **Taken as an argument, not read from the closure**, because that makes
+    // the precondition the button's: a save cannot run before the arrangement
+    // it is going to write has been read. It used to skip the section write
+    // when `sections` was still `null`, which protected the right thing —
+    // writing `[]` over an arrangement because somebody saved a rule quickly
+    // would delete it — and silently did less than it said for anybody who
+    // pressed Save early. Save waits for the read now, so there is one
+    // statement of the rule instead of a guard behind a button that ignored it.
+    mutationFn: async (sections: FormSection[]) => {
       await actionApi.setDefinition(workspaceId, action.id, { parameters, rules, criteria });
       // **After the definition, and only if it landed.** A section names its
       // parameters by `api_name`, so one holding a parameter this save is
       // adding — or renaming — can only be written once the parameter exists.
       // Two documents, and the dependency runs one way.
-      //
-      // Skipped entirely while the read is still in flight: `null` means
-      // nobody has seen the form yet, and writing `[]` over it would delete an
-      // arrangement because somebody saved a rule quickly.
-      if (sections !== null) {
-        await actionApi.setSections(workspaceId, action.id, sections);
-      }
+      await actionApi.setSections(workspaceId, action.id, sections);
     },
     onSuccess: async () => {
       setFailure(null);
@@ -1816,6 +1825,12 @@ export function ActionDefinitionEditor({
           broken by the *second* one, and p.110's ordering rule is about where a
           rule sits relative to another. A message pinned to either rule would
           be blaming a line that is fine on its own. */}
+      {sectionsProblem && (
+        <p className="state error" data-testid="definition-sections-problem">
+          {sectionsProblem}
+        </p>
+      )}
+
       {(() => {
         const said = webhookListProblem(rules, outputsFor);
         return said ? (
@@ -1832,8 +1847,21 @@ export function ActionDefinitionEditor({
         <button className="btn quiet" onClick={onClose}>Cancel</button>
         <button
           className="btn"
-          disabled={save.isPending || !!webhookListProblem(rules, outputsFor)}
-          onClick={() => save.mutate()}
+          // **`sections === null` is a precondition, not a loading state.**
+          // The save writes sections only once it knows what they are, and
+          // rightly so - writing `[]` over an arrangement because somebody
+          // saved a rule quickly would delete it. But that makes an early
+          // press do *less* than it says: a rename pressed before the form
+          // arrives leaves the section pointing at the old name, and the
+          // dialog closes on success anyway, so nobody is told. §214, and the
+          // same one §367 fixed on the scheduled-sync panel - a control
+          // offered before the query it depends on has answered.
+          disabled={
+            save.isPending ||
+            sections === null ||
+            !!webhookListProblem(rules, outputsFor)
+          }
+          onClick={() => sections && save.mutate(sections)}
         >
           {save.isPending ? "Saving…" : "Save"}
         </button>

@@ -22,6 +22,7 @@ real form being filled in and posted, and the only place to observe it is here.
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -515,6 +516,64 @@ def test_the_form_tab_hides_a_section_on_a_prior_parameter(page, api):
     expect(page.locator("[data-section='Why']")).to_have_count(0)
     field(page, "status").fill("closed")
     expect(page.locator("[data-section='Why']")).to_be_visible(timeout=30000)
+
+
+def test_save_is_not_offered_until_the_form_layout_has_been_read(page, api):
+    """**Why the test below failed under a full run and never on its own.**
+
+    The save writes sections only once it knows what they are, and rightly so:
+    writing `[]` over an arrangement because somebody saved a rule quickly
+    would delete it. But `null` is also what the editor holds while the read is
+    in flight, so a Save pressed in that window did *less* than it said - it
+    wrote the parameters and skipped the sections, then closed on success. A
+    rename pressed early left the section pointing at the old name, which is
+    exactly the failure the next test exists to prove cannot happen, and
+    nothing on the screen said so.
+
+    §214, and the same one §367 fixed on the scheduled-sync panel. The read is
+    held rather than slowed because a sleeping route handler blocks
+    Playwright's dispatcher, so the press lands after it and misses the state.
+    """
+    held = []
+    page.route("**/action-types/*/sections", lambda route: held.append(route))
+    save = page.get_by_role("button", name="Save", exact=True)
+    try:
+        mod = build(api, "Form tab wait",
+                    sections=[{"title": "Details", "parameters": ["status"]}])
+        open_editor(page, mod)
+        # The dialog is up and its parameters are editable...
+        expect(page.get_by_label("Parameter 1 name")).to_be_visible()
+        # ...and Save is not offered, because pressing it would drop the half
+        # of the save that this read is still fetching.
+        expect(save).to_be_disabled()
+    finally:
+        for route in held:
+            route.continue_()
+
+    expect(save).to_be_enabled()
+    assert len(held) == 1, held
+
+
+def test_a_form_layout_that_cannot_be_read_says_so(page, api):
+    """The cost of the one above: Save waits on this read, so a read that never
+    succeeds leaves it disabled for good and the dialog has to say why.
+
+    The failure is injected because what is under test is the dialog's response
+    to it; `apps/api/tests/test_action_sections.py` owns the API's own answers.
+    """
+    page.route("**/action-types/*/sections", lambda route: route.fulfill(
+        status=503,
+        content_type="application/json",
+        body=json.dumps({"detail": "the form layout is unavailable"}),
+    ))
+    mod = build(api, "Form tab unreadable",
+                sections=[{"title": "Details", "parameters": ["status"]}])
+    open_editor(page, mod)
+
+    expect(page.get_by_test_id("definition-sections-problem")).to_have_text(
+        "the form layout is unavailable"
+    )
+    expect(page.get_by_role("button", name="Save", exact=True)).to_be_disabled()
 
 
 def test_a_rename_carries_through_the_form_rather_than_being_refused(page, api):
