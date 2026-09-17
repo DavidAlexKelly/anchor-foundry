@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 
 import pypdf
 
@@ -263,6 +264,68 @@ def test_every_path_a_finished_row_cites_is_there() -> None:
         "the parity specifications cite files that are not where they say:\n  "
         + "\n  ".join(broken)
     )
+
+
+def declared_property_types(text: str) -> set[str] | None:
+    """The base types `ontology.md` §1.1 says this platform has.
+
+    The line names them in backticks after "Ours" and before the sentence that
+    follows, which is the shape it has had since the file was written.
+    """
+    match = re.search(r"^Ours[^:]*:(.+?)\.\s*$", text, re.M)
+    if match is None:
+        return None
+    return set(re.findall(r"`([a-z_]+)`", match.group(1)))
+
+
+def test_the_property_types_the_spec_claims_are_the_ones_the_server_takes() -> None:
+    """**The fourth checkable claim, and the one that had already rotted**
+    (§374).
+
+    `ontology.md` §1.1 opens by listing the base types we have. It had drifted
+    three behind its own table — still reading as it did before `time_series`,
+    `struct` and `array` were added, each of which has a row underneath saying
+    it is built. Two more of the same shape were in the build order the day
+    before (§373), which is what made this worth a check rather than a third
+    correction: **a summary line is updated by hand and a row is updated by
+    hand, and nothing has ever made them agree.**
+
+    This is the one claim in these documents that can be resolved against
+    running code rather than against a filename, because the server keeps the
+    canonical set. The comparison is exact in both directions on purpose: a
+    type the spec forgot is the rot that happened, and a type the spec claims
+    and the server refuses would be the worse one.
+    """
+    # Imported here rather than at module scope: every other check in this file
+    # reads documents and needs no application, and a top-level import would
+    # make a docs test fail for a reason that has nothing to do with documents.
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from src.services.ontology import PROPERTY_TYPES  # noqa: E402
+
+    text = open(os.path.join(PARITY, "ontology.md"), encoding="utf-8").read()
+    declared = declared_property_types(text)
+    assert declared is not None, (
+        "ontology.md no longer has a line naming the property types it claims; "
+        "either restore it or delete this check, but do not leave it passing "
+        "over nothing"
+    )
+    assert declared == set(PROPERTY_TYPES), (
+        "ontology.md §1.1 and services/ontology.py disagree about the base "
+        f"types:\n  only in the spec: {sorted(declared - set(PROPERTY_TYPES))}"
+        f"\n  only in the server: {sorted(set(PROPERTY_TYPES) - declared)}"
+    )
+
+
+def test_the_property_type_check_says_no_when_the_list_is_wrong() -> None:
+    """§298 again: a regex that has stopped matching finds nothing, and so does
+    one that matches a correct list. Each way of being wrong gets a case."""
+    # A line that drifted behind the server - the failure that happened.
+    assert declared_property_types("Ours: `string`, `integer`.") == {"string", "integer"}
+    # No such line at all, which must be distinguishable from an empty one.
+    assert declared_property_types("There is no such sentence here.") is None
+    # The sentence this file actually carries, which must still parse.
+    text = open(os.path.join(PARITY, "ontology.md"), encoding="utf-8").read()
+    assert (declared_property_types(text) or set()) >= {"string", "struct", "array"}
 
 
 def test_the_declared_page_counts_are_the_pdfs_real_lengths() -> None:
