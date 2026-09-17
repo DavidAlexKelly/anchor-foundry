@@ -1041,6 +1041,34 @@ export interface ProposalSchemaChange {
   expectations_at_risk?: ExpectationAtRisk[];
 }
 
+/** What a proposal does to a dataset built *from* one it changes
+ *  (§372; `code-repositories` p.54). */
+export interface DerivedImpact {
+  dataset_id: string;
+  dataset_name: string;
+  model_id: string;
+  model_name: string;
+  /** Hops from the changed dataset; 1 is directly downstream. */
+  depth: number;
+  ok: boolean;
+  error?: string | null;
+  changes?: SchemaChanges | null;
+  sampled?: { alias: string; rows_used: number; rows_available: number }[];
+}
+
+export interface UnanalysedTransform {
+  model_id: string;
+  model_name: string;
+  reason: string;
+}
+
+export interface DerivedAnalysis {
+  datasets: DerivedImpact[];
+  not_analysed: UnanalysedTransform[];
+  max_depth: number;
+  truncated: boolean;
+}
+
 export interface ExpectationAtRisk {
   expectation_id: string;
   rule_type: string;

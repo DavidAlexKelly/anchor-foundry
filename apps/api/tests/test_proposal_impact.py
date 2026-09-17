@@ -632,3 +632,211 @@ def test_an_outsider_cannot_ask_for_a_schema_change(
     assert schema_change(
         client, fx, proposal["id"], model_id, sub=fx.outsider_sub
     ).status_code == 404
+
+
+# ---- p.54's Add datasets to analysis (§372) ----------------------------------
+
+def derived(client: TestClient, fx: Fixture, proposal_id: str, model_id: str,
+            sub: str | None = None):
+    return client.get(
+        f"{cbase(fx)}/proposals/{proposal_id}/impact/{model_id}/derived",
+        headers=hdr(sub or fx.viewer_sub),
+    )
+
+
+def model_reading(client: TestClient, fx: Fixture, upstream: str, code: str,
+                  alias: str = "up") -> str:
+    """A transform whose input is another transform's output."""
+    r = client.post(
+        f"{pbase(fx)}/models", headers=hdr(fx.editor_sub),
+        json={"name": f"Derived {uuid.uuid4().hex[:6]}", "code": code,
+              "inputs": [{"dataset_id": upstream, "input_alias": alias}]},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_a_dataset_built_from_the_changed_one_is_analysed_without_a_build(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """**p.54 without p.52's precondition.** Foundry needs the added datasets
+    built — "the added datasets must not be stale in order to show impact
+    information" — because it compares built outputs. This chains previews:
+    the proposed code over a sample, spilled, and the transform below it run
+    over that.
+    """
+    head = make_model(client, fx, source, "SELECT id, val FROM raw")
+    head_out = run(client, fx, head)["output_dataset"]["id"]
+    below = model_reading(client, fx, head_out, "SELECT id, val * 2 AS doubled FROM up")
+    run(client, fx, below)
+
+    # The change drops `val`, which is the column the transform below reads.
+    proposal = propose(client, fx, [{"model_id": head, "code": "SELECT id FROM raw"}])
+    r = derived(client, fx, proposal["id"], head)
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert [d["depth"] for d in body["datasets"]] == [1]
+    only = body["datasets"][0]
+    assert only["model_id"] == below
+    # **The answer worth the whole endpoint**: the transform below no longer
+    # runs, and its code is not in the diff.
+    assert only["ok"] is False
+    assert "val" in only["error"]
+
+
+def test_a_derived_dataset_that_still_runs_reports_its_column_changes(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """The other outcome, and the one that needs the chain to be *faithful*:
+    the transform below survives, and what it produces has moved because what
+    it reads has moved."""
+    head = make_model(client, fx, source, "SELECT id, val FROM raw")
+    head_out = run(client, fx, head)["output_dataset"]["id"]
+    below = model_reading(client, fx, head_out, "SELECT id, val FROM up")
+    run(client, fx, below)
+
+    # `val` becomes a decimal upstream, so the dataset below is retyped too —
+    # a change nothing in the diff mentions.
+    proposal = propose(
+        client, fx, [{"model_id": head, "code": "SELECT id, val * 1.5 AS val FROM raw"}]
+    )
+    body = derived(client, fx, proposal["id"], head).json()
+
+    only = body["datasets"][0]
+    assert only["ok"] is True, only
+    assert [c["name"] for c in only["changes"]["retyped"]] == ["val"]
+    assert only["changes"]["retyped"][0]["to"].startswith("DECIMAL")
+    # **The hop read the whole spilled result, not a corner of it.** The
+    # columns would be right either way, which is exactly why this needs
+    # asserting: a chain that fed one row to the transform below would look
+    # correct on every schema assertion in this file.
+    assert [s["alias"] for s in only["sampled"]] == ["up"]
+    assert only["sampled"][0]["rows_used"] == 3
+    assert only["sampled"][0]["rows_available"] == 3
+
+
+def test_the_chain_is_followed_past_the_first_hop_in_order(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """p.54's "all intermediate datasets between", which is the part that needs
+    each hop's result to feed the next rather than each being read from store.
+
+    Three levels, and the retype has to arrive at the bottom one — which it can
+    only do if hop 2 read hop 1's *previewed* output and not its stored one.
+    """
+    head = make_model(client, fx, source, "SELECT id, val FROM raw")
+    head_out = run(client, fx, head)["output_dataset"]["id"]
+    mid = model_reading(client, fx, head_out, "SELECT id, val FROM up")
+    mid_out = run(client, fx, mid)["output_dataset"]["id"]
+    bottom = model_reading(client, fx, mid_out, "SELECT id, val FROM up")
+    run(client, fx, bottom)
+
+    proposal = propose(
+        client, fx, [{"model_id": head, "code": "SELECT id, val * 1.5 AS val FROM raw"}]
+    )
+    body = derived(client, fx, proposal["id"], head).json()
+
+    assert [d["depth"] for d in body["datasets"]] == [1, 2]
+    assert [d["model_id"] for d in body["datasets"]] == [mid, bottom]
+    for entry in body["datasets"]:
+        assert entry["ok"] is True, entry
+        assert [c["name"] for c in entry["changes"]["retyped"]] == ["val"]
+
+
+def test_a_change_with_nothing_downstream_says_so_rather_than_failing(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """The common case: most transforms have nothing built from them."""
+    head = make_model(client, fx, source, "SELECT id, val FROM raw")
+    run(client, fx, head)
+    proposal = propose(client, fx, [{"model_id": head, "code": "SELECT id FROM raw"}])
+
+    body = derived(client, fx, proposal["id"], head).json()
+    assert body["datasets"] == []
+    assert body["truncated"] is False
+    assert body["max_depth"] >= 1
+
+
+def test_code_that_does_not_run_is_refused_rather_than_answered_empty(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """An empty list would read as "nothing downstream is affected", which is
+    the opposite of what a transform that will not compile tells you."""
+    head = make_model(client, fx, source, "SELECT id, val FROM raw")
+    head_out = run(client, fx, head)["output_dataset"]["id"]
+    run(client, fx, model_reading(client, fx, head_out, "SELECT id FROM up"))
+
+    proposal = propose(client, fx, [{"model_id": head, "code": "SELECT nope FROM raw"}])
+    r = derived(client, fx, proposal["id"], head)
+    assert r.status_code == 409, r.text
+    assert "does not run" in r.json()["detail"]
+
+
+def test_a_consumer_nobody_has_built_is_named_rather_than_left_out(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """§364's rule, one layer further out. A transform that reads the changed
+    dataset but has never been built has nothing to chain a preview into and no
+    stored schema to diff — so there is no impact to report, and it is still
+    something the change reaches. Dropping it would make the list shorter than
+    the consequences with no way to tell which were left out.
+
+    A built consumer sits beside it, so "named" is distinguishable from
+    "everything ends up in this list" (§190).
+    """
+    head = make_model(client, fx, source, "SELECT id, val FROM raw")
+    head_out = run(client, fx, head)["output_dataset"]["id"]
+    built = model_reading(client, fx, head_out, "SELECT id, val FROM up")
+    run(client, fx, built)
+    unbuilt = model_reading(client, fx, head_out, "SELECT val FROM up")
+
+    proposal = propose(client, fx, [{"model_id": head, "code": "SELECT id FROM raw"}])
+    body = derived(client, fx, proposal["id"], head).json()
+
+    assert [d["model_id"] for d in body["datasets"]] == [built]
+    assert [n["model_id"] for n in body["not_analysed"]] == [unbuilt]
+    assert "never been built" in body["not_analysed"][0]["reason"]
+
+
+def test_a_transform_never_built_has_nothing_downstream_to_analyse(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    head = make_model(client, fx, source, "SELECT id FROM raw")
+    proposal = propose(client, fx, [{"model_id": head, "code": "SELECT val FROM raw"}])
+    r = derived(client, fx, proposal["id"], head)
+    assert r.status_code == 409, r.text
+
+
+def test_an_outsider_cannot_ask_what_this_changes_downstream(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    head = make_model(client, fx, source, "SELECT id FROM raw")
+    run(client, fx, head)
+    proposal = propose(client, fx, [{"model_id": head, "code": "SELECT val FROM raw"}])
+    assert derived(client, fx, proposal["id"], head, sub=fx.outsider_sub).status_code == 404
+
+
+def test_a_chain_deeper_than_the_bound_says_it_was_cut_off(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """**The bound is on the answer, not just in the code.** Each hop is a
+    preview, so the work grows with the depth and the walk stops; a list that
+    stopped without saying so would be a short answer wearing a complete one's
+    clothes — the failure §364 refused, arriving through a limit instead of a
+    filter.
+    """
+    head = make_model(client, fx, source, "SELECT id, val FROM raw")
+    upstream = run(client, fx, head)["output_dataset"]["id"]
+    for _ in range(4):  # one more than MAX_DERIVED_DEPTH
+        below = model_reading(client, fx, upstream, "SELECT id, val FROM up")
+        upstream = run(client, fx, below)["output_dataset"]["id"]
+
+    proposal = propose(
+        client, fx, [{"model_id": head, "code": "SELECT id, val * 1.5 AS val FROM raw"}]
+    )
+    body = derived(client, fx, proposal["id"], head).json()
+
+    assert [d["depth"] for d in body["datasets"]] == [1, 2, 3]
+    assert body["max_depth"] == 3
+    assert body["truncated"] is True

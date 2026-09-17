@@ -167,3 +167,127 @@ async def schema_inputs(
         {"mid": str(model_id)},
     )
     return dict(model), [dict(r) for r in inputs]
+
+
+#: How far downstream `derived_chain` will walk (`code-repositories` p.54).
+#:
+#: p.54 says "all intermediate datasets between the selected dataset and the
+#: affected datasets", which is unbounded in a document describing a product
+#: with a build system behind it. Each hop here is a *preview*, so the work
+#: grows with the depth and a pipeline twenty deep would make opening a review
+#: cost twenty transform runs. Bounded, with the bound reported, because a
+#: short answer presented as a whole one is the thing §364 refused.
+MAX_DERIVED_DEPTH = 3
+
+
+async def derived_chain(
+    conn: AsyncConnection,
+    project_id: UUID,
+    dataset_id: UUID,
+    *,
+    max_depth: int = MAX_DERIVED_DEPTH,
+) -> list[dict[str, Any]]:
+    """The datasets built *from* an affected one, nearest first
+    (`code-repositories` p.54; §372).
+
+    > "Clicking on Add datasets to analysis will analyze the pull request's
+    >  impact on derived datasets. All intermediate datasets between the
+    >  selected dataset and the affected datasets will be added as well." (p.54)
+
+    One row per derived dataset, carrying the model that builds it and that
+    model's *other* inputs — everything a chained preview needs, so the caller
+    makes one round trip rather than one per hop.
+
+    **`UNION`, not `UNION ALL`**, which is `models._check_cycle`'s reason too: a
+    cycle already in the project would otherwise make this walk run forever.
+    The depth column is what makes "nearest first" meaningful, and it is also
+    the bound — see `MAX_DERIVED_DEPTH`.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        WITH RECURSIVE downstream(dataset_id, model_id, depth) AS (
+            SELECT m.output_dataset_id, m.id, 1
+              FROM model_inputs mi
+              JOIN models m ON m.id = mi.model_id
+             WHERE mi.dataset_id = CAST(:did AS uuid)
+               AND m.project_id = :pid
+               AND m.output_dataset_id IS NOT NULL
+            UNION
+            SELECT m.output_dataset_id, m.id, d.depth + 1
+              FROM downstream d
+              JOIN model_inputs mi ON mi.dataset_id = d.dataset_id
+              JOIN models m ON m.id = mi.model_id
+             WHERE m.project_id = :pid
+               AND m.output_dataset_id IS NOT NULL
+               AND d.depth < :depth
+        )
+        SELECT DISTINCT ON (ds.id)
+               d.depth, d.model_id, m.name AS model_name, m.code,
+               ds.id AS dataset_id, ds.name AS dataset_name, ds.table_schema
+          FROM downstream d
+          JOIN models m ON m.id = d.model_id
+          JOIN datasets ds ON ds.id = d.dataset_id
+         -- The dataset that started the walk can come back around through a
+         -- cycle; it is the thing being analysed, not something derived from
+         -- it, and listing it as its own consequence would be nonsense.
+         --
+         -- **Deliberately unfalsifiable, and said so** (§213, following §364's
+         -- `m.project_id` clause). `models._check_cycle` refuses to create one,
+         -- so no test here can build the state this excludes — but the `UNION`
+         -- above exists for the same reason and this module is not the place
+         -- that decides whether a cycle can pre-exist. A guard that is dead
+         -- because something else holds is worth keeping when the cost of
+         -- being wrong is a walk that reports a dataset as derived from itself.
+         WHERE ds.id <> CAST(:did AS uuid)
+         ORDER BY ds.id, d.depth
+        """,
+        {"did": str(dataset_id), "pid": str(project_id), "depth": max_depth},
+    )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        inputs = await fetch_all(
+            conn,
+            """
+            SELECT mi.input_alias, d.id AS dataset_id, d.s3_location
+              FROM model_inputs mi
+              JOIN datasets d ON d.id = mi.dataset_id
+             WHERE mi.model_id = :mid
+             ORDER BY mi.input_alias
+            """,
+            {"mid": str(row["model_id"])},
+        )
+        out.append({**dict(row), "inputs": [dict(i) for i in inputs]})
+    # Nearest first, because p.54's "intermediate datasets between" is an order
+    # a reader follows, and the whole point of the row is reading a change
+    # outwards from where it lands.
+    out.sort(key=lambda r: (int(r["depth"]), str(r["dataset_name"]).lower()))
+    return out
+
+
+async def unbuilt_consumers(
+    conn: AsyncConnection, project_id: UUID, dataset_id: UUID
+) -> list[dict[str, Any]]:
+    """Transforms that read this dataset and have never produced one.
+
+    **`derived_chain` cannot include them and must not hide them** — §364's
+    rule, one layer further out. A transform with no output has nothing to
+    chain a preview into and no stored schema to diff against, so there is no
+    impact to report; but it is still something the change reaches, and a list
+    that quietly dropped it would be shorter than the consequences and give a
+    reader no way to know which were left out.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT DISTINCT m.id AS model_id, m.name AS model_name
+          FROM model_inputs mi
+          JOIN models m ON m.id = mi.model_id
+         WHERE mi.dataset_id = CAST(:did AS uuid)
+           AND m.project_id = :pid
+           AND m.output_dataset_id IS NULL
+         ORDER BY m.name
+        """,
+        {"did": str(dataset_id), "pid": str(project_id)},
+    )
+    return [dict(r) for r in rows]

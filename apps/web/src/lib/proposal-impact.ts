@@ -212,3 +212,73 @@ export function expectationsAtRiskSummary(at_risk: ExpectationAtRisk[]): string 
       ? `${count} would stop reporting`
       : `${count} at risk, ${blocking} of which would stop this build`;
 }
+
+/** One dataset built from a changed one (§372; `code-repositories` p.54). */
+export type DerivedImpact = {
+  dataset_name: string;
+  model_name: string;
+  depth: number;
+  ok: boolean;
+  error?: string | null;
+  changes?: {
+    added?: { name: string; data_type: string }[];
+    removed?: { name: string; data_type: string }[];
+    retyped?: { name: string; from: string; to: string }[];
+  } | null;
+};
+
+export type DerivedAnalysis = {
+  datasets: DerivedImpact[];
+  not_analysed: { model_name: string; reason: string }[];
+  max_depth: number;
+  truncated: boolean;
+};
+
+/**
+ * What the change does to one dataset below it, in a line (§372).
+ *
+ * **The transform that no longer runs comes first and alone**, which is
+ * `describeSchemaChange`'s rule applied where it matters most: the code that
+ * breaks here is code the diff does not contain, so a reviewer who is shown
+ * "no column changes" for a transform that has stopped compiling has been told
+ * something true about the one thing they were not asking.
+ */
+export function describeDerived(entry: DerivedImpact): string[] {
+  if (!entry.ok) {
+    return [entry.error?.trim() || "This transform no longer runs."];
+  }
+  const changes = entry.changes;
+  if (!changes) return ["No column changes."];
+  return describeSchemaChange({ ok: true, changes });
+}
+
+/**
+ * The line above the list — how far the analysis reached and what it left out.
+ *
+ * **Every limit is on the screen**, because each of the three is a way for a
+ * short answer to read as a whole one: the walk stops at a depth, a transform
+ * nobody has built cannot be analysed, and nothing here looks past the
+ * project's own models. §364 put the same sentence on the list above this one.
+ */
+export function derivedSummary(analysis: DerivedAnalysis): string {
+  const n = analysis.datasets.length;
+  // Its own sentence, because the clauses below are qualifications of a count
+  // and there is nothing here to qualify — "nothing is built from this;
+  // stopping 3 steps down" would be three steps down through nothing.
+  if (n === 0 && analysis.not_analysed.length === 0) {
+    return "Nothing is built from this dataset.";
+  }
+  const parts: string[] = [
+    n === 0
+      ? "Nothing analysable is built from this dataset"
+      : `${n} dataset${n === 1 ? "" : "s"} built from this one`,
+  ];
+  if (analysis.truncated) {
+    parts.push(`stopping ${analysis.max_depth} steps down — there is more below`);
+  }
+  if (analysis.not_analysed.length > 0) {
+    const m = analysis.not_analysed.length;
+    parts.push(`${m} transform${m === 1 ? "" : "s"} could not be analysed`);
+  }
+  return parts.join("; ") + ".";
+}

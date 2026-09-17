@@ -1054,6 +1054,7 @@ def preview_transform(
     *,
     sample_rows: int = PREVIEW_SAMPLE_ROWS,
     limit: int = PREVIEW_ROWS,
+    spill_to: str | None = None,
 ) -> tuple[TabularResult, list[PreviewedInput]]:
     """Run a transform over a *sample* of its inputs and return the rows,
     writing nothing (roadmap item 2.6).
@@ -1071,6 +1072,22 @@ def preview_transform(
     they will be. That is inherent to previewing rather than running, which is
     why `PreviewedInput.sampled` exists: it is the difference between a screen
     a person can trust and one that quietly misleads them.
+
+    **`spill_to` is the one exception to "writing nothing", and it exists for
+    one caller** (§372's chained preview; `code-repositories` p.54). Analysing
+    what a change does to a *derived* dataset means running the transform below
+    it over the changed output, which has to exist as a file for the next hop
+    to read. It follows `run_transform`'s discipline exactly: the user's SQL
+    still runs in the sandbox with external access off, and the result leaves
+    through a second, trusted connection executing only SQL this module
+    composed, with the column DDL rebuilt from the sandbox's own DESCRIBE. It
+    is a scratch file, not a dataset version — nothing is registered, nothing
+    is versioned, and the caller deletes it.
+
+    Spilled from `__model_output` rather than from the rows this returns,
+    because those are capped at `limit` and passed through `json_safe`: a next
+    hop fed them would be reading a hundred stringified rows and calling it a
+    preview.
     """
     sample_rows = max(1, sample_rows)
     limit = max(1, min(limit, MAX_RESULT_ROWS))
@@ -1108,6 +1125,27 @@ def preview_transform(
             raise DatasetEngineError("the transform produced no columns")
         columns = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
         produced = int(sandbox.execute("SELECT count(*) FROM __model_output").fetchone()[0])
+        if spill_to is not None:
+            # The writer never sees user SQL — only this DDL and these inserts,
+            # which is `run_transform`'s bargain made for the same reason.
+            writer = duckdb.connect()
+            try:
+                columns_ddl = ", ".join(f'"{c.name}" {c.data_type}' for c in columns)
+                writer.execute(f"CREATE TABLE __spill ({columns_ddl})")
+                placeholders = ", ".join("?" for _ in columns)
+                cursor = sandbox.execute("SELECT * FROM __model_output")
+                while True:
+                    batch = cursor.fetchmany(TRANSFORM_BATCH_ROWS)
+                    if not batch:
+                        break
+                    writer.executemany(
+                        f"INSERT INTO __spill VALUES ({placeholders})", batch
+                    )
+                os.makedirs(os.path.dirname(spill_to), exist_ok=True)
+                writer.execute(f"COPY __spill TO '{spill_to}' (FORMAT parquet)")
+            finally:
+                writer.close()
+
         rows = sandbox.execute(
             f"SELECT * FROM __model_output LIMIT {limit}"
         ).fetchall()

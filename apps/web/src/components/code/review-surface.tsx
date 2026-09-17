@@ -45,6 +45,8 @@ import {
 } from "@/lib/file-verdict";
 import {
   DERIVED_NOTE,
+  derivedSummary,
+  describeDerived,
   describeExpectationsAtRisk,
   describeImpact,
   describeSample,
@@ -484,6 +486,94 @@ function PipelineReview({
   );
 }
 
+/** p.54's **Add datasets to analysis**: what the change does below this
+ *  dataset (§372).
+ *
+ *  **Asked for, and more expensive than the schema button beside it**, which
+ *  is why it is a separate press rather than part of that answer: this
+ *  previews one transform per hop, so a panel that ran it on arrival would
+ *  cost a review more the deeper its project's pipeline goes.
+ *
+ *  Every limit the answer has is on the screen with it — §364's rule, which
+ *  this row is the direct continuation of.
+ */
+function DownstreamImpact({
+  workspaceId,
+  projectId,
+  proposalId,
+  modelId,
+}: {
+  workspaceId: string;
+  projectId: string;
+  proposalId: string;
+  modelId: string;
+}) {
+  const [asked, setAsked] = useState(false);
+  const analysis = useQuery({
+    queryKey: ["code-proposal-derived", proposalId, modelId],
+    queryFn: () => codeApi.proposalDerived(workspaceId, projectId, proposalId, modelId),
+    enabled: asked,
+  });
+
+  if (!asked) {
+    return (
+      <>
+        {" "}
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="derived-ask"
+          data-model={modelId}
+          onClick={() => setAsked(true)}
+        >
+          Downstream
+        </button>
+      </>
+    );
+  }
+  if (analysis.isPending) return <span className="soft"> Following the data…</span>;
+  if (analysis.isError) {
+    return (
+      <span className="soft" data-testid="derived-error">
+        {" "}
+        {analysis.error instanceof ApiError
+          ? analysis.error.message
+          : "Couldn't work out what this changes downstream."}
+      </span>
+    );
+  }
+
+  return (
+    <div className="review-schema" data-testid="derived-impact" data-model={modelId}>
+      <p className="soft" data-testid="derived-summary">
+        {derivedSummary(analysis.data)}
+      </p>
+      {analysis.data.datasets.map((entry) => (
+        <div key={entry.dataset_id} data-testid="derived-row" data-ok={entry.ok ? "true" : "false"}>
+          <strong>{entry.dataset_name}</strong>
+          <span className="soft"> · {entry.depth} step{entry.depth === 1 ? "" : "s"} down</span>
+          <ul>
+            {describeDerived(entry).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      {/* Named rather than dropped: a transform the change reaches that has no
+          impact to report is still something the change reaches. */}
+      {analysis.data.not_analysed.length > 0 && (
+        <ul className="soft" data-testid="derived-not-analysed">
+          {analysis.data.not_analysed.map((item) => (
+            <li key={item.model_id}>
+              {item.model_name} — {item.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function ImpactPanel({
   workspaceId,
   projectId,
@@ -518,12 +608,20 @@ function ImpactPanel({
             <strong>{row.dataset?.name ?? row.model_name ?? row.path}</strong>
             <span className="soft"> {describeImpact(row)}</span>
             {row.state === "affected" && row.model_id && (
-              <SchemaChange
-                workspaceId={workspaceId}
-                projectId={projectId}
-                proposalId={proposalId}
-                modelId={row.model_id}
-              />
+              <>
+                <SchemaChange
+                  workspaceId={workspaceId}
+                  projectId={projectId}
+                  proposalId={proposalId}
+                  modelId={row.model_id}
+                />
+                <DownstreamImpact
+                  workspaceId={workspaceId}
+                  projectId={projectId}
+                  proposalId={proposalId}
+                  modelId={row.model_id}
+                />
+              </>
             )}
           </li>
         ))}
