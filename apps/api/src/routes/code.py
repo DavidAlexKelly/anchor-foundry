@@ -288,6 +288,9 @@ class FileMarkOut(BaseModel):
     reviewer_id: UUID
     reviewer_email: str | None
     marked_at: datetime
+    #: p.55's per-file approve/reject (§366, db 0091). None is a mark with no
+    #: verdict — what every mark meant before, and still a real position.
+    verdict: str | None = None
 
 
 class ProposalFileOut(BaseModel):
@@ -397,6 +400,17 @@ class FileMarkIn(BaseModel):
     model_id: UUID | None = None
     source_path: str | None = Field(default=None, max_length=1000)
     read: bool
+    #: p.55's per-file verdict (§366). Absent marks the file read without one,
+    #: which is what marking has always meant — so clearing a verdict is
+    #: marking again with none rather than a separate call.
+    #:
+    #: **No pattern here, deliberately.** `mark_file_read` refuses a verdict it
+    #: does not know and says which ones it does; a pattern beside it would be
+    #: the same check written twice, and the sweep proved it — with the service
+    #: guard in place, removing the pattern failed nothing, because both paths
+    #: end in the same 422. One check, the one with the better message and a
+    #: test that reaches it directly.
+    verdict: str | None = Field(default=None, max_length=32)
 
 
 def _detail(row: dict[str, Any]) -> ProposalDetail:
@@ -747,16 +761,25 @@ async def mark_proposal_file_read(
     body: FileMarkIn,
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> ProposalDetail:
-    """Per-file resolution: "I have read this one", per reviewer.
+    """Per-file resolution: "I have read this one", per reviewer — and since
+    §366, p.55's "approve or reject each file individually".
 
     Kept against the version that was read, so editing the proposal clears it
-    without a write - the same rule that makes an approval stop counting.
+    without a write - the same rule that makes an approval stop counting, and
+    the reason a verdict is a column on this mark rather than a table of its
+    own (db 0091).
+
+    **Viewer, as before, and the verdict does not change that.** A per-file
+    verdict is how a reviewer keeps track of their own progress (p.55 says so
+    in its first clause); the verdict that gates applying a proposal is the
+    proposal-level one, which `POST /reviews` gates separately.
     """
     async with user_connection(access.auth.user_id) as conn:
         row = await code_service.mark_file_read(
             conn, access.project_id, proposal_id,
             model_id=body.model_id, source_path=body.source_path,
             read=body.read, reviewer_id=access.auth.user_id,
+            verdict=body.verdict,
         )
     return _detail(row)
 

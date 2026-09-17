@@ -27,7 +27,13 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { ApiError, code as codeApi } from "@/lib/api";
+import { ApiError, api, code as codeApi } from "@/lib/api";
+import {
+  fileState,
+  markRequest,
+  othersSay,
+  type FileState,
+} from "@/lib/file-verdict";
 import {
   DERIVED_NOTE,
   describeImpact,
@@ -97,6 +103,10 @@ export function ReviewSurface({
     queryKey: ["code-proposal", proposalId],
     queryFn: () => codeApi.proposal(workspaceId, projectId, proposalId),
   });
+  // Shared with the platform layout, which has already fetched it — a per-file
+  // mark is *mine* or somebody else's, and until §366 this surface had no way
+  // to tell, so it offered "Unmark" for marks other people had made.
+  const me = useQuery({ queryKey: ["me"], queryFn: api.me });
 
   // Every mutation here returns the whole proposal, so the cache is *set* from
   // the response rather than invalidated and refetched. A refetch would put a
@@ -225,7 +235,8 @@ export function ReviewSurface({
             say.mutate({ ...anchorOf(file), side, line, body })
           }
           onSettle={(id, resolved) => settle.mutate({ id, resolved })}
-          onMark={(read) => mark.mutate({ ...anchorOf(file), read })}
+          onMark={(request) => mark.mutate({ ...anchorOf(file), ...request })}
+          myId={me.data?.user_id}
           busy={say.isPending || mark.isPending}
         />
       ))}
@@ -529,13 +540,17 @@ function FileReview({
   onSay,
   onSettle,
   onMark,
+  myId,
   busy,
 }: {
   file: CodeProposalFile;
   open: boolean;
   onSay: (side: "live" | "proposed", line: number | null, body: string) => void;
   onSettle: (id: string, resolved: boolean) => void;
-  onMark: (read: boolean) => void;
+  onMark: (request: { read: boolean; verdict?: "approved" | "rejected" }) => void;
+  /** Whose marks are mine. Undefined until the current user has loaded, which
+   *  reads as "no mark of mine" rather than matching the first one. */
+  myId: string | undefined;
   busy: boolean;
 }) {
   // Which line the comment box is open against, as "side:line". Held here
@@ -543,6 +558,8 @@ function FileReview({
   // boxes is two half-written comments and one of them gets lost.
   const [openAt, setOpenAt] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const mine: FileState = fileState(file.read_by, myId);
+  const others = othersSay(file.read_by, myId);
   const [collapsed, setCollapsed] = useState(false);
 
   // A file with no model has no versions at all, so 0 !== 0 is false and this
@@ -578,20 +595,35 @@ function FileReview({
             : "new — this file would create a transform"}
           {stale && ` · live is now v${file.current_version}`}
         </span>
-        {file.read_by.length > 0 && (
-          <span className="review-read-by">
-            read by {file.read_by.map((m) => m.reviewer_email ?? "someone").join(", ")}
+        {others && (
+          <span className="review-read-by" data-testid="others-say">
+            {others}
           </span>
         )}
         {open && (
-          <button
-            type="button"
-            className="review-mark"
-            onClick={() => onMark(file.read_by.length === 0)}
-            disabled={busy}
-          >
-            {file.read_by.length > 0 ? "Unmark" : "Mark as read"}
-          </button>
+          <span className="review-marks" data-testid="file-marks" data-state={mine}>
+            {/* p.55's per-file approve/reject, beside the mark it extends.
+                Pressing the one that is already pressed clears it — the only
+                way back to unread without a fourth button, and it matters
+                because a verdict nobody meant to give is worse than none. */}
+            {([
+              ["read", "Read"],
+              ["approved", "Approve"],
+              ["rejected", "Reject"],
+            ] as const).map(([state, label]) => (
+              <button
+                key={state}
+                type="button"
+                className="review-mark"
+                data-testid={`mark-${state}`}
+                aria-pressed={mine === state}
+                onClick={() => onMark(markRequest(mine, state))}
+                disabled={busy}
+              >
+                {label}
+              </button>
+            ))}
+          </span>
         )}
       </header>
 

@@ -600,6 +600,140 @@ def test_unmarking_a_file_removes_only_that_reviewers_mark(
     assert len(cleared.json()["files"][0]["read_by"]) == 1
 
 
+# ---- p.55's per-file verdict (§366, db 0091) --------------------------------
+
+def mark(client: TestClient, fx: Fixture, proposal_id: str, model: str,
+         sub: str | None = None, **body):
+    body.setdefault("model_id", model)
+    body.setdefault("read", True)
+    return client.put(
+        f"{cbase(fx)}/proposals/{proposal_id}/read", headers=hdr(sub or fx.viewer_sub),
+        json=body,
+    )
+
+
+def marks_of(detail: dict) -> list[dict]:
+    return detail["files"][0]["read_by"]
+
+
+def test_a_reviewer_can_approve_or_reject_one_file(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """p.55: "you can approve or reject each file individually"."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+
+    approved = mark(client, fx, p["id"], model, verdict="approved")
+    assert approved.status_code == 200, approved.text
+    assert [m["verdict"] for m in marks_of(approved.json())] == ["approved"]
+
+    rejected = mark(client, fx, p["id"], model, verdict="rejected")
+    assert [m["verdict"] for m in marks_of(rejected.json())] == ["rejected"]
+
+
+def test_a_mark_without_a_verdict_stays_a_mark_without_one(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """**What every mark meant before db 0091, and still a real position.**
+    "I have read this and I am not sure yet" is where a reviewer spends most of
+    a large diff, and turning it into an approval would invent one."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    marked = mark(client, fx, p["id"], model)
+    assert marks_of(marked.json())[0]["verdict"] is None
+
+
+def test_a_verdict_is_cleared_by_marking_the_file_again_without_one(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """Clearing is marking again, not a separate act — one statement, so
+    changing your mind cannot leave a half-state."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    assert mark(client, fx, p["id"], model, verdict="approved").status_code == 200
+    cleared = mark(client, fx, p["id"], model)
+    assert marks_of(cleared.json())[0]["verdict"] is None
+    assert len(marks_of(cleared.json())) == 1, "and the file is still read"
+
+
+def test_an_edit_takes_the_verdict_away_with_the_mark(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """**The failure a per-file verdict could most easily introduce**, and the
+    reason this is a column on the existing mark rather than a table beside it:
+    approving code that has since changed. db 0036's anchor already stops it,
+    and extending the row means the verdict inherits that for free."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    assert mark(client, fx, p["id"], model, verdict="approved").status_code == 200
+
+    after = client.patch(
+        f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.editor_sub),
+        json={"changes": [{"model_id": model, "code": "SELECT id, val, 9 AS z FROM raw"}]},
+    )
+    assert marks_of(after.json()) == []
+
+
+def test_two_reviewers_can_disagree_about_one_file(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """The verdict is per reviewer, like the mark it rides on — a single
+    verdict per file would make the second reviewer overwrite the first."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    assert mark(client, fx, p["id"], model, sub=fx.viewer_sub, verdict="approved").status_code == 200
+    both = mark(client, fx, p["id"], model, sub=fx.admin_sub, verdict="rejected")
+
+    verdicts = {m["reviewer_email"]: m["verdict"] for m in marks_of(both.json())}
+    assert len(verdicts) == 2
+    assert set(verdicts.values()) == {"approved", "rejected"}
+
+
+def test_a_verdict_that_is_not_one_is_refused(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    r = mark(client, fx, p["id"], model, verdict="maybe")
+    assert r.status_code == 422, r.text
+
+
+def test_the_service_refuses_a_bad_verdict_on_its_own_account(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """**Called directly, and that is the point.** The route's body model has a
+    pattern, so nothing sent over HTTP reaches the service's own check — which
+    makes the test above pass whatever `mark_file_read` does. The guard is the
+    module's contract rather than the route's private assumption, so it gets a
+    test that can actually reach it (§213, and §360's `parse` for the
+    precedent)."""
+    import asyncio
+
+    from src.lib.db import user_connection
+    from src.services import code as code_service
+
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+
+    async def attempt() -> str:
+        async with user_connection(uuid.UUID(str(fx.viewer))) as conn:
+            try:
+                await code_service.mark_file_read(
+                    conn, uuid.UUID(str(fx.project)), uuid.UUID(p["id"]),
+                    model_id=uuid.UUID(model), source_path=None, read=True,
+                    reviewer_id=uuid.UUID(str(fx.viewer)), verdict="maybe",
+                )
+            except ValueError as exc:
+                return str(exc)
+        return ""
+
+    assert "approved or rejected" in asyncio.run(attempt())
+
+
+def test_unmarking_takes_the_verdict_with_it(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """A file nobody has read cannot carry a verdict — otherwise unmarking
+    would leave an opinion behind with nothing attached to it."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    assert mark(client, fx, p["id"], model, verdict="rejected").status_code == 200
+    cleared = mark(client, fx, p["id"], model, read=False)
+    assert marks_of(cleared.json()) == []
+
+
 def test_a_closed_proposal_cannot_be_commented_on(
     client: TestClient, fx: Fixture, model: str
 ) -> None:
