@@ -18,13 +18,15 @@ This is the foundation the rest of the parity work stands on. Workshop's object 
 
 ### 1.1 Property base types (`object-link-types` p.127)
 
-Ours: `string`, `integer`, `float`, `boolean`, `date`, `timestamp`, `geopoint`, `json`, `attachment`.
+Ours, from `services/ontology.py`'s `PROPERTY_TYPES` rather than from memory: `string`, `integer`, `float`, `boolean`, `date`, `timestamp`, `geopoint`, `json`, `attachment`, `time_series`, `struct`, `array`.
+
+**This line had drifted three types behind its own table** (§374). It still read as it did before §148 added `time_series`, §245 added `struct` and §346 added `array` — each of which has a row below saying it is built. Same failure as the two §373 found in the build order, and the third instance in two days: **the row gets updated and the sentence above it does not**, and the sentence is what somebody skims when deciding what exists. It is now derived from the set the server actually enforces, which is the only copy that cannot drift.
 
 | Foundry base type | Status | Notes |
 |---|---|---|
 | String, Integer, Double/Float, Boolean, Date, Timestamp | ✅ | |
 | **Geopoint** | ✅ | §20 |
-| **Attachment** — files on objects, for use with functions | ◑ | we have the type; no file storage behind it |
+| **Attachment** — files on objects, for use with functions | ◑ `[fn]` | (p.127) — **the note here said "we have the type; no file storage behind it" and that has been wrong for a long time** (§374). There is an upload route, a download route, a storage prefix of its own (`services/storage.py`), an audit entry, migration 0029 for the orphan it can leave, and §147 renders an image, video or audio one inline on the standard Object View; `e2e/test_action_attachment.py` drives the whole path. The upload is workspace-scoped and deliberately decoupled from the write that uses it, because it happens while a form is being filled in and before anybody has chosen an instance. What is genuinely missing is the *other* half of Foundry's row — **for use with functions** — which is the `[fn]` decision in the README and not a gap in this type. Marked `[fn]` so it is reversible by grep, and ◑ for a reason that is true rather than one that was. |
 | **Geoshape** | ○ | polygons and lines, not just points |
 | **Time series** | ◑ | §148, §149 — the type, the `object_type_series` mapping (db 0047), the points read, and the chart on the standard Object View. §151 added **Workshop**'s time series set variables (`workshop.md` §3.2) and the Chart XY input that reads one. What is left is the other three widgets workshop p.582 names — Map, Metric Card, Object Table — and workshop p.583's time series *transforms*; geotemporal series is the same mechanism with a geopoint value column and is ○ |
 | **Geotemporal series** | ○ | position over time; renders on a Map in standard Object Views |
