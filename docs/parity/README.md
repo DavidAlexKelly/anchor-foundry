@@ -106,6 +106,41 @@ Each spec is a table of Foundry features with a status and a citation.
 
 Citations are `(workshop p.65)` = `docs/pal/foundry_workshop.pdf`, page 65.
 
+### Where to check first: the thin rows
+
+**Every row-level error found in §370–§378 was in a short note**, and none was
+in a long one. That is not a coincidence worth ignoring: a row somebody wrote a
+paragraph about is a row somebody checked, and a row carrying a mark and a
+citation is a row nobody has opened since it was written.
+
+So a reading that starts at the top and works down spends its first hour on the
+rows least likely to be wrong. Start here instead:
+
+```
+python3 - <<'EOF'
+import re, glob
+rows = []
+for f in sorted(glob.glob('docs/parity/*.md')):
+    for n, line in enumerate(open(f, encoding='utf-8'), 1):
+        m = re.match(r'^\|([^|]+)\|\s*(○|◑)[^|]*\|(.*)\|\s*$', line)
+        if m:
+            rows.append((len(m.group(3).strip()), f, n, m.group(1).strip()))
+for length, f, n, name in sorted(rows)[:20]:
+    print(f"{length:5d}  {f}:{n}  {name}")
+EOF
+```
+
+§378 is what that found on its first run: **Analyze the impact of changes**,
+marked ○ with an empty note, in a document whose §4.1 is that exact capability
+and had just been finished. The row and the section it indexes had disagreed
+for as long as §4.1 had been building.
+
+**The fix for a duplicated row is a pointer, not a second mark.** §8's rows
+index the source's table of contents and several restate a row covered in
+detail elsewhere; a pointer cannot drift from what it points at, and two marks
+for one capability is this repository's most-found failure sitting in its own
+scoreboard.
+
 ### A caveat that applies to every page here
 
 These are the docs, not the product. The checklists are reliable about **what exists**. They are not reliable about **how it feels** — spacing, density, animation, the hundred decisions that make an interface feel finished. Nobody in this loop has used Foundry. Parity as specified here gets the feature set right; matching the feel needs either screenshots, a trial enrollment, or an explicit decision to diverge.
