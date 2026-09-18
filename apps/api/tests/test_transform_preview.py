@@ -12,21 +12,29 @@ things that make a preview a preview:
      writes, which is the drift the roadmap asked this to catch.
 
 The refusals matter as much: a transform naming a dataset the project does not
-have, and a Python transform, which cannot run here at all (decision 0004).
+have, and - for both languages - a file that declares nothing.
+
+**Python is previewed by the same button and answered by different machinery**
+(§390). Decision 0004 keeps customer code out of this process, so the Python
+path queues a row for the worker and this file tests what the API owns of it:
+that it is queued rather than run, that the declaration is resolved *here*, and
+that the run reads back.
 """
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import uuid
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
+from test_api import ADMIN_DSN, Fixture, LocalVerifier, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 
@@ -227,21 +235,270 @@ def test_broken_sql_is_reported_as_the_author_s_problem(
     assert "nope" in r.json()["detail"].lower()
 
 
-def test_previewing_python_refuses_rather_than_running_it_here(
+# ---- the Python path: queued, not run here (§390) ----------------------------
+def python(fx: Fixture, body: str = "    return orders\n") -> str:
+    return (
+        f"@transform(output='daily_orders', inputs={{'orders': 'orders_p_{fx.tag}'}})\n"
+        f"def build(orders):\n{body}"
+    )
+
+
+def test_previewing_python_queues_a_run_rather_than_running_it_here(
     client: TestClient, fx: Fixture, repo: str, datasets
 ) -> None:
-    """Decision 0004: customer Python runs in an isolated task with an empty
-    role, never in the API process. A refusal that says why and says what does
-    work beats an endpoint that quietly executes it in the wrong place."""
+    """Decision 0004: customer Python runs in the runner task with an empty
+    role, never in the API process. Until §390 that meant a refusal; it now
+    means a queued row the panel watches (db 0092), which answers the question
+    instead of explaining why it cannot be answered.
+
+    **The rows must be absent, not empty-and-final.** A response carrying
+    `rows: []` with nothing to say it has not run yet is §214 in numeric form,
+    so `run_id` and `status` are what distinguishes this from an answer.
+    """
+    r = preview(client, fx, repo, path="build.py", content=python(fx))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "queued"
+    assert body["run_id"], "a queued preview the caller cannot poll is not queued"
+    assert body["rows"] == []
+    assert body["output"] == "daily_orders"
+
+    # And it is readable straight back, in the state it was left in.
+    r = client.get(
+        f"{rbase(fx)}/{repo}/previews/{body['run_id']}", headers=hdr(fx.editor_sub)
+    )
+    assert r.status_code == 200, r.text
+    run = r.json()
+    assert run["status"] == "queued"
+    assert run["path"] == "build.py"
+    assert run["branch"] == "main"
+    assert run["finished_at"] is None
+    assert run["rows"] == []
+    assert run["inputs"] == [], "nothing has been sampled yet"
+
+
+def test_a_python_transform_naming_a_missing_dataset_is_refused_at_the_button(
+    client: TestClient, fx: Fixture, repo: str, datasets
+) -> None:
+    """The check that must *not* move to the worker. Resolving the declaration
+    is the API's job (§292 - one parser), so a file reading a dataset the
+    project does not have is told now, with the name in the message, rather
+    than a minute later in a run's error field."""
     source = (
-        "@transform(output='daily_orders', inputs={'orders': 'orders_p_x'})\n"
+        "@transform(output='daily_orders', inputs={'orders': 'no_such_dataset'})\n"
         "def build(orders):\n    return orders\n"
     )
     r = preview(client, fx, repo, path="build.py", content=source)
+    assert r.status_code == 422, r.text
+    assert "no_such_dataset" in r.json()["detail"]
+
+
+def test_an_empty_python_buffer_is_not_queued(
+    client: TestClient, fx: Fixture, repo: str, datasets
+) -> None:
+    """A run over nothing would occupy the queue to report that nothing
+    happened. The declaration reader refuses it first, which is the right
+    refusal and the reason `request`'s own guard is belt and braces."""
+    r = preview(client, fx, repo, path="empty.py", content="   \n")
+    assert r.status_code == 422, r.text
+
+
+def test_queueing_more_previews_than_the_repository_may_hold_is_refused(
+    client: TestClient, fx: Fixture, datasets
+) -> None:
+    """A preview is over a buffer somebody is still typing in, so the third
+    press is nearly always meant to replace the first. Refusing says which,
+    rather than making them watch two answers to questions already stale.
+
+    Its own repository, because the cap counts *queued* rows and a repository
+    other tests have queued against would make the number arrive early.
+    """
+    r = client.post(
+        rbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Queue Cap {uuid.uuid4().hex[:8]}"},
+    )
+    assert r.status_code == 201, r.text
+    own = r.json()["id"]
+
+    for i in range(2):
+        r = preview(client, fx, own, path=f"q{i}.py", content=python(fx))
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "queued"
+
+    r = preview(client, fx, own, path="q2.py", content=python(fx))
     assert r.status_code == 409, r.text
-    detail = r.json()["detail"]
-    assert "isolated task" in detail
-    assert "SQL transforms preview now" in detail
+    assert "already waiting" in r.json()["detail"]
+
+
+def test_a_viewer_may_read_a_preview_they_may_not_ask_for(
+    client: TestClient, fx: Fixture, repo: str, datasets
+) -> None:
+    """The floor `read_test_run` draws, for its reason: asking executes code
+    the caller supplied, reading what it said does not. A viewer who could not
+    see the answer could not be shown the editor at all."""
+    r = preview(client, fx, repo, path="viewed.py", content=python(fx))
+    assert r.status_code == 200, r.text
+    run_id = r.json()["run_id"]
+
+    r = client.post(
+        f"{rbase(fx)}/{repo}/preview", headers=hdr(fx.viewer_sub),
+        json={"path": "viewed.py", "content": python(fx)},
+    )
+    assert r.status_code == 403, r.text
+
+    r = client.get(f"{rbase(fx)}/{repo}/previews/{run_id}", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    assert r.json()["id"] == run_id
+
+
+def test_recent_previews_are_listed_for_the_file_they_were_about(
+    client: TestClient, fx: Fixture, datasets
+) -> None:
+    """The panel opens on "what did this file say last time", so the listing is
+    filtered by path rather than by branch - the one place this diverges from
+    the test runs it is otherwise a copy of."""
+    r = client.post(
+        rbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Listing {uuid.uuid4().hex[:8]}"},
+    )
+    assert r.status_code == 201, r.text
+    own = r.json()["id"]
+
+    for path in ("a.py", "b.py"):
+        assert preview(client, fx, own, path=path, content=python(fx)).status_code == 200
+
+    r = client.get(f"{rbase(fx)}/{own}/previews", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    assert sorted(x["path"] for x in r.json()) == ["a.py", "b.py"]
+
+    r = client.get(
+        f"{rbase(fx)}/{own}/previews", headers=hdr(fx.editor_sub), params={"path": "a.py"}
+    )
+    assert r.status_code == 200, r.text
+    assert [x["path"] for x in r.json()] == ["a.py"]
+
+
+def finish(run_id: str, columns, rows) -> None:
+    """Land an answer on a queued run without a worker.
+
+    The job that really does this is tested in
+    `apps/worker/tests/test_code_preview_runs_job.py` and the whole path is
+    tested in the browser. What is under test *here* is what the read route
+    makes of a finished row, and writing one directly is the only way to ask
+    that question without standing a Dagster op up inside an API test.
+    """
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            """UPDATE code_preview_runs
+                  SET status = 'succeeded', started_at = now(), finished_at = now(),
+                      result = CAST(%s AS jsonb), inputs = CAST(%s AS jsonb)
+                WHERE id = %s""",
+            (
+                json.dumps({"columns": columns, "rows": rows, "total_rows": len(rows)}),
+                json.dumps([{"alias": "orders", "rows_available": 1500, "rows_used": 1000}]),
+                run_id,
+            ),
+        )
+
+
+@pytest.fixture()
+def own_repo(client: TestClient, fx: Fixture) -> str:
+    """A repository of this test's own.
+
+    `MAX_QUEUED_PER_REPO` counts *queued* rows and nothing in an API test ever
+    finishes one, so a test that queues against the shared `repo` fixture spends
+    its budget for everybody after it. The 409 that results reads as a bug in
+    the test under it rather than as a neighbour's leftovers, which cost a
+    diagnosis here.
+    """
+    r = client.post(
+        rbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Own {uuid.uuid4().hex[:8]}"},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_a_finished_run_reports_what_it_would_do_to_the_dataset_it_writes(
+    client: TestClient, fx: Fixture, own_repo: str, datasets
+) -> None:
+    """**p.14's other question, on the Python path too.**
+
+    A SQL preview reports the drift against the dataset the transform already
+    writes, and for a while this one did not - the field was on the response
+    and null by construction, which is a control that is present and inert
+    (§214). The comparison is `engine.diff_schemas`, the same one migration
+    0018 means by a schema change, so the two languages cannot disagree about
+    what a schema change is.
+    """
+    source = (
+        f"@transform(output='orders_p_{fx.tag}', inputs={{'orders': 'orders_p_{fx.tag}'}})\n"
+        "def build(orders):\n    return orders\n"
+    )
+    r = preview(client, fx, own_repo, path="drifts.py", content=source)
+    assert r.status_code == 200, r.text
+    run_id = r.json()["run_id"]
+
+    # `orders_p_<tag>` is three text columns wide (`order_id`, `region`,
+    # `total_pence`); this run produced one of them plus a new one.
+    finish(run_id, [{"name": "order_id", "data_type": "BIGINT"},
+                    {"name": "surcharge", "data_type": "DOUBLE"}], [["1", "0.5"]])
+
+    r = client.get(f"{rbase(fx)}/{own_repo}/previews/{run_id}", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["writes_to_existing_dataset"] is True
+    changes = body["schema_changes"]
+    assert [c["name"] for c in changes["added"]] == ["surcharge"]
+    assert {c["name"] for c in changes["removed"]} == {"region", "total_pence"}
+    # And the sampling warning survives the round trip, derived rather than
+    # stored: 1000 of 1500 is a sample and the row says so.
+    (orders,) = body["inputs"]
+    assert orders["sampled"] is True
+    assert body["sampled"] is True
+
+
+def test_a_queued_run_writing_a_new_dataset_reports_no_drift(
+    client: TestClient, fx: Fixture, own_repo: str, datasets
+) -> None:
+    """The counterweight, and its own name (§69).
+
+    Every column of a dataset that does not exist yet is "added", and a drift
+    block over a first version would be noise on the one preview where there is
+    nothing to compare against - `diff_schemas` returns None with no baseline
+    and this is where that matters. The SQL path has the same test seventeen
+    functions up; two tests sharing a name is two tests where one of them can
+    be deleted without anybody noticing.
+    """
+    r = preview(client, fx, own_repo, path="new.py", content=python(fx))
+    assert r.status_code == 200, r.text
+    run_id = r.json()["run_id"]
+    finish(run_id, [{"name": "id", "data_type": "BIGINT"}], [["1"]])
+
+    r = client.get(f"{rbase(fx)}/{own_repo}/previews/{run_id}", headers=hdr(fx.editor_sub))
+    body = r.json()
+    assert body["writes_to_existing_dataset"] is False
+    assert body["schema_changes"] is None
+
+
+def test_a_preview_run_from_another_repository_reads_as_absent(
+    client: TestClient, fx: Fixture, repo: str, datasets
+) -> None:
+    """Scoped by repository as well as by id, so a borrowed id is a 404 rather
+    than a window into rows the path did not name."""
+    r = client.post(
+        rbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Elsewhere {uuid.uuid4().hex[:8]}"},
+    )
+    assert r.status_code == 201, r.text
+    other = r.json()["id"]
+
+    r = preview(client, fx, other, path="theirs.py", content=python(fx))
+    assert r.status_code == 200, r.text
+    run_id = r.json()["run_id"]
+
+    r = client.get(f"{rbase(fx)}/{repo}/previews/{run_id}", headers=hdr(fx.editor_sub))
+    assert r.status_code == 404, r.text
 
 
 def test_a_declaration_that_cannot_be_read_is_refused_not_guessed(

@@ -708,6 +708,78 @@ export interface TransformPreview {
     retyped?: { name: string; from: string; to: string }[];
   } | null;
   writes_to_existing_dataset: boolean;
+  /** Set only for a Python transform (§390): nothing has run, and this is the
+   * run to watch. **Absent rather than null-and-meaningless on the SQL path**,
+   * where the rows are already here and there is nothing to watch. */
+  run_id?: string | null;
+  /** The queued run's status, for the same reason. */
+  status?: string | null;
+}
+
+/** One input as a queued Python preview read it (§390; db 0092).
+ *
+ * **Deliberately not `PreviewedInput`.** A queued run knows the alias and the
+ * two row counts and does not know the dataset's *name* — the API resolved
+ * names to ids when it queued the run, and storing the name too would be a
+ * second copy of something that can be renamed underneath it. The warning the
+ * alias carries is the same warning, which is what matters.
+ */
+export interface PreviewRunInput {
+  alias: string;
+  rows_available: number;
+  rows_used: number;
+  /** `rows_used < rows_available`, computed by the API from the two numbers so
+   * that one rule has one writer. */
+  sampled: boolean;
+}
+
+/** A Python transform preview, which is a job rather than an answer (§390;
+ * db 0092).
+ *
+ * Decision 0004 keeps customer Python out of the API process, so pressing
+ * Preview on a `.py` file queues this and the panel watches it. A SQL preview
+ * comes back as `TransformPreview` in the response to the same button — same
+ * feature, different machinery, because only one of the two languages can be
+ * run where the answer is wanted.
+ */
+export interface CodePreviewRun {
+  id: string;
+  repo_id: string;
+  branch: string;
+  path: string;
+  /** The dataset this transform declares it writes. */
+  output: string;
+  /** queued | running | succeeded | failed | errored. **`failed` and `errored`
+   * are different answers**: the first is the author's transform raising, the
+   * second the run not having happened. */
+  status: string;
+  columns: { name: string; data_type: string }[];
+  rows: (string | null)[][];
+  /** Rows produced **from the sample**, not from the datasets - counted over
+   * the whole output rather than taken from `rows.length`. */
+  row_count: number;
+  /** True when `rows` is only the first page of `row_count`. */
+  truncated: boolean;
+  sampled: boolean;
+  /** What the author's transform raised, when `status` is `failed`. */
+  failure: string | null;
+  inputs: PreviewRunInput[];
+  /** Set only when `status` is `errored`, and never the transform's own
+   * failure message. */
+  error: string | null;
+  /** What this change would do to the dataset the transform already writes,
+   * or null when it writes a new one or changes nothing. Computed when the
+   * run is read rather than when it ran, because the comparison is against
+   * the dataset as it stands. */
+  schema_changes: {
+    added?: { name: string; data_type: string }[];
+    removed?: { name: string; data_type: string }[];
+    retyped?: { name: string; from: string; to: string }[];
+  } | null;
+  writes_to_existing_dataset: boolean;
+  queued_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 export interface ProjectMember {

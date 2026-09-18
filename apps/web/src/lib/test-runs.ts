@@ -19,8 +19,15 @@ export const FAILED = "failed";
 export const ERROR = "error";
 export const SKIPPED = "skipped";
 
-/** Whether this run has finished, either way. */
-export function isSettled(run: CodeTestRun): boolean {
+/**
+ * Whether this run has finished, either way.
+ *
+ * **Takes a status-bearing thing rather than a `CodeTestRun`**, because it is
+ * the same rule for every queued job this platform polls: db 0071 and db 0092
+ * define the same five statuses, and the preview panel (§390) imports this
+ * one rather than writing a second copy that agrees until it does not (§292).
+ */
+export function isSettled(run: { status: string }): boolean {
   return run.status === "succeeded" || run.status === "failed" || run.status === "errored";
 }
 
@@ -33,7 +40,7 @@ export function isSettled(run: CodeTestRun): boolean {
  * asking forever is for this to go false, which is why it is a named rule
  * rather than an inline `!==`.
  */
-export function shouldPoll(run: CodeTestRun | undefined): boolean {
+export function shouldPoll(run: { status: string } | undefined): boolean {
   return run !== undefined && !isSettled(run);
 }
 
