@@ -96,12 +96,15 @@ times, which is what happened to produce it.
 
 A second cross-cutting fact, smaller than the access one and worth the same
 treatment. Three rows across two specifications read as missing features and
-are really one shape:
+were really one shape. **All three are built now** (§385–§387), and the
+section stays because what it records is not the gap but how badly the gap was
+sized — the estimates were wrong in both directions, and the reason they were
+wrong is the reusable part:
 
 | Row | |
 |---|---|
 | ~~`datasets-lineage.md` — **Manage Builds** (p.9)~~ | **Done (§386).** Two of p.9's three selections were already on the graph — §354's multi-select and the `All upstream` chip — so what was missing was the build over a selection, not the selections |
-| `datasets-lineage.md` — **Manage Schedules** (p.10) | Schedules exist (`trigger_mode='cron'`); same (§379) |
+| ~~`datasets-lineage.md` — **Manage Schedules** (p.10)~~ | **Done (§387)**, reusing §386's plan: which models a selection means is one question |
 | ~~`code-repositories.md` — **Build** the current file (p.13–14)~~ | **Done (§385)**, as one unit with p.14's Build helper. `POST /models/{id}/run` existed; what was missing was the control and somewhere for it to report. **Cited to p.16 until §384** — that is the Branches tab; the button is p.13 and its helper panel is p.14 |
 
 Foundry lets you act on a selection *from wherever you are looking* — the
@@ -128,6 +131,20 @@ against — **as one unit with p.14's Build helper**, which §384 found was a
 second ○ row for the same feature. p.14 pairs the trigger with a progress view,
 and a trigger with nowhere to report progress is §214's control that looks like
 it works.
+
+## What the three of them cost, which is the part to keep
+
+| Row | Estimated as | What it was |
+|---|---|---|
+| **Build** the current file | a build system (§381), then one button (§383) | one module, one panel copied from its neighbour, no new endpoint |
+| **Manage Builds** | three strategies to design | two of the three selections were already chips on the graph; the build over a selection was the work |
+| **Manage Schedules** | a second control | §386's plan answered "which models", so it was a summary, a box and two buttons |
+
+**Every estimate was made from the row's wording and missed what was already
+built.** §191 — check whether the thing exists before writing a second one —
+turned each of them from a feature into a composition, and it did so *after*
+the note had already been written twice. The habit that would have caught it
+earlier is the cheap one: before sizing a row, read the code it would touch.
 
 **§385 built it, and the measurement is the useful part.** It came to one pure
 module, one panel copied from the Tests panel next door, and no new endpoint —
