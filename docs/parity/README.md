@@ -100,7 +100,7 @@ are really one shape:
 
 | Row | |
 |---|---|
-| `datasets-lineage.md` — **Manage Builds** (p.9) | Building exists; the lineage graph is not where you start it (§379) |
+| ~~`datasets-lineage.md` — **Manage Builds** (p.9)~~ | **Done (§386).** Two of p.9's three selections were already on the graph — §354's multi-select and the `All upstream` chip — so what was missing was the build over a selection, not the selections |
 | `datasets-lineage.md` — **Manage Schedules** (p.10) | Schedules exist (`trigger_mode='cron'`); same (§379) |
 | ~~`code-repositories.md` — **Build** the current file (p.13–14)~~ | **Done (§385)**, as one unit with p.14's Build helper. `POST /models/{id}/run` existed; what was missing was the control and somewhere for it to report. **Cited to p.16 until §384** — that is the Branches tab; the button is p.13 and its helper panel is p.14 |
 
