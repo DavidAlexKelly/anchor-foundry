@@ -2043,7 +2043,11 @@ def usages(layout: Any, variables: dict[str, Variable]) -> dict[str, list[dict[s
 
 
 def displayed(
-    layout: Any, variables: dict[str, Variable], visible: "set[str] | frozenset[str]"
+    layout: Any,
+    variables: dict[str, Variable],
+    visible: "set[str] | frozenset[str]",
+    *,
+    bound: "frozenset[str]" = frozenset(),
 ) -> set[str]:
     """Which variables a set of on-screen nodes needs computed (§392; p.75).
 
@@ -2075,6 +2079,14 @@ def displayed(
     which is what `evaluate`'s `only` turns into "not computed yet". **Absent
     rather than null**: p.75 says such a variable "will not be computed until
     [it is] shown", and a null would be a value a widget could render.
+
+    `bound` stops the walk, and it is p.127's rule showing up a second time
+    (§393). An interface variable the host has mapped takes the host's value
+    and **its own derivation is skipped** - `evaluate` says so twelve lines in.
+    So walking into that derivation's inputs schedules work for a computation
+    that will not happen. They are still computed when something else visible
+    needs them, which is the closure doing its job rather than an exception to
+    it.
     """
     wanted: set[str] = set()
     if isinstance(layout, dict):
@@ -2098,7 +2110,7 @@ def displayed(
     while frontier:
         vid = frontier.pop()
         variable = variables.get(vid)
-        if variable is None or variable.derivation is None:
+        if variable is None or variable.derivation is None or vid in bound:
             continue
         for ref in variable.derivation.inputs:
             if ref in variables and ref not in wanted:
