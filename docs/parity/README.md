@@ -130,6 +130,21 @@ for length, f, n, name in sorted(rows)[:20]:
 EOF
 ```
 
+**The second thing to know about a thin row is that it may not be checkable at
+all.** §302's citation test resolves every page a row *cites*; a row citing
+nothing passes it vacuously. Measured in §379: **45 of 164 unfinished rows
+carry no page or TOC reference**, which is a quarter of the board and a project
+rather than an afternoon.
+
+That is why there is no check enforcing it yet, and the reason is §302's own,
+written about `§NNN` references: "enforcing it would mean grandfathering eight
+numbers, and a grandfather list is a thing that rots into the reason the check
+gets deleted." Forty-five is worse. **The number is the thing to watch**: when
+readings have worked it down far enough that the remainder can be fixed rather
+than grandfathered, the check becomes worth adding — and it is re-derived by
+the same snippet above with `p\.\d+|TOC §\d+` searched for instead of note
+length.
+
 §378 is what that found on its first run: **Analyze the impact of changes**,
 marked ○ with an empty note, in a document whose §4.1 is that exact capability
 and had just been finished. The row and the section it indexes had disagreed
