@@ -26,6 +26,7 @@ from ontology_page import find_type_row
 
 GREEN = "rgb(26, 127, 55)"    # #1a7f37
 RED = "rgb(185, 28, 28)"      # #b91c1c
+BLUE = "rgb(29, 78, 216)"     # #1d4ed8 — only §388's copy test writes this
 
 # `region` carries nothing at all: it is what the editor test draws a rule on,
 # and a property the fixture already configured could not tell "the rule I just
@@ -258,6 +259,13 @@ def test_rules_copied_to_another_property_go_on_meaning_what_they_meant(
     # control: copying rules onto themselves is a no-op dressed as an action.
     expect(page.get_by_test_id("copy-target-wifi")).to_have_count(0)
 
+    # **The rules are edited first, and that is deliberate.** Copying them
+    # unchanged cannot tell "copy" from "copy and apply": the source already
+    # has the saved rules either way. A sweep found exactly that — dropping
+    # the write to the source property passed every test here (§213). Changing
+    # the colour before copying makes the two answers different.
+    page.get_by_test_id("rule-1-colour").fill("#1d4ed8")
+
     page.get_by_test_id("copy-target-name").get_by_role("checkbox").check()
     expect(page.get_by_test_id("copy-rules-summary")).to_have_text("copy to 1 property")
 
@@ -265,17 +273,26 @@ def test_rules_copied_to_another_property_go_on_meaning_what_they_meant(
     page.get_by_role("button", name="Save", exact=True).click()
 
     open_object(page, module, "Alpha")
-    # Green, because the copied rule still asks about `wifi` and Alpha's is
-    # true — the reference travelled with the rule.
-    assert colour_of(page, "name") == GREEN
+    # Blue, because the copied rule still asks about `wifi` and Alpha's is
+    # true — the reference travelled with the rule — and because what was
+    # copied is the edit on screen rather than what was saved before it.
+    assert colour_of(page, "name") == BLUE
     # And Beta, whose `wifi` is false, gets the fallback: the *pair* is what
     # says the rules are being evaluated rather than one colour being painted
     # on everything.
     open_object(page, module, "Beta")
     assert colour_of(page, "name") == RED
-    # And the property they came from still has them: a copy is not a move.
+    # **Back to Alpha**, because rule 1 is the one whose colour changed and it
+    # only matches where `wifi` is true. Asserting this on Beta reads the
+    # untouched fallback and fails for a reason that has nothing to do with
+    # the claim.
     open_object(page, module, "Alpha")
-    assert colour_of(page, "wifi") == GREEN
+    # **And the property they came from has the edit too**, which is the half
+    # a copy of unchanged rules could never show: this control applies as well
+    # as copies, because the rules on screen are an edit nobody has applied
+    # yet, and writing them to another property while their own still showed
+    # the old colour would be the worst kind of surprise.
+    assert colour_of(page, "wifi") == BLUE
 
 
 def test_a_copy_says_which_properties_would_lose_their_own_rules(page, module) -> None:
