@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import contextmanager
 
 import pytest
 from playwright.sync_api import expect
@@ -615,6 +616,87 @@ def test_a_parameter_removed_from_the_action_leaves_its_section(page, api):
     page.get_by_role("button", name="Save", exact=True).click()
     expect(page.get_by_role("dialog")).to_have_count(0)
     assert saved_sections(api, mod)[0]["parameters"] == ["status"]
+
+
+@contextmanager
+def sections_read_held(page):
+    """Hold the arrangement read open, so an edit is made before it lands.
+
+    The two tests below are about the gap between the dialog opening and the
+    form arriving: both edits that travel through the form are made inside it.
+    On a loaded machine the gap is real, which is how this arrived as a browser
+    failure rather than as a thought.
+
+    **The route is removed as well as released**, because `onSuccess`
+    invalidates `action-sections` and awaits it. A handler still holding that
+    refetch leaves the dialog open after a save that worked — a symptom
+    indistinguishable from the bug, produced by the harness (§189).
+    """
+    held: list = []
+    page.route("**/action-types/*/sections", lambda route: held.append(route))
+    try:
+        yield
+    finally:
+        for route in held:
+            route.continue_()
+        page.unroute("**/action-types/*/sections")
+
+
+def test_a_parameter_removed_before_the_form_arrives_still_leaves_its_section(page, api):
+    """The same removal, made while the arrangement is still in flight.
+
+    The strip has nothing to strip yet, and the arrangement then arrives from
+    the server still naming `reason` — so the save is refused about a section
+    the person was not looking at, which is the refusal the strip exists to
+    prevent.
+    """
+    mod = build(api, "Removal races the read",
+                sections=[{"title": "Details", "parameters": ["status", "reason"]}])
+    with sections_read_held(page):
+        open_editor(page, mod)
+        expect(page.get_by_label("Parameter 1 name")).to_be_visible()
+        page.get_by_test_id("rule-rows").locator(".card").nth(1).get_by_role(
+            "button", name="Remove").click()
+        page.locator("[data-parameter-row='reason'] button", has_text="Remove").click()
+
+    save = page.get_by_role("button", name="Save", exact=True)
+    expect(save).to_be_enabled(timeout=30000)
+    save.click()
+    # Positive first (§318): the refusal this is about has a place to appear
+    # before the absence of one means anything.
+    expect(page.get_by_role("dialog")).to_have_count(0, timeout=30000)
+    expect(page.get_by_test_id("definition-error")).to_have_count(0)
+    assert saved_sections(api, mod)[0]["parameters"] == ["status"]
+
+
+def test_a_rename_made_before_the_form_arrives_still_carries_through_it(page, api):
+    """The other half. A rename is a pair, and only the edit knows both names —
+    the arrangement that arrives afterwards knows the old one and the action
+    declares the new one, so nothing left at seed time could reconstruct it.
+
+    **Typed rather than filled**, because a name is typed: each keystroke is
+    its own rename, so what waits for the read is a *chain* — status → s → st
+    → … → state. Filled, it is one edit, and one edit replays the same in any
+    order. The chain is the only thing here that can tell replaying in order
+    from replaying backwards, and a backwards replay matches nothing and
+    leaves the section naming `status`.
+    """
+    mod = build(api, "Rename races the read",
+                sections=[{"title": "Details", "parameters": ["status"]}])
+    with sections_read_held(page):
+        open_editor(page, mod)
+        name = page.get_by_label("Parameter 1 name")
+        expect(name).to_be_visible()
+        name.click()
+        page.keyboard.press("ControlOrMeta+a")
+        name.press_sequentially("state", delay=20)
+        expect(name).to_have_value("state")
+
+    save = page.get_by_role("button", name="Save", exact=True)
+    expect(save).to_be_enabled(timeout=30000)
+    save.click()
+    expect(page.get_by_role("dialog")).to_have_count(0, timeout=30000)
+    assert saved_sections(api, mod)[0]["parameters"] == ["state"]
 
 
 def test_starting_folded_is_unreachable_until_a_section_can_fold(page, api):
