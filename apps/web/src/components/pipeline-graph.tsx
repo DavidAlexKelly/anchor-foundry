@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FileState } from "@/lib/file-verdict";
 import type { PipelineGraph, PipelineNode } from "@/lib/types";
+import { between, buildPlan, buildSummary, cascadeCount } from "@/lib/graph-builds";
 import {
   columnsIn,
   kindsIn,
@@ -310,6 +311,8 @@ export function PipelineGraphView({
   initialView,
   onViewChange,
   review,
+  onBuild,
+  building,
 }: {
   graph: PipelineGraph;
   onOpen: (node: PipelineNode) => void;
@@ -325,8 +328,29 @@ export function PipelineGraphView({
    *  `lib/pipeline-review`. A node absent from the map gets none, which is
    *  how "this proposal does not touch it" is said. */
   review?: Map<string, FileState>;
+  /** p.9's builds helper (§386): run what the selection builds.
+   *
+   * **Optional, and that is the control's own §214 rule.** The graph is drawn
+   * on a project page, inside a review surface and inside the dataset
+   * application; only the first is somewhere work starts. A Build button on a
+   * review of a proposal would be a control that cannot do what it says, so
+   * the callers that cannot build simply do not pass this and it is not
+   * drawn.
+   *
+   * The models arrive in build order, upstream first — `buildPlan` sorts by
+   * the `layer` the server already computed. */
+  onBuild?: (models: { id: string; name: string; layer: number }[]) => void;
+  /** A build asked for here is still going, so the button says so rather than
+   *  inviting a second one. */
+  building?: boolean;
 }) {
   const [selected, setSelected] = useState<string[]>(initialView?.selected ?? []);
+  // What Build would run, and what it would set off afterwards. Computed here
+  // rather than in the button so the summary and the button cannot disagree
+  // about which nodes they mean (§386); the rules are in `lib/graph-builds`,
+  // which has its own tests because vitest cannot parse `.tsx`.
+  const plan = buildPlan(graph.nodes, graph.edges, selected);
+  const cascade = cascadeCount(graph.nodes, graph.edges, plan);
   // p.7's two modes. **Panning is the default**, as it is in Foundry: the
   // gesture a reader makes without thinking is moving the graph around, and a
   // page that opens in a mode where dragging selects would have them draw a
@@ -819,6 +843,24 @@ export function PipelineGraphView({
                 {label}
               </button>
             ))}
+            {/* p.9's middle strategy, and the only one of the three whose
+                *selection* was not already on this bar: "build all datasets
+                between the selected datasets". Its own chip rather than a
+                build button of its own, because here the three strategies are
+                three ways to shape a selection and the shaping is a step the
+                reader can watch happen — `All upstream` beside it is p.9's
+                third strategy already, and the selection itself is the first
+                (§386). Two ends at least, since "between" needs them. */}
+            {selected.length >= 2 && (
+              <button
+                type="button"
+                className="chip"
+                data-testid="expand-between"
+                onClick={() => setSelected((current) => between(graph.edges, current))}
+              >
+                Between
+              </button>
+            )}
             <button
               className="btn quiet"
               data-testid="selection-clear"
@@ -827,6 +869,40 @@ export function PipelineGraphView({
             >
               Clear
             </button>
+            {/* p.9's builds helper. **The summary is beside the button, not
+                inside it**: what a reader has to know before pressing is how
+                many transforms will run and which of the selected cards are
+                not built by one, and a label cannot carry both. §214 is the
+                whole reason the second half is there — selecting six cards and
+                running four builds is the reading this prevents (§386). */}
+            {onBuild && (
+              <div
+                data-testid="selection-build"
+                style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}
+              >
+                <button
+                  type="button"
+                  className="btn"
+                  data-testid="selection-build-run"
+                  disabled={building || plan.models.length === 0}
+                  onClick={() => onBuild(plan.models)}
+                >
+                  {building ? "Building…" : "Build"}
+                </button>
+                <span className="soft" data-testid="selection-build-summary">
+                  {buildSummary(plan)}
+                </span>
+                {/* §383: an ancestors build makes every upstream-triggered
+                    model below it fire again on the worker's next pass, so
+                    the run history will hold more builds than were asked for.
+                    Said before the click rather than discovered after it. */}
+                {cascade > 0 && (
+                  <span className="chip" data-testid="selection-build-cascade">
+                    {cascade} more will follow on their own
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
