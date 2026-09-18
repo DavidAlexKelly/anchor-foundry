@@ -9545,6 +9545,17 @@ export function CanvasEmbeddedModule({
               declared={childVariables}
               events={eventsOf(definition) as never}
               bound={boundIds}
+              // p.75's last sentence (§393): "This behavior is the same for
+              // non-visible variables used in embedded modules." The child is
+              // a module with its own pages, its own current page and its own
+              // bridge, so the rule is the same rule over the child's own
+              // document rather than a second one.
+              layout={layout}
+              // Run mode only, and for the host's reason rather than by
+              // analogy with it: the child inherits the host's mode, and in
+              // edit mode `CanvasPage` renders every page - so inside the
+              // host's editor every page of the child is on screen too.
+              lazy={mode === "run"}
             >
               <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
                 <Frame data={JSON.stringify(layout)} />
@@ -9939,6 +9950,15 @@ export function CanvasLoopSection({
                   declared={childVariables}
                   events={eventsOf(child.data!.definition) as never}
                   bound={[itemTarget!.id, ...Object.keys(shared)]}
+                  // p.75's other remaining clause (§393): "non-visible pages
+                  // of a looped layout". A Loop is one embedded module per
+                  // row (p.129), each with its own variable scope and layout
+                  // state, so a row's non-visible pages are an embedded
+                  // module's non-visible pages and the same wiring answers
+                  // both. A row the loop is not showing is not mounted at all,
+                  // so it never had a bridge to be lazy about.
+                  layout={layout}
+                  lazy={mode === "run"}
                 >
                   <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
                     <Frame data={JSON.stringify(layout)} />

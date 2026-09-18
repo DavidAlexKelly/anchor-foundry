@@ -3576,3 +3576,45 @@ def test_a_payload_token_is_not_a_dangling_reference() -> None:
     scan is deliberately not wired into `dangling_references`."""
     variables = wv.parse({"v_alpha": var("v_alpha", label="Alpha")})
     assert wv.dangling_references({"t": text_node("{{row.id}}")}, variables) == []
+
+
+def test_the_closure_stops_at_a_variable_the_host_has_mapped() -> None:
+    """p.127's rule, a second time (§393).
+
+    An interface variable the host mapped takes the host's value and **its own
+    derivation is skipped** - so walking into that derivation's inputs
+    schedules work for a computation that will not happen. The child's own
+    default is not used either, which is the same sentence read for values
+    rather than for effort.
+    """
+    variables = wv.parse({
+        "v_deep": var("v_deep", label="Deep"),
+        "v_own": var("v_own", label="Own",
+                     derivation={"transform": "concat", "inputs": ["v_deep"]}),
+        "v_iface": var("v_iface", label="Iface",
+                       derivation={"transform": "concat", "inputs": ["v_own"]}),
+    })
+    layout = {"w": node({"variable": "v_iface"})}
+
+    # Unmapped, the whole chain is needed.
+    assert wv.displayed(layout, variables, {"w"}) == {"v_iface", "v_own", "v_deep"}
+    # Mapped, the host supplies the value and nothing behind it is computed.
+    assert wv.displayed(
+        layout, variables, {"w"}, bound=frozenset({"v_iface"})
+    ) == {"v_iface"}
+
+
+def test_a_mapped_variable_is_still_computed_when_something_else_needs_it() -> None:
+    """The counterweight, and the reason this is a *stop* rather than an
+    exclusion. `v_own` is behind a mapped variable and also read by a widget of
+    its own; skipping it would leave that widget waiting for a value nobody
+    asked for, which is the failure the whole lazy rule has to avoid."""
+    variables = wv.parse({
+        "v_own": var("v_own", label="Own"),
+        "v_iface": var("v_iface", label="Iface",
+                       derivation={"transform": "concat", "inputs": ["v_own"]}),
+    })
+    layout = {"a": node({"variable": "v_iface"}), "b": node({"variable": "v_own"})}
+    assert wv.displayed(
+        layout, variables, {"a", "b"}, bound=frozenset({"v_iface"})
+    ) == {"v_iface", "v_own"}

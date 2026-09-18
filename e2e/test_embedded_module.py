@@ -148,3 +148,135 @@ def test_the_host_still_works_around_the_embed(page, modules):
     open_module(page, outer)
     expect(page.locator(".canvas-embedded")).to_contain_text("INNER MODULE")
     expect(tables(page).first.locator("tr")).to_have_count(TOTAL)
+
+
+# ---- p.75's last sentence, inside an embed (§393) -----------------------------
+#
+# > "This behavior is the same for non-visible variables used in embedded
+# > modules." (p.75)
+#
+# §392 built the lazy rule for a module's own pages and left this clause eager,
+# because an embedded bridge had variables and no layout to walk. It has one
+# now. What needs a browser is that the child walks its **own** document: the
+# host and the child each resolve against their own module, and a child that
+# reported the host's nodes - or none at all - would starve its own widgets.
+@pytest.fixture(scope="module")
+def paged_embed(api):
+    """An inner module with two pages, embedded in an outer one.
+
+    Derived variables rather than defaults, for `test_lazy_variables.py`'s
+    reason: a static value is in the document already and renders whether the
+    server computed anything or not.
+    """
+    inner = Module(api, "Inner paged")
+    inner.define({
+        "format": 2,
+        "layout": layout({
+            "hdr": {"resolvedName": "CanvasHeader", "props": {"title": "IN"},
+                    "isCanvas": True, "nodes": ["go2"]},
+            "go2": {"resolvedName": "CanvasButton", "props": {"label": "Inner two"},
+                    "parent": "hdr"},
+            "ip1": {"resolvedName": "CanvasPage",
+                    "props": {"title": "One", "pageId": "one"},
+                    "isCanvas": True, "nodes": ["ip1_body"]},
+            "ip1_body": {"resolvedName": "CanvasText",
+                         "props": {"tag": "p", "text": "IN_ONE={{v_one}}"},
+                         "parent": "ip1"},
+            "ip2": {"resolvedName": "CanvasPage",
+                    "props": {"title": "Two", "pageId": "two"},
+                    "isCanvas": True, "nodes": ["ip2_body"]},
+            "ip2_body": {"resolvedName": "CanvasText",
+                         "props": {"tag": "p", "text": "IN_TWO={{v_two}}"},
+                         "parent": "ip2"},
+        }),
+        "variables": {
+            "v_one_in": {"id": "v_one_in", "kind": "string", "label": "one in",
+                         "default": "ONE"},
+            "v_one": {"id": "v_one", "kind": "string", "label": "one",
+                      "derivation": {"transform": "concat", "inputs": ["v_one_in"]}},
+            "v_two_in": {"id": "v_two_in", "kind": "string", "label": "two in",
+                         "default": "TWO"},
+            "v_two": {"id": "v_two", "kind": "string", "label": "two",
+                      "derivation": {"transform": "concat", "inputs": ["v_two_in"]}},
+        },
+        "events": {
+            "e_go2": {"id": "e_go2", "trigger": {"node": "go2", "on": "click"},
+                      "effects": [{"type": "navigate", "config": {"page": "ip2"}}]},
+        },
+    })
+
+    outer = Module(api, "Outer paged", beside=inner)
+    outer.define({
+        "format": 2,
+        "layout": layout({
+            "txt": {"resolvedName": "CanvasText",
+                    "props": {"tag": "p", "text": "HOST"}},
+            "emb": {"resolvedName": "CanvasEmbeddedModule",
+                    "props": {"moduleId": inner.app_id, "title": "Embedded"}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+    return outer, inner
+
+
+def test_an_embedded_module_computes_the_page_it_is_showing(page, paged_embed):
+    """The seam. The child is lazy now, so its widget only has a value if the
+    child reported its own nodes - and its own page's, not the host's."""
+    outer, _ = paged_embed
+    open_module(page, outer)
+    embedded = page.locator(".canvas-embedded")
+    expect(embedded).to_be_visible()
+    expect(embedded.get_by_text("IN_ONE=ONE")).to_be_visible()
+
+
+def test_an_embedded_module_computes_its_other_page_when_it_shows_it(
+    page, paged_embed
+):
+    """p.75 inside the embed, which is the clause §392 left eager. The child
+    keeps its own current page (p.129: each instance has "its own variable
+    scope and layout state"), so switching it must re-resolve the child."""
+    outer, _ = paged_embed
+    open_module(page, outer)
+    embedded = page.locator(".canvas-embedded")
+    expect(embedded.get_by_text("IN_ONE=ONE")).to_be_visible()
+
+    embedded.get_by_role("button", name="Inner two").click()
+    expect(embedded.get_by_text("IN_TWO=TWO")).to_be_visible()
+    expect(embedded.get_by_text("IN_ONE=ONE")).to_have_count(0)
+
+
+def test_the_child_reports_its_own_nodes_and_not_the_hosts(page, paged_embed):
+    """**That the rule is engaged in the child**, which nothing above can tell:
+    the child is correct with it off too, it just computes its whole graph.
+
+    The two modules resolve against different app ids, so the request is
+    attributable - and the child's `visible` must name the child's nodes. A
+    child sending the host's would be a walk over the wrong document, which
+    would starve exactly the widgets it is responsible for.
+    """
+    import contextlib
+    import json
+
+    outer, inner = paged_embed
+    sent: list = []
+
+    def record(route):
+        body = route.request.post_data
+        if body and inner.app_id in route.request.url:
+            with contextlib.suppress(ValueError):
+                sent.append(json.loads(body))
+        route.continue_()
+
+    page.route("**/variables/evaluate", record)
+    try:
+        open_module(page, outer)
+        expect(page.locator(".canvas-embedded").get_by_text("IN_ONE=ONE")).to_be_visible()
+    finally:
+        page.unroute("**/variables/evaluate")
+
+    asked = [b for b in sent if b.get("visible") is not None]
+    assert asked, "the embedded module never said what was on screen"
+    visible = set(asked[-1]["visible"])
+    assert "ip1_body" in visible
+    assert "ip2_body" not in visible, "the child's other page is not on screen"

@@ -691,7 +691,13 @@ def _only_visible(
         return None
     layout = document.get("layout") if isinstance(document, dict) else None
     return frozenset(
-        variables_service.displayed(layout, variables, set(body.visible))
+        variables_service.displayed(
+            layout, variables, set(body.visible),
+            # What the host mapped, which the evaluator is about to honour by
+            # skipping these variables' own derivations (p.127). The closure
+            # stops there for the same reason.
+            bound=frozenset(body.bound),
+        )
     )
 
 
