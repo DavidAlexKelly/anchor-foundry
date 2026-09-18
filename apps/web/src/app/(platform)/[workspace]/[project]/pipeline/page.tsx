@@ -59,9 +59,15 @@ export default function PipelinePage() {
   // came from rather than arriving as one failure for a batch.
   //
   // **`null` clears**, which is p.10's "edit" including turning a schedule
-  // off: `trigger_mode` back to `manual`. Sending `cron_schedule: null` with
-  // it rather than leaving the old expression behind, so a model that is not
-  // on a schedule does not still carry one nobody can see.
+  // off: `trigger_mode` back to `manual`.
+  //
+  // **The expression going with it is the server's doing, not this line's.**
+  // A sweep put that right: mutating `cron_schedule` here changed nothing,
+  // because `models.update`'s SQL reads `WHEN :trigger IS NOT NULL THEN NULL`
+  // — any change of trigger mode clears the schedule, and it has to, or a
+  // model switched to manual would keep an expression nobody can see. The
+  // field is still sent because one object serves both branches, but the
+  // guarantee is the server's and the comment used to claim it for this.
   const schedule = useMutation({
     mutationFn: async (
       { models, cron }: { models: { id: string; name: string }[]; cron: string | null },
