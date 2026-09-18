@@ -41,6 +41,7 @@ function run(over: Partial<CodePreviewRun> = {}): CodePreviewRun {
     repo_id: "repo",
     branch: "main",
     path: "build.py",
+    output: "doubled",
     status: "succeeded",
     columns: [{ name: "id", data_type: "BIGINT" }],
     rows: [["1"]],
@@ -50,6 +51,8 @@ function run(over: Partial<CodePreviewRun> = {}): CodePreviewRun {
     failure: null,
     inputs: [{ alias: "orders", rows_available: 5, rows_used: 5, sampled: false }],
     error: null,
+    schema_changes: null,
+    writes_to_existing_dataset: false,
     queued_at: "2026-01-01T00:00:00Z",
     started_at: "2026-01-01T00:00:01Z",
     finished_at: "2026-01-01T00:00:02Z",
@@ -83,6 +86,23 @@ describe("one shape, two sources", () => {
     expect(view?.columns).toEqual([{ name: "id", data_type: "BIGINT" }]);
     expect(view?.rows).toEqual([["1"]]);
     expect(view?.rowCount).toBe(1);
+    // The declared output, which the run carries because db 0092 stores it.
+    // The first version of this module returned null here and the panel hid
+    // the line - a difference between the two languages that nothing on the
+    // screen explained.
+    expect(view?.output).toBe("doubled");
+  });
+
+  it("carries the drift check on both paths", () => {
+    // **The half that was missing.** The SQL response computes what the change
+    // would do to the dataset the transform already writes; a queued run gets
+    // the same answer from the read route. A panel drawing this from
+    // `result.schema_changes` alone would have shown it for one language and
+    // silently omitted it for the other (§214).
+    const drift = { added: [{ name: "doubled", data_type: "BIGINT" }] };
+    expect(shown(null, run({ schema_changes: drift }))?.schemaChanges).toEqual(drift);
+    expect(shown(sqlResult({ schema_changes: drift }), undefined)?.schemaChanges)
+      .toEqual(drift);
   });
 
   it("names the dataset for SQL and only the alias for a run", () => {

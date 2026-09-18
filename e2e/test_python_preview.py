@@ -213,6 +213,58 @@ def test_the_button_does_not_offer_a_second_press_while_one_is_in_flight(
     expect(button).to_be_enabled()
 
 
+def test_it_says_what_the_change_would_do_to_the_dataset_it_writes(page, api) -> None:
+    """p.14's other question, and the half a Python preview nearly shipped
+    without.
+
+    The transform declares the dataset the fixture already uploaded, and
+    produces a different shape from it. A SQL preview answers this in its own
+    response; a queued run cannot, so the read route computes it against the
+    dataset as it stands - `engine.diff_schemas`, which is what migration 0018
+    means by a schema change, rather than a second notion of one.
+    """
+    mod, repo, dataset = fixture(api, "Python preview drift")
+    # Writes back to the dataset it reads, dropping `id` for a column that was
+    # never there. The input is one column wide, so both halves are visible.
+    source = (
+        f"@transform(output='{dataset}', inputs={{'orders': '{dataset}'}})\n"
+        "def build(orders):\n"
+        "    out = orders.copy()\n"
+        "    out['surcharge'] = out['id'] * 0.5\n"
+        "    return out[['surcharge']]\n"
+    )
+    commit(api, mod, repo, {"src/drift.py": source})
+    open_file(page, repo, "src/drift.py")
+
+    page.get_by_test_id("preview-run").click()
+    eventually(work_the_queue, lambda n: n >= 1, what="the worker to pick the preview up")
+    expect(page.get_by_test_id("preview-table")).to_be_visible(timeout=30000)
+
+    drift = page.locator(".repo-preview-drift")
+    expect(drift).to_contain_text(f"This would change {dataset}")
+    expect(drift).to_contain_text("adds")
+    expect(drift).to_contain_text("surcharge")
+    expect(drift).to_contain_text("drops")
+    expect(drift).to_contain_text("id")
+
+
+def test_a_preview_of_a_new_dataset_shows_no_drift_block(page, api) -> None:
+    """The counterweight, and the assertion that keeps the block meaningful:
+    every column of a dataset that does not exist yet is "added", so a drift
+    block over a first version is noise on the one preview where there is
+    nothing to compare against."""
+    mod, repo, dataset = fixture(api, "Python preview no drift")
+    commit(api, mod, repo, {"src/build.py": transform(dataset, DOUBLES)})
+    open_file(page, repo, "src/build.py")
+
+    page.get_by_test_id("preview-run").click()
+    eventually(work_the_queue, lambda n: n >= 1, what="the worker to pick the preview up")
+    # Positive wait first (§318): the table is what says the run landed, and a
+    # count of zero drift blocks before it would be true of a blank panel.
+    expect(page.get_by_test_id("preview-table")).to_be_visible(timeout=30000)
+    expect(page.locator(".repo-preview-drift")).to_have_count(0)
+
+
 def test_a_sql_preview_still_answers_in_the_response(page, api) -> None:
     """**The half that did not change, asserted because it could have.**
 

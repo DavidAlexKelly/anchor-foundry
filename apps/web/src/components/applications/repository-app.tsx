@@ -1883,7 +1883,6 @@ function PreviewPanel({
   const view = shown(result, current);
   const status = runStatus(current);
   const warning = samplingWarning(view);
-  const changes = result?.schema_changes;
 
   return (
     <section className="repo-preview">
@@ -1915,11 +1914,9 @@ function PreviewPanel({
       {view && (
         <>
           <div className="repo-preview-meta">
-            {view.output && (
-              <span>
-                → <code>{view.output}</code>
-              </span>
-            )}
+            <span>
+              → <code>{view.output}</code>
+            </span>
             <span data-testid="preview-rows">{rowCountLabel(view)}</span>
             {view.inputs.map((input) => (
               <span key={input.alias} className={input.sampled ? "warn" : "soft"}>
@@ -1930,21 +1927,26 @@ function PreviewPanel({
 
           {warning && <p className="repo-preview-warning">{warning}</p>}
 
-          {changes && !runId && (
+          {/* **Drawn from the flattened view, so both languages get it.** The
+              first version read `result.schema_changes`, which is null on the
+              Python path by construction - a drift block that silently applied
+              to one of two languages, which is §214 with the control present
+              and inert. The read route computes it for a run (db 0092). */}
+          {view.schemaChanges && (
             <div className="repo-preview-drift">
-              <strong>This would change {result?.output}:</strong>
+              <strong>This would change {view.output}:</strong>
               <ul>
-                {(changes.added ?? []).map((c) => (
+                {(view.schemaChanges.added ?? []).map((c) => (
                   <li key={`a${c.name}`} className="added">
                     adds <code>{c.name}</code> ({c.data_type})
                   </li>
                 ))}
-                {(changes.removed ?? []).map((c) => (
+                {(view.schemaChanges.removed ?? []).map((c) => (
                   <li key={`r${c.name}`} className="deleted">
                     drops <code>{c.name}</code> ({c.data_type})
                   </li>
                 ))}
-                {(changes.retyped ?? []).map((c) => (
+                {(view.schemaChanges.retyped ?? []).map((c) => (
                   <li key={`t${c.name}`} className="modified">
                     <code>{c.name}</code> becomes {c.to} (was {c.from})
                   </li>

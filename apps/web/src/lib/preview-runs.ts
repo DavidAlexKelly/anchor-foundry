@@ -34,13 +34,18 @@ export interface ShownInput {
 
 /** The rows the panel draws, whichever machinery produced them. */
 export interface ShownPreview {
-  output: string | null;
+  output: string;
   columns: { name: string; data_type: string }[];
   rows: unknown[][];
   rowCount: number;
   truncated: boolean;
   sampled: boolean;
   inputs: ShownInput[];
+  /** What this change would do to the dataset the transform already
+   * writes, or null when it writes a new one or changes nothing. Both
+   * paths carry it, so the drift block is drawn once from one field -
+   * the SQL response computes it, the read route computes it for a run. */
+  schemaChanges: TransformPreview["schema_changes"];
 }
 
 /**
@@ -78,10 +83,7 @@ export function shown(
   if (run !== undefined) {
     if (!isSettled(run) || run.status !== "succeeded") return null;
     return {
-      // A queued run stores the file and the datasets, not the declared output
-      // name - the API knew it when it queued the run and had nowhere honest
-      // to put it. Null rather than a guess.
-      output: null,
+      output: run.output,
       columns: run.columns,
       rows: run.rows,
       rowCount: run.row_count,
@@ -93,6 +95,7 @@ export function shown(
         label: i.sampled ? `${i.alias} (${countLabel(i.rows_used, i.rows_available)})` : i.alias,
         sampled: i.sampled,
       })),
+      schemaChanges: run.schema_changes,
     };
   }
   if (result === null || result.run_id) return null;
@@ -110,6 +113,7 @@ export function shown(
         : `${i.alias} = ${i.dataset}`,
       sampled: i.sampled,
     })),
+    schemaChanges: result.schema_changes,
   };
 }
 

@@ -798,6 +798,9 @@ class PreviewRunOut(BaseModel):
     repo_id: UUID
     branch: str
     path: str
+    #: The dataset this transform declares it writes, as the file said when
+    #: the run was queued.
+    output: str
     #: queued | running | succeeded | failed | errored. **`failed` and
     #: `errored` are different answers** (db 0092, db 0071's distinction): the
     #: first is the author's transform raising, the second the run not
@@ -819,12 +822,22 @@ class PreviewRunOut(BaseModel):
     failure: str | None = None
     inputs: list[PreviewRunInputOut] = []
     error: str | None = None
+    #: What this change would do to the dataset the transform already
+    #: writes, or null when it writes a new one or changes nothing. The SQL
+    #: path answers this in the response to the button; a queued run cannot,
+    #: so the read route answers it here instead - **the same question, not
+    #: a narrower one**, because a Python preview that quietly dropped the
+    #: drift check would be a control that looks like the SQL one (§214).
+    schema_changes: dict[str, Any] | None = None
+    writes_to_existing_dataset: bool = False
     queued_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
 
-def _preview_out(row: dict[str, Any]) -> PreviewRunOut:
+def _preview_out(
+    row: dict[str, Any], output_row: dict[str, Any] | None = None
+) -> PreviewRunOut:
     result = row.get("result") or {}
     rows = result.get("rows") or []
     inputs = [
@@ -841,11 +854,28 @@ def _preview_out(row: dict[str, Any]) -> PreviewRunOut:
     # whenever there is anything worth previewing - and `truncated` is what
     # says which one the table is showing.
     total = int(result.get("total_rows", len(rows)))
+    # **One drift rule, not a second one.** `engine.diff_schemas` is what
+    # the SQL path calls and what migration 0018 means by a schema change;
+    # the only difference here is that the columns arrive as stored JSON
+    # rather than as the engine's own objects, so they are put back into
+    # its shape rather than compared in a second way (§292).
+    columns = result.get("columns") or []
+    changes = (
+        engine.diff_schemas(
+            (output_row or {}).get("table_schema"),
+            [engine.ColumnSchema(name=c["name"], data_type=c["data_type"])
+             for c in columns],
+        )
+        if output_row is not None and columns
+        else None
+    )
     return PreviewRunOut(
         **{k: v for k, v in row.items() if k not in ("result", "inputs")},
-        columns=result.get("columns") or [],
+        columns=columns,
         rows=rows,
         row_count=total,
+        schema_changes=changes,
+        writes_to_existing_dataset=output_row is not None,
         truncated=len(rows) < total,
         sampled=any(i.sampled for i in inputs),
         failure=result.get("error"),
@@ -870,7 +900,11 @@ async def read_preview_run(
             conn, project_id=access.project_id, repo_id=repo_id
         )
         row = await preview_run_service.get(conn, repo_id=repo_id, run_id=run_id)
-    return _preview_out(row)
+        by_name = {
+            str(d["name"]): d
+            for d in await ds_service.list_for_project(conn, access.project_id)
+        }
+        return _preview_out(row, by_name.get(str(row["output"])))
 
 
 @router.get("/{repo_id}/previews", response_model=list[PreviewRunOut])
@@ -890,7 +924,13 @@ async def list_preview_runs(
             conn, project_id=access.project_id, repo_id=repo_id
         )
         rows = await preview_run_service.latest(conn, repo_id=repo_id, path=path)
-    return [_preview_out(r) for r in rows]
+        # One lookup for the page rather than one per row: the listing is
+        # this file's previews, so they name the same output nearly always.
+        by_name = {
+            str(d["name"]): d
+            for d in await ds_service.list_for_project(conn, access.project_id)
+        }
+        return [_preview_out(r, by_name.get(str(r["output"]))) for r in rows]
 
 
 class BranchSummaryOut(BaseModel):
@@ -1671,6 +1711,7 @@ async def preview_transform(
                     branch=body.branch or repo["default_branch"],
                     path=body.path,
                     content=content,
+                    output=declaration.output,
                     input_datasets={
                         alias: str(row["id"]) for alias, row in input_rows.items()
                     },

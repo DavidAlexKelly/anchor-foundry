@@ -747,6 +747,8 @@ export interface CodePreviewRun {
   repo_id: string;
   branch: string;
   path: string;
+  /** The dataset this transform declares it writes. */
+  output: string;
   /** queued | running | succeeded | failed | errored. **`failed` and `errored`
    * are different answers**: the first is the author's transform raising, the
    * second the run not having happened. */
@@ -765,6 +767,16 @@ export interface CodePreviewRun {
   /** Set only when `status` is `errored`, and never the transform's own
    * failure message. */
   error: string | null;
+  /** What this change would do to the dataset the transform already writes,
+   * or null when it writes a new one or changes nothing. Computed when the
+   * run is read rather than when it ran, because the comparison is against
+   * the dataset as it stands. */
+  schema_changes: {
+    added?: { name: string; data_type: string }[];
+    removed?: { name: string; data_type: string }[];
+    retyped?: { name: string; from: string; to: string }[];
+  } | null;
+  writes_to_existing_dataset: boolean;
   queued_at: string;
   started_at: string | null;
   finished_at: string | null;

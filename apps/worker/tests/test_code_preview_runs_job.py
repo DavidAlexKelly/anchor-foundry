@@ -121,8 +121,9 @@ def queue(repository: dict, content: str = PASSING, *, inputs=None,
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         return conn.execute(
             """INSERT INTO code_preview_runs
-                      (repo_id, branch, path, content, input_datasets, requested_by)
-               VALUES (%s,'main',%s,%s,CAST(%s AS jsonb),%s) RETURNING id""",
+                      (repo_id, branch, path, content, output, input_datasets,
+                       requested_by)
+               VALUES (%s,'main',%s,%s,'doubled',CAST(%s AS jsonb),%s) RETURNING id""",
             (repository["repo_id"], path, content, json.dumps(inputs),
              repository["user_id"]),
         ).fetchone()[0]

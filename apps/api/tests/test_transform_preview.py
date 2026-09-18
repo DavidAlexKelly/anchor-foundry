@@ -23,16 +23,18 @@ that the run reads back.
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import uuid
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
+from test_api import ADMIN_DSN, Fixture, LocalVerifier, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 
@@ -374,6 +376,109 @@ def test_recent_previews_are_listed_for_the_file_they_were_about(
     )
     assert r.status_code == 200, r.text
     assert [x["path"] for x in r.json()] == ["a.py"]
+
+
+def finish(run_id: str, columns, rows) -> None:
+    """Land an answer on a queued run without a worker.
+
+    The job that really does this is tested in
+    `apps/worker/tests/test_code_preview_runs_job.py` and the whole path is
+    tested in the browser. What is under test *here* is what the read route
+    makes of a finished row, and writing one directly is the only way to ask
+    that question without standing a Dagster op up inside an API test.
+    """
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            """UPDATE code_preview_runs
+                  SET status = 'succeeded', started_at = now(), finished_at = now(),
+                      result = CAST(%s AS jsonb), inputs = CAST(%s AS jsonb)
+                WHERE id = %s""",
+            (
+                json.dumps({"columns": columns, "rows": rows, "total_rows": len(rows)}),
+                json.dumps([{"alias": "orders", "rows_available": 1500, "rows_used": 1000}]),
+                run_id,
+            ),
+        )
+
+
+@pytest.fixture()
+def own_repo(client: TestClient, fx: Fixture) -> str:
+    """A repository of this test's own.
+
+    `MAX_QUEUED_PER_REPO` counts *queued* rows and nothing in an API test ever
+    finishes one, so a test that queues against the shared `repo` fixture spends
+    its budget for everybody after it. The 409 that results reads as a bug in
+    the test under it rather than as a neighbour's leftovers, which cost a
+    diagnosis here.
+    """
+    r = client.post(
+        rbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Own {uuid.uuid4().hex[:8]}"},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_a_finished_run_reports_what_it_would_do_to_the_dataset_it_writes(
+    client: TestClient, fx: Fixture, own_repo: str, datasets
+) -> None:
+    """**p.14's other question, on the Python path too.**
+
+    A SQL preview reports the drift against the dataset the transform already
+    writes, and for a while this one did not - the field was on the response
+    and null by construction, which is a control that is present and inert
+    (§214). The comparison is `engine.diff_schemas`, the same one migration
+    0018 means by a schema change, so the two languages cannot disagree about
+    what a schema change is.
+    """
+    source = (
+        f"@transform(output='orders_p_{fx.tag}', inputs={{'orders': 'orders_p_{fx.tag}'}})\n"
+        "def build(orders):\n    return orders\n"
+    )
+    r = preview(client, fx, own_repo, path="drifts.py", content=source)
+    assert r.status_code == 200, r.text
+    run_id = r.json()["run_id"]
+
+    # `orders_p_<tag>` is three text columns wide (`order_id`, `region`,
+    # `total_pence`); this run produced one of them plus a new one.
+    finish(run_id, [{"name": "order_id", "data_type": "BIGINT"},
+                    {"name": "surcharge", "data_type": "DOUBLE"}], [["1", "0.5"]])
+
+    r = client.get(f"{rbase(fx)}/{own_repo}/previews/{run_id}", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["writes_to_existing_dataset"] is True
+    changes = body["schema_changes"]
+    assert [c["name"] for c in changes["added"]] == ["surcharge"]
+    assert {c["name"] for c in changes["removed"]} == {"region", "total_pence"}
+    # And the sampling warning survives the round trip, derived rather than
+    # stored: 1000 of 1500 is a sample and the row says so.
+    (orders,) = body["inputs"]
+    assert orders["sampled"] is True
+    assert body["sampled"] is True
+
+
+def test_a_queued_run_writing_a_new_dataset_reports_no_drift(
+    client: TestClient, fx: Fixture, own_repo: str, datasets
+) -> None:
+    """The counterweight, and its own name (§69).
+
+    Every column of a dataset that does not exist yet is "added", and a drift
+    block over a first version would be noise on the one preview where there is
+    nothing to compare against - `diff_schemas` returns None with no baseline
+    and this is where that matters. The SQL path has the same test seventeen
+    functions up; two tests sharing a name is two tests where one of them can
+    be deleted without anybody noticing.
+    """
+    r = preview(client, fx, own_repo, path="new.py", content=python(fx))
+    assert r.status_code == 200, r.text
+    run_id = r.json()["run_id"]
+    finish(run_id, [{"name": "id", "data_type": "BIGINT"}], [["1"]])
+
+    r = client.get(f"{rbase(fx)}/{own_repo}/previews/{run_id}", headers=hdr(fx.editor_sub))
+    body = r.json()
+    assert body["writes_to_existing_dataset"] is False
+    assert body["schema_changes"] is None
 
 
 def test_a_preview_run_from_another_repository_reads_as_absent(

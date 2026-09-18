@@ -52,6 +52,7 @@ async def request(
     branch: str,
     path: str,
     content: str,
+    output: str,
     input_datasets: dict[str, str],
     requested_by: UUID,
 ) -> dict[str, Any]:
@@ -97,13 +98,16 @@ async def request(
         conn,
         """
         INSERT INTO code_preview_runs
-               (repo_id, branch, path, content, input_datasets, requested_by)
-        VALUES (:rid, :branch, :path, :content, CAST(:inputs AS jsonb), :by)
-        RETURNING id, repo_id, branch, path, status, result, inputs, error,
-                  queued_at, started_at, finished_at
+               (repo_id, branch, path, content, output, input_datasets,
+                requested_by)
+        VALUES (:rid, :branch, :path, :content, :output,
+                CAST(:inputs AS jsonb), :by)
+        RETURNING id, repo_id, branch, path, output, status, result, inputs,
+                  error, queued_at, started_at, finished_at
         """,
         {"rid": str(repo_id), "branch": branch, "path": path,
-         "content": content, "inputs": json.dumps(input_datasets),
+         "content": content, "output": output,
+         "inputs": json.dumps(input_datasets),
          "by": str(requested_by)},
     )
     assert row is not None
@@ -119,8 +123,8 @@ async def get(conn: AsyncConnection, *, repo_id: UUID, run_id: UUID) -> dict[str
     row = await fetch_one(
         conn,
         """
-        SELECT id, repo_id, branch, path, status, result, inputs, error,
-               queued_at, started_at, finished_at
+        SELECT id, repo_id, branch, path, output, status, result, inputs,
+               error, queued_at, started_at, finished_at
           FROM code_preview_runs
          WHERE id = :id AND repo_id = :rid
         """,
@@ -143,8 +147,8 @@ async def latest(
     rows = await fetch_all(
         conn,
         """
-        SELECT id, repo_id, branch, path, status, result, inputs, error,
-               queued_at, started_at, finished_at
+        SELECT id, repo_id, branch, path, output, status, result, inputs,
+               error, queued_at, started_at, finished_at
           FROM code_preview_runs
          WHERE repo_id = :rid
            -- Cast for the reason `code_test_runs.latest` records: Postgres

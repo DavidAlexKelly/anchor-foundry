@@ -26,6 +26,16 @@
 -- alternative is a parquet somewhere with a lifetime nobody owns, and a
 -- preview that leaves files behind is a leak that nothing on the screen would
 -- ever show.
+--
+-- **Nothing prunes this table, and that is worth stating rather than
+-- discovering.** Neither does 0071, nor `model_runs`: this schema has no
+-- retention sweep at all, and `jobs/cleanup.py` drops orphaned schemas and
+-- nothing else. A preview row is bigger than a test run's and arrives more
+-- often - somebody editing a transform presses the button repeatedly, and
+-- each press stores a buffer of up to 512KB plus a hundred rows. So this
+-- table makes an existing gap grow faster rather than opening a new one.
+-- The fix is one retention job over all three tables, not three rules that
+-- disagree (§292), which is why it is named here instead of half-built.
 
 CREATE TABLE code_preview_runs (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -38,6 +48,15 @@ CREATE TABLE code_preview_runs (
 
     path          text NOT NULL CHECK (length(path) BETWEEN 1 AND 1000),
     content       text NOT NULL,
+
+    -- The dataset this transform declares it writes, read out of the file
+    -- by the API along with the inputs. **Stored rather than re-derived**
+    -- for the reason `input_datasets` is: the parser lives in the API and
+    -- a second reader of a syntax with one writer is §292's failure. It is
+    -- here so the read route can answer p.14's other question - what this
+    -- change would do to the dataset the transform already writes - which
+    -- the SQL path answers in its own response and this one could not.
+    output        text NOT NULL CHECK (length(output) BETWEEN 1 AND 200),
 
     -- `{alias: dataset_id}`, **resolved by the API when the run is queued**
     -- rather than by the worker when it starts. The declaration that names
