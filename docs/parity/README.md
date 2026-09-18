@@ -102,7 +102,7 @@ are really one shape:
 |---|---|
 | `datasets-lineage.md` — **Manage Builds** (p.9) | Building exists; the lineage graph is not where you start it (§379) |
 | `datasets-lineage.md` — **Manage Schedules** (p.10) | Schedules exist (`trigger_mode='cron'`); same (§379) |
-| `code-repositories.md` — **Build** the current file (p.16) | `POST /models/{id}/run` exists; the editor has no button for it (§381) |
+| `code-repositories.md` — **Build** the current file (p.13–14) | `POST /models/{id}/run` exists; the editor has no button for it (§381). **Cited to p.16 until §384** — that is the Branches tab; the button is p.13 and its helper panel is p.14 |
 
 Foundry lets you act on a selection *from wherever you are looking* — the
 lineage graph, the code editor, the impact panel. Here every build and every
@@ -115,6 +115,19 @@ these two" (p.9) is a path query over edges `services/pipeline.py` already
 returns, not a build system. **§369 is the precedent that this is cheap when the
 view already exists**: the pipeline review tab put the graph on the review
 surface by composing what §14, §364, §365 and §366 had already built.
+
+**The cascade already here runs the other way, and that is the direction to
+build in** (§383). `enqueue_due_upstream_models` propagates *downstream* — a
+build writes an output version, and whatever reads it with
+`trigger_mode='upstream'` fires on its own. Every strategy p.9 names reaches
+*upstream or across*. So the cascade is what happens after a build rather than
+how a build finds its set, and the three rows are not equally sized: **`Build`
+the current file needs no selection question answered at all**, which makes it
+the one to build first and the one whose cost the other two should be measured
+against — **as one unit with p.14's Build helper**, which §384 found was a
+second ○ row for the same feature. p.14 pairs the trigger with a progress view,
+and a trigger with nowhere to report progress is §214's control that looks like
+it works.
 
 ---
 
