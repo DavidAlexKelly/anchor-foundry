@@ -225,13 +225,17 @@ def test_rules_copied_to_another_property_go_on_meaning_what_they_meant(
         "Select the properties to which you want to copy the conditional
          formatting rules." (p.107)
 
-    **The copied set is not re-interpreted for its new property**, and that is
-    the claim worth a browser: `wifi`'s rules are a boolean test with p.105's
-    always-true fallback behind it, so on a string property the test cannot
-    match and the *fallback* is what paints. Red on `name` is the copy having
-    landed and the rules having gone on meaning exactly what they meant —
-    which is also why the first draft of this test was wrong, expecting green
-    because that is the colour the rules are *for*.
+    **The copied set goes on reading what it read**, and that is the claim
+    worth a browser. Every rule names the property it tests — `matches` reads
+    `properties[rule.property]`, and there is no "the property being painted"
+    default (p.105 label B is the whole reason). So `wifi`'s rules carried to
+    `name` still ask about `wifi`, and Alpha's is true: `name` comes out
+    **green**, painted by a rule about a different property entirely.
+
+    That is worth stating because the obvious guess is wrong in both
+    directions. It is not re-pointed at its new property, and it does not fall
+    through to p.105's fallback either — a draft of this test asserted red on
+    exactly that reasoning and the browser said otherwise.
 
     Which properties are offered and what the sentence says are
     `apps/web/src/lib/copy-format-rules.test.ts`'s. This is the seam.
@@ -261,10 +265,16 @@ def test_rules_copied_to_another_property_go_on_meaning_what_they_meant(
     page.get_by_role("button", name="Save", exact=True).click()
 
     open_object(page, module, "Alpha")
-    # The fallback, because "Alpha" is not true — the rules arrived intact
-    # rather than being adapted to the property they landed on.
+    # Green, because the copied rule still asks about `wifi` and Alpha's is
+    # true — the reference travelled with the rule.
+    assert colour_of(page, "name") == GREEN
+    # And Beta, whose `wifi` is false, gets the fallback: the *pair* is what
+    # says the rules are being evaluated rather than one colour being painted
+    # on everything.
+    open_object(page, module, "Beta")
     assert colour_of(page, "name") == RED
     # And the property they came from still has them: a copy is not a move.
+    open_object(page, module, "Alpha")
     assert colour_of(page, "wifi") == GREEN
 
 
