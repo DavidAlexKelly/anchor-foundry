@@ -17,7 +17,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import eventually, no_console_errors, open_module
+from conftest import eventually, no_console_errors, open_builder, open_module
 
 COUNTS = {"north": 4, "south": 2}
 TOTAL = sum(COUNTS.values())
@@ -280,3 +280,28 @@ def test_the_child_reports_its_own_nodes_and_not_the_hosts(page, paged_embed):
     visible = set(asked[-1]["visible"])
     assert "ip1_body" in visible
     assert "ip2_body" not in visible, "the child's other page is not on screen"
+
+
+def test_an_embedded_module_is_not_lazy_in_the_hosts_editor(page, paged_embed):
+    """**The gate, and a mutant is why this exists** (§393).
+
+    The child inherits the host's mode, and in edit mode `CanvasPage` renders
+    *every* page - so inside the host's editor every page of the child is on
+    screen at once and "not visible" has no answer there. An ungated `lazy`
+    would report only the child's default page and leave the widgets on its
+    other pages blank while an author was looking straight at them.
+
+    Every other test in this file and in `test_lazy_variables.py` goes through
+    Preview, so none of them could tell: a mutation dropping `mode === "run"`
+    passed all seventeen. This one stays in the builder, which is the only
+    place the difference exists.
+    """
+    outer, _ = paged_embed
+    open_builder(page, outer)
+    embedded = page.locator(".canvas-embedded")
+    expect(embedded).to_be_visible()
+    # Both of the child's pages are drawn, and both have their values - which
+    # is what says the child computed its whole graph rather than one page of
+    # it. Positive waits before anything else is asked (§318).
+    expect(embedded.get_by_text("IN_ONE=ONE")).to_be_visible()
+    expect(embedded.get_by_text("IN_TWO=TWO")).to_be_visible()
