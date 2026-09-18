@@ -112,8 +112,14 @@ def test_building_the_current_file_gives_its_dataset_a_version(page, api) -> Non
     # The row is the progress view: p.14's "view the progress for your builds".
     expect(page.get_by_test_id("build-verdict")).to_contain_text("built", timeout=60000)
     expect(page.get_by_test_id("build-runs")).to_contain_text("succeeded")
-    # A version, which is what p.13 says the button produces.
-    expect(page.get_by_test_id("build-runs")).to_contain_text("v1")
+    # **What the build produced**, which is p.13's "a new version of your
+    # output dataset" said in the terms a reader can act on. The first draft
+    # asserted `v1` against the row's `output_version`, which is a
+    # `dataset_versions` *id* rather than an ordinal — it passed locally only
+    # because that run's UUID happened to start with a `1`, and CI drew a `2`.
+    # A test that passes one time in sixteen for a reason unrelated to the
+    # behaviour is not a check (§213).
+    expect(page.get_by_test_id("build-rows")).to_have_text("2 rows")
 
 
 def test_a_file_that_publishes_nothing_says_so_rather_than_offering_a_button(

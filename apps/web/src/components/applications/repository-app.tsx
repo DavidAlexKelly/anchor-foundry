@@ -2633,7 +2633,18 @@ function BuildPanel({
           {(runs.data ?? []).slice(0, 5).map((r) => (
             <li key={r.id} className="repo-problem">
               <span className="chip">{r.status}</span>
-              <code>{r.output_version ? `v${r.output_version}` : "—"}</code>
+              {/* **Not `output_version`.** That column is a `dataset_versions`
+                  *id* — the service calls it the anchor that "points at the
+                  exact version each run produced" — so rendering it as `v…`
+                  put a UUID on the screen wearing a version number's clothes.
+                  What a reader wants from p.13's "a new version of your output
+                  dataset" is that rows landed, which the verdict above already
+                  says, and how long it took. CI found this: the test asserted
+                  `v1` and passed locally only because that run's UUID happened
+                  to start with a `1`. */}
+              <span className="soft" data-testid="build-rows">
+                {r.rows_produced === null ? "—" : `${r.rows_produced.toLocaleString()} rows`}
+              </span>
               <span className="soft" data-testid="build-duration">
                 {runDuration(r) || "—"}
               </span>
