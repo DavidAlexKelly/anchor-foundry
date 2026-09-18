@@ -141,6 +141,17 @@ import {
   verdict as testVerdict,
   worstFirst as worstTestsFirst,
 } from "@/lib/test-runs";
+// `shouldPoll` above is the same function this module re-exports - db 0071 and
+// db 0092 define the same five statuses, so one rule serves both panels (§292).
+import {
+  previewLabel,
+  queuedRunId,
+  rowCountLabel,
+  runIsAProblem,
+  runStatus,
+  samplingWarning,
+  shown,
+} from "@/lib/preview-runs";
 // Aliased for the reason the `test-runs` block above is: a build and a test
 // run are the same *shape* of question about different things, so both modules
 // export a `shouldPoll` and an `isSettled`. The collision is a sign the naming
@@ -1796,7 +1807,7 @@ function CommitRow({
 }
 
 /** Preview: run this file's transform against a sample of its inputs and show
- * what comes back, without committing anything (roadmap 2.6).
+ * what comes back, without committing anything (roadmap 2.6; §390; p.13-14).
  *
  * Three things this has to get right, and only the first is the obvious one:
  *
@@ -1811,6 +1822,12 @@ function CommitRow({
  *
  * Nothing runs on its own. A preview reads datasets and costs real work, so it
  * happens when somebody asks for it rather than on every keystroke.
+ *
+ * **One button, two machineries** (§390). SQL runs in the API's own sandbox and
+ * the rows are in the response. Python cannot - decision 0004 confines customer
+ * code to the runner task - so the press queues a row (db 0092) and this polls
+ * it. What the reader sees is the same table either way, because `shown`
+ * flattens both into one shape and this draws that shape once.
  */
 function PreviewPanel({
   wid,
@@ -1827,12 +1844,16 @@ function PreviewPanel({
 }) {
   const [result, setResult] = useState<TransformPreview | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
   // A result belongs to the text it came from. Keeping the path here and
   // clearing on change stops a preview of one file being read as a preview of
-  // the next one - the failure mode of every stale panel.
+  // the next one - the failure mode of every stale panel. The queued run is
+  // dropped with it, or a Python preview would go on polling in the background
+  // and land its answer under somebody else's file.
   useEffect(() => {
     setResult(null);
     setFailure(null);
+    setRunId(null);
   }, [path]);
 
   const run = useMutation({
@@ -1840,13 +1861,28 @@ function PreviewPanel({
     onSuccess: (data) => {
       setResult(data);
       setFailure(null);
+      setRunId(queuedRunId(data));
     },
     onError: (e: Error) => {
       setResult(null);
       setFailure(e.message);
+      setRunId(null);
     },
   });
 
+  const queued = useQuery({
+    queryKey: ["repo-preview-run", rid, runId],
+    queryFn: () => repoApi.previewRun(wid, pid, rid, runId!),
+    enabled: runId !== null,
+    // The panel polls because there is nothing to push to it, and stops the
+    // moment the run settles rather than asking for the life of the page.
+    refetchInterval: (query) => (shouldPoll(query.state.data) ? 1500 : false),
+  });
+
+  const current = queued.data;
+  const view = shown(result, current);
+  const status = runStatus(current);
+  const warning = samplingWarning(view);
   const changes = result?.schema_changes;
 
   return (
@@ -1855,10 +1891,11 @@ function PreviewPanel({
         <button
           type="button"
           className="btn"
+          data-testid="preview-run"
           onClick={() => run.mutate()}
-          disabled={run.isPending}
+          disabled={run.isPending || shouldPoll(current)}
         >
-          {run.isPending ? "Running…" : "Preview"}
+          {previewLabel(run.isPending, current)}
         </button>
         <span className="soft">
           Runs against a sample. Writes nothing.
@@ -1866,42 +1903,36 @@ function PreviewPanel({
       </div>
 
       {failure && <p className="state error">{failure}</p>}
+      {status && (
+        <p
+          className={runIsAProblem(current) ? "state error" : "state"}
+          data-testid="preview-status"
+        >
+          {status}
+        </p>
+      )}
 
-      {result && (
+      {view && (
         <>
           <div className="repo-preview-meta">
-            <span>
-              → <code>{result.output}</code>
-            </span>
-            <span>
-              {result.row_count.toLocaleString()} row
-              {result.row_count === 1 ? "" : "s"}
-              {result.sampled && " from the sample"}
-            </span>
-            {result.inputs.map((input) => (
+            {view.output && (
+              <span>
+                → <code>{view.output}</code>
+              </span>
+            )}
+            <span data-testid="preview-rows">{rowCountLabel(view)}</span>
+            {view.inputs.map((input) => (
               <span key={input.alias} className={input.sampled ? "warn" : "soft"}>
-                {input.alias} = {input.dataset}
-                {input.sampled
-                  ? ` (${input.rows_used.toLocaleString()} of ${input.rows_available.toLocaleString()})`
-                  : ""}
+                {input.label}
               </span>
             ))}
           </div>
 
-          {result.sampled && (
-            <p className="repo-preview-warning">
-              This ran on the first {result.inputs
-                .filter((i) => i.sampled)
-                .map((i) => i.rows_used.toLocaleString())
-                .join(" / ")}{" "}
-              rows of its inputs. Joins and aggregates over a sample give an
-              answer, not the answer.
-            </p>
-          )}
+          {warning && <p className="repo-preview-warning">{warning}</p>}
 
-          {changes && (
+          {changes && !runId && (
             <div className="repo-preview-drift">
-              <strong>This would change {result.output}:</strong>
+              <strong>This would change {result?.output}:</strong>
               <ul>
                 {(changes.added ?? []).map((c) => (
                   <li key={`a${c.name}`} className="added">
@@ -1922,11 +1953,11 @@ function PreviewPanel({
             </div>
           )}
 
-          <div className="repo-preview-table">
+          <div className="repo-preview-table" data-testid="preview-table">
             <table>
               <thead>
                 <tr>
-                  {result.columns.map((c) => (
+                  {view.columns.map((c) => (
                     <th key={c.name}>
                       {c.name}
                       <span className="soft">{c.data_type}</span>
@@ -1935,7 +1966,7 @@ function PreviewPanel({
                 </tr>
               </thead>
               <tbody>
-                {result.rows.map((row, i) => (
+                {view.rows.map((row, i) => (
                   <tr key={i}>
                     {row.map((value, j) => (
                       <td key={j}>
@@ -1947,11 +1978,6 @@ function PreviewPanel({
               </tbody>
             </table>
           </div>
-          {result.truncated && (
-            <p className="soft">
-              Showing {result.rows.length} of {result.row_count.toLocaleString()} rows.
-            </p>
-          )}
         </>
       )}
     </section>

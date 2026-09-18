@@ -418,6 +418,18 @@ export const repositories = {
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/preview`,
       { method: "POST", body: JSON.stringify(input) },
     ),
+  /** What came back from a queued Python preview. Viewer-level, where asking
+   * for one is editor-level: asking executes code the caller supplied,
+   * reading what it said does not. */
+  previewRun: (wid: string, pid: string, rid: string, runId: string) =>
+    request<import("./types").CodePreviewRun>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/previews/${runId}`,
+    ),
+  previewRuns: (wid: string, pid: string, rid: string, path?: string) =>
+    request<import("./types").CodePreviewRun[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/previews` +
+        (path ? `?path=${encodeURIComponent(path)}` : ""),
+    ),
 };
 
 /** The resource registry (db 0032). `resolve` takes an id and nothing else -

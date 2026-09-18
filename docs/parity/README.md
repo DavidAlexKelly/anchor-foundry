@@ -155,6 +155,40 @@ size them against.
 
 ---
 
+## A refusal is a row, and its premise expires
+
+**§390's whole cost was reading a sentence this repo had already written.**
+`code-repositories.md` §2.2 and §2.4 both sat at ◑ for one reason: a Python
+transform could not be previewed, because decision 0004 confines customer
+Python to a process holding no platform credentials, *"which takes long enough
+to need a job you can watch rather than a request that waits"*.
+
+That sentence is not an argument against building it. It is a **description of
+the work** — and by the time it was read again, this repository had built that
+exact shape twice: code test runs (§293–§295, db 0071, whose migration header
+quotes this very refusal) and the Build panel (§385). The refusal outlived the
+thing that made it a refusal, and nothing marked the row when that happened.
+
+| | |
+|---|---|
+| What the row said | Python previews are refused; a preview would need a job with a status |
+| What it cost | a migration, a service, a worker job, a `lib/` module, six panels' worth of nothing — the panel was already there |
+| Why it looked bigger | the note named a constraint and stopped, so every re-reading re-derived the constraint and never asked whether the shape it implied existed |
+
+**The reusable part is a question to ask of every refusal in this repo**, not
+only parity rows: *what would have to be true for this to be buildable, and is
+it true now?* A refusal records a decision made against the platform as it was.
+The platform moves; the sentence does not. §191 says check whether a thing
+exists before building a second one — this is its other half: check whether the
+reason you are not building something still holds.
+
+Two places to look, because both are written in the same voice and neither is
+re-read on a schedule: an `HTTPException` whose detail explains *why not* (this
+one lived in `routes/repositories.py` for six months), and a `◑` whose note
+names a dependency rather than a gap.
+
+---
+
 ## How to read the checklists
 
 Each spec is a table of Foundry features with a status and a citation.

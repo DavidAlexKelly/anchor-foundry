@@ -8,6 +8,7 @@ from urllib.parse import quote
 from dagster import Definitions, ScheduleDefinition
 
 from .jobs.cleanup import workspace_cleanup
+from .jobs.code_preview_runs import scheduled_preview_runs
 from .jobs.code_test_runs import scheduled_test_runs
 from .jobs.export_schedules import scheduled_exports
 from .jobs.instance_syncs import scheduled_instance_syncs
@@ -40,6 +41,7 @@ defs = Definitions(
         scheduled_connection_syncs,
         scheduled_instance_syncs,
         scheduled_exports,
+        scheduled_preview_runs,
         scheduled_test_runs,
     ],
     schedules=[
@@ -83,6 +85,14 @@ defs = Definitions(
             # minutes would make the feature feel broken rather than slow.
             cron_schedule="* * * * *",
             name="poll_test_runs",
+        ),
+        ScheduleDefinition(
+            job=scheduled_preview_runs,
+            # Every minute, for `poll_test_runs`' reason exactly: a preview is
+            # asked for by somebody who has just pressed a button and is
+            # watching a panel, so the poll interval is the latency they feel.
+            cron_schedule="* * * * *",
+            name="poll_preview_runs",
         ),
     ],
     resources={

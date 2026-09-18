@@ -1249,7 +1249,7 @@ Roadmap item 2.6. `POST .../repositories/{id}/preview` takes a path and **the ed
 
 **The drift check the roadmap asked for.** When the declared output names a dataset that already exists, the response carries `engine.diff_schemas` between that dataset's stored schema and what the transform now produces — added, removed, retyped columns. Finding out at preview that an edit drops a column from `daily_orders` is the difference between a conversation and a support ticket. It reuses the connectors' existing drift comparison rather than inventing a second notion of what a schema change is.
 
-**Python is refused, with a sentence.** Decision 0004 puts customer Python in an isolated task, never in the API process; previewing it means dispatching Fargate and waiting sixty-odd seconds, which is a job with a status rather than an HTTP response. The refusal says that and says SQL previews now. That is the honest half-built state rather than an endpoint that quietly runs Python in the wrong place.
+**Python was refused, with a sentence — and §390 has since built what the sentence described.** Decision 0004 puts customer Python in an isolated task, never in the API process; previewing it means dispatching the runner and waiting, which is a job with a status rather than an HTTP response. For as long as there was nothing to watch, the refusal saying so was the honest half-built state rather than an endpoint that quietly ran Python in the wrong place. db 0092 is the thing to watch, the same shape §294 built for test runs from this very sentence, and the button now answers both languages.
 
 `preview_transform` lives in `dataset_engine.py` beside `run_transform` because it needs the same sandbox discipline and a second almost-identical one would drift from it. It is simpler in one respect: nothing is written, so there is no trusted writer connection and user SQL never leaves the sandbox where `enable_external_access` is off.
 
@@ -4729,11 +4729,13 @@ faked the result would prove the panel can render a fixture.
 ### 294. A test run is a job, not a request (this session)
 
 Item 6's second part, and the shape was decided years earlier.
-`routes/repositories.py` has refused to preview a Python transform since §69,
+`routes/repositories.py` had refused to preview a Python transform since §69,
 with the reason in the message: *"they run in an isolated task rather than in
 the API, which takes long enough to need a job you can watch rather than a
 request that waits."* Running a repository's unit tests is the same act, so it
-is the same answer.
+is the same answer. (§390 later gave the preview itself that answer, built from
+this section - the refusal's own premise turned out to be a description of the
+work rather than an argument against it.)
 
 db 0071 is the thing you watch. The API writes a queued row and answers **202**,
 the worker claims it on the same one-minute poll queued model runs use, and the

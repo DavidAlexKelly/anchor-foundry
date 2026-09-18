@@ -42,6 +42,7 @@ from ..services import scratchpad
 from ..services import scratchpad_queries
 from ..services import transform_declarations as declarations
 from ..services import transform_problems as problem_service
+from ..services import code_preview_runs as preview_run_service
 from ..services import transform_publish as publish_service
 from ..services.dataset_engine import DatasetEngineError
 
@@ -225,6 +226,13 @@ class PreviewOut(BaseModel):
     truncated: bool
     sampled: bool
     inputs: list[PreviewedInputOut]
+    #: Set only for a Python transform (§390): the preview is a queued run
+    #: rather than an answer, so this is what the panel watches. **Absent
+    #: rather than null-and-meaningless on the SQL path**, where the rows are
+    #: already in this response and there is nothing to watch.
+    run_id: str | None = None
+    #: The queued run's status, for the same reason. `None` on the SQL path.
+    status: str | None = None
     # Against the dataset this transform already writes, when it exists.
     schema_changes: dict[str, Any] | None = None
     writes_to_existing_dataset: bool = False
@@ -645,8 +653,8 @@ async def run_tests(
 
     **202, not 200**, because nothing has run yet. Decision 0004 confines
     customer Python to a process holding no platform credentials, so this
-    writes a job and the worker executes it - the same answer the Python
-    preview refusal gives one route above.
+    writes a job and the worker executes it - which is the shape a Python
+    preview now takes too (§390, db 0092), built from this one.
 
     **Editor, unlike Problems.** A test is code the caller supplied and it
     *executes*, which is the line `preview_transform` draws: the floor matches
@@ -761,6 +769,128 @@ async def list_test_runs(
         )
         rows = await test_run_service.latest(conn, repo_id=repo_id, branch=branch)
     return [_run_out(r) for r in rows]
+
+
+class PreviewRunInputOut(BaseModel):
+    """One input a queued preview read, and how much of it."""
+
+    alias: str
+    rows_available: int
+    rows_used: int
+    #: **Derived here, not stored** - `rows_used < rows_available`, which is
+    #: `PreviewedInput.sampled`'s own definition on the SQL path. One rule with
+    #: two readers would be two rules the first time it changed (§292), so the
+    #: worker stores the two numbers and both paths answer the question from
+    #: them.
+    sampled: bool
+
+
+class PreviewRunOut(BaseModel):
+    """A queued Python preview, in the shape the panel draws (§390; db 0092).
+
+    **Deliberately not `PreviewOut`.** That model answers "here are the rows",
+    which is a thing the SQL path can say in its response and this one cannot:
+    a Python preview is a row that is queued, then running, then an answer, and
+    a model without `status` could not describe the first two states.
+    """
+
+    id: UUID
+    repo_id: UUID
+    branch: str
+    path: str
+    #: queued | running | succeeded | failed | errored. **`failed` and
+    #: `errored` are different answers** (db 0092, db 0071's distinction): the
+    #: first is the author's transform raising, the second the run not
+    #: happening.
+    status: str
+    columns: list[dict[str, str]] = []
+    rows: list[list[Any]] = []
+    #: Rows produced *from the sample*, which `sampled` says is not the same
+    #: thing as the answer. `preview_transform`'s docstring is explicit that a
+    #: count over a sample "is not the answer"; the Python path reports the
+    #: same thing rather than a number that looks whole (§214).
+    row_count: int = 0
+    #: True when `rows` is only the first page of `row_count`.
+    truncated: bool = False
+    #: True when any input was cut. The warning travels with the rows.
+    sampled: bool = False
+    #: What the author's transform raised, when `status` is `failed`. Separate
+    #: from `error`, which is about the run not happening at all.
+    failure: str | None = None
+    inputs: list[PreviewRunInputOut] = []
+    error: str | None = None
+    queued_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+def _preview_out(row: dict[str, Any]) -> PreviewRunOut:
+    result = row.get("result") or {}
+    rows = result.get("rows") or []
+    inputs = [
+        PreviewRunInputOut(
+            alias=i["alias"],
+            rows_available=i["rows_available"],
+            rows_used=i["rows_used"],
+            sampled=i["rows_used"] < i["rows_available"],
+        )
+        for i in (row.get("inputs") or [])
+    ]
+    # **`total_rows` rather than `len(rows)`.** The worker counts the output
+    # and returns at most a hundred of it, so the two are different numbers
+    # whenever there is anything worth previewing - and `truncated` is what
+    # says which one the table is showing.
+    total = int(result.get("total_rows", len(rows)))
+    return PreviewRunOut(
+        **{k: v for k, v in row.items() if k not in ("result", "inputs")},
+        columns=result.get("columns") or [],
+        rows=rows,
+        row_count=total,
+        truncated=len(rows) < total,
+        sampled=any(i.sampled for i in inputs),
+        failure=result.get("error"),
+        inputs=inputs,
+    )
+
+
+@router.get("/{repo_id}/previews/{run_id}", response_model=PreviewRunOut)
+async def read_preview_run(
+    repo_id: UUID,
+    run_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> PreviewRunOut:
+    """What came back from a queued preview - what the panel polls.
+
+    Viewer, where asking for the preview is editor, for `read_test_run`'s
+    reason: asking executes code the caller supplied, reading what it said does
+    not.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        row = await preview_run_service.get(conn, repo_id=repo_id, run_id=run_id)
+    return _preview_out(row)
+
+
+@router.get("/{repo_id}/previews", response_model=list[PreviewRunOut])
+async def list_preview_runs(
+    repo_id: UUID,
+    path: str | None = Query(default=None),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[PreviewRunOut]:
+    """Recent previews, newest first - what the panel opens on.
+
+    By `path` rather than by branch, which is where this diverges from
+    `list_test_runs`: a preview is about one file, so "what did this file say
+    last time" is the question somebody opening the editor is asking.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await preview_run_service.latest(conn, repo_id=repo_id, path=path)
+    return [_preview_out(r) for r in rows]
 
 
 class BranchSummaryOut(BaseModel):
@@ -1497,17 +1627,6 @@ async def preview_transform(
                     "preview - a transform declares the dataset it produces"
                 ),
             )
-        if not body.path.endswith(".sql"):
-            # Decision 0004: customer Python runs in the runner task, never in
-            # the API. Previewing it means dispatching a Fargate task and
-            # waiting on it, which is a job with a status rather than an HTTP
-            # response (STATUS.md §69).
-            raise ConflictError(
-                "previewing Python transforms is not built yet - they run in an isolated "
-                "task rather than in the API, which takes long enough to need a job you "
-                "can watch rather than a request that waits. SQL transforms preview now."
-            )
-
         datasets_by_name = {
             str(row["name"]): row
             for row in await ds_service.list_for_project(conn, access.project_id)
@@ -1528,6 +1647,51 @@ async def preview_transform(
             alias: datasets_by_name[name] for alias, name in declaration.inputs.items()
         }
         output_row = datasets_by_name.get(declaration.output)
+
+        if not body.path.endswith(".sql"):
+            # **Decision 0004, answered rather than refused** (§390). Customer
+            # Python runs in the runner task, never here — so a Python preview
+            # is a queued row the panel watches (db 0092), not an HTTP response
+            # that waits. The refusal that used to stand here is quoted in db
+            # 0071's header, which built the shape this uses.
+            #
+            # This route resolved the declaration above, which is why the
+            # queued row carries `{alias: dataset_id}`: the parser lives here,
+            # and the worker should not grow a second reader of a syntax with
+            # one writer (§292).
+            #
+            # **Everything before this point is shared with the SQL path on
+            # purpose.** A file that declares nothing, or that reads a dataset
+            # the project does not have, is refused the same way in both
+            # languages and at the button rather than a minute later.
+            try:
+                run = await preview_run_service.request(
+                    conn,
+                    repo_id=repo_id,
+                    branch=body.branch or repo["default_branch"],
+                    path=body.path,
+                    content=content,
+                    input_datasets={
+                        alias: str(row["id"]) for alias, row in input_rows.items()
+                    },
+                    requested_by=access.auth.user_id,
+                )
+            except ValueError as exc:
+                # 422 for the reason the declaration errors above give one:
+                # the file is the request body and it is what is wrong. A
+                # queue that is full raises `ConflictError` instead, which is
+                # already an `HTTPException` and says 409 - a different
+                # answer because it is about timing rather than the file.
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                ) from exc
+            return PreviewOut(
+                output=declaration.output,
+                columns=[], rows=[], row_count=0,
+                truncated=False, sampled=False, inputs=[],
+                run_id=str(run["id"]),
+                status=str(run["status"]),
+            )
 
     storage = _dataset_storage()
     input_paths: dict[str, str] = {}

@@ -443,3 +443,95 @@ def overall_status(results: list[dict[str, Any]]) -> str:
     if any(status in ("fail", "error") for status, _ in statuses):
         return "warn"
     return "pass"
+
+
+#: A preview reads this many rows of each input. The API's own constant
+#: (`services/dataset_engine.PREVIEW_SAMPLE_ROWS`), repeated here rather than
+#: imported because the worker does not import the API — **and named the same
+#: so the two are findable together when one changes**, which is the honest
+#: version of a duplicated constant.
+PREVIEW_SAMPLE_ROWS = 1000
+
+#: And returns at most this many of the result. `services/dataset_engine`'s
+#: `PREVIEW_ROWS`.
+PREVIEW_ROWS = 100
+
+
+def sample_parquet(src: str, dest: str, limit: int = PREVIEW_SAMPLE_ROWS) -> tuple[int, int]:
+    """Write the first `limit` rows of `src` to `dest`. Returns
+    `(rows_available, rows_used)`.
+
+    **The same sampling the API's SQL preview does**, kept identical on
+    purpose: `preview_transform` counts the input, takes `LIMIT sample_rows`,
+    and records both numbers so `PreviewedInput.sampled` can say whether the
+    answer is the answer. A Python preview that sampled differently would
+    produce a differently-wrong row count for the same file, which is worse
+    than either being wrong on its own.
+
+    **No ordering.** `LIMIT` without `ORDER BY` takes whatever the file holds
+    first, which is what the SQL path takes too — a preview is "your code
+    against real data", not a representative sample, and pretending otherwise
+    by sorting would cost the whole file's read to look more principled.
+    """
+    con = duckdb.connect()
+    try:
+        try:
+            available = int(
+                con.execute(f"SELECT count(*) FROM read_parquet({src!r})").fetchone()[0]
+            )
+            con.execute(
+                f"COPY (SELECT * FROM read_parquet({src!r}) LIMIT {max(1, limit)}) "
+                f"TO {dest!r} (FORMAT PARQUET)"
+            )
+            used = int(
+                con.execute(f"SELECT count(*) FROM read_parquet({dest!r})").fetchone()[0]
+            )
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+    finally:
+        con.close()
+    return available, used
+
+
+def read_preview_rows(parquet_path: str, limit: int = PREVIEW_ROWS) -> dict[str, Any]:
+    """The first `limit` rows of a transform's output, as
+    `{"columns": [{name, data_type}], "rows": [[...]]}`.
+
+    **Stored on the run row rather than left in a file** (db 0092): a preview
+    is capped at a hundred rows, so the result is small enough to be a column,
+    and a parquet left behind is a leak nothing on the screen would show.
+
+    Values are stringified the way the API's preview does, because a preview
+    is read rather than computed on and JSON has no answer for a `Decimal` or
+    a `date`.
+
+    **`total_rows` is counted, not inferred from the rows returned.** A
+    transform that produced forty thousand rows over the sample and a
+    transform that produced exactly a hundred are different answers, and a
+    panel that reported the second for the first would be confidently wrong in
+    the direction nobody checks. `preview_transform` reports the same pair for
+    SQL, which is the whole reason the number is here rather than `len(rows)`.
+    """
+    con = duckdb.connect()
+    try:
+        try:
+            described = con.execute(
+                f"DESCRIBE SELECT * FROM read_parquet({parquet_path!r})"
+            ).fetchall()
+            total = int(
+                con.execute(
+                    f"SELECT count(*) FROM read_parquet({parquet_path!r})"
+                ).fetchone()[0]
+            )
+            rows = con.execute(
+                f"SELECT * FROM read_parquet({parquet_path!r}) LIMIT {max(1, limit)}"
+            ).fetchall()
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+    finally:
+        con.close()
+    return {
+        "columns": [{"name": r[0], "data_type": r[1]} for r in described],
+        "rows": [[None if v is None else str(v) for v in row] for row in rows],
+        "total_rows": total,
+    }

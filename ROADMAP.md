@@ -256,11 +256,13 @@ The point of the whole section: code in a repository that declares the dataset i
 
 SQL transforms are the cheaper first step and should ship first, because they are what exists today, just relocated into a repository.
 
-### 2.6 Preview — **M, done for SQL** (`STATUS.md` §69)
+### ~~2.6 Preview~~ — **done** (`STATUS.md` §69, §390, migration 0092)
 
 Run the transform against a limited sample of its inputs, without committing, and show the resulting rows and schema. It previews **the editor's buffer**, says in three places when the answer came from a sample, and reports what the change would do to the dataset the transform already writes — the drift check this item was always meant to carry, reusing the connectors' existing comparison.
 
-**Python previews are refused with a sentence and are the remaining half.** Customer Python runs in an isolated task (decision 0004), so previewing it means dispatching Fargate and waiting — a job with a status rather than an HTTP response. That needs a preview-run record and something to poll, which is its own item.
+**Both languages preview now.** Python was refused with a sentence for as long as the refusal's premise held: customer Python runs in an isolated task (decision 0004), so previewing it means a job with a status rather than an HTTP response. §390 built that job — the preview-run record this item named, and the panel that polls it. What the refusal called a reason to wait turned out to be a description of the work, and the shape was already in the repository twice over (code test runs, the Build panel).
+
+One thing worth keeping in view: the two languages share every check *before* the fork — the declaration, the aliases, the missing-dataset refusal — and one flattening function after it, so the reader cannot tell which engine answered. Two renderers under an `if` would have been the version of this that drifts.
 
 ### ~~2.7 Pull request review UI~~ — **done** (`STATUS.md` §92, migration 0036)
 
