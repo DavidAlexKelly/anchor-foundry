@@ -232,7 +232,17 @@ EOF
 all.** §302's citation test resolves every page a row *cites*; a row citing
 nothing passes it vacuously. Measured in §379: **45 of 164 unfinished rows
 carry no page or TOC reference**, which is a quarter of the board and a project
-rather than an afternoon.
+rather than an afternoon. **31 of 157 as of §391**, and the two numbers moved
+for different reasons — some rows were finished, and some were opened and
+written up.
+
+**The empty-note count reached zero in §391**, which is the narrower thing the
+snippet above was really measuring. Six rows carried a mark and nothing else;
+§388's sorting found them, §389 closed two of them (and found they were one
+feature twice — see `code-repositories.md` §2.2), §390 built it, and the last
+four were read and written up. A row with a note can be wrong; a row without
+one cannot even be argued with, which is why this was worth finishing as its
+own thing rather than as a side effect of building.
 
 That is why there is no check enforcing it yet, and the reason is §302's own,
 written about `§NNN` references: "enforcing it would mean grandfathering eight
