@@ -116,6 +116,16 @@ returns, not a build system. **§369 is the precedent that this is cheap when th
 view already exists**: the pipeline review tab put the graph on the review
 surface by composing what §14, §364, §365 and §366 had already built.
 
+**The cascade already here runs the other way, and that is the direction to
+build in** (§383). `enqueue_due_upstream_models` propagates *downstream* — a
+build writes an output version, and whatever reads it with
+`trigger_mode='upstream'` fires on its own. Every strategy p.9 names reaches
+*upstream or across*. So the cascade is what happens after a build rather than
+how a build finds its set, and the three rows are not equally sized: **`Build`
+the current file needs no selection question answered at all**, which makes it
+the one to build first and the one whose cost the other two should be measured
+against.
+
 ---
 
 ## How to read the checklists
