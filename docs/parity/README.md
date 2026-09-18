@@ -57,6 +57,40 @@ Foundry describes Functions as logic "executed on the server side in an isolated
 
 ---
 
+## The one structural difference we did not choose
+
+**Foundry grants access per resource. This platform grants it per project.**
+`rls_can_access_project(project_id)` is the whole of it: `datasets`, `models`
+and the rest carry that one policy (db 0006, db 0061), there is no per-dataset
+grant table anywhere, and nothing has a marking.
+
+That is a legitimate design — a project *is* the unit people share here — and it
+is not being revisited. It is written down because **four rows across two specs
+turn on it**, and each was read independently before anybody noticed they were
+the same finding (§370, §374, §375, §376 found them one at a time):
+
+| Row | What the difference does to it |
+|---|---|
+| `code-repositories.md` — **Inaccessible datasets marked rather than hidden** (p.53) | **Unreachable.** A proposal is project-scoped and a dataset inherits the project, so a reviewer who can open the proposal can read every dataset it names. Withdrawn in §370 |
+| `code-repositories.md` — **Security: changes to markings on the output** (p.54) | **Not an impact-analysis gap.** Markings are Foundry's per-resource classification; building the diff means building the access model first |
+| `ontology.md` §1.2 — **edit-only properties permissioned to one of the backing datasets** (p.113) | **No counterpart.** Datasets carry no permissions of their own to be permissioned *to* — except in the one case below |
+| `ontology.md` §5.3 — **Writeback dataset** (`action-types` p.3) | **Decides where it lives.** §324 established a type mapped from two projects genuinely has two homes and this platform refuses to pick one; a writeback dataset meets that question first (§375) |
+
+**The exception is the interesting part, and it is the same one each time.** A
+type mapped from datasets in *two projects* does have two genuinely different
+access answers, which is why §324 makes the Explorer name both and refuse
+rather than choose. So the per-resource/per-project difference collapses to
+nothing on a single-project type and becomes a real decision on a multi-project
+one — and every row above is easy until somebody maps a type across two
+projects.
+
+**What this section is for.** Any of these four can be reopened, and reopening
+one means answering the access question rather than the row's own question. A
+reader who has this in hand will not cost themselves the reading four separate
+times, which is what happened to produce it.
+
+---
+
 ## How to read the checklists
 
 Each spec is a table of Foundry features with a status and a citation.
