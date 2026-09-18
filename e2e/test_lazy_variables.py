@@ -124,8 +124,12 @@ def module_with_values(api, name: str) -> Module:
                       "effects": [{"type": "navigate", "config": {"page": "p1"}}]},
             "e_to2": {"id": "e_to2", "trigger": {"node": "to2", "on": "click"},
                       "effects": [{"type": "navigate", "config": {"page": "p2"}}]},
+            # **`navigate`, not an `open_overlay` of its own.** One effect
+            # takes either a page or an overlay and tells them apart from the
+            # tree (`event-run.ts`'s `overlayIds`), which is why the effect
+            # list this document is checked against has no second verb.
             "e_open": {"id": "e_open", "trigger": {"node": "open", "on": "click"},
-                       "effects": [{"type": "open_overlay", "config": {"overlay": "ov"}}]},
+                       "effects": [{"type": "navigate", "config": {"page": "ov"}}]},
         },
     })
     return mod

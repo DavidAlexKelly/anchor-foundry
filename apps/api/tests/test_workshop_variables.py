@@ -3486,3 +3486,68 @@ def test_an_empty_restriction_is_not_the_same_as_no_restriction() -> None:
     "compute everything"."""
     variables = wv.parse(LAZY)
     assert wv.evaluate(variables, {"v_region": "north"}, only=frozenset()) == {}
+
+
+# ---- the reference nothing could see (§392) -----------------------------------
+def text_node(text: str) -> dict:
+    return {"type": {"resolvedName": "CanvasText"}, "props": {"tag": "p", "text": text}}
+
+
+def test_a_variable_interpolated_into_text_is_displayed() -> None:
+    """**The defect a browser found and no unit test could.**
+
+    `CanvasText` renders `{{v_id}}` by substituting from the resolved map, so a
+    Text widget names no variable in any prop. Under the lazy rule that meant
+    the variable was never computed and the widget rendered `ALPHA=` - the
+    value silently gone, with the text around it perfectly intact.
+    """
+    variables = wv.parse({"v_alpha": var("v_alpha", label="Alpha")})
+    layout = {"t": text_node("ALPHA={{v_alpha}}")}
+    assert wv.displayed(layout, variables, {"t"}) == {"v_alpha"}
+
+
+def test_an_interpolated_variable_pulls_its_inputs_in_too() -> None:
+    """The closure applies to this kind of reference like any other."""
+    variables = wv.parse({
+        "v_in": var("v_in", label="In"),
+        "v_out": var("v_out", label="Out",
+                     derivation={"transform": "concat", "inputs": ["v_in"]}),
+    })
+    assert wv.displayed({"t": text_node("{{v_out}}")}, variables, {"t"}) == {
+        "v_out", "v_in"
+    }
+
+
+def test_a_token_that_is_not_a_declared_variable_is_ignored() -> None:
+    """**The safety argument for doing this at all.** The same two-brace syntax
+    carries an event payload - `{{row.id}}` on a row-click label names a field
+    of a row, not a variable. Filtering against the declared ids is what lets
+    one syntax serve both without a payload token becoming a broken reference.
+    """
+    variables = wv.parse({"v_alpha": var("v_alpha", label="Alpha")})
+    layout = {"t": text_node("{{row.id}} and {{v_missing}}")}
+    assert wv.displayed(layout, variables, {"t"}) == set()
+
+
+def test_an_interpolated_variable_counts_as_a_usage() -> None:
+    """**The same fact, and the half that was already wrong before §392.**
+
+    A variable used only in a Text widget reported zero usages, so the
+    Variables panel offered to delete it and the refusal that exists to stop
+    exactly that never fired. The text then renders with a blank where the
+    value was and nothing anywhere says why. Found while building the lazy
+    rule, because it needed the same answer.
+    """
+    variables = wv.parse({"v_alpha": var("v_alpha", label="Alpha")})
+    found = wv.usages({"t": text_node("ALPHA={{v_alpha}}")}, variables)
+    assert len(found["v_alpha"]) == 1
+    assert found["v_alpha"][0]["node"] == "t"
+
+
+def test_a_payload_token_is_not_a_dangling_reference() -> None:
+    """The counterweight to the usage rule above, and the reason this is a
+    separate function from `references()`. A save must not be refused over
+    `{{row.id}}`, which is not a variable reference at all - so the template
+    scan is deliberately not wired into `dangling_references`."""
+    variables = wv.parse({"v_alpha": var("v_alpha", label="Alpha")})
+    assert wv.dangling_references({"t": text_node("{{row.id}}")}, variables) == []

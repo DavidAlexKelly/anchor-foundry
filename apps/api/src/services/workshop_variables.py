@@ -34,6 +34,7 @@ inside it.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -419,6 +420,46 @@ def references(props: Any) -> list[tuple[str, str]]:
                 ref = entry.get(inner)
                 if isinstance(ref, str) and ref:
                     found.append((f"{prop}[{index}].{inner}", ref))
+    return found
+
+
+#: `{{v_id}}` in a typed string prop — what `CanvasText` renders and what
+#: `event-run.interpolate` substitutes. Two braces, unlike the platform's
+#: three-brace `{{{name}}}` for action and webhook templates
+#: (`services/templates.py`): different syntaxes for different documents, and
+#: this one is the canvas's.
+TEMPLATE_TOKEN = re.compile(r"\{\{\s*([A-Za-z0-9_.]+)\s*\}\}")
+
+
+def template_references(props: Any, variables: dict[str, "Variable"]) -> set[str]:
+    """Variable ids a node's *typed text* interpolates.
+
+    **A second kind of reference, and it was invisible** (§392). `references()`
+    knows the declared reference props — `filterParameter`, `variable`,
+    `objectSetVariable` and the rest — because those are the ones a widget
+    configuration names. A Text widget does not name a variable anywhere; it
+    holds a string with `{{v_id}}` in it, and `CanvasText` substitutes from the
+    resolved map at render. So a variable used only that way is referenced by
+    nothing any of this module could see.
+
+    **Filtered against the declared variables, and that is the whole safety
+    argument.** `interpolate` is also used on event payloads, where `{{row.id}}`
+    names a field of a row rather than a variable. A token that is not a
+    declared id is simply not one, so it is ignored rather than reported — which
+    is why this is a separate function from `references()` and why it is *not*
+    wired into `dangling_references()`: a payload token is not a broken
+    reference, and refusing a save over one would make every row-click label
+    unsaveable.
+    """
+    found: set[str] = set()
+    if not isinstance(props, dict):
+        return found
+    for value in props.values():
+        if not isinstance(value, str) or "{{" not in value:
+            continue
+        for name in TEMPLATE_TOKEN.findall(value):
+            if name in variables:
+                found.add(name)
     return found
 
 
@@ -1980,6 +2021,15 @@ def usages(layout: Any, variables: dict[str, Variable]) -> dict[str, list[dict[s
         for prop, ref in references(node.get("props")):
             if ref in found:
                 found[ref].append({"node": str(node_id), "prop": prop})
+        # **The same second kind of reference, because it is the same fact**
+        # (§392). A variable interpolated into a Text widget reported *zero*
+        # usages, so the Variables panel offered to delete it and the refusal
+        # that exists to stop exactly that never fired - after which the text
+        # renders with a blank where the value was and nothing says why. Found
+        # while building the lazy rule, which needed the same answer.
+        for ref in sorted(template_references(node.get("props"), variables)):
+            if ref in found:
+                found[ref].append({"node": str(node_id), "prop": "text"})
     # A derived variable is a usage too. Deleting an input out from under a
     # derivation is the same mistake as deleting one out from under a widget,
     # and only naming the widget case would make the refusal look arbitrary.
@@ -2031,9 +2081,14 @@ def displayed(
         for node_id, node in layout.items():
             if str(node_id) not in visible or not isinstance(node, dict):
                 continue
-            for _prop, ref in references(node.get("props")):
+            props = node.get("props")
+            for _prop, ref in references(props):
                 if ref in variables:
                     wanted.add(ref)
+            # The other kind (§392): `{{v_id}}` in typed text, which names no
+            # prop and which nothing here could see until a browser test asked
+            # a Text widget what it was showing and got `ALPHA=`.
+            wanted |= template_references(props, variables)
 
     # The closure. Breadth rather than recursion because `parse` has already
     # refused cycles, so the only reason to track what has been walked is to
