@@ -23,6 +23,7 @@ import { useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { ValueFormatEditor, formattable } from "@/components/value-format-editor";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
+import { copyRulesTo } from "@/lib/copy-format-rules";
 import { DerivedPropertyEditor } from "@/components/derived-property-editor";
 import { SharedPropertyPicker } from "@/components/shared-property-picker";
 import { StatusField } from "@/components/status-field";
@@ -261,12 +262,28 @@ export function PropertyRows({
           // (`object-link-types` p.105 label B).
           properties={properties
             .filter((p) => p.api_name.trim())
-            .map((p) => ({ api_name: p.api_name, data_type: p.data_type }))}
+            .map((p) => ({
+              api_name: p.api_name,
+              data_type: p.data_type,
+              // p.107's dialog names which properties would lose rules they
+              // already have, so it has to be told which ones have any.
+              conditional_format: p.conditional_format,
+            }))}
           value={colouringRow.conditional_format}
           onSave={(next) => {
             const rows = [...properties];
             rows[colouring!] = { ...colouringRow, conditional_format: next };
             onChange(rows);
+          }}
+          // p.107's Copy rules (§388). **The source and the targets in one
+          // write**, because they are one act: the rules on screen are the
+          // unsaved edit, so applying them here and copying them there cannot
+          // be two steps without a state where the copy has happened and the
+          // property it came from still shows the old rules.
+          onCopy={(next, chosen) => {
+            const rows = [...properties];
+            rows[colouring!] = { ...colouringRow, conditional_format: next };
+            onChange(copyRulesTo(rows, next ?? [], chosen));
           }}
         />
       )}

@@ -26,6 +26,7 @@
  */
 
 import { useState } from "react";
+import { copySummary, copyTargets } from "@/lib/copy-format-rules";
 import { Dialog, Field } from "@/components/dialog";
 import type { ConditionalRule, PropertyDataType } from "@/lib/types";
 import { conditionalStyle } from "@/lib/conditional-format";
@@ -55,6 +56,11 @@ const STRING_OPERATORS: [string, string][] = [
 export interface EditableProperty {
   api_name: string;
   data_type: PropertyDataType;
+  /** This property's own rules, for p.107's Copy dialog: it names the
+   *  properties whose rules a copy would overwrite, and it cannot do that
+   *  without knowing which of them have any (§388). Absent on the callers
+   *  that do not offer copying. */
+  conditional_format?: ConditionalRule[] | null;
 }
 
 function comparisonsFor(dataType: string | undefined): [string, string][] {
@@ -113,6 +119,7 @@ export function ConditionalFormatEditor({
   properties,
   value,
   onSave,
+  onCopy,
 }: {
   open: boolean;
   onClose: () => void;
@@ -121,8 +128,18 @@ export function ConditionalFormatEditor({
   properties: EditableProperty[];
   value: ConditionalRule[] | null | undefined;
   onSave: (next: ConditionalRule[] | null) => void;
+  /** p.107's Copy rules (§388). **Applies as well as copies**, and that is
+   *  the translation rather than a shortcut: p.107 copies "the conditional
+   *  formatting rule" you are looking at, and what you are looking at here is
+   *  the unsaved edit. A copy that wrote the old rules to four properties
+   *  while the screen showed new ones would be the worst kind of surprise, so
+   *  this writes the rules on screen to the source and the chosen targets
+   *  together. Absent on callers that cannot write other properties. */
+  onCopy?: (rules: ConditionalRule[] | null, chosen: string[]) => void;
 }) {
   const [rules, setRules] = useState<ConditionalRule[]>(value ?? []);
+  const [copying, setCopying] = useState(false);
+  const [chosen, setChosen] = useState<string[]>([]);
   const types = Object.fromEntries(properties.map((p) => [p.api_name, p.data_type]));
   const problem = ruleProblem(rules, types);
 
@@ -345,6 +362,78 @@ export function ConditionalFormatEditor({
       )}
 
       {problem && <p className="field-hint" data-testid="rule-problem">{problem}</p>}
+
+      {/* p.107's Copy rule dialog (§388). **A section in this dialog rather
+          than a second one over it**: p.107 describes a dialog because its
+          Copy rules button lives on a properties *pane*, and here it lives
+          inside the rules editor already — stacking a dialog on a dialog to
+          match the noun would be copying the shape and losing the reason.
+
+          Offered only when there is somewhere to copy to, which on a type
+          with one named property there is not (§214: a button that opens an
+          empty list is a control that looks like it works). */}
+      {onCopy && copyTargets(properties, propertyName).length > 0 && (
+        <div style={{ borderTop: "1px solid var(--line)", marginTop: 12, paddingTop: 12 }}>
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="copy-rules-toggle"
+            onClick={() => setCopying((v) => !v)}
+          >
+            {copying ? "Cancel copy" : "Copy rules"}
+          </button>
+          {copying && (
+            <div data-testid="copy-rules" style={{ marginTop: 8 }}>
+              <p className="field-hint">
+                p.107 — the rules on screen, written to the properties you choose.
+              </p>
+              {copyTargets(properties, propertyName).map((p) => (
+                <label
+                  key={p.api_name}
+                  data-testid={`copy-target-${p.api_name}`}
+                  style={{ display: "block" }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={chosen.includes(p.api_name)}
+                    onChange={(e) =>
+                      setChosen((current) =>
+                        e.target.checked
+                          ? [...current, p.api_name]
+                          : current.filter((n) => n !== p.api_name),
+                      )
+                    }
+                  />{" "}
+                  {p.api_name}
+                  {(p.conditional_format?.length ?? 0) > 0 && (
+                    <span className="slug"> has its own rules</span>
+                  )}
+                </label>
+              ))}
+              <div className="row-actions" style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  className="btn"
+                  data-testid="copy-rules-confirm"
+                  // The same floor as Apply, plus something to copy to: a
+                  // copy of rules the editor would refuse to save is a way
+                  // round the refusal.
+                  disabled={problem !== null || chosen.length === 0}
+                  onClick={() => {
+                    onCopy(rules.length ? rules : null, chosen);
+                    onClose();
+                  }}
+                >
+                  Copy
+                </button>
+                <span className="soft" data-testid="copy-rules-summary">
+                  {copySummary(properties, chosen)}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       <div className="row-actions" style={{ justifyContent: "flex-end", marginTop: 12 }}>
         <button type="button" className="btn" onClick={onClose}>Cancel</button>
         <button

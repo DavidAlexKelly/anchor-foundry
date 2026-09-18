@@ -26,6 +26,7 @@ from ontology_page import find_type_row
 
 GREEN = "rgb(26, 127, 55)"    # #1a7f37
 RED = "rgb(185, 28, 28)"      # #b91c1c
+BLUE = "rgb(29, 78, 216)"     # #1d4ed8 — only §388's copy test writes this
 
 # `region` carries nothing at all: it is what the editor test draws a rule on,
 # and a property the fixture already configured could not tell "the rule I just
@@ -215,3 +216,102 @@ def test_a_rule_can_be_drawn_and_it_paints_an_object(page, module) -> None:
     # be waiting thirty seconds for something that is never coming.
     expect(page.locator("[data-property='region'] span")).to_have_count(0)
     expect(page.locator("[data-property='region']")).to_contain_text("south")
+
+
+def test_rules_copied_to_another_property_go_on_meaning_what_they_meant(
+    page, module
+) -> None:
+    """p.107's Copy rules (§388).
+
+        "Select the properties to which you want to copy the conditional
+         formatting rules." (p.107)
+
+    **The copied set goes on reading what it read**, and that is the claim
+    worth a browser. Every rule names the property it tests — `matches` reads
+    `properties[rule.property]`, and there is no "the property being painted"
+    default (p.105 label B is the whole reason). So `wifi`'s rules carried to
+    `name` still ask about `wifi`, and Alpha's is true: `name` comes out
+    **green**, painted by a rule about a different property entirely.
+
+    That is worth stating because the obvious guess is wrong in both
+    directions. It is not re-pointed at its new property, and it does not fall
+    through to p.105's fallback either — a draft of this test asserted red on
+    exactly that reasoning and the browser said otherwise.
+
+    Which properties are offered and what the sentence says are
+    `apps/web/src/lib/copy-format-rules.test.ts`'s. This is the seam.
+
+    `name` is the target because no other test in this file touches it: the
+    fixture is module-scoped, and a property an earlier test has drawn on
+    would make this depend on the order they run in.
+    """
+    open_type_editor(page, module)
+    # `wifi` is the fixture's own coloured property, so there are rules to copy.
+    page.get_by_role("button", name="Property 4 rules").click()
+    page.get_by_test_id("copy-rules-toggle").click()
+
+    # Nothing chosen: the button is unusable and the sentence asks rather than
+    # counting (§214 — a Copy that copies to nothing is not a control).
+    expect(page.get_by_test_id("copy-rules-confirm")).to_be_disabled()
+    expect(page.get_by_test_id("copy-rules-summary")).to_contain_text("choose the properties")
+
+    # **The property it came from is not on the list**, which is the negative
+    # control: copying rules onto themselves is a no-op dressed as an action.
+    expect(page.get_by_test_id("copy-target-wifi")).to_have_count(0)
+
+    # **The rules are edited first, and that is deliberate.** Copying them
+    # unchanged cannot tell "copy" from "copy and apply": the source already
+    # has the saved rules either way. A sweep found exactly that — dropping
+    # the write to the source property passed every test here (§213). Changing
+    # the colour before copying makes the two answers different.
+    page.get_by_test_id("rule-1-colour").fill("#1d4ed8")
+
+    page.get_by_test_id("copy-target-name").get_by_role("checkbox").check()
+    expect(page.get_by_test_id("copy-rules-summary")).to_have_text("copy to 1 property")
+
+    page.get_by_test_id("copy-rules-confirm").click()
+    page.get_by_role("button", name="Save", exact=True).click()
+
+    open_object(page, module, "Alpha")
+    # Blue, because the copied rule still asks about `wifi` and Alpha's is
+    # true — the reference travelled with the rule — and because what was
+    # copied is the edit on screen rather than what was saved before it.
+    assert colour_of(page, "name") == BLUE
+    # And Beta, whose `wifi` is false, gets the fallback: the *pair* is what
+    # says the rules are being evaluated rather than one colour being painted
+    # on everything.
+    open_object(page, module, "Beta")
+    assert colour_of(page, "name") == RED
+    # **Back to Alpha**, because rule 1 is the one whose colour changed and it
+    # only matches where `wifi` is true. Asserting this on Beta reads the
+    # untouched fallback and fails for a reason that has nothing to do with
+    # the claim.
+    open_object(page, module, "Alpha")
+    # **And the property they came from has the edit too**, which is the half
+    # a copy of unchanged rules could never show: this control applies as well
+    # as copies, because the rules on screen are an edit nobody has applied
+    # yet, and writing them to another property while their own still showed
+    # the old colour would be the worst kind of surprise.
+    assert colour_of(page, "wifi") == BLUE
+
+
+def test_a_copy_says_which_properties_would_lose_their_own_rules(page, module) -> None:
+    """The half p.107 spends its last sentence on — "they will be overwritten
+    by the new rules" — and the reason it is worth its own test: the count has
+    to be on the screen **before** the click, not discovered after it.
+
+    `value` is the target because the fixture gives it rules and nothing here
+    changes them, so this does not depend on what another test did first. It
+    ticks the box and reads the sentence; it never presses Copy.
+    """
+    open_type_editor(page, module)
+    page.get_by_role("button", name="Property 4 rules").click()
+    page.get_by_test_id("copy-rules-toggle").click()
+
+    page.get_by_test_id("copy-target-value").get_by_role("checkbox").check()
+    summary = page.get_by_test_id("copy-rules-summary")
+    expect(summary).to_contain_text("overwriting the rules on 1")
+    expect(summary).to_contain_text("value")
+    # The row says so too, so somebody ticking boxes sees it where they are
+    # looking rather than only in the total.
+    expect(page.get_by_test_id("copy-target-value")).to_contain_text("has its own rules")

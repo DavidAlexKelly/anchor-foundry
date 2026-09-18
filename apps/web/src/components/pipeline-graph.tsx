@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FileState } from "@/lib/file-verdict";
 import type { PipelineGraph, PipelineNode } from "@/lib/types";
-import { between, buildPlan, buildSummary, cascadeCount } from "@/lib/graph-builds";
+import {
+  between, buildPlan, buildSummary, cascadeCount, type PlannedModel,
+} from "@/lib/graph-builds";
+import { clearSummary, looksLikeCron, scheduleSummary } from "@/lib/graph-schedules";
 import {
   columnsIn,
   kindsIn,
@@ -313,6 +316,8 @@ export function PipelineGraphView({
   review,
   onBuild,
   building,
+  onSchedule,
+  scheduling,
 }: {
   graph: PipelineGraph;
   onOpen: (node: PipelineNode) => void;
@@ -339,10 +344,16 @@ export function PipelineGraphView({
    *
    * The models arrive in build order, upstream first — `buildPlan` sorts by
    * the `layer` the server already computed. */
-  onBuild?: (models: { id: string; name: string; layer: number }[]) => void;
+  onBuild?: (models: PlannedModel[]) => void;
   /** A build asked for here is still going, so the button says so rather than
    *  inviting a second one. */
   building?: boolean;
+  /** p.10's schedules helper (§387): set or clear a build schedule over the
+   *  selection. Optional for the same reason `onBuild` is — a review surface
+   *  is not somewhere work starts. A `null` expression clears the schedule,
+   *  which is p.10's "edit" including turning one off. */
+  onSchedule?: (models: PlannedModel[], cron: string | null) => void;
+  scheduling?: boolean;
 }) {
   const [selected, setSelected] = useState<string[]>(initialView?.selected ?? []);
   // What Build would run, and what it would set off afterwards. Computed here
@@ -351,6 +362,9 @@ export function PipelineGraphView({
   // which has its own tests because vitest cannot parse `.tsx`.
   const plan = buildPlan(graph.nodes, graph.edges, selected);
   const cascade = cascadeCount(graph.nodes, graph.edges, plan);
+  // p.10's schedule, as typed. The default is the one the Models page offers,
+  // so the two places a schedule can be set open on the same suggestion.
+  const [cron, setCron] = useState("0 * * * *");
   // p.7's two modes. **Panning is the default**, as it is in Foundry: the
   // gesture a reader makes without thinking is moving the graph around, and a
   // page that opens in a mode where dragging selects would have them draw a
@@ -900,6 +914,60 @@ export function PipelineGraphView({
                   <span className="chip" data-testid="selection-build-cascade">
                     {cascade} more will follow on their own
                   </span>
+                )}
+              </div>
+            )}
+            {/* p.10's schedules helper, beside the builds one exactly as the
+                two sit beside each other on p.9-10. **The same plan**: which
+                models a selection means is one question, and `buildPlan`
+                answers it (§292). What differs is that scheduling is about
+                *how and when* a transform runs, so an uploaded dataset in the
+                selection is as irrelevant here as there and the summary says
+                so the same way (§387). */}
+            {onSchedule && (
+              <div
+                data-testid="selection-schedule"
+                style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}
+              >
+                <input
+                  aria-label="Cron schedule"
+                  data-testid="selection-schedule-cron"
+                  value={cron}
+                  onChange={(e) => setCron(e.target.value)}
+                  style={{ width: 130 }}
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  data-testid="selection-schedule-set"
+                  // **Both halves, and each for its own reason.** No models is
+                  // nothing to schedule; a box that is not five fields was
+                  // never going to be a cron expression, so the button is
+                  // unusable rather than earning a refusal for something the
+                  // reader can already see is unfinished. Whether those five
+                  // fields *mean* anything is the server's to say.
+                  disabled={scheduling || plan.models.length === 0 || !looksLikeCron(cron)}
+                  onClick={() => onSchedule(plan.models, cron)}
+                >
+                  {scheduling ? "Saving…" : "Schedule"}
+                </button>
+                <span className="soft" data-testid="selection-schedule-summary">
+                  {scheduleSummary(plan.models)}
+                </span>
+                {/* Absent rather than disabled when there is nothing to clear:
+                    a control offered over a selection it would not change is
+                    §214's shape, and `clearSummary` returns "" for exactly
+                    that case. */}
+                {clearSummary(plan.models) && (
+                  <button
+                    type="button"
+                    className="btn quiet"
+                    data-testid="selection-schedule-clear"
+                    disabled={scheduling}
+                    onClick={() => onSchedule(plan.models, null)}
+                  >
+                    {clearSummary(plan.models)}
+                  </button>
                 )}
               </div>
             )}
