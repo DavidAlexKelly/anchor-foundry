@@ -75,6 +75,7 @@ the same finding (§370, §374, §375, §376 found them one at a time):
 | `code-repositories.md` — **Security: changes to markings on the output** (p.54) | **Not an impact-analysis gap.** Markings are Foundry's per-resource classification; building the diff means building the access model first |
 | `ontology.md` §1.2 — **edit-only properties permissioned to one of the backing datasets** (p.113) | **No counterpart.** Datasets carry no permissions of their own to be permissioned *to* — except in the one case below |
 | `ontology.md` §5.3 — **Writeback dataset** (`action-types` p.3) | **Decides where it lives.** §324 established a type mapped from two projects genuinely has two homes and this platform refuses to pick one; a writeback dataset meets that question first (§375) |
+| `code-repositories.md` — **Project references: use datasets across projects** (TOC §10) | **Refused, in code.** `models._validate_and_set_inputs` requires every input to live in the model's own project — "cross-project reads would be a permission bypass". Foundry's references work because a resource carries its own permission; here the reference *is* the bypass (§381) |
 
 **The exception is the interesting part, and it is the same one each time.** A
 type mapped from datasets in *two projects* does have two genuinely different
@@ -88,6 +89,32 @@ projects.
 one means answering the access question rather than the row's own question. A
 reader who has this in hand will not cost themselves the reading four separate
 times, which is what happened to produce it.
+
+---
+
+## Work starts from the resource, never from a view of it
+
+A second cross-cutting fact, smaller than the access one and worth the same
+treatment. Three rows across two specifications read as missing features and
+are really one shape:
+
+| Row | |
+|---|---|
+| `datasets-lineage.md` — **Manage Builds** (p.9) | Building exists; the lineage graph is not where you start it (§379) |
+| `datasets-lineage.md` — **Manage Schedules** (p.10) | Schedules exist (`trigger_mode='cron'`); same (§379) |
+| `code-repositories.md` — **Build** the current file (p.16) | `POST /models/{id}/run` exists; the editor has no button for it (§381) |
+
+Foundry lets you act on a selection *from wherever you are looking* — the
+lineage graph, the code editor, the impact panel. Here every build and every
+schedule is started from the resource's own page, and the views are views.
+
+**None of these is a missing capability**, which is why each row's note says so
+rather than sizing the work as if it were. What they need is a control and a
+decision about what a multi-node selection means — "build all datasets between
+these two" (p.9) is a path query over edges `services/pipeline.py` already
+returns, not a build system. **§369 is the precedent that this is cheap when the
+view already exists**: the pipeline review tab put the graph on the review
+surface by composing what §14, §364, §365 and §366 had already built.
 
 ---
 

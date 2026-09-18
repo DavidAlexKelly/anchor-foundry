@@ -598,7 +598,32 @@ export function ActionDefinitionEditor({
       ? savedSections.error.message
       : "Couldn't read this action's form layout.");
   const [sections, setSections] = useState<FormSection[] | null>(null);
-  if (sections === null && savedSections.data) setSections(savedSections.data);
+  // **Edits made before the read lands, kept until there is something to make
+  // them to.** Removing or renaming a parameter has to travel through the form
+  // as well (§368), and both edits used to be dropped on the floor while
+  // `sections` was still `null` — the arrangement then arrived from the server
+  // still naming a parameter the action no longer declares, and the save was
+  // refused about a section the person was not looking at. Which is the
+  // refusal carrying the rename and the strip exist to prevent, arriving by a
+  // different road.
+  //
+  // Held as the edits themselves rather than as a list of names, because a
+  // rename is a *pair* and only the edit still knows both halves.
+  const [pending, setPending] = useState<Array<(s: FormSection[]) => FormSection[]>>([]);
+  /** Edit the form now, or as soon as there is a form to edit. */
+  const editSections = (edit: (s: FormSection[]) => FormSection[]) =>
+    sections === null
+      ? setPending((queued) => [...queued, edit])
+      // Functional, so two edits in one handler compose instead of the second
+      // one overwriting the first from a stale render.
+      : setSections((current) => (current === null ? null : edit(current)));
+  // Seeded once, with everything edited since the read went out replayed onto
+  // it in order. `pending` is not cleared: once `sections` is non-null nothing
+  // queues again and this branch cannot run a second time, and clearing it
+  // during render would hand React a new array on every pass.
+  if (sections === null && savedSections.data) {
+    setSections(pending.reduce((current, edit) => edit(current), savedSections.data));
+  }
   const patchSection = (index: number, patch: Partial<FormSection>) =>
     setSections((sections ?? []).map((s, i) => (i === index ? { ...s, ...patch } : s)));
 
@@ -711,8 +736,7 @@ export function ActionDefinitionEditor({
     // And through p.124's form, for the same reason: a section still naming
     // the old parameter makes the server refuse the save, and the refusal is
     // about a row the person did not touch.
-    setSections((current) =>
-      current === null ? null : renameParameter(current, before ?? "", after));
+    editSections((current) => renameParameter(current, before ?? "", after));
     setCriteria(
       criteria.map((c) => {
         const config = c.config as Record<string, unknown>;
@@ -808,8 +832,7 @@ export function ActionDefinitionEditor({
                     // A section holding a parameter the action no longer
                     // declares is refused by the server — about a section the
                     // person was not looking at.
-                    setSections((current) =>
-                      current === null ? null : forgetParameters(current, left));
+                    editSections((current) => forgetParameters(current, left));
                   }}
                 >
                   Remove
