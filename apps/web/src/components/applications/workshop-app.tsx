@@ -646,6 +646,11 @@ function CanvasEnvBridge({
           // screen at once, so "the current page" has no answer.
           routing={routing && !enabled}
           layout={layout}
+          // p.75's lazy rule, and Preview only for the third time on this
+          // element: in edit mode every page is on screen at once, so a walk
+          // answering "what is visible" would name one page and blank the
+          // widgets on all the others while an author was arranging them.
+          lazy={!enabled}
           // Preview only, by the same argument as routing one line up: in
           // edit mode every page is on screen, so a variable choosing one
           // would hide the others from the author arranging them.

@@ -166,6 +166,19 @@ class EvaluateVariablesIn(BaseModel):
     # "recompute now" are both spelled "nothing held", and the event has to be
     # able to mean the second one.
     recompute: list[str] = Field(default_factory=list)
+    #: p.75's lazy rule (§392): the layout node ids currently on screen. The
+    #: server expands these into the variables they need, inputs included, and
+    #: computes nothing else.
+    #:
+    #: **`None` means "compute everything", and that is not the same as `[]`.**
+    #: An empty list is a real answer - a module showing no widgets at all -
+    #: and a caller that has not been taught to send this must not be read as
+    #: giving it. The builder sends nothing, because in this build's editor
+    #: every page is on screen at once and the question has no answer there.
+    #:
+    #: Trusting the client is the same size of thing as `bound` and `held`
+    #: above: what it buys a caller is a smaller answer about its own browser.
+    visible: list[str] | None = None
 
 
 class EvaluateVariablesOut(BaseModel):
@@ -663,6 +676,25 @@ async def set_version_settings(
     return _out(row)
 
 
+def _only_visible(
+    body: EvaluateVariablesIn, document: Any, variables: Any
+) -> "frozenset[str] | None":
+    """p.75's lazy rule, or None when the caller did not ask for it (§392).
+
+    **The `None` check is the whole function.** `body.visible` defaults to
+    `None` and an empty list is a real answer, so `if not body.visible` would
+    quietly turn "this module is showing nothing" into "compute everything" -
+    which is the one case where the lazy rule saves the most work and the one
+    where it would be silently switched off.
+    """
+    if body.visible is None:
+        return None
+    layout = document.get("layout") if isinstance(document, dict) else None
+    return frozenset(
+        variables_service.displayed(layout, variables, set(body.visible))
+    )
+
+
 # ---- variables (roadmap phase 2, item 1.2) -----------------------------------
 @router.post("/{app_id}/variables/evaluate", response_model=EvaluateVariablesOut)
 async def evaluate_variables(
@@ -719,6 +751,11 @@ async def evaluate_variables(
             # the declared types here too (§221) - not only where the document
             # was checked.
             property_types=property_types,
+            # p.75's lazy rule (§392). Expanded here rather than in the
+            # browser: the closure - a chart needs its set, the set needs its
+            # filter - is over a graph this service already understands, and a
+            # second walker of it would be the copy that disagrees.
+            only=_only_visible(body, document, variables),
         )
     except variables_service.VariableError as exc:
         # Not the same failure, and not the same fault. The document is fine;
@@ -873,6 +910,11 @@ async def evaluate_published_variables(
             # the declared types here too (§221) - not only where the document
             # was checked.
             property_types=property_types,
+            # p.75's lazy rule (§392). Expanded here rather than in the
+            # browser: the closure - a chart needs its set, the set needs its
+            # filter - is over a graph this service already understands, and a
+            # second walker of it would be the copy that disagrees.
+            only=_only_visible(body, document, variables),
         )
     except variables_service.VariableError as exc:
         # The values, not the document - see the note on the project-scoped one.

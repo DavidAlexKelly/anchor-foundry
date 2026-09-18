@@ -187,6 +187,9 @@ export default function PublishedAppPage() {
                 published
                 routing={routingOf(app.data.definition)}
                 layout={definition}
+                // p.75's lazy rule (§392). Always on here: this route is a
+                // running module, where exactly one page is on screen.
+                lazy
                 pageSelection={pageSelectionOf(app.data.definition) || undefined}
                 stateSaving={stateSavingOf(app.data.definition)}
               >
