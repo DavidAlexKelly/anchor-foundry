@@ -27,6 +27,32 @@ export default function PipelinePage() {
     enabled: !!workspace && !!project,
   });
 
+  // p.9's builds helper (§386). **One at a time, in the order the plan gives
+  // them** — `buildPlan` sorts by the `layer` the server computed, and the
+  // order is the point: a transform reads its inputs' *current* versions, so
+  // firing an ancestor and its descendant together would have the descendant
+  // read the version the ancestor is in the middle of replacing. Awaiting each
+  // is what makes "build these and their ancestors" mean what it says.
+  //
+  // **A refusal stops the run rather than being collected.** `run_model`
+  // refuses a model with no code or no inputs, and carrying on past one would
+  // build the rest of a chain on an input that never got rebuilt — the wrong
+  // answer, arrived at more thoroughly. The error names which transform.
+  const build = useMutation({
+    mutationFn: async (models: { id: string; name: string }[]) => {
+      for (const model of models) {
+        try {
+          await modelApi.run(workspace!.id, project!.id, model.id);
+        } catch (error) {
+          throw new Error(
+            `${model.name}: ${error instanceof ApiError ? error.message : String(error)}`,
+          );
+        }
+      }
+    },
+    onSuccess: () => graph.refetch(),
+  });
+
   // **The view arrives from the URL, and is read once.** p.12's "quick share
   // link" is a link, so the parameters have to be *in* one — and putting them
   // there fixes reload-loses-everything as a side effect, which this page had
@@ -90,11 +116,26 @@ export default function PipelinePage() {
 
       {graph.isPending && <div className="state">Loading the pipeline…</div>}
       {graph.isError && <div className="state error">Couldn&apos;t load the pipeline.</div>}
+      {/* **A refused build has to land somewhere.** The button is at the
+          bottom of the graph and this is at the top, which is the one thing
+          worth saying about the placement: the message names the transform
+          that refused, so it is readable without hunting for which of six
+          builds stopped (§386, §214). */}
+      {build.isError && (
+        <div className="state error" data-testid="pipeline-build-error">
+          {(build.error as Error).message}
+        </div>
+      )}
       {graph.data && (
         <PipelineGraphView
           key={openedKey}
           graph={graph.data}
           onOpen={open}
+          // Only here, of the four places this graph is drawn: a review
+          // surface and a dataset application are views of somebody's work,
+          // and the project's own pipeline page is where work starts (§386).
+          onBuild={(models) => build.mutate(models)}
+          building={build.isPending}
           initialView={opened}
           onViewChange={(view) => {
             live.current = view;

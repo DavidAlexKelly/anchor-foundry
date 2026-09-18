@@ -100,9 +100,9 @@ are really one shape:
 
 | Row | |
 |---|---|
-| `datasets-lineage.md` — **Manage Builds** (p.9) | Building exists; the lineage graph is not where you start it (§379) |
+| ~~`datasets-lineage.md` — **Manage Builds** (p.9)~~ | **Done (§386).** Two of p.9's three selections were already on the graph — §354's multi-select and the `All upstream` chip — so what was missing was the build over a selection, not the selections |
 | `datasets-lineage.md` — **Manage Schedules** (p.10) | Schedules exist (`trigger_mode='cron'`); same (§379) |
-| `code-repositories.md` — **Build** the current file (p.13–14) | `POST /models/{id}/run` exists; the editor has no button for it (§381). **Cited to p.16 until §384** — that is the Branches tab; the button is p.13 and its helper panel is p.14 |
+| ~~`code-repositories.md` — **Build** the current file (p.13–14)~~ | **Done (§385)**, as one unit with p.14's Build helper. `POST /models/{id}/run` existed; what was missing was the control and somewhere for it to report. **Cited to p.16 until §384** — that is the Branches tab; the button is p.13 and its helper panel is p.14 |
 
 Foundry lets you act on a selection *from wherever you are looking* — the
 lineage graph, the code editor, the impact panel. Here every build and every
@@ -128,6 +128,13 @@ against — **as one unit with p.14's Build helper**, which §384 found was a
 second ○ row for the same feature. p.14 pairs the trigger with a progress view,
 and a trigger with nowhere to report progress is §214's control that looks like
 it works.
+
+**§385 built it, and the measurement is the useful part.** It came to one pure
+module, one panel copied from the Tests panel next door, and no new endpoint —
+because the progress half was already there (`lib/run-logs.ts`, `run-summary.ts`)
+and the listing already carried what the panel needed. The two rows that remain
+are the ones that *do* have a selection question, and this is the number to
+size them against.
 
 ---
 
