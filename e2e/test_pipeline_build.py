@@ -26,18 +26,23 @@ import uuid
 import pytest
 from playwright.sync_api import expect
 
-from conftest import WEB_BASE
+from conftest import WEB_BASE, eventually
 
 ROWS = b"id,val\n1,10\n2,20\n3,30\n"
 
 
 @pytest.fixture(scope="module")
 def chain(api):
-    """S → A → `A`'s output → B → `B`'s output.
+    """S → A → `A`'s output → B → `B`'s output: five nodes in a line.
 
-    `S` is an upload: nothing builds it, which is the §214 case. `B` is left
-    **never run**, so "it built" is observable as a version appearing rather
-    than as a number that was already there.
+    `S` is an upload: nothing builds it, which is the §214 case.
+
+    **Both models are run here**, so all five nodes exist. The first draft left
+    `B` unrun so that "it built" would show up as a dataset appearing — but an
+    unrun model has no output node at all, so three tests then looked for a
+    card that was never going to be there. What a build did is read from the
+    run history instead, which is a fact about the model rather than about the
+    graph's shape.
     """
     tag = uuid.uuid4().hex[:6]
     workspace = api.call("GET", "/workspaces")[0]
@@ -58,7 +63,7 @@ def chain(api):
         "name": f"B {tag}", "code": "SELECT id, doubled + 1 AS bumped FROM raw",
         "inputs": [{"dataset_id": a_out, "input_alias": "raw"}],
     })
-    # B is deliberately not run here.
+    api.call("POST", f"{base}/models/{b['id']}/run")
     return {"workspace_slug": workspace["slug"], "project_slug": project["slug"],
             "tag": tag, "base": base, "a": a["id"], "b": b["id"]}
 
@@ -93,11 +98,14 @@ def test_building_a_selected_transform_runs_it(page, api, chain) -> None:
     expect(page.get_by_test_id("selection-build-summary")).to_have_text("build 1 transform")
 
     page.get_by_test_id("selection-build-run").click()
-    # Positive first (§318): the button reports it finished before the count
-    # is read, so a passing assertion cannot be one taken too early.
-    expect(page.get_by_test_id("selection-build-run")).to_have_text("Build", timeout=60000)
+    # **Waited for, not assumed.** The first draft waited for the button to
+    # read "Build" again — which it also reads *before* the click, so the wait
+    # was satisfied at once and the run count was read before anything had
+    # run. A check that cannot fail is not a check (§213); this polls the run
+    # history, which only moves when a build actually happened.
+    eventually(lambda: runs(api, chain, chain["b"]), lambda n: n == before + 1,
+               what="the build to run")
     expect(page.get_by_test_id("pipeline-build-error")).to_have_count(0)
-    assert runs(api, chain, chain["b"]) == before + 1
 
 
 def test_selecting_a_dataset_builds_the_transform_that_writes_it(page, api, chain) -> None:
@@ -107,13 +115,18 @@ def test_selecting_a_dataset_builds_the_transform_that_writes_it(page, api, chai
     nothing.
     """
     before = runs(api, chain, chain["a"])
+    b_before = runs(api, chain, chain["b"])
     open_pipeline(page, chain)
     card(page, chain, "dataset", "A").click()
     expect(page.get_by_test_id("selection-build-summary")).to_have_text("build 1 transform")
 
     page.get_by_test_id("selection-build-run").click()
-    expect(page.get_by_test_id("selection-build-run")).to_have_text("Build", timeout=60000)
-    assert runs(api, chain, chain["a"]) == before + 1
+    eventually(lambda: runs(api, chain, chain["a"]), lambda n: n == before + 1,
+               what="A to be the transform that ran")
+    # And `B`, which reads A's output, was not run by this: p.9's first
+    # strategy builds what was selected, and reaching further is its own
+    # strategy.
+    assert runs(api, chain, chain["b"]) == b_before
 
 
 def test_an_uploaded_dataset_is_reported_rather_than_silently_skipped(page, chain) -> None:
