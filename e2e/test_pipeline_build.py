@@ -166,6 +166,43 @@ def test_between_takes_the_path_and_the_build_follows_the_graph_order(page, chai
     expect(page.get_by_test_id("selection-build-summary")).to_contain_text("build 2 transforms")
 
 
+def test_a_build_runs_every_transform_the_summary_counted_and_upstream_first(
+    page, api, chain
+) -> None:
+    """**The claim this row is actually about**, and nothing pinned it until a
+    sweep said so: building only the first model of the plan passed every
+    other test here, because none of them pressed Build with more than one
+    transform to run (§213).
+
+    Two things are asserted, and they are different claims. That *both* ran is
+    p.9's strategy doing what it says. That `A` finished before `B` started is
+    the **order**, which is the reason the page awaits each run rather than
+    firing them together: a transform reads its inputs' current versions, so
+    `B` reading `A`'s output has to run after `A` replaced it.
+    """
+    a_before = runs(api, chain, chain["a"])
+    b_before = runs(api, chain, chain["b"])
+    open_pipeline(page, chain)
+    card(page, chain, "dataset", "S").click()
+    card(page, chain, "dataset", "B").click(modifiers=["ControlOrMeta"])
+    page.get_by_test_id("expand-between").click()
+    expect(page.get_by_test_id("selection-build-summary")).to_contain_text("build 2 transforms")
+
+    page.get_by_test_id("selection-build-run").click()
+    eventually(lambda: (runs(api, chain, chain["a"]), runs(api, chain, chain["b"])),
+               lambda pair: pair == (a_before + 1, b_before + 1),
+               what="both transforms to run")
+    expect(page.get_by_test_id("pipeline-build-error")).to_have_count(0)
+
+    # Upstream first. The history is newest-first, so the run each build added
+    # is the one at the front.
+    a_run = api.call("GET", f"{chain['base']}/models/{chain['a']}/runs")[0]
+    b_run = api.call("GET", f"{chain['base']}/models/{chain['b']}/runs")[0]
+    assert a_run["finished_at"] <= b_run["started_at"], (
+        f"A finished {a_run['finished_at']}, B started {b_run['started_at']}"
+    )
+
+
 def test_between_is_offered_only_when_there_are_two_ends(page, chain) -> None:
     """The negative control for the chip. "Between" needs two ends, and a
     chip that did nothing on one node would be a control that looks like it
