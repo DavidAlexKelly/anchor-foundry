@@ -1326,6 +1326,7 @@ def evaluate(
     held: dict[str, Any] | None = None,
     recompute_now: frozenset[str] = frozenset(),
     property_types: "dict[str, dict[str, str]] | None" = None,
+    only: "frozenset[str] | None" = None,
 ) -> dict[str, Any]:
     """Resolve every variable, computing derived ones from their inputs.
 
@@ -1362,6 +1363,22 @@ def evaluate(
     "recomputed *only* when explicitly triggered" and computing it at load
     would make the two options identical on the one occasion they differ.
 
+    `only` is p.75's lazy rule (§392): the ids the caller can currently see,
+    closed over their inputs by `displayed`. Everything else is **left out of
+    the result entirely** rather than resolved to None - a None is a value a
+    widget renders, and "not computed yet" is not a value. `None` means compute
+    the graph, which is what every caller did before this existed and what the
+    builder still does, because in this build's editor every page is on screen
+    at once and "not visible" has no answer there.
+
+    **The caller decides what is visible, and it has to be right.** The server
+    can see which nodes exist and not which are on screen; a caller that
+    under-reports leaves a widget on screen waiting for a value that will never
+    come. That is why the parameter is the *visible* set expanded here rather
+    than a flag: the expansion - a chart needs its set, the set needs its
+    filter - is the part that is easy to get wrong, and it is done once, here,
+    over a graph this module already understands.
+
     `recompute_now` is p.85's event arriving: the ids the caller is explicitly
     asking to recompute this time, whatever it is holding for them. **It is a
     separate argument rather than an absence from `held`**, and that is not
@@ -1373,6 +1390,8 @@ def evaluate(
     """
     resolved: dict[str, Any] = {}
     for vid in evaluation_order(variables):
+        if only is not None and vid not in only:
+            continue
         variable = variables[vid]
         if vid in bound:
             # No fallback to `variable.default`, deliberately. p.127: "default
@@ -1971,6 +1990,66 @@ def usages(layout: Any, variables: dict[str, Variable]) -> dict[str, list[dict[s
             if ref in found:
                 found[ref].append({"node": variable.id, "prop": "derivation"})
     return found
+
+
+def displayed(
+    layout: Any, variables: dict[str, Variable], visible: "set[str] | frozenset[str]"
+) -> set[str]:
+    """Which variables a set of on-screen nodes needs computed (§392; p.75).
+
+    > "In both view and edit mode, Workshop variables will compute and
+    > recompute lazily only when displayed by a visible widget or layout. This
+    > means that variables used in non-visible pages, tabs, overlays, or
+    > non-visible pages of a looped layout will not be computed until they are
+    > shown." (p.75)
+
+    The answer is what the visible nodes reference, **closed over derivation
+    inputs**: a chart on screen reading a filtered set needs the set, and the
+    set needs the filter, and none of those three is referenced by a widget.
+    A closure that stopped at the first hop would compute a derived variable
+    from inputs that had not been computed, which is a wrong answer rather
+    than a slow one.
+
+    **This is deliberately not `usages()`, and the difference is a real
+    document.** That function answers "may this variable be deleted", and
+    decision 0010 makes it iterate the node map *including the holding node*
+    so that a widget parked in the Unused area still counts - otherwise
+    parking a Filter List makes its variable look unused, somebody deletes it,
+    and the widget comes back bound to nothing. A parked widget is never on
+    screen, so it must count for deletion and must not count for computation.
+    One function serving both questions would have to be wrong about one of
+    them, and the one it would be wrong about is this one - silently, by
+    computing forever what nobody can see.
+
+    A variable nothing visible references is simply absent from the result,
+    which is what `evaluate`'s `only` turns into "not computed yet". **Absent
+    rather than null**: p.75 says such a variable "will not be computed until
+    [it is] shown", and a null would be a value a widget could render.
+    """
+    wanted: set[str] = set()
+    if isinstance(layout, dict):
+        for node_id, node in layout.items():
+            if str(node_id) not in visible or not isinstance(node, dict):
+                continue
+            for _prop, ref in references(node.get("props")):
+                if ref in variables:
+                    wanted.add(ref)
+
+    # The closure. Breadth rather than recursion because `parse` has already
+    # refused cycles, so the only reason to track what has been walked is to
+    # avoid re-walking a diamond - and a diamond is the ordinary case, not an
+    # edge one: two widgets on a page reading the same filtered set.
+    frontier = list(wanted)
+    while frontier:
+        vid = frontier.pop()
+        variable = variables.get(vid)
+        if variable is None or variable.derivation is None:
+            continue
+        for ref in variable.derivation.inputs:
+            if ref in variables and ref not in wanted:
+                wanted.add(ref)
+                frontier.append(ref)
+    return wanted
 
 
 def dangling_references(layout: Any, variables: dict[str, Variable]) -> list[dict[str, str]]:

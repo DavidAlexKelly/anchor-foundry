@@ -510,6 +510,80 @@ def test_evaluating_variables_resolves_derived_ones(
     assert body["order"].index("v_full") > body["order"].index("v_first")
 
 
+# ---- p.75's lazy rule, over the wire (§392) ----------------------------------
+_LAZY_VARS = {
+    "v_region": {"id": "v_region", "kind": "string", "label": "Region",
+                 "default": "north"},
+    "v_shown": {"id": "v_shown", "kind": "string", "label": "Shown",
+                "derivation": {"transform": "concat", "inputs": ["v_region"]}},
+    "v_offscreen": {"id": "v_offscreen", "kind": "string", "label": "Offscreen",
+                    "default": "elsewhere"},
+}
+_LAZY_LAYOUT = {
+    "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["here", "away"]},
+    "here": {"type": {"resolvedName": "CanvasParameterControl"},
+             "props": {"variable": "v_shown"}},
+    "away": {"type": {"resolvedName": "CanvasParameterControl"},
+             "props": {"variable": "v_offscreen"}},
+}
+
+
+def _lazy_app(client: TestClient, fx: Fixture) -> str:
+    app_id = _new_app(client, fx)
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": _module(_LAZY_VARS, _LAZY_LAYOUT)})
+    assert r.status_code == 200, r.text
+    return app_id
+
+
+def test_a_caller_that_says_what_is_on_screen_gets_only_that(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.75, over the wire.
+
+    The visible widget reads a derived variable, so its input comes too - the
+    closure is the server's job because the graph is. The widget that is not on
+    screen contributes nothing, and its variable is **absent from the response
+    rather than null**: a null is a value the browser would render.
+    """
+    app_id = _lazy_app(client, fx)
+    r = client.post(f"{base(fx)}/{app_id}/variables/evaluate",
+                    headers=hdr(fx.viewer_sub),
+                    json={"values": {}, "visible": ["ROOT", "here"]})
+    assert r.status_code == 200, r.text
+    values = r.json()["values"]
+    assert values["v_shown"] == "north"
+    assert values["v_region"] == "north"
+    assert "v_offscreen" not in values
+
+
+def test_a_caller_that_says_nothing_still_gets_everything(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The compatibility half, and it is not decoration: the builder sends no
+    visible set, because in this build's editor every page is on screen at once
+    and the question has no answer there. A client that has not been taught
+    this must not silently start receiving less."""
+    app_id = _lazy_app(client, fx)
+    r = client.post(f"{base(fx)}/{app_id}/variables/evaluate",
+                    headers=hdr(fx.viewer_sub), json={"values": {}})
+    assert r.status_code == 200, r.text
+    assert set(r.json()["values"]) == {"v_region", "v_shown", "v_offscreen"}
+
+
+def test_showing_nothing_is_a_real_answer_and_not_a_missing_one(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The case a falsy check would lose. `[]` is a module displaying no
+    widgets - the state where the rule saves the most work - and reading it as
+    "the caller did not say" would switch the rule off exactly there."""
+    app_id = _lazy_app(client, fx)
+    r = client.post(f"{base(fx)}/{app_id}/variables/evaluate",
+                    headers=hdr(fx.viewer_sub), json={"values": {}, "visible": []})
+    assert r.status_code == 200, r.text
+    assert r.json()["values"] == {}
+
+
 def test_a_viewer_may_evaluate_but_not_save(client: TestClient, fx: Fixture) -> None:
     """Evaluating is reading an app you can already open. Saving is not."""
     app_id = _new_app(client, fx)

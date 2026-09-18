@@ -3363,3 +3363,126 @@ def test_a_mapping_to_nothing_is_refused() -> None:
             {"e_1": event("e_1", effects=[_open_module(values={"region": ""})])},
             layout={"btn": node({})},
         )
+
+
+# ---- p.75's lazy rule (§392) -------------------------------------------------
+#
+# > "In both view and edit mode, Workshop variables will compute and recompute
+# > lazily only when displayed by a visible widget or layout. This means that
+# > variables used in non-visible pages, tabs, overlays, or non-visible pages of
+# > a looped layout will not be computed until they are shown." (p.75)
+#
+# Two functions carry it: `displayed` says which variables a set of on-screen
+# nodes needs, and `evaluate(only=...)` computes those and no others. The
+# division is deliberate - the closure is the part that is easy to get wrong,
+# so it is one pure function with its own tests rather than an argument the
+# evaluator works out mid-loop.
+LAZY = {
+    "v_region": var("v_region", label="Region"),
+    "v_filtered": var("v_filtered", label="Filtered",
+                      derivation={"transform": "concat", "inputs": ["v_region"]}),
+    "v_elsewhere": var("v_elsewhere", label="Elsewhere"),
+}
+
+
+def lazy_layout() -> dict:
+    return {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["shown", "hidden"]},
+        "shown": node({"variable": "v_filtered"}),
+        "hidden": node({"variable": "v_elsewhere"}),
+    }
+
+
+def test_a_visible_widget_pulls_in_what_its_variable_is_made_of() -> None:
+    """**The closure, which is the whole point of the function.**
+
+    A chart on screen reads a filtered set; the set reads a filter; neither of
+    the last two is referenced by any widget. Stopping at the first hop would
+    compute a derived variable from inputs that had not been computed, which is
+    a wrong answer rather than a slow one.
+    """
+    variables = wv.parse(LAZY)
+    assert wv.displayed(lazy_layout(), variables, {"shown"}) == {"v_filtered", "v_region"}
+
+
+def test_a_variable_only_a_hidden_widget_reads_is_not_computed() -> None:
+    """p.75's sentence, in one assertion."""
+    variables = wv.parse(LAZY)
+    assert "v_elsewhere" not in wv.displayed(lazy_layout(), variables, {"shown"})
+
+
+def test_showing_the_other_node_computes_the_other_variable() -> None:
+    """The counterweight. A rule that never computed anything would pass the
+    test above, and the two together are what say it is about visibility."""
+    variables = wv.parse(LAZY)
+    assert wv.displayed(lazy_layout(), variables, {"hidden"}) == {"v_elsewhere"}
+
+
+def test_nothing_visible_needs_nothing_computed() -> None:
+    variables = wv.parse(LAZY)
+    assert wv.displayed(lazy_layout(), variables, set()) == set()
+
+
+def test_a_parked_widget_is_a_usage_and_is_never_displayed() -> None:
+    """**The distinction that made this a separate function** (decision 0010).
+
+    `usages()` iterates the node map *including* the Unused holding node, so a
+    widget parked there still counts and its variable cannot be deleted out
+    from under it. A parked widget is never on screen. One function answering
+    both questions would have to be wrong about one of them, and the one it
+    would be wrong about is this one - by computing forever what nobody can
+    see, silently.
+    """
+    variables = wv.parse({"v_parked": var("v_parked", label="Parked")})
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["CanvasUnused"]},
+        "CanvasUnused": {"type": {"resolvedName": "CanvasUnused"}, "nodes": ["p1"]},
+        "p1": node({"filterParameter": "v_parked"}),
+    }
+    assert len(wv.usages(layout, variables)["v_parked"]) == 1
+    # The renderer never puts `p1` on screen, so it is never in the visible set.
+    assert wv.displayed(layout, variables, {"ROOT", "CanvasUnused"}) == set()
+
+
+def test_two_widgets_reading_one_set_do_not_walk_it_twice() -> None:
+    """A diamond is the ordinary case, not an edge one: a table and a chart on
+    one page reading the same filtered set. The assertion is on the answer
+    rather than on the walk, because the answer is what a caller has."""
+    variables = wv.parse({
+        "v_base": var("v_base", label="Base"),
+        "v_a": var("v_a", label="A", derivation={"transform": "concat", "inputs": ["v_base"]}),
+        "v_b": var("v_b", label="B", derivation={"transform": "concat", "inputs": ["v_base"]}),
+    })
+    layout = {"t": node({"variable": "v_a"}), "c": node({"variable": "v_b"})}
+    assert wv.displayed(layout, variables, {"t", "c"}) == {"v_a", "v_b", "v_base"}
+
+
+def test_evaluate_leaves_out_what_is_not_displayed() -> None:
+    """**Absent, not None.** p.75 says such a variable "will not be computed
+    until [it is] shown", and a None is a value a widget renders - which would
+    turn "not computed yet" into "computed as empty", the exact substitution
+    §214 is about."""
+    variables = wv.parse(LAZY)
+    only = frozenset(wv.displayed(lazy_layout(), variables, {"shown"}))
+    resolved = wv.evaluate(variables, {"v_region": "north"}, only=only)
+    assert resolved["v_region"] == "north"
+    assert resolved["v_filtered"] == "north"
+    assert "v_elsewhere" not in resolved
+
+
+def test_evaluate_with_no_restriction_computes_the_graph() -> None:
+    """What every caller did before this existed, and what the builder still
+    does - in this build's editor every page is on screen at once, so "not
+    visible" has no answer there."""
+    variables = wv.parse(LAZY)
+    resolved = wv.evaluate(variables, {"v_region": "north", "v_elsewhere": "x"})
+    assert set(resolved) == {"v_region", "v_filtered", "v_elsewhere"}
+
+
+def test_an_empty_restriction_is_not_the_same_as_no_restriction() -> None:
+    """The one that would be lost to a falsy check. A module showing no widgets
+    is a real state, and it is the state where the lazy rule saves the most
+    work - so `frozenset()` must mean "compute nothing" and not fall back to
+    "compute everything"."""
+    variables = wv.parse(LAZY)
+    assert wv.evaluate(variables, {"v_region": "north"}, only=frozenset()) == {}

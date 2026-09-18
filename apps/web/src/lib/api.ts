@@ -2311,6 +2311,12 @@ export const canvas = {
      * because for `only_on_event` an absence from `held` is what a page that
      * has never fired the event looks like. */
     recompute?: string[],
+    /** p.75's lazy rule (§392): the layout node ids on screen right now, or
+     * `undefined` to compute the whole graph. **`undefined` and `[]` are
+     * different requests** — an empty array is a module showing no widgets,
+     * which is the state where the rule saves the most, so it is sent as an
+     * empty array rather than dropped. */
+    visible?: string[],
   ) =>
     request<{ values: Record<string, unknown>; order: string[] }>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/variables/evaluate`,
@@ -2321,6 +2327,9 @@ export const canvas = {
           bound: bound ?? [],
           held: held ?? {},
           recompute: recompute ?? [],
+          // Only when the caller has one. `null` would be JSON for "compute
+          // everything" too, but sending the field at all reads as an answer.
+          ...(visible === undefined ? {} : { visible }),
         }),
       },
     ),
@@ -2333,6 +2342,12 @@ export const canvas = {
     bound?: string[],
     held?: Record<string, unknown>,
     recompute?: string[],
+    /** p.75's lazy rule (§392): the layout node ids on screen right now, or
+     * `undefined` to compute the whole graph. **`undefined` and `[]` are
+     * different requests** — an empty array is a module showing no widgets,
+     * which is the state where the rule saves the most, so it is sent as an
+     * empty array rather than dropped. */
+    visible?: string[],
   ) =>
     request<{ values: Record<string, unknown>; order: string[] }>(
       `/workspaces/${wid}/published-canvas-apps/${appId}/variables/evaluate`,
@@ -2343,6 +2358,9 @@ export const canvas = {
           bound: bound ?? [],
           held: held ?? {},
           recompute: recompute ?? [],
+          // Only when the caller has one. `null` would be JSON for "compute
+          // everything" too, but sending the field at all reads as an answer.
+          ...(visible === undefined ? {} : { visible }),
         }),
       },
     ),

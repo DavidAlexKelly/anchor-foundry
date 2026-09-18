@@ -37,6 +37,7 @@ import type { TabOverride } from "./tab-selection";
 import { asPageId, pageState, type PageOverride } from "./page-selection";
 import { heldFor, remember, request, requested, settled } from "./recompute";
 import { defaultPageNode, pageNodeFor } from "./routing";
+import { visibleNodes } from "./visible-nodes";
 import { RoutingSync } from "./RoutingSync";
 import { StateBar } from "./StateBar";
 
@@ -52,6 +53,7 @@ export function VariableBridge({
   bound,
   routing = false,
   layout,
+  lazy = false,
   pageSelection,
   stateSaving,
   children,
@@ -86,6 +88,24 @@ export function VariableBridge({
    * would have nothing to decide — and an author arranging widgets on page two
    * should not have it vanish because a filter changed. */
   pageSelection?: string;
+  /** p.75's lazy rule (§392): compute only what is on screen.
+   *
+   * **Off unless asked for, and the reason is the same one `routing` and
+   * `pageSelection` give one prop up.** In *edit* mode every page of a module
+   * is on screen at once, so "not visible" has no answer there - and a bridge
+   * that answered it anyway would report the default page, leave every other
+   * page's variables uncomputed, and blank the widgets an author is arranging.
+   * The builder passes this in Preview and not in edit mode; the viewer routes
+   * pass it always.
+   *
+   * `layout` is required for it to do anything, because the walk needs a tree.
+   * Where the two disagree - an embedded module's bridge, which has variables
+   * and no layout prop - the answer is the whole graph, which is what every
+   * caller got before this existed. p.75's last sentence ("the same for
+   * non-visible variables used in embedded modules") is the part still to
+   * build, and it is named in `workshop.md` §3.5 rather than half-done here.
+   */
+  lazy?: boolean;
   /** State-saving settings (p.201, p.204). Passed by the *viewer* routes only:
    * p.200 calls this a feature for "module consumers", and an author arranging
    * widgets has no state to save. */
@@ -115,39 +135,7 @@ export function VariableBridge({
   const askRef = useRef<ReadonlySet<string>>(new Set());
   const [recomputeTick, setRecomputeTick] = useState(0);
 
-  const resolve = useMutation({
-    mutationFn: (raw: Record<string, unknown>) => {
-      const ticket = ++latest.current;
-      const asks = requested(declared, askRef.current);
-      const held = heldFor(declared, heldRef.current, askRef.current);
-      return (published
-        ? canvasApi.evaluatePublishedVariables(workspaceId, appId, raw, bound, held, asks)
-        : canvasApi.evaluateVariables(workspaceId, projectId, appId, raw, bound, held, asks))
-        .then((data) => ({ data, ticket, held, asks }));
-    },
-    onSuccess: ({ data, ticket, held, asks }) => {
-      if (ticket !== latest.current) return;
-      // Captured before the values are published, so a widget never renders a
-      // held variable in the gap between the two.
-      heldRef.current = remember(declared, heldRef.current, held, data.values);
-      askRef.current = settled(askRef.current, asks);
-      setResolved(data.values);
-      setPending(false);
-    },
-    onError: () => setPending(false),
-  });
 
-  const serialised = JSON.stringify(values);
-  useEffect(() => {
-    if (!enabled) {
-      setPending(false);
-      return;
-    }
-    setPending(true);
-    const timer = setTimeout(() => resolve.mutate(values), DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serialised, enabled, appId, (bound ?? []).join(","), recomputeTick]);
 
   // The current page lives here too: it is runtime state with exactly the
   // lifetime of the variable values beside it, and a separate provider would
@@ -189,6 +177,68 @@ export function VariableBridge({
   // p.54's Tabs sections, by the same argument again. Separate from
   // `collapsed` because one section can be both collapsible and tabbed.
   const [tabs, setTabState] = useState<Record<string, TabOverride>>({});
+
+  // p.75's lazy rule (§392): what is on screen right now. The server turns
+  // this into the variables it implies - a chart needs its set, the set needs
+  // its filter - and computes nothing else.
+  //
+  // **Viewer routes only, and the `layout` prop is what says so.** The builder
+  // does not pass one, because in this build's editor every page is on screen
+  // at once and "not visible" has no answer there; `undefined` then travels to
+  // the server as "compute everything", which is what it did before this
+  // existed. p.75 says the rule holds in edit mode too, and that divergence is
+  // this editor's, not this wire's.
+  const visible = lazy && layout
+    ? [...visibleNodes(layout, { page, overlay, tabs, values: resolved })]
+    : undefined;
+  // Sorted and joined for the dependency array below: a Set's iteration order
+  // is insertion order, so two walks over the same screen can spell the same
+  // answer differently and re-resolve for nothing.
+  const visibleKey = visible ? [...visible].sort().join(",") : "";
+
+  const resolve = useMutation({
+    mutationFn: (raw: Record<string, unknown>) => {
+      const ticket = ++latest.current;
+      const asks = requested(declared, askRef.current);
+      const held = heldFor(declared, heldRef.current, askRef.current);
+      return (published
+        ? canvasApi.evaluatePublishedVariables(
+          workspaceId, appId, raw, bound, held, asks, visible)
+        : canvasApi.evaluateVariables(
+          workspaceId, projectId, appId, raw, bound, held, asks, visible))
+        .then((data) => ({ data, ticket, held, asks }));
+    },
+    onSuccess: ({ data, ticket, held, asks }) => {
+      if (ticket !== latest.current) return;
+      // Captured before the values are published, so a widget never renders a
+      // held variable in the gap between the two.
+      heldRef.current = remember(declared, heldRef.current, held, data.values);
+      askRef.current = settled(askRef.current, asks);
+      // **Merged, not replaced**, and only under the lazy rule. A resolve now
+      // answers about what is on screen, so the values for a page somebody has
+      // navigated away from are simply absent from it - and replacing wholesale
+      // would blank a variable that was computed a moment ago, which reads as
+      // the page having lost its filter rather than as a narrower answer.
+      // Without a visible set the answer is the whole graph and there is
+      // nothing to merge with.
+      setResolved((current) =>
+        visible ? { ...current, ...data.values } : data.values);
+      setPending(false);
+    },
+    onError: () => setPending(false),
+  });
+
+  const serialised = JSON.stringify(values);
+  useEffect(() => {
+    if (!enabled) {
+      setPending(false);
+      return;
+    }
+    setPending(true);
+    const timer = setTimeout(() => resolve.mutate(values), DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serialised, enabled, appId, (bound ?? []).join(","), recomputeTick, visibleKey]);
 
   // And running an action (roadmap 1.3), by the same argument.
   const queryClient = useQueryClient();
