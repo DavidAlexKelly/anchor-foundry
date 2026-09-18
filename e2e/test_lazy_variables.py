@@ -22,6 +22,9 @@ the way a person would read it — and every value has to be there.
 """
 from __future__ import annotations
 
+import contextlib
+import json
+
 from playwright.sync_api import expect
 
 from api import Module, layout
@@ -202,3 +205,82 @@ def test_going_back_to_a_page_still_shows_what_it_showed(page, api) -> None:
 
     page.get_by_role("button", name="One").click()
     expect(page.get_by_text("ALPHA=AY")).to_be_visible()
+
+
+# ---- the two a "does it still work" test cannot see ---------------------------
+#
+# Both of these came from mutants that survived the four tests above. The
+# module is *correct* with the rule switched off and with the resolved map
+# replaced wholesale, so a test that only reads values off the screen passes
+# either way (§213). What separates them is the request itself and the moment
+# before it lands, and both are reachable by holding the route.
+EVALUATE = "**/variables/evaluate"
+
+
+def test_the_resolve_tells_the_server_what_is_on_screen(page, api) -> None:
+    """**That the rule is engaged at all**, which nothing above could tell.
+
+    With `lazy` off the module still shows every correct value - it just
+    computes the whole graph to do it. So the check has to be on the request:
+    the body carries the nodes on screen, and the second page's widget is not
+    among them.
+    """
+    mod = module_with_values(api, "Lazy request")
+    sent: list = []
+
+    def record(route):
+        body = route.request.post_data
+        if body:
+            with contextlib.suppress(ValueError):
+                sent.append(json.loads(body))
+        route.continue_()
+
+    page.route(EVALUATE, record)
+    try:
+        open_module(page, mod)
+        expect(page.get_by_text("ALPHA=AY")).to_be_visible()
+    finally:
+        page.unroute(EVALUATE)
+
+    asked = [b for b in sent if b.get("visible") is not None]
+    assert asked, "no resolve told the server what was on screen"
+    visible = set(asked[-1]["visible"])
+    # The tab that is showing, and not the one that is not.
+    assert "t_alpha" in visible
+    assert "t_beta" not in visible
+    # The other page, and the overlay, are not on screen.
+    assert "p2_body" not in visible
+    assert "ov_body" not in visible
+
+
+def test_a_page_you_return_to_is_not_blank_while_it_reloads(page, api) -> None:
+    """**The merge, and the only way to see it.**
+
+    A resolve answers about the current screen, so the values for the page you
+    left are absent from it. Replacing the resolved map rather than merging
+    into it blanks the first page's variable while you are away - and coming
+    back shows an empty widget until the next round trip lands.
+
+    `test_going_back_to_a_page_still_shows_what_it_showed` above cannot catch
+    that: `to_be_visible` retries, so it waits out the blank and sees the value
+    arrive. Holding the resolve open is what turns "a wrong first frame" into a
+    state the test can stand in.
+    """
+    mod = module_with_values(api, "Lazy return held")
+    open_module(page, mod)
+    expect(page.get_by_text("ALPHA=AY")).to_be_visible()
+
+    page.get_by_role("button", name="Two").click()
+    expect(page.get_by_text("SECOND=TWO")).to_be_visible()
+
+    held: list = []
+    page.route(EVALUATE, lambda route: held.append(route))
+    try:
+        page.get_by_role("button", name="One").click()
+        # Page one is back on screen and its resolve cannot land, because this
+        # test is holding it. The value has to be the one from before.
+        expect(page.get_by_text("ALPHA=AY")).to_be_visible()
+    finally:
+        for route in held:
+            route.continue_()
+        page.unroute(EVALUATE)

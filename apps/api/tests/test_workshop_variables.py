@@ -3405,6 +3405,31 @@ def test_a_visible_widget_pulls_in_what_its_variable_is_made_of() -> None:
     assert wv.displayed(lazy_layout(), variables, {"shown"}) == {"v_filtered", "v_region"}
 
 
+def test_the_closure_follows_a_chain_as_far_as_it_goes() -> None:
+    """**The depth, and a survivor is why this test exists.**
+
+    Every chain in this file was one hop deep, so a closure that added a
+    derivation's inputs and then stopped walking passed all of them - it lost
+    nothing until the second hop. The real shape is three: a chart reads a
+    filtered set, the set reads a filter, the filter reads a selection, and it
+    is the selection that a one-hop closure drops. The widget then renders an
+    answer computed from a variable that was never computed.
+    """
+    variables = wv.parse({
+        "v_picked": var("v_picked", label="Picked"),
+        "v_filter": var("v_filter", label="Filter",
+                        derivation={"transform": "concat", "inputs": ["v_picked"]}),
+        "v_set": var("v_set", label="Set",
+                     derivation={"transform": "concat", "inputs": ["v_filter"]}),
+        "v_chart": var("v_chart", label="Chart",
+                       derivation={"transform": "concat", "inputs": ["v_set"]}),
+    })
+    layout = {"c": node({"variable": "v_chart"})}
+    assert wv.displayed(layout, variables, {"c"}) == {
+        "v_chart", "v_set", "v_filter", "v_picked"
+    }
+
+
 def test_a_variable_only_a_hidden_widget_reads_is_not_computed() -> None:
     """p.75's sentence, in one assertion."""
     variables = wv.parse(LAZY)
