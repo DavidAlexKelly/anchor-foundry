@@ -43,6 +43,7 @@ import {
   ApiError,
   api as platformApi,
   code as codeApi,
+  models as modelApi,
   repositories as repoApi,
   resources as resourceApi,
 } from "@/lib/api";
@@ -140,6 +141,23 @@ import {
   verdict as testVerdict,
   worstFirst as worstTestsFirst,
 } from "@/lib/test-runs";
+// Aliased for the reason the `test-runs` block above is: a build and a test
+// run are the same *shape* of question about different things, so both modules
+// export a `shouldPoll` and an `isSettled`. The collision is a sign the naming
+// is right rather than a sign one of them should move (§385).
+// §292: how long a run took already has one writer, and it is the models
+// page's. A second `finished_at - started_at` here would be the second copy
+// that disagrees the first time somebody decides what to count from.
+import { runDuration } from "@/lib/run-logs";
+import {
+  buildIsAProblem,
+  buildLabel,
+  buildVerdict,
+  latestRun,
+  modelForFile,
+  shouldPoll as shouldPollBuild,
+  whyNoBuild,
+} from "@/lib/build-runs";
 import {
   checkTarget,
   emptyReason as checksEmptyReason,
@@ -743,6 +761,12 @@ function FilesTab({
                   }}
                 />
               )}
+              {/* Beside the Tests panel and inside `!pinned` for the same
+                  reason: building writes a dataset version, and a pinned view
+                  is of a commit that has already happened. Inside the "is a
+                  file open" branch because p.13's subject is *the current
+                  file* — without one there is nothing to build (§385). */}
+              {!pinned && <BuildPanel wid={wid} pid={pid} rid={rid} path={selected} />}
               {!pinned && (
                 <FileChangesPanel
                   wid={wid}
@@ -2472,6 +2496,150 @@ function TestsPanel({
               </li>
             );
           })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+
+/** p.13's Build button and p.14's Build helper, which are one thing (§385).
+ *
+ * > "Clicking the Build button at the top right corner of the Code
+ * >  Repositories interface is **equivalent to** triggering a build from the
+ * >  Build helper." (p.14)
+ *
+ * Foundry says it outright, and §384 found this platform's checklist carrying
+ * the two halves as separate ○ rows whose notes disagreed about whether either
+ * was worth doing. They are built together because the trigger alone is
+ * §214's control that looks like it works: a build is a job, so a button that
+ * fires and has nowhere to report lands you back on the models page to find
+ * out what happened.
+ *
+ * **The Tests panel next door is the shape**, down to why it polls. What is
+ * different is the subject: tests are the repository's, and a build is a
+ * *dataset's* — so this panel's whole question is which model, if any, the
+ * open file publishes to (db 0038's `(source_repo_id, source_path)`).
+ *
+ * **The listing, not a new endpoint.** `GET /models` is project-scoped and
+ * unpaged, so the rows it returns are every model there is and filtering them
+ * is exact. §256's rule — a control over a *paged* listing has to search
+ * rather than use the rows it happened to receive — is about the opposite
+ * case, and reading it as a ban on using any listing would have bought a
+ * second endpoint to answer a question the first one already answers.
+ *
+ * The wording rules are in `lib/build-runs.ts`. What is here is the seam.
+ */
+function BuildPanel({
+  wid,
+  pid,
+  rid,
+  path,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  path: string | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  // The same cached answer the Tests panel and the Settings tab read, on the
+  // same key rather than as a second request. Building writes a dataset
+  // version, so `POST /run` is editor-level and this is the floor it draws.
+  const project = useQuery({
+    queryKey: ["project", wid, pid],
+    queryFn: () => platformApi.project(wid, pid),
+    enabled: open,
+  });
+  const canBuild = canEditProject(project.data?.effective_role ?? "viewer");
+  const models = useQuery({
+    queryKey: ["models", wid, pid],
+    queryFn: () => modelApi.list(wid, pid),
+    enabled: open,
+  });
+  const model = modelForFile(models.data, rid, path);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const runs = useQuery({
+    queryKey: ["model-runs", model?.id],
+    queryFn: () => modelApi.runs(wid, pid, model!.id),
+    enabled: open && model !== undefined,
+    // p.14's "view the progress for your builds", and the only way to see it:
+    // a build is a job, so its answer arrives in a table rather than in the
+    // response. `false` once settled, so a finished build stops asking.
+    refetchInterval: (query) =>
+      shouldPollBuild(latestRun(query.state.data)) ? 1500 : false,
+  });
+  const current = latestRun(runs.data);
+
+  const start = useMutation({
+    mutationFn: () => modelApi.run(wid, pid, model!.id),
+    onSuccess: async () => {
+      setFailure(null);
+      // The run this just made is not in `runs` yet, and the poll above only
+      // starts once something unsettled is there to poll for.
+      await runs.refetch();
+    },
+    onError: (error) => setFailure((error as Error).message),
+  });
+
+  // Why the button is not here, when it is not. **Only once the listing has
+  // arrived**: before that, "this file publishes to nothing" and "nobody has
+  // answered yet" are the same `undefined`, and saying the first while the
+  // second is true is the panel telling somebody their file is unpublished
+  // because a request is in flight.
+  const blocked = models.data === undefined
+    ? ""
+    : whyNoBuild(model, { isSourceFile: path !== undefined && isSourceFile(path) });
+
+  return (
+    <section className="repo-problems" data-testid="build-panel">
+      <div className="repo-problems-head">
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="build-toggle"
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? "Hide build" : "Build"}
+        </button>
+        {open && canBuild && !blocked && model && (
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="build-run"
+            disabled={start.isPending || shouldPollBuild(current)}
+            onClick={() => start.mutate()}
+          >
+            {buildLabel(current)}
+          </button>
+        )}
+        {open && model && (
+          <span
+            className={buildIsAProblem(current) ? "chip brass" : "soft"}
+            data-testid="build-verdict"
+          >
+            {buildVerdict(current)}
+          </span>
+        )}
+      </div>
+      {open && blocked && (
+        <p className="state" data-testid="build-blocked">{blocked}</p>
+      )}
+      {open && failure && (
+        <p className="state error" data-testid="build-error">{failure}</p>
+      )}
+      {open && model && (
+        <ul className="repo-problem-list" data-testid="build-runs">
+          {(runs.data ?? []).slice(0, 5).map((r) => (
+            <li key={r.id} className="repo-problem">
+              <span className="chip">{r.status}</span>
+              <code>{r.output_version ? `v${r.output_version}` : "—"}</code>
+              <span className="soft" data-testid="build-duration">
+                {runDuration(r) || "—"}
+              </span>
+              {r.error_message && <span>{r.error_message}</span>}
+            </li>
+          ))}
         </ul>
       )}
     </section>
