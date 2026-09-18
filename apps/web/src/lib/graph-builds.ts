@@ -57,9 +57,20 @@ export function between(
   return [...downstream].filter((id) => upstream.has(id));
 }
 
+export interface PlannedModel {
+  id: string;
+  name: string;
+  layer: number;
+  /** How this model fires today — `manual`, `cron` or `upstream`. Carried
+   *  because a *schedule* control over the same selection needs it (§387),
+   *  and asking which models a selection means is one question with one
+   *  answer (§292). Null on a node whose graph row did not carry one. */
+  trigger_mode: string | null;
+}
+
 export interface BuildPlan {
   /** Model ids to run, in the order the graph reads: upstream first. */
-  models: { id: string; name: string; layer: number }[];
+  models: PlannedModel[];
   /** Selected datasets nothing on this graph builds. */
   unbuildable: string[];
 }
@@ -101,7 +112,9 @@ export function buildPlan(
   return {
     models: [...models.values()]
       .sort((a, b) => a.layer - b.layer || a.name.localeCompare(b.name))
-      .map((m) => ({ id: m.resource_id, name: m.name, layer: m.layer })),
+      .map((m) => ({
+        id: m.resource_id, name: m.name, layer: m.layer, trigger_mode: m.trigger_mode,
+      })),
     unbuildable: unbuildable.sort(),
   };
 }

@@ -53,6 +53,35 @@ export default function PipelinePage() {
     onSuccess: () => graph.refetch(),
   });
 
+  // p.10's schedules helper (§387). **One at a time like the build**, but for
+  // a different reason: a schedule write is small and independent, so the
+  // order does not matter — what matters is that a refusal names the model it
+  // came from rather than arriving as one failure for a batch.
+  //
+  // **`null` clears**, which is p.10's "edit" including turning a schedule
+  // off: `trigger_mode` back to `manual`. Sending `cron_schedule: null` with
+  // it rather than leaving the old expression behind, so a model that is not
+  // on a schedule does not still carry one nobody can see.
+  const schedule = useMutation({
+    mutationFn: async (
+      { models, cron }: { models: { id: string; name: string }[]; cron: string | null },
+    ) => {
+      for (const model of models) {
+        try {
+          await modelApi.update(workspace!.id, project!.id, model.id, {
+            trigger_mode: cron === null ? "manual" : "cron",
+            cron_schedule: cron,
+          });
+        } catch (error) {
+          throw new Error(
+            `${model.name}: ${error instanceof ApiError ? error.message : String(error)}`,
+          );
+        }
+      }
+    },
+    onSuccess: () => graph.refetch(),
+  });
+
   // **The view arrives from the URL, and is read once.** p.12's "quick share
   // link" is a link, so the parameters have to be *in* one — and putting them
   // there fixes reload-loses-everything as a side effect, which this page had
@@ -126,6 +155,14 @@ export default function PipelinePage() {
           {(build.error as Error).message}
         </div>
       )}
+      {/* The server owns whether a cron expression means anything —
+          `lib/cron.py` parses it with `croniter` and refuses it by name — so
+          its refusal is shown as it came rather than restated here (§387). */}
+      {schedule.isError && (
+        <div className="state error" data-testid="pipeline-schedule-error">
+          {(schedule.error as Error).message}
+        </div>
+      )}
       {graph.data && (
         <PipelineGraphView
           key={openedKey}
@@ -136,6 +173,8 @@ export default function PipelinePage() {
           // and the project's own pipeline page is where work starts (§386).
           onBuild={(models) => build.mutate(models)}
           building={build.isPending}
+          onSchedule={(models, cron) => schedule.mutate({ models, cron })}
+          scheduling={schedule.isPending}
           initialView={opened}
           onViewChange={(view) => {
             live.current = view;
