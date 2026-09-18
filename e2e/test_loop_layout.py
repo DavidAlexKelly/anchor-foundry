@@ -117,6 +117,52 @@ def test_each_copy_gets_its_own_object(page, modules):
     assert texts == sorted(f"CARD {name}" for name in NAMES), texts
 
 
+def test_each_copy_asks_only_for_what_that_copy_shows(page, modules):
+    """p.75's "non-visible pages of a looped layout", in the only place it can
+    be seen (§393).
+
+    A loop instance is an embedded module (p.129), so the lazy rule reaches it
+    through the same wiring - and **a loop that computed every card's whole
+    graph would still render every card correctly**, which is why none of the
+    tests above can tell. A mutation making these instances eager passed all of
+    them. The check has to be on the request: each copy tells the server which
+    of its own nodes are on screen.
+
+    The card interpolates `{{v_name}}` into its text, which names no variable
+    in any prop - so this is also the second reader of §392's template scan,
+    and a copy that reported nothing would render `CARD ` with the name gone.
+    """
+    import contextlib
+    import json
+
+    host, card = modules
+    sent: list = []
+
+    def record(route):
+        body = route.request.post_data
+        if body and card.app_id in route.request.url:
+            with contextlib.suppress(ValueError):
+                sent.append(json.loads(body))
+        route.continue_()
+
+    page.route("**/variables/evaluate", record)
+    try:
+        open_module(page, host)
+        eventually(lambda: cards(page).count(), lambda n: n == len(NAMES),
+                   what="one card per object in the set")
+        expect(cards(page).first).to_contain_text(f"CARD {NAMES[0]}")
+    finally:
+        page.unroute("**/variables/evaluate")
+
+    asked = [b for b in sent if b.get("visible") is not None]
+    assert asked, "a loop copy never said what was on screen"
+    # Its own node, from its own document - the card's text widget, not the
+    # host's loop section.
+    assert any("txt" in set(b["visible"]) for b in asked)
+    assert all("loop" not in set(b["visible"]) for b in asked), \
+        "a copy reported the host's nodes, which is a walk over the wrong document"
+
+
 def test_a_loop_with_no_sort_keeps_the_order_it_always_had(page, modules):
     """**The compatibility half of §231.** p.132's sort is new; every loop saved
     before it holds no `sort` at all, and adding a default here would silently
