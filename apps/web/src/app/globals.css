@@ -3097,4 +3097,20 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-colours-uses { list-style: none; margin: 2px 0 0 22px; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
 .canvas-colours-uses li { display: flex; gap: 6px; justify-content: space-between; }
 .canvas-colours-use-node { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* p.209-210's Translations tab (§400). A string, where it comes from, a box
+   to translate it and p.210's reviewed tick. */
+.canvas-translations { display: flex; flex-direction: column; gap: 8px; }
+.canvas-tr-add { display: flex; gap: 6px; }
+.canvas-tr-add input { flex: 1 1 auto; min-width: 0; }
+.canvas-tr-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.canvas-tr-rows li { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+/* The source reads as the thing being translated, so it carries the weight;
+   everything else on the row is about it. */
+.canvas-tr-source { font-weight: 600; overflow-wrap: anywhere; }
+.canvas-tr-where { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-tr-reviewed { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+/* Dimmed rather than hidden: these are translations of text the module no
+   longer has, and somebody has to be able to see them to clear them. */
+.canvas-tr-stale li { opacity: 0.65; flex-direction: row; align-items: center; gap: 6px; justify-content: space-between; }
 .field-inline { display: flex; align-items: center; gap: 6px; font-size: 12px; }

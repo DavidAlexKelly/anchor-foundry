@@ -13827,6 +13827,7 @@ function ButtonSettings() {
         <span className="field-label">Label</span>
         <input
           value={label ?? ""}
+          data-testid="button-label"
           onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
         />
         <span className="field-hint">{"{{v_id}}"} shows a variable&apos;s current value</span>
