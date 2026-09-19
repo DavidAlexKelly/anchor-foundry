@@ -126,6 +126,10 @@ class VersionSettingsIn(BaseModel):
     prompt_for_description: bool | None = None
 
 
+class UsageTrackingIn(BaseModel):
+    on: bool
+
+
 class PublishIn(BaseModel):
     scope: str = Field(pattern="^(private|workspace|groups)$")
     group_ids: list[UUID] = Field(default_factory=list, max_length=50)
@@ -686,6 +690,26 @@ async def set_version_settings(
     return _out(row)
 
 
+@router.put("/{app_id}/usage-tracking", response_model=CanvasAppDetail)
+async def set_usage_tracking(
+    app_id: UUID,
+    body: UsageTrackingIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> CanvasAppDetail:
+    """p.187's Usage Metrics Tracking (§397).
+
+    **Editor**, unlike everything else about metrics. Reading counts is
+    reading; deciding that a module starts recording what people look at is a
+    change to the module, and p.187 puts it behind "Open the module in Edit
+    mode" for the same reason.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.set_usage_tracking(
+            conn, access.project_id, app_id, on=body.on
+        )
+    return _out(row)
+
+
 def _only_visible(
     body: EvaluateVariablesIn, document: Any, variables: Any
 ) -> "frozenset[str] | None":
@@ -808,9 +832,22 @@ class ActionUsageOut(BaseModel):
     used_by: list[dict[str, str]]
 
 
+class LayoutViewOut(BaseModel):
+    node_id: str
+    views: int
+    previous: int
+
+
 class UsageMetricsOut(BaseModel):
     days: int
     actions: list[ActionUsageOut]
+    #: p.186's layout views. Empty when the module has not opted in *and* when
+    #: it has but nobody has looked - **`tracking` is what tells those apart**,
+    #: because "no views" and "we are not counting" are different answers and
+    #: a panel showing the first for the second would report a module as unused
+    #: when it was never watched.
+    layouts: list[LayoutViewOut] = []
+    tracking: bool = False
 
 
 @router.get("/{app_id}/metrics", response_model=UsageMetricsOut)
@@ -845,13 +882,45 @@ async def usage_metrics(
         counts = await workshop_metrics.action_counts(
             conn, list(used), days=days
         )
+        views = await workshop_metrics.layout_views(conn, app_id=app_id, days=days)
     return UsageMetricsOut(
         days=days,
+        tracking=bool(row["track_usage"]),
+        layouts=[LayoutViewOut(**v) for v in views],
         actions=[
             ActionUsageOut(**c, used_by=used.get(c["action_type_id"], []))
             for c in counts
         ],
     )
+
+
+class LayoutViewIn(BaseModel):
+    node_id: str
+
+
+@router.post("/{app_id}/views", status_code=status.HTTP_204_NO_CONTENT,
+             response_model=None)
+async def record_layout_view(
+    app_id: UUID,
+    body: LayoutViewIn,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> None:
+    """One layout was looked at (p.186; §397).
+
+    **204 whether or not it was counted**, and the silence is the point. A
+    module with tracking off is the ordinary case, not an error, and a browser
+    that got a 4xx for reporting a page view would be a browser logging errors
+    on every navigation of every module nobody opted in. The service decides;
+    the caller is told nothing because there is nothing it should do
+    differently.
+
+    **Viewer, because viewing is what this records.** p.185's numbers are
+    aggregate and carry no user, so there is nothing here that a reader of the
+    module could not already do by reading it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await canvas_service.get(conn, access.project_id, app_id)
+        await workshop_metrics.record_view(conn, app_id=app_id, node_id=body.node_id)
 
 
 # ---- publishing ---------------------------------------------------------------

@@ -138,3 +138,86 @@ async def action_counts(
         {"ids": list(action_ids), "since": since, "before": before},
     )
     return [dict(r) for r in rows]
+
+
+# ---- layout views (§397; db 0093; p.186-188) ---------------------------------
+async def record_view(
+    conn: AsyncConnection, *, app_id: UUID, node_id: str
+) -> bool:
+    """Count one view of one layout. Returns whether it was counted.
+
+    **Refused silently when the module has not opted in** (p.187), and `False`
+    rather than an exception: the caller is a browser reporting what somebody
+    looked at, and a module with tracking off is the ordinary case rather than
+    an error. The check is here rather than in the route because it is a fact
+    about the row being written, and a route that forgot it would write counts
+    nobody asked to collect.
+
+    **Aggregated on write.** One row per module, layout and day, incremented -
+    so a busy module costs a row a day per page rather than a row per view, and
+    the panel reads in real time. db 0093's header argues that against p.187's
+    daily pipeline.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        INSERT INTO canvas_layout_views (canvas_app_id, node_id, day, views)
+        SELECT a.id, :node, (now() AT TIME ZONE 'utc')::date, 1
+          FROM canvas_apps a
+          -- The opt-in, enforced by the statement rather than by a branch
+          -- above it: one round trip, and no window in which a concurrent
+          -- toggle-off lets a view through a check that already passed.
+         WHERE a.id = :aid AND a.track_usage
+            ON CONFLICT (canvas_app_id, node_id, day)
+            DO UPDATE SET views = canvas_layout_views.views + 1
+         RETURNING canvas_app_id
+        """,
+        {"aid": str(app_id), "node": node_id},
+    )
+    return bool(rows)
+
+
+async def layout_views(
+    conn: AsyncConnection, *, app_id: UUID, days: int = DEFAULT_PERIOD
+) -> list[dict[str, Any]]:
+    """Views per layout over the window, busiest first (p.186).
+
+    The prior period comes back on the same row for p.188's percentage, the
+    same way `action_counts` does - the two numbers are always read together
+    and a second query would scan the same rows again.
+
+    **A layout with views in *either* window appears**, which is not the same
+    as "layouts viewed this period" and is deliberately the wider set. A page
+    with nine views last month and none this one is the most useful row a usage
+    panel has - "this stopped being used" is the finding somebody opened the
+    tab for, and filtering it out would leave them looking at a shorter list
+    with no idea anything was missing.
+
+    A layout with no views in either window has no row at all. Unlike an
+    action, which is listed because the module *runs* it, there is nothing here
+    to report - and the panel knows what the document currently contains, so it
+    is the one that could say "this page has never been viewed" if that were
+    ever wanted.
+    """
+    return [
+        dict(r)
+        for r in await fetch_all(
+            conn,
+            """
+            SELECT node_id,
+                   coalesce(sum(views) FILTER (
+                       WHERE day > (now() AT TIME ZONE 'utc')::date - CAST(:days AS int)
+                   ), 0) AS views,
+                   coalesce(sum(views) FILTER (
+                       WHERE day <= (now() AT TIME ZONE 'utc')::date - CAST(:days AS int)
+                   ), 0) AS previous
+              FROM canvas_layout_views
+             WHERE canvas_app_id = :aid
+               AND day > (now() AT TIME ZONE 'utc')::date - CAST(:span AS int)
+             GROUP BY node_id
+            HAVING coalesce(sum(views), 0) > 0
+             ORDER BY views DESC, node_id
+            """,
+            {"aid": str(app_id), "days": days, "span": days * 2},
+        )
+    ]

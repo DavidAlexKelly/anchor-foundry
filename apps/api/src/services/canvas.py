@@ -47,6 +47,10 @@ _COLUMN_NAMES = (
     "id", "project_id", "name", "slug", "description", "current_version",
     "publish_scope", "published_at", "published_version", "created_at", "updated_at",
     "auto_publish_on_save", "prompt_for_description",
+    # p.187's Usage Metrics Tracking (§397, db 0093). Beside the other two
+    # module settings rather than fetched on its own: a read that wanted it
+    # would otherwise be a second query for a boolean the row already had.
+    "track_usage",
     # Where this app opens as an application (`/r/{id}`). The column has been
     # here since the registry landed; not returning it meant every caller that
     # wanted to link to a module had to build a slug path instead, which is the
@@ -364,6 +368,30 @@ async def set_version_settings(
         {"aid": str(app_id), "auto": auto_publish_on_save, "prompt": prompt_for_description},
     )
     assert row is not None
+    return dict(row)
+
+
+async def set_usage_tracking(
+    conn: AsyncConnection, project_id: UUID, app_id: UUID, *, on: bool
+) -> dict[str, Any]:
+    """p.187's Usage Metrics Tracking toggle (§397).
+
+    Its own statement rather than a field on `set_version_settings`: p.187 puts
+    it in the Metrics tab and p.192 puts those two in the Versions dialog, and
+    a route that took all three would let a caller change what is recorded
+    about a module while saying it was adjusting how versions are published.
+    """
+    row = await fetch_one(
+        conn,
+        """
+        UPDATE canvas_apps SET track_usage = :on, updated_at = now()
+         WHERE id = :aid AND project_id = :pid
+     RETURNING """ + _COLUMNS + """, definition
+        """,
+        {"aid": str(app_id), "pid": str(project_id), "on": on},
+    )
+    if row is None:
+        raise NotFoundError("this module")
     return dict(row)
 
 
