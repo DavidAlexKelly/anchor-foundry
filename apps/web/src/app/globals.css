@@ -3043,7 +3043,12 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 /* Performance Profiler (§394; workshop p.177-178). */
 .canvas-profiler-banner {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 8px 14px; background: var(--warn-bg, #fff4e5);
+  /* The palette's existing amber pair rather than a `--warn` of its own
+     (§191): `--brass` and `--brass-wash` are declared in both themes, so a
+     new token would be a second answer to a question already settled - and
+     an undeclared one read through a fallback is what `tokens.test.ts`
+     refuses, which is how this was caught. */
+  padding: 8px 14px; background: var(--brass-wash);
   border-bottom: 1px solid var(--line); font-size: 13px;
 }
 .canvas-profiler { display: flex; flex-direction: column; gap: 10px; }
@@ -3061,9 +3066,9 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    and to a browser test, which is how this was found. The percentage bounds
    the maths; this bounds the drawing. */
 .canvas-profiler-span { position: absolute; top: 0; height: 10px; min-width: 3px; border-radius: 5px; background: var(--accent); }
-.canvas-profiler-span.slow { background: var(--warn, #c77700); }
+.canvas-profiler-span.slow { background: var(--brass); }
 .canvas-profiler-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .canvas-profiler-table th, .canvas-profiler-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); }
-.canvas-profiler-table tr.warn td { color: var(--warn, #c77700); }
+.canvas-profiler-table tr.warn td { color: var(--brass); }
 .canvas-profiler-controls { display: flex; gap: 8px; align-items: flex-end; }
 .canvas-profiler-controls .field { flex: 1; min-width: 0; }
