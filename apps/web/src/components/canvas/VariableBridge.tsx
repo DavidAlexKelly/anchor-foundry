@@ -202,6 +202,19 @@ export function VariableBridge({
   // nothing else.
   const profiler = useProfiler();
 
+  // p.178's "the page or overlay that triggered them" (§395). The bridge owns
+  // the current page, so it is what tells the recorder - an overlay wins over
+  // the page beneath it, because an overlay is what a reader opened and what
+  // they would filter by.
+  //
+  // **Below `useProfiler` rather than beside the page state**, which is where
+  // it was first written: `profiler` is declared here, and a hook referencing
+  // it earlier is a temporal dead zone away from a runtime error.
+  useEffect(() => {
+    profiler.setPage(overlay ?? page);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlay, page]);
+
   const resolve = useMutation({
     mutationFn: (raw: Record<string, unknown>) => {
       const ticket = ++latest.current;

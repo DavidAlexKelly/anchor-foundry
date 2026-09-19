@@ -30,6 +30,10 @@ import { merge, PROFILER_PARAM, keyName, type LoadEvent } from "./profiler";
 export interface ProfilerState {
   on: boolean;
   events: LoadEvent[];
+  /** p.178's "the page or overlay that triggered them" (§395). Told to the
+   * recorder rather than read by it: the bridge owns the current page, and a
+   * recorder that reached for it would be a second reader of one fact. */
+  setPage: (nodeId: string | null) => void;
   /** p.178's "clear all captured load events". */
   clear: () => void;
   /** Report a batch of variable timings from a resolve that has landed. */
@@ -51,6 +55,7 @@ export function useProfiler(): ProfilerState {
 const OFF: ProfilerState = {
   on: false,
   events: [],
+  setPage: () => {},
   clear: () => {},
   recordVariables: () => {},
 };
@@ -74,6 +79,10 @@ export function ProfilerRecorder({
   // Fetch starts, by query hash. A ref rather than state: a render per
   // in-flight request would make the profiler the slowest thing in the module.
   const started = useRef<Map<string, number>>(new Map());
+  // Which layout is on screen, as of now. A ref rather than state: the
+  // subscription below closes over it, and re-subscribing on every page change
+  // would lose the fetch starts it is holding.
+  const page = useRef<string | null>(null);
 
   useEffect(() => {
     if (!on) return;
@@ -98,6 +107,7 @@ export function ProfilerRecorder({
         ms: now - began,
         at: began - origin.current,
         loads: 1,
+        page: page.current,
       };
       setEvents((current) => merge(current, row));
     });
@@ -106,6 +116,9 @@ export function ProfilerRecorder({
   const state: ProfilerState = {
     on,
     events,
+    setPage: (nodeId) => {
+      page.current = nodeId;
+    },
     clear: () => {
       // The clock restarts with the list. p.178 offers "clear all captured
       // load events" as a way to watch one interaction, and a timeline whose
@@ -121,6 +134,7 @@ export function ProfilerRecorder({
         for (const [id, ms] of Object.entries(timings)) {
           next = merge(next, {
             id, kind: "variable", name: labelFor(id), ms, at, loads: 1,
+            page: page.current,
           });
         }
         return next;

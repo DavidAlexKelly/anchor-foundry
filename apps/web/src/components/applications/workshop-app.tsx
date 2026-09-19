@@ -1145,7 +1145,15 @@ function CanvasBody({
             // p.177: "enter Edit mode, open the Profiler tab, and select
             // Reload in Profiler Mode". The panel knows whether it is
             // recording; the address is what it offers to change.
-            <ProfilerPanel href={profilerHref(shellHref, true)} />
+            <ProfilerPanel
+              href={profilerHref(shellHref, true)}
+              // The filter names pages the way the rest of the builder does.
+              // The panel has the events and not the document, so the name
+              // comes from here - a profiler that invented its own naming
+              // would make a reader match node ids by eye.
+              labelFor={(nodeId) =>
+                pageNodes.find((p) => p.id === nodeId)?.label ?? nodeId}
+            />
           ) : tab === "variables" ? (
             <VariablesPanel
               workspaceId={workspaceId}
