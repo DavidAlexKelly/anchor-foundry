@@ -25,8 +25,70 @@ from __future__ import annotations
 import pytest
 from playwright.sync_api import expect
 
-from api import Module, layout
+from api import Module, layout, object_set
 from conftest import WEB_BASE, open_builder, settled
+
+
+@pytest.fixture(scope="module")
+def two_pages(api):
+    """Two pages, each with its own derived variable, and an Object Table.
+
+    **Both halves of p.178 need a module that has both.** The table is what
+    makes a *request* row possible at all - a Text widget issues no query, so a
+    module of text can only ever exercise the variable half. And the second
+    page is what makes the lazy rule observable: p.178's "only widgets and
+    variables that affect the on-screen display are calculated" is a claim
+    about what is *absent* from the breakdown.
+    """
+    mod = Module(api, "Profiled pages")
+    type_id = mod.object_type(
+        columns=["id", "name"],
+        rows=[{"id": f"P{i}", "name": f"Row {i}"} for i in range(1, 4)],
+        key="id", title="name",
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "hdr": {"resolvedName": "CanvasHeader", "props": {"title": "P"},
+                    "isCanvas": True, "nodes": ["go2"]},
+            "go2": {"resolvedName": "CanvasButton", "props": {"label": "Second"},
+                    "parent": "hdr"},
+            "pg1": {"resolvedName": "CanvasPage",
+                    "props": {"title": "One", "pageId": "one"},
+                    "isCanvas": True, "nodes": ["one_txt", "tbl"]},
+            "one_txt": {"resolvedName": "CanvasText",
+                        "props": {"tag": "p", "text": "FIRST={{v_first}}"},
+                        "parent": "pg1"},
+            "tbl": {"resolvedName": "CanvasObjectTable",
+                    "props": {"objectSetVariable": "v_rows", "columns": "id,name",
+                              "pageSize": 25},
+                    "parent": "pg1"},
+            "pg2": {"resolvedName": "CanvasPage",
+                    "props": {"title": "Two", "pageId": "two"},
+                    "isCanvas": True, "nodes": ["two_txt"]},
+            "two_txt": {"resolvedName": "CanvasText",
+                        "props": {"tag": "p", "text": "SECOND={{v_second}}"},
+                        "parent": "pg2"},
+        }),
+        "variables": {
+            "v_rows": {"id": "v_rows", "kind": "object_set", "label": "The rows",
+                       "object_set": object_set(type_id)},
+            "v_first_in": {"id": "v_first_in", "kind": "string", "label": "first in",
+                           "default": "ONE"},
+            "v_first": {"id": "v_first", "kind": "string", "label": "First page value",
+                        "derivation": {"transform": "concat", "inputs": ["v_first_in"]}},
+            "v_second_in": {"id": "v_second_in", "kind": "string", "label": "second in",
+                            "default": "TWO"},
+            "v_second": {"id": "v_second", "kind": "string",
+                         "label": "Second page value",
+                         "derivation": {"transform": "concat", "inputs": ["v_second_in"]}},
+        },
+        "events": {
+            "e_go2": {"id": "e_go2", "trigger": {"node": "go2", "on": "click"},
+                      "effects": [{"type": "navigate", "config": {"page": "pg2"}}]},
+        },
+    })
+    return mod
 
 
 @pytest.fixture(scope="module")
@@ -201,3 +263,67 @@ def test_the_panel_is_readable_while_profiling(page, profiled):
     # The panel, and the tab it lives behind, are both still there.
     expect(page.get_by_test_id("profiler-panel")).to_be_visible()
     expect(page.get_by_role("button", name="Profiler", exact=True)).to_be_visible()
+
+
+def test_a_widget_that_queries_shows_up_as_a_request(page, two_pages):
+    """p.178's other half, and the one R1 found missing (§394).
+
+    Every test above reads a *variable* row, which arrives from the bridge.
+    The request half comes from a different place entirely - a subscription to
+    the query cache - and a module of text issues no queries, so disabling that
+    subscription altogether passed all nine of them.
+
+    A row says what loaded rather than who asked: sixteen widget types share
+    one cache and a key names the request. The column says "Request" for that
+    reason, and this asserts the honest thing rather than a widget name the
+    panel does not have.
+    """
+    open_profiler_tab(page, two_pages)
+    page.get_by_test_id("profiler-enter").click()
+    expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
+
+    breakdown = page.get_by_test_id("profiler-breakdown")
+    expect(breakdown).to_be_visible(timeout=30000)
+    expect(breakdown).to_contain_text("Request", timeout=30000)
+
+
+def test_the_profile_is_of_what_a_viewer_sees(page, two_pages):
+    """**p.178's sentence, which is why this feature was blocked until §392.**
+
+    "Only widgets and variables that affect the on-screen display are
+    calculated… This mirrors the behavior and performance that users experience
+    in View mode." Profiler mode therefore drops the canvas to run mode, where
+    the lazy rule applies - and in edit mode every page is on screen, so every
+    page's variables would be computed and the breakdown would describe a
+    program no reader runs.
+
+    The claim is about an *absence*, which is why it needs two pages: the
+    second page's variable must not be in the breakdown. Removing the run-mode
+    switch passed all nine earlier tests, because none of them asked what the
+    numbers were a measurement *of*.
+    """
+    open_profiler_tab(page, two_pages)
+    page.get_by_test_id("profiler-enter").click()
+    expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
+
+    breakdown = page.get_by_test_id("profiler-breakdown")
+    # Positive wait first (§318): the first page's variable is there, so the
+    # second one's absence is about the lazy rule rather than about an empty
+    # panel.
+    expect(breakdown).to_contain_text("First page value", timeout=30000)
+    expect(breakdown).not_to_contain_text("Second page value")
+
+
+def test_showing_the_second_page_adds_its_variable(page, two_pages):
+    """The counterweight. A profiler that never recorded the second page would
+    pass the test above and be useless - p.178 wants "new layout views to
+    prompt loading of new widgets and variables", captured as they happen."""
+    open_profiler_tab(page, two_pages)
+    page.get_by_test_id("profiler-enter").click()
+    expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("profiler-breakdown")).to_contain_text(
+        "First page value", timeout=30000)
+
+    page.get_by_role("button", name="Second").click()
+    expect(page.get_by_test_id("profiler-breakdown")).to_contain_text(
+        "Second page value", timeout=30000)
