@@ -199,6 +199,7 @@ import {
   toEdits, undoRow, type Staged,
 } from "./inline-edit";
 import { readerLayout } from "./reader-layout";
+import { SeriesCell } from "./SeriesCell";
 import { outputClauses } from "./action-output";
 import {
   collapsedInitially, columnsOf as sectionColumnsOf, conditionKey, formLayout,
@@ -3818,6 +3819,36 @@ export function CanvasObjectTable({
     ? wanted.map((name) => all.find((p) => p.api_name === name)).filter((p) => !!p)
     : all;
 
+  // p.583's column. **One read for the page**, fired only when a visible
+  // column is a time series - a table of ordinary properties must not pay for
+  // a feature it is not using.
+  //
+  // The *first* such column rather than all of them: a second series column
+  // would be a second read, and no widget in the corpus has one. When one
+  // does, this becomes a loop rather than a different shape.
+  const seriesProperty = properties.find((p) => p.data_type === "time_series");
+  const seriesPage = useQuery({
+    queryKey: ["canvas-series-points", JSON.stringify(setDefinition ?? null),
+               effectiveTypeId, seriesProperty?.api_name, pageSize, offset,
+               Array.isArray(sortRequest) ? sortRequest.join(",") : sortRequest ?? null],
+    queryFn: () => objApi.objectSetSeriesPoints(
+      workspaceId,
+      // The explore path has no object set of its own, so the type *is* the
+      // set. The series read has to describe the same rows the table drew, and
+      // an unfiltered type is what that path is showing.
+      usingSet ? setDefinition : { object_type_id: effectiveTypeId, filters: [] },
+      seriesProperty!.api_name,
+      { limit: pageSize, offset, sort: sortRequest },
+    ),
+    enabled: !!seriesProperty && !!effectiveTypeId && (!usingSet || !!setDefinition),
+    placeholderData: (previous) => previous,
+  });
+  // Keyed by primary key, which is how the server keys it and the only key
+  // that survives two objects sharing a series.
+  const seriesByKey = new Map(
+    (seriesPage.data?.rows ?? []).map((r) => [r.primary_key, r.points]),
+  );
+
   // One shape for both paths, so everything below reads the same. The set path
   // returns `instances`; the explore path returns `items`.
   const rows = usingSet ? setPage.rows : page.data?.items;
@@ -4196,6 +4227,15 @@ export function CanvasObjectTable({
                                   />
                                 </fieldset>
                               </div>
+                            ) : p.data_type === "time_series" ? (
+                              // p.583, and the reason it is not `PropertyValue`:
+                              // the stored value is the *id* of the readings,
+                              // so the ordinary renderer puts an opaque key in
+                              // the cell.
+                              <SeriesCell
+                                points={seriesByKey.get(instance.primary_key)}
+                                pending={seriesPage.isPending}
+                              />
                             ) : (
                               <PropertyValue
                                 workspaceId={workspaceId}

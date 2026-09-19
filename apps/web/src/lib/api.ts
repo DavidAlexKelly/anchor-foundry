@@ -1235,6 +1235,34 @@ export const objects = {
       method: "POST",
       body: JSON.stringify({ definition, ...opts }),
     }),
+  /** Every visible row's time series, in one read (`workshop` p.583).
+   *
+   * Takes the object set and the same paging the page used, not a list of
+   * series ids: a series id is a value the caller may not have, and the
+   * server resolves them from the objects this reader can already see.
+   *
+   * Keyed by `primary_key` rather than by series id, because two objects may
+   * legitimately share a series and matching on the id would draw one row's
+   * line and leave its twin empty. */
+  objectSetSeriesPoints: (
+    wid: string,
+    definition: unknown,
+    property: string,
+    opts: {
+      limit?: number; offset?: number; sort?: string | string[];
+      interval?: string; aggregate?: string;
+    } = {},
+  ) =>
+    request<{
+      property_api_name: string;
+      interval: string;
+      aggregate: string;
+      rows: { primary_key: string; series_id: string; points: { at: string; value: number | null }[] }[];
+      truncated: boolean;
+    }>(`/workspaces/${wid}/object-sets/series-points`, {
+      method: "POST",
+      body: JSON.stringify({ definition, property_api_name: property, ...opts }),
+    }),
   /** One number over a whole set — what a Metric Card shows. Separate from
    * `evaluateObjectSet` because a number over every row and a page of rows are
    * different questions with different costs. */

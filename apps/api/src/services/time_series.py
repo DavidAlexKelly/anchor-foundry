@@ -15,6 +15,7 @@ its own answer to "what did this look like last Tuesday".
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -205,6 +206,36 @@ async def series_for_source(
     return dict(row) if row else None
 
 
+async def series_for_type(
+    conn: AsyncConnection, object_type_id: UUID, property_api_name: str
+) -> list[dict[str, Any]]:
+    """Every mapping of one property, across all of a type's sources.
+
+    **A type can be fed by several sources and each maps its own dataset**
+    (db 0047 keys the mapping on `object_type_source_id`). A reader that has a
+    page of *objects* rather than a page of sources cannot say which source
+    each row came from - `evaluate_object_set` does not carry it - so it asks
+    for all of them and reads each. A series id belonging to one source's
+    dataset simply matches nothing in another's, which makes merging the
+    results safe rather than merely convenient.
+
+    Usually one row, and then this is one query and one read.
+    """
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT {_S_COLUMNS}, d.name AS dataset_name, d.s3_location, d.project_id
+          FROM object_type_series s
+          JOIN object_type_sources src ON src.id = s.object_type_source_id
+          JOIN datasets d ON d.id = s.dataset_id
+         WHERE src.object_type_id = :tid AND s.property_api_name = :prop
+         ORDER BY s.created_at
+        """,
+        {"tid": str(object_type_id), "prop": property_api_name},
+    )
+    return [dict(r) for r in rows]
+
+
 def _quote(name: str) -> str:
     """A column name as a SQL identifier.
 
@@ -217,6 +248,97 @@ def _quote(name: str) -> str:
 
 def _literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+#: How many points one series contributes to a *sparkline*, as against a chart.
+#:
+#: `MAX_POINTS` is the ceiling for one series somebody is looking at; a column
+#: draws a page of them at a thumbnail size, so the same ceiling would be a
+#: page of 25 rows asking for 125,000 points to draw a line a centimetre wide.
+#: The cap is per series and it is the *latest* points, because a sparkline's
+#: job is the recent shape (`workshop` p.583: "a sparkline showing the history
+#: of the time series").
+SPARK_POINTS = 100
+
+#: A ceiling on how many series one batch may ask for, which is a page of rows
+#: rather than a set. A caller wanting every object's series wants an export.
+MAX_SERIES = 200
+
+
+def points_for_many_sql(
+    *,
+    key_column: str,
+    timestamp_column: str,
+    value_column: str,
+    series_ids: "Sequence[str]",
+    interval: str,
+    aggregate: str,
+    per_series: int = SPARK_POINTS,
+) -> str:
+    """The same read, for a page of series at once (`workshop` p.583).
+
+    **One query rather than one per row**, and that is the whole reason this
+    exists beside `points_sql`: an Object Table column of sparklines asks for
+    every visible row's series, and 25 round trips into the dataset engine to
+    draw 25 thumbnails is the version that makes the column not worth having.
+
+    **The cap is per series, applied with a window rather than a LIMIT.** A
+    single `LIMIT` over the union would spend its whole budget on whichever
+    series sorted first and hand back nothing for the rest - a column where
+    the top row draws and the others are empty, which reads as missing data
+    rather than as a cap. `row_number()` partitioned by the key gives each
+    series its own allowance.
+
+    **And it takes the latest points, then re-orders them.** `DESC` inside the
+    window is what makes the allowance the *recent* history; the outer
+    `ORDER BY` puts each series back into time order, because a line drawn
+    from rows in descending order is a line drawn backwards.
+    """
+    if interval not in INTERVALS:
+        raise ValueError(
+            f"unknown interval {interval!r} (supported: {', '.join(INTERVALS)})"
+        )
+    if aggregate not in AGGREGATES:
+        raise ValueError(
+            f"unknown aggregate {aggregate!r} (supported: {', '.join(AGGREGATES)})"
+        )
+    if not series_ids:
+        raise ValueError("no series to read")
+    if len(series_ids) > MAX_SERIES:
+        raise ValueError(f"too many series: {len(series_ids)} (max {MAX_SERIES})")
+    key, ts, val = _quote(key_column), _quote(timestamp_column), _quote(value_column)
+    # Deduplicated, because two objects may legitimately share a series id and
+    # a repeated literal would widen the IN list for nothing.
+    wanted = ", ".join(_literal(s) for s in dict.fromkeys(series_ids))
+    series_key = f"CAST({key} AS VARCHAR)"
+    capped = max(1, min(per_series, MAX_POINTS))
+
+    if interval == "none":
+        inner = (
+            f"SELECT {series_key} AS series, {ts} AS at, {val} AS value, "
+            f"row_number() OVER (PARTITION BY {series_key} ORDER BY {ts} DESC) AS rn "
+            f"FROM dataset WHERE {series_key} IN ({wanted})"
+        )
+    else:
+        expression = (
+            f"arg_max({val}, {ts})" if aggregate == "last"
+            else "count(*)" if aggregate == "count"
+            else f"{aggregate}({val})"
+        )
+        bucketed = (
+            f"SELECT {series_key} AS series, date_trunc({_literal(interval)}, {ts}) AS at, "
+            f"{expression} AS value FROM dataset WHERE {series_key} IN ({wanted}) "
+            f"GROUP BY series, at"
+        )
+        inner = (
+            "SELECT series, at, value, "
+            "row_number() OVER (PARTITION BY series ORDER BY at DESC) AS rn "
+            f"FROM ({bucketed})"
+        )
+    return (
+        f"SELECT series, at, value FROM ({inner}) WHERE rn <= {capped} "
+        "ORDER BY series, at"
+    )
 
 
 def points_sql(

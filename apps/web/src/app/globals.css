@@ -3119,4 +3119,14 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-tr-preview { position: fixed; inset: 0; z-index: 60; background: var(--paper); overflow: auto; display: flex; flex-direction: column; }
 .canvas-tr-preview-bar { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 1; flex: none; }
 .canvas-tr-preview-bar .soft { font-size: 12px; }
+
+/* p.583's time series column (§402): the latest value on the left, a sparkline
+   on the right. */
+.canvas-series { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.canvas-series-value { font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* The line takes whatever width is left, so a wider column is a longer history
+   rather than a bigger number. */
+.canvas-series-spark { flex: 1 1 auto; min-width: 24px; height: 18px; }
+.canvas-series-spark path { stroke: var(--accent); stroke-width: 1.5; }
+.canvas-series-empty, .canvas-series-pending { font-size: 11px; white-space: nowrap; }
 .field-inline { display: flex; align-items: center; gap: 6px; font-size: 12px; }
