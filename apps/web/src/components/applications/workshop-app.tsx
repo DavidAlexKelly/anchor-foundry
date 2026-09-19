@@ -51,6 +51,7 @@ import { VariablesPanel } from "@/components/canvas/VariablesPanel";
 import { ProfilerRecorder } from "@/components/canvas/ProfilerRecorder";
 import { MetricsPanel } from "@/components/canvas/MetricsPanel";
 import { ProfilerBanner, ProfilerPanel } from "@/components/canvas/ProfilerPanel";
+import { TranslationsPanel } from "@/components/canvas/TranslationsPanel";
 import { UsedColoursPanel } from "@/components/canvas/UsedColoursPanel";
 import { profilerHref, profilerOn } from "@/components/canvas/profiler";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
@@ -1088,7 +1089,7 @@ function CanvasBody({
   // pressed *from* it (p.177) and coming back to Widget loses the reader's
   // place in the one flow this mode has.
   const [tab, setTab] = useState<
-    "widget" | "variables" | "events" | "profiler" | "metrics"
+    "widget" | "variables" | "events" | "profiler" | "metrics" | "translations"
   >(
     profilerOn(typeof window === "undefined" ? "" : window.location.search)
       ? "profiler"
@@ -1143,7 +1144,7 @@ function CanvasBody({
       {showChrome && (
         <div className="canvas-settings">
           <nav className="ds-tabs canvas-panel-tabs">
-            {(["widget", "variables", "events", "profiler", "metrics"] as const).map((t) => (
+            {(["widget", "variables", "events", "profiler", "metrics", "translations"] as const).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -1159,7 +1160,13 @@ function CanvasBody({
                       ? `Events (${Object.keys(events).length})`
                       : t === "profiler"
                         ? "Profiler"
-                        : "Metrics"}
+                        : t === "metrics"
+                          ? "Metrics"
+                          // p.208: "a new Translations tab will appear".
+                          // Named for the feature, with the count of
+                          // languages the way Variables and Events carry
+                          // theirs.
+                          : `Translations (${Object.keys(translations.languages ?? {}).length})`}
               </button>
             ))}
           </nav>
@@ -1207,6 +1214,14 @@ function CanvasBody({
               // would make a reader match node ids by eye.
               labelFor={(nodeId) =>
                 pageNodes.find((p) => p.id === nodeId)?.label ?? nodeId}
+            />
+          ) : tab === "translations" ? (
+            // p.208 puts this tab in the editor's sidebar beside the rest,
+            // and p.209-210 are what it draws.
+            <TranslationsPanel
+              translations={translations}
+              onChange={onTranslationsChange}
+              readOnly={!canEdit}
             />
           ) : tab === "variables" ? (
             <VariablesPanel
