@@ -3459,3 +3459,29 @@ export interface ActionFormSection {
   /** The parameters inside it, by `api_name`, in the order they are drawn. */
   parameters: string[];
 }
+
+/** One action's usage inside a module (§396; `workshop` p.185-188).
+ *
+ * **`submissions` counts the action, not the module.** p.186's "available by
+ * default for all modules and do not require any additional configuration" is
+ * what settles that: a per-module attribution needs a column on every
+ * submission and could never answer for a module older than the column. The
+ * module decides which actions are listed; `lib/workshop-metrics.ts` carries
+ * the wording that keeps a reader from assuming otherwise.
+ */
+export interface ModuleActionUsage {
+  action_type_id: string;
+  display_name: string;
+  api_name: string;
+  submissions: number;
+  /** The same count over the equivalent period immediately before (p.188). */
+  previous: number;
+  /** Where in the module this action is used, for p.185's "select an action to
+   * view which widgets in the module use that action". */
+  used_by: { node: string; via: string }[];
+}
+
+export interface ModuleUsageMetrics {
+  days: number;
+  actions: ModuleActionUsage[];
+}

@@ -49,6 +49,7 @@ import { tabLabels } from "@/components/canvas/tab-selection";
 import { CanvasNode, SettingsPanel } from "@/components/canvas/SettingsPanel";
 import { VariablesPanel } from "@/components/canvas/VariablesPanel";
 import { ProfilerRecorder } from "@/components/canvas/ProfilerRecorder";
+import { MetricsPanel } from "@/components/canvas/MetricsPanel";
 import { ProfilerBanner, ProfilerPanel } from "@/components/canvas/ProfilerPanel";
 import { profilerHref, profilerOn } from "@/components/canvas/profiler";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
@@ -1053,7 +1054,9 @@ function CanvasBody({
   // Profiling opens on the Profiler tab, because the reload that got here was
   // pressed *from* it (p.177) and coming back to Widget loses the reader's
   // place in the one flow this mode has.
-  const [tab, setTab] = useState<"widget" | "variables" | "events" | "profiler">(
+  const [tab, setTab] = useState<
+    "widget" | "variables" | "events" | "profiler" | "metrics"
+  >(
     profilerOn(typeof window === "undefined" ? "" : window.location.search)
       ? "profiler"
       : "widget",
@@ -1105,7 +1108,7 @@ function CanvasBody({
       {showChrome && (
         <div className="canvas-settings">
           <nav className="ds-tabs canvas-panel-tabs">
-            {(["widget", "variables", "events", "profiler"] as const).map((t) => (
+            {(["widget", "variables", "events", "profiler", "metrics"] as const).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -1119,7 +1122,9 @@ function CanvasBody({
                     ? `Variables (${Object.keys(variables).length})`
                     : t === "events"
                       ? `Events (${Object.keys(events).length})`
-                      : "Profiler"}
+                      : t === "profiler"
+                        ? "Profiler"
+                        : "Metrics"}
               </button>
             ))}
           </nav>
@@ -1141,6 +1146,13 @@ function CanvasBody({
           )}
           {tab === "widget" ? (
             <SettingsPanel />
+          ) : tab === "metrics" ? (
+            // p.185 puts this in the editor's sidebar beside the rest.
+            <MetricsPanel
+              workspaceId={workspaceId}
+              projectId={projectId}
+              appId={appId}
+            />
           ) : tab === "profiler" ? (
             // p.177: "enter Edit mode, open the Profiler tab, and select
             // Reload in Profiler Mode". The panel knows whether it is

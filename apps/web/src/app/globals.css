@@ -3072,3 +3072,16 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-profiler-table tr.warn td { color: var(--brass); }
 .canvas-profiler-controls { display: flex; gap: 8px; align-items: flex-end; }
 .canvas-profiler-controls .field { flex: 1; min-width: 0; }
+
+/* Usage metrics (§396; workshop p.185-188). */
+.canvas-metrics { display: flex; flex-direction: column; gap: 10px; }
+.canvas-metrics-card { display: flex; align-items: baseline; gap: 6px; }
+.canvas-metrics-card strong { font-size: 22px; font-family: var(--font-display); }
+.canvas-metrics-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.canvas-metrics-rows li { display: grid; grid-template-columns: 1fr 5em 3em 5em; gap: 8px; align-items: center; font-size: 12px; }
+.canvas-metrics-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-metrics-track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+/* A minimum in pixels, for the reason the profiler's bar records: a share of a
+   narrow column can round to nothing, and a row with a real count and no bar
+   reads as a row with no count. */
+.canvas-metrics-bar { display: block; height: 8px; min-width: 2px; background: var(--accent); }

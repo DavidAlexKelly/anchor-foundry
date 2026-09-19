@@ -2341,6 +2341,12 @@ export const canvas = {
         }),
       },
     ),
+  /** p.185's Metrics tab (§396). Viewer-level: every number is an aggregate
+   * count the caller could already reach through the action list. */
+  usageMetrics: (wid: string, pid: string, appId: string, days: number) =>
+    request<import("./types").ModuleUsageMetrics>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/metrics?days=${days}`,
+    ),
   /** The same resolve for a published app, which a workspace member may open
    * without being in its project. */
   evaluatePublishedVariables: (

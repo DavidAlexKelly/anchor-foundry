@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
@@ -35,6 +35,7 @@ from ..services import actions as actions_service
 from ..services import audit
 from ..services import ontology as ontology_service
 from ..services import canvas as canvas_service
+from ..services import workshop_metrics
 from ..services import module_states as states_service
 from ..services import workshop_format
 from ..services import workshop_variables as variables_service
@@ -787,6 +788,69 @@ async def evaluate_variables(
         values=resolved,
         order=variables_service.evaluation_order(variables),
         timings=measured,
+    )
+
+
+# ---- usage metrics (§396; `workshop` p.185-188) ------------------------------
+class ActionUsageOut(BaseModel):
+    action_type_id: str
+    display_name: str
+    api_name: str
+    #: Successful submissions in the chosen period. **Of this action**, not of
+    #: this module - p.186's "available by default for all modules and do not
+    #: require any additional configuration" is what settles that, and the
+    #: service says so at length.
+    submissions: int
+    #: The same count over the equivalent period immediately before (p.188).
+    previous: int
+    #: Where in the module this action is used, for p.185's "select an action
+    #: to view which widgets in the module use that action".
+    used_by: list[dict[str, str]]
+
+
+class UsageMetricsOut(BaseModel):
+    days: int
+    actions: list[ActionUsageOut]
+
+
+@router.get("/{app_id}/metrics", response_model=UsageMetricsOut)
+async def usage_metrics(
+    app_id: UUID,
+    days: int = Query(default=workshop_metrics.DEFAULT_PERIOD),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> UsageMetricsOut:
+    """p.185's Metrics tab, the action half.
+
+    **Viewer, though the panel is a builder's.** Reading how a module is used
+    is reading counts about actions the caller can already see; p.185 calls
+    every number here "aggregate counts… not attributable to any specific
+    user", so there is nothing to protect that the action list does not already
+    expose. Putting an editor floor on it would be a rule with no reason behind
+    it, which is the kind that gets copied.
+    """
+    if days not in workshop_metrics.PERIODS:
+        # p.188 offers three windows and no others. Refused rather than
+        # clamped: a panel that asked for 45 days and was quietly given 30
+        # would label the answer with the number it asked for.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "usage metrics are reported over "
+                + ", ".join(f"{d} days" for d in workshop_metrics.PERIODS)
+            ),
+        )
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.get(conn, access.project_id, app_id)
+        used = workshop_metrics.module_actions(_parse_json(row["definition"]))
+        counts = await workshop_metrics.action_counts(
+            conn, list(used), days=days
+        )
+    return UsageMetricsOut(
+        days=days,
+        actions=[
+            ActionUsageOut(**c, used_by=used.get(c["action_type_id"], []))
+            for c in counts
+        ],
     )
 
 
