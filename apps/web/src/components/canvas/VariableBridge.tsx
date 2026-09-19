@@ -218,6 +218,11 @@ export function VariableBridge({
   const resolve = useMutation({
     mutationFn: (raw: Record<string, unknown>) => {
       const ticket = ++latest.current;
+      // The layout on screen when this resolve is *sent*. Captured here rather
+      // than read when the answer lands, for the reason the recorder's
+      // `started` map gives: a resolve triggered by page one and answered
+      // after somebody opened an overlay was still triggered by page one.
+      const from = overlay ?? page;
       const asks = requested(declared, askRef.current);
       const held = heldFor(declared, heldRef.current, askRef.current);
       return (published
@@ -225,9 +230,9 @@ export function VariableBridge({
           workspaceId, appId, raw, bound, held, asks, visible, profiler.on)
         : canvasApi.evaluateVariables(
           workspaceId, projectId, appId, raw, bound, held, asks, visible, profiler.on))
-        .then((data) => ({ data, ticket, held, asks }));
+        .then((data) => ({ data, ticket, held, asks, from }));
     },
-    onSuccess: ({ data, ticket, held, asks }) => {
+    onSuccess: ({ data, ticket, held, asks, from }) => {
       if (ticket !== latest.current) return;
       // Captured before the values are published, so a widget never renders a
       // held variable in the gap between the two.
@@ -252,6 +257,7 @@ export function VariableBridge({
         profiler.recordVariables(
           data.timings,
           (id) => declared[id]?.label ?? id,
+          from,
         );
       }
     },

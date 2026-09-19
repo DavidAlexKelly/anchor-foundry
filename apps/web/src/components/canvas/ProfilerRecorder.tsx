@@ -40,6 +40,9 @@ export interface ProfilerState {
   recordVariables: (
     timings: Record<string, number>,
     labelFor: (id: string) => string,
+    /** The layout on screen when the resolve was *sent* - see `started`. The
+     * bridge captures it, because a resolve is requested there. */
+    from: string | null,
   ) => void;
 }
 
@@ -78,7 +81,12 @@ export function ProfilerRecorder({
   if (origin.current === 0) origin.current = performance.now();
   // Fetch starts, by query hash. A ref rather than state: a render per
   // in-flight request would make the profiler the slowest thing in the module.
-  const started = useRef<Map<string, number>>(new Map());
+  // **The start time *and* the page it started on.** Attribution is a fact
+  // about when a load began, not about when it finished: a query that starts
+  // on a page and lands after the reader has opened an overlay was triggered
+  // by the page. Recording `page.current` at completion put every in-flight
+  // request under whatever was on screen by the time it came back.
+  const started = useRef<Map<string, { at: number; page: string | null }>>(new Map());
   // Which layout is on screen, as of now. A ref rather than state: the
   // subscription below closes over it, and re-subscribing on every page change
   // would lose the fetch starts it is holding.
@@ -93,7 +101,9 @@ export function ProfilerRecorder({
       const hash = query.queryHash;
       const fetching = query.state.fetchStatus === "fetching";
       if (fetching) {
-        if (!started.current.has(hash)) started.current.set(hash, performance.now());
+        if (!started.current.has(hash)) {
+          started.current.set(hash, { at: performance.now(), page: page.current });
+        }
         return;
       }
       const began = started.current.get(hash);
@@ -104,10 +114,10 @@ export function ProfilerRecorder({
         id: hash,
         kind: "request",
         name: keyName(query.queryKey as readonly unknown[]),
-        ms: now - began,
-        at: began - origin.current,
+        ms: now - began.at,
+        at: began.at - origin.current,
         loads: 1,
-        page: page.current,
+        page: began.page,
       };
       setEvents((current) => merge(current, row));
     });
@@ -127,14 +137,14 @@ export function ProfilerRecorder({
       started.current.clear();
       setEvents([]);
     },
-    recordVariables: (timings, labelFor) => {
+    recordVariables: (timings, labelFor, from) => {
       const at = performance.now() - origin.current;
       setEvents((current) => {
         let next = current;
         for (const [id, ms] of Object.entries(timings)) {
           next = merge(next, {
             id, kind: "variable", name: labelFor(id), ms, at, loads: 1,
-            page: page.current,
+            page: from,
           });
         }
         return next;
