@@ -91,7 +91,8 @@ def test_the_profiler_records_this_modules_variables(page, profiled):
     page.get_by_test_id("profiler-enter").click()
     expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
 
-    page.get_by_role("button", name="Profiler", exact=True).click()
+    # No second click: the reload lands on the Profiler tab, because that is
+    # where the control that caused it lives (p.177).
     breakdown = page.get_by_test_id("profiler-breakdown")
     expect(breakdown).to_be_visible(timeout=30000)
     expect(breakdown).to_contain_text("Shown value")
@@ -106,7 +107,6 @@ def test_the_total_is_reported_and_is_not_a_measurement_of_nothing(page, profile
     open_profiler_tab(page, profiled)
     page.get_by_test_id("profiler-enter").click()
     expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
-    page.get_by_role("button", name="Profiler", exact=True).click()
 
     total = page.get_by_test_id("profiler-total")
     expect(total).to_be_visible(timeout=30000)
@@ -121,7 +121,6 @@ def test_the_timeline_is_drawn_beside_the_breakdown(page, profiled):
     open_profiler_tab(page, profiled)
     page.get_by_test_id("profiler-enter").click()
     expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
-    page.get_by_role("button", name="Profiler", exact=True).click()
 
     expect(page.get_by_test_id("profiler-timeline")).to_be_visible(timeout=30000)
     expect(page.locator(".canvas-profiler-span").first).to_be_visible()
@@ -134,7 +133,6 @@ def test_clearing_empties_the_panel_without_leaving_profiler_mode(page, profiled
     open_profiler_tab(page, profiled)
     page.get_by_test_id("profiler-enter").click()
     expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
-    page.get_by_role("button", name="Profiler", exact=True).click()
     expect(page.get_by_test_id("profiler-breakdown")).to_be_visible(timeout=30000)
 
     page.get_by_test_id("profiler-clear").click()
@@ -184,3 +182,22 @@ def test_a_module_opened_normally_is_not_measured(page, profiled):
     assert sent, "the module never resolved its variables"
     assert all(not b.get("profile") for b in sent), \
         "a module nobody is profiling asked the server to measure"
+
+
+def test_the_panel_is_readable_while_profiling(page, profiled):
+    """**The one the first run found**, and it is p.177 rather than a nicety:
+    "To exit Profiler mode select Exit at the top of the Profiler panel or in
+    the Profiler mode banner" - so the panel is on screen *while* profiling.
+
+    Profiler mode drops the canvas to run mode so the measurement is of what a
+    viewer experiences (p.178), and the first version tied that to the same
+    flag that draws the settings column. The panel vanished exactly when it had
+    something to say, and four tests timed out looking for a tab they had just
+    pressed a button on.
+    """
+    open_profiler_tab(page, profiled)
+    page.get_by_test_id("profiler-enter").click()
+    expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
+    # The panel, and the tab it lives behind, are both still there.
+    expect(page.get_by_test_id("profiler-panel")).to_be_visible()
+    expect(page.get_by_role("button", name="Profiler", exact=True)).to_be_visible()

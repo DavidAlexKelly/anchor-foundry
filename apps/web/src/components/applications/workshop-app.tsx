@@ -1019,7 +1019,15 @@ function CanvasBody({
       tabSectionNodes: tabs,
     };
   });
-  const showChrome = enabled && canEdit;
+  // **Profiler mode keeps the chrome while the canvas drops to run mode**, and
+  // the two halves come apart here on purpose. p.177 has you reading the
+  // Profiler panel *while* profiling ("select Exit at the top of the Profiler
+  // panel or in the Profiler mode banner"), so the settings column has to
+  // stay; p.178 wants the measurement to be of what a viewer experiences, so
+  // the canvas must not be in edit mode. Tying both to Craft's `enabled` flag
+  // hid the panel the moment it had something to say - which is how this was
+  // found, by four browser tests that could not reach the tab they had just
+  // pressed a button on.
   // The address as it stands, which is what entering and leaving profiler
   // mode edit. Read here rather than in the panel so the two controls - the
   // tab's link and the banner's Exit - cannot disagree about what "this page"
@@ -1028,11 +1036,28 @@ function CanvasBody({
   const shellHref = `${typeof window === "undefined" ? "" : window.location.pathname}${
     shellSearch ? `?${shellSearch}` : ""}`;
   const profiling = profilerOn(shellSearch);
+  // **Profiler mode keeps the chrome while the canvas drops to run mode**, and
+  // the two halves come apart here on purpose. p.177 has you reading the
+  // Profiler panel *while* profiling ("select Exit at the top of the Profiler
+  // panel or in the Profiler mode banner"), so the settings column has to
+  // stay; p.178 wants the measurement to be of what a viewer experiences, so
+  // the canvas must not be in edit mode. Tying both to Craft's `enabled` flag
+  // hid the panel the moment it had something to say - which is how this was
+  // found, by four browser tests that could not reach the tab they had just
+  // pressed a button on.
+  const showChrome = (enabled || profiling) && canEdit;
   // Three things want the right-hand column: the selected widget's settings,
   // the module's variables, and its events. Tabbed rather than stacked - a
   // variable list that pushed the settings below the fold would make
   // configuring a widget worse in service of a panel most edits do not touch.
-  const [tab, setTab] = useState<"widget" | "variables" | "events" | "profiler">("widget");
+  // Profiling opens on the Profiler tab, because the reload that got here was
+  // pressed *from* it (p.177) and coming back to Widget loses the reader's
+  // place in the one flow this mode has.
+  const [tab, setTab] = useState<"widget" | "variables" | "events" | "profiler">(
+    profilerOn(typeof window === "undefined" ? "" : window.location.search)
+      ? "profiler"
+      : "widget",
+  );
   // p.55's clipboard. **Module-scoped and never persisted**: p.68 offers copy
   // and paste for reuse "anywhere in the module", and a clipping holds node
   // ids and variable definitions from *this* document, so carrying one to
