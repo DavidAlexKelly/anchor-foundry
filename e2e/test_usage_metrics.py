@@ -1,154 +1,160 @@
-"""A module's usage metrics, on the screen (§396; `workshop` p.185-188).
+"""p.33's usage summary, on the screen (§320; `ontology-manager` p.32-34).
 
-> "From the Metrics tab in the Workshop editor's left sidebar, you can view
-> action submission counts… The overview card displays the total number of
-> action submissions across the module for a selected time period along with
-> the percentage change compared to the prior equivalent period. Below the
-> overview are individual actions with their submission counts and a
-> proportional bar indicating relative usage." (p.185)
+    "A usage graph on the Overview tab: High-level summary of usage over the
+     last 30 days, enabling Ontology users to quickly understand the
+     implications of making a breaking change to this resource." (p.33)
 
-What the numbers *mean* is decided in `apps/web/src/lib/workshop-metrics.ts`
-and what is counted is in `apps/api/tests/test_workshop_metrics.py`. What needs
-a browser is the seam - that the tab reaches the right module's actions - and
-one thing no unit test can check: **that the panel says what it is counting.**
+The counting rules and the four numbers are in
+`apps/api/tests/test_object_type_usage.py`, and the wording in
+`apps/web/src/lib/usage-metrics.test.ts`. What needs a browser is the sentence
+p.32 spends a clause on and no API test can reach:
 
-p.186's reading makes `submissions` a count of the *action*, not of this
-module. A panel that printed the number without saying so would be read as
-"submissions made here" by anybody who had not read the page, and would be
-wrong by however much the action is used elsewhere. That sentence is the
-feature, not a disclaimer on it.
+    "any object type or link type usage happening in Ontology Manager is not
+     included."
+
+That is a claim about **which screen you are looking at**, not about a request.
+The Ontology Manager's type page and the Object Explorer list a type's objects
+through the same route, so an API test can only check that the server honours
+a label it is handed. Whether the type page actually hands it over is a fact
+about the page — and getting it wrong would make the person deciding on a
+rename the type's most active user, silently, for having looked.
 """
 from __future__ import annotations
-
-import uuid
 
 import pytest
 from playwright.sync_api import expect
 
-from api import Module, layout
-from conftest import open_builder
+from api import Module
+from conftest import WEB_BASE, eventually
 
 
 @pytest.fixture(scope="module")
-def module_with_action(api):
-    """A module whose form runs an action of its own."""
-    mod = Module(api, "Metrics")
-    type_id = mod.object_type(
-        columns=["id", "state"],
-        rows=[{"id": f"T{i}", "state": "open"} for i in range(1, 4)],
-        key="id", title="id",
+def counted(api):
+    """A type with rows, in its own module so the counts are this test's."""
+    mod = Module(api, "Usage metrics")
+    mod.object_type(
+        columns=["id", "town"],
+        rows=[{"id": "1", "town": "Ely"}, {"id": "2", "town": "Ripon"}],
+        key="id", title="town",
     )
-    action = api.call(
-        "POST",
-        f"/workspaces/{mod.workspace_id}/action-types",
-        {
-            "object_type_id": type_id,
-            "api_name": f"ship_{uuid.uuid4().hex[:8]}",
-            "display_name": "Ship the order",
-            "editable_properties": ["state"],
-        },
+    return mod
+
+
+def type_page(page, module) -> None:
+    page.goto(
+        f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}"
+        f"/objects/{module.object_type_id}"
     )
-    mod.define({
-        "format": 2,
-        "layout": layout({
-            "form": {"resolvedName": "CanvasActionForm",
-                     "props": {"actionTypeId": action["id"], "title": "Ship"}},
-        }),
-        "variables": {},
-        "events": {},
-    })
-    return mod, action
+    expect(page.get_by_test_id("usage-panel")).to_be_visible(timeout=30000)
 
 
-def open_metrics(page, mod):
-    open_builder(page, mod)
-    page.get_by_role("button", name="Metrics", exact=True).click()
+def reads(api, module) -> int:
+    return api.call(
+        "GET",
+        f"/workspaces/{module.workspace_id}/object-types/{module.object_type_id}/usage",
+    )["reads"]
 
 
-def test_the_tab_lists_the_actions_this_module_runs(page, module_with_action):
-    """The seam: the panel reaches this module's document and names what it
-    finds there, by the action's display name rather than its id."""
-    mod, _ = module_with_action
-    open_metrics(page, mod)
-    expect(page.get_by_test_id("metrics-panel")).to_be_visible()
-    rows = page.get_by_test_id("metrics-rows")
-    expect(rows).to_be_visible(timeout=30000)
-    expect(rows).to_contain_text("Ship the order")
-    # p.185's "which widgets in the module use that action".
-    expect(rows).to_contain_text("1 widget")
+def test_a_type_nobody_has_used_says_so(page, api, counted) -> None:
+    """p.33's "No usage for the last 30 days", as a sentence.
 
-
-def test_the_panel_says_what_it_is_counting(page, module_with_action):
-    """**The sentence that keeps the number honest**, and the reason it is a
-    feature rather than a footnote.
-
-    p.186's "available by default for all modules and do not require any
-    additional configuration" is what makes `submissions` a count of the
-    action rather than of this module. Without this line a reader takes it for
-    the other thing, and the panel is confidently wrong about the only number
-    it reports.
+    **A blank panel and a failed one look identical**, which is why this is
+    drawn rather than omitted — and p.33 attaches a warning to exactly this
+    state, so people do see it and wonder.
     """
-    mod, _ = module_with_action
-    open_metrics(page, mod)
-    expect(page.get_by_test_id("metrics-scope")).to_contain_text(
-        "outside this module", timeout=30000)
+    type_page(page, counted)
+    expect(page.get_by_test_id("usage-empty")).to_be_visible()
+    expect(page.get_by_test_id("usage-empty")).to_contain_text("No usage")
+    expect(page.get_by_test_id("usage-figures")).to_have_count(0)
 
 
-def test_an_action_nobody_has_submitted_shows_a_zero(page, module_with_action):
-    """Not an absent row. "This action exists and has been submitted nought
-    times" is the most useful thing this panel says about a new module."""
-    mod, _ = module_with_action
-    open_metrics(page, mod)
-    expect(page.get_by_test_id("metrics-total")).to_contain_text("0", timeout=30000)
-    expect(page.get_by_test_id("metrics-rows")).to_contain_text("Ship the order")
-    # No comparison to make, so no percentage is offered - a first period is
-    # not a trend.
-    expect(page.get_by_test_id("metrics-change")).to_have_count(0)
+def test_opening_the_type_page_does_not_count_as_usage(page, api, counted) -> None:
+    """**p.32's exclusion, and the only place it can be checked.**
 
+    The Ontology Manager's type page lists this type's objects through the same
+    route the Explorer uses. An API test can check that the server honours the
+    label it is given; only a browser can check that this page gives it.
 
-def test_the_period_picker_offers_the_three_the_pages_offer(page, module_with_action):
-    """p.188's three windows: "7 days, 30 days, or 90 days. The default is 30."
+    The read really happens — the rows are on screen — and the number does not
+    move.
     """
-    mod, _ = module_with_action
-    open_metrics(page, mod)
-    picker = page.get_by_test_id("metrics-period")
-    expect(picker).to_be_visible(timeout=30000)
-    assert picker.input_value() == "30"
-    options = page.eval_on_selector_all(
-        "[data-testid='metrics-period'] option", "els => els.map(e => e.value)")
-    assert options == ["7", "30", "90"]
+    before = reads(api, counted)
+    type_page(page, counted)
+    # The rows are the proof the read happened, and the positive wait that
+    # makes the assertion below about the product rather than about timing
+    # (§318).
+    expect(page.get_by_test_id("instances-table")).to_contain_text(
+        "Ely", timeout=30000
+    )
+    assert reads(api, counted) == before
 
 
-def test_changing_the_period_asks_again(page, module_with_action):
-    """The picker is a control, not a label: choosing a window has to reach the
-    server, because the window is what the server counts over."""
-    mod, _ = module_with_action
-    sent: list = []
-    page.route("**/canvas-apps/*/metrics*", lambda route: (
-        sent.append(route.request.url), route.continue_()))
+def test_the_explorer_s_reads_are_counted_and_shown(page, api, counted) -> None:
+    """The other half, and the one that makes the exclusion mean something.
+
+    Without this, "the type page does not count" is satisfied by a platform
+    that counts nothing at all — which is the shape §302 found in five
+    specifications and §315 found in a browser test three units later.
+    """
+    before = reads(api, counted)
+    page.goto(
+        f"{WEB_BASE}/{counted.workspace_slug}/explore?type={counted.object_type_id}"
+    )
+    expect(page.get_by_text("Ely").first).to_be_visible(timeout=30000)
+    eventually(lambda: reads(api, counted), lambda n: n > before,
+               what="the Explorer's read to be counted")
+
+    type_page(page, counted)
+    expect(page.get_by_test_id("usage-figures")).to_be_visible(timeout=30000)
+    # p.33's "in which Foundry applications", with the Explorer named — and
+    # the Ontology Manager absent from the breakdown, because its reads were
+    # never recorded to group.
+    row = page.get_by_test_id("usage-app-explorer")
+    expect(row).to_be_visible()
+    expect(row).to_contain_text("Object Explorer")
+    expect(page.get_by_test_id("usage-app-ontology_manager")).to_have_count(0)
+
+
+def test_the_headline_leads_with_people(page, api, counted) -> None:
+    """p.33 frames the whole feature as understanding "the implications of
+    making a breaking change", and the number that decides that is how many
+    people would notice — not how many times."""
+    page.goto(
+        f"{WEB_BASE}/{counted.workspace_slug}/explore?type={counted.object_type_id}"
+    )
+    expect(page.get_by_text("Ely").first).to_be_visible(timeout=30000)
+    eventually(lambda: reads(api, counted), lambda n: n > 0, what="a recorded read")
+
+    type_page(page, counted)
+    headline = page.get_by_test_id("usage-headline")
+    expect(headline).to_contain_text("last 30 days")
+    expect(headline).to_contain_text("person")
+    expect(page.get_by_test_id("usage-active-users")).to_have_text("1")
+
+
+def test_a_failure_says_so_rather_than_reading_as_no_usage(page, api, counted) -> None:
+    """**The two states a surviving mutant showed were interchangeable.**
+
+    Replacing the error branch with `return null` — draw nothing when the
+    request fails — passed every other test in this file. And "nothing" is
+    exactly what p.33's "No usage for the last 30 days" looks like from across
+    the room, so a reader would take a broken panel for a definite answer and
+    rename the property.
+
+    The failure is manufactured by refusing the request, which is the only way
+    to reach a branch the server has no way to produce on demand.
+    """
+    page.route("**/usage", lambda route: route.abort())
     try:
-        open_metrics(page, mod)
-        expect(page.get_by_test_id("metrics-rows")).to_be_visible(timeout=30000)
-        page.get_by_test_id("metrics-period").select_option("90")
-        expect(page.get_by_test_id("metrics-rows")).to_be_visible(timeout=30000)
+        page.goto(
+            f"{WEB_BASE}/{counted.workspace_slug}/{counted.project_slug}"
+            f"/objects/{counted.object_type_id}"
+        )
+        problem = page.get_by_text("Couldn't load usage for this type")
+        expect(problem).to_be_visible(timeout=30000)
+        # And it is **not** mistakable for the empty state: that sentence is
+        # the one a reader would act on.
+        expect(page.get_by_test_id("usage-empty")).to_have_count(0)
+        expect(page.get_by_test_id("usage-figures")).to_have_count(0)
     finally:
-        page.unroute("**/canvas-apps/*/metrics*")
-
-    assert any("days=30" in u for u in sent), "the default window was never asked for"
-    assert any("days=90" in u for u in sent), "choosing 90 days asked for 30"
-
-
-def test_a_module_that_runs_nothing_says_so(page, api):
-    """**Not the same as "no submissions".** A module that runs no actions has
-    nothing to report; one whose action is unused has something to report and
-    the answer is zero. Collapsing them tells a builder their action is unused
-    when they never wired one up."""
-    bare = Module(api, "No actions")
-    bare.define({"format": 2, "layout": layout({
-        "txt": {"resolvedName": "CanvasText", "props": {"tag": "p", "text": "HI"}},
-    }), "variables": {}, "events": {}})
-
-    open_metrics(page, bare)
-    expect(page.get_by_test_id("metrics-empty")).to_contain_text(
-        "does not run any actions", timeout=30000)
-    expect(page.get_by_test_id("metrics-rows")).to_have_count(0)
+        page.unroute("**/usage")
