@@ -480,16 +480,24 @@ def test_filtering_does_not_move_the_timelines_zero(page, two_pages):
             name,
         )
 
-    before = offset_of("Second page value")
-    assert before > 0, "the second page's bar should not start at the very left"
+    # **Measured on an *early* row, which is the half that makes this
+    # checkable.** Filtering to the *last* row cannot tell the two apart: its
+    # own end is where the whole run ends, so a scale made only of it is the
+    # same scale. The first page's value loaded near the beginning, so under a
+    # rescale it would jump from near the left to the far right.
+    before = offset_of("First page value")
+    assert before < 50, (
+        f"the first page's bar starts at {before}% of a run that continued well "
+        "past it - the timeline is not measuring what it claims to"
+    )
 
-    page.get_by_test_id("profiler-search").fill("Second page value")
-    expect(breakdown).to_contain_text("Second page value")
-    expect(breakdown).not_to_contain_text("First page value")
-    after = offset_of("Second page value")
+    page.get_by_test_id("profiler-search").fill("First page value")
+    expect(breakdown).to_contain_text("First page value")
+    expect(breakdown).not_to_contain_text("Second page value")
+    after = offset_of("First page value")
     assert abs(after - before) < 1.0, (
         f"the bar moved from {before}% to {after}% when the panel was filtered - "
-        "the timeline rescaled to what is shown, so a late load now reads as "
+        "the timeline rescaled to what is shown, so an early load now reads as "
         "having happened at a different time than it did"
     )
 
