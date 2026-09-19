@@ -92,11 +92,17 @@ export function timeline(events: readonly LoadEvent[]): LoadEvent[] {
 /** Where a row sits on the timeline, as percentages of the total. */
 export function span(event: LoadEvent, total: number): { left: number; width: number } {
   if (total <= 0) return { left: 0, width: 100 };
-  const left = Math.max(0, Math.min(100, (event.at / total) * 100));
   // A load that took no measurable time still needs to be findable, so a bar
   // has a floor. Without it every fast row is invisible and the timeline looks
   // like it lost them.
-  const width = Math.max(1, Math.min(100 - left, (event.ms / total) * 100));
+  const width = Math.max(1, Math.min(100, (event.ms / total) * 100));
+  // **The floor has to push the bar back, not off the end.** The width is
+  // settled first and `left` then makes room for it, because the common case
+  // is the one that broke: a variable resolving in under a millisecond at the
+  // very end of the run puts `at / total` at 100%, and a 1% bar starting there
+  // is a bar nobody can see. A browser test caught it - the row was in the
+  // DOM, correct, and outside the track.
+  const left = Math.max(0, Math.min(100 - width, (event.at / total) * 100));
   return { left, width };
 }
 

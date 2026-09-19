@@ -86,6 +86,19 @@ describe("the timeline", () => {
     expect(bar.left + bar.width).toBeLessThanOrEqual(100);
   });
 
+  it("keeps an instant load at the very end on the track", () => {
+    // **The case that broke, and the ordinary one.** A variable resolving in
+    // under a millisecond at the end of the run puts `at / total` at 100%, and
+    // a bar with the 1% floor starting there is a bar nobody can see. The
+    // first version computed `left` first and let the floor push the bar off
+    // the end; a browser test found the row in the DOM, correct, and outside
+    // the track.
+    const bar = span(ev({ at: 5, ms: 0.2 }), 5);
+    expect(bar.left).toBeLessThanOrEqual(99);
+    expect(bar.left + bar.width).toBeLessThanOrEqual(100);
+    expect(bar.width).toBeGreaterThan(0);
+  });
+
   it("draws a full bar when nothing has established a scale yet", () => {
     expect(span(ev(), 0)).toEqual({ left: 0, width: 100 });
   });
