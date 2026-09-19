@@ -191,6 +191,17 @@ def two_page_module(api):
     return mod
 
 
+def viewer_url(mod) -> str:
+    """Where a module is *viewed*, which is not where it is opened.
+
+    `Module.url` is `/r/{resource_id}` and that opens the **builder** for
+    somebody who can edit - which is exactly the surface p.188 says does not
+    count. The viewer route is the workspace-scoped one, and it is what
+    `countViews` is passed on.
+    """
+    return f"{WEB_BASE}/{mod.workspace_slug}/apps/{mod.app_id}"
+
+
 def set_tracking(api, mod, on: bool):
     api.call("PUT", f"{mod.base}/canvas-apps/{mod.app_id}/usage-tracking", {"on": on})
 
@@ -207,7 +218,7 @@ def test_viewing_a_module_counts_the_page_it_shows(page, api, two_page_module):
     module has opted in."""
     mod = two_page_module
     set_tracking(api, mod, True)
-    page.goto(f"{WEB_BASE}{mod.url}")
+    page.goto(viewer_url(mod))
     expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
 
     eventually(lambda: layout_views(api, mod), lambda v: v.get("pg1", 0) >= 1,
@@ -219,7 +230,7 @@ def test_navigating_counts_the_page_navigated_to(page, api, two_page_module):
     trail rather than one entry for wherever they landed first."""
     mod = two_page_module
     set_tracking(api, mod, True)
-    page.goto(f"{WEB_BASE}{mod.url}")
+    page.goto(viewer_url(mod))
     expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
     page.get_by_role("button", name="Second", exact=True).click()
     expect(page.get_by_text("PAGE TWO")).to_be_visible(timeout=30000)
@@ -241,7 +252,7 @@ def test_a_module_that_has_not_opted_in_records_nothing(page, api):
                "props": {"tag": "p", "text": "UNTRACKED"}, "parent": "pg1"},
     }), "variables": {}, "events": {}})
 
-    page.goto(f"{WEB_BASE}{mod.url}")
+    page.goto(viewer_url(mod))
     expect(page.get_by_text("UNTRACKED")).to_be_visible(timeout=30000)
     # The page has rendered and any report it was going to send has been sent.
     assert layout_views(api, mod) == {}
@@ -259,9 +270,13 @@ def test_the_builder_does_not_count_as_a_view(page, api, two_page_module):
     before = layout_views(api, mod)
 
     open_builder(page, mod)
-    expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
+    # Scoped to the rendered paragraph: the builder's layout tree draws a row
+    # per node, so the text of a Text widget appears twice on this screen
+    # (§337 - name the control, not its neighbourhood).
+    shown = page.get_by_role("paragraph").filter(has_text="PAGE ONE")
+    expect(shown.first).to_be_visible(timeout=30000)
     page.get_by_role("button", name="Preview", exact=True).click()
-    expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
+    expect(shown.first).to_be_visible(timeout=30000)
 
     assert layout_views(api, mod) == before, (
         "the builder counted as a view of the module"
@@ -273,7 +288,7 @@ def test_the_panel_shows_what_was_viewed_by_name(page, api, two_page_module):
     node id - the panel has the counts and the editor has the tree."""
     mod = two_page_module
     set_tracking(api, mod, True)
-    page.goto(f"{WEB_BASE}{mod.url}")
+    page.goto(viewer_url(mod))
     expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
     eventually(lambda: layout_views(api, mod), lambda v: v.get("pg1", 0) >= 1,
                what="a view to record before the panel is opened")
