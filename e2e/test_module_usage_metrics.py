@@ -32,7 +32,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import open_builder
+from conftest import WEB_BASE, eventually, open_builder
 
 
 @pytest.fixture(scope="module")
@@ -158,3 +158,156 @@ def test_a_module_that_runs_nothing_says_so(page, api):
     expect(page.get_by_test_id("metrics-empty")).to_contain_text(
         "does not run any actions", timeout=30000)
     expect(page.get_by_test_id("metrics-rows")).to_have_count(0)
+
+
+# ---- layout views (§397; p.186-188) ------------------------------------------
+@pytest.fixture(scope="module")
+def two_page_module(api):
+    """A module with two pages and a header that switches between them."""
+    mod = Module(api, "Views")
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "hdr": {"resolvedName": "CanvasHeader", "props": {"title": "V"},
+                    "isCanvas": True, "nodes": ["go2"]},
+            "go2": {"resolvedName": "CanvasButton", "props": {"label": "Second"},
+                    "parent": "hdr"},
+            "pg1": {"resolvedName": "CanvasPage",
+                    "props": {"title": "First", "pageId": "one"},
+                    "isCanvas": True, "nodes": ["t1"]},
+            "t1": {"resolvedName": "CanvasText",
+                   "props": {"tag": "p", "text": "PAGE ONE"}, "parent": "pg1"},
+            "pg2": {"resolvedName": "CanvasPage",
+                    "props": {"title": "Second", "pageId": "two"},
+                    "isCanvas": True, "nodes": ["t2"]},
+            "t2": {"resolvedName": "CanvasText",
+                   "props": {"tag": "p", "text": "PAGE TWO"}, "parent": "pg2"},
+        }),
+        "variables": {},
+        "events": {"e_go2": {"id": "e_go2", "trigger": {"node": "go2", "on": "click"},
+                             "effects": [{"type": "navigate",
+                                          "config": {"page": "pg2"}}]}},
+    })
+    return mod
+
+
+def set_tracking(api, mod, on: bool):
+    api.call("PUT", f"{mod.base}/canvas-apps/{mod.app_id}/usage-tracking", {"on": on})
+
+
+def layout_views(api, mod, days: int = 30) -> dict:
+    body = api.call(
+        "GET", f"{mod.base}/canvas-apps/{mod.app_id}/metrics?days={days}")
+    return {row["node_id"]: row["views"] for row in body["layouts"]}
+
+
+def test_viewing_a_module_counts_the_page_it_shows(page, api, two_page_module):
+    """**The seam.** The viewer reports what is on screen and the server counts
+    it - which only works if the two agree on what "on screen" means and the
+    module has opted in."""
+    mod = two_page_module
+    set_tracking(api, mod, True)
+    page.goto(f"{WEB_BASE}{mod.url}")
+    expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
+
+    eventually(lambda: layout_views(api, mod), lambda v: v.get("pg1", 0) >= 1,
+               what="the first page's view to be recorded")
+
+
+def test_navigating_counts_the_page_navigated_to(page, api, two_page_module):
+    """p.186 counts each page, so a reader moving through a module leaves a
+    trail rather than one entry for wherever they landed first."""
+    mod = two_page_module
+    set_tracking(api, mod, True)
+    page.goto(f"{WEB_BASE}{mod.url}")
+    expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
+    page.get_by_role("button", name="Second", exact=True).click()
+    expect(page.get_by_text("PAGE TWO")).to_be_visible(timeout=30000)
+
+    eventually(lambda: layout_views(api, mod), lambda v: v.get("pg2", 0) >= 1,
+               what="the second page's view to be recorded")
+
+
+def test_a_module_that_has_not_opted_in_records_nothing(page, api):
+    """p.187's opt-in, from the other end - and the assertion has to be about
+    an *absence*, so it comes after a positive wait on the page rendering
+    (§318): otherwise it passes on a page that never loaded."""
+    mod = Module(api, "Untracked")
+    mod.define({"format": 2, "layout": layout({
+        "pg1": {"resolvedName": "CanvasPage",
+                "props": {"title": "First", "pageId": "one"},
+                "isCanvas": True, "nodes": ["t1"]},
+        "t1": {"resolvedName": "CanvasText",
+               "props": {"tag": "p", "text": "UNTRACKED"}, "parent": "pg1"},
+    }), "variables": {}, "events": {}})
+
+    page.goto(f"{WEB_BASE}{mod.url}")
+    expect(page.get_by_text("UNTRACKED")).to_be_visible(timeout=30000)
+    # The page has rendered and any report it was going to send has been sent.
+    assert layout_views(api, mod) == {}
+
+
+def test_the_builder_does_not_count_as_a_view(page, api, two_page_module):
+    """p.188: "Views in Edit mode… are not tracked."
+
+    An author arranging widgets is not a reader, and counting them would make
+    the busiest page of every module the one its builder was last editing.
+    Preview is the same thing: it is the author looking at their own work.
+    """
+    mod = two_page_module
+    set_tracking(api, mod, True)
+    before = layout_views(api, mod)
+
+    open_builder(page, mod)
+    expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
+    page.get_by_role("button", name="Preview", exact=True).click()
+    expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
+
+    assert layout_views(api, mod) == before, (
+        "the builder counted as a view of the module"
+    )
+
+
+def test_the_panel_shows_what_was_viewed_by_name(page, api, two_page_module):
+    """p.186's list, named the way the author named the pages rather than by
+    node id - the panel has the counts and the editor has the tree."""
+    mod = two_page_module
+    set_tracking(api, mod, True)
+    page.goto(f"{WEB_BASE}{mod.url}")
+    expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
+    eventually(lambda: layout_views(api, mod), lambda v: v.get("pg1", 0) >= 1,
+               what="a view to record before the panel is opened")
+
+    open_metrics(page, mod)
+    rows = page.get_by_test_id("views-rows")
+    expect(rows).to_be_visible(timeout=30000)
+    expect(rows).to_contain_text("First")
+
+
+def test_the_panel_says_when_nothing_is_being_recorded(page, api):
+    """**Three states, not two.** "No views" for a module nobody is recording
+    reports it as unused when it was never watched."""
+    mod = Module(api, "Off")
+    mod.define({"format": 2, "layout": layout({
+        "t": {"resolvedName": "CanvasText", "props": {"tag": "p", "text": "OFF"}},
+    }), "variables": {}, "events": {}})
+
+    open_metrics(page, mod)
+    expect(page.get_by_test_id("views-empty")).to_contain_text(
+        "not being recorded", timeout=30000)
+
+
+def test_the_toggle_turns_recording_on(page, api):
+    """p.187: "Open Module settings. Navigate to the Metrics tab. Toggle on
+    Usage Metrics Tracking.""" 
+    mod = Module(api, "Toggle")
+    mod.define({"format": 2, "layout": layout({
+        "t": {"resolvedName": "CanvasText", "props": {"tag": "p", "text": "T"}},
+    }), "variables": {}, "events": {}})
+
+    open_metrics(page, mod)
+    toggle = page.get_by_test_id("metrics-tracking")
+    expect(toggle).not_to_be_checked()
+    toggle.check()
+    expect(page.get_by_test_id("views-empty")).to_contain_text(
+        "No layouts have been viewed", timeout=30000)

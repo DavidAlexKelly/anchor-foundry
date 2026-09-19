@@ -187,6 +187,10 @@ export default function PublishedAppPage() {
                 published
                 routing={routingOf(app.data.definition)}
                 layout={definition}
+                // p.188: layout views are recorded in View mode only. This
+                // route is a running module; the builder's Preview is not,
+                // because an author looking at their own work is not a view.
+                countViews
                 // p.75's lazy rule (§392). Always on here: this route is a
                 // running module, where exactly one page is on screen.
                 lazy

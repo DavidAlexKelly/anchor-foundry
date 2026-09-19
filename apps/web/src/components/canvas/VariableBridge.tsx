@@ -55,6 +55,7 @@ export function VariableBridge({
   routing = false,
   layout,
   lazy = false,
+  countViews = false,
   pageSelection,
   stateSaving,
   children,
@@ -107,6 +108,20 @@ export function VariableBridge({
    * build, and it is named in `workshop.md` §3.5 rather than half-done here.
    */
   lazy?: boolean;
+  /** p.186's layout views (§397): report each page and overlay this module
+   * shows, so the Metrics tab can count them.
+   *
+   * **Viewer routes only, and p.188 is why rather than convenience**: "Layout
+   * views are only recorded when the module is viewed on the main branch in
+   * View mode. Views in Edit mode or on draft branches are not tracked." An
+   * author arranging widgets, or looking at their own work in Preview, is not
+   * a view - counting them would make the busiest page of every module the one
+   * its builder was last editing.
+   *
+   * The server refuses to record anything for a module that has not opted in
+   * (p.187), so this being on is not the same as views being collected.
+   */
+  countViews?: boolean;
   /** State-saving settings (p.201, p.204). Passed by the *viewer* routes only:
    * p.200 calls this a feature for "module consumers", and an author arranging
    * widgets has no state to save. */
@@ -222,6 +237,21 @@ export function VariableBridge({
     profiler.setPage(currentLayout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentLayout]);
+
+  // p.186's layout views (§397). The same value the profiler is told, for the
+  // same reason it is one expression: "which layout is on screen" is one
+  // question, and an overlay is what a reader opened.
+  //
+  // **Failures are swallowed deliberately.** A view count is not worth a
+  // message on a reader's screen, and a module that has not opted in answers
+  // 204 anyway - there is nothing here anybody should be told about.
+  useEffect(() => {
+    if (!countViews || !currentLayout) return;
+    canvasApi
+      .recordView(workspaceId, projectId, appId, currentLayout)
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [countViews, currentLayout, appId]);
 
   const resolve = useMutation({
     mutationFn: (raw: Record<string, unknown>) => {

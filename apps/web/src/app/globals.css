@@ -3085,3 +3085,4 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    narrow column can round to nothing, and a row with a real count and no bar
    reads as a row with no count. */
 .canvas-metrics-bar { display: block; height: 8px; min-width: 2px; background: var(--accent); }
+.field-inline { display: flex; align-items: center; gap: 6px; font-size: 12px; }

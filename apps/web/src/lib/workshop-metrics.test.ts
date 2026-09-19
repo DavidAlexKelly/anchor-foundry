@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { ModuleActionUsage } from "./types";
+import type { LayoutViewCount, ModuleActionUsage } from "./types";
 import {
-  change, changeLabel, emptyReason, previousTotal, rising, scopeNote, share,
-  total, usageLabel,
+  change, changeLabel, emptyReason, layoutName, previousTotal, previousViews,
+  rising, scopeNote, share, total, totalViews, usageLabel, viewShare,
+  viewsEmptyReason,
 } from "./workshop-metrics";
 
 function row(over: Partial<ModuleActionUsage> = {}): ModuleActionUsage {
@@ -116,5 +117,63 @@ describe("where an action is used", () => {
   it("says something rather than nothing for an empty list", () => {
     // A blank cell reads as a bug rather than as an empty list.
     expect(usageLabel(row({ used_by: [] }))).toBe("not used");
+  });
+});
+
+// ---- layout views (§397; p.186-188) -----------------------------------------
+function viewRow(over: Partial<LayoutViewCount> = {}): LayoutViewCount {
+  return { node_id: "pg1", views: 10, previous: 5, ...over };
+}
+
+describe("what the layout section says when it is empty", () => {
+  it("tells three states apart, not two", () => {
+    // **Collapsing any pair misinforms.** "No views" for a module nobody is
+    // recording reports it as unused when it was never watched; and "not
+    // recording" for one just switched on hides that it is working.
+    expect(viewsEmptyReason(false, [])).toContain("not being recorded");
+    expect(viewsEmptyReason(true, [])).toContain("No layouts have been viewed");
+    expect(viewsEmptyReason(true, [viewRow()])).toBeNull();
+  });
+
+  it("says not recording even when old counts are still there", () => {
+    // Turning tracking off keeps what was counted, so rows can outlive the
+    // switch. The sentence is about what is happening now.
+    expect(viewsEmptyReason(false, [viewRow()])).toContain("not being recorded");
+  });
+});
+
+describe("the layout totals", () => {
+  it("sums both windows", () => {
+    const rows = [viewRow({ views: 3, previous: 1 }), viewRow({ views: 4, previous: 2 })];
+    expect(totalViews(rows)).toBe(7);
+    expect(previousViews(rows)).toBe(3);
+  });
+});
+
+describe("naming a layout", () => {
+  it("uses the name the document gives it", () => {
+    expect(layoutName("pg1", { pg1: "Overview" })).toBe("Overview");
+  });
+
+  it("shows the id for a layout the document no longer has", () => {
+    // **Shown rather than hidden.** A count recorded against a deleted page is
+    // still true, and dropping the row would quietly reduce the total; the raw
+    // id says "this was viewed and is no longer here", which is actionable.
+    expect(layoutName("gone", { pg1: "Overview" })).toBe("gone");
+  });
+});
+
+describe("the layout bar", () => {
+  it("is relative to the busiest layout", () => {
+    const rows = [viewRow({ views: 8 }), viewRow({ node_id: "pg2", views: 2 })];
+    expect(viewShare(rows[0]!, rows)).toBe(100);
+    expect(viewShare(rows[1]!, rows)).toBe(25);
+  });
+
+  it("draws nothing when a window has no views at all", () => {
+    // Every row zero this period is the "it stopped being used" case, and
+    // dividing by the busiest would make twelve full bars out of nothing.
+    const rows = [viewRow({ views: 0, previous: 9 })];
+    expect(viewShare(rows[0]!, rows)).toBe(0);
   });
 });

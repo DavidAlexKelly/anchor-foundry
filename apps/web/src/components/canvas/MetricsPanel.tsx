@@ -17,21 +17,29 @@
  */
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { canvas as canvasApi } from "@/lib/api";
 import {
-  changeLabel, DEFAULT_PERIOD, emptyReason, PERIODS, previousTotal, rising,
-  scopeNote, share, total, usageLabel,
+  changeLabel, DEFAULT_PERIOD, emptyReason, layoutName, PERIODS, previousTotal,
+  previousViews, rising, scopeNote, share, total, totalViews, usageLabel,
+  viewShare, viewsEmptyReason,
 } from "@/lib/workshop-metrics";
 
 export function MetricsPanel({
   workspaceId,
   projectId,
   appId,
+  /** Page and overlay labels from the document, so the layout list names what
+   * a builder named rather than making them match node ids by eye. The panel
+   * has the counts; only the editor has the tree. */
+  layoutNames = {},
+  readOnly = false,
 }: {
   workspaceId: string;
   projectId: string;
   appId: string;
+  layoutNames?: Record<string, string>;
+  readOnly?: boolean;
 }) {
   const [days, setDays] = useState<number>(DEFAULT_PERIOD);
   const metrics = useQuery({
@@ -39,7 +47,22 @@ export function MetricsPanel({
     queryFn: () => canvasApi.usageMetrics(workspaceId, projectId, appId, days),
   });
 
+  const client = useQueryClient();
   const rows = metrics.data?.actions ?? [];
+  const layouts = metrics.data?.layouts ?? [];
+  const tracking = metrics.data?.tracking ?? false;
+  const viewsEmpty = viewsEmptyReason(tracking, layouts);
+  const viewsNow = totalViews(layouts);
+  const viewsBefore = previousViews(layouts);
+  const viewsDelta = changeLabel(viewsNow, viewsBefore);
+
+  const setTracking = useMutation({
+    mutationFn: (on: boolean) =>
+      canvasApi.setUsageTracking(workspaceId, projectId, appId, on),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["canvas-usage-metrics", appId] });
+    },
+  });
   const now = total(rows);
   const before = previousTotal(rows);
   const delta = changeLabel(now, before);
@@ -108,6 +131,59 @@ export function MetricsPanel({
                     the answer is one short phrase, and a disclosure that hides
                     a phrase costs more than it saves. */}
                 <span className="soft">{usageLabel(row)}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {/* p.186's layout views. Its own section rather than a second table in
+          the same list: an action submission and a page view are different
+          units, and a single list would invite somebody to compare them. */}
+      <p className="field-label">Layout views</p>
+      {/* p.187's Usage Metrics Tracking, in the Metrics tab where p.187 puts
+          it. Shown whatever the state, because "off" is the explanation for an
+          empty section and a toggle that only appeared when there was nothing
+          to see would hide the way to turn it back off. */}
+      <label className="field-inline">
+        <input
+          type="checkbox"
+          data-testid="metrics-tracking"
+          checked={tracking}
+          disabled={readOnly || setTracking.isPending}
+          onChange={(e) => setTracking.mutate(e.target.checked)}
+        />
+        <span>Record layout views</span>
+      </label>
+
+      {metrics.data && viewsEmpty && (
+        <p className="soft" data-testid="views-empty">{viewsEmpty}</p>
+      )}
+
+      {metrics.data && !viewsEmpty && (
+        <>
+          <div className="canvas-metrics-card" data-testid="views-total">
+            <strong>{viewsNow.toLocaleString()}</strong>
+            <span className="soft">
+              view{viewsNow === 1 ? "" : "s"}
+              {viewsDelta === null ? "" : " · "}
+            </span>
+            {viewsDelta !== null && <span className="soft">{viewsDelta}</span>}
+          </div>
+          <ul className="canvas-metrics-rows" data-testid="views-rows">
+            {layouts.map((row) => (
+              <li key={row.node_id}>
+                <span className="canvas-metrics-name">
+                  {layoutName(row.node_id, layoutNames)}
+                </span>
+                <span className="canvas-metrics-track">
+                  <span
+                    className="canvas-metrics-bar"
+                    style={{ width: `${viewShare(row, layouts)}%` }}
+                  />
+                </span>
+                <span>{row.views.toLocaleString()}</span>
+                <span className="soft" />
               </li>
             ))}
           </ul>
