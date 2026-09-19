@@ -50,9 +50,11 @@ def two_pages(api):
         "format": 2,
         "layout": layout({
             "hdr": {"resolvedName": "CanvasHeader", "props": {"title": "P"},
-                    "isCanvas": True, "nodes": ["go2"]},
+                    "isCanvas": True, "nodes": ["go2", "open"]},
             "go2": {"resolvedName": "CanvasButton", "props": {"label": "Second"},
                     "parent": "hdr"},
+            "open": {"resolvedName": "CanvasButton", "props": {"label": "Detail"},
+                     "parent": "hdr"},
             "pg1": {"resolvedName": "CanvasPage",
                     "props": {"title": "One", "pageId": "one"},
                     "isCanvas": True, "nodes": ["one_txt", "tbl"]},
@@ -63,6 +65,12 @@ def two_pages(api):
                     "props": {"objectSetVariable": "v_rows", "columns": "id,name",
                               "pageSize": 25},
                     "parent": "pg1"},
+            "ov": {"resolvedName": "CanvasOverlay",
+                   "props": {"title": "Detail"},
+                   "isCanvas": True, "nodes": ["ov_txt"]},
+            "ov_txt": {"resolvedName": "CanvasText",
+                       "props": {"tag": "p", "text": "OVER={{v_over}}"},
+                       "parent": "ov"},
             "pg2": {"resolvedName": "CanvasPage",
                     "props": {"title": "Two", "pageId": "two"},
                     "isCanvas": True, "nodes": ["two_txt"]},
@@ -82,10 +90,16 @@ def two_pages(api):
             "v_second": {"id": "v_second", "kind": "string",
                          "label": "Second page value",
                          "derivation": {"transform": "concat", "inputs": ["v_second_in"]}},
+            "v_over_in": {"id": "v_over_in", "kind": "string", "label": "over in",
+                          "default": "DEEP"},
+            "v_over": {"id": "v_over", "kind": "string", "label": "Overlay value",
+                       "derivation": {"transform": "concat", "inputs": ["v_over_in"]}},
         },
         "events": {
             "e_go2": {"id": "e_go2", "trigger": {"node": "go2", "on": "click"},
                       "effects": [{"type": "navigate", "config": {"page": "pg2"}}]},
+            "e_open": {"id": "e_open", "trigger": {"node": "open", "on": "click"},
+                       "effects": [{"type": "navigate", "config": {"page": "ov"}}]},
         },
     })
     return mod
@@ -398,3 +412,63 @@ def test_a_search_that_matches_nothing_says_so_rather_than_looking_empty(
     page.get_by_test_id("profiler-search").fill("nothing is called this")
     expect(page.get_by_test_id("profiler-empty")).to_contain_text("match this filter")
     expect(page.get_by_test_id("profiler-breakdown")).to_have_count(0)
+
+
+def test_an_overlay_is_what_triggered_a_load_opened_over_a_page(page, two_pages):
+    """p.178 says "the page **or overlay** that triggered them", and an overlay
+    opens *over* a page - so both are on screen and only one of them is what
+    the reader opened.
+
+    Attributing the overlay's loads to the page underneath passed every other
+    test in this file, because none of them opened an overlay.
+    """
+    open_profiler_tab(page, two_pages)
+    page.get_by_test_id("profiler-enter").click()
+    expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
+    breakdown = page.get_by_test_id("profiler-breakdown")
+    expect(breakdown).to_contain_text("First page value", timeout=30000)
+
+    page.get_by_role("button", name="Detail", exact=True).click()
+    expect(breakdown).to_contain_text("Overlay value", timeout=30000)
+
+    # Two layouts have triggered loads, so the filter means something. The last
+    # option is the overlay, and filtering to it must leave the page's loads
+    # out - which is only true if the overlay was recorded as the trigger.
+    chooser = page.get_by_test_id("profiler-page")
+    expect(chooser).to_be_visible()
+    chooser.select_option(index=2)
+    expect(breakdown).to_contain_text("Overlay value")
+    expect(breakdown).not_to_contain_text("First page value")
+
+
+def test_filtering_does_not_move_the_timelines_zero(page, two_pages):
+    """**The scale is the whole run, not the rows on screen.**
+
+    A timeline that rescaled to the filtered rows would put the second page's
+    loads at the far left - as though they had happened at start-up - and
+    comparing when two pages loaded is the reason to filter in the first place.
+
+    Asserted on the bar's offset, because that is where the claim lives: the
+    second page loaded well after the first, so its bar must still start some
+    way along the track once everything else is filtered out.
+    """
+    open_profiler_tab(page, two_pages)
+    page.get_by_test_id("profiler-enter").click()
+    expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
+    breakdown = page.get_by_test_id("profiler-breakdown")
+    expect(breakdown).to_contain_text("First page value", timeout=30000)
+
+    page.get_by_role("button", name="Second", exact=True).click()
+    expect(breakdown).to_contain_text("Second page value", timeout=30000)
+
+    page.get_by_test_id("profiler-search").fill("Second page value")
+    expect(breakdown).to_contain_text("Second page value")
+    bar = page.locator(".canvas-profiler-span").first
+    expect(bar).to_be_visible()
+    left = page.evaluate(
+        "() => parseFloat(document.querySelector('.canvas-profiler-span').style.left)"
+    )
+    assert left > 5, (
+        f"the filtered bar starts at {left}% - the timeline rescaled to what is "
+        "shown, so a late load now reads as having happened at start-up"
+    )
