@@ -147,11 +147,15 @@ def test_each_series_gets_its_own_allowance_rather_than_sharing_one() -> None:
     draws and the rest are empty.** A single LIMIT over the union spends its
     whole budget on whichever series sorts first; a window partitioned by the
     key gives each one the same allowance."""
-    sql = many(per_series=10)
-    assert "PARTITION BY" in sql
-    assert "rn <= 10" in sql
-    # And no bare LIMIT doing the capping instead.
-    assert "LIMIT" not in sql
+    # **Both branches**, because they build their windows separately: the raw
+    # one partitions on the key column and the bucketed one on the alias. A
+    # check that only ever saw `interval="none"` left the bucketed branch free
+    # to share a single budget, which a mutant walked straight through.
+    for sql in (many(per_series=10), many(per_series=10, interval="day")):
+        assert "PARTITION BY" in sql
+        assert "rn <= 10" in sql
+        # And no bare LIMIT doing the capping instead.
+        assert "LIMIT" not in sql
 
 
 def test_the_allowance_is_the_latest_points_but_the_rows_come_back_in_order() -> None:
@@ -607,7 +611,13 @@ def test_a_bucketed_batch_aggregates_per_series(
     client: TestClient, fx: Fixture, ontology: dict
 ) -> None:
     """S1's two readings on the first day average to 15; S2's single reading
-    is untouched. The bucketing must not pool the two sensors."""
+    is untouched. The bucketing must not pool the two sensors.
+
+    **And both sensors still get their own allowance when bucketed.** The
+    bucketed branch builds its own window, so a cap that is per-series in the
+    raw read can still be shared here - which would give S1 both its buckets
+    and leave S2 empty, since S2's single point sorts last.
+    """
     assert declare(client, fx, ontology).status_code == 200
     synced(client, fx, ontology)
     r = series_points(client, fx, ontology, interval="day", aggregate="avg")
