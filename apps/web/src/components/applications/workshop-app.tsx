@@ -51,6 +51,7 @@ import { VariablesPanel } from "@/components/canvas/VariablesPanel";
 import { ProfilerRecorder } from "@/components/canvas/ProfilerRecorder";
 import { MetricsPanel } from "@/components/canvas/MetricsPanel";
 import { ProfilerBanner, ProfilerPanel } from "@/components/canvas/ProfilerPanel";
+import { UsedColoursPanel } from "@/components/canvas/UsedColoursPanel";
 import { profilerHref, profilerOn } from "@/components/canvas/profiler";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
 import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
@@ -738,6 +739,11 @@ function Toolbox({
         stateSaving={stateSaving}
         onStateSavingChange={onStateSavingChange}
       />
+      {/* p.213 reaches Used colors "by navigating to a module's Settings tab
+          in edit mode", and this column is that tab: it is where the module's
+          own switches live. Below them and above the palette, because it
+          describes the document rather than offering anything to drag. */}
+      <UsedColoursPanel />
       <p className="field-label canvas-toolbox-heading">Widgets</p>
       {PALETTE.map((p) => (
         <PaletteItem key={p.key} componentKey={p.key} label={p.label} hint={p.hint} />

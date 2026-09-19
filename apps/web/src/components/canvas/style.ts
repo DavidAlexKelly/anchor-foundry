@@ -130,14 +130,21 @@ export function resolveBackground(value: string | null | undefined): string | nu
   return raw === "transparent" || raw === "" ? null : raw;
 }
 
-function isHex(value: string): boolean {
+/** Whether this is a hex colour, in either spelling. Exported for
+ * `used-colours.ts` (§398), which asks the same question of the same values -
+ * a second copy would be a second answer the first time somebody allowed a
+ * four-digit alpha hex (§292). */
+export function isHex(value: string): boolean {
   return /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value.trim());
 }
 
 /** `#abc` and `abc` both mean `#aabbcc`. Accepting the short form and the
  * missing hash is not politeness: this value is typed by hand, and a picker
  * that silently ignored `abc` would look like a broken control. */
-function normaliseHex(value: string): string {
+/** One spelling per colour: lowercased, `#`-prefixed, three digits expanded
+ * to six. Exported for the same reason as `isHex` - and it is what makes
+ * `#FFF` and `#ffffff` one row in the Used colors panel rather than two. */
+export function normaliseHex(value: string): string {
   const raw = value.trim().replace(/^#/, "").toLowerCase();
   const full = raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw;
   return `#${full}`;
