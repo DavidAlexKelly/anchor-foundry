@@ -2317,8 +2317,15 @@ export const canvas = {
      * which is the state where the rule saves the most, so it is sent as an
      * empty array rather than dropped. */
     visible?: string[],
+    /** p.178's breakdown (§394): ask the evaluator to time each variable.
+     * Off unless a profiler is listening. */
+    profile?: boolean,
   ) =>
-    request<{ values: Record<string, unknown>; order: string[] }>(
+    request<{
+      values: Record<string, unknown>;
+      order: string[];
+      timings?: Record<string, number> | null;
+    }>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/variables/evaluate`,
       {
         method: "POST",
@@ -2330,6 +2337,7 @@ export const canvas = {
           // Only when the caller has one. `null` would be JSON for "compute
           // everything" too, but sending the field at all reads as an answer.
           ...(visible === undefined ? {} : { visible }),
+          ...(profile ? { profile: true } : {}),
         }),
       },
     ),
@@ -2348,8 +2356,15 @@ export const canvas = {
      * which is the state where the rule saves the most, so it is sent as an
      * empty array rather than dropped. */
     visible?: string[],
+    /** p.178's breakdown (§394): ask the evaluator to time each variable.
+     * Off unless a profiler is listening. */
+    profile?: boolean,
   ) =>
-    request<{ values: Record<string, unknown>; order: string[] }>(
+    request<{
+      values: Record<string, unknown>;
+      order: string[];
+      timings?: Record<string, number> | null;
+    }>(
       `/workspaces/${wid}/published-canvas-apps/${appId}/variables/evaluate`,
       {
         method: "POST",
@@ -2361,6 +2376,7 @@ export const canvas = {
           // Only when the caller has one. `null` would be JSON for "compute
           // everything" too, but sending the field at all reads as an answer.
           ...(visible === undefined ? {} : { visible }),
+          ...(profile ? { profile: true } : {}),
         }),
       },
     ),

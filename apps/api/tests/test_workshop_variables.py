@@ -3618,3 +3618,68 @@ def test_a_mapped_variable_is_still_computed_when_something_else_needs_it() -> N
     assert wv.displayed(
         layout, variables, {"a", "b"}, bound=frozenset({"v_iface"})
     ) == {"v_iface", "v_own"}
+
+
+# ---- the Profiler's measurements (§394; p.178) --------------------------------
+def test_every_variable_computed_reports_a_time() -> None:
+    """p.178's "breakdown of load time by widgets and variables".
+
+    **Measured here rather than inferred from the network**, which is where
+    this build diverges from p.177's method deliberately: one request resolves
+    the whole visible closure, so a network measurement could only ever report
+    one number for the lot. The evaluator knows which variable it is on.
+    """
+    variables = wv.parse(LAZY)
+    timings: dict[str, float] = {}
+    wv.evaluate(variables, {"v_region": "north"}, timings=timings)
+    assert set(timings) == {"v_region", "v_filtered", "v_elsewhere"}
+    assert all(ms >= 0 for ms in timings.values())
+
+
+def test_a_variable_that_was_not_computed_has_no_time() -> None:
+    """The breakdown is of what ran. A variable the lazy rule skipped did not
+    take zero milliseconds - it did not happen, and a `0.0` in the panel would
+    read as "instant" rather than "not on screen" (§214)."""
+    variables = wv.parse(LAZY)
+    only = frozenset(wv.displayed(lazy_layout(), variables, {"shown"}))
+    timings: dict[str, float] = {}
+    wv.evaluate(variables, {"v_region": "north"}, only=only, timings=timings)
+    assert "v_elsewhere" not in timings
+    assert set(timings) == {"v_region", "v_filtered"}
+
+
+def test_a_static_variable_is_in_the_breakdown_too() -> None:
+    """**Not only the derived ones.** A static variable resolves by being read
+    out of the document, which is fast and is still a row - and a breakdown
+    that silently listed derivations only would make a module look like it
+    spent all its time on the few variables that happen to be computed."""
+    variables = wv.parse({"v_plain": var("v_plain", label="Plain", default="x")})
+    timings: dict[str, float] = {}
+    wv.evaluate(variables, {}, timings=timings)
+    assert "v_plain" in timings
+
+
+def test_a_held_variable_is_reported_as_what_it_cost_this_time() -> None:
+    """p.76's non-automatic behaviours: a variable holding its last value did
+    not recompute, so its time is the cost of *not* recomputing. It stays in
+    the breakdown because a variable missing from the panel reads as one the
+    module does not have."""
+    variables = wv.parse({
+        "v_in": var("v_in", label="In", default="a"),
+        "v_held": var("v_held", label="Held",
+                      derivation={"transform": "concat", "inputs": ["v_in"]},
+                      recompute="only_on_event"),
+    })
+    timings: dict[str, float] = {}
+    wv.evaluate(variables, {}, held={"v_held": "kept"}, timings=timings)
+    assert "v_held" in timings
+
+
+def test_measuring_is_opt_in() -> None:
+    """Passing nothing measures nothing. Every caller but the profiler wants
+    the values and nothing else, and a cost paid on every resolve for a panel
+    almost nobody has open is the wrong default."""
+    variables = wv.parse(LAZY)
+    assert wv.evaluate(variables, {"v_region": "north"}) == wv.evaluate(
+        variables, {"v_region": "north"}, timings={}
+    )

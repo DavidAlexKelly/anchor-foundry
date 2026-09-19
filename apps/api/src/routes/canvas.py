@@ -179,11 +179,20 @@ class EvaluateVariablesIn(BaseModel):
     #: Trusting the client is the same size of thing as `bound` and `held`
     #: above: what it buys a caller is a smaller answer about its own browser.
     visible: list[str] | None = None
+    #: Whether to measure (§394). Off by default: every caller but the
+    #: Performance Profiler wants the values and nothing else.
+    profile: bool = False
 
 
 class EvaluateVariablesOut(BaseModel):
     values: dict[str, Any]
     order: list[str]
+    #: p.178's "breakdown of load time by widgets and variables", the variable
+    #: half (§394). Milliseconds each variable took *this* resolve, and only
+    #: when the caller asked - `None` rather than `{}` for a resolve that was
+    #: not measured, because an empty breakdown is a real answer (a module
+    #: showing nothing) and "not measured" is not an answer at all.
+    timings: dict[str, float] | None = None
 
 
 def _out(row: dict[str, Any]) -> CanvasAppDetail:
@@ -746,6 +755,7 @@ async def evaluate_variables(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
     try:
+        measured: dict[str, float] | None = {} if body.profile else None
         resolved = variables_service.evaluate(
             variables,
             body.values,
@@ -762,6 +772,7 @@ async def evaluate_variables(
             # filter - is over a graph this service already understands, and a
             # second walker of it would be the copy that disagrees.
             only=_only_visible(body, document, variables),
+            timings=measured,
         )
     except variables_service.VariableError as exc:
         # Not the same failure, and not the same fault. The document is fine;
@@ -773,7 +784,9 @@ async def evaluate_variables(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
     return EvaluateVariablesOut(
-        values=resolved, order=variables_service.evaluation_order(variables)
+        values=resolved,
+        order=variables_service.evaluation_order(variables),
+        timings=measured,
     )
 
 
@@ -905,6 +918,7 @@ async def evaluate_published_variables(
     except variables_service.VariableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     try:
+        measured: dict[str, float] | None = {} if body.profile else None
         resolved = variables_service.evaluate(
             variables,
             body.values,
@@ -921,6 +935,7 @@ async def evaluate_published_variables(
             # filter - is over a graph this service already understands, and a
             # second walker of it would be the copy that disagrees.
             only=_only_visible(body, document, variables),
+            timings=measured,
         )
     except variables_service.VariableError as exc:
         # The values, not the document - see the note on the project-scoped one.
@@ -928,7 +943,9 @@ async def evaluate_published_variables(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
     return EvaluateVariablesOut(
-        values=resolved, order=variables_service.evaluation_order(variables)
+        values=resolved,
+        order=variables_service.evaluation_order(variables),
+        timings=measured,
     )
 
 

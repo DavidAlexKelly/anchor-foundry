@@ -38,6 +38,7 @@ import { asPageId, pageState, type PageOverride } from "./page-selection";
 import { heldFor, remember, request, requested, settled } from "./recompute";
 import { defaultPageNode, pageNodeFor } from "./routing";
 import { visibleNodes } from "./visible-nodes";
+import { useProfiler } from "./ProfilerRecorder";
 import { RoutingSync } from "./RoutingSync";
 import { StateBar } from "./StateBar";
 
@@ -196,6 +197,11 @@ export function VariableBridge({
   // answer differently and re-resolve for nothing.
   const visibleKey = visible ? [...visible].sort().join(",") : "";
 
+  // p.178's variable half (§394). Asking the server to measure only when a
+  // profiler is listening, because every other resolve wants the values and
+  // nothing else.
+  const profiler = useProfiler();
+
   const resolve = useMutation({
     mutationFn: (raw: Record<string, unknown>) => {
       const ticket = ++latest.current;
@@ -203,9 +209,9 @@ export function VariableBridge({
       const held = heldFor(declared, heldRef.current, askRef.current);
       return (published
         ? canvasApi.evaluatePublishedVariables(
-          workspaceId, appId, raw, bound, held, asks, visible)
+          workspaceId, appId, raw, bound, held, asks, visible, profiler.on)
         : canvasApi.evaluateVariables(
-          workspaceId, projectId, appId, raw, bound, held, asks, visible))
+          workspaceId, projectId, appId, raw, bound, held, asks, visible, profiler.on))
         .then((data) => ({ data, ticket, held, asks }));
     },
     onSuccess: ({ data, ticket, held, asks }) => {
@@ -224,6 +230,17 @@ export function VariableBridge({
       setResolved((current) =>
         visible ? { ...current, ...data.values } : data.values);
       setPending(false);
+      // **Named from the declarations, not from the id.** A breakdown of
+      // `v_7f3a` is a list somebody has to go and decode; the author called it
+      // something, and that is what a panel diagnosing a slow module has to
+      // say. An id with no declaration left is shown as itself rather than
+      // dropped - a row nobody can name is still a row that took time.
+      if (data.timings) {
+        profiler.recordVariables(
+          data.timings,
+          (id) => declared[id]?.label ?? id,
+        );
+      }
     },
     onError: () => setPending(false),
   });

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import Any
 
 KINDS = (
@@ -1368,6 +1369,7 @@ def evaluate(
     recompute_now: frozenset[str] = frozenset(),
     property_types: "dict[str, dict[str, str]] | None" = None,
     only: "frozenset[str] | None" = None,
+    timings: "dict[str, float] | None" = None,
 ) -> dict[str, Any]:
     """Resolve every variable, computing derived ones from their inputs.
 
@@ -1420,6 +1422,24 @@ def evaluate(
     filter - is the part that is easy to get wrong, and it is done once, here,
     over a graph this module already understands.
 
+    `timings` is the Performance Profiler's half of p.178 (§394): pass a dict
+    and each variable's own compute time lands in it, in milliseconds.
+
+    **An out-parameter rather than a second return value**, and the reason is
+    that it makes measuring opt-in at the call site. Every caller but the
+    profiler wants the values and nothing else; a changed return type would
+    make all of them handle a number none of them asked for, and a
+    measurement this module took unconditionally would be a cost paid on every
+    resolve for a panel almost nobody has open.
+
+    **And it is measured here rather than inferred from the network**, which is
+    the one place this build diverges from p.177's method on purpose. Foundry
+    records network requests; this platform resolves the whole visible closure
+    in *one* request, so a network measurement could only ever report a single
+    number for the lot. The evaluator knows which variable it is computing and
+    when, so the breakdown p.178 asks for is exact here rather than
+    apportioned.
+
     `recompute_now` is p.85's event arriving: the ids the caller is explicitly
     asking to recompute this time, whatever it is holding for them. **It is a
     separate argument rather than an absence from `held`**, and that is not
@@ -1433,6 +1453,7 @@ def evaluate(
     for vid in evaluation_order(variables):
         if only is not None and vid not in only:
             continue
+        started = perf_counter() if timings is not None else 0.0
         variable = variables[vid]
         if vid in bound:
             # No fallback to `variable.default`, deliberately. p.127: "default
@@ -1442,6 +1463,8 @@ def evaluate(
             # is genuinely unset - and answering that with the child's default
             # would be the child's definition winning after all.
             resolved[vid] = values.get(vid)
+            if timings is not None:
+                timings[vid] = (perf_counter() - started) * 1000
             continue
         # p.76's two non-automatic behaviours. Checked before the static
         # branch, because only a *derived* variable can carry one - a static
@@ -1467,6 +1490,8 @@ def evaluate(
                 )
             else:
                 resolved[vid] = None
+            if timings is not None:
+                timings[vid] = (perf_counter() - started) * 1000
             continue
         if variable.derivation is None:
             # An object-set variable resolves to its *definition*, not to rows.
@@ -1478,10 +1503,14 @@ def evaluate(
                 if variable.object_set is not None
                 else values.get(vid, variable.default)
             )
+            if timings is not None:
+                timings[vid] = (perf_counter() - started) * 1000
             continue
         resolved[vid] = _apply(
             variable, [resolved[i] for i in variable.derivation.inputs], property_types
         )
+        if timings is not None:
+            timings[vid] = (perf_counter() - started) * 1000
     return resolved
 
 
