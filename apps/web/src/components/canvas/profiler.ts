@@ -223,13 +223,21 @@ export function keyName(key: readonly unknown[]): string {
  * one, because that is the load the reader can still do something about; the
  * *start* stays at the first, so the timeline keeps saying when this thing
  * first appeared rather than sliding right on every recompute.
+ *
+ * **And the page stays with the start, for the same reason.** A row is "this
+ * thing, first seen here"; keeping its original moment while letting its page
+ * follow the latest reload would be half of each. It shows up immediately:
+ * opening an overlay recomputes the variables on the page underneath, so a
+ * row that took the newest page would move page one's costs under the overlay
+ * and leave "what did page one cost" unanswerable - which is the question the
+ * filter exists for.
  */
 export function merge(current: readonly LoadEvent[], row: LoadEvent): LoadEvent[] {
   const at = current.findIndex((e) => e.id === row.id && e.kind === row.kind);
   if (at < 0) return [...current, row];
   const previous = current[at]!;
   const next = [...current];
-  next[at] = { ...row, loads: previous.loads + 1, at: previous.at };
+  next[at] = { ...row, loads: previous.loads + 1, at: previous.at, page: previous.page };
   return next;
 }
 

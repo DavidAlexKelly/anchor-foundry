@@ -434,9 +434,11 @@ def test_an_overlay_is_what_triggered_a_load_opened_over_a_page(page, two_pages)
     # Two layouts have triggered loads, so the filter means something. The last
     # option is the overlay, and filtering to it must leave the page's loads
     # out - which is only true if the overlay was recorded as the trigger.
+    # Selected by value rather than by index: the options are ordered by which
+    # layout triggered something first, so an index is a guess about timing.
     chooser = page.get_by_test_id("profiler-page")
     expect(chooser).to_be_visible()
-    chooser.select_option(index=2)
+    chooser.select_option("ov")
     expect(breakdown).to_contain_text("Overlay value")
     expect(breakdown).not_to_contain_text("First page value")
 

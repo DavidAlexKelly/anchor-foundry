@@ -226,6 +226,16 @@ describe("a reload folds into its row", () => {
     expect(rows[0]?.ms).toBe(30);
   });
 
+  it("keeps the page it was first seen on", () => {
+    // **Found by a probe, not by reasoning.** Opening an overlay recomputes
+    // the variables on the page underneath, so a row taking the newest page
+    // moved page one's costs under the overlay - and "what did page one cost"
+    // became unanswerable, which is the question the filter exists for.
+    let rows = merge([], ev({ id: "v1", page: "pg1" }));
+    rows = merge(rows, ev({ id: "v1", page: "ov" }));
+    expect(rows[0]?.page).toBe("pg1");
+  });
+
   it("keeps the first start, so the timeline does not slide right", () => {
     let rows = merge([], ev({ id: "v1", ms: 10, at: 0 }));
     rows = merge(rows, ev({ id: "v1", ms: 30, at: 500 }));
