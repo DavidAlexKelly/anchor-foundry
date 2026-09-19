@@ -463,14 +463,58 @@ def test_filtering_does_not_move_the_timelines_zero(page, two_pages):
     page.get_by_role("button", name="Second", exact=True).click()
     expect(breakdown).to_contain_text("Second page value", timeout=30000)
 
+    # **Measured before and after, because the claim is that it does not
+    # move.** An absolute threshold cannot tell the two apart: a late load is
+    # near the right-hand end on the full scale *and* near it on a scale made
+    # only of itself. The number that changes under a rescale is this one,
+    # compared with itself.
+    def offset_of(name: str) -> float:
+        return page.evaluate(
+            """(wanted) => {
+                const rows = [...document.querySelectorAll(
+                    '[data-testid=profiler-timeline] li')];
+                const row = rows.find((li) => li.textContent.includes(wanted));
+                return row ? parseFloat(row.querySelector(
+                    '.canvas-profiler-span').style.left) : -1;
+            }""",
+            name,
+        )
+
+    before = offset_of("Second page value")
+    assert before > 0, "the second page's bar should not start at the very left"
+
     page.get_by_test_id("profiler-search").fill("Second page value")
     expect(breakdown).to_contain_text("Second page value")
-    bar = page.locator(".canvas-profiler-span").first
-    expect(bar).to_be_visible()
-    left = page.evaluate(
-        "() => parseFloat(document.querySelector('.canvas-profiler-span').style.left)"
+    expect(breakdown).not_to_contain_text("First page value")
+    after = offset_of("Second page value")
+    assert abs(after - before) < 1.0, (
+        f"the bar moved from {before}% to {after}% when the panel was filtered - "
+        "the timeline rescaled to what is shown, so a late load now reads as "
+        "having happened at a different time than it did"
     )
-    assert left > 5, (
-        f"the filtered bar starts at {left}% - the timeline rescaled to what is "
-        "shown, so a late load now reads as having happened at start-up"
-    )
+
+
+def test_a_request_is_attributed_to_the_page_that_triggered_it(page, two_pages):
+    """The *request* half of the filter, which the variable tests do not reach.
+
+    Both kinds of row carry a page and they get it from different places: a
+    variable's comes from the bridge with the resolve, a request's from the
+    recorder's map of in-flight fetches. Blanking the second passed every test
+    here, because filtering to a page still had that page's variables to show.
+    """
+    open_profiler_tab(page, two_pages)
+    page.get_by_test_id("profiler-enter").click()
+    expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
+    breakdown = page.get_by_test_id("profiler-breakdown")
+    expect(breakdown).to_contain_text("First page value", timeout=30000)
+    # The table on page one issues queries, so page one has requests of its own.
+    expect(breakdown).to_contain_text("Request", timeout=30000)
+
+    page.get_by_role("button", name="Detail", exact=True).click()
+    expect(breakdown).to_contain_text("Overlay value", timeout=30000)
+
+    page.get_by_test_id("profiler-page").select_option("pg1")
+    # Filtered to the page the table is on, its requests are still here - which
+    # is only true if a request remembered where it started.
+    expect(breakdown).to_contain_text("Request")
+    expect(breakdown).not_to_contain_text("Overlay value")

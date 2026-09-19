@@ -210,10 +210,18 @@ export function VariableBridge({
   // **Below `useProfiler` rather than beside the page state**, which is where
   // it was first written: `profiler` is declared here, and a hook referencing
   // it earlier is a temporal dead zone away from a runtime error.
+  //
+  // **One expression, two readers.** The recorder watches the query cache and
+  // needs to be *told* which layout is current; a variable resolve is sent
+  // from here and carries it explicitly. Both are the same question, and
+  // writing `overlay ?? page` at each of them is the shape §292 is about -
+  // a mutation that changed one of the two left the other answering
+  // correctly, which is how the duplication was found.
+  const currentLayout = overlay ?? page;
   useEffect(() => {
-    profiler.setPage(overlay ?? page);
+    profiler.setPage(currentLayout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overlay, page]);
+  }, [currentLayout]);
 
   const resolve = useMutation({
     mutationFn: (raw: Record<string, unknown>) => {
@@ -222,7 +230,7 @@ export function VariableBridge({
       // than read when the answer lands, for the reason the recorder's
       // `started` map gives: a resolve triggered by page one and answered
       // after somebody opened an overlay was still triggered by page one.
-      const from = overlay ?? page;
+      const from = currentLayout;
       const asks = requested(declared, askRef.current);
       const held = heldFor(declared, heldRef.current, askRef.current);
       return (published
