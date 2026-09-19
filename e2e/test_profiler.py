@@ -324,6 +324,10 @@ def test_showing_the_second_page_adds_its_variable(page, two_pages):
     expect(page.get_by_test_id("profiler-breakdown")).to_contain_text(
         "First page value", timeout=30000)
 
-    page.get_by_role("button", name="Second").click()
+    # `exact=True`, because profiler mode keeps the builder chrome and the
+    # layout tree draws a row per node - so "Second" also matches the tree's
+    # entries for the button and for the text that mentions the variable
+    # (§337: name the control, not its neighbourhood).
+    page.get_by_role("button", name="Second", exact=True).click()
     expect(page.get_by_test_id("profiler-breakdown")).to_contain_text(
         "Second page value", timeout=30000)
