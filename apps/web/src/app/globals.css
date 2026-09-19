@@ -3085,4 +3085,16 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    narrow column can round to nothing, and a row with a real count and no bar
    reads as a row with no count. */
 .canvas-metrics-bar { display: block; height: 8px; min-width: 2px; background: var(--accent); }
+
+/* p.213's Used colors panel (§398). A swatch, the hex, and where it is used. */
+.canvas-colours { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.canvas-colours-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.canvas-colours-row { display: flex; align-items: center; gap: 6px; }
+/* Bordered rather than bare: a swatch of the panel's own background would be
+   invisible, which is exactly the colour somebody is most likely hunting. */
+.canvas-colours-swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--line); flex: none; }
+.canvas-colours-hex { font-family: var(--font-mono); }
+.canvas-colours-uses { list-style: none; margin: 2px 0 0 22px; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+.canvas-colours-uses li { display: flex; gap: 6px; justify-content: space-between; }
+.canvas-colours-use-node { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .field-inline { display: flex; align-items: center; gap: 6px; font-size: 12px; }
