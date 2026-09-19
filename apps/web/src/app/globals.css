@@ -3065,3 +3065,5 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-profiler-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .canvas-profiler-table th, .canvas-profiler-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); }
 .canvas-profiler-table tr.warn td { color: var(--warn, #c77700); }
+.canvas-profiler-controls { display: flex; gap: 8px; align-items: flex-end; }
+.canvas-profiler-controls .field { flex: 1; min-width: 0; }

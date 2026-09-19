@@ -331,3 +331,70 @@ def test_showing_the_second_page_adds_its_variable(page, two_pages):
     page.get_by_role("button", name="Second", exact=True).click()
     expect(page.get_by_test_id("profiler-breakdown")).to_contain_text(
         "Second page value", timeout=30000)
+
+
+# ---- p.178's interaction list (§395) -----------------------------------------
+#
+# > "You can also filter widget and variable loads based on the page or overlay
+# > that triggered them, search for captured load events by widget or variable
+# > name, and clear all captured load events in the profiler." (p.178)
+#
+# Clearing is tested above. These are the other two, and they need a module
+# whose loads come from more than one page - which is what makes the filter a
+# control rather than a label.
+def test_loads_can_be_filtered_by_the_page_that_triggered_them(page, two_pages):
+    """p.178's filter. The picker only offers pages that actually triggered
+    something, so this navigates first - a module that has only ever loaded on
+    one page has nothing to filter between, and offering a choice that cannot
+    change the panel is a control that looks like it works (§214).
+    """
+    open_profiler_tab(page, two_pages)
+    page.get_by_test_id("profiler-enter").click()
+    expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("profiler-breakdown")).to_contain_text(
+        "First page value", timeout=30000)
+
+    page.get_by_role("button", name="Second", exact=True).click()
+    breakdown = page.get_by_test_id("profiler-breakdown")
+    expect(breakdown).to_contain_text("Second page value", timeout=30000)
+
+    # Both pages have now triggered loads, so the filter appears and means
+    # something. Picking the second leaves only what it triggered.
+    chooser = page.get_by_test_id("profiler-page")
+    expect(chooser).to_be_visible()
+    chooser.select_option(index=2)
+    expect(breakdown).to_contain_text("Second page value")
+    expect(breakdown).not_to_contain_text("First page value")
+
+
+def test_events_can_be_searched_by_name(page, two_pages):
+    """p.178's search, over the name because that is what a reader can see.
+
+    The positive match comes first (§318): asserting that something is gone is
+    only meaningful once the panel has been shown to still be drawing.
+    """
+    open_profiler_tab(page, two_pages)
+    page.get_by_test_id("profiler-enter").click()
+    expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
+    breakdown = page.get_by_test_id("profiler-breakdown")
+    expect(breakdown).to_contain_text("First page value", timeout=30000)
+
+    page.get_by_test_id("profiler-search").fill("first")
+    expect(breakdown).to_contain_text("First page value")
+    expect(breakdown).not_to_contain_text("The rows")
+
+
+def test_a_search_that_matches_nothing_says_so_rather_than_looking_empty(
+    page, two_pages
+):
+    """**The sentence that keeps the panel honest.** "Nothing has loaded yet"
+    and "no events match this filter" are different facts, and showing the
+    first for the second sends somebody to diagnose a module that is fine."""
+    open_profiler_tab(page, two_pages)
+    page.get_by_test_id("profiler-enter").click()
+    expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("profiler-breakdown")).to_be_visible(timeout=30000)
+
+    page.get_by_test_id("profiler-search").fill("nothing is called this")
+    expect(page.get_by_test_id("profiler-empty")).to_contain_text("match this filter")
+    expect(page.get_by_test_id("profiler-breakdown")).to_have_count(0)

@@ -44,6 +44,15 @@ export interface LoadEvent {
    * events"), and a row that collapsed them would hide the thing most worth
    * finding: something loading forty times. */
   loads: number;
+  /** p.178's "the page or overlay that triggered them" (§395): the layout node
+   * that was on screen when this load started, or null when nothing was.
+   *
+   * **The page at the time, captured rather than looked up.** A load's
+   * triggering page is a fact about a moment, and by the time somebody filters
+   * the panel the reader is usually somewhere else entirely - asking "which
+   * page is showing" then would attribute every earlier load to wherever they
+   * happen to be standing. */
+  page: string | null;
 }
 
 /**
@@ -222,4 +231,84 @@ export function merge(current: readonly LoadEvent[], row: LoadEvent): LoadEvent[
   const next = [...current];
   next[at] = { ...row, loads: previous.loads + 1, at: previous.at };
   return next;
+}
+
+
+// ---- p.178's interaction list (§395) ----------------------------------------
+//
+// > "You can also filter widget and variable loads based on the page or
+// > overlay that triggered them, search for captured load events by widget or
+// > variable name, and clear all captured load events in the profiler." (p.178)
+//
+// Clearing is the recorder's (§394). These two are decisions about what a
+// reader is asking for, so they are here.
+
+/** How the filter is set: a layout node id, or every page. */
+export type PageFilter = string | null;
+
+/**
+ * The pages and overlays that actually triggered something, for the picker.
+ *
+ * **Derived from the events rather than from the layout**, which is the whole
+ * design of this control. A module with twelve pages that has only ever loaded
+ * on two offers two, because p.178 filters *loads* — and a picker listing ten
+ * choices that all yield an empty panel is a control that looks like it works
+ * (§214). It also means the list grows as a reader navigates, which is exactly
+ * the interaction p.178 describes.
+ *
+ * Ordered by first appearance, so the entry a reader arrived through is first.
+ */
+export function triggeringPages(events: readonly LoadEvent[]): string[] {
+  const seen: string[] = [];
+  for (const event of events) {
+    if (event.page !== null && !seen.includes(event.page)) seen.push(event.page);
+  }
+  return seen;
+}
+
+/**
+ * p.178's two narrowings, applied together.
+ *
+ * **One function rather than two composed at the call site**, because they are
+ * one question — "which of these am I looking at" — and a panel that filtered
+ * in one place and searched in another would eventually disagree about which
+ * came first, which matters for the count shown beside them.
+ *
+ * The search is over the *name*, which is what p.178 says ("by widget or
+ * variable name") and what the reader can see. Matching an id would let a
+ * search succeed against a string nowhere on screen.
+ *
+ * Case-insensitive and trimmed: a reader typing a variable's label copies it
+ * from a panel that title-cases, and a search that missed on capitalisation
+ * would read as the event not being recorded.
+ */
+export function narrow(
+  events: readonly LoadEvent[],
+  { page = null, search = "" }: { page?: PageFilter; search?: string } = {},
+): LoadEvent[] {
+  const needle = search.trim().toLowerCase();
+  return events.filter((event) => {
+    if (page !== null && event.page !== page) return false;
+    if (needle === "" ) return true;
+    return event.name.toLowerCase().includes(needle);
+  });
+}
+
+/**
+ * What the panel says when a narrowing has hidden everything.
+ *
+ * **Not the same sentence as "nothing has loaded yet"**, and the difference is
+ * the whole point: one means the module is still starting, the other means the
+ * reader is looking through a filter they set. Showing the first for the
+ * second sends somebody to diagnose a module that is fine.
+ *
+ * Null when there is something to show, so the caller draws the table instead.
+ */
+export function emptyReason(
+  all: readonly LoadEvent[],
+  shown: readonly LoadEvent[],
+): string | null {
+  if (shown.length > 0) return null;
+  if (all.length === 0) return "Nothing has loaded yet.";
+  return "No load events match this filter.";
 }

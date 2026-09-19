@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
-  breakdown, durationLabel, isSlow, keyName, type LoadEvent, merge,
-  profilerHref, profilerOn, span, summary, timeline, totalMs,
+  breakdown, durationLabel, emptyReason, isSlow, keyName, type LoadEvent, merge,
+  narrow, profilerHref, profilerOn, span, summary, timeline, totalMs,
+  triggeringPages,
 } from "./profiler";
 
 function ev(over: Partial<LoadEvent> = {}): LoadEvent {
-  return { id: "v1", kind: "variable", name: "One", ms: 10, at: 0, loads: 1, ...over };
+  return {
+    id: "v1", kind: "variable", name: "One", ms: 10, at: 0, loads: 1,
+    page: null, ...over,
+  };
 }
 
 describe("the total", () => {
@@ -238,5 +242,83 @@ describe("a reload folds into its row", () => {
     const given = [ev({ id: "v1" })];
     merge(given, ev({ id: "v1" }));
     expect(given[0]?.loads).toBe(1);
+  });
+});
+
+
+// ---- p.178's interaction list (§395) ----------------------------------------
+describe("which pages the filter offers", () => {
+  it("offers only the ones that actually triggered something", () => {
+    // **Derived from the events, not from the layout.** A module with twelve
+    // pages that has only ever loaded on two offers two — a picker listing ten
+    // choices that all yield an empty panel is a control that looks like it
+    // works (§214).
+    const pages = triggeringPages([
+      ev({ id: "a", page: "p1" }),
+      ev({ id: "b", page: "p2" }),
+      ev({ id: "c", page: "p1" }),
+    ]);
+    expect(pages).toEqual(["p1", "p2"]);
+  });
+
+  it("keeps the order they first appeared in", () => {
+    // So the entry a reader arrived through is first.
+    expect(triggeringPages([ev({ id: "a", page: "z" }), ev({ id: "b", page: "a" })]))
+      .toEqual(["z", "a"]);
+  });
+
+  it("ignores loads that belong to no page", () => {
+    expect(triggeringPages([ev({ page: null })])).toEqual([]);
+  });
+});
+
+describe("narrowing what is shown", () => {
+  const ROWS = [
+    ev({ id: "a", name: "Region filter", page: "p1" }),
+    ev({ id: "b", name: "Order rows", page: "p1" }),
+    ev({ id: "c", name: "Region total", page: "p2" }),
+  ];
+
+  it("shows everything when nothing is set", () => {
+    expect(narrow(ROWS)).toHaveLength(3);
+  });
+
+  it("filters by the page that triggered the load", () => {
+    expect(narrow(ROWS, { page: "p2" }).map((r) => r.id)).toEqual(["c"]);
+  });
+
+  it("searches the name, which is what a reader can see", () => {
+    // p.178 says "by widget or variable name". Matching an id would let a
+    // search succeed against a string nowhere on screen.
+    expect(narrow(ROWS, { search: "region" }).map((r) => r.id)).toEqual(["a", "c"]);
+  });
+
+  it("does not miss on capitalisation or stray spaces", () => {
+    // A reader copies a label out of a panel that title-cases; a search that
+    // missed would read as the event not having been recorded.
+    expect(narrow(ROWS, { search: "  ORDER " }).map((r) => r.id)).toEqual(["b"]);
+  });
+
+  it("applies both at once", () => {
+    // One question, not two: "which of these am I looking at".
+    expect(narrow(ROWS, { page: "p1", search: "region" }).map((r) => r.id)).toEqual(["a"]);
+  });
+
+  it("an empty search is not a filter", () => {
+    expect(narrow(ROWS, { search: "   " })).toHaveLength(3);
+  });
+});
+
+describe("what an empty panel says", () => {
+  it("tells a starting module apart from a filtered one", () => {
+    // **The distinction the whole function exists for.** One means the module
+    // is still coming up; the other means the reader set a filter. Showing the
+    // first for the second sends somebody to diagnose a module that is fine.
+    expect(emptyReason([], [])).toBe("Nothing has loaded yet.");
+    expect(emptyReason([ev()], [])).toBe("No load events match this filter.");
+  });
+
+  it("says nothing when there is something to draw", () => {
+    expect(emptyReason([ev()], [ev()])).toBeNull();
   });
 });

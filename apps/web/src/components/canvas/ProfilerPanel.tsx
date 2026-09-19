@@ -17,13 +17,34 @@
  * attributable to a component. `profiler.ts` sets out why.
  */
 
+import { useState } from "react";
 import {
-  breakdown, durationLabel, isSlow, span, summary, timeline, totalMs,
+  breakdown, durationLabel, emptyReason, isSlow, narrow, span, summary,
+  timeline, totalMs, triggeringPages,
 } from "./profiler";
 import { useProfiler } from "./ProfilerRecorder";
 
-export function ProfilerPanel({ href }: { href: string }) {
+export function ProfilerPanel({
+  href,
+  labelFor,
+}: {
+  href: string;
+  /** What to call a layout node in the filter. The panel does not have the
+   * document; the builder does. */
+  labelFor?: (nodeId: string) => string;
+}) {
   const { on, events, clear } = useProfiler();
+  // p.178's two narrowings. Local to the panel: they are how somebody is
+  // *looking* at a recording, not part of it, so clearing the events must not
+  // reset them and leaving the tab must not remember them.
+  const [page, setPage] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const shown = narrow(events, { page, search });
+  const nothing = emptyReason(events, shown);
+  // **The scale is the whole run, not the filtered rows.** A timeline whose
+  // zero moved when somebody filtered would make two pages' loads look like
+  // they happened at the same moment - and comparing them is the reason to
+  // filter in the first place.
   const total = totalMs(events);
 
   if (!on) {
@@ -59,10 +80,53 @@ export function ProfilerPanel({ href }: { href: string }) {
       </div>
 
       {events.length > 0 && (
+        <div className="canvas-profiler-controls">
+          {/* p.178: "filter widget and variable loads based on the page or
+              overlay that triggered them". Offered only when more than one
+              layout has triggered anything — a picker with one choice is a
+              control that cannot change what you see. */}
+          {triggeringPages(events).length > 1 && (
+            <label className="field">
+              <span className="field-label">Triggered by</span>
+              <select
+                data-testid="profiler-page"
+                value={page ?? ""}
+                onChange={(e) => setPage(e.target.value || null)}
+              >
+                <option value="">Every page</option>
+                {triggeringPages(events).map((nodeId) => (
+                  <option key={nodeId} value={nodeId}>
+                    {labelFor?.(nodeId) ?? nodeId}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="field">
+            <span className="field-label">Search</span>
+            <input
+              data-testid="profiler-search"
+              type="search"
+              value={search}
+              placeholder="Widget or variable name"
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+        </div>
+      )}
+
+      {nothing !== null && events.length > 0 && (
+        // Not the same sentence as "nothing has loaded yet": one means the
+        // module is starting, the other means the reader set a filter. Showing
+        // the first for the second sends somebody to diagnose a healthy module.
+        <p className="soft" data-testid="profiler-empty">{nothing}</p>
+      )}
+
+      {shown.length > 0 && (
         <>
           <p className="field-label">Timeline</p>
           <ul className="canvas-profiler-timeline" data-testid="profiler-timeline">
-            {timeline(events).map((event) => {
+            {timeline(shown).map((event) => {
               const bar = span(event, total);
               return (
                 <li key={`${event.kind}:${event.id}`}>
@@ -90,7 +154,7 @@ export function ProfilerPanel({ href }: { href: string }) {
               </tr>
             </thead>
             <tbody>
-              {breakdown(events).map((event) => (
+              {breakdown(shown).map((event) => (
                 <tr key={`${event.kind}:${event.id}`} className={isSlow(event) ? "warn" : ""}>
                   <td>{event.name}</td>
                   <td className="soft">
