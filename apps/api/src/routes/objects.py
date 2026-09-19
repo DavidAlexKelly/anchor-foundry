@@ -4647,6 +4647,152 @@ async def _with_derived(
     return {**row, "properties": values}
 
 
+class ObjectSetSeriesIn(ObjectSetIn):
+    property_api_name: str
+    interval: str = "none"
+    aggregate: str = "avg"
+
+
+class SeriesForKey(BaseModel):
+    """One row's series, keyed the way the table keys its rows."""
+    primary_key: str
+    series_id: str
+    points: list[SeriesPoint]
+
+
+class ObjectSetSeriesOut(BaseModel):
+    property_api_name: str
+    interval: str
+    aggregate: str
+    rows: list[SeriesForKey]
+    truncated: bool
+    """True when the dataset engine cut the read short. Per *query*, not per
+    series: a caller that draws a sparkline from a truncated read is drawing a
+    partial history and should be able to say so."""
+
+
+@router.post("/object-sets/series-points", response_model=ObjectSetSeriesOut)
+async def object_set_series_points(
+    body: ObjectSetSeriesIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ObjectSetSeriesOut:
+    """Every visible row's series, in one read (`workshop` p.583).
+
+    p.583 describes the Object Table column this serves: *"two visualizations
+    for each time series: the latest value of the time series on the left, and
+    a sparkline showing the history of the time series on the right."* A page
+    of rows needs a page of series, and asking for them one at a time is 25
+    round trips into the dataset engine to draw 25 thumbnails.
+
+    **It takes the object set, not a list of series ids**, and that is the same
+    rule `instance_series_points` states: a series id is a *value* the caller
+    may not have and must not be able to guess. Re-evaluating the set here
+    means the series read are exactly the series of the objects this caller
+    can already see - and it costs nothing extra, because the paging is the
+    paging the table used.
+
+    **The rows come back keyed by primary key, not by series id.** Two objects
+    may legitimately share a series, and a client matching on the series id
+    would draw one row's line and leave its twin empty.
+    """
+    type_id = object_sets.object_type_id_of(body.definition)
+    # **Refused before anything is read**, not where the SQL is built. Down
+    # there the check only runs when the property happens to be mapped, so a
+    # module asking for a bucket nobody supports would get a cheerful 200 on
+    # an unmapped type and a 422 on a mapped one - the same request answered
+    # two ways by something the caller cannot see.
+    if body.interval not in time_series_service.INTERVALS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"unknown interval {body.interval!r}",
+        )
+    if body.aggregate not in time_series_service.AGGREGATES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"unknown aggregate {body.aggregate!r}",
+        )
+    storage = _dataset_storage()
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        property_types = await _declared_types(conn, type_id)
+        definition = object_sets.parse(body.definition, property_types=property_types)
+        sort = object_sets.parse_sorts(body.sort, property_types=property_types)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        filters, empty = await _resolve_traversal(
+            conn, store, prefix, access.workspace_id, definition
+        )
+        rows: list[dict[str, Any]] = []
+        if not empty:
+            rows, _ = await store.evaluate_object_set(
+                search_prefix=prefix,
+                object_type_id=definition.object_type_id,
+                filters=filters,
+                limit=body.limit,
+                offset=body.offset,
+                sort=sort,
+            )
+        by_series: dict[str, list[str]] = {}
+        for row in rows:
+            value = (_jsonb(row["properties"]) or {}).get(body.property_api_name)
+            if value is None or str(value).strip() == "":
+                continue
+            by_series.setdefault(str(value), []).append(str(row["primary_key"]))
+        # **Every source's mapping, not one.** A type can be fed by several
+        # sources and each maps its own dataset (db 0047). The page of rows
+        # does not say which source each came from - `evaluate_object_set`
+        # carries no `source_id` - so all the mapped datasets are read and the
+        # results merged. That is safe rather than merely convenient: a series
+        # id belonging to one source's dataset matches nothing in another's.
+        # Usually there is exactly one, and this is one query and one read.
+        mappings = (
+            await time_series_service.series_for_type(
+                conn, definition.object_type_id, body.property_api_name
+            )
+            if by_series else []
+        )
+
+    out: list[SeriesForKey] = []
+    truncated = False
+    found: dict[str, list[SeriesPoint]] = {}
+    for series in mappings:
+        try:
+            sql = time_series_service.points_for_many_sql(
+                key_column=str(series["key_column"]),
+                timestamp_column=str(series["timestamp_column"]),
+                value_column=str(series["value_column"]),
+                series_ids=list(by_series),
+                interval=body.interval,
+                aggregate=body.aggregate,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        local_path = await anyio.to_thread.run_sync(
+            storage.local_path, str(series["s3_location"])
+        )
+        result = await anyio.to_thread.run_sync(engine.query, local_path, sql)
+        truncated = truncated or result.truncated
+        for series_id, at, value in result.rows:
+            found.setdefault(str(series_id), []).append(SeriesPoint(at=at, value=value))
+
+    # Every row that *has* a series id gets a row back, points or not. A row
+    # missing from the answer is indistinguishable from a row still loading,
+    # and the column would show a spinner that never resolves.
+    out.extend(
+        SeriesForKey(primary_key=key, series_id=series_id, points=found.get(series_id, []))
+        for series_id, keys in by_series.items() for key in keys
+    )
+    return ObjectSetSeriesOut(
+        property_api_name=body.property_api_name,
+        interval=body.interval,
+        aggregate=body.aggregate,
+        rows=out,
+        truncated=truncated,
+    )
+
+
 @router.post("/object-sets/evaluate", response_model=ObjectSetOut)
 async def evaluate_object_set(
     body: ObjectSetIn,
