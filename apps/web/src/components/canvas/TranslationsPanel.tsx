@@ -34,10 +34,15 @@ type Settings = NonNullable<WorkshopModule["translations"]>;
 export function TranslationsPanel({
   translations,
   onChange,
+  onPreview,
   readOnly = false,
 }: {
   translations: Settings;
   onChange: (next: Settings) => void;
+  /** p.211's preview, opened on the language showing. Handed up rather than
+   * rendered here: the preview needs the live layout, which only the editor
+   * this panel sits beside can serialise. */
+  onPreview?: (language: string) => void;
   readOnly?: boolean;
 }) {
   // The **live** document, like the Used colours panel and for the same
@@ -148,6 +153,22 @@ export function TranslationsPanel({
           ))}
         </select>
       </label>
+
+      {/* p.211: "previewed directly in the module in edit mode by navigating
+          to the Translations tab and selecting the configured language of
+          choice". Beside the picker, because the language it previews is the
+          one the picker is on - a preview button somewhere else would leave
+          "which language" to be guessed. */}
+      {onPreview && language !== "" && (
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="tr-preview"
+          onClick={() => onPreview(language)}
+        >
+          Preview the module in {language}
+        </button>
+      )}
 
       {!readOnly && (
         <label className="field">
