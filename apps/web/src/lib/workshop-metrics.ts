@@ -21,7 +21,7 @@
  * bolted on afterwards - it is the difference between a panel that informs and
  * one that misleads about the only thing it reports (§214).
  */
-import type { ModuleActionUsage } from "./types";
+import type { LayoutViewCount, ModuleActionUsage } from "./types";
 
 /** p.188's three windows, in the order the page offers them. */
 export const PERIODS = [7, 30, 90] as const;
@@ -129,4 +129,64 @@ export function usageLabel(row: ModuleActionUsage): string {
   // exactly these references - but a document can arrive from anywhere, and a
   // blank cell reads as a bug rather than as an empty list.
   return parts.length === 0 ? "not used" : parts.join(", ");
+}
+
+// ---- layout views (§397; p.186-188) -----------------------------------------
+
+/**
+ * What the layout section says when there is nothing in it.
+ *
+ * **Three states, not two**, and collapsing any pair of them misinforms:
+ * tracking is off (nothing is being recorded, and the builder can change
+ * that); tracking is on and nothing has been viewed yet (which for a module
+ * somebody just enabled is the expected answer rather than a finding); or
+ * there is something to draw. A panel that showed "no views" for the first
+ * would report a module as unused when it was never watched.
+ */
+export function viewsEmptyReason(
+  tracking: boolean,
+  rows: readonly LayoutViewCount[],
+): string | null {
+  if (!tracking) {
+    return "Layout views are not being recorded for this module.";
+  }
+  if (rows.length === 0) {
+    return "No layouts have been viewed yet.";
+  }
+  return null;
+}
+
+/** p.186's "total views across all layouts". */
+export function totalViews(rows: readonly LayoutViewCount[]): number {
+  return rows.reduce((sum, row) => sum + row.views, 0);
+}
+
+export function previousViews(rows: readonly LayoutViewCount[]): number {
+  return rows.reduce((sum, row) => sum + row.previous, 0);
+}
+
+/**
+ * What to call a layout, given what the document currently holds.
+ *
+ * **The id is the fallback and it is shown rather than hidden.** A count
+ * recorded against a page that has since been deleted is still true, and
+ * dropping the row would quietly reduce the total; showing the raw id says
+ * "this was viewed and is no longer here", which a builder can act on.
+ */
+export function layoutName(
+  nodeId: string,
+  names: Readonly<Record<string, string>>,
+): string {
+  return names[nodeId] ?? nodeId;
+}
+
+/** The share of the busiest layout, for p.186's list. Relative to the busiest
+ * row for `share`'s reason one section up. */
+export function viewShare(
+  row: LayoutViewCount,
+  rows: readonly LayoutViewCount[],
+): number {
+  const busiest = Math.max(0, ...rows.map((r) => r.views));
+  if (busiest === 0) return 0;
+  return (row.views / busiest) * 100;
 }

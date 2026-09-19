@@ -1152,6 +1152,13 @@ function CanvasBody({
               workspaceId={workspaceId}
               projectId={projectId}
               appId={appId}
+              // Pages and overlays by the names their author gave them. The
+              // panel has the counts and the editor has the tree, so the names
+              // come from here rather than the panel guessing.
+              layoutNames={Object.fromEntries(
+                pageNodes.map((p) => [p.id, p.label]),
+              )}
+              readOnly={!canEdit}
             />
           ) : tab === "profiler" ? (
             // p.177: "enter Edit mode, open the Profiler tab, and select

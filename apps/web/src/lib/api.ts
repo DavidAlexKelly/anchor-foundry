@@ -2341,6 +2341,22 @@ export const canvas = {
         }),
       },
     ),
+  /** p.186's layout views (§397): one page, tab or overlay was looked at.
+   *
+   * **Fire and forget, and failures are swallowed by the caller.** A view
+   * count is not worth a message on somebody's screen, and a module with
+   * tracking off answers 204 anyway - so there is nothing here a viewer
+   * should ever be told about. */
+  recordView: (wid: string, pid: string, appId: string, nodeId: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/views`,
+      { method: "POST", body: JSON.stringify({ node_id: nodeId }) },
+    ),
+  setUsageTracking: (wid: string, pid: string, appId: string, on: boolean) =>
+    request<import("./types").CanvasAppDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/usage-tracking`,
+      { method: "PUT", body: JSON.stringify({ on }) },
+    ),
   /** p.185's Metrics tab (§396). Viewer-level: every number is an aggregate
    * count the caller could already reach through the action list. */
   usageMetrics: (wid: string, pid: string, appId: string, days: number) =>

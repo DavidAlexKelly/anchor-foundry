@@ -244,3 +244,165 @@ def test_a_module_that_runs_nothing_reports_no_actions(
     r = metrics(client, fx, app_id)
     assert r.status_code == 200, r.text
     assert r.json()["actions"] == []
+
+
+# ---- layout views (§397; db 0093; p.186-188) ---------------------------------
+def track(client: TestClient, fx: Fixture, app_id: str, on: bool):
+    return client.put(f"{base(fx)}/{app_id}/usage-tracking",
+                      headers=hdr(fx.editor_sub), json={"on": on})
+
+
+def view(client: TestClient, fx: Fixture, app_id: str, node: str):
+    return client.post(f"{base(fx)}/{app_id}/views",
+                       headers=hdr(fx.viewer_sub), json={"node_id": node})
+
+
+def test_a_view_is_not_recorded_until_a_builder_opts_in(
+    client: TestClient, fx: Fixture, module_with_action
+) -> None:
+    """p.187: "Layout view metrics require builders to opt in."
+
+    **And the request still succeeds.** A module with tracking off is the
+    ordinary case, not an error; a browser that got a 4xx for reporting a page
+    view would log errors on every navigation of every module nobody opted in.
+    """
+    app_id = module_with_action["app_id"]
+    assert view(client, fx, app_id, "pg1").status_code == 204
+    body = metrics(client, fx, app_id).json()
+    assert body["tracking"] is False
+    assert body["layouts"] == []
+
+
+def test_once_tracking_is_on_views_are_counted(
+    client: TestClient, fx: Fixture, module_with_action
+) -> None:
+    app_id = module_with_action["app_id"]
+    assert track(client, fx, app_id, True).status_code == 200
+    view(client, fx, app_id, "pg1")
+    view(client, fx, app_id, "pg1")
+    view(client, fx, app_id, "pg2")
+
+    body = metrics(client, fx, app_id).json()
+    assert body["tracking"] is True
+    counts = {row["node_id"]: row["views"] for row in body["layouts"]}
+    assert counts == {"pg1": 2, "pg2": 1}
+
+
+def test_the_busiest_layout_is_first(
+    client: TestClient, fx: Fixture, module_with_action
+) -> None:
+    """p.186: "the list view breaks down views by individual layout item". A
+    reader opens this asking which part of their module is used."""
+    app_id = module_with_action["app_id"]
+    track(client, fx, app_id, True)
+    view(client, fx, app_id, "quiet")
+    for _ in range(3):
+        view(client, fx, app_id, "busy")
+
+    rows = metrics(client, fx, app_id).json()["layouts"]
+    assert [r["node_id"] for r in rows] == ["busy", "quiet"]
+
+
+def test_turning_tracking_off_stops_counting_and_keeps_what_was_counted(
+    client: TestClient, fx: Fixture, module_with_action
+) -> None:
+    """**Off means stop, not forget.** Deleting what was already recorded would
+    make the toggle destructive, and p.187 describes a switch rather than a
+    purge - a builder turning it off to stop collecting would lose the answer
+    they turned it on for."""
+    app_id = module_with_action["app_id"]
+    track(client, fx, app_id, True)
+    view(client, fx, app_id, "pg1")
+    track(client, fx, app_id, False)
+    view(client, fx, app_id, "pg1")
+
+    body = metrics(client, fx, app_id).json()
+    assert body["tracking"] is False
+    assert {r["node_id"]: r["views"] for r in body["layouts"]} == {"pg1": 1}
+
+
+def test_many_views_of_one_layout_are_one_row(
+    client: TestClient, fx: Fixture, module_with_action
+) -> None:
+    """db 0093's shape: a row per module, layout and day, incremented. A row
+    per *view* would be unbounded and would need a retention sweep this schema
+    does not have."""
+    app_id = module_with_action["app_id"]
+    track(client, fx, app_id, True)
+    for _ in range(5):
+        view(client, fx, app_id, "pg1")
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT count(*), sum(views) FROM canvas_layout_views "
+            " WHERE canvas_app_id = %s AND node_id = 'pg1'",
+            (app_id,),
+        ).fetchone()
+    assert rows == (1, 5)
+
+
+def test_a_view_outside_the_window_is_not_counted(
+    client: TestClient, fx: Fixture, module_with_action
+) -> None:
+    """p.188's periods apply to both halves of the panel."""
+    app_id = module_with_action["app_id"]
+    track(client, fx, app_id, True)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            """INSERT INTO canvas_layout_views (canvas_app_id, node_id, day, views)
+               VALUES (%s, 'old', (now() AT TIME ZONE 'utc')::date - 40, 9)""",
+            (app_id,),
+        )
+    # **Zero this period, not absent.** A page with views last month and none
+    # this one is the most useful row a usage panel has: "this stopped being
+    # used" is what somebody opened the tab to find out, and dropping the row
+    # would leave them with a shorter list and no idea anything was missing.
+    (row,) = metrics(client, fx, app_id, 30).json()["layouts"]
+    assert row["node_id"] == "old"
+    assert row["views"] == 0
+    assert row["previous"] == 9
+    # And inside a window that contains it, it is an ordinary count.
+    assert metrics(client, fx, app_id, 90).json()["layouts"][0]["views"] == 9
+
+
+def test_the_previous_period_is_reported_for_layouts_too(
+    client: TestClient, fx: Fixture, module_with_action
+) -> None:
+    """p.188's percentage change is over both halves, so the prior window has
+    to come back on the row rather than being asked for separately."""
+    app_id = module_with_action["app_id"]
+    track(client, fx, app_id, True)
+    view(client, fx, app_id, "pg1")
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            """INSERT INTO canvas_layout_views (canvas_app_id, node_id, day, views)
+               VALUES (%s, 'pg1', (now() AT TIME ZONE 'utc')::date - 40, 4)""",
+            (app_id,),
+        )
+    # **And a row older than the prior window is outside it**, which is the
+    # half that makes "previous" a period rather than "everything before".
+    # Without it the query can drop its outer bound and no test notices - the
+    # action half has had this case since §396 and the layout half did not.
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            """INSERT INTO canvas_layout_views (canvas_app_id, node_id, day, views)
+               VALUES (%s, 'pg1', (now() AT TIME ZONE 'utc')::date - 100, 99)""",
+            (app_id,),
+        )
+
+    (row,) = metrics(client, fx, app_id, 30).json()["layouts"]
+    assert row["views"] == 1
+    assert row["previous"] == 4, "the prior window is 30 days, not all of history"
+
+
+def test_a_viewer_may_report_a_view_but_not_turn_tracking_on(
+    client: TestClient, fx: Fixture, module_with_action
+) -> None:
+    """Reporting a view is what a reader does by reading; deciding a module
+    records what people look at is a change to the module (p.187: "Open the
+    module in Edit mode")."""
+    app_id = module_with_action["app_id"]
+    assert view(client, fx, app_id, "pg1").status_code == 204
+    r = client.put(f"{base(fx)}/{app_id}/usage-tracking",
+                   headers=hdr(fx.viewer_sub), json={"on": True})
+    assert r.status_code == 403, r.text

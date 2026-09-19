@@ -3481,7 +3481,22 @@ export interface ModuleActionUsage {
   used_by: { node: string; via: string }[];
 }
 
+/** One layout's view count (§397; `workshop` p.186-188). */
+export interface LayoutViewCount {
+  /** The page, tab or overlay node. Not resolved to a name here: a layout the
+   * document no longer has still has a count that was true when it was
+   * recorded, and the panel is what knows the current document. */
+  node_id: string;
+  views: number;
+  previous: number;
+}
+
 export interface ModuleUsageMetrics {
   days: number;
   actions: ModuleActionUsage[];
+  layouts: LayoutViewCount[];
+  /** p.187's opt-in. **What tells "no views" from "we are not counting"** -
+   * different answers, and a panel showing the first for the second would
+   * report a module as unused when it was never watched. */
+  tracking: boolean;
 }
