@@ -51,6 +51,7 @@ import { VariablesPanel } from "@/components/canvas/VariablesPanel";
 import { ProfilerRecorder } from "@/components/canvas/ProfilerRecorder";
 import { MetricsPanel } from "@/components/canvas/MetricsPanel";
 import { ProfilerBanner, ProfilerPanel } from "@/components/canvas/ProfilerPanel";
+import { TranslationPreview } from "@/components/canvas/TranslationPreview";
 import { TranslationsPanel } from "@/components/canvas/TranslationsPanel";
 import { UsedColoursPanel } from "@/components/canvas/UsedColoursPanel";
 import { profilerHref, profilerOn } from "@/components/canvas/profiler";
@@ -858,6 +859,13 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // is the Settings panel's and the tables are written through the API until
   // p.209's Translations tab exists.
   const [translations, setTranslations] = useState(() => translationsOf(undefined));
+  // p.211's preview: the language being previewed and the document as it
+  // stood when preview opened. Held together because a snapshot without a
+  // language is nothing to translate it with, and a language without a
+  // snapshot has nothing to translate.
+  const [previewing, setPreviewing] = useState<
+    { language: string; snapshot: Record<string, unknown> } | null
+  >(null);
   const savedVersion = appQuery.data?.current_version;
   useEffect(() => {
     if (!appQuery.data) return;
@@ -901,6 +909,36 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   }
 
   return (
+    <>
+    {/* p.211's preview, **beside** the builder rather than instead of it.
+        The builder's Editor stays mounted below, so its tree, its selection
+        and everything the author has not saved are still there when they
+        exit - which is the hazard §400 refused to ship into. Its own Editor
+        is `enabled={false}` and has no Save, so the translated nodes cannot
+        reach the document. */}
+    {previewing && (
+      <TranslationPreview
+        snapshot={previewing.snapshot}
+        language={previewing.language}
+        table={translations.languages?.[previewing.language]}
+        variables={variables}
+        events={eventsOf(app.definition)}
+        resolver={CANVAS_RESOLVER}
+        onRender={CanvasNode}
+        envelope={(children: React.ReactNode) => (
+          <CanvasEnvBridge
+            workspaceId={workspaceId}
+            projectId={projectId}
+            appId={app.id}
+            variables={variables}
+            events={eventsOf(app.definition)}
+          >
+            {children}
+          </CanvasEnvBridge>
+        )}
+        onExit={() => setPreviewing(null)}
+      />
+    )}
     <Editor
       key={reloadToken}
       resolver={CANVAS_RESOLVER}
@@ -953,11 +991,13 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           onStateSavingChange={setStateSaving}
           translations={translations}
           onTranslationsChange={setTranslations}
+          onPreview={(language, snapshot) => setPreviewing({ language, snapshot })}
           actions={actionCandidates}
           modules={moduleCandidates}
         />
       </CanvasEnvBridge>
     </Editor>
+    </>
   );
 }
 
@@ -980,6 +1020,7 @@ function CanvasBody({
   onStateSavingChange,
   translations,
   onTranslationsChange,
+  onPreview,
   actions,
   modules,
 }: {
@@ -1003,9 +1044,15 @@ function CanvasBody({
   ) => void;
   translations: NonNullable<import("@/lib/types").WorkshopModule["translations"]>;
   onTranslationsChange: (next: NonNullable<import("@/lib/types").WorkshopModule["translations"]>) => void;
+  /** p.211's preview. Serialised **inside** the Editor, because that is the
+   * only place the live document exists - the builder's unsaved tree is
+   * Craft's node map, and nothing above this component has it.
+   */
+  onPreview: (language: string, snapshot: Record<string, unknown>) => void;
   actions: ActionCandidate[];
   modules: ModuleCandidate[];
 }) {
+  const { query } = useEditor();
   const { enabled, triggerNodes, pageNodes, sectionNodes, tabSectionNodes } = useEditor((state) => {
     // Read from the editor's own node map rather than from the saved
     // definition: a widget dropped a moment ago is wireable, and a widget
@@ -1221,6 +1268,10 @@ function CanvasBody({
             <TranslationsPanel
               translations={translations}
               onChange={onTranslationsChange}
+              // Serialised here, inside the Editor: the builder's unsaved
+              // tree is Craft's node map and nothing above this has it.
+              onPreview={(language) =>
+                onPreview(language, query.getSerializedNodes() as Record<string, unknown>)}
               readOnly={!canEdit}
             />
           ) : tab === "variables" ? (

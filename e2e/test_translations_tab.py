@@ -220,3 +220,138 @@ def test_the_tab_warns_when_the_switch_is_off(page, api) -> None:
     page.get_by_role("button", name="Translations (1)", exact=True).click()
 
     expect(page.get_by_test_id("tr-off")).to_contain_text("switched off")
+
+
+def test_the_preview_shows_the_module_in_the_chosen_language(page, api) -> None:
+    """p.211: "Translated text may be previewed directly in the module in edit
+    mode by navigating to the Translations tab and selecting the configured
+    language of choice"."""
+    mod = module_with_strings(api, "Tab preview", translations={
+        "enabled": True, "source_language": "en",
+        "languages": {"fr": {"Case review": {"text": "Examen des dossiers"}}},
+    })
+    open_builder(page, mod)
+    page.get_by_role("button", name="Translations (1)", exact=True).click()
+    page.get_by_test_id("tr-preview").click()
+
+    preview = page.get_by_test_id("translation-preview")
+    expect(preview).to_be_visible()
+    # **The banner names the language**, which is the only thing telling an
+    # author which of their languages they are looking at. Somebody who
+    # forgets they are previewing French reports the module as broken - and
+    # a mutant that dropped the name from the banner passed everything else
+    # in this file, so the claim was written in a comment and nowhere else.
+    expect(preview.get_by_text("Previewing fr")).to_be_visible()
+    expect(preview).to_have_attribute("data-language", "fr")
+    expect(preview).to_contain_text("Examen des dossiers")
+    # The untranslated string is still English, which is what an author is
+    # looking for: the preview is how they find what they have not done.
+    expect(preview).to_contain_text("Submit")
+
+
+def test_the_preview_is_the_module_running_not_a_second_editor(page, api) -> None:
+    """**The preview is read-only, and that is load-bearing rather than
+    tidy.** Nothing done inside it is kept - it has no Save and its nodes
+    reach no save path - so a canvas that invited edits would be §214 in its
+    purest form: an author drags a widget, sees it move, exits, and the work
+    is gone with no warning it was never real.
+
+    Asserted through what run mode *does*: a Button is a dead placeholder in
+    edit mode (`disabled` while `mode === "edit"`) and pressable for a
+    reader. The preview must show the pressable one.
+    """
+    mod = module_with_strings(api, "Tab preview run", translations={
+        "enabled": True, "source_language": "en",
+        "languages": {"fr": {"Submit": {"text": "Envoyer"}}},
+    })
+    open_builder(page, mod)
+    # The same button, in the builder, is disabled - so this is a comparison
+    # rather than a claim about buttons in general.
+    expect(page.get_by_role("button", name="Submit", exact=True)).to_be_disabled()
+
+    page.get_by_role("button", name="Translations (1)", exact=True).click()
+    page.get_by_test_id("tr-preview").click()
+
+    preview = page.get_by_test_id("translation-preview")
+    expect(preview.get_by_role("button", name="Envoyer", exact=True)).to_be_enabled()
+
+
+def test_the_preview_shows_what_has_not_been_saved(page, api) -> None:
+    """p.211 has an author previewing *while they work*. A preview of the last
+    save would show a module they had already moved on from."""
+    mod = module_with_strings(api, "Tab preview live", translations={
+        "enabled": True, "source_language": "en", "languages": {"fr": {}},
+    })
+    open_builder(page, mod)
+    # Rename the button, without saving.
+    page.get_by_role("button", name="Button Submit").click()
+    page.get_by_role("button", name="Widget", exact=True).click()
+    page.get_by_test_id("button-label").fill("Send it")
+
+    page.get_by_role("button", name="Translations (1)", exact=True).click()
+    page.get_by_test_id("tr-preview").click()
+    expect(page.get_by_test_id("translation-preview")).to_contain_text("Send it")
+
+
+def test_leaving_the_preview_keeps_the_unsaved_work(page, api) -> None:
+    """**The reason this is a second canvas and not the builder's.**
+
+    Translating the editing canvas means remounting it, and Craft reads
+    `<Frame data>` once at mount — so every unsaved edit would go. This test
+    is the one that fails if somebody ever "simplifies" the preview into the
+    builder's own Frame.
+    """
+    mod = module_with_strings(api, "Tab preview keeps", translations={
+        "enabled": True, "source_language": "en",
+        "languages": {"fr": {"Case review": {"text": "Examen des dossiers"}}},
+    })
+    open_builder(page, mod)
+    page.get_by_role("button", name="Button Submit").click()
+    page.get_by_role("button", name="Widget", exact=True).click()
+    page.get_by_test_id("button-label").fill("Send it")
+
+    page.get_by_role("button", name="Translations (1)", exact=True).click()
+    page.get_by_test_id("tr-preview").click()
+    expect(page.get_by_test_id("translation-preview")).to_be_visible()
+    page.get_by_test_id("translation-preview-exit").click()
+
+    # The preview is gone and the unsaved rename is still on the canvas.
+    expect(page.get_by_test_id("translation-preview")).to_have_count(0)
+    # `exact` because the Layout tree row is also called "Send it" - and its
+    # presence is not the claim: the canvas is (§337).
+    expect(page.get_by_role("button", name="Send it", exact=True)).to_be_visible()
+    # And it really is unsaved, so the save path was never involved.
+    assert mod.definition()["layout"]["btn"]["props"]["label"] == "Submit"
+
+
+def test_the_preview_cannot_write_the_translation_into_the_document(page, api) -> None:
+    """The second hazard §400 named: a translated tree in the *builder's*
+    editor is what `getSerializedNodes()` would hand the next Save, and the
+    French would replace the strings there was any point translating.
+
+    Saving after a preview has to leave the document's English alone.
+    """
+    mod = module_with_strings(api, "Tab preview no write", translations={
+        "enabled": True, "source_language": "en",
+        "languages": {"fr": {"Case review": {"text": "Examen des dossiers"}}},
+    })
+    open_builder(page, mod)
+    page.get_by_role("button", name="Translations (1)", exact=True).click()
+    page.get_by_test_id("tr-preview").click()
+    expect(page.get_by_test_id("translation-preview")).to_be_visible()
+    page.get_by_test_id("translation-preview-exit").click()
+    expect(page.get_by_test_id("translation-preview")).to_have_count(0)
+
+    save(page)
+    layout = mod.definition()["layout"]
+    assert layout["h"]["props"]["title"] == "Case review"
+
+
+def test_there_is_no_preview_before_there_is_a_language(page, api) -> None:
+    """A button that previews nothing is a button that reports the feature is
+    broken."""
+    mod = module_with_strings(api, "Tab preview none")
+    open_tab(page, mod)
+
+    expect(page.get_by_test_id("tr-no-language")).to_be_visible()
+    expect(page.get_by_test_id("tr-preview")).to_have_count(0)
