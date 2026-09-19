@@ -263,6 +263,47 @@ export interface WorkshopModule {
    * to the URL — rather than a layout node id, which is generated and would
    * change under an author who recreated a page. */
   page_selection?: string;
+  /** Translations (p.207-211): the module's static text in other languages.
+   *
+   * In the document rather than on the app row, for `routing`'s reason and
+   * more strongly: a translation is *of* a string that lives in the layout,
+   * so reverting to an old version has to bring back the translations of the
+   * text that version holds. A table on the app row would leave a French
+   * module describing a page that no longer exists.
+   *
+   * **Keyed by the source text, not by where it sits.** p.210 wants "any new
+   * or modified strings detected in the module… [to] appear in the To
+   * translate section" — which is what a source-text key gives for nothing:
+   * editing a section title makes it a different key, so its old translation
+   * stops applying and the new string is untranslated. It also means one
+   * translation serves every place a string is repeated, which is what a
+   * translator expects and what a per-node key would get wrong. The cost is
+   * that two identical strings cannot be translated differently; that is the
+   * standard i18n trade and the standard answer (reword one) applies. */
+  translations?: WorkshopTranslations;
+}
+
+export interface WorkshopTranslations {
+  /** p.208's "toggle on Translations in the Advanced functionalities section".
+   * Off means no reader is served a translation even if a table is stored -
+   * so a half-finished table cannot reach anybody by accident. */
+  enabled: boolean;
+  /** p.209: "the module's starting language must be defined". The language the
+   * text in `layout` is *written in*, so a reader whose locale matches it is
+   * served the document untouched rather than a table lookup that would
+   * mostly miss. */
+  source_language?: string;
+  /** Language tag (BCP 47, e.g. `fr` or `pt-BR`) to that language's table. */
+  languages: Record<string, Record<string, WorkshopTranslationEntry>>;
+}
+
+export interface WorkshopTranslationEntry {
+  text: string;
+  /** p.210's "Marked as complete… essentially marking these strings as
+   * reviewed to application builders". A builder's bookkeeping, not a gate:
+   * an unreviewed translation is still served, because a translation nobody
+   * got round to ticking is still better than English. */
+  reviewed?: boolean;
 }
 
 /** Reserved now, built in roadmap item 1.2. `object_set` is the one that

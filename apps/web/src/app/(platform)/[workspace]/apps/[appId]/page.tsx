@@ -41,8 +41,9 @@ import {
 } from "@/lib/app-version";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
 import {
-  eventsOf, layoutOf, pageSelectionOf, routingOf, stateSavingOf, variablesOf,
+  eventsOf, pageSelectionOf, routingOf, stateSavingOf, variablesOf,
 } from "@/lib/workshop-module";
+import { readerLayout } from "@/components/canvas/reader-layout";
 
 /** Craft.js's `enabled` option is what makes a node draggable, selectable and
  * editable. `<Editor enabled={false}>` is the documented way to render a
@@ -87,7 +88,11 @@ export default function PublishedAppPage() {
   // The tab name (p.47). A viewer of a published module gets the same title a
   // builder sees, falling back to the app's name - `useModuleTitle` waits for
   // the fetch rather than blanking the tab while it is in flight.
-  useModuleTitle(layoutOf(app.data?.definition), app.data?.name ?? "");
+  // The browser tab, from the same translated document the page is drawn
+  // from. p.208 makes the module header Title translatable, and this is
+  // that title - a French module whose tab said English would be the one
+  // place the translation leaked.
+  useModuleTitle(readerLayout(app.data?.definition), app.data?.name ?? "");
 
   if (wsPending || app.isPending) {
     return <main className="page"><div className="state">Loading app…</div></main>;
@@ -114,8 +119,9 @@ export default function PublishedAppPage() {
   }
 
   // After migration 0034 a stored definition wraps the node tree; the
-  // renderer wants the tree.
-  const definition = layoutOf(app.data.definition);
+  // renderer wants the tree - translated into this reader's language if the
+  // module has been translated into it (p.207).
+  const definition = readerLayout(app.data.definition);
   return (
     <main className="page">
       <nav className="crumbs" aria-label="Breadcrumb">

@@ -15,7 +15,7 @@ import {
   actions as actionApi, api, ApiError, canvas as canvasApi, datasets as dsApi,
   objects as objApi,
 } from "@/lib/api";
-import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
+import { eventsOf, variablesOf } from "@/lib/workshop-module";
 import { TypePicker } from "@/components/type-picker";
 import { VariableBridge } from "./VariableBridge";
 import { WidgetSetup } from "./WidgetSetup";
@@ -198,6 +198,7 @@ import {
   mappingOf, oneClickOf, parameterForColumn, rowLimitOf, stage, stagedCount,
   toEdits, undoRow, type Staged,
 } from "./inline-edit";
+import { readerLayout } from "./reader-layout";
 import { outputClauses } from "./action-output";
 import {
   collapsedInitially, columnsOf as sectionColumnsOf, conditionKey, formLayout,
@@ -9445,7 +9446,10 @@ export function CanvasEmbeddedModule({
   });
 
   const definition = embedded.data?.definition;
-  const layout = definition ? layoutOf(definition) : null;
+  // An embedded module is a module, and p.207 says nothing about which door
+  // a reader came through. Its *own* table, not the host's: the two are
+  // separate documents translated by separate people.
+  const layout = definition ? readerLayout(definition) : null;
   const childVariables = definition ? variablesOf(definition) : {};
 
   // The mapping arrives keyed by external ID; everything downstream works in
@@ -9870,7 +9874,7 @@ export function CanvasLoopSection({
   const entries = arrayEntries(overArray ? host.resolved[arrayVariable ?? ""] : undefined);
   const arraySlice = pageOf(entries, { paging, maxItems, pageSize, page: arrayPage });
 
-  const layout = child.data?.definition ? layoutOf(child.data.definition) : null;
+  const layout = child.data?.definition ? readerLayout(child.data.definition) : null;
   const sourceChosen = overArray ? !!arrayVariable : !!objectSetVariable;
   const ready = sourceChosen && !!moduleId && !!itemTarget && !!layout;
 

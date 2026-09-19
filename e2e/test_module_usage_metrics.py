@@ -32,7 +32,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import WEB_BASE, eventually, open_builder
+from conftest import eventually, open_builder, publish, viewer_url
 
 
 @pytest.fixture(scope="module")
@@ -191,25 +191,6 @@ def two_page_module(api):
     return mod
 
 
-def publish(mod) -> None:
-    """The viewer route serves a *published* app. An unpublished module has
-    nothing to show there, which is the second thing that made these tests look
-    like the recorder was broken."""
-    mod.api.call("PUT", f"{mod.base}/canvas-apps/{mod.app_id}/publish",
-                 {"scope": "workspace"})
-
-
-def viewer_url(mod) -> str:
-    """Where a module is *viewed*, which is not where it is opened.
-
-    `Module.url` is `/r/{resource_id}` and that opens the **builder** for
-    somebody who can edit - which is exactly the surface p.188 says does not
-    count. The viewer route is the workspace-scoped one, and it is what
-    `countViews` is passed on. It needs `publish(mod)` first.
-    """
-    return f"{WEB_BASE}/{mod.workspace_slug}/apps/{mod.app_id}"
-
-
 def set_tracking(api, mod, on: bool):
     api.call("PUT", f"{mod.base}/canvas-apps/{mod.app_id}/usage-tracking", {"on": on})
 
@@ -335,6 +316,15 @@ def test_the_toggle_turns_recording_on(page, api):
     open_metrics(page, mod)
     toggle = page.get_by_test_id("metrics-tracking")
     expect(toggle).not_to_be_checked()
-    toggle.check()
+    # **`click` and then a polled assertion, never `check`.** Playwright's
+    # `check()` reads `el.checked` in the same tick as the click and does not
+    # retry that read. A *controlled* checkbox cannot satisfy it: React
+    # reverts the native click on the input and writes the true value back on
+    # its next render, ~14ms later under no load and later under some. The
+    # claim this test makes is "ticking it turns recording on", and
+    # `to_be_checked()` polls for exactly that - so it still fails if the
+    # control does nothing, and stops failing when the machine is busy.
+    toggle.click()
+    expect(toggle).to_be_checked()
     expect(page.get_by_test_id("views-empty")).to_contain_text(
         "No layouts have been viewed", timeout=30000)

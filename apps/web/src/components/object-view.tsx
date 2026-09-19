@@ -45,8 +45,9 @@ import { VariableBridge } from "@/components/canvas/VariableBridge";
 import { CANVAS_RESOLVER } from "@/components/canvas/widgets";
 import { CanvasNode } from "@/components/canvas/SettingsPanel";
 import { StandardObjectView } from "@/components/standard-object-view";
-import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
+import { eventsOf, variablesOf } from "@/lib/workshop-module";
 import type { ObjectInstance } from "@/lib/types";
+import { readerLayout } from "@/components/canvas/reader-layout";
 
 /** Craft.js's `enabled` is what makes a node draggable and selectable, so
  * `enabled={false}` is the documented way to render a definition read-only.
@@ -100,7 +101,7 @@ function ConfiguredObjectView({
     );
   }
 
-  const definition = layoutOf(app.data.definition);
+  const definition = readerLayout(app.data.definition);
   const declared = variablesOf(app.data.definition);
   return (
     <div data-testid="configured-object-view" data-app={appId}>

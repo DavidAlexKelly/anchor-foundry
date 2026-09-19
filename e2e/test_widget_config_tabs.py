@@ -29,7 +29,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import eventually, no_console_errors, open_builder, settled
+from conftest import eventually, no_console_errors, open_builder, save, settled
 
 ROWS = 30
 
@@ -133,24 +133,6 @@ def header_count(page) -> int:
 
 def tab(page, name: str):
     page.get_by_role("tab", name=name).click()
-
-
-def save(page):
-    """Click Save **and wait for it to land**.
-
-    Every caller reloads straight afterwards, and a reload that beats the PUT
-    throws the edit away - the page comes back showing what the server still
-    has, which reads exactly like a feature that does not persist. In isolation
-    the write is fast enough to hide it; under a full-file run it is not, which
-    is why this file failed in company and passed alone with a different subset
-    each time.
-
-    The builder already says when the write has landed - the version line gains
-    "· saved" on success - so this waits for the application's own statement
-    rather than for a sleep.
-    """
-    page.get_by_role("button", name="Save", exact=True).click()
-    expect(page.locator(".ws-actions .sub")).to_contain_text("saved")
 
 
 def test_the_panel_offers_foundrys_three_tabs(page, module):
