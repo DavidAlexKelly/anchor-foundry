@@ -48,6 +48,9 @@ import type { Clipping } from "@/components/canvas/clipboard";
 import { tabLabels } from "@/components/canvas/tab-selection";
 import { CanvasNode, SettingsPanel } from "@/components/canvas/SettingsPanel";
 import { VariablesPanel } from "@/components/canvas/VariablesPanel";
+import { ProfilerRecorder } from "@/components/canvas/ProfilerRecorder";
+import { ProfilerBanner, ProfilerPanel } from "@/components/canvas/ProfilerPanel";
+import { profilerHref, profilerOn } from "@/components/canvas/profiler";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
 import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
 import { ApiError, actions as actionApi, api, canvas as canvasApi } from "@/lib/api";
@@ -622,8 +625,21 @@ function CanvasEnvBridge({
   stateSaving?: import("@/lib/types").WorkshopModule["state_saving"];
   children: React.ReactNode;
 }) {
-  const { enabled } = useEditor((state) => ({ enabled: state.options.enabled }));
+  const { enabled, actions } = useEditor((state) => ({ enabled: state.options.enabled }));
+  const search = useSearchParams();
+  const profiling = profilerOn(search.toString());
+  // **Profiler mode is Preview, and that is p.178 rather than a convenience.**
+  // "Only widgets and variables that affect the on-screen display are
+  // calculated… This mirrors the behavior and performance that users
+  // experience in View mode." In edit mode every page of this module is on
+  // screen at once and the lazy rule is off, so a profile taken there would be
+  // an accurate measurement of a program no reader runs - the exact objection
+  // that kept this feature unbuilt until §392.
+  useEffect(() => {
+    if (profiling && enabled) actions.setOptions((o) => (o.enabled = false));
+  }, [profiling, enabled, actions]);
   return (
+    <ProfilerRecorder on={profiling}>
     <CanvasEnvProvider value={{ workspaceId, projectId, mode: enabled ? "edit" : "run" }}>
       {/* Parameter state lives inside the env provider and outside the editor
           tree, so a filter set in Preview survives switching back to Edit -
@@ -661,6 +677,7 @@ function CanvasEnvBridge({
         </VariableBridge>
       </CanvasParameterProvider>
     </CanvasEnvProvider>
+    </ProfilerRecorder>
   );
 }
 
@@ -1002,12 +1019,45 @@ function CanvasBody({
       tabSectionNodes: tabs,
     };
   });
-  const showChrome = enabled && canEdit;
+  // **Profiler mode keeps the chrome while the canvas drops to run mode**, and
+  // the two halves come apart here on purpose. p.177 has you reading the
+  // Profiler panel *while* profiling ("select Exit at the top of the Profiler
+  // panel or in the Profiler mode banner"), so the settings column has to
+  // stay; p.178 wants the measurement to be of what a viewer experiences, so
+  // the canvas must not be in edit mode. Tying both to Craft's `enabled` flag
+  // hid the panel the moment it had something to say - which is how this was
+  // found, by four browser tests that could not reach the tab they had just
+  // pressed a button on.
+  // The address as it stands, which is what entering and leaving profiler
+  // mode edit. Read here rather than in the panel so the two controls - the
+  // tab's link and the banner's Exit - cannot disagree about what "this page"
+  // means (§292).
+  const shellSearch = useSearchParams().toString();
+  const shellHref = `${typeof window === "undefined" ? "" : window.location.pathname}${
+    shellSearch ? `?${shellSearch}` : ""}`;
+  const profiling = profilerOn(shellSearch);
+  // **Profiler mode keeps the chrome while the canvas drops to run mode**, and
+  // the two halves come apart here on purpose. p.177 has you reading the
+  // Profiler panel *while* profiling ("select Exit at the top of the Profiler
+  // panel or in the Profiler mode banner"), so the settings column has to
+  // stay; p.178 wants the measurement to be of what a viewer experiences, so
+  // the canvas must not be in edit mode. Tying both to Craft's `enabled` flag
+  // hid the panel the moment it had something to say - which is how this was
+  // found, by four browser tests that could not reach the tab they had just
+  // pressed a button on.
+  const showChrome = (enabled || profiling) && canEdit;
   // Three things want the right-hand column: the selected widget's settings,
   // the module's variables, and its events. Tabbed rather than stacked - a
   // variable list that pushed the settings below the fold would make
   // configuring a widget worse in service of a panel most edits do not touch.
-  const [tab, setTab] = useState<"widget" | "variables" | "events">("widget");
+  // Profiling opens on the Profiler tab, because the reload that got here was
+  // pressed *from* it (p.177) and coming back to Widget loses the reader's
+  // place in the one flow this mode has.
+  const [tab, setTab] = useState<"widget" | "variables" | "events" | "profiler">(
+    profilerOn(typeof window === "undefined" ? "" : window.location.search)
+      ? "profiler"
+      : "widget",
+  );
   // p.55's clipboard. **Module-scoped and never persisted**: p.68 offers copy
   // and paste for reuse "anywhere in the module", and a clipping holds node
   // ids and variable definitions from *this* document, so carrying one to
@@ -1015,6 +1065,11 @@ function CanvasBody({
   const [clipboard, setClipboard] = useState<Clipping | null>(null);
   return (
     <div className={showChrome ? "canvas-shell" : "canvas-shell canvas-shell--full"}>
+      {/* p.177: "A banner will be displayed at the top of the page". At the
+          top of the *shell* rather than inside the settings column, because it
+          is about the whole page and because its Exit has to be reachable from
+          wherever somebody has scrolled to. */}
+      {profiling && <ProfilerBanner href={profilerHref(shellHref, false)} />}
       {showChrome && (
         <Toolbox
           routing={routing}
@@ -1050,7 +1105,7 @@ function CanvasBody({
       {showChrome && (
         <div className="canvas-settings">
           <nav className="ds-tabs canvas-panel-tabs">
-            {(["widget", "variables", "events"] as const).map((t) => (
+            {(["widget", "variables", "events", "profiler"] as const).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -1062,7 +1117,9 @@ function CanvasBody({
                   ? "Widget"
                   : t === "variables"
                     ? `Variables (${Object.keys(variables).length})`
-                    : `Events (${Object.keys(events).length})`}
+                    : t === "events"
+                      ? `Events (${Object.keys(events).length})`
+                      : "Profiler"}
               </button>
             ))}
           </nav>
@@ -1084,6 +1141,19 @@ function CanvasBody({
           )}
           {tab === "widget" ? (
             <SettingsPanel />
+          ) : tab === "profiler" ? (
+            // p.177: "enter Edit mode, open the Profiler tab, and select
+            // Reload in Profiler Mode". The panel knows whether it is
+            // recording; the address is what it offers to change.
+            <ProfilerPanel
+              href={profilerHref(shellHref, true)}
+              // The filter names pages the way the rest of the builder does.
+              // The panel has the events and not the document, so the name
+              // comes from here - a profiler that invented its own naming
+              // would make a reader match node ids by eye.
+              labelFor={(nodeId) =>
+                pageNodes.find((p) => p.id === nodeId)?.label ?? nodeId}
+            />
           ) : tab === "variables" ? (
             <VariablesPanel
               workspaceId={workspaceId}

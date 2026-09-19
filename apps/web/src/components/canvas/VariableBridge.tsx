@@ -38,6 +38,7 @@ import { asPageId, pageState, type PageOverride } from "./page-selection";
 import { heldFor, remember, request, requested, settled } from "./recompute";
 import { defaultPageNode, pageNodeFor } from "./routing";
 import { visibleNodes } from "./visible-nodes";
+import { useProfiler } from "./ProfilerRecorder";
 import { RoutingSync } from "./RoutingSync";
 import { StateBar } from "./StateBar";
 
@@ -196,19 +197,50 @@ export function VariableBridge({
   // answer differently and re-resolve for nothing.
   const visibleKey = visible ? [...visible].sort().join(",") : "";
 
+  // p.178's variable half (§394). Asking the server to measure only when a
+  // profiler is listening, because every other resolve wants the values and
+  // nothing else.
+  const profiler = useProfiler();
+
+  // p.178's "the page or overlay that triggered them" (§395). The bridge owns
+  // the current page, so it is what tells the recorder - an overlay wins over
+  // the page beneath it, because an overlay is what a reader opened and what
+  // they would filter by.
+  //
+  // **Below `useProfiler` rather than beside the page state**, which is where
+  // it was first written: `profiler` is declared here, and a hook referencing
+  // it earlier is a temporal dead zone away from a runtime error.
+  //
+  // **One expression, two readers.** The recorder watches the query cache and
+  // needs to be *told* which layout is current; a variable resolve is sent
+  // from here and carries it explicitly. Both are the same question, and
+  // writing `overlay ?? page` at each of them is the shape §292 is about -
+  // a mutation that changed one of the two left the other answering
+  // correctly, which is how the duplication was found.
+  const currentLayout = overlay ?? page;
+  useEffect(() => {
+    profiler.setPage(currentLayout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentLayout]);
+
   const resolve = useMutation({
     mutationFn: (raw: Record<string, unknown>) => {
       const ticket = ++latest.current;
+      // The layout on screen when this resolve is *sent*. Captured here rather
+      // than read when the answer lands, for the reason the recorder's
+      // `started` map gives: a resolve triggered by page one and answered
+      // after somebody opened an overlay was still triggered by page one.
+      const from = currentLayout;
       const asks = requested(declared, askRef.current);
       const held = heldFor(declared, heldRef.current, askRef.current);
       return (published
         ? canvasApi.evaluatePublishedVariables(
-          workspaceId, appId, raw, bound, held, asks, visible)
+          workspaceId, appId, raw, bound, held, asks, visible, profiler.on)
         : canvasApi.evaluateVariables(
-          workspaceId, projectId, appId, raw, bound, held, asks, visible))
-        .then((data) => ({ data, ticket, held, asks }));
+          workspaceId, projectId, appId, raw, bound, held, asks, visible, profiler.on))
+        .then((data) => ({ data, ticket, held, asks, from }));
     },
-    onSuccess: ({ data, ticket, held, asks }) => {
+    onSuccess: ({ data, ticket, held, asks, from }) => {
       if (ticket !== latest.current) return;
       // Captured before the values are published, so a widget never renders a
       // held variable in the gap between the two.
@@ -224,6 +256,18 @@ export function VariableBridge({
       setResolved((current) =>
         visible ? { ...current, ...data.values } : data.values);
       setPending(false);
+      // **Named from the declarations, not from the id.** A breakdown of
+      // `v_7f3a` is a list somebody has to go and decode; the author called it
+      // something, and that is what a panel diagnosing a slow module has to
+      // say. An id with no declaration left is shown as itself rather than
+      // dropped - a row nobody can name is still a row that took time.
+      if (data.timings) {
+        profiler.recordVariables(
+          data.timings,
+          (id) => declared[id]?.label ?? id,
+          from,
+        );
+      }
     },
     onError: () => setPending(false),
   });

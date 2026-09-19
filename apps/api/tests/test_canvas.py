@@ -584,6 +584,40 @@ def test_showing_nothing_is_a_real_answer_and_not_a_missing_one(
     assert r.json()["values"] == {}
 
 
+def test_a_resolve_reports_what_each_variable_cost_when_asked(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.178's breakdown, over the wire (§394).
+
+    **Only what was computed.** The lazy rule and the breakdown answer the
+    same question from two ends, so a variable the resolve skipped must be
+    absent here rather than reported as zero - "instant" and "not on screen"
+    are different facts and only one of them is true.
+    """
+    app_id = _lazy_app(client, fx)
+    r = client.post(f"{base(fx)}/{app_id}/variables/evaluate",
+                    headers=hdr(fx.viewer_sub),
+                    json={"values": {}, "visible": ["ROOT", "here"], "profile": True})
+    assert r.status_code == 200, r.text
+    timings = r.json()["timings"]
+    assert set(timings) == {"v_region", "v_shown"}
+    assert all(ms >= 0 for ms in timings.values())
+
+
+def test_a_resolve_nobody_asked_to_measure_reports_nothing(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**`None`, not `{}`.** An empty breakdown is a real answer - a module
+    showing no widgets - and "was not measured" is not an answer at all. A
+    panel reading `{}` as "this module computed nothing" would be confidently
+    wrong about the one case it exists to describe."""
+    app_id = _lazy_app(client, fx)
+    r = client.post(f"{base(fx)}/{app_id}/variables/evaluate",
+                    headers=hdr(fx.viewer_sub), json={"values": {}})
+    assert r.status_code == 200, r.text
+    assert r.json()["timings"] is None
+
+
 def test_a_viewer_may_evaluate_but_not_save(client: TestClient, fx: Fixture) -> None:
     """Evaluating is reading an app you can already open. Saving is not."""
     app_id = _new_app(client, fx)

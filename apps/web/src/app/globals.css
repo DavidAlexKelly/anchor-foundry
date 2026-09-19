@@ -3039,3 +3039,36 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    underneath, which sit where the file list would otherwise start. */
 .review-pipeline { margin-top: 12px; }
 .review-pipeline > .soft { margin: 8px 0 0; font-size: 12.5px; }
+
+/* Performance Profiler (§394; workshop p.177-178). */
+.canvas-profiler-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  /* The palette's existing amber pair rather than a `--warn` of its own
+     (§191): `--brass` and `--brass-wash` are declared in both themes, so a
+     new token would be a second answer to a question already settled - and
+     an undeclared one read through a fallback is what `tokens.test.ts`
+     refuses, which is how this was caught. */
+  padding: 8px 14px; background: var(--brass-wash);
+  border-bottom: 1px solid var(--line); font-size: 13px;
+}
+.canvas-profiler { display: flex; flex-direction: column; gap: 10px; }
+.canvas-profiler-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.canvas-profiler-timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.canvas-profiler-timeline li { display: grid; grid-template-columns: 9em 1fr 4.5em; gap: 8px; align-items: center; font-size: 12px; }
+.canvas-profiler-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The track is the full width of the run, so a bar's *position* is when it
+   started - which is the whole point of showing a timeline beside a
+   breakdown. */
+.canvas-profiler-track { position: relative; height: 10px; background: var(--line); border-radius: 5px; }
+/* **The floor that makes a bar seeable is in pixels, not percent.** `span()`
+   floors the width at 1% so the arithmetic never yields zero, but 1% of a
+   track a few hundred pixels wide is under a pixel - invisible to a reader,
+   and to a browser test, which is how this was found. The percentage bounds
+   the maths; this bounds the drawing. */
+.canvas-profiler-span { position: absolute; top: 0; height: 10px; min-width: 3px; border-radius: 5px; background: var(--accent); }
+.canvas-profiler-span.slow { background: var(--brass); }
+.canvas-profiler-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.canvas-profiler-table th, .canvas-profiler-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+.canvas-profiler-table tr.warn td { color: var(--brass); }
+.canvas-profiler-controls { display: flex; gap: 8px; align-items: flex-end; }
+.canvas-profiler-controls .field { flex: 1; min-width: 0; }
