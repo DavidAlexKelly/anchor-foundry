@@ -379,9 +379,20 @@ def test_the_previous_period_is_reported_for_layouts_too(
                VALUES (%s, 'pg1', (now() AT TIME ZONE 'utc')::date - 40, 4)""",
             (app_id,),
         )
+    # **And a row older than the prior window is outside it**, which is the
+    # half that makes "previous" a period rather than "everything before".
+    # Without it the query can drop its outer bound and no test notices - the
+    # action half has had this case since §396 and the layout half did not.
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            """INSERT INTO canvas_layout_views (canvas_app_id, node_id, day, views)
+               VALUES (%s, 'pg1', (now() AT TIME ZONE 'utc')::date - 100, 99)""",
+            (app_id,),
+        )
+
     (row,) = metrics(client, fx, app_id, 30).json()["layouts"]
     assert row["views"] == 1
-    assert row["previous"] == 4
+    assert row["previous"] == 4, "the prior window is 30 days, not all of history"
 
 
 def test_a_viewer_may_report_a_view_but_not_turn_tracking_on(
