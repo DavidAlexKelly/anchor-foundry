@@ -149,7 +149,13 @@ export function MetricsPanel({
         <input
           type="checkbox"
           data-testid="metrics-tracking"
-          checked={tracking}
+          // **The asked-for value while the ask is in flight.** A controlled
+          // checkbox bound to the server's answer does not move until a round
+          // trip completes, which reads as a control that does not work - the
+          // mirror of §214's control that looks like it does. React Query
+          // hands back the variable it is sending, so the box moves at once
+          // and settles on what the server says.
+          checked={setTracking.isPending ? setTracking.variables : tracking}
           disabled={readOnly || setTracking.isPending}
           onChange={(e) => setTracking.mutate(e.target.checked)}
         />

@@ -191,13 +191,21 @@ def two_page_module(api):
     return mod
 
 
+def publish(mod) -> None:
+    """The viewer route serves a *published* app. An unpublished module has
+    nothing to show there, which is the second thing that made these tests look
+    like the recorder was broken."""
+    mod.api.call("PUT", f"{mod.base}/canvas-apps/{mod.app_id}/publish",
+                 {"scope": "workspace"})
+
+
 def viewer_url(mod) -> str:
     """Where a module is *viewed*, which is not where it is opened.
 
     `Module.url` is `/r/{resource_id}` and that opens the **builder** for
     somebody who can edit - which is exactly the surface p.188 says does not
     count. The viewer route is the workspace-scoped one, and it is what
-    `countViews` is passed on.
+    `countViews` is passed on. It needs `publish(mod)` first.
     """
     return f"{WEB_BASE}/{mod.workspace_slug}/apps/{mod.app_id}"
 
@@ -218,6 +226,7 @@ def test_viewing_a_module_counts_the_page_it_shows(page, api, two_page_module):
     module has opted in."""
     mod = two_page_module
     set_tracking(api, mod, True)
+    publish(mod)
     page.goto(viewer_url(mod))
     expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
 
@@ -230,6 +239,7 @@ def test_navigating_counts_the_page_navigated_to(page, api, two_page_module):
     trail rather than one entry for wherever they landed first."""
     mod = two_page_module
     set_tracking(api, mod, True)
+    publish(mod)
     page.goto(viewer_url(mod))
     expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
     page.get_by_role("button", name="Second", exact=True).click()
@@ -251,6 +261,7 @@ def test_a_module_that_has_not_opted_in_records_nothing(page, api):
         "t1": {"resolvedName": "CanvasText",
                "props": {"tag": "p", "text": "UNTRACKED"}, "parent": "pg1"},
     }), "variables": {}, "events": {}})
+    publish(mod)
 
     page.goto(viewer_url(mod))
     expect(page.get_by_text("UNTRACKED")).to_be_visible(timeout=30000)
@@ -288,6 +299,7 @@ def test_the_panel_shows_what_was_viewed_by_name(page, api, two_page_module):
     node id - the panel has the counts and the editor has the tree."""
     mod = two_page_module
     set_tracking(api, mod, True)
+    publish(mod)
     page.goto(viewer_url(mod))
     expect(page.get_by_text("PAGE ONE")).to_be_visible(timeout=30000)
     eventually(lambda: layout_views(api, mod), lambda v: v.get("pg1", 0) >= 1,
