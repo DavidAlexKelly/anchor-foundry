@@ -77,12 +77,14 @@ export function moduleFrom(
      * would be indistinguishable from "not part of this save" and would make
      * the setting impossible to turn off. */
     pageSelection?: string;
+    translations?: WorkshopModule["translations"];
   },
 ): WorkshopModule {
   const current = isV2(definition) ? definition : undefined;
   const routing = parts.routing ?? current?.routing;
   const stateSaving = parts.stateSaving ?? current?.state_saving;
   const pageSelection = parts.pageSelection ?? current?.page_selection;
+  const translations = parts.translations ?? current?.translations;
   return {
     format: 2,
     layout: parts.layout ?? layoutOf(definition),
@@ -99,6 +101,42 @@ export function moduleFrom(
     // never had it - the server reads absent and empty alike, and a stored
     // empty string is a setting that looks configured in a diff.
     ...(pageSelection ? { page_selection: pageSelection } : {}),
+    // Same carry again (p.207-211). Written whenever it exists rather than
+    // only when enabled: a builder who turns Translations off has not thrown
+    // the tables away, and a save that dropped them would make the toggle a
+    // delete button.
+    ...(translations ? { translations } : {}),
+  };
+}
+
+/** A Craft node's component name.
+ *
+ * `type` is `{"resolvedName": "CanvasMap"}` for a registered component and a
+ * bare string for a plain element, and **saved documents in this repository
+ * hold both** - `workshop_format._resolved_name` on the server says the same
+ * thing, and was written from a fixture that only had the first form until a
+ * run over a real database corrected it.
+ *
+ * Here rather than in each caller: `unused.ts` and `layout-template.ts` each
+ * carry a private copy of this, which is two too many already (§292). Folding
+ * those in is a tidy-up of its own; what this export prevents is a *fourth*.
+ */
+export function resolvedNameOf(node: unknown): string {
+  const type = (node as { type?: unknown } | undefined)?.type;
+  if (typeof type === "string") return type;
+  return String((type as { resolvedName?: unknown } | undefined)?.resolvedName ?? "");
+}
+
+/** A module's Translations settings (p.207-211), with the shape the panel and
+ * the reader both expect rather than `undefined` for a module that has none. */
+export function translationsOf(
+  definition: unknown,
+): NonNullable<WorkshopModule["translations"]> {
+  const stored = isV2(definition) ? definition.translations : undefined;
+  return {
+    enabled: Boolean(stored?.enabled),
+    ...(stored?.source_language ? { source_language: stored.source_language } : {}),
+    languages: stored?.languages ?? {},
   };
 }
 

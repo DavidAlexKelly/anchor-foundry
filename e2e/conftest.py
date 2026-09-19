@@ -305,8 +305,16 @@ def viewer_token(stack: None) -> str:
     return tokens["viewer@acme.dev.local"]
 
 
-def _signed_in(browser, token: str, request):
-    context = browser.new_context(viewport={"width": 1500, "height": 1200})
+def _signed_in(browser, token: str, request, *, locale: str | None = None):
+    """`locale` is handed to the browser context, which is the only honest way
+    to ask this question: Chromium sets `navigator.language`, `navigator.
+    languages` and the `Accept-Language` header from it together, so a test
+    for p.207's "their browser's locale" is testing a browser rather than a
+    stub somebody wrote to agree with the code under it."""
+    context = browser.new_context(
+        viewport={"width": 1500, "height": 1200},
+        **({"locale": locale} if locale else {}),
+    )
     opened = context.new_page()
     errors: list[str] = []
     opened.on(
@@ -474,6 +482,40 @@ def open_module(page, module, *, settle_ms: int | None = None) -> None:
     expect(preview).to_be_visible(timeout=FIRST_RENDER_MS)
     preview.click()
     settled(page)
+
+
+def save(page):
+    """Click Save **and wait for it to land**.
+
+    A caller that reads the document back, or reloads, straight afterwards
+    races the PUT: the answer comes back as what the server still has, which
+    reads exactly like a feature that does not persist. In isolation the write
+    is fast enough to hide it; under a full-file run it is not.
+
+    The builder already says when the write has landed - the version line
+    gains "· saved" on success - so this waits for the application's own
+    statement rather than for a sleep.
+    """
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.locator(".ws-actions .sub")).to_contain_text("saved")
+
+
+def publish(mod) -> None:
+    """The viewer route serves a *published* app. An unpublished module has
+    nothing to show there, which is the second thing that made
+    `test_module_usage_metrics.py` look like its recorder was broken."""
+    mod.api.call("PUT", f"{mod.base}/canvas-apps/{mod.app_id}/publish",
+                 {"scope": "workspace"})
+
+
+def viewer_url(mod) -> str:
+    """Where a module is *viewed*, which is not where it is opened.
+
+    `Module.url` is `/r/{resource_id}` and that opens the **builder** for
+    somebody who can edit. The viewer route is the workspace-scoped one, and
+    it needs `publish(mod)` first.
+    """
+    return f"{WEB_BASE}/{mod.workspace_slug}/apps/{mod.app_id}"
 
 
 def open_builder(page, module) -> None:

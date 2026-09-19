@@ -58,6 +58,7 @@ import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
 import { ApiError, actions as actionApi, api, canvas as canvasApi } from "@/lib/api";
 import {
   eventsOf, hasLayout, layoutOf, moduleFrom, pageSelectionOf, routingOf, stateSavingOf,
+  translationsOf,
   variablesOf,
 } from "@/lib/workshop-module";
 import { useModuleTitle } from "@/components/canvas/module-title";
@@ -464,6 +465,7 @@ function ActionBar({
   routing,
   pageSelection,
   stateSaving,
+  translations,
   onView,
   onReverted,
 }: {
@@ -478,6 +480,11 @@ function ActionBar({
   /** The variable backing page selection (p.81), or "" for none. */
   pageSelection: string;
   stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
+  /** Translations (p.207-211). In the save for the same reason as the other
+   * two: the tables translate strings that live in the layout, so they have
+   * to travel with it or a save would drop every translation a builder
+   * entered. */
+  translations: NonNullable<import("@/lib/types").WorkshopModule["translations"]>;
   onView: (version: number) => void;
   onReverted: () => void;
 }) {
@@ -503,6 +510,7 @@ function ActionBar({
           routing: { enabled: routing },
           pageSelection,
           stateSaving,
+          translations,
         }),
         description,
       ),
@@ -705,6 +713,8 @@ function Toolbox({
   onEventsChange,
   stateSaving,
   onStateSavingChange,
+  translations,
+  onTranslationsChange,
 }: {
   routing: boolean;
   onRoutingChange: (next: boolean) => void;
@@ -721,6 +731,8 @@ function Toolbox({
   onStateSavingChange: (
     next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
   ) => void;
+  translations: NonNullable<import("@/lib/types").WorkshopModule["translations"]>;
+  onTranslationsChange: (next: NonNullable<import("@/lib/types").WorkshopModule["translations"]>) => void;
 }) {
   return (
     <div className="canvas-toolbox">
@@ -738,6 +750,8 @@ function Toolbox({
         onEventsChange={onEventsChange}
         stateSaving={stateSaving}
         onStateSavingChange={onStateSavingChange}
+        translations={translations}
+        onTranslationsChange={onTranslationsChange}
       />
       {/* p.213 reaches Used colors "by navigating to a module's Settings tab
           in edit mode", and this column is that tab: it is where the module's
@@ -838,6 +852,11 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // module, saved with the document beside routing and for the same reason.
   const [pageSelection, setPageSelection] = useState("");
   const [stateSaving, setStateSaving] = useState(() => stateSavingOf(undefined));
+  // p.207-211's tables, held here with the other two module-wide settings so
+  // the Save button carries them. Never edited by this component - the switch
+  // is the Settings panel's and the tables are written through the API until
+  // p.209's Translations tab exists.
+  const [translations, setTranslations] = useState(() => translationsOf(undefined));
   const savedVersion = appQuery.data?.current_version;
   useEffect(() => {
     if (!appQuery.data) return;
@@ -846,6 +865,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     setRouting(routingOf(appQuery.data.definition));
     setPageSelection(pageSelectionOf(appQuery.data.definition));
     setStateSaving(stateSavingOf(appQuery.data.definition));
+    setTranslations(translationsOf(appQuery.data.definition));
   }, [savedVersion, appQuery.data?.id]);
 
   // A module always lives in a project. A resolved `canvas_app` without one is
@@ -909,6 +929,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           routing={routing}
           pageSelection={pageSelection}
           stateSaving={stateSaving}
+          translations={translations}
           onView={setViewingVersion}
           onReverted={() => setReloadToken((n) => n + 1)}
         />
@@ -929,6 +950,8 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           onPageSelectionChange={setPageSelection}
           stateSaving={stateSaving}
           onStateSavingChange={setStateSaving}
+          translations={translations}
+          onTranslationsChange={setTranslations}
           actions={actionCandidates}
           modules={moduleCandidates}
         />
@@ -954,6 +977,8 @@ function CanvasBody({
   onPageSelectionChange,
   stateSaving,
   onStateSavingChange,
+  translations,
+  onTranslationsChange,
   actions,
   modules,
 }: {
@@ -975,6 +1000,8 @@ function CanvasBody({
   onStateSavingChange: (
     next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
   ) => void;
+  translations: NonNullable<import("@/lib/types").WorkshopModule["translations"]>;
+  onTranslationsChange: (next: NonNullable<import("@/lib/types").WorkshopModule["translations"]>) => void;
   actions: ActionCandidate[];
   modules: ModuleCandidate[];
 }) {
@@ -1100,6 +1127,8 @@ function CanvasBody({
           onEventsChange={onEventsChange}
           stateSaving={stateSaving}
           onStateSavingChange={onStateSavingChange}
+          translations={translations}
+          onTranslationsChange={onTranslationsChange}
         />
       )}
       <div className="canvas-frame-area">

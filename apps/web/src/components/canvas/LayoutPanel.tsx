@@ -10,6 +10,7 @@ import { canPark, move as moveNode, park, UNUSED_NAME } from "./unused";
 import type { Clipping, PasteMode } from "./clipboard";
 
 type StateSavingSettings = NonNullable<WorkshopModule["state_saving"]>;
+type TranslationSettings = NonNullable<WorkshopModule["translations"]>;
 
 /**
  * The Layout sidebar (roadmap phase 2, item 1.4).
@@ -84,6 +85,8 @@ export function LayoutPanel({
   onEventsChange,
   stateSaving,
   onStateSavingChange,
+  translations,
+  onTranslationsChange,
 }: {
   /** Whether this module writes its state to the URL (p.195). Here because
    * Foundry puts it in "the Pages section of the Settings panel" and the
@@ -119,6 +122,12 @@ export function LayoutPanel({
    * module-wide switches an author sets once. */
   stateSaving?: StateSavingSettings;
   onStateSavingChange?: (next: StateSavingSettings) => void;
+  /** Translations (p.207-211). p.208 puts the switch here by name — "navigate
+   * to the Settings tab in edit mode and toggle on Translations in the
+   * Advanced functionalities section" — and this panel is that tab, beside
+   * the other two module-wide switches an author sets once. */
+  translations?: TranslationSettings;
+  onTranslationsChange?: (next: TranslationSettings) => void;
 } = {}) {
   const { rows, parked, selectedId } = useEditor((state) => {
     const walk = (id: string, depth: number, out: Row[]): Row[] => {
@@ -190,6 +199,7 @@ export function LayoutPanel({
     };
   });
   const { actions, query } = useEditor();
+  const languageCount = Object.keys(translations?.languages ?? {}).length;
 
   // p.55's cut / copy / paste. **Both halves go through the serialised map**,
   // not through Craft's node-tree API: the layout *is* that map (decision
@@ -499,6 +509,38 @@ export function LayoutPanel({
                 under.
               </p>
             </>
+          )}
+        </>
+      )}
+      {onTranslationsChange && translations && (
+        <>
+          <label className="vars-toggle">
+            <input
+              type="checkbox"
+              checked={translations.enabled}
+              data-testid="translations-toggle"
+              onChange={(e) =>
+                onTranslationsChange({ ...translations, enabled: e.target.checked })
+              }
+            />
+            {/* p.207's own framing, which is what the switch actually does:
+                a reader gets their language, not "the module is
+                multilingual". */}
+            Serve readers their own language
+          </label>
+          {translations.enabled && (
+            <p className="canvas-widget-empty" data-testid="translations-state">
+              {/* Two facts, because either alone misleads. A count of
+                  languages over an empty table reads as done, and a module
+                  with the switch on and nothing entered is the state most
+                  likely to be mistaken for working (§214). */}
+              {languageCount === 0
+                ? "No languages yet. Strings are translated through the API "
+                  + "until the Translations tab is built."
+                : `${languageCount} language${languageCount === 1 ? "" : "s"}. `
+                  + "A reader whose browser asks for one of them gets it; "
+                  + "everyone else gets the module as written."}
+            </p>
           )}
         </>
       )}
