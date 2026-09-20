@@ -247,3 +247,52 @@ def test_a_collection_still_answers(
     }, data_type="string")
     got = _read(client, fx, world, "North Ltd")["figure"]
     assert sorted(str(v) for v in got) == ["10", "20", "30"], got
+
+
+def test_a_chain_that_lands_back_on_the_type_being_saved(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """**The overlay, and the mutation sweep is how it got a test.**
+
+    `ontology._update` reads every type's declared properties out of the
+    database so `parse` can check an arithmetic aggregation against the far
+    type. A chain can land back on the type being *saved* - here Orders and
+    then Placed by, two hops home - and the rows in the database for that type
+    are the ones this save is about to replace. So the map is overlaid with the
+    properties in hand.
+
+    Without the overlay the check reads the definition being replaced, and a
+    numeric property added in the *same* request is invisible to a derivation
+    added beside it: the save fails saying the type has no such property, about
+    a property the request plainly contains. Removing the overlay passed all
+    seven of this file's other tests, because none of them looked homeward.
+    """
+    r = client.get(f"{wbase(fx)}/object-types/{world['customer']}",
+                   headers=hdr(fx.editor_sub))
+    detail = r.json()
+    keep = [dict(p) for p in detail["properties"] if p["derivation"] is None]
+    # Both in one request: a brand-new number, and a derivation that aggregates
+    # it after walking out to Orders and back.
+    r = client.patch(
+        f"{wbase(fx)}/object-types/{world['customer']}",
+        headers=hdr(fx.editor_sub),
+        json={
+            "display_name": detail["display_name"],
+            "properties": keep + [
+                {"api_name": "score", "display_name": "Score",
+                 "data_type": "integer"},
+                {"api_name": "peer_score", "display_name": "Peer score",
+                 "data_type": "float",
+                 "derivation": {
+                     "links": [{"link_type_id": world["link"]},
+                               {"link_type_id": world["link"]}],
+                     "aggregate": "avg", "property": "score",
+                 }},
+            ],
+            "title_property": detail.get("title_property"),
+        },
+    )
+    assert r.status_code == 200, r.text
+    saved = next(p for p in r.json()["properties"] if p["api_name"] == "peer_score")
+    assert saved["derivation"]["aggregate"] == "avg"
+    assert saved["derivation"]["far_type_id"] == world["customer"]

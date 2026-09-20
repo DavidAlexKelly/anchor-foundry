@@ -4604,12 +4604,17 @@ async def _derive_property(
                 str(prop["api_name"]): str(prop["data_type"]) for prop in far
             },
         )
+        # **No `property_name`, and that is not an omission.** Both stores read
+        # an arithmetic aggregation's property off the `Aggregation` itself
+        # (`agg.property`); the argument exists for `count_distinct`, which
+        # needs the `.keyword` subfield by name. Passing it here looked
+        # careful and was dead - the mutation sweep set it to `None` and
+        # nothing failed, because nothing reads it on this path.
         return await store.aggregate_object_set(
             search_prefix=prefix,
             object_type_id=definition.object_type_id,
             filters=filters,
             aggregation=aggregation,
-            property_name=aggregation.property,
         )
 
     # Everything else reads the far objects and takes the property off them:
