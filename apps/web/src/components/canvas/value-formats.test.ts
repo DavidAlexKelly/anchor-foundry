@@ -35,6 +35,16 @@ describe("reading a stored formatter", () => {
     // parse `1234` as a date, fail, and hand the digits back - a formatter
     // that reads as configured and does nothing at all.
     expect(numberFormatOf({ kind: "datetime", style: "datetime_short" })).toBeNull();
+    // **The second one is what makes the `kind` line load-bearing**, and the
+    // first on its own did not. §157's two families name no style in common,
+    // so every formatter §157's editor can produce is refused by the style
+    // list whether the kind is checked or not - deleting the check left the
+    // case above passing. A hand-written hybrid is the shape that separates
+    // them, and §212 is the reason one can exist: the raw JSON editor holds
+    // whatever somebody types.
+    expect(numberFormatOf({ kind: "datetime", style: "plain" })).toBeNull();
+    expect(numberFormatOf({ kind: "datetime", style: "currency", currency: "USD" }))
+      .toBeNull();
   });
 
   it("drops a style the editor never offers", () => {
