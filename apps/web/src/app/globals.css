@@ -2278,6 +2278,14 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    `data-tinted` rather than on the inline style, so an untinted header does
    not move a pixel. */
 .canvas-header[data-tinted="true"] { padding-left: 14px; padding-right: 14px; }
+/* **And the ink follows the band.** `data-scheme` redefines `--ink` beneath
+   the header, but inheritance passes a computed colour rather than the
+   variable — so a header that sets no `color` of its own renders its title in
+   the *page's* ink, which on a dark band is dark text on dark. Asking for the
+   token here is what makes p.59-60's rule reach the header's own text, and it
+   is scoped to a tinted header so an untinted one keeps inheriting exactly
+   what it always did. */
+.canvas-header[data-tinted="true"] { color: var(--ink); }
 .canvas-header--vertical[data-tinted="true"] { padding-right: 14px; }
 /* Pinned while the page beneath it scrolls - the behaviour that makes a
    header a node type rather than a container with a border. */
