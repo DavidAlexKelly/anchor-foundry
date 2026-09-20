@@ -21,6 +21,8 @@
  * this widget.
  */
 
+import { showNumber, type NumberFormat } from "./value-formats";
+
 /** What a card can show, matching `object_sets.AGGREGATIONS` and
  * `NUMERIC_AGGREGATIONS` between them.
  *
@@ -112,9 +114,22 @@ export function metricRequest(aggregation: unknown, property: unknown): {
  */
 export const NO_VALUE = "—";
 
-export function valueLabel(value: unknown): string {
+/**
+ * `format` is p.328's **Numeric formatting**, which is the module-local
+ * formatter p.174 describes rather than an ontology one — the number here was
+ * computed by this widget, so there is no property to inherit from.
+ *
+ * **It applies to the figure and not to the dash.** p.328 calls it a scheme
+ * "to display the numeric value"; there is no numeric value to display when
+ * the aggregation answered nothing, and a formatter that turned the empty
+ * answer into `$0.00` would be §226's whole point undone by a display option.
+ */
+export function valueLabel(
+  value: unknown,
+  format: NumberFormat | null = null,
+): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return NO_VALUE;
-  return value.toLocaleString();
+  return showNumber(value, format);
 }
 
 // ---- p.329's "Show visualization?" -----------------------------------------
