@@ -315,7 +315,7 @@ Ours: 4 triggers (`click`, `row_select`, `change`, `submit`) and 16 effects (`se
 |---|---|---|
 | Viewer role to open, Editor role to edit | ✅ | (p. Permissions section) |
 | Data, actions and functions permissioned **separately** from the module | ✅ | our RLS does this |
-| **Check access panel** — inspect a named user's access to the module | ○ | genuinely useful; a support tool as much as a builder one |
+| **Check access panel** — inspect a named user's access to the module | ✅ | §412 (p.92) — every answer is asked on a connection opened *as* the named user, through the reads their own requests make, so the panel cannot drift from what a real request would get. Four states rather than a yes/no: `unusable` is p.92's warning made concrete (a published module opens for a workspace viewer; running an action is a project editor's right), and `unknown` keeps a dangling reference from being reported as a permission problem. Functions are p.92's fourth kind and are `[fn]` |
 
 ---
 
