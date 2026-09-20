@@ -202,9 +202,9 @@ describe("which properties an aggregation may run over", () => {
 });
 
 describe("the arithmetic rule as a sentence", () => {
-  const many = chainState("dept", [
-    { link_type_id: "l1", far_type_id: "emp", reaches_many: true, label: "Employees" },
-  ]);
+  // Built the way the other tests build one, rather than by hand: `hopsFrom`
+  // owns the shape of a hop, and a literal here would be a second copy of it.
+  const many = chainState(DEPARTMENT, hopsFrom([WORKS_IN], DEPARTMENT));
   const FAR = [
     { api_name: "salary", data_type: "integer", derivation: null },
     { api_name: "title", data_type: "string", derivation: null },
