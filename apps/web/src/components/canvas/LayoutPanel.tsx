@@ -1,7 +1,10 @@
 "use client";
 
 import { useEditor } from "@craftjs/core";
+import { useState } from "react";
 import { MIN_SECONDS, type AutoRefresh } from "./auto-refresh";
+import { problem as columnMathProblem } from "./derived-columns";
+import type { DerivedColumn, KnownProperty } from "./derived-columns";
 
 import type { WorkshopEvent, WorkshopModule, WorkshopVariable } from "@/lib/types";
 import { newEventId, newNodeId, newVariableId } from "@/lib/workshop-module";
@@ -72,6 +75,124 @@ function detailOf(displayName: string, props: Record<string, unknown>): string {
   return first("title", "label", "text", "name", "objectSetVariable", "datasetId").slice(0, 28);
 }
 
+/**
+ * p.168's Derived properties, declared per object type.
+ *
+ * > "In the Overview tab, select Derived properties from the Capabilities
+ * > section. You can also select the object type from the Object types section
+ * > and add a derived property on the next screen." (p.168)
+ *
+ * **The type comes first**, which is p.168's own order and not a layout
+ * choice: an expression is checked against one type's properties, so there is
+ * no meaningful "add a derived property" until a type has been named.
+ *
+ * The expression is checked as it is typed, against `derived-columns.ts` —
+ * the same function the table would refuse on, so a column that shows a
+ * sentence here never reaches a reader as a blank.
+ */
+function DerivedPropertiesField({
+  value,
+  types,
+  onChange,
+}: {
+  value: Record<string, DerivedColumn[]>;
+  types: { id: string; label: string; properties: KnownProperty[] }[];
+  onChange: (next: Record<string, DerivedColumn[]>) => void;
+}) {
+  const [typeId, setTypeId] = useState("");
+  const chosen = types.find((t) => t.id === typeId);
+  const columns = value[typeId] ?? [];
+
+  const write = (next: DerivedColumn[]) => {
+    const all = { ...value };
+    // An empty list is *no* declaration rather than an empty one, which keeps
+    // a document that has had them and lost them identical to one that never
+    // did (the rule `moduleFrom` applies one level up).
+    if (next.length) all[typeId] = next;
+    else delete all[typeId];
+    onChange(all);
+  };
+
+  return (
+    <div className="field">
+      <span className="field-label">Derived properties</span>
+      <select
+        value={typeId}
+        data-testid="derived-type"
+        onChange={(e) => setTypeId(e.target.value)}
+      >
+        <option value="">Choose an object type…</option>
+        {types.map((t) => (
+          <option key={t.id} value={t.id}>{t.label}</option>
+        ))}
+      </select>
+      {types.length === 0 && (
+        <span className="field-hint">
+          No widget in this module reads an object type yet.
+        </span>
+      )}
+      {chosen && (
+        <>
+          {columns.map((column, index) => {
+            const issue = columnMathProblem(
+              column.expression,
+              chosen.properties,
+              columns.filter((_, i) => i !== index),
+            );
+            return (
+              <div key={index} className="cf-rule">
+                <input
+                  data-testid={`derived-name-${index + 1}`}
+                  placeholder="column name"
+                  value={column.api_name}
+                  onChange={(e) => write(columns.map((c, i) =>
+                    (i === index ? { ...c, api_name: e.target.value } : c)))}
+                />
+                <input
+                  data-testid={`derived-expression-${index + 1}`}
+                  placeholder="revenue - cost"
+                  value={column.expression}
+                  onChange={(e) => write(columns.map((c, i) =>
+                    (i === index ? { ...c, expression: e.target.value } : c)))}
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  aria-label={`Remove derived property ${index + 1}`}
+                  onClick={() => write(columns.filter((_, i) => i !== index))}
+                >
+                  ✕
+                </button>
+                {issue && (
+                  <span className="field-hint" data-testid={`derived-problem-${index + 1}`}>
+                    {issue}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            className="btn"
+            data-testid="derived-add"
+            onClick={() => write([
+              ...columns,
+              { api_name: "", kind: "column_math", expression: "" },
+            ])}
+          >
+            Add a derived property
+          </button>
+          <span className="field-hint">
+            Arithmetic over this type&rsquo;s own properties (p.170). Name it in a
+            widget&rsquo;s column list to show it. It is calculated for display —
+            filters and sorts do not see it (p.172).
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function LayoutPanel({
   routing,
   onRoutingChange,
@@ -91,6 +212,9 @@ export function LayoutPanel({
   autoRefresh,
   onAutoRefreshChange,
   objectSetVariables = [],
+  derivedProperties,
+  onDerivedPropertiesChange,
+  derivableTypes = [],
 }: {
   /** Whether this module writes its state to the URL (p.195). Here because
    * Foundry puts it in "the Pages section of the Settings panel" and the
@@ -141,6 +265,15 @@ export function LayoutPanel({
    * than read from `variables` above so this panel keeps one source for what
    * a registration may name. */
   objectSetVariables?: { id: string; label: string }[];
+  /** Derived properties, per object type (p.168–172). p.168 puts them in the
+   * Overview tab's Capabilities section; this panel is that tab, beside the
+   * other module-wide declarations. */
+  derivedProperties?: Record<string, DerivedColumn[]>;
+  onDerivedPropertiesChange?: (next: Record<string, DerivedColumn[]>) => void;
+  /** The object types this module's widgets read, with their properties —
+   * p.168 declares a derived property *per object type*, so the type comes
+   * first and an expression is checked against that type's own properties. */
+  derivableTypes?: { id: string; label: string; properties: KnownProperty[] }[];
 } = {}) {
   const { rows, parked, selectedId } = useEditor((state) => {
     const walk = (id: string, depth: number, out: Row[]): Row[] => {
@@ -610,6 +743,13 @@ export function LayoutPanel({
             </>
           )}
         </>
+      )}
+      {onDerivedPropertiesChange && derivedProperties && (
+        <DerivedPropertiesField
+          value={derivedProperties}
+          types={derivableTypes}
+          onChange={onDerivedPropertiesChange}
+        />
       )}
       {onTranslationsChange && translations && (
         <>

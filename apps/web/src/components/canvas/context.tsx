@@ -17,6 +17,16 @@ export interface CanvasEnv {
    * submit real writes while arranging the page. "run": the real app, as an
    * end user sees it - forms and actions are live. */
   mode: "edit" | "run";
+  /** The module's derived properties, keyed by object type id (workshop
+   * p.168-172; §411).
+   *
+   * **Here rather than on each widget's props**, because p.168 declares them
+   * "at the module level and per object type" — a Craft prop would have to be
+   * copied onto every table showing that type, and the copies would be free to
+   * disagree. Variables live here for the same reason.
+   *
+   * Read through `derived-columns.ts`, which drops what it cannot use (§212). */
+  derivedColumns?: unknown;
 }
 
 const CanvasContext = createContext<CanvasEnv | null>(null);

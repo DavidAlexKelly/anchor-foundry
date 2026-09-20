@@ -247,6 +247,25 @@ export interface WorkshopModule {
    * module does not carry over the auto-refresh configuration of the embedded
    * module" — because the setting is on a document and an embedded module
    * renders its own. */
+  /** Derived properties, per object type (workshop p.168–172; §411).
+   *
+   * > "Derived properties are defined at the module level and per object
+   * > type." (p.168)
+   *
+   * Beside `routing`, `state_saving` and `auto_refresh` for their reason: a
+   * widget names one of these in its column list, so reverting a version has
+   * to take the declaration back with the layout that references it.
+   *
+   * Only p.170's **Column math** is built. p.169's linked property /
+   * aggregation is the shape the ontology already has (§161, §406) and
+   * carries that shape's cost — a query per hop, so a single-object read
+   * rather than a column. */
+  derived_properties?: Record<string, {
+    api_name: string;
+    display_name?: string;
+    kind: "column_math";
+    expression: string;
+  }[]>;
   auto_refresh?: {
     enabled: boolean;
     /** p.577's "Minimum seconds between refresh", floor 10. */

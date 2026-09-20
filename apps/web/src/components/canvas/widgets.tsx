@@ -122,6 +122,7 @@ import {
   METRIC_SUBJECT, paintFor, rulesByColumn, rulesOf, SERIES_SUBJECT,
   strokeFor, subjectProperties,
 } from "./conditional-formats";
+import { columnsFor, problem as columnMathProblem, valueFor } from "./derived-columns";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import type { ConditionalRule } from "@/lib/types";
 import { latest as latestOf } from "./sparkline";
@@ -3754,7 +3755,7 @@ export function CanvasObjectTable({
     id: nodeId,
     connectors: { connect, drag },
   } = useNode();
-  const { workspaceId, projectId, mode } = useCanvasEnv();
+  const { workspaceId, projectId, mode, derivedColumns } = useCanvasEnv();
   const eventContext = useEventContext(undefined, useOverlayIds());
   const filterValue = useCanvasParameter(filterParameter);
   const searchValue = useCanvasParameter(searchParameter);
@@ -3857,6 +3858,22 @@ export function CanvasObjectTable({
   const properties = wanted.length
     ? wanted.map((name) => all.find((p) => p.api_name === name)).filter((p) => !!p)
     : all;
+
+  // p.170's calculated columns for whichever type this table is showing.
+  //
+  // **Only when named in `columns`, and never in the "every property" case.**
+  // A derived property is the module's, not the ontology's, so a table left
+  // on its default of "show everything" is showing everything the *type* has;
+  // adding columns a builder never asked this table for would be the module
+  // reaching into a widget that never mentioned it.
+  const declaredDerived = useMemo(
+    () => columnsFor(derivedColumns, String(effectiveTypeId ?? "")),
+    [derivedColumns, effectiveTypeId],
+  );
+  const derived = wanted.length
+    ? wanted.map((name) => declaredDerived.find((c) => c.api_name === name))
+        .filter((c) => !!c)
+    : [];
 
   // p.583's column. **One read for the page**, fired only when a visible
   // column is a time series - a table of ordinary properties must not pay for
@@ -4114,6 +4131,15 @@ export function CanvasObjectTable({
                       {p.display_name || p.api_name}
                     </th>
                   ))}
+                  {/* p.170's calculated columns, after the type's own. They
+                      are not frozen - `stick` numbers the columns a reader can
+                      pin, and a column the ontology does not have is not one
+                      of them. */}
+                  {derived.map((c) => (
+                    <th key={`derived-${c.api_name}`} data-derived={c.api_name}>
+                      {c.display_name || c.api_name}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -4297,6 +4323,27 @@ export function CanvasObjectTable({
                                 value={instance.properties[p.api_name]}
                                 emptyText={emptyText}
                               />
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
+                    {derived.map((c) => {
+                      // p.171: "computed on the fly". Every value it needs is
+                      // already on this row, so a page of these costs nothing
+                      // the table was not already paying.
+                      const value = valueFor(c, instance.properties);
+                      return (
+                        <td key={`derived-${c.api_name}`} data-derived={c.api_name}>
+                          <div className="canvas-cell">
+                            {value === null ? (
+                              // **Not a zero.** A missing or non-numeric input
+                              // makes the whole expression nothing, and the
+                              // cell says so the way every other empty one
+                              // does rather than reporting a figure.
+                              <span className="soft">{emptyText}</span>
+                            ) : (
+                              value.toLocaleString()
                             )}
                           </div>
                         </td>
