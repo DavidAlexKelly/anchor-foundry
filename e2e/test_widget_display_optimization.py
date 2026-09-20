@@ -183,7 +183,12 @@ def test_the_builder_is_not_optimised(page, api):
     settled(page)
     expect(page.locator("[data-mount]")).to_have_count(0)
     # And the widget itself is there to be selected, unscrolled.
-    expect(page.get_by_text(TARGET, exact=True)).to_have_count(1)
+    #
+    # **Scoped to the canvas.** Unscoped this finds two: the widget, and the
+    # layout tree row that names it - so `count == 1` failed against a product
+    # that was working. The claim is about the canvas, so it says canvas
+    # (§337: name the control, not its neighbourhood).
+    expect(page.locator(".canvas-block").get_by_text(TARGET, exact=True)).to_have_count(1)
 
 
 def test_the_panel_offers_p182s_two_and_says_why_not_the_others(page, api):
