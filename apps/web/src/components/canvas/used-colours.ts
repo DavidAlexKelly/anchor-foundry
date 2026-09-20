@@ -28,6 +28,7 @@
  * might want to tidy.
  */
 import { isHex, normaliseHex } from "./style";
+import { refIn } from "./saved-colours";
 import type { LayoutNodes } from "../../lib/workshop-module";
 
 /** Where one colour is used. */
@@ -110,31 +111,63 @@ function record(
  */
 export function usedColours(layout: unknown): UsedColour[] {
   const found = new Map<string, ColourUse[]>();
-  if (layout && typeof layout === "object") {
-    for (const [nodeId, node] of Object.entries(layout as LayoutNodes)) {
-      const props = (node as { props?: Record<string, unknown> } | undefined)?.props;
-      if (!props || typeof props !== "object") continue;
-      for (const prop of COLOUR_PROPS) record(found, props[prop], nodeId, prop);
-      for (const [listProp, inner] of Object.entries(NESTED_COLOUR_PROPS)) {
-        const entries = props[listProp];
-        if (!Array.isArray(entries)) continue;
-        entries.forEach((entry, index) => {
-          if (!entry || typeof entry !== "object") return;
-          for (const key of inner) {
-            record(
-              found,
-              (entry as Record<string, unknown>)[key],
-              nodeId,
-              `${listProp}[${index}].${key}`,
-            );
-          }
-        });
-      }
-    }
-  }
+  eachColourValue(layout, (value, node, prop) => record(found, value, node, prop));
   return [...found.entries()]
     .map(([hex, uses]) => ({ hex, uses }))
     .sort((a, b) => (b.uses.length - a.uses.length) || a.hex.localeCompare(b.hex));
+}
+
+/** Every value sitting in a colour prop, wherever the prop sits.
+ *
+ * **Extracted when §414 needed the same walk for a different question.** Which
+ * props hold a colour — and that two widgets spell theirs differently — is one
+ * fact, and a second walk would be a second list to keep in step: a saved
+ * colour would work on a section and not on a Timeline layer, and nobody would
+ * report it because it reads as "that widget does not support it" (§292).
+ */
+export function eachColourValue(
+  layout: unknown,
+  visit: (value: unknown, node: string, prop: string) => void,
+): void {
+  if (!layout || typeof layout !== "object") return;
+  for (const [nodeId, node] of Object.entries(layout as LayoutNodes)) {
+    const props = (node as { props?: Record<string, unknown> } | undefined)?.props;
+    if (!props || typeof props !== "object") continue;
+    for (const prop of COLOUR_PROPS) visit(props[prop], nodeId, prop);
+    for (const [listProp, inner] of Object.entries(NESTED_COLOUR_PROPS)) {
+      const entries = props[listProp];
+      if (!Array.isArray(entries)) continue;
+      entries.forEach((entry, index) => {
+        if (!entry || typeof entry !== "object") return;
+        for (const key of inner) {
+          visit(
+            (entry as Record<string, unknown>)[key],
+            nodeId,
+            `${listProp}[${index}].${key}`,
+          );
+        }
+      });
+    }
+  }
+}
+
+/** Where each saved colour is referenced, by id (p.214; §414).
+ *
+ * > "…and view where each color is used across layouts and widgets in your
+ * > module." (p.214)
+ *
+ * The Saved half of the question `usedColours` answers for the Unsaved one,
+ * over the same walk. Keyed by id rather than by name, because a rename must
+ * not change the answer — which is the whole reason a reference names an id.
+ */
+export function referenceUses(layout: unknown): Record<string, ColourUse[]> {
+  const found: Record<string, ColourUse[]> = {};
+  eachColourValue(layout, (value, node, prop) => {
+    const id = refIn(value);
+    if (id === null) return;
+    (found[id] ??= []).push({ node, prop });
+  });
+  return found;
 }
 
 /** How a colour's usage reads. p.214: "see the usage of these colors in layouts

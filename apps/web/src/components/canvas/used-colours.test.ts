@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BACKGROUND_PRESETS } from "./style";
-import { emptyReason, usageLabel, usedColours } from "./used-colours";
+import { emptyReason, referenceUses, usageLabel, usedColours } from "./used-colours";
 
 function node(props: Record<string, unknown>) {
   return { type: { resolvedName: "CanvasSection" }, props };
@@ -183,5 +183,45 @@ describe("documents that arrived from anywhere", () => {
 
   it("survives a node with no props", () => {
     expect(usedColours({ a: { type: { resolvedName: "X" } } })).toEqual([]);
+  });
+});
+
+describe("referenceUses (p.214; §414)", () => {
+  it("finds a saved colour wherever a colour prop sits", () => {
+    // The same walk as `usedColours`, which is the point of extracting it: a
+    // saved colour that worked on a section and not on a Timeline layer would
+    // read as "that widget does not support it" and go unreported.
+    const uses = referenceUses({
+      page: { props: { background: "saved:c1" } },
+      chart: { props: { segments: [{ color: "saved:c1" }, { color: "#112233" }] } },
+      stepper: { props: { completedColour: "saved:c2" } },
+    });
+    expect(uses.c1).toEqual([
+      { node: "page", prop: "background" },
+      { node: "chart", prop: "segments[0].color" },
+    ]);
+    expect(uses.c2).toEqual([{ node: "stepper", prop: "completedColour" }]);
+  });
+
+  it("keys by id, not by name", () => {
+    // A rename must not change where a colour is used, which is the whole
+    // reason a reference names an id.
+    expect(Object.keys(referenceUses({ p: { props: { background: "saved:c1" } } })))
+      .toEqual(["c1"]);
+  });
+
+  it("reports a colour nothing references as absent, not as zero", () => {
+    // §226: the caller needs to tell "no uses" from "never asked", and an
+    // empty array for every id in the palette would be a guess about ids this
+    // walk has never seen.
+    expect(referenceUses({ p: { props: { background: "#112233" } } })).toEqual({});
+  });
+
+  it("ignores a hex, a preset and a reference to nothing", () => {
+    expect(referenceUses({
+      a: { props: { background: "#112233" } },
+      b: { props: { background: "shade-2" } },
+      c: { props: { background: "saved:" } },
+    })).toEqual({});
   });
 });

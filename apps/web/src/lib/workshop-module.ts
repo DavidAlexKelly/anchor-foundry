@@ -80,6 +80,7 @@ export function moduleFrom(
     translations?: WorkshopModule["translations"];
     autoRefresh?: WorkshopModule["auto_refresh"];
     derivedProperties?: WorkshopModule["derived_properties"];
+    savedColours?: WorkshopModule["saved_colours"];
   },
 ): WorkshopModule {
   const current = isV2(definition) ? definition : undefined;
@@ -89,6 +90,7 @@ export function moduleFrom(
   const translations = parts.translations ?? current?.translations;
   const autoRefresh = parts.autoRefresh ?? current?.auto_refresh;
   const derivedProperties = parts.derivedProperties ?? current?.derived_properties;
+  const savedColours = parts.savedColours ?? current?.saved_colours;
   return {
     format: 2,
     layout: parts.layout ?? layoutOf(definition),
@@ -108,6 +110,11 @@ export function moduleFrom(
     // chose.
     ...(derivedProperties && Object.keys(derivedProperties).length
       ? { derived_properties: derivedProperties } : {}),
+    // Same carry, same reason (p.214): a widget's background holds
+    // `saved:c1`, so a save that dropped the palette would leave every one
+    // of those references naming nothing. Written only when the palette has
+    // an entry, so an empty array is not a key in every diff.
+    ...(savedColours && savedColours.length ? { saved_colours: savedColours } : {}),
     ...(stateSaving ? { state_saving: stateSaving } : {}),
     // Same carry, same reason. Omitted when empty rather than written as `""`
     // so that turning it off leaves a document indistinguishable from one that
@@ -201,6 +208,13 @@ export function autoRefreshOf(definition: unknown): unknown {
  * `components/canvas/derived-columns.ts`, which is pure and is where they are
  * tested; this only finds the object.
  */
+/** p.214's palette, out of a stored document. Mirrors `derivedPropertiesOf`:
+ * the palette belongs to the module, and what a stored entry *means* is
+ * `saved-colours.ts`'s. */
+export function savedColoursOf(definition: unknown): unknown {
+  return isV2(definition) ? definition.saved_colours : undefined;
+}
+
 export function derivedPropertiesOf(definition: unknown): unknown {
   return isV2(definition) ? definition.derived_properties : undefined;
 }

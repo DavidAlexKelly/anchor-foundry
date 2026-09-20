@@ -3166,6 +3166,12 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    invisible, which is exactly the colour somebody is most likely hunting. */
 .canvas-colours-swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--line); flex: none; }
 .canvas-colours-hex { font-family: var(--font-mono); }
+/* p.214's Saved colors (§414): a name that can be typed over, and the
+   light/dark pair below it. */
+.canvas-colours-name { flex: 1 1 auto; min-width: 0; font-size: 12px; }
+.canvas-colours-pair { display: flex; gap: 8px; margin: 2px 0 0 22px; font-size: 11px; }
+.canvas-colours-pair label { display: flex; align-items: center; gap: 4px; }
+.canvas-colours-pair input { width: 7em; font-family: var(--font-mono); font-size: 11px; }
 .canvas-colours-uses { list-style: none; margin: 2px 0 0 22px; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
 .canvas-colours-uses li { display: flex; gap: 6px; justify-content: space-between; }
 .canvas-colours-use-node { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

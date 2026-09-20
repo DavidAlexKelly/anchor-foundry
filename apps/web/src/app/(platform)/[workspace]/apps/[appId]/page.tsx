@@ -41,7 +41,7 @@ import {
 } from "@/lib/app-version";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
 import {
-  eventsOf, pageSelectionOf, routingOf, stateSavingOf, variablesOf,
+  eventsOf, pageSelectionOf, routingOf, savedColoursOf, stateSavingOf, variablesOf,
 } from "@/lib/workshop-module";
 import { readerLayout } from "@/components/canvas/reader-layout";
 import { RedactBanner } from "@/components/canvas/RedactBanner";
@@ -193,7 +193,14 @@ export default function PublishedAppPage() {
       ) : (
         <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
           <CanvasEnvProvider
-            value={{ workspaceId: workspace!.id, projectId: app.data.project_id, mode: "run" }}
+            value={{
+              workspaceId: workspace!.id, projectId: app.data.project_id, mode: "run",
+              // p.214's Saved colors. A viewer resolves `saved:c1` the same way
+              // the builder does or every referencing widget renders nothing —
+              // which is the one failure a palette must not have, because it
+              // only appears on the route nobody is looking at while building.
+              savedColours: savedColoursOf(app.data.definition),
+            }}
           >
             {/* Interface variables seeded from the URL (Foundry p.165) - the
                 same external IDs an embedding module maps. */}

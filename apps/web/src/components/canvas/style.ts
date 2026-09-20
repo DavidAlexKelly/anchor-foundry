@@ -30,6 +30,9 @@
  * colours by typing them.
  */
 
+import { isHex, normaliseHex } from "./hex";
+import { type SavedColour, refIn, resolveColour } from "./saved-colours";
+
 /** p.58's presets, as a ladder from the page's own paper to its strongest rule.
  *
  * Named by depth rather than by colour so a future dark ladder can reuse the
@@ -120,8 +123,25 @@ export interface StyleProps {
  * holding a value this function did not invent. Rejecting `red` in the name of
  * validation would blank a background somebody is looking at.
  */
-export function resolveBackground(value: string | null | undefined): string | null {
+export function resolveBackground(
+  value: string | null | undefined,
+  /** p.214's Saved colors (§414). Absent means a module with no palette, which
+   * is every module built before §414 and most of them after — so a caller
+   * that does not have one is not a caller doing something wrong.
+   *
+   * The resolution lives in `saved-colours.ts` and is called from here rather
+   * than written here, because the Stepper's two colour props go through the
+   * same function (§292): two resolvers would mean a saved colour that worked
+   * on a section and not on a step. */
+  saved?: { palette: readonly SavedColour[]; scheme: "light" | "dark" },
+): string | null {
   if (!value) return null;
+  const referenced = resolveColour(value, saved?.palette ?? [], saved?.scheme ?? "light");
+  // `undefined` is a reference whose colour is gone (§210), and it stops here
+  // rather than falling through: the remaining rules would read `saved:c9` as
+  // a free CSS colour and hand it to the browser, which renders nothing and
+  // reports nothing.
+  if (referenced !== null) return referenced ?? null;
   if (value in BACKGROUND_PRESETS) {
     return BACKGROUND_PRESETS[value as BackgroundPreset] || null;
   }
@@ -130,25 +150,12 @@ export function resolveBackground(value: string | null | undefined): string | nu
   return raw === "transparent" || raw === "" ? null : raw;
 }
 
-/** Whether this is a hex colour, in either spelling. Exported for
- * `used-colours.ts` (§398), which asks the same question of the same values -
- * a second copy would be a second answer the first time somebody allowed a
- * four-digit alpha hex (§292). */
-export function isHex(value: string): boolean {
-  return /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value.trim());
-}
-
-/** `#abc` and `abc` both mean `#aabbcc`. Accepting the short form and the
- * missing hash is not politeness: this value is typed by hand, and a picker
- * that silently ignored `abc` would look like a broken control. */
-/** One spelling per colour: lowercased, `#`-prefixed, three digits expanded
- * to six. Exported for the same reason as `isHex` - and it is what makes
- * `#FFF` and `#ffffff` one row in the Used colors panel rather than two. */
-export function normaliseHex(value: string): string {
-  const raw = value.trim().replace(/^#/, "").toLowerCase();
-  const full = raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw;
-  return `#${full}`;
-}
+/** Both live in `hex.ts` since §414 — `saved-colours.ts` needs them and this
+ * file needs `saved-colours.ts`, so leaving them here made the two import each
+ * other. Re-exported so `used-colours.ts` and every other caller kept working
+ * without learning where they went (§292: one implementation, imported by
+ * both). */
+export { isHex, normaliseHex };
 
 /** How bright a colour is, 0 (black) to 1 (white).
  *
@@ -182,8 +189,11 @@ export const LIGHT_TEXT_BELOW = Math.sqrt(1.05 * 0.05) - 0.05;
  * behind it, and claiming to know that colour is how a section flips to white
  * text over a white page.
  */
-export function isDarkBackground(value: string | null | undefined): boolean {
-  const colour = resolveBackground(value);
+export function isDarkBackground(
+  value: string | null | undefined,
+  saved?: { palette: readonly SavedColour[]; scheme: "light" | "dark" },
+): boolean {
+  const colour = resolveBackground(value, saved);
   // Only a colour whose brightness can actually be *computed* counts. A
   // free-text `red` or `var(--panel)` is a real background this cannot measure,
   // and guessing would flip a section's text on a value nobody read.
@@ -225,8 +235,11 @@ function borderCss(border: BorderName): { border?: string; boxShadow?: string } 
  * and splitting the block across both mechanisms is how one half of it ends up
  * applying and the other silently not.
  */
-export function styleFor(props: StyleProps): React.CSSProperties {
-  const background = resolveBackground(props.background);
+export function styleFor(
+  props: StyleProps,
+  saved?: { palette: readonly SavedColour[]; scheme: "light" | "dark" },
+): React.CSSProperties {
+  const background = resolveBackground(props.background, saved);
   const [block, inline] = paddingFor(props);
   return {
     ...(background ? { background } : {}),
@@ -234,6 +247,30 @@ export function styleFor(props: StyleProps): React.CSSProperties {
     ...(props.border ? borderCss(props.border) : {}),
     ...(props.border && props.border !== "borderless" ? { borderRadius: "var(--radius)" } : {}),
   };
+}
+
+/** Which option the Background control should show as chosen (p.214; §414).
+ *
+ * The control has one slot and four kinds of value in it — a preset, a saved
+ * colour, a typed hex and whatever free CSS an older module holds — so what is
+ * *selected* is a decision rather than a lookup, and it is here with the rest
+ * of the vocabulary rather than inside the panel.
+ *
+ * **A reference whose colour has gone reads as Custom**, which puts the raw
+ * `saved:c9` into the hex field. Showing it is the point: the alternative is a
+ * control that silently reads "Transparent" over a widget that is not
+ * transparent, and a builder with no way to find out what happened.
+ */
+export function backgroundChoice(
+  value: string | null | undefined,
+  palette: readonly SavedColour[] = [],
+): string {
+  const raw = (value ?? "").trim();
+  const id = refIn(raw);
+  if (id !== null) return palette.some((colour) => colour.id === id) ? raw : "custom";
+  if (raw === "") return "transparent";
+  if (raw in BACKGROUND_PRESETS) return raw;
+  return "custom";
 }
 
 /** The value for the `data-scheme` attribute a styled element carries, or
@@ -247,6 +284,9 @@ export function styleFor(props: StyleProps): React.CSSProperties {
  * mean touching every one of them, and missing one would be invisible until
  * somebody picked a dark background.
  */
-export function schemeFor(props: StyleProps): "dark" | undefined {
-  return isDarkBackground(props.background) ? "dark" : undefined;
+export function schemeFor(
+  props: StyleProps,
+  saved?: { palette: readonly SavedColour[]; scheme: "light" | "dark" },
+): "dark" | undefined {
+  return isDarkBackground(props.background, saved) ? "dark" : undefined;
 }

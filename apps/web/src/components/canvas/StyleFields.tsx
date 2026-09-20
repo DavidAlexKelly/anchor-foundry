@@ -18,9 +18,11 @@
 
 import {
   BACKGROUND_LABELS, BACKGROUND_PRESETS, BORDERS, BORDER_LABELS,
-  PADDINGS, PADDING_LABELS, paddingFor, resolveBackground,
+  PADDINGS, PADDING_LABELS, backgroundChoice, paddingFor, resolveBackground,
   type BorderName, type PaddingName, type StyleProps,
 } from "./style";
+import { refTo } from "./saved-colours";
+import { useSavedColours } from "./use-saved-colours";
 
 const PRESET_NAMES = Object.keys(BACKGROUND_PRESETS) as (keyof typeof BACKGROUND_PRESETS)[];
 const PADDING_NAMES = [...Object.keys(PADDINGS), "custom"] as PaddingName[];
@@ -42,7 +44,13 @@ export function StyleFields({
   border?: boolean;
 }) {
   const background = props.background ?? "";
-  const custom = !(background in BACKGROUND_PRESETS) && background !== "";
+  const { palette, scheme } = useSavedColours();
+  // p.214: a saved colour is "selectable when configuring custom colors in
+  // layouts and widgets, including section and page backgrounds" — so it is an
+  // option in this control rather than a second one beside it. Which option is
+  // chosen is `backgroundChoice`'s, with the rest of the vocabulary.
+  const choice = backgroundChoice(background, palette);
+  const custom = choice === "custom";
   const [block, inline] = paddingFor(props);
 
   return (
@@ -51,16 +59,18 @@ export function StyleFields({
         <span className="field-label">Background</span>
         <select
           data-testid="style-background"
-          value={custom ? "custom" : background || "transparent"}
+          value={choice}
           onChange={(e) =>
             set(
               "background",
               // Switching *to* custom seeds the picker with the colour that is
               // already showing, so the swatch does not blank the moment
-              // somebody reaches for a shade of it. Switching to a preset
-              // replaces it outright, which is what picking a preset means.
+              // somebody reaches for a shade of it. Switching to a preset or a
+              // saved colour replaces it outright, which is what picking one
+              // means — and for a saved colour it is the whole feature: the
+              // node stores the reference, not the value behind it.
               e.target.value === "custom"
-                ? resolveBackground(background) ?? "#ffffff"
+                ? resolveBackground(background, { palette, scheme }) ?? "#ffffff"
                 : e.target.value,
             )
           }
@@ -68,6 +78,13 @@ export function StyleFields({
           {PRESET_NAMES.map((name) => (
             <option key={name} value={name}>{BACKGROUND_LABELS[name]}</option>
           ))}
+          {palette.length > 0 && (
+            <optgroup label="Saved colours">
+              {palette.map((colour) => (
+                <option key={colour.id} value={refTo(colour.id)}>{colour.name}</option>
+              ))}
+            </optgroup>
+          )}
           <option value="custom">Custom…</option>
         </select>
       </label>

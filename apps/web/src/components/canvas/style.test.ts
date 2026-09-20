@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   BACKGROUND_PRESETS, BORDERS, LIGHT_TEXT_BELOW, PADDINGS,
-  isDarkBackground, paddingFor, relativeLuminance, resolveBackground, schemeFor, styleFor,
+  backgroundChoice, isDarkBackground, paddingFor, relativeLuminance, resolveBackground,
+  schemeFor, styleFor,
 } from "./style";
 
 /** Style formatting (Foundry `workshop` p.57-62).
@@ -166,5 +167,76 @@ describe("styleFor", () => {
     expect(style.background).toBe("#123456");
     expect(style.padding).toBe("16px 16px");
     expect(style.border).toBe("1px solid var(--line)");
+  });
+});
+
+describe("resolveBackground with a saved palette (p.214; §414)", () => {
+  const PALETTE = [
+    { id: "c1", name: "Brand", light: "#112233", dark: "#ddeeff" },
+  ];
+
+  it("resolves a reference to the colour for the scheme on screen", () => {
+    expect(resolveBackground("saved:c1", { palette: PALETTE, scheme: "light" }))
+      .toBe("#112233");
+    expect(resolveBackground("saved:c1", { palette: PALETTE, scheme: "dark" }))
+      .toBe("#ddeeff");
+  });
+
+  it("still resolves presets and hexes with a palette present", () => {
+    // The palette is an addition, not a replacement: every module built before
+    // §414 stores hexes and presets and has to keep rendering.
+    expect(resolveBackground("shade-3", { palette: PALETTE, scheme: "light" }))
+      .toBe(BACKGROUND_PRESETS["shade-3"]);
+    expect(resolveBackground("#ABC", { palette: PALETTE, scheme: "light" }))
+      .toBe("#aabbcc");
+  });
+
+  it("gives nothing for a reference whose colour has gone", () => {
+    // §210. It stops here rather than falling through, because the remaining
+    // rules would read `saved:c9` as a free CSS colour and hand it to the
+    // browser — which renders nothing and reports nothing.
+    expect(resolveBackground("saved:c9", { palette: PALETTE, scheme: "light" }))
+      .toBeNull();
+  });
+
+  it("gives nothing for a reference when nobody passed a palette", () => {
+    // A caller that has not been taught about the palette must not render
+    // `saved:c1` as a colour name.
+    expect(resolveBackground("saved:c1")).toBeNull();
+  });
+});
+
+describe("backgroundChoice (p.214; §414)", () => {
+  const PALETTE = [
+    { id: "c1", name: "Brand", light: "#112233", dark: "#ddeeff" },
+  ];
+
+  it("picks the saved colour's own option", () => {
+    expect(backgroundChoice("saved:c1", PALETTE)).toBe("saved:c1");
+  });
+
+  it("picks the preset", () => {
+    expect(backgroundChoice("shade-3", PALETTE)).toBe("shade-3");
+  });
+
+  it("picks Transparent for nothing at all", () => {
+    for (const value of ["", "   ", null, undefined]) {
+      expect(backgroundChoice(value, PALETTE)).toBe("transparent");
+    }
+  });
+
+  it("picks Custom for a typed colour", () => {
+    expect(backgroundChoice("#123456", PALETTE)).toBe("custom");
+    expect(backgroundChoice("var(--panel)", PALETTE)).toBe("custom");
+  });
+
+  it("shows a reference whose colour has gone rather than hiding it", () => {
+    // Reading it as Transparent would leave the control saying one thing over
+    // a widget doing another, with no way for a builder to find out.
+    expect(backgroundChoice("saved:c9", PALETTE)).toBe("custom");
+  });
+
+  it("reads every reference as Custom when there is no palette", () => {
+    expect(backgroundChoice("saved:c1")).toBe("custom");
   });
 });
