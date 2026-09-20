@@ -3695,10 +3695,16 @@ export function CanvasObjectTable({
    * keyed by property API name. §158's rules, comparing the latest value
    * rather than a stored property - see `conditional-formats.ts`. */
   seriesRules?: unknown;
-  /** One of the server's `object_sets.SORTS`. Sorting *by a property* is
-   * refused there rather than here, because untyped properties would order
-   * differently on the two stores; the settings panel therefore offers what
-   * the server accepts rather than a column-header click that sometimes 422s.
+  /** One of the server's `object_sets.SORTS`, **or a property sort** — `name`
+   * or `-name` for a property whose declared type has an order both stores
+   * agree on (§221's `ORDERABLE_TYPES`), which §231 gave this panel.
+   *
+   * This said property sorts were "refused there rather than here, because
+   * untyped properties would order differently on the two stores". True when
+   * written and untrue from §221, which is the same shape of stale claim §406
+   * found on the derived-property editor — except this one had already been
+   * built, so the comment was describing a refusal the code beside it does not
+   * make. `withSortProperty` is imported ten lines up.
    *
    * **p.223's "one or more"**: a list of them, and a plain string for the one
    * every module stored before this. Both read through `table-sorts.ts`, so

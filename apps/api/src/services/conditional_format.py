@@ -18,13 +18,16 @@ compare it would never be greater than 50000, because a string never was
 greater than anything. Two settings on one property, reading the same stored
 number, deciding different things about it.
 
-**This is not the ordered-comparison rule the stores refuse.** ``OPERATORS``
-excludes ordered operators because instance properties are stored untyped and
-Postgres and OpenSearch would disagree about whether "250" sorts before "40".
-Nothing here touches a store: the comparison happens in a browser, on a value
-already fetched, against a property the object type *declares* as numeric. The
-declaration is what makes it safe, and it is why a numeric rule is allowed on a
-numeric property and refused on a string one.
+**This is a different question from an object set's ordered filter**, and the
+distinction is worth keeping even though both are now allowed. ``OPERATORS``
+excludes ordered operators and ``ORDERED_OPERATORS`` carries them separately,
+because a store comparison needs the declared type to be one both stores order
+the same way (§221). Nothing here touches a store: the comparison happens in a
+browser, on a value already fetched, against a property the object type
+*declares* as numeric. The declaration is what makes both safe.
+
+This paragraph said the stores *refuse* ordered comparison, which stopped being
+true at §221 and was still here at §410.
 """
 from __future__ import annotations
 

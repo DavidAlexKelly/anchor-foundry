@@ -12,6 +12,8 @@ one-to-one hop, and a collection.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from src.services import derived_properties as dp
@@ -410,3 +412,43 @@ def test_a_declared_landing_type_that_disagrees_with_the_chain_is_refused() -> N
     """Accepted back, never trusted: the chain decides where it lands."""
     with pytest.raises(dp.DerivationError, match="lands on a different object type"):
         parse({"links": [WORKS_IN], "aggregate": "count", "far_type_id": PROJECT})
+
+
+def test_the_browser_and_the_server_agree_on_which_aggregations_exist() -> None:
+    """**The guard §410 added, and the gap it would have caught.**
+
+    §406 removed four aggregations from `UNSUPPORTED_AGGREGATES` and added them
+    to the editor's dropdown — and left `Derivation["aggregate"]` in
+    `packages/types` naming the old four. Nothing failed, because the editor
+    wrote `aggregate as "count"` to satisfy the union: a cast that names one
+    member to smuggle four others through.
+
+    So there were three lists of aggregations and only two of them were
+    compared. This is the third: the TypeScript union must be exactly what this
+    module accepts, which is `AGGREGATES` minus the ones it refuses.
+
+    Read out of the source rather than imported, for the reason §190's
+    panel-drift test gives: the two are in different languages and neither is
+    derived from the other, so the only honest comparison is to go and look.
+    """
+    import re
+
+    types_file = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))),
+        "packages", "types", "src", "index.ts",
+    )
+    source = open(types_file).read()
+    block = re.search(r"export interface Derivation \{(.*?)\n\}", source, re.S)
+    assert block, "Derivation not found in packages/types - has it been renamed?"
+    field = re.search(r"aggregate\?:([^;]+);", block.group(1), re.S)
+    assert field, "Derivation has no `aggregate` field - has it been renamed?"
+    declared = set(re.findall(r'"([a-z_]+)"', field.group(1)))
+    assert declared, "the union parsed as empty - the scan broke, not the type"
+
+    accepted = set(dp.AGGREGATES) - set(dp.UNSUPPORTED_AGGREGATES)
+    assert declared == accepted, (
+        f"the browser's Derivation union and the server's accepted list have "
+        f"drifted: only in TypeScript {sorted(declared - accepted)}, "
+        f"only on the server {sorted(accepted - declared)}"
+    )
