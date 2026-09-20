@@ -24,6 +24,8 @@
  * kind of thing a browser test can only confirm rendered *something*.
  */
 
+import type { CSSProperties } from "react";
+
 import type { ConditionalRule, PropertyStyle } from "@/lib/types";
 
 /** The style the first matching rule asks for, or null if none matched.
@@ -132,4 +134,33 @@ function asNumber(value: unknown): number | null {
   if (typeof value === "boolean") return null;
   const n = Number(String(value).trim());
   return Number.isFinite(n) ? n : null;
+}
+
+/** A rule's answer as inline style. Inline rather than a class because the
+ * colours are author-chosen hex (p.105's "add your own custom color"), and a
+ * stylesheet cannot enumerate those.
+ *
+ * **Here rather than in `property-value.tsx`, where it was private** (§405):
+ * workshop p.175 paints a time series column and a Metric Card, and neither
+ * goes through `PropertyValue` — the series cell renders `SeriesCell` and the
+ * card renders its own number. Three copies of "a background needs padding"
+ * is three places for the padding to differ. Being a module rather than a
+ * component's private also makes it testable, which it was not. */
+export function cssFor(style: PropertyStyle | null | undefined): CSSProperties | undefined {
+  if (!style) return undefined;
+  const out: CSSProperties = {};
+  if (style.colour) out.color = style.colour;
+  if (style.background) {
+    out.background = style.background;
+    // A background needs room to read as one rather than as a smear behind
+    // the text, and p.102's screenshot is explicit about it: "colored boxes".
+    out.padding = "1px 6px";
+    out.borderRadius = "var(--radius)";
+  }
+  if (style.align) {
+    out.textAlign = style.align;
+    out.display = "inline-block";
+    out.minWidth = "100%";
+  }
+  return Object.keys(out).length ? out : undefined;
 }
