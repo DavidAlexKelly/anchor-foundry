@@ -3289,6 +3289,39 @@ def test_the_two_events_p91_names_are_accepted() -> None:
     assert [e.type for e in events["e_1"].effects] == ["refresh_data", "toggle_theme"]
 
 
+def test_p578_s_pause_and_resume_are_accepted() -> None:
+    """workshop p.578: "You can let users pause or resume the application of
+    auto-refresh updates during a session by configuring Workshop events, such
+    as through a Button Group widget."
+
+    **Two effects rather than one with a value**, because p.578 names two
+    actions — a Button Group offering "pause" and "resume" needs a button that
+    does each, and a single toggle would make the two indistinguishable.
+    """
+    events = we.parse(
+        {"e_1": event("e_1", effects=[{"type": "disable_auto_refresh"},
+                                      {"type": "enable_auto_refresh"}])},
+        layout={"btn": node({})},
+    )
+    assert [e.type for e in events["e_1"].effects] == [
+        "disable_auto_refresh", "enable_auto_refresh",
+    ]
+    # Neither names anything, for p.91's pair's reason: p.578 gives each one
+    # sentence with no object in it.
+    assert all(e.config == {} for e in events["e_1"].effects)
+
+
+def test_an_effect_this_platform_does_not_answer_is_still_refused() -> None:
+    """The guard that makes the list above mean something. §409 added two
+    names to it, and a parser that had stopped refusing would accept them
+    for a reason that has nothing to do with p.578."""
+    with pytest.raises(we.EventError):
+        we.parse(
+            {"e_1": event("e_1", effects=[{"type": "pause_everything"}])},
+            layout={"btn": node({})},
+        )
+
+
 def test_neither_of_p91_s_events_needs_a_target() -> None:
     """**The claim worth stating rather than assuming.** Every other effect this
     module accepts names something - a variable, a section, a page, an action -

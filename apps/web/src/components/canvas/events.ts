@@ -35,7 +35,7 @@ export function useEventContext(
   const { setMany, reset, values: parameterValues } = useCanvasParameters();
   const {
     go, openOverlay, closeOverlay, collapsed, setCollapsed, tabs, setTab, recompute,
-    toggleScheme,
+    toggleScheme, setAutoRefreshPaused,
   } = useCanvasPage();
   const queryClient = useQueryClient();
   const { run: runAction } = useCanvasActions();
@@ -68,6 +68,8 @@ export function useEventContext(
       );
     },
     toggleTheme: toggleScheme,
+    // p.578's pause and resume, from wherever the button happens to be.
+    setAutoRefreshPaused,
     // **Toggle is resolved here, against what is on screen.** The section's
     // own props say which variable backs it and how it starts, and `resolved`
     // says what that variable currently holds - so this is the only place with

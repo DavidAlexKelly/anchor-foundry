@@ -194,9 +194,15 @@ export function changed(before: string | null, after: string | null): boolean {
  * So a change seen while the tab is in the background is **remembered, not
  * dropped** — which is the difference between catching up and silently missing
  * an update. The caller holds the pending flag; this says what to do with it.
+ *
+ * **p.578's pause is the same question** (§409), which is why it is the same
+ * function rather than a second one: *"Disable auto-refresh updates: Prevents
+ * updates from auto-refresh from **taking effect**"* — not from happening. A
+ * paused module keeps watching, and what it saw lands when somebody resumes,
+ * exactly as a hidden tab's does when it returns.
  */
-export function applyNow(visible: boolean): boolean {
-  return visible;
+export function applyNow(visible: boolean, paused = false): boolean {
+  return visible && !paused;
 }
 
 /** The object-set variables a module can register (p.576). */

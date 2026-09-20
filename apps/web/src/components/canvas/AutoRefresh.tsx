@@ -18,11 +18,13 @@ import {
   applyNow, changed, intervalMs, running, settingsOf, stamp, watchedTypes,
 } from "./auto-refresh";
 import { invalidateCanvasReads } from "./refresh";
-import { useCanvasEnv, useCanvasVariables } from "./context";
+import { useCanvasEnv, useCanvasPage, useCanvasVariables } from "./context";
 
 export function AutoRefresh({ setting }: { setting: unknown }) {
   const { workspaceId, mode } = useCanvasEnv();
   const { resolved } = useCanvasVariables();
+  // p.578: a reader can pause the *application* of updates with a button.
+  const { autoRefreshPaused } = useCanvasPage();
   const queryClient = useQueryClient();
 
   const settings = settingsOf(setting);
@@ -38,6 +40,10 @@ export function AutoRefresh({ setting }: { setting: unknown }) {
    * missing the update. */
   const pending = useRef(false);
   const [visible, setVisible] = useState(true);
+  // A ref as well as the value, so the poll running on a timer reads what
+  // is true now rather than what was true when the interval was armed.
+  const paused = useRef(autoRefreshPaused);
+  paused.current = autoRefreshPaused;
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -75,7 +81,8 @@ export function AutoRefresh({ setting }: { setting: unknown }) {
       if (stopped) return;
       if (changed(seen.current, next)) pending.current = true;
       seen.current = next;
-      if (pending.current && applyNow(document.visibilityState !== "hidden")) {
+      if (pending.current
+          && applyNow(document.visibilityState !== "hidden", paused.current)) {
         pending.current = false;
         void invalidateCanvasReads(queryClient);
       }
@@ -91,11 +98,15 @@ export function AutoRefresh({ setting }: { setting: unknown }) {
   // p.579's "at which point a reload will immediately be triggered": a change
   // that arrived while the tab was away is applied the moment it comes back,
   // without waiting for the next interval.
+  // p.579's "at which point a reload will immediately be triggered", and
+  // p.578's "Allows updates from auto-refresh to take effect": a change that
+  // arrived while the tab was away *or* while a reader had paused is applied
+  // the moment that stops being true, without waiting for the next interval.
   useEffect(() => {
-    if (!on || !visible || !pending.current) return;
+    if (!on || !applyNow(visible, autoRefreshPaused) || !pending.current) return;
     pending.current = false;
     void invalidateCanvasReads(queryClient);
-  }, [on, visible, queryClient]);
+  }, [on, visible, autoRefreshPaused, queryClient]);
 
   return null;
 }

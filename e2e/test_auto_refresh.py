@@ -26,6 +26,43 @@ LATER = {"id": "R3", "name": "Third from elsewhere"}
 SECONDS = 10
 
 
+def with_buttons(api, name: str):
+    """The same watching module, plus p.578's two buttons.
+
+    > "You can let users pause or resume the application of auto-refresh
+    > updates during a session by configuring Workshop events, such as through
+    > a Button Group widget." (p.578)
+    """
+    mod = Module(api, name)
+    type_id = mod.object_type(columns=["id", "name"], rows=ROWS, key="id", title="name")
+    mod.type_id = type_id
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "pause": {"resolvedName": "CanvasButton", "props": {"label": "Pause"}},
+            "resume": {"resolvedName": "CanvasButton", "props": {"label": "Resume"}},
+            "tbl": {"resolvedName": "CanvasObjectTable",
+                    "props": {"objectSetVariable": "v_all", "columns": "id,name",
+                              "pageSize": 25}},
+        }),
+        "variables": {
+            "v_all": {"id": "v_all", "kind": "object_set", "label": "All rows",
+                      "object_set": object_set(type_id)},
+        },
+        "events": {
+            "e_pause": {"id": "e_pause", "trigger": {"node": "pause", "on": "click"},
+                        "effects": [{"type": "disable_auto_refresh"}]},
+            "e_resume": {"id": "e_resume", "trigger": {"node": "resume", "on": "click"},
+                         "effects": [{"type": "enable_auto_refresh"}]},
+        },
+        "auto_refresh": {
+            "enabled": True, "seconds": SECONDS,
+            "disable_in_edit": True, "variables": ["v_all"],
+        },
+    })
+    return mod
+
+
 def build(api, name: str, *, watching=True, seconds=SECONDS, in_edit=False,
           register="v_all", second_type=False):
     """A table over one object type, and optionally a second type nobody shows.
@@ -203,3 +240,106 @@ def test_registering_one_set_does_not_watch_another_type(page, api):
     page.wait_for_timeout((SECONDS + 5) * 1000)
     assert rows(page).count() == len(ROWS), "an unregistered type was watched"
     expect(page.get_by_text(LATER["name"], exact=True)).to_have_count(0)
+
+
+def test_a_reader_can_pause_updates_and_the_held_one_lands_on_resume(page, api):
+    """p.578's pair, and the sentence that shapes both: *"Prevents updates from
+    auto-refresh from **taking effect**"* — not from happening.
+
+    So a paused module keeps watching, and what it saw while paused arrives
+    the moment somebody resumes. **That is the half worth a browser**: pausing
+    and never seeing the row again would be indistinguishable from pausing and
+    losing it, and the second is the version that quietly shows stale data
+    forever.
+    """
+    mod = with_buttons(api, "Auto refresh pause")
+    open_module(page, mod)
+    eventually(lambda: rows(page).count(), lambda n: n == len(ROWS),
+               what="the module's rows")
+
+    page.get_by_role("button", name="Pause", exact=True).click()
+    add_row(mod)
+
+    # **The timing is the test, and it took a mutation to notice.**
+    #
+    # Polls land at roughly t=0 (on mount) and every `SECONDS` after. Waiting
+    # just over one interval guarantees a poll has *seen* the write and held
+    # it; resuming there leaves most of an interval before the next tick, so
+    # an assertion inside that gap can only be satisfied by the resume itself.
+    #
+    # The first version waited `SECONDS + 5` and then allowed 8 seconds, which
+    # put the next scheduled poll inside the assertion window — so a build
+    # where resuming did nothing at all passed, with the interval quietly
+    # doing the work. "Immediately, not at the next interval" was never
+    # checked.
+    page.wait_for_timeout((SECONDS + 2) * 1000)
+    assert rows(page).count() == len(ROWS), "a paused module applied an update"
+
+    page.get_by_role("button", name="Resume", exact=True).click()
+    # p.578's "Allows updates from auto-refresh to take effect" is p.579's "at
+    # which point a reload will immediately be triggered", said for the other
+    # reason a refresh is held. Well inside the remaining interval.
+    eventually(lambda: rows(page).count(), lambda n: n == len(ROWS) + 1,
+               what="the held update landing on resume, not at the next poll",
+               timeout_ms=3000)
+    expect(page.get_by_text(LATER["name"], exact=True)).to_be_visible()
+
+
+def hide_tab(page, hidden: bool) -> None:
+    """Make the page look backgrounded, the way p.579 means it.
+
+    Playwright cannot minimise a tab, so `visibilityState` is overridden and
+    the event the browser would fire is fired. That is exactly the pair the
+    component listens for, so this drives the real code path rather than a
+    test-only one.
+    """
+    page.evaluate(
+        """(hidden) => {
+            Object.defineProperty(document, "visibilityState", {
+                configurable: true, get: () => (hidden ? "hidden" : "visible"),
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+        }""",
+        hidden,
+    )
+
+
+def test_a_paused_module_stays_paused_when_the_tab_comes_back(page, api):
+    """**The claim the mutation sweep found nothing was making.**
+
+    p.578's pause and p.579's hidden tab are two reasons to hold the same
+    update, and `applyNow` takes both because either alone is not enough. A
+    build that checked only visibility passed every other test in this file:
+    on resume the two agree, so nothing could tell them apart — until the tab
+    goes away and comes back *while still paused*, which is the one moment
+    they disagree.
+
+    Without both, returning to the tab applies an update the reader explicitly
+    paused, which is the failure that looks like the pause button is broken
+    intermittently.
+    """
+    mod = with_buttons(api, "Auto refresh paused tab")
+    open_module(page, mod)
+    eventually(lambda: rows(page).count(), lambda n: n == len(ROWS),
+               what="the module's rows")
+
+    page.get_by_role("button", name="Pause", exact=True).click()
+    add_row(mod)
+    # Long enough that a poll has seen the write and held it.
+    page.wait_for_timeout((SECONDS + 2) * 1000)
+    assert rows(page).count() == len(ROWS), "a paused module applied an update"
+
+    # Away and back, still paused.
+    hide_tab(page, True)
+    page.wait_for_timeout(500)
+    hide_tab(page, False)
+    page.wait_for_timeout(2000)
+    assert rows(page).count() == len(ROWS), (
+        "returning to the tab applied an update the reader had paused"
+    )
+
+    # And the pause is still a pause, not a break: resuming still delivers it.
+    page.get_by_role("button", name="Resume", exact=True).click()
+    eventually(lambda: rows(page).count(), lambda n: n == len(ROWS) + 1,
+               what="the held update landing once the reader resumes",
+               timeout_ms=3000)

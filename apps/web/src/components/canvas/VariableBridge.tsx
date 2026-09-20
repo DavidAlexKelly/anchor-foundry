@@ -174,6 +174,8 @@ export function VariableBridge({
   // the section overrides (decision 0002 §3): a published module opens light
   // for every viewer, because a saved app is not a saved session.
   const [scheme, setScheme] = useState<"light" | "dark">("light");
+  // p.578's pause. Session state beside `scheme` and for its reason.
+  const [autoRefreshPaused, setAutoRefreshPaused] = useState(false);
   // `undefined` when this module has no Variable-Based Page Selection at all,
   // which `pageState` reads differently from a variable holding "".
   //
@@ -374,6 +376,8 @@ export function VariableBridge({
           setTab: (id, override) =>
             setTabState((current) => ({ ...current, [id]: override })),
           scheme,
+          autoRefreshPaused,
+          setAutoRefreshPaused,
           toggleScheme: () => setScheme((s) => (s === "dark" ? "light" : "dark")),
           // p.85's Recompute: record the ask, then make a resolve happen. The
           // tick is what makes it happen at all, since none of the *parameter*
