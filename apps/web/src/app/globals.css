@@ -2278,14 +2278,19 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    `data-tinted` rather than on the inline style, so an untinted header does
    not move a pixel. */
 .canvas-header[data-tinted="true"] { padding-left: 14px; padding-right: 14px; }
-/* **And the ink follows the band.** `data-scheme` redefines `--ink` beneath
-   the header, but inheritance passes a computed colour rather than the
-   variable — so a header that sets no `color` of its own renders its title in
-   the *page's* ink, which on a dark band is dark text on dark. Asking for the
-   token here is what makes p.59-60's rule reach the header's own text, and it
-   is scoped to a tinted header so an untinted one keeps inheriting exactly
-   what it always did. */
-.canvas-header[data-tinted="true"] { color: var(--ink); }
+/* **No `color` rule here, and the absence is the finding.** A tinted header's
+   own text relights through `[data-scheme="dark"]`, which ends in
+   `color: var(--ink)` and predates all of this — so a rule here would be a
+   second answer to a settled question. §415 added one anyway and the sweep
+   caught it: changing it to `inherit` reddened a test, which proves only that
+   the line was load-bearing *as written* (`inherit` is specific enough to
+   override the scheme rule), not that it was needed. Deleting it outright
+   left every test green, which is the §223 question and the honest one.
+
+   What is still missing is the inverse: there is no `[data-scheme="light"]`,
+   so a **pale** header inside a dark-themed module shows light ink on a pale
+   band. That is platform-wide — any light section in a dark module has it —
+   and `workshop.md` §1.5 carries it rather than this file. */
 .canvas-header--vertical[data-tinted="true"] { padding-right: 14px; }
 /* Pinned while the page beneath it scrolls - the behaviour that makes a
    header a node type rather than a container with a border. */
