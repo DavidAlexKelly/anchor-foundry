@@ -40,6 +40,7 @@ import { defaultPageNode, pageNodeFor } from "./routing";
 import { visibleNodes } from "./visible-nodes";
 import { useProfiler } from "./ProfilerRecorder";
 import { RoutingSync } from "./RoutingSync";
+import { AutoRefresh } from "./AutoRefresh";
 import { StateBar } from "./StateBar";
 
 const DEBOUNCE_MS = 250;
@@ -53,6 +54,7 @@ export function VariableBridge({
   published = false,
   bound,
   routing = false,
+  autoRefresh,
   layout,
   lazy = false,
   countViews = false,
@@ -81,6 +83,9 @@ export function VariableBridge({
    * "the current page" has no answer, and an author arranging widgets should
    * not be rewriting the link they will share. */
   routing?: boolean;
+  /** The module's auto-refresh setting, as stored (p.576-580). Read
+   * defensively by `settingsOf`, so an absent one is simply off. */
+  autoRefresh?: unknown;
   /** The layout, for the page walk routing and state saving both need. */
   layout?: unknown;
   /** The id of the string variable backing page selection (p.81), if any.
@@ -403,6 +408,10 @@ export function VariableBridge({
           }}
         >
           {routing && <RoutingSync layout={layout} declared={declared} />}
+          {/* p.576's auto-refresh. Beside `RoutingSync` and for its reason:
+              it watches what the module's variables resolve to, so it has to
+              sit inside the provider that resolves them. Renders nothing. */}
+          <AutoRefresh setting={autoRefresh} />
           {/* p.91's theme, applied where every widget under it is reached at
               once. `data-scheme` redefines the tokens rather than restyling
               anything (p.59-60's rule, one level up), so a widget written

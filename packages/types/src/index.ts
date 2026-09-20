@@ -239,6 +239,23 @@ export interface WorkshopModule {
    * to an old version restored the behaviours and not the switch that makes
    * them mean anything. */
   routing?: { enabled: boolean };
+  /** Auto-refresh (workshop p.576–580). Beside `routing` and `state_saving`
+   * for their reason: what it registers is object set *variables*, and those
+   * live here, so a version revert has to take the switch with them.
+   *
+   * It is also what makes p.580 true without any code — "embedding a Workshop
+   * module does not carry over the auto-refresh configuration of the embedded
+   * module" — because the setting is on a document and an embedded module
+   * renders its own. */
+  auto_refresh?: {
+    enabled: boolean;
+    /** p.577's "Minimum seconds between refresh", floor 10. */
+    seconds: number;
+    /** p.578's "Disable in edit mode". */
+    disable_in_edit: boolean;
+    /** The `object_set` variable ids this module registered (p.576). */
+    variables: string[];
+  };
   /** State saving (p.200–206). Beside `routing` and for the same reason: the
    * per-variable enablement lives on the variables, so the switch that makes
    * it mean anything has to be reverted with them.

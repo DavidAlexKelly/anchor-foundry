@@ -1263,6 +1263,18 @@ export const objects = {
       method: "POST",
       body: JSON.stringify({ definition, property_api_name: property, ...opts }),
     }),
+  /** When each of these object types last changed (workshop p.576; §408).
+   *
+   * The watching half of auto-refresh. A watermark rather than a feed, because
+   * p.577's ten-second floor states a polling model outright — and cheap
+   * enough to ask on that schedule: a max and a count, no documents. */
+  objectTypeFreshness: (wid: string, objectTypeIds: string[]) =>
+    request<{
+      types: { object_type_id: string; updated_at: string | null; count: number }[];
+    }>(`/workspaces/${wid}/object-types/freshness`, {
+      method: "POST",
+      body: JSON.stringify({ object_type_ids: objectTypeIds }),
+    }),
   /** One number over a whole set — what a Metric Card shows. Separate from
    * `evaluateObjectSet` because a number over every row and a page of rows are
    * different questions with different costs. */
