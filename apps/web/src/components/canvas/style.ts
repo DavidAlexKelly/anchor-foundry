@@ -273,6 +273,25 @@ export function backgroundChoice(
   return "custom";
 }
 
+/** Which option a *text* colour control should show as chosen (p.47; §415).
+ *
+ * `backgroundChoice`'s vocabulary with two words changed, delegating rather
+ * than repeating it (§292). p.47 asks for "a custom color for the title text",
+ * so the control offers a default, the module's saved colours and a typed hex
+ * — and **not** p.58's background presets, whose names ("White", "Paper",
+ * "Shade") describe a surface rather than ink. A document holding one still
+ * renders it; it just reads as Custom here, which is the honest place to show
+ * a value this control would not have offered.
+ */
+export function textColourChoice(
+  value: string | null | undefined,
+  palette: readonly SavedColour[] = [],
+): string {
+  const chosen = backgroundChoice(value, palette);
+  if (chosen === "transparent") return "default";
+  return chosen in BACKGROUND_PRESETS ? "custom" : chosen;
+}
+
 /** The value for the `data-scheme` attribute a styled element carries, or
  * `undefined` when it should not carry one.
  *

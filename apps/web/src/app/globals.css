@@ -2271,6 +2271,27 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   padding: 10px 0 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
+/* p.47's header background (§415). **The padding comes with the colour**, and
+   only with it: a header has no horizontal padding by default because it sits
+   flush with the page it titles, and a coloured band running to the edge of
+   the viewport reads as a rendering fault rather than as a choice. Keyed on
+   `data-tinted` rather than on the inline style, so an untinted header does
+   not move a pixel. */
+.canvas-header[data-tinted="true"] { padding-left: 14px; padding-right: 14px; }
+/* **No `color` rule here, and the absence is the finding.** A tinted header's
+   own text relights through `[data-scheme="dark"]`, which ends in
+   `color: var(--ink)` and predates all of this — so a rule here would be a
+   second answer to a settled question. §415 added one anyway and the sweep
+   caught it: changing it to `inherit` reddened a test, which proves only that
+   the line was load-bearing *as written* (`inherit` is specific enough to
+   override the scheme rule), not that it was needed. Deleting it outright
+   left every test green, which is the §223 question and the honest one.
+
+   What is still missing is the inverse: there is no `[data-scheme="light"]`,
+   so a **pale** header inside a dark-themed module shows light ink on a pale
+   band. That is platform-wide — any light section in a dark module has it —
+   and `workshop.md` §1.5 carries it rather than this file. */
+.canvas-header--vertical[data-tinted="true"] { padding-right: 14px; }
 /* Pinned while the page beneath it scrolls - the behaviour that makes a
    header a node type rather than a container with a border. */
 .canvas-header--sticky { position: sticky; top: 0; z-index: 20; }
