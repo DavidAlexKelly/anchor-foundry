@@ -47,7 +47,7 @@ READINGS = (
 PLAIN_LATEST = "1,234.568"
 
 
-def build(api, name: str, *, table_props=None, card_props=None):
+def build(api, name: str, *, table_props=None, card_props=None, second_table=None):
     """A sensor type with a `time_series` property, a table and a card.
 
     Built directly rather than through `Module.object_type` for the reason
@@ -104,6 +104,14 @@ def build(api, name: str, *, table_props=None, card_props=None):
                      "props": {"objectSetVariable": "v_all", "aggregation": "avg",
                                "property": "capacity", "label": "Average",
                                **(card_props or {})}},
+            # A second table over the *same* property, for the one claim that
+            # needs two widgets alive at once. Omitted unless asked for, so
+            # every other test still reads `table` without an index.
+            **({"tbl2": {"resolvedName": "CanvasObjectTable",
+                         "props": {"objectSetVariable": "v_all",
+                                   "columns": "name,readings", "pageSize": 25,
+                                   **second_table}}}
+               if second_table is not None else {}),
         }),
         "variables": {
             "v_all": {"id": "v_all", "kind": "object_set", "label": "All sensors",
@@ -120,6 +128,13 @@ def row_for(page, name: str):
 
 def latest(page, name: str):
     return row_for(page, name).get_by_test_id("series-latest")
+
+
+def latest_in(page, index: int, name: str):
+    """The same cell, but in a named table rather than the only one."""
+    return (page.locator("table").nth(index)
+            .locator("tr", has=page.get_by_text(name, exact=True))
+            .get_by_test_id("series-latest"))
 
 
 @pytest.fixture(scope="module")
@@ -163,30 +178,43 @@ def test_a_module_formatter_writes_the_time_series_column(page, api):
     expect(latest(page, "South sensor")).to_have_text("$900")
 
 
-def test_the_same_property_is_formatted_differently_in_another_module(page, api):
-    """p.174's "local to the Workshop module, and not global to the ontology",
-    which is a claim about **two** modules and cannot be made with one.
+def test_the_formatter_belongs_to_the_widget_and_not_to_the_property(page, api):
+    """p.174's "local to the Workshop module, and not global to the ontology" —
+    made here in the only shape a browser can make *fail*.
 
-    Both tables read the same object type and the same `readings` property.
-    A formatter stored anywhere shared — on the property, on the type, in a
-    cache keyed by property name — would make the second module show the
-    first's punctuation.
+    **This replaces a two-module version that could not fail, and the mutation
+    sweep is how that was found.** That test opened module A, asserted its
+    formatting, then opened module B and asserted plain numbers. Opening B is a
+    `page.goto`, which tears down the JS context — so a mutant that cached
+    formatters by property name across tables was wiped before B's assertion
+    ever ran, and passed all seven tests untouched. The claim was true; the
+    check could not have noticed it being false.
+
+    Two tables on **one page**, over the **same property**, is the same claim
+    where a leak survives long enough to be seen. It is also the stronger
+    statement: the formatter belongs to the *widget*, which is what makes it
+    local to a module rather than to the ontology behind both tables.
     """
-    first = build(api, "Workshop formatting local A", table_props={
-        "seriesFormats": {"readings": {"kind": "number", "style": "affix",
-                                       "suffix": " kPa",
-                                       "maximum_fraction_digits": 1}},
-    })
-    open_module(page, first)
+    mod = build(
+        api, "Workshop formatting local",
+        table_props={"seriesFormats": {"readings": {
+            "kind": "number", "style": "affix", "suffix": " kPa",
+            "maximum_fraction_digits": 1}}},
+        # Deliberately no formatter. Two formatters would prove they differ;
+        # one and none proves the unformatted table stayed unformatted, which
+        # is the direction a leak actually travels.
+        second_table={},
+    )
+    open_module(page, mod)
+    # Both tables, before either is read: an assertion about "the second table"
+    # passes vacuously if only one rendered.
+    eventually(lambda: page.locator("table").count(), lambda n: n == 2,
+               what="both tables")
     eventually(lambda: page.get_by_test_id("series-latest").count(),
-               lambda n: n == 2, what="the first module's rows")
-    expect(latest(page, "North sensor")).to_have_text("1,234.6 kPa")
+               lambda n: n == 4, what="a latest value per row in each table")
 
-    second = build(api, "Workshop formatting local B")
-    open_module(page, second)
-    eventually(lambda: page.get_by_test_id("series-latest").count(),
-               lambda n: n == 2, what="the second module's rows")
-    expect(latest(page, "North sensor")).to_have_text(PLAIN_LATEST)
+    expect(latest_in(page, 0, "North sensor")).to_have_text("1,234.6 kPa")
+    expect(latest_in(page, 1, "North sensor")).to_have_text(PLAIN_LATEST)
 
 
 def test_a_formatter_that_could_not_apply_leaves_the_plain_number(page, api):
