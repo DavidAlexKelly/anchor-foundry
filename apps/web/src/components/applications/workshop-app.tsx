@@ -30,6 +30,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { ChangelogPanel } from "@/components/canvas/ChangelogPanel";
+import { CheckAccessPanel } from "@/components/canvas/CheckAccessPanel";
 import {
   CanvasEnvProvider, CanvasParameterProvider, useCanvasEnv,
 } from "@/components/canvas/context";
@@ -1103,6 +1104,12 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   );
 }
 
+/** The editor sidebar's tabs. Named rather than written twice: the state and
+ * the list that fills it went out of step the first time a tab was added. */
+type WorkshopTab =
+  | "widget" | "variables" | "events" | "profiler" | "metrics" | "translations"
+  | "access";
+
 function CanvasBody({
   hasSavedLayout,
   definition,
@@ -1245,9 +1252,7 @@ function CanvasBody({
   // Profiling opens on the Profiler tab, because the reload that got here was
   // pressed *from* it (p.177) and coming back to Widget loses the reader's
   // place in the one flow this mode has.
-  const [tab, setTab] = useState<
-    "widget" | "variables" | "events" | "profiler" | "metrics" | "translations"
-  >(
+  const [tab, setTab] = useState<WorkshopTab>(
     profilerOn(typeof window === "undefined" ? "" : window.location.search)
       ? "profiler"
       : "widget",
@@ -1305,7 +1310,12 @@ function CanvasBody({
       {showChrome && (
         <div className="canvas-settings">
           <nav className="ds-tabs canvas-panel-tabs">
-            {(["widget", "variables", "events", "profiler", "metrics", "translations"] as const).map((t) => (
+            {/* p.92's Check access is in this list without a guard of its own:
+                its route is editor-only, and `showChrome` above already keeps
+                this whole column from anybody who cannot edit. A second
+                `canEdit` here would be a check that cannot fail (§213). */}
+            {(["widget", "variables", "events", "profiler", "metrics",
+               "translations", "access"] satisfies WorkshopTab[]).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -1327,7 +1337,9 @@ function CanvasBody({
                           // Named for the feature, with the count of
                           // languages the way Variables and Events carry
                           // theirs.
-                          : `Translations (${Object.keys(translations.languages ?? {}).length})`}
+                          : t === "translations"
+                            ? `Translations (${Object.keys(translations.languages ?? {}).length})`
+                            : "Check access"}
               </button>
             ))}
           </nav>
@@ -1345,6 +1357,13 @@ function CanvasBody({
               projectId={projectId}
               onChange={onEventsChange}
               readOnly={!canEdit}
+            />
+          )}
+          {tab === "access" && (
+            <CheckAccessPanel
+              workspaceId={workspaceId}
+              projectId={projectId}
+              appId={appId}
             />
           )}
           {tab === "widget" ? (

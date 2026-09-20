@@ -3086,6 +3086,13 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-profiler-controls { display: flex; gap: 8px; align-items: flex-end; }
 .canvas-profiler-controls .field { flex: 1; min-width: 0; }
 
+/* Check access (§412; workshop p.92). */
+.canvas-access { display: flex; flex-direction: column; gap: 10px; }
+.canvas-access-verdict { display: flex; flex-direction: column; gap: 2px; }
+.canvas-access-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.canvas-access-rows li { display: grid; grid-template-columns: 1fr 6em 8em; gap: 8px; align-items: baseline; font-size: 12px; }
+.canvas-access-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Usage metrics (§396; workshop p.185-188). */
 .canvas-metrics { display: flex; flex-direction: column; gap: 10px; }
 .canvas-metrics-card { display: flex; align-items: baseline; gap: 6px; }

@@ -2518,6 +2518,14 @@ export const canvas = {
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/publish`,
       { method: "PUT", body: JSON.stringify(input) },
     ),
+  /** p.92's Check access panel: what one named user may do with this module
+   * and with everything it reads. Editor-only, because it reports one person's
+   * access to another. */
+  checkAccess: (wid: string, pid: string, appId: string, userId: string) =>
+    request<import("../components/canvas/check-access").ModuleAccess>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/access` +
+        `?user_id=${encodeURIComponent(userId)}`,
+    ),
   listShares: (wid: string, pid: string, appId: string) =>
     request<import("./types").CanvasAppShare[]>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/shares`,
