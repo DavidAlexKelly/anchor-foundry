@@ -44,6 +44,8 @@ import {
   eventsOf, pageSelectionOf, routingOf, stateSavingOf, variablesOf,
 } from "@/lib/workshop-module";
 import { readerLayout } from "@/components/canvas/reader-layout";
+import { RedactBanner } from "@/components/canvas/RedactBanner";
+import { redactHref, redactOn } from "@/components/canvas/redact";
 
 /** Craft.js's `enabled` option is what makes a node draggable, selectable and
  * editable. `<Editor enabled={false}>` is the documented way to render a
@@ -122,8 +124,22 @@ export default function PublishedAppPage() {
   // renderer wants the tree - translated into this reader's language if the
   // module has been translated into it (p.207).
   const definition = readerLayout(app.data.definition);
+  // p.614's redact mode, on the route people actually screen-share. The
+  // builder's shell has the same two lines; what they *mean* is `redact.ts`'s,
+  // and the rendering is one block of CSS - so the second copy here is the
+  // attribute and the banner, not the feature.
+  const redacting = redactOn(search.toString());
   return (
-    <main className="page">
+    <main className="page" data-redact={redacting ? "on" : undefined}>
+      {redacting && (
+        <RedactBanner
+          href={redactHref(
+            `${typeof window === "undefined" ? "" : window.location.pathname}`
+            + `${search.toString() ? `?${search.toString()}` : ""}`,
+            false,
+          )}
+        />
+      )}
       <nav className="crumbs" aria-label="Breadcrumb">
         <Link href="/home">Workspaces</Link>
         <span className="link-mark" />

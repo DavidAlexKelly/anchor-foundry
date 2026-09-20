@@ -3053,6 +3053,58 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .review-pipeline { margin-top: 12px; }
 .review-pipeline > .soft { margin: 8px 0 0; font-size: 12.5px; }
 
+/* Redact mode (§413; workshop p.614-615).
+ *
+ * p.615 lists three changes, and all three are here because all three are
+ * rendering: "Workshop renders all text in a custom font that replaces each
+ * character with an obfuscated glyph, preserving the approximate length and
+ * shape of words", "replaces icons and chart plot areas with a diagonal
+ * striped background", and "hides images, SVGs, canvases, videos, audio
+ * elements, and embedded iframes".
+ *
+ * **A blur where p.615 has a font, and the divergence is deliberate.** An
+ * obfuscating webfont is a binary asset this repo does not carry, and the
+ * property p.615 actually states of it - approximate length and shape
+ * preserved - is what a blur gives exactly. Neither hides anything from the
+ * DOM, which p.614 is explicit about: "Workshop still loads and processes the
+ * underlying data; redact mode only changes how the page renders."
+ */
+[data-redact="on"] {
+  /* Every glyph loses its identity and keeps its box. `currentColor` rather
+     than a fixed colour so this survives both themes and any widget that sets
+     its own text colour. */
+  color: transparent;
+  text-shadow: 0 0 7px currentColor;
+}
+/* The banner is the one thing that must stay legible: it carries p.614's
+   warning, and a warning nobody can read is worse than none - a reader who
+   cannot make it out concludes the page is protecting something. */
+[data-redact="on"] .canvas-redact-banner,
+[data-redact="on"] .canvas-redact-banner * {
+  color: var(--ink); text-shadow: none;
+}
+/* p.615's stripes. An SVG here is a chart's plot area, a sparkline or an icon
+   - all three are drawn inline (`charts.tsx`, `Sparkline.tsx`) - so one rule
+   answers p.615's two bullets about them: the box and its size stay, the
+   content goes, and the area reads as deliberately withheld rather than as a
+   chart that failed to load. */
+[data-redact="on"] svg {
+  background: repeating-linear-gradient(
+    45deg, var(--line), var(--line) 4px, transparent 4px, transparent 9px);
+}
+[data-redact="on"] svg > * { visibility: hidden; }
+/* `visibility`, not `display`: p.615 hides these, and a layout that reflowed
+   as they went would no longer be the layout the screenshot is being taken
+   of. */
+[data-redact="on"] :is(img, canvas, video, audio, iframe) {
+  visibility: hidden;
+}
+.canvas-redact-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 14px; background: var(--brass-wash);
+  border-bottom: 1px solid var(--line); font-size: 13px;
+}
+
 /* Performance Profiler (§394; workshop p.177-178). */
 .canvas-profiler-banner {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;

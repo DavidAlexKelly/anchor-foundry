@@ -55,10 +55,12 @@ import { VariablesPanel } from "@/components/canvas/VariablesPanel";
 import { ProfilerRecorder } from "@/components/canvas/ProfilerRecorder";
 import { MetricsPanel } from "@/components/canvas/MetricsPanel";
 import { ProfilerBanner, ProfilerPanel } from "@/components/canvas/ProfilerPanel";
+import { RedactBanner } from "@/components/canvas/RedactBanner";
 import { TranslationPreview } from "@/components/canvas/TranslationPreview";
 import { TranslationsPanel } from "@/components/canvas/TranslationsPanel";
 import { UsedColoursPanel } from "@/components/canvas/UsedColoursPanel";
 import { profilerHref, profilerOn } from "@/components/canvas/profiler";
+import { redactHref, redactOn } from "@/components/canvas/redact";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
 import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
 import {
@@ -1235,6 +1237,10 @@ function CanvasBody({
   const shellHref = `${typeof window === "undefined" ? "" : window.location.pathname}${
     shellSearch ? `?${shellSearch}` : ""}`;
   const profiling = profilerOn(shellSearch);
+  // p.614's redact mode. On the shell rather than on the canvas: "visually
+  // obfuscates the visible content of a Workshop application", and a builder
+  // screen-sharing has the settings column open beside the widgets.
+  const redacting = redactOn(shellSearch);
   // **Profiler mode keeps the chrome while the canvas drops to run mode**, and
   // the two halves come apart here on purpose. p.177 has you reading the
   // Profiler panel *while* profiling ("select Exit at the top of the Profiler
@@ -1263,7 +1269,14 @@ function CanvasBody({
   // another module would paste references to variables that are not there.
   const [clipboard, setClipboard] = useState<Clipping | null>(null);
   return (
-    <div className={showChrome ? "canvas-shell" : "canvas-shell canvas-shell--full"}>
+    <div
+      className={showChrome ? "canvas-shell" : "canvas-shell canvas-shell--full"}
+      data-redact={redacting ? "on" : undefined}
+    >
+      {/* Above the profiler's, because it is the one that says something is
+          being hidden - and `globals.css` exempts it from the blur, or the
+          warning would be the least readable thing on the page. */}
+      {redacting && <RedactBanner href={redactHref(shellHref, false)} />}
       {/* p.177: "A banner will be displayed at the top of the page". At the
           top of the *shell* rather than inside the settings column, because it
           is about the whole page and because its Exit has to be reachable from
