@@ -4590,15 +4590,18 @@ async def _derive_property(
         # declaration is an answer that can change under it - a property
         # retyped from `integer` to `string` would otherwise keep summing on
         # the strength of what it used to be.
-        far = await ontology_service.get_type(
-            conn, workspace_id, definition.object_type_id
-        )
+        #
+        # `list_properties`, not `get_type`: the latter returns the type's own
+        # row and nothing else, so `get_type(...)["properties"]` was silently
+        # `[]` and every arithmetic derivation refused itself on the read with
+        # "this caller resolved none" - a sentence about the caller, from a
+        # caller that had asked the wrong function.
+        far = await ontology_service.list_properties(conn, definition.object_type_id)
         aggregation = object_sets.parse_aggregation(
             str(aggregate),
             str(derivation.get("property") or ""),
             property_types={
-                str(prop["api_name"]): str(prop["data_type"])
-                for prop in far.get("properties") or []
+                str(prop["api_name"]): str(prop["data_type"]) for prop in far
             },
         )
         return await store.aggregate_object_set(

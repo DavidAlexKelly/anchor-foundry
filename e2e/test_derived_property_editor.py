@@ -43,6 +43,11 @@ def module(api):
     orders = Module(api, "Derived editor orders", beside=customers)
     order_type = orders.object_type(
         columns=["id", "customer_id", "total"], rows=ORDERS, key="id", title="id",
+        # **Declared**, because §406's arithmetic aggregations run on the
+        # declaration rather than on what the values look like. An untyped
+        # `total` is the state this platform was in before §220, and it is what
+        # the refusal §406 removed used to be about.
+        types={"total": "integer"},
     )
     api.call(
         "POST", f"/workspaces/{customers.workspace_id}/link-types",
@@ -122,12 +127,20 @@ def test_a_derived_property_can_be_drawn_and_it_answers(page, module) -> None:
     expect(page.locator("[data-property='order_count']")).to_contain_text("0")
 
 
-def test_the_aggregations_this_platform_cannot_answer_are_not_offered(page, module) -> None:
-    """p.145 lists nine. Four are refused by the server - sum, average, minimum
-    and maximum on the untyped-property blocker, and approximate cardinality
-    because the two stores would disagree about how approximate it is. Offering
-    them would be offering a save that fails, so the list says what it can do
-    and a hint says why the rest is missing."""
+def test_eight_of_p145s_nine_aggregations_are_offered(page, module) -> None:
+    """p.145 lists nine and this platform offers eight.
+
+    **This test asserted four more absences until §406.** It read "sum,
+    average, minimum and maximum on the untyped-property blocker" and checked
+    for a hint saying "stored untyped" - a sentence that was true when it was
+    written and untrue from §220, which typed the properties, and §226, which
+    answered those four over an object set. The test was a faithful record of
+    a refusal nobody had re-read.
+
+    `approx_cardinality` is still absent, and its reason has not moved:
+    OpenSearch approximates where Postgres is exact, so it is a difference
+    between the two stores rather than a gap here.
+    """
     open_type_editor(page, module)
     index = add_property(page, "unused_probe")
     page.get_by_role("button", name=f"Property {index} derive").click()
@@ -137,13 +150,83 @@ def test_the_aggregations_this_platform_cannot_answer_are_not_offered(page, modu
 
     options = page.get_by_test_id("derive-aggregate").locator("option")
     # Presence before absence: wait for the list to be there before asserting
-    # what is not in it (§157's lesson).
-    expect(options).to_have_count(5)
+    # what is not in it (§157's lesson, §318's rule).
+    expect(options).to_have_count(9)
     labels = [options.nth(i).inner_text() for i in range(options.count())]
-    assert "Count" in labels, labels
-    for absent in ("Sum", "Average", "Minimum", "Maximum", "Approximate"):
-        assert not any(absent in label for label in labels), labels
-    expect(page.get_by_text("stored untyped", exact=False)).to_be_visible()
+    for present in ("Count", "Sum", "Average", "Minimum", "Maximum"):
+        assert any(present in label for label in labels), labels
+    assert not any("Approximate" in label for label in labels), labels
+    # And the hint now names the one thing that is missing, rather than a
+    # blocker that no longer exists.
+    expect(page.get_by_text("Approximate cardinality is not available",
+                            exact=False)).to_be_visible()
+    expect(page.get_by_text("stored untyped", exact=False)).to_have_count(0)
+
+
+def test_the_property_picker_narrows_for_arithmetic(page, module) -> None:
+    """p.169's rule and §226's, in the control that has to enforce both.
+
+    `sum` runs on a declared `integer` or `float`; `customer_id` is a string
+    and `id` is the key, so offering them to a sum would be offering a save
+    that fails. **Two lists, and this is the assertion that they are two** -
+    the same check `test_metric_card.py` makes of the Metric Card's picker,
+    because it is the same rule in a second place.
+    """
+    open_type_editor(page, module)
+    index = add_property(page, "unused_probe2")
+    page.get_by_role("button", name=f"Property {index} derive").click()
+    page.get_by_test_id("derive-add-hop").select_option(
+        label="Orders → Seed " + module.order_tag
+    )
+
+    picker = page.get_by_test_id("derive-property").locator("option")
+    # A collection takes anything, which is the wide list.
+    page.get_by_test_id("derive-aggregate").select_option("collect_list")
+    eventually(lambda: picker.count(), lambda n: n > 2,
+               what="every property of the linked type")
+    # Lower-cased on the way in: the options carry *display* names, which the
+    # seeder title-cases ("Total", "Customer_Id"), so matching the api name
+    # verbatim finds nothing - which is how this first failed.
+    wide = {picker.nth(i).inner_text().lower() for i in range(picker.count())}
+    assert any("total" in label for label in wide), wide
+    assert any("customer_id" in label for label in wide), wide
+
+    page.get_by_test_id("derive-aggregate").select_option("sum")
+    eventually(
+        lambda: {picker.nth(i).inner_text().lower() for i in range(picker.count())},
+        lambda got: not any("customer_id" in label for label in got),
+        what="the string property to drop out of the list",
+    )
+    narrow = {picker.nth(i).inner_text().lower() for i in range(picker.count())}
+    assert any("total" in label for label in narrow), narrow
+    assert narrow < wide, (narrow, wide)
+
+
+def test_p143s_own_first_example_can_be_built_and_answers(page, module) -> None:
+    """"A Department object type could have a derived property for 'Average
+    employee salary'" - the shape p.143 leads with, and the one this platform
+    refused until §406.
+
+    Here it is a customer's average order total: C1 has orders of 10, 20 and
+    30, so the answer is 20 - **a number none of the three orders carries**,
+    which is what separates an average from a first-value read.
+    """
+    open_type_editor(page, module)
+    index = add_property(page, "avg_order")
+    page.get_by_role("button", name=f"Property {index} derive").click()
+    page.get_by_test_id("derive-add-hop").select_option(
+        label="Orders → Seed " + module.order_tag
+    )
+    page.get_by_test_id("derive-aggregate").select_option("avg")
+    page.get_by_test_id("derive-property").select_option("total")
+    page.get_by_test_id("derive-save").click()
+    page.get_by_role("button", name="Save").first.click()
+    expect(page.get_by_text("Saved", exact=False).first).to_be_visible()
+
+    open_customer(page, module, "North Ltd")
+    eventually(lambda: page.get_by_text("avg_order", exact=False).count(),
+               lambda n: n >= 1, what="the derived property on the object view")
+    expect(page.get_by_text("20", exact=True).first).to_be_visible()
 
 
 def test_a_chain_stops_at_three_links(page, module) -> None:
