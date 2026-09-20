@@ -24,6 +24,7 @@ import {
   useCanvasVariables,
 } from "./context";
 import type { EventContext } from "./event-run";
+import { carry as carryRedact } from "./redact";
 
 export * from "./event-run";
 
@@ -61,7 +62,14 @@ export function useEventContext(
     // **new browser tab**". Through `openUrl`'s own window.open rather than a
     // second one, so a module opens the way a link does.
     openModule: (moduleId, query) => {
-      const search = new URLSearchParams(query).toString();
+      // p.615: the redact parameter "persists in the URL across in-application
+      // navigation". Routing's own writes already keep it; this address is
+      // built from nothing, so it is the one place it would be lost - and a
+      // redacted screen share whose first link opens an unredacted module has
+      // redacted nothing.
+      const search = new URLSearchParams(
+        carryRedact(query, typeof window === "undefined" ? "" : window.location.search),
+      ).toString();
       window.open(
         `/r/${moduleId}${search ? `?${search}` : ""}`,
         "_blank", "noopener,noreferrer",
