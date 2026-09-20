@@ -4278,6 +4278,7 @@ export function CanvasObjectTable({
                                   columnRules[p.api_name],
                                   SERIES_SUBJECT,
                                   latestOf(seriesByKey.get(instance.primary_key) ?? []),
+                                  { pending: seriesPage.isPending },
                                 )}
                               />
                             ) : (
@@ -12507,6 +12508,7 @@ export function CanvasMetricCard({
     cardRules,
     METRIC_SUBJECT,
     typeof metric.data?.value === "number" ? metric.data.value : null,
+    { pending: metric.isPending },
   );
 
   const spine = (

@@ -141,13 +141,29 @@ export function rulesByColumn(raw: unknown): Record<string, ConditionalRule[]> {
  * make an empty series match "at or below zero" and paint a threshold nobody
  * crossed. That is a real claim and `conditional-formats.test.ts` pins it —
  * verified by mutating this line to `?? 0`, which that test kills.
+ *
+ * ---
+ *
+ * **`pending` paints nothing, and the fallback is why.** A read in flight has
+ * no number, so every threshold rule falls through to p.105's Always-true
+ * rule — which matches anything and is last by construction. A loading table
+ * would therefore flash every row the fallback's colour and then settle, which
+ * reads as "all of these are fine" about data nobody has read yet. Distinct
+ * from *no rule matched*, and for the same reason `Sparkline` distinguishes
+ * "…" from "No readings": absence of an answer is not an answer.
+ *
+ * Found by a full-file browser run rather than by the mutation sweep — in
+ * isolation the read lands before the first assertion and the window never
+ * opens. The rule lives here rather than in the two widgets so there is one
+ * place for it and it can be tested at all.
  */
 export function paintFor(
   rules: ConditionalRule[] | null | undefined,
   subject: string,
   value: number | null | undefined,
+  { pending = false }: { pending?: boolean } = {},
 ): PropertyStyle | null {
-  if (!rules?.length) return null;
+  if (pending || !rules?.length) return null;
   return conditionalStyle(rules, { [subject]: value ?? null });
 }
 

@@ -49,7 +49,6 @@ export function SeriesCell({
 }) {
   const list = points ?? [];
   const value = latest(list);
-
   return (
     <span className="canvas-series" data-testid="series-cell">
       <span

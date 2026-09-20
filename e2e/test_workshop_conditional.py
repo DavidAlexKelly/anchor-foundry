@@ -135,6 +135,28 @@ def stroke_of(locator) -> str:
     return locator.evaluate("el => getComputedStyle(el).stroke")
 
 
+def drawn(row) -> None:
+    """Wait for the row's *reading*, not for the row.
+
+    **The element is not the wait.** `series-latest` exists as soon as the row
+    does: it renders empty while the series read is in flight and `—` when the
+    series has no readings, and the paint is computed from those same points -
+    so a colour read after waiting only for the element is a colour read one
+    frame early, and the colour it reads is the unpainted one. That is exactly
+    how this file first failed, under a full-file run and not in isolation.
+    """
+    eventually(lambda: row.get_by_test_id("series-latest").inner_text().strip(),
+               lambda t: t not in ("", "—"), what="the row's latest reading")
+
+
+def wait_colour(locator, expected: str, *, what: str) -> None:
+    eventually(lambda: colour_of(locator), lambda c: c == expected, what=what)
+
+
+def wait_stroke(locator, expected: str, *, what: str) -> None:
+    eventually(lambda: stroke_of(locator), lambda c: c == expected, what=what)
+
+
 @pytest.fixture(scope="module")
 def painted(api):
     return build(api, "Workshop rules column",
@@ -150,12 +172,13 @@ def test_a_rule_paints_the_number_and_the_sparkline_together(page, painted):
     what this widget did before §405, since the stroke came from a stylesheet.
     """
     open_module(page, painted)
-    eventually(lambda: page.get_by_test_id("series-latest").count(),
-               lambda n: n == 2, what="a latest value per row")
-
     south = row_for(page, "South sensor")
-    assert colour_of(south.get_by_test_id("series-latest")) == RED_RGB
-    assert stroke_of(south.locator("path")) == RED_RGB
+    drawn(south)
+
+    wait_colour(south.get_by_test_id("series-latest"), RED_RGB,
+                what="the number painted by the threshold rule")
+    wait_stroke(south.locator("path"), RED_RGB,
+                what="the sparkline painted by the same rule")
 
 
 def test_each_row_is_matched_on_its_own_value(page, painted):
@@ -167,15 +190,17 @@ def test_each_row_is_matched_on_its_own_value(page, painted):
     them would be wrong without ever failing.
     """
     open_module(page, painted)
-    eventually(lambda: page.get_by_test_id("series-latest").count(),
-               lambda n: n == 2, what="a latest value per row")
-
     north = row_for(page, "North sensor")
     south = row_for(page, "South sensor")
-    assert colour_of(north.get_by_test_id("series-latest")) == GREEN_RGB
-    assert colour_of(south.get_by_test_id("series-latest")) == RED_RGB
-    assert stroke_of(north.locator("path")) == GREEN_RGB
-    assert stroke_of(south.locator("path")) == RED_RGB
+    drawn(north)
+    drawn(south)
+
+    wait_colour(north.get_by_test_id("series-latest"), GREEN_RGB,
+                what="the row above the threshold")
+    wait_colour(south.get_by_test_id("series-latest"), RED_RGB,
+                what="the row below it")
+    wait_stroke(north.locator("path"), GREEN_RGB, what="the green sparkline")
+    wait_stroke(south.locator("path"), RED_RGB, what="the red sparkline")
 
 
 def test_an_unpainted_column_keeps_the_theme(page, api):
@@ -185,9 +210,10 @@ def test_an_unpainted_column_keeps_the_theme(page, api):
     accent is a theme value this test has no business pinning."""
     mod = build(api, "Workshop rules none")
     open_module(page, mod)
-    eventually(lambda: page.get_by_test_id("series-latest").count(),
-               lambda n: n == 2, what="a latest value per row")
     north = row_for(page, "North sensor")
+    # §318: the negative assertions below only mean something once there is a
+    # painted-or-not number to read. Before that they pass against a blank.
+    drawn(north)
     assert colour_of(north.get_by_test_id("series-latest")) not in (RED_RGB, GREEN_RGB)
     assert stroke_of(north.locator("path")) not in (RED_RGB, GREEN_RGB)
     # And nothing inline, which is what "the stylesheet still decides" means.
@@ -211,9 +237,8 @@ def test_a_list_that_could_not_evaluate_paints_nothing(page, api):
                                       "colour": RED}]},
     })
     open_module(page, mod)
-    eventually(lambda: page.get_by_test_id("series-latest").count(),
-               lambda n: n == 2, what="a latest value per row")
     north = row_for(page, "North sensor")
+    drawn(north)
     assert colour_of(north.get_by_test_id("series-latest")) not in (RED_RGB, GREEN_RGB)
 
 
@@ -236,7 +261,8 @@ def test_the_metric_card_paints_its_number_and_its_line(page, api):
     })
     open_module(page, mod)
     expect(page.get_by_test_id("metric-value")).to_have_text("2")
-    assert colour_of(page.get_by_test_id("metric-value")) == RED_RGB
+    wait_colour(page.get_by_test_id("metric-value"), RED_RGB,
+                what="the metric painted by its own rule")
 
 
 def test_setting_a_rule_in_the_panel_reaches_the_cell(page, api):
@@ -263,11 +289,12 @@ def test_setting_a_rule_in_the_panel_reaches_the_cell(page, api):
 
     save(page)
     open_module(page, mod)
-    eventually(lambda: page.get_by_test_id("series-latest").count(),
-               lambda n: n == 2, what="a latest value per row")
     south = row_for(page, "South sensor")
-    assert colour_of(south.get_by_test_id("series-latest")) == RED_RGB
+    north = row_for(page, "North sensor")
+    drawn(south)
+    drawn(north)
+    wait_colour(south.get_by_test_id("series-latest"), RED_RGB,
+                what="the rule written in the panel reaching the cell")
     # One rule and no fallback, so the row above the threshold is left alone —
     # which is what makes "first match wins" visible rather than asserted.
-    north = row_for(page, "North sensor")
     assert colour_of(north.get_by_test_id("series-latest")) != RED_RGB

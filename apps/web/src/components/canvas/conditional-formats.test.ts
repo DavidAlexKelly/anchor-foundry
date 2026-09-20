@@ -129,6 +129,27 @@ describe("painting one number", () => {
   });
 });
 
+describe("a read in flight", () => {
+  it("paints nothing, so a loading table does not flash the fallback", () => {
+    // **The fallback is what makes this matter.** p.105's Always-true rule
+    // matches anything and is last by construction, so a pending row - which
+    // has no number - falls through every threshold rule and lands on it.
+    // Without this the whole table would go green and then settle, which reads
+    // as "all of these are fine" about data nobody has read yet.
+    expect(paintFor([RED, GREEN], SERIES_SUBJECT, null, { pending: true })).toBeNull();
+    // Not merely the missing-value case: a number that *has* arrived is still
+    // not painted while the request it belongs to is in flight, which is what
+    // `placeholderData` leaves on screen between pages.
+    expect(paintFor([RED, GREEN], SERIES_SUBJECT, -5, { pending: true })).toBeNull();
+  });
+
+  it("paints again the moment the read lands", () => {
+    expect(paintFor([RED, GREEN], SERIES_SUBJECT, null, { pending: false }))
+      .toEqual({ colour: "#0a0" });
+    expect(paintFor([RED, GREEN], SERIES_SUBJECT, -5)).toEqual({ colour: "#c00" });
+  });
+});
+
 describe("the sparkline's stroke", () => {
   it("is the same colour as the number, because p.175 is one rule", () => {
     expect(strokeFor({ colour: "#c00" })).toBe("#c00");
