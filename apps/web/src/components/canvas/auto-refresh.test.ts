@@ -160,6 +160,27 @@ describe("a background tab", () => {
   });
 });
 
+describe("a reader who paused updates (p.578)", () => {
+  it("holds them the same way a hidden tab does", () => {
+    // "Disable auto-refresh updates: Prevents updates from auto-refresh from
+    // **taking effect**" — not from happening. Same question as the tab, so
+    // the same function rather than a second one.
+    expect(applyNow(true, true)).toBe(false);
+    expect(applyNow(true, false)).toBe(true);
+  });
+
+  it("stays held while either reason holds", () => {
+    // A reader who paused, then switched tabs, then came back has resolved
+    // one of the two and not the other.
+    expect(applyNow(false, true)).toBe(false);
+    expect(applyNow(false, false)).toBe(false);
+  });
+
+  it("defaults to not paused, so a module that never fires the event runs", () => {
+    expect(applyNow(true)).toBe(true);
+  });
+});
+
 describe("what can be registered", () => {
   it("is the object set variables and nothing else", () => {
     // p.576 registers *object sets*. Offering a string variable would be

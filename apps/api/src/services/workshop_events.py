@@ -72,6 +72,17 @@ EFFECTS = (
     # page does not describe is a setting somebody would have to guess at.
     "refresh_data",
     "toggle_theme",
+    # p.578's pair, and they take no config for the same reason: "Enable
+    # auto-refresh updates: Allows updates from auto-refresh to take effect"
+    # and "Disable auto-refresh updates: Prevents updates from auto-refresh
+    # from taking effect". Two sentences, no object in either.
+    #
+    # **Two effects rather than one with a value**, because p.578 lists two
+    # actions by name - a Button Group offering "pause" and "resume" is what
+    # the page shows, and a single toggle would make a button that resumes
+    # indistinguishable from one that pauses.
+    "enable_auto_refresh",
+    "disable_auto_refresh",
     # p.165's "Open Workshop module", and p.165 is also what makes it small:
     # "The Open Workshop module event can be used to **avoid manually creating
     # a URL** … When the event is called, the URL uses the current value to

@@ -138,6 +138,19 @@ const EFFECTS: { type: string; label: string; hint: string }[] = [
     label: "Toggle light / dark mode",
     hint: "for this viewer, until they leave — a module always opens light",
   },
+  // p.578's pair. Two entries rather than one toggle because p.578 names two
+  // actions, and a Button Group offering "pause" and "resume" needs a button
+  // that does each rather than one that does whichever is next.
+  {
+    type: "disable_auto_refresh",
+    label: "Pause auto-refresh updates",
+    hint: "keeps watching — an update seen while paused lands when it resumes",
+  },
+  {
+    type: "enable_auto_refresh",
+    label: "Resume auto-refresh updates",
+    hint: "applies anything that arrived while it was paused",
+  },
   // p.165's, and p.165 also says what it is *for*: "can be used to avoid
   // manually creating a URL". The hint says so, because a builder who does not
   // know that sentence cannot tell this from `navigate`.

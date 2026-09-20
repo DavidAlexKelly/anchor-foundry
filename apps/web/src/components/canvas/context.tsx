@@ -335,6 +335,23 @@ export interface CanvasPageState {
    * rather than a second set of colours. */
   scheme: "light" | "dark";
   toggleScheme: () => void;
+  /** Whether auto-refresh updates are being *applied* (workshop p.578; §409).
+   *
+   * > "You can let users pause or resume the application of auto-refresh
+   * > updates during a session by configuring Workshop events… Disable
+   * > auto-refresh updates: Prevents updates from auto-refresh from taking
+   * > effect." (p.578)
+   *
+   * **Paused, not stopped**, which is what "taking effect" means: the module
+   * keeps watching, and a change seen while paused is held and applied the
+   * moment somebody resumes. That is the same rule p.579 states for a
+   * background tab, so it is the same mechanism rather than a second one.
+   *
+   * Module-level runtime state beside `scheme`, and never persisted for its
+   * reason (decision 0002 §3): p.578 says "during a session", and a published
+   * module opens watching for every viewer. */
+  autoRefreshPaused: boolean;
+  setAutoRefreshPaused: (paused: boolean) => void;
   /** p.85's Recompute (p.76's behaviours). Forget what these variables last
    * computed and resolve again, so the server computes them fresh.
    *
@@ -356,6 +373,8 @@ const PageContext = createContext<CanvasPageState>({
   setTab: () => {},
   scheme: "light",
   toggleScheme: () => {},
+  autoRefreshPaused: false,
+  setAutoRefreshPaused: () => {},
   recompute: () => {},
 });
 

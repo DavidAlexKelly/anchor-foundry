@@ -139,6 +139,10 @@ export interface EventContext {
    * opens in its light scheme for every viewer, because a saved app is not a
    * saved session. */
   toggleTheme?: () => void;
+  /** p.578's pause and resume. **Paused, not stopped**: the module keeps
+   * watching and a change seen while paused is applied when somebody
+   * resumes, which is what "taking effect" means. */
+  setAutoRefreshPaused?: (paused: boolean) => void;
 }
 
 /** Events on one widget for one act, in id order — the same order the server's
@@ -310,6 +314,12 @@ export function run(
         context.refreshData?.();
       } else if (effect.type === "toggle_theme") {
         context.toggleTheme?.();
+      } else if (effect.type === "enable_auto_refresh") {
+        // Not added to `written` for `refresh_data`'s reason: this changes no
+        // variable, it changes whether a refresh is allowed to land.
+        context.setAutoRefreshPaused?.(false);
+      } else if (effect.type === "disable_auto_refresh") {
+        context.setAutoRefreshPaused?.(true);
       } else if (effect.type === "open_url") {
         const url = typeof config.url === "string"
           ? interpolate(config.url, { ...payload, ...written })
