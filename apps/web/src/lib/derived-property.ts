@@ -118,6 +118,53 @@ export function chainState(startTypeId: string, hops: Hop[]): ChainState {
   };
 }
 
+/** p.145's four arithmetic aggregations, which `derived_properties` calls
+ * `NUMERIC_AGGREGATES`. They were refused outright until §406, with a hint
+ * saying instance properties were stored untyped — true when written, untrue
+ * from §220. */
+export const NUMERIC_AGGREGATES = ["sum", "avg", "min", "max"];
+
+/** `object_sets.AGGREGATABLE_TYPES`. A date has an order but no arithmetic the
+ * two stores agree on, so it is not here. */
+const AGGREGATABLE_TYPES = ["integer", "float"];
+
+const AGGREGATE_LABELS: Record<string, string> = {
+  sum: "Sum", avg: "Average", min: "Minimum", max: "Maximum",
+};
+
+/** Only what the arithmetic rule reads, so a caller can pass an ontology
+ * property row or a stub. */
+export interface DerivableProperty {
+  api_name: string;
+  data_type?: string | null;
+  display_name?: string | null;
+  /** p.169's **native**: a property that is itself derived is not one. */
+  derivation?: unknown;
+}
+
+function derivable(prop: DerivableProperty): boolean {
+  return AGGREGATABLE_TYPES.includes(String(prop.data_type ?? ""))
+    && (prop.derivation === null || prop.derivation === undefined);
+}
+
+/**
+ * The properties an aggregation may run over (p.146, narrowed by p.169).
+ *
+ * **Two lists, the same split the Metric Card makes.** The four arithmetic
+ * aggregations are arithmetic on a stored value, so each needs a declared
+ * `integer` or `float`; every other aggregation is a text-identity question
+ * and works on anything. p.169's "native" is the second half: a derived
+ * property at the far end is itself a chain, so there is no column to push an
+ * aggregation into.
+ */
+export function derivableProperties<T extends DerivableProperty>(
+  properties: readonly T[],
+  aggregate: string,
+): T[] {
+  if (!NUMERIC_AGGREGATES.includes(aggregate)) return [...properties];
+  return properties.filter(derivable);
+}
+
 /** The rules the save would apply, in the one place the answer can still be
  * changed. Returns the first problem as a sentence, or null.
  *
@@ -127,11 +174,28 @@ export function derivationProblem(
   state: ChainState,
   aggregate: string,
   property: string,
+  /** The properties of the type the chain lands on, for the arithmetic rule
+   * below. Omitted by callers that have not read the far type yet, in which
+   * case that rule is not checked here — the server still checks it, so the
+   * cost is a 422 rather than a bad save. */
+  farProperties: readonly DerivableProperty[] = [],
 ): string | null {
   if (!state.hops.length) return "Choose a link to follow.";
   if (state.reachesMany && !aggregate)
     return "This chain can reach more than one object, so it needs an aggregation.";
   if (aggregate && aggregate !== "count" && !property.trim())
     return "Choose which property of the linked object to derive.";
+  if (NUMERIC_AGGREGATES.includes(aggregate) && property.trim() && farProperties.length) {
+    // §406's rule, in the one place the answer can still be changed. The
+    // picker already narrows the list, so reaching this means a property that
+    // was chosen and then invalidated - by switching the aggregation, or by
+    // adding a hop that lands somewhere else.
+    const chosen = farProperties.find((p) => p.api_name === property.trim());
+    if (!chosen || !derivable(chosen)) {
+      return `${AGGREGATE_LABELS[aggregate] ?? aggregate} needs a declared `
+        + `integer or float on the linked object type's own properties, and `
+        + `${property.trim()} is not one.`;
+    }
+  }
   return null;
 }

@@ -54,20 +54,33 @@ AGGREGATES = (
 #: gives a limit to.
 COLLECTORS = ("collect_list", "collect_set")
 
-#: The ones this platform cannot answer the same way on both stores, and so
-#: refuses rather than guesses at.
+#: p.145's four arithmetic aggregations, which need the far property's declared
+#: type behind them (`object_sets.AGGREGATABLE_TYPES`).
 #:
-#: `sum`/`avg`/`min`/`max` need to know a property is a number, and instance
-#: properties are stored untyped - the blocker §52 named for ordered filters,
-#: §74 for numeric aggregations, §83 for property sorts and §86 for map area
-#: selection. This is the fifth thing waiting behind it.
+#: **These were refused outright until §406, and the refusal had outlived its
+#: reason.** It said "instance properties are stored untyped, so this platform
+#: cannot promise the same answer on both stores" - the blocker §52 named for
+#: ordered filters, §74 for numeric aggregations, §83 for property sorts and
+#: §86 for map area selection. §220 typed the properties and §226 answered the
+#: four over a set, which is the same question this asks of a chain's far end;
+#: `object_sets.parse_aggregation` has taken them since. So the sentence was
+#: true when written and untrue from §220, and it took p.143's own first
+#: example - a department's average employee salary - with it.
 #:
-#: `approx_cardinality` is refused for a sharper reason: OpenSearch's
-#: cardinality aggregation is approximate and Postgres' `COUNT(DISTINCT)` is
-#: exact, so "approximate" would be a promise one store keeps and the other
-#: exceeds. `exact_cardinality` is the same question with an answer both can
-#: give, so it is the one offered.
-UNSUPPORTED_AGGREGATES = ("sum", "avg", "min", "max", "approx_cardinality")
+#: The third stale refusal of this shape (§228 on the Pie Chart's panel, §229
+#: on the Metric Card's), which is what makes it a pattern rather than an
+#: oversight: **a control that explains why it cannot work is a claim with a
+#: date on it**, and nothing re-reads it when the date passes.
+NUMERIC_AGGREGATES = ("sum", "avg", "min", "max")
+
+#: The one this platform still cannot answer the same way on both stores.
+#:
+#: `approx_cardinality` is refused for a reason that has nothing to do with
+#: types and has not moved: OpenSearch's cardinality aggregation is approximate
+#: and Postgres' `COUNT(DISTINCT)` is exact, so "approximate" would be a
+#: promise one store keeps and the other exceeds. `exact_cardinality` is the
+#: same question with an answer both can give, so it is the one offered.
+UNSUPPORTED_AGGREGATES = ("approx_cardinality",)
 
 #: p.146: "The default limit is 10 items."
 DEFAULT_LIMIT = 10
@@ -90,6 +103,7 @@ def parse(
     property_name: str,
     link_types: dict[str, dict[str, Any]],
     object_type_id: str,
+    far_properties: dict[str, dict[str, dict[str, Any]]] | None = None,
 ) -> dict[str, Any] | None:
     """Validate one property's ``derivation``, or refuse it by name.
 
@@ -97,6 +111,19 @@ def parse(
     `from_object_type_id`, `to_object_type_id` and `cardinality` - because
     whether a chain joins up, and whether any hop is "many", are facts about
     the ontology rather than about this property.
+
+    `far_properties` is the same idea one step further out: object type id ->
+    api name -> that property's row, for the types a chain can land on. §406
+    needs it because p.145's four arithmetic aggregations run on a *declared*
+    type, and p.169 restricts them to the linked type's **native** properties -
+    both facts about the far type rather than about this one.
+
+    **Its absence is a refusal, not a permission**, which is `object_sets`'
+    rule (§221) rather than a new one: a caller that resolved no types has
+    checked nothing, so it gets the aggregations that need no declaration and
+    a sentence naming what the rest would need. The alternative is a saved
+    derivation that fails on a page instead of on a save, which is the whole
+    reason this module exists.
 
     Returns the normalised derivation, or ``None`` for an ordinary property.
     """
@@ -124,10 +151,10 @@ def parse(
         )
     if aggregate in UNSUPPORTED_AGGREGATES:
         raise DerivationError(
-            f"{property_name}: {aggregate!r} is not available - instance "
-            "properties are stored untyped, so this platform cannot promise "
-            "the same answer on both stores. Use count or exact_cardinality, "
-            "or collect the values and read them"
+            f"{property_name}: {aggregate!r} is not available - OpenSearch "
+            "approximates where Postgres is exact, so the two stores would "
+            "answer it differently. Use exact_cardinality, which is the same "
+            "question with an answer both can give"
         )
     if many and aggregate is None:
         # p.145: "If any link in your chain has a 'many' cardinality … you must
@@ -154,6 +181,14 @@ def parse(
         out["aggregate"] = aggregate
 
     prop = raw.get("property")
+    if aggregate in NUMERIC_AGGREGATES:
+        _check_arithmetic(
+            prop,
+            property_name=property_name,
+            aggregate=aggregate,
+            far_type=far_type,
+            far_properties=far_properties,
+        )
     if aggregate == "count":
         # p.146: "For Count aggregation, you do not need to select a property
         # as objects are automatically counted." Carrying one anyway is two
@@ -185,6 +220,68 @@ def parse(
     elif aggregate in COLLECTORS:
         out["limit"] = DEFAULT_LIMIT
     return out
+
+
+def _check_arithmetic(
+    prop: Any,
+    *,
+    property_name: str,
+    aggregate: str,
+    far_type: str,
+    far_properties: dict[str, dict[str, dict[str, Any]]] | None,
+) -> None:
+    """p.145's four, against the far object type's own declaration.
+
+    Three refusals, each of which would otherwise be a column of blanks or a
+    500 on somebody's screen:
+
+    * no property at all - caught below rather than by the generic "choose
+      which property" message, because `sum` with nothing to sum is a
+      different mistake from `collect_list` with nothing to collect;
+    * a property the far type does not declare, which p.169 is explicit
+      about: *"Aggregations may only be calculated on the linked object
+      type's native properties"*;
+    * a property whose declared type has no arithmetic both stores agree on.
+      The wording is `object_sets`' own, because it is the same refusal one
+      layer out and two spellings of it would drift (§292).
+    """
+    if not isinstance(prop, str) or not prop.strip():
+        raise DerivationError(
+            f"{property_name}: {aggregate} needs a property of the linked "
+            "object to run over"
+        )
+    if far_properties is None:
+        raise DerivationError(
+            f"{property_name}: {aggregate} needs the declared type of "
+            f"{prop.strip()!r} behind it, and this caller resolved none. "
+            + object_sets.AGGREGATION_HINT
+        )
+    declared = (far_properties.get(far_type) or {}).get(prop.strip())
+    if declared is None:
+        raise DerivationError(
+            f"{property_name}: the linked object type has no property "
+            f"{prop.strip()!r} to {aggregate} over"
+        )
+    if declared.get("derivation") is not None:
+        # p.169: **"native properties"**, and this is the word doing the work.
+        # A derived property at the far end is itself a chain, so aggregating
+        # one would be an aggregation over a per-object walk - the far store
+        # has no column to push it into, and the honest answer is a refusal
+        # rather than a read that fans out per row. p.170 lets an *aggregation*
+        # derived property feed column math, and nothing lets one feed an
+        # aggregation.
+        raise DerivationError(
+            f"{property_name}: {prop.strip()!r} is itself a derived property, "
+            f"and p.169 allows {aggregate} only over the linked object type's "
+            "native properties"
+        )
+    kind = str(declared.get("data_type") or "")
+    if kind not in object_sets.AGGREGATABLE_TYPES:
+        raise DerivationError(
+            f"{property_name}: {prop.strip()!r} is a {kind} property, and "
+            f"{aggregate} needs one of "
+            f"{', '.join(object_sets.AGGREGATABLE_TYPES)}"
+        )
 
 
 def _chain(

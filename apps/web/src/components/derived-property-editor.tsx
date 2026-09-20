@@ -14,12 +14,25 @@
  * The walk itself is `lib/derived-property.ts`, pure and unit-tested; this
  * file is the controls around it.
  *
- * **Four of p.145's nine aggregations are missing on purpose.** The server
- * refuses `sum`, `avg`, `min` and `max` because instance properties are stored
- * untyped, and `approx_cardinality` because the two stores would disagree
- * about how approximate it is. Offering them here would be offering a save
- * that fails — so the list says what it can do, and the hint says why the rest
- * is absent rather than leaving somebody hunting for it.
+ * **One of p.145's nine aggregations is missing on purpose**, and it used to
+ * be five. `approx_cardinality` is refused because OpenSearch approximates
+ * where Postgres is exact, which is a difference between the stores rather
+ * than a gap in this platform; `exact_cardinality` is the same question with
+ * an answer both can give, so it is the one offered.
+ *
+ * `sum`, `avg`, `min` and `max` were refused alongside it, with a hint on this
+ * screen saying "instance properties are stored untyped". True when written
+ * and untrue from §220 — §406 removed the refusal. The hint is the third of
+ * this shape the parity work has found (§228 on the Pie Chart's panel, §229 on
+ * the Metric Card's), which is what makes it a pattern: **a control that
+ * explains why it cannot work is a claim with a date on it**, and nothing
+ * re-reads it when the date passes.
+ *
+ * **The property picker therefore offers two different lists**, the same split
+ * the Metric Card makes: the four arithmetic aggregations run only over a
+ * declared `integer` or `float`, and everything else works on any property.
+ * p.169 is the other half of the same rule — those four run on the linked
+ * type's **native** properties, so a derived one is not offered either.
  */
 
 import { useState } from "react";
@@ -28,14 +41,18 @@ import { Dialog, Field } from "@/components/dialog";
 import { objects as objApi } from "@/lib/api";
 import type { Derivation, ObjectTypeProperty } from "@/lib/types";
 import {
-  chainState, derivationProblem, hopsFrom, type Hop,
+  chainState, derivableProperties, derivationProblem, hopsFrom, type Hop,
 } from "@/lib/derived-property";
 
-/** p.145's list, minus the five the server refuses. `""` is "no aggregation",
- * legal only when no hop can reach more than one object. */
+/** p.145's list, minus the one the server still refuses. `""` is "no
+ * aggregation", legal only when no hop can reach more than one object. */
 const AGGREGATES: [string, string][] = [
   ["", "None — a single linked object"],
   ["count", "Count"],
+  ["sum", "Sum"],
+  ["avg", "Average"],
+  ["min", "Minimum"],
+  ["max", "Maximum"],
   ["exact_cardinality", "Exact cardinality"],
   ["collect_list", "Collect list"],
   ["collect_set", "Collect set"],
@@ -206,9 +223,9 @@ export function DerivedPropertyEditor({
             </select>
           </Field>
           <p className="field-hint">
-            Sum, average, minimum and maximum are not available: instance
-            properties are stored untyped, so this platform cannot promise the
-            same answer on both of its stores.
+            Approximate cardinality is not available: this platform&rsquo;s two
+            stores would disagree about how approximate it is. Exact
+            cardinality is the same question with an answer both can give.
           </p>
 
           {aggregate !== "count" && (
@@ -219,7 +236,12 @@ export function DerivedPropertyEditor({
                 onChange={(e) => setProperty(e.target.value)}
               >
                 <option value="">Choose a property…</option>
-                {farProperties.map((p) => (
+                {/* **Two different lists.** The four arithmetic aggregations
+                    need a declared number, and p.169 restricts them to the
+                    linked type&rsquo;s native properties; everything else
+                    works on any of them. Offering the full list to a `sum`
+                    would be offering a save that fails. */}
+                {derivableProperties(farProperties, aggregate).map((p) => (
                   <option key={p.api_name} value={p.api_name}>
                     {p.display_name || p.api_name}
                   </option>
