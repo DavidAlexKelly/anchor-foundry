@@ -212,6 +212,28 @@ async def list_users(
     )
 
 
+async def get_user(
+    conn: AsyncConnection, organisation_id: UUID, user_id: UUID
+) -> dict[str, Any]:
+    """One user of this organisation, by id.
+
+    The organisation clause is the point of the function rather than a detail
+    of it: a user id arrives from a URL, and without it a caller could confirm
+    the existence of accounts in organisations they have nothing to do with.
+    """
+    row = await fetch_one(
+        conn,
+        """
+        SELECT id, email, display_name, org_role, status
+          FROM users WHERE id = :uid AND organisation_id = :org
+        """,
+        {"uid": str(user_id), "org": str(organisation_id)},
+    )
+    if row is None:
+        raise NotFoundError("user")
+    return dict(row)
+
+
 async def invite_user(
     conn: AsyncConnection,
     cognito: CognitoAdminGateway,

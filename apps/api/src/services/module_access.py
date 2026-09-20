@@ -12,10 +12,13 @@ The whole feature exists because of the sentence above it:
 > the ability to access the data, actions, or functions which may be needed to
 > fully use a Workshop module." (p.92)
 
-So "can they open it" is the easy half and the useless one on its own. A
-viewer with the module role and no access to the object type behind its main
-table opens a page of empty widgets, and the builder who shared it has no way
-to see why. This answers both halves in one place.
+So "can they open it" is the easy half and the useless one on its own, and on
+this platform the two halves genuinely come apart. A module published to the
+workspace opens for any workspace viewer; **running** an action is a project
+editor's right on the module's own project. That reader gets the page, gets
+the Action Form, and gets a refusal at the button — and the builder who
+published it has no way to find that out short of borrowing their account.
+This answers both halves in one place, before anybody presses anything.
 
 ---
 
@@ -38,6 +41,11 @@ carries that as `[fn]` and this is not the place to invent one.
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
+
+from ..lib.errors import NotFoundError
+from . import actions, ontology
+from .canvas import get_published
 
 #: Widget props that hold an object type id, mirroring the widgets that have
 #: one. Kept beside the variable walk rather than in the browser, because the
@@ -130,3 +138,115 @@ def referenced(definition: Any) -> dict[str, list[str]]:
         "action_types": sorted(action_types),
         "link_types": sorted(links),
     }
+
+
+# ---- resolving one user's access ---------------------------------------------
+#: p.92's kinds, in p.92's order ("object types, link types, action types, and
+#: functions"), each paired with the key `referenced` files it under and the
+#: read that decides whether a user may see one.
+#:
+#: **The read is the platform's own.** Asking `ontology.get_type` the question
+#: on a connection opened as the named user is the same call the route serving
+#: that user makes, so the panel cannot drift from what a real request would
+#: get. Spelling out the RLS predicate here instead would be §146's second
+#: matcher, free to disagree with the one that decides.
+_KINDS: tuple[tuple[str, str, Any], ...] = (
+    ("object_types", "object_type", ontology.get_type),
+    ("link_types", "link_type", ontology.get_link_type),
+    ("action_types", "action_type", actions.get_action_type),
+)
+
+
+def _as_uuid(raw: str) -> UUID | None:
+    try:
+        return UUID(raw)
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+async def resources(
+    conn,
+    caller_conn,
+    *,
+    workspace_id: UUID,
+    definition: Any,
+    may_run_actions: bool,
+) -> list[dict[str, Any]]:
+    """Every resource the module needs, and how the user behind ``conn`` stands
+    to each one.
+
+    ``caller_conn`` is the *asking* user's connection and is used only to put a
+    name on a resource the subject cannot see. Without it every hidden row
+    would read "hidden: <uuid>", which tells the builder that something is
+    wrong and nothing about what — and the builder is already entitled to that
+    name, because it is in a module they are looking at.
+
+    One field rather than a flag beside it. A `visible` boolean and a `status`
+    string are two answers to one question, and the pair only has to disagree
+    once to make the panel worse than nothing (§146). The four states are:
+
+    ``visible``
+        They can read it, and for an action type they can also run it.
+    ``unusable``
+        p.92's sentence in one word. An action type they can *read* — every
+        workspace member can — but cannot **run**, because running one is a
+        project editor's right on the module's own project. This is what a
+        published module's reader actually hits: the form draws, the button
+        refuses, and until now nothing said so before they pressed it.
+    ``hidden``
+        They cannot read it and the asker can name it.
+    ``unknown``
+        Neither can (§210). A dangling reference to something deleted or never
+        created — calling that a permission problem would send the builder to
+        ask an administrator for a grant that would not help.
+    """
+    found = referenced(definition)
+    out: list[dict[str, Any]] = []
+    for key, kind, read in _KINDS:
+        for raw in found[key]:
+            rid = _as_uuid(raw)
+            row: dict[str, Any] | None = None
+            if rid is not None:
+                try:
+                    row = await read(conn, workspace_id, rid)
+                except NotFoundError:
+                    row = None
+            if row is not None:
+                usable = may_run_actions or kind != "action_type"
+                out.append({
+                    "kind": kind, "id": raw, "name": row["display_name"],
+                    "status": "visible" if usable else "unusable",
+                })
+                continue
+            name: str | None = None
+            if rid is not None:
+                try:
+                    name = (await read(caller_conn, workspace_id, rid))["display_name"]
+                except NotFoundError:
+                    name = None
+            out.append({
+                "kind": kind, "id": raw, "name": name,
+                "status": "hidden" if name is not None else "unknown",
+            })
+    return out
+
+
+async def opens(conn, *, workspace_id: UUID, app_id: UUID, project_role: str | None) -> bool:
+    """Whether the user behind ``conn`` can open the module at all.
+
+    p.92 calls this "the access requirement on the Workshop module", and it has
+    two doors: membership of the module's own project, or the module having
+    been published to a workspace they belong to. Checking only the first would
+    report no access for every reader a published module was made for.
+
+    The published door is *opened*, not described: `get_published` carries the
+    `publish_scope <> 'private'` clause and RLS carries the group shares, and
+    both are asked here by making the read.
+    """
+    if project_role is not None:
+        return True
+    try:
+        await get_published(conn, workspace_id, app_id)
+    except NotFoundError:
+        return False
+    return True

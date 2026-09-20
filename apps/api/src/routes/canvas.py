@@ -30,10 +30,13 @@ from ..middleware.permissions import (
     require_project_role,
     require_workspace_role,
     resolve_project_role,
+    resolve_workspace_role,
 )
 from ..services import actions as actions_service
 from ..services import audit
+from ..services import module_access
 from ..services import ontology as ontology_service
+from ..services import orgs as org_service
 from ..services import canvas as canvas_service
 from ..services import workshop_metrics
 from ..services import module_states as states_service
@@ -963,6 +966,92 @@ async def list_shares(
     async with user_connection(access.auth.user_id) as conn:
         rows = await canvas_service.list_shares(conn, access.project_id, app_id)
     return [ShareOut(**r) for r in rows]
+
+
+class AccessUser(BaseModel):
+    id: UUID
+    email: str
+    display_name: str
+
+
+class AccessResource(BaseModel):
+    kind: str
+    id: str
+    name: str | None
+    status: str  # 'visible' | 'unusable' | 'hidden' | 'unknown'
+
+
+class ModuleAccessOut(BaseModel):
+    user: AccessUser
+    workspace_role: str | None
+    project_role: str | None
+    can_open: bool
+    can_edit: bool
+    resources: list[AccessResource]
+
+
+@router.get("/{app_id}/access", response_model=ModuleAccessOut)
+async def check_access(
+    app_id: UUID,
+    user_id: UUID = Query(...),
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ModuleAccessOut:
+    """The Check access panel (`workshop` p.92).
+
+        "You can use the Check access panel in the sidebar to easily check a
+         user's access on a Workshop module. This will show if they meet the
+         access requirement on the Workshop module, as well as additional data
+         requirements to see object types, link types, action types, and
+         functions."
+
+    **Every answer is asked as the named user**, on a connection opened for
+    them, through the same reads their own requests make. p.92's value is
+    entirely in being right about somebody else's access, and a re-derivation
+    of the rules here would be free to disagree with the rules (§146) in
+    exactly the cases a builder opens this panel to understand.
+
+    **Editor, not viewer.** The panel reports one person's access to another,
+    which is a builder's question about a module they maintain; a reader of the
+    module has no use for it. The bar is the same one that can change what the
+    module requires.
+
+    Functions are p.92's fourth kind and are absent: this platform has none.
+    """
+    async with user_connection(access.auth.user_id) as caller:
+        subject = await org_service.get_user(caller, access.auth.organisation_id, user_id)
+        row = await canvas_service.get(caller, access.project_id, app_id)
+        definition = _parse_json(row["definition"])
+
+        async with user_connection(user_id) as theirs:
+            project_role = await resolve_project_role(theirs, user_id, access.project_id)
+            workspace_role = await resolve_workspace_role(theirs, user_id, access.workspace_id)
+            can_open = await module_access.opens(
+                theirs, workspace_id=access.workspace_id, app_id=app_id,
+                project_role=project_role,
+            )
+            found = await module_access.resources(
+                theirs, caller, workspace_id=access.workspace_id, definition=definition,
+                # Running an action is a project editor's right on the module's
+                # own project (`actions.execute_action`), and it is the one
+                # requirement p.92's sentence separates that this platform can
+                # actually have come apart: a published module's reader can
+                # read every action type in the workspace and run none of them.
+                may_run_actions=project_role in ("editor", "owner"),
+            )
+
+    return ModuleAccessOut(
+        user=AccessUser(
+            id=subject["id"], email=subject["email"],
+            display_name=subject["display_name"],
+        ),
+        workspace_role=workspace_role,
+        project_role=project_role,
+        can_open=can_open,
+        # An editor of the project may change the module; p.92's "open or edit"
+        # is one sentence and two different answers, which is why both are here.
+        can_edit=project_role in ("editor", "owner"),
+        resources=[AccessResource(**r) for r in found],
+    )
 
 
 # ---- workspace-wide read path for published apps ------------------------------
