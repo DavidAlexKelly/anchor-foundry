@@ -20,6 +20,7 @@ import { TypePicker } from "@/components/type-picker";
 import { VariableBridge } from "./VariableBridge";
 import { WidgetSetup } from "./WidgetSetup";
 import { StyleFields } from "./StyleFields";
+import { useSavedColours } from "./use-saved-colours";
 import {
   schemeFor, styleFor, type BorderName, type PaddingName, type StyleProps,
 } from "./style";
@@ -336,6 +337,7 @@ export function CanvasContainer({
     childIds,
   } = useNode((node) => ({ childIds: node.data.nodes ?? [] }));
   const { query } = useEditor();
+  const saved = useSavedColours();
   const { hidden, marker } = useVisibility(visibleWhen);
   // **A vertical header turns this container into a row** (p.47: "on the left
   // of the module"). Decided here rather than by the header, because the thing
@@ -363,9 +365,9 @@ export function CanvasContainer({
       // box rather than a colour on each widget: the stylesheet redefines the
       // ink and line tokens beneath it and a widget written years ago inherits
       // legible colours without knowing the feature exists.
-      data-scheme={schemeFor({ background })}
+      data-scheme={schemeFor({ background }, saved)}
       style={{
-        ...styleFor({ background, border }),
+        ...styleFor({ background, border }, saved),
         // This container's own padding, which predates p.62's scale and is a
         // plain number. Written after the style block so it wins - the two
         // would otherwise both emit `padding` and the order would decide.
@@ -6710,6 +6712,7 @@ export function CanvasStepper({
     connectors: { connect, drag },
   } = useNode();
   const { mode } = useCanvasEnv();
+  const saved = useSavedColours();
   const { events: moduleEvents, resolved } = useCanvasVariables();
   const eventContext = useEventContext(undefined, useOverlayIds());
 
@@ -6741,8 +6744,8 @@ export function CanvasStepper({
             const state = stateOf(index, completed, active);
             const reachable = isReachable({ index, completed, type: stepperType });
             const colour = state === "completed"
-              ? completedColourOf(completedColour)
-              : state === "active" ? activeColourOf(activeColour) : undefined;
+              ? completedColourOf(completedColour, saved)
+              : state === "active" ? activeColourOf(activeColour, saved) : undefined;
             return (
               <li
                 className="canvas-step"
@@ -13135,6 +13138,7 @@ export function CanvasSection({
   // p.82's collapse state. Read even when this section is not collapsible, so
   // the hook order does not depend on a prop somebody can toggle.
   const { collapsed: overrides, setCollapsed } = useCanvasPage();
+  const saved = useSavedColours();
   const backing = useCanvasVariable(collapsedWhen);
   const shut = collapsible
     && collapseState(
@@ -13244,8 +13248,8 @@ export function CanvasSection({
       className={`canvas-section canvas-section--${direction}`}
       // p.59-60: "widgets within that section automatically switch between
       // light and dark mode based on the brightness of the background".
-      data-scheme={schemeFor({ background })}
-      style={styleFor({ background, padding, customPadding, border })}
+      data-scheme={schemeFor({ background }, saved)}
+      style={styleFor({ background, padding, customPadding, border }, saved)}
     >
       {marker && <p className="canvas-hidden-marker">{marker}</p>}
       {collapsible && (
@@ -13916,6 +13920,7 @@ export function CanvasPage({
   } = useNode();
   const { mode } = useCanvasEnv();
   const { current } = useCanvasPage();
+  const saved = useSavedColours();
   const { query } = useEditor();
 
   // No page selected yet means "show the first one". Read from the tree rather
@@ -13941,8 +13946,8 @@ export function CanvasPage({
     <section
       ref={(ref) => connectDragDrop(ref, connect, drag)}
       className={`canvas-page${active ? " on" : ""}`}
-      data-scheme={schemeFor({ background })}
-      style={styleFor({ background, padding, customPadding })}
+      data-scheme={schemeFor({ background }, saved)}
+      style={styleFor({ background, padding, customPadding }, saved)}
     >
       {mode === "edit" && (
         <p className="canvas-page-label">

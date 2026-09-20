@@ -68,6 +68,7 @@ import {
 } from "@/lib/api";
 import {
   autoRefreshOf, derivedPropertiesOf, eventsOf, hasLayout, layoutOf, moduleFrom, pageSelectionOf, routingOf,
+  savedColoursOf,
   stateSavingOf,
   translationsOf,
   variablesOf,
@@ -482,6 +483,7 @@ function ActionBar({
   translations,
   autoRefresh,
   derivedProperties,
+  savedColours,
   onView,
   onReverted,
 }: {
@@ -504,6 +506,10 @@ function ActionBar({
    * column list in the layout names one, so a save without them would drop
    * the declaration the column depends on. */
   derivedProperties: import("@/lib/types").WorkshopModule["derived_properties"];
+  /** p.214's Saved colors. In the save for the rest's reason: a widget's
+   * background holds a reference into this palette, so a save without it would
+   * leave every one of those references naming nothing. */
+  savedColours: import("@/lib/types").WorkshopModule["saved_colours"];
   /** Translations (p.207-211). In the save for the same reason as the other
    * two: the tables translate strings that live in the layout, so they have
    * to travel with it or a save would drop every translation a builder
@@ -537,6 +543,7 @@ function ActionBar({
           translations,
           autoRefresh,
           derivedProperties,
+          savedColours,
         }),
         description,
       ),
@@ -633,6 +640,7 @@ function CanvasEnvBridge({
   routing = false,
   autoRefresh,
   derivedProperties,
+  savedColours,
   layout,
   pageSelection,
   stateSaving,
@@ -655,6 +663,10 @@ function CanvasEnvBridge({
    * names one in its column list rather than carrying the
    * declaration. */
   derivedProperties?: unknown;
+  /** p.214's Saved colors, as stored. Passed to `CanvasEnv` rather than to
+   * each widget for p.214's own reason: the palette is module-level, and a
+   * copy on every node is the copying that "the change propagates" abolishes. */
+  savedColours?: unknown;
   /** The **saved** layout, which is what routing reads page IDs and per-page
    * bindings from. An unsaved page ID therefore does not appear in the URL
    * until it is saved — the same rule the Variables panel follows for usage
@@ -690,6 +702,7 @@ function CanvasEnvBridge({
     <CanvasEnvProvider value={{
       workspaceId, projectId, mode: enabled ? "edit" : "run",
       derivedColumns: derivedProperties,
+      savedColours,
     }}>
       {/* Parameter state lives inside the env provider and outside the editor
           tree, so a filter set in Preview survives switching back to Edit -
@@ -760,9 +773,16 @@ function Toolbox({
   onTranslationsChange,
   derivedProperties,
   onDerivedPropertiesChange,
+  savedColours,
+  onSavedColoursChange,
 }: {
   routing: boolean;
   onRoutingChange: (next: boolean) => void;
+  /** p.214's Saved colors, for the Used colors panel below. */
+  savedColours: NonNullable<import("@/lib/types").WorkshopModule["saved_colours"]>;
+  onSavedColoursChange: (
+    next: NonNullable<import("@/lib/types").WorkshopModule["saved_colours"]>,
+  ) => void;
   derivedProperties: Record<string, DerivedColumn[]>;
   onDerivedPropertiesChange: (next: Record<string, DerivedColumn[]>) => void;
   pageSelection: string;
@@ -842,7 +862,7 @@ function Toolbox({
           in edit mode", and this column is that tab: it is where the module's
           own switches live. Below them and above the palette, because it
           describes the document rather than offering anything to drag. */}
-      <UsedColoursPanel />
+      <UsedColoursPanel palette={savedColours} onPaletteChange={onSavedColoursChange} />
       <p className="field-label canvas-toolbox-heading">Widgets</p>
       {PALETTE.map((p) => (
         <PaletteItem key={p.key} componentKey={p.key} label={p.label} hint={p.hint} />
@@ -947,6 +967,12 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   const [derivedProperties, setDerivedProperties] = useState<
     NonNullable<import("@/lib/types").WorkshopModule["derived_properties"]>
   >({});
+  // p.214's Saved colors, held here for `derivedProperties`' reason: a widget's
+  // background holds `saved:c1`, so the Save button has to carry the palette
+  // and a revert has to take it back with the layout that references it.
+  const [savedColours, setSavedColours] = useState<
+    NonNullable<import("@/lib/types").WorkshopModule["saved_colours"]>
+  >([]);
   // p.207-211's tables, held here with the other two module-wide settings so
   // the Save button carries them. Never edited by this component - the switch
   // is the Settings panel's and the tables are written through the API until
@@ -971,6 +997,9 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     setAutoRefresh(autoRefreshSettings(autoRefreshOf(appQuery.data.definition)));
     setDerivedProperties(
       (derivedPropertiesOf(appQuery.data.definition) as typeof derivedProperties) ?? {},
+    );
+    setSavedColours(
+      (savedColoursOf(appQuery.data.definition) as typeof savedColours) ?? [],
     );
   }, [savedVersion, appQuery.data?.id]);
 
@@ -1055,6 +1084,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
         stateSaving={stateSaving}
         autoRefresh={autoRefresh}
         derivedProperties={derivedProperties}
+        savedColours={savedColours}
       >
         <ActionBar
           app={app}
@@ -1070,6 +1100,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           translations={translations}
           autoRefresh={autoRefresh.enabled ? autoRefresh : undefined}
           derivedProperties={derivedProperties}
+          savedColours={savedColours}
           onView={setViewingVersion}
           onReverted={() => setReloadToken((n) => n + 1)}
         />
@@ -1094,6 +1125,8 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           onAutoRefreshChange={setAutoRefresh}
           derivedProperties={derivedProperties}
           onDerivedPropertiesChange={setDerivedProperties}
+          savedColours={savedColours}
+          onSavedColoursChange={setSavedColours}
           translations={translations}
           onTranslationsChange={setTranslations}
           onPreview={(language, snapshot) => setPreviewing({ language, snapshot })}
@@ -1133,6 +1166,8 @@ function CanvasBody({
   onAutoRefreshChange,
   derivedProperties,
   onDerivedPropertiesChange,
+  savedColours,
+  onSavedColoursChange,
   translations,
   onTranslationsChange,
   onPreview,
@@ -1158,6 +1193,11 @@ function CanvasBody({
   onAutoRefreshChange: (next: AutoRefresh) => void;
   derivedProperties: Record<string, DerivedColumn[]>;
   onDerivedPropertiesChange: (next: Record<string, DerivedColumn[]>) => void;
+  /** p.214's Saved colors, edited in the Used colors panel. */
+  savedColours: NonNullable<import("@/lib/types").WorkshopModule["saved_colours"]>;
+  onSavedColoursChange: (
+    next: NonNullable<import("@/lib/types").WorkshopModule["saved_colours"]>,
+  ) => void;
   onStateSavingChange: (
     next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
   ) => void;
@@ -1309,6 +1349,8 @@ function CanvasBody({
           onTranslationsChange={onTranslationsChange}
           derivedProperties={derivedProperties}
           onDerivedPropertiesChange={onDerivedPropertiesChange}
+          savedColours={savedColours}
+          onSavedColoursChange={onSavedColoursChange}
         />
       )}
       <div className="canvas-frame-area">

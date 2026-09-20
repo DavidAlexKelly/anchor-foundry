@@ -484,6 +484,32 @@ def open_module(page, module, *, settle_ms: int | None = None) -> None:
     settled(page)
 
 
+def select_node(page, label: str):
+    """Select a node in the builder by its row in the Layout panel.
+
+    **Not by clicking the thing on the canvas**, and the difference is not
+    taste. A canvas node is *visible* as soon as the layout renders and
+    *selectable* only once Craft has wired its connectors, so a click that
+    follows `expect(node).to_be_visible()` can land in the gap between the two
+    and select nothing — and what fails afterwards is the settings panel,
+    several assertions later, reading "Select a widget to edit its settings."
+
+    It is timing, so it hides exactly where §271 says it will: on a database
+    created a minute ago the builder is quick enough that the click lands, and
+    on an accumulated one it is not. Three tests in `test_used_colours.py` and
+    two in `test_saved_colours.py` were green under `fresh-e2e.sh` and red
+    against the dev stack for this reason, one of them since §398.
+
+    The Layout panel's rows only exist once Craft has the tree, so waiting for
+    one is waiting for the editor to be ready — and `test_style_formatting.py`
+    has been selecting this way, without trouble, since §184.
+    """
+    row = page.locator(".canvas-tree-row", has_text=label).first
+    expect(row).to_be_visible(timeout=FIRST_RENDER_MS)
+    row.click()
+    return row
+
+
 def save(page):
     """Click Save **and wait for it to land**.
 

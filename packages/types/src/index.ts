@@ -266,6 +266,23 @@ export interface WorkshopModule {
     kind: "column_math";
     expression: string;
   }[]>;
+  /** p.214's Saved colors: the module-level palette widgets reference (§414).
+   *
+   * > "Saved colors are defined at the module level… When you edit a saved
+   * > color, the change propagates to all layouts, sections, and widgets that
+   * > reference it." (p.214)
+   *
+   * Beside `derived_properties` and for its reason: a widget's `background`
+   * holds `saved:c1`, so reverting a version has to take the palette back with
+   * the layout that references it — or every one of those widgets resolves to
+   * a colour that is no longer there. */
+  saved_colours?: {
+    id: string;
+    name: string;
+    /** Hex. p.214: "set separate colors for light and dark modes". */
+    light: string;
+    dark: string;
+  }[];
   auto_refresh?: {
     enabled: boolean;
     /** p.577's "Minimum seconds between refresh", floor 10. */

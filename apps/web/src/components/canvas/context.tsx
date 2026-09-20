@@ -27,6 +27,15 @@ export interface CanvasEnv {
    *
    * Read through `derived-columns.ts`, which drops what it cannot use (§212). */
   derivedColumns?: unknown;
+  /** p.214's Saved colors, as stored (§414).
+   *
+   * Here for `derivedColumns`' reason: p.214 defines the palette "at the
+   * module level", and a Craft prop would have to be copied onto every node
+   * that referenced a colour — which is the copying that p.214's "the change
+   * propagates" exists to abolish.
+   *
+   * Read through `saved-colours.ts`, which drops what it cannot use (§212). */
+  savedColours?: unknown;
 }
 
 const CanvasContext = createContext<CanvasEnv | null>(null);

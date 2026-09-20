@@ -31,6 +31,8 @@
  * with the completion variables it is drawn beside.
  */
 
+import { type SavedColour, resolveColour } from "./saved-colours";
+
 /** p.312's Type. */
 export const STEPPER_TYPES: Record<string, string> = {
   linear: "Linear — in order",
@@ -149,19 +151,36 @@ export function stateOf(
 export const DEFAULT_COMPLETED_COLOUR = "#14646e";
 export const DEFAULT_ACTIVE_COLOUR = "#8a6d3b";
 
-function colourOf(raw: unknown, fallback: string): string {
+/** p.214's Saved colors, when the module has any (§414). Optional because
+ * every module built before §414 has none — and because these two props are
+ * p.313's "custom colors in widgets", which is the phrase p.214 uses for what
+ * a saved colour may be selected into.
+ *
+ * Resolved through `saved-colours.ts` rather than here: `style.
+ * resolveBackground` asks the same question of the same values, and two
+ * resolvers would mean a saved colour that worked on a section and not on a
+ * step (§292). */
+export type Saved = { palette: readonly SavedColour[]; scheme: "light" | "dark" };
+
+function colourOf(raw: unknown, fallback: string, saved?: Saved): string {
+  const referenced = resolveColour(raw, saved?.palette ?? [], saved?.scheme ?? "light");
+  // A reference whose colour has gone falls back to p.313's default rather
+  // than to the raw `saved:c9` (§210). The step still has to be drawn, and
+  // handing that string to the browser paints nothing at all - an invisible
+  // step is a worse answer than a default-coloured one.
+  if (referenced !== null) return referenced ?? fallback;
   const text = typeof raw === "string" ? raw.trim() : "";
   return text || fallback;
 }
 
 /** p.313's Completed color. */
-export function completedColourOf(raw: unknown): string {
-  return colourOf(raw, DEFAULT_COMPLETED_COLOUR);
+export function completedColourOf(raw: unknown, saved?: Saved): string {
+  return colourOf(raw, DEFAULT_COMPLETED_COLOUR, saved);
 }
 
 /** p.313's Active color. */
-export function activeColourOf(raw: unknown): string {
-  return colourOf(raw, DEFAULT_ACTIVE_COLOUR);
+export function activeColourOf(raw: unknown, saved?: Saved): string {
+  return colourOf(raw, DEFAULT_ACTIVE_COLOUR, saved);
 }
 
 /** p.313's "Show step number".
