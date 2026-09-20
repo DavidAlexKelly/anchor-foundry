@@ -26,10 +26,28 @@ LATER = {"id": "R3", "name": "Third from elsewhere"}
 SECONDS = 10
 
 
-def build(api, name: str, *, watching=True, seconds=SECONDS, in_edit=False):
+def build(api, name: str, *, watching=True, seconds=SECONDS, in_edit=False,
+          register="v_all", second_type=False):
+    """A table over one object type, and optionally a second type nobody shows.
+
+    `register` is which variable the module *registers* (p.576), which is not
+    the same question as which one a widget reads — `second_type` exists so the
+    two can be pulled apart.
+    """
     mod = Module(api, name)
     type_id = mod.object_type(columns=["id", "name"], rows=ROWS, key="id", title="name")
     mod.type_id = type_id
+    variables = {
+        "v_all": {"id": "v_all", "kind": "object_set", "label": "All rows",
+                  "object_set": object_set(type_id)},
+    }
+    if second_type:
+        other = mod.object_type(columns=["id", "name"], rows=ROWS, key="id",
+                                title="name", slug=f"other_{mod.tag}")
+        variables["v_other"] = {
+            "id": "v_other", "kind": "object_set", "label": "Other rows",
+            "object_set": object_set(other),
+        }
     definition = {
         "format": 2,
         "layout": layout({
@@ -37,16 +55,13 @@ def build(api, name: str, *, watching=True, seconds=SECONDS, in_edit=False):
                     "props": {"objectSetVariable": "v_all", "columns": "id,name",
                               "pageSize": 25}},
         }),
-        "variables": {
-            "v_all": {"id": "v_all", "kind": "object_set", "label": "All rows",
-                      "object_set": object_set(type_id)},
-        },
+        "variables": variables,
         "events": {},
     }
     if watching:
         definition["auto_refresh"] = {
             "enabled": True, "seconds": seconds,
-            "disable_in_edit": not in_edit, "variables": ["v_all"],
+            "disable_in_edit": not in_edit, "variables": [register],
         }
     mod.define(definition)
     return mod
@@ -162,3 +177,29 @@ def test_the_panel_writes_a_registration_that_takes_effect(page, api):
     eventually(lambda: rows(page).count(), lambda n: n == len(ROWS) + 1,
                what="the registration written in the panel taking effect",
                timeout_ms=(SECONDS + 20) * 1000)
+
+
+def test_registering_one_set_does_not_watch_another_type(page, api):
+    """p.576's verb is **register**, and this is the test that it means
+    something: the module has auto-refresh on, and watches a set over a
+    *different* object type than the one on screen.
+
+    **The unregistered test above could not make this claim.** It switches
+    auto-refresh off entirely, so it cannot tell "the feature is off" from
+    "this set was not registered" — and a mutant that watched every resolved
+    variable rather than the registered ones passed all four tests in this
+    file. p.579 is the page it comes from: watching is explicit, and nothing
+    is watched by being nearby.
+    """
+    mod = build(api, "Auto refresh other type", register="v_other",
+                second_type=True)
+    open_module(page, mod)
+    eventually(lambda: rows(page).count(), lambda n: n == len(ROWS),
+               what="the module's rows")
+
+    # The write lands on the type the table shows, which is the one *not*
+    # registered.
+    add_row(mod)
+    page.wait_for_timeout((SECONDS + 5) * 1000)
+    assert rows(page).count() == len(ROWS), "an unregistered type was watched"
+    expect(page.get_by_text(LATER["name"], exact=True)).to_have_count(0)
