@@ -4704,6 +4704,87 @@ class ObjectSetSeriesOut(BaseModel):
     partial history and should be able to say so."""
 
 
+class FreshnessIn(BaseModel):
+    object_type_ids: list[UUID]
+
+
+class TypeFreshness(BaseModel):
+    object_type_id: UUID
+    """When this type last changed, as ISO text, or null when it holds nothing.
+
+    Text rather than a `datetime` because the two stores spell an instant
+    differently — OpenSearch returns its own formatting and Postgres a Python
+    `datetime` — and the caller only ever compares it for equality. A value
+    that round-trips differently between stores would refresh every watching
+    module once, for nothing."""
+    updated_at: str | None
+    count: int
+
+
+class FreshnessOut(BaseModel):
+    types: list[TypeFreshness]
+
+
+#: How many types one call may ask about. A module registers object sets by
+#: hand (workshop p.576), so a handful is the realistic number; the cap is here
+#: because this is polled and an unbounded list would be an unbounded number of
+#: store reads every ten seconds.
+MAX_WATCHED_TYPES = 25
+
+
+@router.post("/object-types/freshness", response_model=FreshnessOut)
+async def object_type_freshness(
+    body: FreshnessIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> FreshnessOut:
+    """When each of these object types last changed (`workshop` p.576).
+
+    > "With auto-refresh, you can register object sets within a module to be
+    > watched for updates from anywhere in Foundry. When an update occurs, all
+    > data in the current module will automatically refresh without user
+    > interaction." (p.576)
+
+    This is the *watching* half. The refreshing half is the browser's, and it
+    already exists — `invalidateCanvasReads` is "all data in the module" said
+    in one call.
+
+    **A watermark, not a feed.** p.577 puts a floor of ten seconds under the
+    refresh rate "to ensure stability of services due to the increased load",
+    which is a polling model stated outright; so this answers the cheapest
+    question that can detect a change rather than streaming what changed.
+
+    **Per type, because that is the unit Foundry watches.** p.579 is explicit
+    that auto-refresh "does not automatically watch for updates of linked
+    object types", so a registered set watches its own type and nothing it
+    links to. A set is a filtered view of a type and any write to the type can
+    move a row in or out of it, so the type is also the *smallest* thing that
+    can be watched without re-evaluating the filter on every poll.
+
+    A type the caller cannot see is left out of the answer rather than 404-ing
+    the call: a module can outlive the ontology it was built against, and a
+    deleted type should stop a module refreshing, not stop it rendering.
+    """
+    wanted = list(dict.fromkeys(body.object_type_ids))[:MAX_WATCHED_TYPES]
+    if not wanted:
+        return FreshnessOut(types=[])
+    async with user_connection(access.auth.user_id) as conn:
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        out: list[TypeFreshness] = []
+        for type_id in wanted:
+            try:
+                await ontology_service.get_type(conn, access.workspace_id, type_id)
+            except Exception:
+                continue
+            newest, count = await store.freshness(
+                search_prefix=prefix, object_type_id=type_id
+            )
+            out.append(
+                TypeFreshness(object_type_id=type_id, updated_at=newest, count=count)
+            )
+        return FreshnessOut(types=out)
+
+
 @router.post("/object-sets/series-points", response_model=ObjectSetSeriesOut)
 async def object_set_series_points(
     body: ObjectSetSeriesIn,

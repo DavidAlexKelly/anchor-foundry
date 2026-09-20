@@ -251,6 +251,39 @@ async def delete_instances(
     return result.rowcount or 0
 
 
+async def freshness(
+    conn: AsyncConnection, object_type_id: UUID
+) -> tuple[str | None, int]:
+    """When this type last changed, and how many objects it has (§408).
+
+    Workshop p.576's auto-refresh watches an object type by asking this, so it
+    is one row: `max(updated_at)` and `count(*)` in a single pass.
+
+    **The maximum alone is not a watermark.** A delete lowers it rather than
+    raising it, so a watcher comparing only the newest timestamp would see the
+    number go backwards and have to decide whether that is a change. The count
+    moves on every insert and delete, so the pair moves on every write.
+
+    The timestamp goes out as **ISO text**, which is what the OpenSearch store
+    returns and what a browser compares for equality. A `datetime` would be
+    serialised by whatever the route's response model decided, and the two
+    stores would then disagree about the spelling of the same instant.
+    """
+    row = await fetch_one(
+        conn,
+        """
+        SELECT max(updated_at) AS newest, count(*) AS n
+          FROM object_instances
+         WHERE object_type_id = :tid
+        """,
+        {"tid": str(object_type_id)},
+    )
+    if row is None:
+        return (None, 0)
+    newest = row["newest"]
+    return (newest.isoformat() if newest is not None else None, int(row["n"]))
+
+
 async def list_for_type(
     conn: AsyncConnection, object_type_id: UUID, *, limit: int, offset: int
 ) -> tuple[list[dict[str, Any]], int]:

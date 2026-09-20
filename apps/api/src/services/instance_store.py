@@ -124,6 +124,24 @@ class InstanceStoreGateway(Protocol):
         """
         ...
 
+    async def freshness(
+        self, *, search_prefix: str, object_type_id: UUID
+    ) -> tuple[str | None, int]:
+        """When this type last changed, and how many objects it has (§408).
+
+        Workshop p.576's auto-refresh: "register object sets within a module to
+        be watched for updates from anywhere in Foundry". Watching means asking
+        this, so it has to be cheap enough to ask every ten seconds - p.577's
+        floor - and it is: a maximum and a count, with no documents read.
+
+        **Two numbers, not one, and the count is the reason.** A deletion does
+        not raise the newest `updated_at`; it usually lowers it, so a watcher
+        comparing only the maximum would see the watermark move *backwards*
+        and have to decide whether that counts as a change. The count moves on
+        every insert and every delete, so the pair moves on every write.
+        """
+        ...
+
     async def list_for_type(
         self, *, search_prefix: str, object_type_id: UUID, limit: int, offset: int
     ) -> tuple[list[dict[str, Any]], int]: ...
@@ -646,6 +664,31 @@ class OpenSearchInstanceStore:
             # indexed yet.
             ignore_unavailable=True,
         )
+
+    async def freshness(
+        self, *, search_prefix: str, object_type_id: UUID
+    ) -> tuple[str | None, int]:
+        resp = await self._client.search(
+            index=_index_name(search_prefix, object_type_id),
+            body={
+                "query": {"term": {"object_type_id": str(object_type_id)}},
+                # `size: 0` for `aggregate_object_set`'s reason: the watermark
+                # is the answer and the documents are not.
+                "size": 0,
+                "aggs": {"newest": {"max": {"field": "updated_at"}}},
+            },
+            # A type nobody has synced has no index, which is "no objects yet"
+            # rather than a broken cluster - `list_for_type`'s own note.
+            ignore_unavailable=True,
+        )
+        total = int(resp.get("hits", {}).get("total", {}).get("value", 0))
+        agg = resp.get("aggregations", {}).get("newest", {}) or {}
+        # `value_as_string`, not `value`: the latter is epoch milliseconds as a
+        # float, and the watermark is only ever compared for equality - two
+        # spellings of the same instant would compare unequal across a store
+        # switch and refresh every module once for nothing.
+        newest = agg.get("value_as_string") if agg.get("value") is not None else None
+        return (str(newest) if newest else None, total)
 
     async def list_for_type(
         self, *, search_prefix: str, object_type_id: UUID, limit: int, offset: int
@@ -1326,6 +1369,13 @@ class PostgresInstanceStore:
         gets here. Implemented rather than omitted, so the route can call one
         method without knowing which store it has."""
         return None
+
+    async def freshness(
+        self, *, search_prefix: str, object_type_id: UUID
+    ) -> tuple[str | None, int]:
+        from . import instances as instances_service
+
+        return await instances_service.freshness(self._conn, object_type_id)
 
     async def list_for_type(
         self, *, search_prefix: str, object_type_id: UUID, limit: int, offset: int
