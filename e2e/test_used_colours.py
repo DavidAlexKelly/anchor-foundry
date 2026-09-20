@@ -21,7 +21,7 @@ from __future__ import annotations
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import open_builder, open_module
+from conftest import open_builder, open_module, select_node
 
 # Two custom colours, one of them used twice, so the panel has an order to get
 # right and a count to get right.
@@ -120,7 +120,7 @@ def test_a_renamed_widget_is_named_by_its_new_name(page, api) -> None:
     mod = coloured_module(api, "Colours renamed", {"a": {"background": TEAL}})
     open_builder(page, mod)
 
-    page.locator(".canvas-section").first.click()
+    select_node(page, "Section")
     # p.68's rename lives on the widget's Metadata tab, which is where the
     # builder puts it and therefore where an author will do it.
     page.get_by_role("tab", name="Metadata").click()
@@ -145,7 +145,7 @@ def test_the_list_follows_the_edit_not_the_save(page, api) -> None:
     expect(page.locator('[data-testid="used-colours-empty"]')).to_have_count(1)
 
     # Select the section and give it a custom background, without saving.
-    page.locator(".canvas-section").first.click()
+    select_node(page, "Section")
     page.locator('[data-testid="style-background"]').select_option("custom")
     page.locator('[data-testid="style-background-hex"]').fill(TEAL)
     page.locator('[data-testid="style-background-hex"]').blur()

@@ -23,7 +23,8 @@ from playwright.sync_api import expect
 
 from api import Module, layout
 from conftest import (
-    eventually, open_builder, open_module, publish, save, settled, viewer_url,
+    eventually, open_builder, open_module, publish, save, select_node, settled,
+    viewer_url,
 )
 
 TEAL = "#1f7a70"
@@ -134,7 +135,7 @@ def test_a_saved_colour_is_offered_by_name_on_a_background(page, api) -> None:
         backgrounds={"a": ""},
     )
     open_builder(page, mod)
-    page.locator(".canvas-section").first.click()
+    select_node(page, "Section")
     picker = page.get_by_test_id("style-background")
     expect(picker).to_be_visible()
     labels = page.eval_on_selector_all(
@@ -160,7 +161,7 @@ def test_a_reference_to_a_colour_that_is_gone_paints_nothing(page, api) -> None:
     expect(page.locator(".canvas-section").first).to_be_visible()
     assert background_of(page, 0) == "rgba(0, 0, 0, 0)", background_of(page, 0)
 
-    page.locator(".canvas-section").first.click()
+    select_node(page, "Section")
     expect(page.get_by_test_id("style-background")).to_have_value("custom")
     expect(page.get_by_test_id("style-background-hex")).to_have_value(NOWHERE)
 
