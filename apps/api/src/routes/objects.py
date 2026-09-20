@@ -4662,8 +4662,14 @@ async def _with_derived(
     silent N+1 on every list in the product. p.143's own examples are all
     object-shaped - "this department's average salary", "this project's lead
     engineer" - so the object view is where the answer is worth paying for.
-    A table showing a derived column needs the aggregation pushed into the
-    index, which is the same typed-index work §87 is blocked on.
+    A table showing a derived column needs the chain pushed into the *set*
+    read, the way §402 pushed a page of time series into one query.
+
+    **Not the typed-index work**, which this said until §410 and which §406
+    finished: the arithmetic aggregations it was waiting on are answered now,
+    and a derived column is still a read per row. The two were never the same
+    problem — one is about knowing a value is a number, this one is about
+    asking once instead of twenty-five times.
     """
     properties = await ontology_service.list_properties(conn, type_id)
     derived = [p for p in properties if p.get("derivation")]

@@ -1875,17 +1875,28 @@ export interface ValueTypeVersion {
  * chain of up to three link types, an aggregation, and the property at the far
  * end.
  *
- * Four of p.145's nine aggregations are absent because the server refuses
- * them: `sum`/`avg`/`min`/`max` need to know a property is a number and
- * instance properties are stored untyped, and `approx_cardinality` would be
- * approximate on OpenSearch and exact on Postgres. */
+ * **One of p.145's nine aggregations is absent**, and it used to be five.
+ * `approx_cardinality` is refused because it would be approximate on
+ * OpenSearch and exact on Postgres — a difference between the stores rather
+ * than a gap here.
+ *
+ * `sum`/`avg`/`min`/`max` were refused alongside it, on the grounds that they
+ * "need to know a property is a number and instance properties are stored
+ * untyped". True when written and untrue from §220; §406 removed the refusal
+ * from the server and the editor and **left this type behind** — which nothing
+ * caught, because `derived-property-editor.tsx` wrote `aggregate as "count"`
+ * to satisfy the union. A cast that names one member to smuggle four others
+ * through is a type that has stopped describing the program. Both are fixed,
+ * and `test_workshop_variables.py` now compares this list with the server's so
+ * the next one cannot drift silently. */
 export interface Derivation {
   /** In order, each naming the link and where following it lands. */
   links: { link_type_id: string; far_type_id: string }[];
   /** Where the whole chain lands. */
   far_type_id: string;
   /** Absent when no hop can reach more than one object (p.145). */
-  aggregate?: "count" | "exact_cardinality" | "collect_list" | "collect_set";
+  aggregate?: "count" | "sum" | "avg" | "min" | "max" | "exact_cardinality"
+    | "collect_list" | "collect_set";
   /** Absent iff the aggregate is `count` (p.146). */
   property?: string;
   /** p.146's collection limit; defaulted to 10 by the server. */

@@ -134,7 +134,12 @@ export function DerivedPropertyEditor({
     onSave({
       links: hops.map((h) => ({ link_type_id: h.link_type_id, far_type_id: h.far_type_id })),
       far_type_id: state.here,
-      ...(aggregate ? { aggregate: aggregate as "count" } : {}),
+      // **No cast.** This read `aggregate as "count"` until §410, which made
+      // every aggregation type-check as a count and is why §406 could add four
+      // to the dropdown without the type noticing they were not in the union.
+      ...(aggregate
+        ? { aggregate: aggregate as NonNullable<Derivation["aggregate"]> }
+        : {}),
       ...(aggregate !== "count" && property ? { property } : {}),
       ...(COLLECTORS.includes(aggregate) && limit.trim()
         ? { limit: Number(limit) }
