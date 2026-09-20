@@ -283,3 +283,63 @@ def test_a_reader_can_pause_updates_and_the_held_one_lands_on_resume(page, api):
                what="the held update landing on resume, not at the next poll",
                timeout_ms=3000)
     expect(page.get_by_text(LATER["name"], exact=True)).to_be_visible()
+
+
+def hide_tab(page, hidden: bool) -> None:
+    """Make the page look backgrounded, the way p.579 means it.
+
+    Playwright cannot minimise a tab, so `visibilityState` is overridden and
+    the event the browser would fire is fired. That is exactly the pair the
+    component listens for, so this drives the real code path rather than a
+    test-only one.
+    """
+    page.evaluate(
+        """(hidden) => {
+            Object.defineProperty(document, "visibilityState", {
+                configurable: true, get: () => (hidden ? "hidden" : "visible"),
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+        }""",
+        hidden,
+    )
+
+
+def test_a_paused_module_stays_paused_when_the_tab_comes_back(page, api):
+    """**The claim the mutation sweep found nothing was making.**
+
+    p.578's pause and p.579's hidden tab are two reasons to hold the same
+    update, and `applyNow` takes both because either alone is not enough. A
+    build that checked only visibility passed every other test in this file:
+    on resume the two agree, so nothing could tell them apart — until the tab
+    goes away and comes back *while still paused*, which is the one moment
+    they disagree.
+
+    Without both, returning to the tab applies an update the reader explicitly
+    paused, which is the failure that looks like the pause button is broken
+    intermittently.
+    """
+    mod = with_buttons(api, "Auto refresh paused tab")
+    open_module(page, mod)
+    eventually(lambda: rows(page).count(), lambda n: n == len(ROWS),
+               what="the module's rows")
+
+    page.get_by_role("button", name="Pause", exact=True).click()
+    add_row(mod)
+    # Long enough that a poll has seen the write and held it.
+    page.wait_for_timeout((SECONDS + 2) * 1000)
+    assert rows(page).count() == len(ROWS), "a paused module applied an update"
+
+    # Away and back, still paused.
+    hide_tab(page, True)
+    page.wait_for_timeout(500)
+    hide_tab(page, False)
+    page.wait_for_timeout(2000)
+    assert rows(page).count() == len(ROWS), (
+        "returning to the tab applied an update the reader had paused"
+    )
+
+    # And the pause is still a pause, not a break: resuming still delivers it.
+    page.get_by_role("button", name="Resume", exact=True).click()
+    eventually(lambda: rows(page).count(), lambda n: n == len(ROWS) + 1,
+               what="the held update landing once the reader resumes",
+               timeout_ms=3000)
