@@ -543,6 +543,12 @@ def layout(nodes: dict[str, dict[str, Any]]) -> dict[str, Any]:
         if spec.get("isCanvas"):
             node["isCanvas"] = True
             node["linkedNodes"] = {}
+        # Craft's per-node `custom`, which is where the settings that are not
+        # widget props live - sizing (§12) and p.182's display optimization.
+        # Omitted unless a spec asks for it, so every existing layout is
+        # written exactly as it was.
+        if spec.get("custom") is not None:
+            node["custom"] = spec["custom"]
         out[node_id] = node
     return out
 

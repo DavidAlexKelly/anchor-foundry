@@ -1,7 +1,13 @@
 "use client";
 
 import { useEditor, useNode } from "@craftjs/core";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import {
+  DEFAULT_MOUNT, DEFAULT_UNMOUNT, MOUNTS, UNMOUNTS, UNSUPPORTED, mountOf,
+  placeholderHeight, shows, unmountOf, watches,
+} from "./display-optimization";
+import { useOnScreen } from "./object-set";
+import { useCanvasEnv } from "./context";
 
 /** The selected widget's configuration, in Foundry's three tabs (p.65–68).
  *
@@ -275,8 +281,17 @@ function DisplayTab({ id }: { id: string }) {
       // "auto" with no maximum is the default, so it is stored as *absent*
       // rather than as a value. A document that records every default is a
       // document whose diffs are mostly noise.
-      if (next.mode === "auto" && !next.max) delete custom.display;
-      else custom.display = next;
+      //
+      // p.182's two settings follow the same rule one field at a time: each
+      // is deleted when it holds its default, so turning one on and off again
+      // leaves the document as it was rather than carrying a `"default"`
+      // nobody chose.
+      const tidy = { ...next };
+      if (mountOf(tidy.mount) === DEFAULT_MOUNT) delete tidy.mount;
+      if (unmountOf(tidy.unmount) === DEFAULT_UNMOUNT) delete tidy.unmount;
+      if (tidy.mode === "auto" && !tidy.max && !tidy.mount && !tidy.unmount) {
+        delete custom.display;
+      } else custom.display = tidy;
     });
 
   return (
@@ -328,6 +343,36 @@ function DisplayTab({ id }: { id: string }) {
         </label>
       )}
 
+      {/* p.182's two independent settings, under the sizing they sit beside
+          in the same tab: "Open the widget configuration panel's Display tab
+          and locate the Display optimization options." */}
+      <label className="field">
+        <span className="field-label">Mount</span>
+        <select
+          value={mountOf(display.mount)}
+          data-testid="display-mount"
+          onChange={(e) => set({ ...display, mount: e.target.value })}
+        >
+          {Object.entries(MOUNTS).map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Unmount</span>
+        <select
+          value={unmountOf(display.unmount)}
+          data-testid="display-unmount"
+          onChange={(e) => set({ ...display, unmount: e.target.value })}
+        >
+          {Object.entries(UNMOUNTS).map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
+        </select>
+        <span className="field-hint" data-testid="display-unsupported">
+          {UNSUPPORTED}
+        </span>
+      </label>
       {display.mode === "flex" && (
         <label className="field">
           <span className="field-label">Ratio</span>
@@ -359,6 +404,11 @@ export interface DisplayConfig {
   height?: number;
   /** `flex` only. */
   grow?: number;
+  /** p.182's **Mount behavior**, absent for its default — `display-optimization.ts`
+   * has the two this platform offers and why the third is not among them. */
+  mount?: string;
+  /** p.182's **Unmount behavior**, absent for its default. */
+  unmount?: string;
 }
 
 /** The style a display config resolves to, kept beside the editor that writes
@@ -395,11 +445,58 @@ export function CanvasNode({ render }: { render: React.ReactElement }) {
   const { display } = useNode((node) => ({
     display: (node.data.custom as { display?: DisplayConfig } | undefined)?.display,
   }));
+  const { mode } = useCanvasEnv();
   const style = displayStyle(display);
-  if (!style) return render;
+  const mount = mountOf(display?.mount);
+  const unmount = unmountOf(display?.unmount);
+  // **Run mode only.** In the builder a widget that vanished when it scrolled
+  // away would be one the canvas cannot show and the layout tree selects into
+  // nothing - and p.182's own instructions for configuring this start "in edit
+  // mode, select the widget in the canvas".
+  const optimised = mode === "run" && watches(mount, unmount);
+
+  const [ref, visible] = useOnScreen();
+  const [seen, setSeen] = useState(false);
+  // The last height the body actually had, so unmounting it does not collapse
+  // the layout and move the viewport out from under the reader.
+  const [measured, setMeasured] = useState<number | null>(null);
+  const box = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (visible && !seen) setSeen(true);
+  }, [visible, seen]);
+
+  const showing = !optimised || shows({ mount, unmount, visible, seen });
+
+  useEffect(() => {
+    if (!optimised || !showing) return;
+    const height = box.current?.offsetHeight ?? 0;
+    if (height > 0) setMeasured(height);
+  }, [optimised, showing, visible]);
+
+  if (!optimised) {
+    if (!style) return render;
+    return (
+      <div className="canvas-sized" data-sizing={display?.mode} style={style}>
+        {render}
+      </div>
+    );
+  }
+
   return (
-    <div className="canvas-sized" data-sizing={display?.mode} style={style}>
-      {render}
+    <div
+      className="canvas-sized"
+      data-sizing={display?.mode}
+      data-mount={mount}
+      data-unmount={unmount}
+      data-mounted={showing ? "yes" : "no"}
+      style={showing ? style ?? undefined : { minHeight: placeholderHeight(measured) }}
+      ref={(node) => {
+        box.current = node;
+        ref(node);
+      }}
+    >
+      {showing ? render : null}
     </div>
   );
 }
