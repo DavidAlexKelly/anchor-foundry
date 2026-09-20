@@ -114,6 +114,10 @@ import {
   sparkPositionOf as metricSparkPositionOf,
   valueLabel as metricValueLabel,
 } from "./metric-card";
+import { ValueFormatEditor } from "@/components/value-format-editor";
+import {
+  formatsByColumn, formatSummary, numberFormatOf, type NumberFormat,
+} from "./value-formats";
 import {
   // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
   // enough to collide with something later, and `labelOf` is the kind of name
@@ -3657,6 +3661,7 @@ export function CanvasObjectTable({
   inlineEditButtonText = "",
   inlineEditByDefault = false,
   inlineEditOneClick = false,
+  seriesFormats = null,
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
@@ -3673,6 +3678,11 @@ export function CanvasObjectTable({
    * them - a table that showed nothing until somebody configured it would look
    * broken on the first drop. */
   columns?: string;
+  /** p.174's value formatting for this module's **time series columns**, keyed
+   * by property API name. Read through `formatsByColumn`, which drops anything
+   * that would not apply (§212) - see `value-formats.ts` for why the ontology
+   * has nothing to inherit from here. */
+  seriesFormats?: unknown;
   /** One of the server's `object_sets.SORTS`. Sorting *by a property* is
    * refused there rather than here, because untyped properties would order
    * differently on the two stores; the settings panel therefore offers what
@@ -3814,6 +3824,10 @@ export function CanvasObjectTable({
   });
 
   const all = type.data?.properties ?? [];
+  // p.174's per-column formatters, read once for the render rather than per
+  // cell: this validates every entry, and a twenty-five row page would run it
+  // twenty-five times for an answer that cannot differ between rows.
+  const columnFormats = useMemo(() => formatsByColumn(seriesFormats), [seriesFormats]);
   // Configured order wins, and a name that matches nothing is dropped rather
   // than rendered as an empty column: a property can be removed from the type
   // long after a table was pointed at it.
@@ -4241,6 +4255,9 @@ export function CanvasObjectTable({
                               <SeriesCell
                                 points={seriesByKey.get(instance.primary_key)}
                                 pending={seriesPage.isPending}
+                                // p.174: the module's formatter for this
+                                // column, when one was set.
+                                format={columnFormats[p.api_name] ?? null}
                               />
                             ) : (
                               <PropertyValue
@@ -4725,7 +4742,7 @@ function ObjectTableSettings() {
     lines, valueWrap, frozenColumns, emptyMode, emptyMessage,
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
     inlineEditAction, inlineEditMapping, inlineEditButtonText,
-    inlineEditByDefault, inlineEditOneClick,
+    inlineEditByDefault, inlineEditOneClick, seriesFormats,
     actions: { setProp },
   } = useNode((node) => ({
     objectTypeId: node.data.props.objectTypeId,
@@ -4755,6 +4772,7 @@ function ObjectTableSettings() {
     inlineEditButtonText: node.data.props.inlineEditButtonText,
     inlineEditByDefault: node.data.props.inlineEditByDefault,
     inlineEditOneClick: node.data.props.inlineEditOneClick,
+    seriesFormats: node.data.props.seriesFormats,
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   // **`array`, not `object_set`.** p.224 calls these outputs object sets and
@@ -4798,6 +4816,17 @@ function ObjectTableSettings() {
     const all = (detail.data?.properties ?? []).map((p) => p.api_name);
     return wanted.length ? wanted.filter((c) => all.includes(c)) : all;
   }, [columns, detail.data]);
+  // p.174 scopes Workshop value formatting to *time series* columns, so the
+  // controls are offered for those and nothing else. Every other column is
+  // written by the ontology's formatter (§157) and an override here would be
+  // the second place to set the same thing.
+  const seriesColumns = useMemo(() => {
+    const types = new Map(
+      (detail.data?.properties ?? []).map((prop) => [prop.api_name, prop.data_type]),
+    );
+    return shownColumns.filter((name) => types.get(name) === "time_series");
+  }, [shownColumns, detail.data]);
+  const savedFormats = useMemo(() => formatsByColumn(seriesFormats), [seriesFormats]);
 
   // p.65's order, and p.66's disclosure. **A choice rather than a
   // requirement**: this widget is populated either by a bound object set or
@@ -4918,6 +4947,32 @@ function ObjectTableSettings() {
           Property names in the order to show them. Blank shows all of them.
         </span>
       </label>
+      {/* p.174's value formatting, one control per time series column shown.
+          **Only when the type has been read**: before that `seriesColumns` is
+          empty for want of the property list rather than because there are no
+          series columns, and an absent section says that more honestly than a
+          "no time series columns" sentence that would be wrong for a moment. */}
+      {seriesColumns.map((name) => (
+        <ValueFormatField
+          key={name}
+          label={`Format ${name}`}
+          testId={`series-format-${name}`}
+          value={savedFormats[name] ?? null}
+          hint="The latest value of this series. Local to this module (p.174)."
+          onChange={(next) =>
+            setProp((p: { seriesFormats: Record<string, NumberFormat> | null }) => {
+              // A rebuilt map rather than a mutated one, and the cleared entry
+              // *deleted* rather than set to null: `formatsByColumn` would drop
+              // a null anyway, but a document full of tombstones is a document
+              // where "has this column been formatted" has two answers.
+              const next_ = { ...savedFormats };
+              if (next) next_[name] = next;
+              else delete next_[name];
+              p.seriesFormats = Object.keys(next_).length ? next_ : null;
+            })
+          }
+        />
+      ))}
       {/* p.241: "the toggle to Enable inline editing will appear within the
           Column configuration section below the Columns list". */}
       <InlineEditField
@@ -5180,6 +5235,7 @@ CanvasObjectTable.craft = {
     narrowHeaders: false, formatFillsCell: false,
     inlineEditAction: null, inlineEditMapping: null, inlineEditButtonText: "",
     inlineEditByDefault: false, inlineEditOneClick: false,
+    seriesFormats: null,
   },
   related: { settings: ObjectTableSettings },
 };
@@ -12346,6 +12402,7 @@ export function CanvasMetricCard({
   showVisualization = false,
   visualizationPosition = DEFAULT_SPARK_POSITION,
   seriesVariable = null,
+  valueFormat = null,
 }: {
   objectSetVariable?: string | null;
   /** p.310's six, as `metric-card.ts` lists them. */
@@ -12357,6 +12414,10 @@ export function CanvasMetricCard({
   showVisualization?: boolean;
   visualizationPosition?: string;
   seriesVariable?: string | null;
+  /** p.328's "Numeric formatting", which is p.174's module-local value
+   * formatting. Read through `numberFormatOf` rather than used as given,
+   * because a layout document holds whatever was put there (§212). */
+  valueFormat?: unknown;
 }) {
   const {
     connectors: { connect, drag },
@@ -12402,7 +12463,7 @@ export function CanvasMetricCard({
           // large number somebody reads at a glance - so it says there is
           // nothing rather than throwing, or worse, showing a zero.
           <span className="metric-value" data-testid="metric-value">
-            {metricValueLabel(metric.data?.value)}
+            {metricValueLabel(metric.data?.value, numberFormatOf(valueFormat))}
           </span>
         )}
     </>
@@ -12454,18 +12515,79 @@ export function CanvasMetricCard({
   );
 }
 
+/**
+ * p.174's value formatting as one settings control: a button showing what the
+ * formatter does to a number, and §157's dialog behind it.
+ *
+ * **§157's editor, not a second one** (§191). It already carries p.97-98's
+ * whole option list and p.96's live preview, and a Workshop copy would be a
+ * second place for "max fraction digits" to mean something slightly different.
+ * `dataType` is `float` because both of p.174's surfaces are numbers: that is
+ * the editor's switch between p.97's numeric options and p.99's temporal ones,
+ * and a datetime formatter on either surface would format nothing.
+ *
+ * **Mounted only while open**, because the dialog seeds its draft from `value`
+ * once at mount. Kept mounted, a formatter cancelled and reopened would still
+ * show the abandoned draft.
+ *
+ * The button's face is the formatter's *effect* rather than its fields, on
+ * p.329's own example - "setting the maximum fraction digits to 2 displays
+ * 3.14159 as 3.14". Nobody reads "maximumFractionDigits: 2" and pictures that.
+ */
+function ValueFormatField({
+  label,
+  testId,
+  value,
+  onChange,
+  hint,
+}: {
+  label: string;
+  testId: string;
+  value: unknown;
+  onChange: (next: NumberFormat | null) => void;
+  hint?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const format = numberFormatOf(value);
+  return (
+    <div className="field">
+      <span className="field-label">{label}</span>
+      <button
+        type="button"
+        className="btn"
+        data-testid={testId}
+        onClick={() => setOpen(true)}
+      >
+        {formatSummary(format)}
+      </button>
+      {hint && <span className="field-hint">{hint}</span>}
+      {open && (
+        <ValueFormatEditor
+          open
+          onClose={() => setOpen(false)}
+          propertyName={label}
+          dataType="float"
+          value={format}
+          onSave={(next) => onChange(next as NumberFormat | null)}
+        />
+      )}
+    </div>
+  );
+}
+
 function MetricCardSettings() {
   const { workspaceId } = useCanvasEnv();
   const { declared, resolved } = useCanvasVariables();
   const {
     objectSetVariable, aggregation, property, label,
-    showVisualization, visualizationPosition, seriesVariable,
+    showVisualization, visualizationPosition, seriesVariable, valueFormat,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
     aggregation: node.data.props.aggregation,
     property: node.data.props.property,
     label: node.data.props.label,
+    valueFormat: node.data.props.valueFormat,
     showVisualization: node.data.props.showVisualization,
     visualizationPosition: node.data.props.visualizationPosition,
     seriesVariable: node.data.props.seriesVariable,
@@ -12555,6 +12677,19 @@ function MetricCardSettings() {
           </select>
         </label>
       )}
+      {/* p.328's **Numeric formatting**: "This optional configuration is only
+          available for the Number value type… specify a value formatting
+          scheme to display the numeric value", and it points at p.174. In
+          p.328's own order, directly under the value it formats. */}
+      <ValueFormatField
+        label="Numeric formatting"
+        testId="metric-value-format"
+        value={valueFormat}
+        hint="Local to this module — the ontology is unchanged (p.174)."
+        onChange={(next) =>
+          setProp((p: { valueFormat: NumberFormat | null }) => (p.valueFormat = next))
+        }
+      />
       {/* p.329's "Show visualization?" - "An optional configuration to display
           a sparkline depicting the history of a time series with the metric.
           Setting this toggle to Yes opens a configuration screen with the
@@ -12623,7 +12758,7 @@ function MetricCardSettings() {
 CanvasMetricCard.craft = {
   displayName: "Metric card",
   props: {
-    objectSetVariable: null, aggregation: "count", property: null, label: "",
+    objectSetVariable: null, aggregation: "count", property: null, label: "", valueFormat: null,
     showVisualization: false, visualizationPosition: DEFAULT_SPARK_POSITION,
     seriesVariable: null,
   },

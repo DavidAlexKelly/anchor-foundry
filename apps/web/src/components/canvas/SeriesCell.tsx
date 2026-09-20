@@ -15,17 +15,27 @@
  */
 import { Sparkline } from "./Sparkline";
 import { latest, type Point } from "./sparkline";
+import { showNumber, type NumberFormat } from "./value-formats";
 
 export function SeriesCell({
   points,
-  /** How the latest value is written. The ontology's formatter (§157) when the
-   * property has one, so a column of readings is punctuated the way the same
-   * property is everywhere else. */
-  format = (n: number) => n.toLocaleString(),
+  /**
+   * p.174's value formatting for this column, or `null` for the plain
+   * localised number.
+   *
+   * **Module-local, and it has to be.** The comment here used to say this was
+   * "the ontology's formatter (§157) when the property has one" — which was
+   * wrong twice over. No call site passed anything, so every column was
+   * `toLocaleString()`; and §157 permits a formatter only on an `integer` or a
+   * `float`, so the `time_series` property behind this cell could never have
+   * carried one. p.174 puts the formatter on the widget for exactly that
+   * reason.
+   */
+  format = null,
   pending = false,
 }: {
   points: readonly Point[] | undefined;
-  format?: (value: number) => string;
+  format?: NumberFormat | null;
   pending?: boolean;
 }) {
   const list = points ?? [];
@@ -34,7 +44,7 @@ export function SeriesCell({
   return (
     <span className="canvas-series" data-testid="series-cell">
       <span className="canvas-series-value" data-testid="series-latest">
-        {pending ? "" : value === null ? "—" : format(value)}
+        {pending ? "" : value === null ? "—" : showNumber(value, format)}
       </span>
       {/* The line itself is `Sparkline`'s, shared with the Metric Card
           (p.329) so the stroke, the empty wording and the non-scaling trick
