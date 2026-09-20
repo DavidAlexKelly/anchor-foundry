@@ -12,7 +12,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { LinkType } from "@/lib/types";
-import { chainState, derivationProblem, hopsFrom, reachesMany } from "./derived-property";
+import {
+  NUMERIC_AGGREGATES, chainState, derivableProperties, derivationProblem, hopsFrom,
+  reachesMany,
+} from "./derived-property";
 
 const DEPARTMENT = "dept";
 const EMPLOYEE = "emp";
@@ -155,5 +158,83 @@ describe("derivationProblem", () => {
     expect(derivationProblem(many, "collect_list", "salary")).toBeNull();
     // p.146: "For Count aggregation, you do not need to select a property."
     expect(derivationProblem(many, "count", "")).toBeNull();
+  });
+});
+
+// ---- §406: p.145's four arithmetic aggregations -----------------------------
+
+describe("which properties an aggregation may run over", () => {
+  const FAR = [
+    { api_name: "salary", data_type: "integer", derivation: null },
+    { api_name: "rating", data_type: "float", derivation: null },
+    { api_name: "title", data_type: "string", derivation: null },
+    { api_name: "started", data_type: "date", derivation: null },
+    { api_name: "headcount", data_type: "integer", derivation: { links: [] } },
+  ];
+
+  it("offers every property to the aggregations that need no declared type", () => {
+    // `count_distinct`-shaped questions are text identity and work on
+    // anything, which is why this is two lists rather than one narrowed one.
+    for (const aggregate of ["", "count", "exact_cardinality", "collect_list"]) {
+      expect(derivableProperties(FAR, aggregate).map((p) => p.api_name))
+        .toEqual(["salary", "rating", "title", "started", "headcount"]);
+    }
+  });
+
+  it("narrows to declared numbers for the four arithmetic ones", () => {
+    for (const aggregate of NUMERIC_AGGREGATES) {
+      expect(derivableProperties(FAR, aggregate).map((p) => p.api_name))
+        .toEqual(["salary", "rating"]);
+    }
+  });
+
+  it("excludes a derived property, which is p.169's word 'native'", () => {
+    // `headcount` is a declared integer and still not offered: it is itself a
+    // chain, so an aggregation over it would be an aggregation over a
+    // per-object walk, with no column to push into.
+    expect(derivableProperties(FAR, "sum").map((p) => p.api_name))
+      .not.toContain("headcount");
+    // And the exclusion is about the derivation rather than about the name.
+    expect(derivableProperties(
+      [{ api_name: "headcount", data_type: "integer", derivation: null }], "sum",
+    ).map((p) => p.api_name)).toEqual(["headcount"]);
+  });
+});
+
+describe("the arithmetic rule as a sentence", () => {
+  // Built the way the other tests build one, rather than by hand: `hopsFrom`
+  // owns the shape of a hop, and a literal here would be a second copy of it.
+  const many = chainState(DEPARTMENT, hopsFrom([WORKS_IN], DEPARTMENT));
+  const FAR = [
+    { api_name: "salary", data_type: "integer", derivation: null },
+    { api_name: "title", data_type: "string", derivation: null },
+  ];
+
+  it("passes p.143's own first example", () => {
+    expect(derivationProblem(many, "avg", "salary", FAR)).toBeNull();
+  });
+
+  it("names the property and what it would need", () => {
+    const problem = derivationProblem(many, "sum", "title", FAR);
+    expect(problem).toContain("title");
+    expect(problem).toContain("integer or float");
+    // The aggregation is named as a person would read it, not as it is stored.
+    expect(problem).toContain("Sum");
+  });
+
+  it("catches a property invalidated by switching the aggregation", () => {
+    // The picker narrows the list, so this is the state somebody reaches by
+    // choosing `title` under `count_distinct` and then switching to `max`.
+    expect(derivationProblem(many, "max", "title", FAR)).not.toBeNull();
+    expect(derivationProblem(many, "exact_cardinality", "title", FAR)).toBeNull();
+  });
+
+  it("does not guess when the far type has not been read", () => {
+    // **A missing list is not a verdict.** The editor fetches the far type, so
+    // an empty list means "not yet" rather than "no properties" - and refusing
+    // on it would put a sentence about types in front of somebody whose form
+    // is still loading. The server checks it either way.
+    expect(derivationProblem(many, "sum", "title")).toBeNull();
+    expect(derivationProblem(many, "sum", "title", [])).toBeNull();
   });
 });

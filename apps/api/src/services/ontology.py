@@ -1398,12 +1398,27 @@ async def update_type(
     links_by_id = {
         str(link["id"]): link for link in await list_link_types(conn, workspace_id)
     }
+    # p.145's arithmetic aggregations read the far type's declaration (§406).
+    # **The type being saved is overlaid with the properties in hand**, because
+    # a chain can land back on it - a self-link, or a two-hop round trip - and
+    # the stored rows are about to be replaced by these. Reading the database
+    # for that one type would check the derivation against the definition it is
+    # replacing, which is the version that is wrong by the time it matters.
+    far_properties = await native_property_types(conn, workspace_id)
+    far_properties[str(type_id)] = {
+        str(p["api_name"]): {
+            "data_type": p.get("data_type"),
+            "derivation": p.get("derivation"),
+        }
+        for p in properties
+    }
     for prop in properties:
         prop["derivation"] = derived_properties.parse(
             prop.get("derivation"),
             property_name=str(prop["api_name"]),
             link_types=links_by_id,
             object_type_id=str(type_id),
+            far_properties=far_properties,
         )
     if not properties:
         raise ValueError("an object type needs at least one property")
@@ -1831,6 +1846,44 @@ _LINK_SELECT = """
           JOIN object_types f ON f.id = lt.from_object_type_id
           JOIN object_types t ON t.id = lt.to_object_type_id
 """
+
+
+async def native_property_types(
+    conn: AsyncConnection, workspace_id: UUID
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Every object type's properties, as ``type id -> api name -> {…}``.
+
+    What `derived_properties.parse` needs to check p.145's four arithmetic
+    aggregations (§406): each runs on a *declared* type, and p.169 restricts
+    it to the linked type's **native** properties - both facts about the type
+    a chain lands on rather than about the one being saved.
+
+    **The whole workspace, in one query, for `list_link_types`' reason.** A
+    chain's far type is only known after the chain has been walked, and the
+    walk happens inside `parse` - so the alternative is either a second copy
+    of the walk out here or a query per property, and the link types this sits
+    beside are already loaded whole.
+
+    Only what the check reads, rather than the full property row: a data type
+    and whether the property is itself derived.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT p.object_type_id, p.api_name, p.data_type, p.derivation
+          FROM object_type_properties p
+          JOIN object_types t ON t.id = p.object_type_id
+         WHERE t.workspace_id = :wid
+        """,
+        {"wid": str(workspace_id)},
+    )
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in rows:
+        out.setdefault(str(row["object_type_id"]), {})[str(row["api_name"])] = {
+            "data_type": row["data_type"],
+            "derivation": row["derivation"],
+        }
+    return out
 
 
 async def list_link_types(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str, Any]]:

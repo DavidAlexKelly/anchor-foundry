@@ -45,6 +45,7 @@ from ..services import dataset_engine as engine
 from ..services import time_series as time_series_service
 from ..lib.errors import NotFoundError
 from ..services import instance_store
+from ..services import derived_properties
 from ..services import object_sets
 from ..services import object_set_eval
 from ..services import object_views as object_views_service
@@ -4572,16 +4573,48 @@ async def _derive_property(
         return _empty_for(aggregate)
 
     if aggregate in ("count", "exact_cardinality"):
-        # `AGGREGATIONS`' two, which are the two both stores answer the same
-        # way over untyped properties. The rest were refused at save time
-        # (`derived_properties.UNSUPPORTED_AGGREGATES`), so reaching here with
-        # one would mean a row that predates that rule.
+        # `AGGREGATIONS`' two, which need no declared type because both are
+        # text-identity questions.
         return await store.aggregate_object_set(
             search_prefix=prefix,
             object_type_id=definition.object_type_id,
             filters=filters,
             aggregation="count" if aggregate == "count" else "count_distinct",
             property_name=None if aggregate == "count" else derivation.get("property"),
+        )
+
+    if aggregate in derived_properties.NUMERIC_AGGREGATES:
+        # §406: p.145's four arithmetic ones, which §226 already answers over a
+        # set. **The declared type is resolved here rather than carried on the
+        # derivation**, because a derivation is a question and the far type's
+        # declaration is an answer that can change under it - a property
+        # retyped from `integer` to `string` would otherwise keep summing on
+        # the strength of what it used to be.
+        #
+        # `list_properties`, not `get_type`: the latter returns the type's own
+        # row and nothing else, so `get_type(...)["properties"]` was silently
+        # `[]` and every arithmetic derivation refused itself on the read with
+        # "this caller resolved none" - a sentence about the caller, from a
+        # caller that had asked the wrong function.
+        far = await ontology_service.list_properties(conn, definition.object_type_id)
+        aggregation = object_sets.parse_aggregation(
+            str(aggregate),
+            str(derivation.get("property") or ""),
+            property_types={
+                str(prop["api_name"]): str(prop["data_type"]) for prop in far
+            },
+        )
+        # **No `property_name`, and that is not an omission.** Both stores read
+        # an arithmetic aggregation's property off the `Aggregation` itself
+        # (`agg.property`); the argument exists for `count_distinct`, which
+        # needs the `.keyword` subfield by name. Passing it here looked
+        # careful and was dead - the mutation sweep set it to `None` and
+        # nothing failed, because nothing reads it on this path.
+        return await store.aggregate_object_set(
+            search_prefix=prefix,
+            object_type_id=definition.object_type_id,
+            filters=filters,
+            aggregation=aggregation,
         )
 
     # Everything else reads the far objects and takes the property off them:
