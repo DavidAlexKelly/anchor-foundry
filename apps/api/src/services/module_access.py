@@ -75,6 +75,15 @@ def _ids_named(node: Any, key_name: str, out: set[str]) -> None:
 
     A list of paths is a list the next nesting outgrows. The key name is the
     fact worth relying on.
+
+    **Over the whole document rather than over `variables`.** Every
+    `object_type_id` and `link_type_id` a module writes today is somewhere
+    under `variables`, and §412's sweep confirmed that narrowing the walk to
+    that key changes no answer - an equivalent mutant. It stays broad because
+    the broad form is the shorter expression and the narrow one is a claim
+    about document shape, and the same sweep found two of those claims wrong
+    below: a module names resources in a key and in half a string as well as
+    in a field.
     """
     if isinstance(node, dict):
         for key, value in node.items():
@@ -117,6 +126,29 @@ def referenced(definition: Any) -> dict[str, list[str]]:
             value = props.get(key)
             if isinstance(value, str) and value:
                 action_types.add(value)
+        # **Half a string** (p.272, §272). The Links widget stores its chosen
+        # links as `"<link type id>:<direction>"`, because a self-link occupies
+        # both ends and the id alone names two different rows. No walk over
+        # field names can see the id inside that, so a widget configured to
+        # show three link types reported needing none of them - the exact
+        # under-report this panel exists to prevent, found by the same sweep
+        # that asked whether the walk's breadth mattered.
+        for entry in props.get("links") or []:
+            if not isinstance(entry, dict):
+                continue
+            composite = entry.get("key")
+            if isinstance(composite, str) and composite:
+                links.add(composite.split(":", 1)[0])
+
+    # **Keys, not values** (p.168, §411): `derived_properties` is a map *from*
+    # object type id, so no walk over values can see one. A module whose only
+    # mention of a type is a column declared on it still needs that type, and
+    # `_ids_named` reported it as needing nothing.
+    declared = definition.get("derived_properties")
+    if isinstance(declared, dict):
+        for type_id in declared:
+            if isinstance(type_id, str) and type_id:
+                object_types.add(type_id)
 
     events = definition.get("events")
     if isinstance(events, dict):

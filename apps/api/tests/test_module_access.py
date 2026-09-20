@@ -131,3 +131,54 @@ def test_a_malformed_node_does_not_stop_the_walk() -> None:
     })
     assert got["object_types"] == [TYPE_A]
     assert got["action_types"] == [ACTION]
+
+
+def test_a_links_widget_names_the_link_types_it_shows() -> None:
+    """p.272's "Link types to display", stored as `"<id>:<direction>"` because
+    a self-link occupies both ends and the id alone names two rows (§272).
+
+    **Found by §412's mutation sweep, as a real under-report.** No walk over
+    field names can see an id that is half a string, so a widget configured
+    with three link types asked for none of them - and a reader who could see
+    none of the three would have been told every requirement was met.
+    """
+    got = ma.referenced({
+        "layout": {
+            "links": {"props": {"links": [
+                {"key": f"{LINK}:outgoing", "label": "Orders"},
+                # The same type at its other end is one requirement, not two.
+                {"key": f"{LINK}:incoming"},
+                "not a link", {"key": ""}, {"no": "key"},
+            ]}},
+        },
+    })
+    assert got["link_types"] == [LINK]
+
+
+def test_a_column_declared_on_a_type_names_that_type() -> None:
+    """p.168: "Derived properties are defined at the module level and per
+    object type" (§411) - so the map is keyed *by* object type id, and a walk
+    over values cannot reach a key.
+
+    A module whose only mention of a type is a column it declares on that type
+    still needs the type to draw the column.
+    """
+    got = ma.referenced({
+        "derived_properties": {
+            TYPE_B: [{"api_name": "margin", "kind": "column_math",
+                      "expression": "revenue - cost"}],
+            "": [],
+        },
+        "layout": {"t": {"props": {"objectTypeId": TYPE_A}}},
+    })
+    assert got["object_types"] == [TYPE_A, TYPE_B]
+
+
+def test_a_malformed_derived_property_map_does_not_stop_the_walk() -> None:
+    """§212 again: the raw editor can hold anything, including a list where a
+    map belongs."""
+    got = ma.referenced({
+        "derived_properties": ["not a map"],
+        "layout": {"t": {"props": {"objectTypeId": TYPE_A}}},
+    })
+    assert got["object_types"] == [TYPE_A]
