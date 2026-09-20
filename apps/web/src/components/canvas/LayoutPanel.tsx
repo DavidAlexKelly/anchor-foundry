@@ -1,6 +1,7 @@
 "use client";
 
 import { useEditor } from "@craftjs/core";
+import { MIN_SECONDS, type AutoRefresh } from "./auto-refresh";
 
 import type { WorkshopEvent, WorkshopModule, WorkshopVariable } from "@/lib/types";
 import { newEventId, newNodeId, newVariableId } from "@/lib/workshop-module";
@@ -87,6 +88,9 @@ export function LayoutPanel({
   onStateSavingChange,
   translations,
   onTranslationsChange,
+  autoRefresh,
+  onAutoRefreshChange,
+  objectSetVariables = [],
 }: {
   /** Whether this module writes its state to the URL (p.195). Here because
    * Foundry puts it in "the Pages section of the Settings panel" and the
@@ -128,6 +132,15 @@ export function LayoutPanel({
    * the other two module-wide switches an author sets once. */
   translations?: TranslationSettings;
   onTranslationsChange?: (next: TranslationSettings) => void;
+  /** Auto-refresh (p.576–580). p.576 puts it here by name — "navigate to the
+   * Auto-refresh configuration options toward the bottom of the Settings
+   * panel in the Workshop editor" — beside the other module-wide switches. */
+  autoRefresh?: AutoRefresh;
+  onAutoRefreshChange?: (next: AutoRefresh) => void;
+  /** The object set variables a module can register (p.576). Passed in rather
+   * than read from `variables` above so this panel keeps one source for what
+   * a registration may name. */
+  objectSetVariables?: { id: string; label: string }[];
 } = {}) {
   const { rows, parked, selectedId } = useEditor((state) => {
     const walk = (id: string, depth: number, out: Row[]): Row[] => {
@@ -508,6 +521,92 @@ export function LayoutPanel({
                 each needs an external ID, which is the key a state is stored
                 under.
               </p>
+            </>
+          )}
+        </>
+      )}
+      {onAutoRefreshChange && autoRefresh && (
+        <>
+          <label className="vars-toggle">
+            <input
+              type="checkbox"
+              checked={autoRefresh.enabled}
+              data-testid="auto-refresh-toggle"
+              onChange={(e) =>
+                onAutoRefreshChange({ ...autoRefresh, enabled: e.target.checked })
+              }
+            />
+            Refresh when the data changes
+          </label>
+          {autoRefresh.enabled && (
+            <>
+              {/* p.576: "register object sets within a module to be watched
+                  for updates from anywhere in Foundry." Nothing is watched
+                  until something is registered, which is why the list comes
+                  first. */}
+              <div className="field">
+                <span className="field-label">Watch these object sets</span>
+                {objectSetVariables.length === 0 ? (
+                  <span className="field-hint">
+                    This module has no object set variables to watch yet.
+                  </span>
+                ) : (
+                  objectSetVariables.map((v) => (
+                    <label key={v.id} className="vars-toggle">
+                      <input
+                        type="checkbox"
+                        checked={autoRefresh.variables.includes(v.id)}
+                        data-testid={`auto-refresh-watch-${v.id}`}
+                        onChange={(e) =>
+                          onAutoRefreshChange({
+                            ...autoRefresh,
+                            variables: e.target.checked
+                              ? [...autoRefresh.variables, v.id]
+                              : autoRefresh.variables.filter((id) => id !== v.id),
+                          })
+                        }
+                      />
+                      {v.label}
+                    </label>
+                  ))
+                )}
+                <span className="field-hint">
+                  Each watches its own object type. A linked type is not
+                  watched with it (p.579) — register a set of that type too.
+                </span>
+              </div>
+              <label className="field">
+                <span className="field-label">Minimum seconds between refresh</span>
+                <input
+                  type="number"
+                  min={MIN_SECONDS}
+                  data-testid="auto-refresh-seconds"
+                  value={autoRefresh.seconds}
+                  onChange={(e) =>
+                    onAutoRefreshChange({
+                      ...autoRefresh,
+                      seconds: Math.max(MIN_SECONDS, Number(e.target.value) || MIN_SECONDS),
+                    })
+                  }
+                />
+                <span className="field-hint">
+                  p.577&rsquo;s floor is {MIN_SECONDS} seconds, which is what keeps
+                  a module from constantly reloading.
+                </span>
+              </label>
+              <label className="vars-toggle">
+                <input
+                  type="checkbox"
+                  checked={autoRefresh.disable_in_edit}
+                  data-testid="auto-refresh-not-in-edit"
+                  onChange={(e) =>
+                    onAutoRefreshChange({
+                      ...autoRefresh, disable_in_edit: e.target.checked,
+                    })
+                  }
+                />
+                Disable while editing
+              </label>
             </>
           )}
         </>

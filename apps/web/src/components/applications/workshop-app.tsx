@@ -59,10 +59,14 @@ import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/compon
 import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
 import { ApiError, actions as actionApi, api, canvas as canvasApi } from "@/lib/api";
 import {
-  eventsOf, hasLayout, layoutOf, moduleFrom, pageSelectionOf, routingOf, stateSavingOf,
+  autoRefreshOf, eventsOf, hasLayout, layoutOf, moduleFrom, pageSelectionOf, routingOf,
+  stateSavingOf,
   translationsOf,
   variablesOf,
 } from "@/lib/workshop-module";
+import {
+  settingsOf as autoRefreshSettings, registrable, type AutoRefresh,
+} from "@/components/canvas/auto-refresh";
 import { useModuleTitle } from "@/components/canvas/module-title";
 import type {
   CanvasAppDetail,
@@ -468,6 +472,7 @@ function ActionBar({
   pageSelection,
   stateSaving,
   translations,
+  autoRefresh,
   onView,
   onReverted,
 }: {
@@ -482,6 +487,10 @@ function ActionBar({
   /** The variable backing page selection (p.81), or "" for none. */
   pageSelection: string;
   stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
+  /** Auto-refresh (p.576-580). In the save for the same reason as the rest:
+   * it registers variables that live in the document, so a save without it
+   * would drop the registration a builder just made. */
+  autoRefresh: import("@/lib/types").WorkshopModule["auto_refresh"];
   /** Translations (p.207-211). In the save for the same reason as the other
    * two: the tables translate strings that live in the layout, so they have
    * to travel with it or a save would drop every translation a builder
@@ -513,6 +522,7 @@ function ActionBar({
           pageSelection,
           stateSaving,
           translations,
+          autoRefresh,
         }),
         description,
       ),
@@ -607,6 +617,7 @@ function CanvasEnvBridge({
   events,
   seed,
   routing = false,
+  autoRefresh,
   layout,
   pageSelection,
   stateSaving,
@@ -620,6 +631,10 @@ function CanvasEnvBridge({
   seed?: Record<string, unknown>;
   /** Whether this module writes its state to the URL (p.195). */
   routing?: boolean;
+  /** The module's auto-refresh setting (p.576-580), passed to the
+   * variable bridge because what it watches is what the variables
+   * resolve to. */
+  autoRefresh?: unknown;
   /** The **saved** layout, which is what routing reads page IDs and per-page
    * bindings from. An unsaved page ID therefore does not appear in the URL
    * until it is saved — the same rule the Variables panel follows for usage
@@ -673,6 +688,7 @@ function CanvasEnvBridge({
           // module should behave like one. Edit mode is not: every page is on
           // screen at once, so "the current page" has no answer.
           routing={routing && !enabled}
+          autoRefresh={autoRefresh}
           layout={layout}
           // p.75's lazy rule, and Preview only for the third time on this
           // element: in edit mode every page is on screen at once, so a walk
@@ -715,6 +731,8 @@ function Toolbox({
   onEventsChange,
   stateSaving,
   onStateSavingChange,
+  autoRefresh,
+  onAutoRefreshChange,
   translations,
   onTranslationsChange,
 }: {
@@ -730,6 +748,8 @@ function Toolbox({
   events: Record<string, WorkshopEvent>;
   onEventsChange: (next: Record<string, WorkshopEvent>) => void;
   stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
+  autoRefresh: AutoRefresh;
+  onAutoRefreshChange: (next: AutoRefresh) => void;
   onStateSavingChange: (
     next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
   ) => void;
@@ -752,6 +772,11 @@ function Toolbox({
         onEventsChange={onEventsChange}
         stateSaving={stateSaving}
         onStateSavingChange={onStateSavingChange}
+        autoRefresh={autoRefresh}
+        onAutoRefreshChange={onAutoRefreshChange}
+        objectSetVariables={registrable(variables).map((v) => ({
+          id: v.id, label: v.label || v.id,
+        }))}
         translations={translations}
         onTranslationsChange={onTranslationsChange}
       />
@@ -854,6 +879,10 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // module, saved with the document beside routing and for the same reason.
   const [pageSelection, setPageSelection] = useState("");
   const [stateSaving, setStateSaving] = useState(() => stateSavingOf(undefined));
+  // p.576-580's auto-refresh, held with the other module-wide settings so
+  // the Save button carries it - and so a version revert takes the switch
+  // back with the variables it registers.
+  const [autoRefresh, setAutoRefresh] = useState(() => autoRefreshSettings(undefined));
   // p.207-211's tables, held here with the other two module-wide settings so
   // the Save button carries them. Never edited by this component - the switch
   // is the Settings panel's and the tables are written through the API until
@@ -875,6 +904,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     setPageSelection(pageSelectionOf(appQuery.data.definition));
     setStateSaving(stateSavingOf(appQuery.data.definition));
     setTranslations(translationsOf(appQuery.data.definition));
+    setAutoRefresh(autoRefreshSettings(autoRefreshOf(appQuery.data.definition)));
   }, [savedVersion, appQuery.data?.id]);
 
   // A module always lives in a project. A resolved `canvas_app` without one is
@@ -956,6 +986,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
         layout={layoutOf(app.definition)}
         pageSelection={pageSelection}
         stateSaving={stateSaving}
+        autoRefresh={autoRefresh}
       >
         <ActionBar
           app={app}
@@ -969,6 +1000,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           pageSelection={pageSelection}
           stateSaving={stateSaving}
           translations={translations}
+          autoRefresh={autoRefresh.enabled ? autoRefresh : undefined}
           onView={setViewingVersion}
           onReverted={() => setReloadToken((n) => n + 1)}
         />
@@ -989,6 +1021,8 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           onPageSelectionChange={setPageSelection}
           stateSaving={stateSaving}
           onStateSavingChange={setStateSaving}
+          autoRefresh={autoRefresh}
+          onAutoRefreshChange={setAutoRefresh}
           translations={translations}
           onTranslationsChange={setTranslations}
           onPreview={(language, snapshot) => setPreviewing({ language, snapshot })}
@@ -1018,6 +1052,8 @@ function CanvasBody({
   onPageSelectionChange,
   stateSaving,
   onStateSavingChange,
+  autoRefresh,
+  onAutoRefreshChange,
   translations,
   onTranslationsChange,
   onPreview,
@@ -1039,6 +1075,8 @@ function CanvasBody({
   pageSelection: string;
   onPageSelectionChange: (next: string) => void;
   stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
+  autoRefresh: AutoRefresh;
+  onAutoRefreshChange: (next: AutoRefresh) => void;
   onStateSavingChange: (
     next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
   ) => void;
@@ -1175,6 +1213,8 @@ function CanvasBody({
           onEventsChange={onEventsChange}
           stateSaving={stateSaving}
           onStateSavingChange={onStateSavingChange}
+          autoRefresh={autoRefresh}
+          onAutoRefreshChange={onAutoRefreshChange}
           translations={translations}
           onTranslationsChange={onTranslationsChange}
         />

@@ -78,6 +78,7 @@ export function moduleFrom(
      * the setting impossible to turn off. */
     pageSelection?: string;
     translations?: WorkshopModule["translations"];
+    autoRefresh?: WorkshopModule["auto_refresh"];
   },
 ): WorkshopModule {
   const current = isV2(definition) ? definition : undefined;
@@ -85,6 +86,7 @@ export function moduleFrom(
   const stateSaving = parts.stateSaving ?? current?.state_saving;
   const pageSelection = parts.pageSelection ?? current?.page_selection;
   const translations = parts.translations ?? current?.translations;
+  const autoRefresh = parts.autoRefresh ?? current?.auto_refresh;
   return {
     format: 2,
     layout: parts.layout ?? layoutOf(definition),
@@ -95,6 +97,10 @@ export function moduleFrom(
     // off for every module built before this existed, which is the same class
     // of quiet loss `broken_bindings` is carried to avoid.
     ...(routing ? { routing } : {}),
+    // Carried for `routing`'s reason, and written only when it is on: an
+    // `enabled: false` in every document would be a setting recorded in every
+    // diff that nobody chose.
+    ...(autoRefresh?.enabled ? { auto_refresh: autoRefresh } : {}),
     ...(stateSaving ? { state_saving: stateSaving } : {}),
     // Same carry, same reason. Omitted when empty rather than written as `""`
     // so that turning it off leaves a document indistinguishable from one that
@@ -168,6 +174,18 @@ export function stateSavingOf(
     display_name_plural: stored?.display_name_plural || "module states",
     include_page: stored?.include_page ?? true,
   };
+}
+
+/** Auto-refresh, as stored (workshop p.576-580; §408).
+ *
+ * Mirrors `stateSavingOf` above: the document may hold nothing, a partial, or
+ * whatever the raw JSON editor put there, and every caller wants one shape.
+ * The rules — the ten-second floor, what counts as enabled — belong to
+ * `components/canvas/auto-refresh.ts`, which is pure and is where they are
+ * tested; this only finds the object.
+ */
+export function autoRefreshOf(definition: unknown): unknown {
+  return isV2(definition) ? definition.auto_refresh : undefined;
 }
 
 /** Props whose value is a variable id. Mirrors `REFERENCE_PROPS` in
