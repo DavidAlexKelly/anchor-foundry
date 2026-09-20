@@ -2271,6 +2271,14 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   padding: 10px 0 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
+/* p.47's header background (§415). **The padding comes with the colour**, and
+   only with it: a header has no horizontal padding by default because it sits
+   flush with the page it titles, and a coloured band running to the edge of
+   the viewport reads as a rendering fault rather than as a choice. Keyed on
+   `data-tinted` rather than on the inline style, so an untinted header does
+   not move a pixel. */
+.canvas-header[data-tinted="true"] { padding-left: 14px; padding-right: 14px; }
+.canvas-header--vertical[data-tinted="true"] { padding-right: 14px; }
 /* Pinned while the page beneath it scrolls - the behaviour that makes a
    header a node type rather than a container with a border. */
 .canvas-header--sticky { position: sticky; top: 0; z-index: 20; }

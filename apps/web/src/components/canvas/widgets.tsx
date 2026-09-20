@@ -20,9 +20,11 @@ import { TypePicker } from "@/components/type-picker";
 import { VariableBridge } from "./VariableBridge";
 import { WidgetSetup } from "./WidgetSetup";
 import { StyleFields } from "./StyleFields";
+import { refTo } from "./saved-colours";
 import { useSavedColours } from "./use-saved-colours";
 import {
-  schemeFor, styleFor, type BorderName, type PaddingName, type StyleProps,
+  resolveBackground, schemeFor, styleFor, textColourChoice,
+  type BorderName, type PaddingName, type StyleProps,
 } from "./style";
 import { asCollapsed, collapseState } from "./collapse";
 import { arrayEntries, pageOf } from "./loop-array";
@@ -13667,6 +13669,8 @@ export function CanvasHeader({
   width = 220,
   collapsible = false,
   collapsedByDefault = false,
+  background = null,
+  titleColour = null,
   children,
 }: {
   title?: string;
@@ -13680,6 +13684,20 @@ export function CanvasHeader({
   /** Vertical only (p.48), with the option to start collapsed. */
   collapsible?: boolean;
   collapsedByDefault?: boolean;
+  /** p.47: "Select a background color for the header."
+   *
+   * The style block's own prop and resolver (§184, §414), so a header takes a
+   * preset, a typed hex or a saved colour by the same rules a section does —
+   * and p.59-60's brightness rule comes with it, which matters more here than
+   * anywhere: the buttons and tabs a header holds are the module's navigation,
+   * and dark navigation on a dark header is a module nobody can steer. */
+  background?: string | null;
+  /** p.47: "Choose a custom color for the title text."
+   *
+   * Null is the theme's ink rather than a colour of its own: a default written
+   * into every document is a value that stops following the theme the moment
+   * the theme changes. */
+  titleColour?: string | null;
   children?: React.ReactNode;
 }) {
   const {
@@ -13687,6 +13705,7 @@ export function CanvasHeader({
     childIds,
   } = useNode((node) => ({ childIds: node.data.nodes ?? [] }));
   const { query } = useEditor();
+  const saved = useSavedColours();
   // `{{v_id}}` like every other text, so a header can name what the viewer is
   // looking at rather than only what the app is called.
   const { resolved } = useCanvasVariables();
@@ -13728,13 +13747,25 @@ export function CanvasHeader({
           isCollapsed ? "canvas-header--collapsed" : "",
         ].filter(Boolean).join(" ")}
         data-collapsed={isCollapsed ? "true" : "false"}
-        style={
-          vertical
+        // p.59-60 one level up, exactly as a section does it: the stylesheet
+        // redefines the ink and line tokens beneath this attribute, so the
+        // buttons and tabs inside stay legible without knowing the header has
+        // a colour at all.
+        data-scheme={schemeFor({ background }, saved)}
+        // **Says a colour was chosen, not which one.** The header has no
+        // horizontal padding by default - it sits flush with the page it
+        // titles - and a coloured band flush to the edge reads as a rendering
+        // fault rather than as a choice. The padding belongs with the colour,
+        // and CSS is where it can be added without the untinted header moving.
+        data-tinted={resolveBackground(background, saved) ? "true" : undefined}
+        style={{
+          ...styleFor({ background }, saved),
+          ...(vertical
             ? { width: isCollapsed ? 56 : width, flex: `0 0 ${isCollapsed ? 56 : width}px` }
             : height > 0
               ? { minHeight: height }
-              : undefined
-        }
+              : {}),
+        }}
       >
         {vertical && collapsible && (
           <button
@@ -13750,7 +13781,12 @@ export function CanvasHeader({
         {/* The title goes with the text: p.49 drops labels in the collapsed
             state, and a title is nothing but a label. */}
         {!isCollapsed && title.trim() && (
-          <p className="canvas-header-title">{interpolate(title, resolved)}</p>
+          <p
+            className="canvas-header-title"
+            style={{ color: resolveBackground(titleColour, saved) ?? undefined }}
+          >
+            {interpolate(title, resolved)}
+          </p>
         )}
         {visible}
       </header>
@@ -13776,6 +13812,7 @@ function glyphFor(icon: string | undefined, label: string | undefined): string {
 function HeaderSettings() {
   const {
     title, sticky, orientation, height, width, collapsible, collapsedByDefault,
+    titleColour,
     actions: { setProp },
   } = useNode((node) => ({
     title: node.data.props.title,
@@ -13785,8 +13822,11 @@ function HeaderSettings() {
     width: node.data.props.width,
     collapsible: node.data.props.collapsible,
     collapsedByDefault: node.data.props.collapsedByDefault,
+    titleColour: node.data.props.titleColour,
   }));
   const vertical = orientation === "vertical";
+  const { palette, scheme } = useSavedColours();
+  const titleChoice = textColourChoice(titleColour, palette);
   return (
     <>
       <label className="field">
@@ -13797,6 +13837,58 @@ function HeaderSettings() {
         />
         <span className="field-hint">{"{{v_id}}"} shows a variable&apos;s current value</span>
       </label>
+      {/* p.47: "Choose a custom color for the title text." Directly under the
+          title it colours rather than in a style section further down: the two
+          are one decision, and a colour control separated from the thing it
+          colours is one people set on the wrong node. */}
+      <label className="field">
+        <span className="field-label">Title colour</span>
+        <select
+          data-testid="header-title-colour"
+          value={titleChoice}
+          onChange={(e) =>
+            setProp((p: { titleColour: string | null }) => {
+              p.titleColour =
+                e.target.value === "default"
+                  ? null
+                  : e.target.value === "custom"
+                    // Seeded with what is showing, the way the background
+                    // control is (p.59): reaching for a shade of the colour
+                    // already there should not start by losing it.
+                    ? resolveBackground(titleColour, { palette, scheme }) ?? "#16232f"
+                    : e.target.value;
+            })
+          }
+        >
+          <option value="default">Default — follows the theme</option>
+          {palette.length > 0 && (
+            <optgroup label="Saved colours">
+              {palette.map((colour) => (
+                <option key={colour.id} value={refTo(colour.id)}>{colour.name}</option>
+              ))}
+            </optgroup>
+          )}
+          <option value="custom">Custom…</option>
+        </select>
+      </label>
+      {titleChoice === "custom" && (
+        <label className="field">
+          <span className="field-label">Title colour (hex)</span>
+          <input
+            type="text"
+            data-testid="header-title-colour-hex"
+            value={titleColour ?? ""}
+            placeholder="#16232f"
+            onChange={(e) =>
+              setProp((p: { titleColour: string }) => (p.titleColour = e.target.value))}
+          />
+        </label>
+      )}
+      {/* p.47: "Select a background color for the header." The style block's
+          own control, flagless: p.60 puts borders on "sections and widgets"
+          and p.62 puts padding on "pages and sections", and a header is
+          neither — so it gets the one setting p.47 names and no more. */}
+      <NodeStyleFields />
       <label className="field">
         <span className="field-label">Orientation</span>
         <select
@@ -13876,6 +13968,7 @@ CanvasHeader.craft = {
   props: {
     title: "", sticky: true, orientation: "horizontal",
     height: 0, width: 220, collapsible: false, collapsedByDefault: false,
+    background: null, titleColour: null,
   },
   isCanvas: true,
   related: { settings: HeaderSettings },

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   BACKGROUND_PRESETS, BORDERS, LIGHT_TEXT_BELOW, PADDINGS,
   backgroundChoice, isDarkBackground, paddingFor, relativeLuminance, resolveBackground,
+  textColourChoice,
   schemeFor, styleFor,
 } from "./style";
 
@@ -238,5 +239,36 @@ describe("backgroundChoice (p.214; §414)", () => {
 
   it("reads every reference as Custom when there is no palette", () => {
     expect(backgroundChoice("saved:c1")).toBe("custom");
+  });
+});
+
+describe("textColourChoice (p.47; §415)", () => {
+  const PALETTE = [
+    { id: "c1", name: "Brand", light: "#112233", dark: "#ddeeff" },
+  ];
+
+  it("shows Default when nothing is set", () => {
+    for (const value of ["", "   ", null, undefined]) {
+      expect(textColourChoice(value, PALETTE)).toBe("default");
+    }
+  });
+
+  it("shows a saved colour's own option", () => {
+    expect(textColourChoice("saved:c1", PALETTE)).toBe("saved:c1");
+  });
+
+  it("shows a typed colour as Custom", () => {
+    expect(textColourChoice("#123456", PALETTE)).toBe("custom");
+  });
+
+  it("shows a background preset as Custom rather than as itself", () => {
+    // p.58's names describe a surface, not ink, so this control does not offer
+    // them — and a value it would not have offered has to read as Custom, or
+    // the select shows nothing chosen over a title that is coloured.
+    expect(textColourChoice("shade-3", PALETTE)).toBe("custom");
+  });
+
+  it("shows a reference whose colour has gone as Custom", () => {
+    expect(textColourChoice("saved:c9", PALETTE)).toBe("custom");
   });
 });
