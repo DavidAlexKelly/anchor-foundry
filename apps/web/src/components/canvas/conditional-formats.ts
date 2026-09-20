@@ -123,12 +123,24 @@ export function rulesByColumn(raw: unknown): Record<string, ConditionalRule[]> {
 /**
  * The paint for one number, or `null` when no rule matched.
  *
- * **A missing number is given no entry at all**, rather than an entry holding
- * `null`. §158's matcher treats absence as "the rule does not apply" and has
- * an `is_null` comparison for asking about it on purpose — so an empty series
- * can be painted grey by a rule that asks, and is left alone by every rule
- * that does not. Passing `{[subject]: null}` would mean the same thing to that
- * matcher, but only by coincidence; this says it.
+ * **A missing number is passed as one**, and the reason is a sentence about
+ * §158's matcher rather than a choice made here: `matches` reads
+ * `properties[rule.property]` and then asks `isEmpty` of it, so a key holding
+ * `null` and a key that is not there are the same question. An empty series is
+ * therefore left alone by every ordinary rule and *can* be painted by an
+ * `is_null` one — which is p.106's own use of that comparison.
+ *
+ * This branched on the absent case until the mutation sweep showed the branch
+ * changed nothing (§189: a no-op mutant reports as a survivor). The comment
+ * there claimed it was saying something the two forms only agreed on by
+ * coincidence, and that was the claim that was wrong — `isEmpty` is not a
+ * coincidence, it is the contract. Deleted rather than tested, with the
+ * contract named in its place.
+ *
+ * What must stay true is that a missing number is **not zero**: `?? 0` would
+ * make an empty series match "at or below zero" and paint a threshold nobody
+ * crossed. That is a real claim and `conditional-formats.test.ts` pins it —
+ * verified by mutating this line to `?? 0`, which that test kills.
  */
 export function paintFor(
   rules: ConditionalRule[] | null | undefined,
@@ -136,10 +148,7 @@ export function paintFor(
   value: number | null | undefined,
 ): PropertyStyle | null {
   if (!rules?.length) return null;
-  return conditionalStyle(
-    rules,
-    value === null || value === undefined ? {} : { [subject]: value },
-  );
+  return conditionalStyle(rules, { [subject]: value ?? null });
 }
 
 /**
