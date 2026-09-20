@@ -259,15 +259,27 @@ def test_a_reader_can_pause_updates_and_the_held_one_lands_on_resume(page, api):
 
     page.get_by_role("button", name="Pause", exact=True).click()
     add_row(mod)
-    # Held, not applied — asserted over the window an unpaused module
-    # refreshed in.
-    page.wait_for_timeout((SECONDS + 5) * 1000)
+
+    # **The timing is the test, and it took a mutation to notice.**
+    #
+    # Polls land at roughly t=0 (on mount) and every `SECONDS` after. Waiting
+    # just over one interval guarantees a poll has *seen* the write and held
+    # it; resuming there leaves most of an interval before the next tick, so
+    # an assertion inside that gap can only be satisfied by the resume itself.
+    #
+    # The first version waited `SECONDS + 5` and then allowed 8 seconds, which
+    # put the next scheduled poll inside the assertion window — so a build
+    # where resuming did nothing at all passed, with the interval quietly
+    # doing the work. "Immediately, not at the next interval" was never
+    # checked.
+    page.wait_for_timeout((SECONDS + 2) * 1000)
     assert rows(page).count() == len(ROWS), "a paused module applied an update"
 
     page.get_by_role("button", name="Resume", exact=True).click()
-    # **Immediately**, not at the next interval: p.578's "Allows updates from
-    # auto-refresh to take effect" is p.579's "at which point a reload will
-    # immediately be triggered", said for the other reason a refresh is held.
+    # p.578's "Allows updates from auto-refresh to take effect" is p.579's "at
+    # which point a reload will immediately be triggered", said for the other
+    # reason a refresh is held. Well inside the remaining interval.
     eventually(lambda: rows(page).count(), lambda n: n == len(ROWS) + 1,
-               what="the held update landing on resume", timeout_ms=8000)
+               what="the held update landing on resume, not at the next poll",
+               timeout_ms=3000)
     expect(page.get_by_text(LATER["name"], exact=True)).to_be_visible()
