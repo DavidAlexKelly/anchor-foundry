@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  AGGREGATIONS, DEFAULT_AGGREGATION, NO_VALUE,
-  aggregationOf, metricRequest, needsProperty, propertiesFor, valueLabel,
+  AGGREGATIONS, DEFAULT_AGGREGATION, DEFAULT_SPARK_POSITION, NO_VALUE, SPARK_POSITIONS, aggregationOf, metricRequest, needsProperty, propertiesFor, showsSpark, sparkEmptyReason, sparkPositionOf, valueLabel,
 } from "./metric-card";
 
 /** p.325-330's Metric Card. */
@@ -114,5 +113,40 @@ describe("the number on the card", () => {
     // The other half of the same rule: a count of nothing genuinely *is* zero -
     // "how many" always has an answer - so the card must not hide it.
     expect(valueLabel(0)).not.toBe(NO_VALUE);
+  });
+});
+
+describe("p.329's Show visualization?", () => {
+  it("names Foundry's two positions", () => {
+    // p.329's own words - "Side-by-side (alongside) or Stacked (under)" - so
+    // a stored document reads as the setting a builder chose rather than as
+    // `row`/`column`.
+    expect(Object.values(SPARK_POSITIONS)).toEqual(["Side-by-side", "Stacked"]);
+  });
+
+  it("falls back to a position rather than to nothing", () => {
+    expect(sparkPositionOf(undefined)).toBe(DEFAULT_SPARK_POSITION);
+    expect(sparkPositionOf("diagonal")).toBe(DEFAULT_SPARK_POSITION);
+    expect(sparkPositionOf("stacked")).toBe("stacked");
+  });
+
+  it("draws only when the toggle is on and a variable is chosen", () => {
+    // **Either half alone is a half-configured card.** A toggle on with no
+    // variable has nothing to draw, and drawing on the toggle alone leaves an
+    // empty box with no way to tell broken from unfinished.
+    expect(showsSpark(true, "v_series")).toBe(true);
+    expect(showsSpark(true, "")).toBe(false);
+    expect(showsSpark(true, null)).toBe(false);
+    expect(showsSpark(false, "v_series")).toBe(false);
+    expect(showsSpark(undefined, "v_series")).toBe(false);
+  });
+
+  it("says what is missing only when the toggle is the thing that is on", () => {
+    // A variable chosen with the toggle off is a decision somebody reversed,
+    // not an unfinished one - so there is nothing to report.
+    expect(sparkEmptyReason(true, null)).toContain("time series set");
+    expect(sparkEmptyReason(true, "v_series")).toBeNull();
+    expect(sparkEmptyReason(false, null)).toBeNull();
+    expect(sparkEmptyReason(false, "v_series")).toBeNull();
   });
 });

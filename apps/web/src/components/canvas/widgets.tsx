@@ -107,8 +107,12 @@ import {
   // Aliased on §211's rule: this file already has two `AGGREGATIONS` and three
   // `needsProperty`-shaped questions.
   AGGREGATIONS as METRIC_AGGREGATIONS, aggregationOf as metricAggregationOf,
-  metricRequest, needsProperty as metricNeedsProperty,
-  propertiesFor as metricPropertiesFor, valueLabel as metricValueLabel,
+  DEFAULT_SPARK_POSITION, metricRequest, needsProperty as metricNeedsProperty,
+  propertiesFor as metricPropertiesFor,
+  showsSpark as metricShowsSpark, SPARK_POSITIONS,
+  sparkEmptyReason as metricSparkEmptyReason,
+  sparkPositionOf as metricSparkPositionOf,
+  valueLabel as metricValueLabel,
 } from "./metric-card";
 import {
   // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
@@ -200,6 +204,8 @@ import {
 } from "./inline-edit";
 import { readerLayout } from "./reader-layout";
 import { SeriesCell } from "./SeriesCell";
+import { Sparkline } from "./Sparkline";
+import { useSeriesPoints } from "./series-points";
 import { outputClauses } from "./action-output";
 import {
   collapsedInitially, columnsOf as sectionColumnsOf, conditionKey, formLayout,
@@ -12337,19 +12343,32 @@ export function CanvasMetricCard({
   aggregation = "count",
   property = null,
   label = "",
+  showVisualization = false,
+  visualizationPosition = DEFAULT_SPARK_POSITION,
+  seriesVariable = null,
 }: {
   objectSetVariable?: string | null;
   /** p.310's six, as `metric-card.ts` lists them. */
   aggregation?: string;
   property?: string | null;
   label?: string;
+  /** p.329's "Show visualization?" - a sparkline of a time series beside the
+   * number - and its two settings. */
+  showVisualization?: boolean;
+  visualizationPosition?: string;
+  seriesVariable?: string | null;
 }) {
   const {
     connectors: { connect, drag },
   } = useNode();
-  const { workspaceId } = useCanvasEnv();
+  const { workspaceId, mode } = useCanvasEnv();
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending } = useCanvasVariables();
+  // p.329's sparkline: the same read the Chart makes of a time series set
+  // variable, through the hook they share (§292).
+  const drawsSpark = metricShowsSpark(showVisualization, seriesVariable);
+  const spark = useSeriesPoints(workspaceId, drawsSpark ? seriesVariable : null);
+  const sparkMissing = metricSparkEmptyReason(showVisualization, seriesVariable);
 
   // `null` while the setting is unfinished - an aggregation whose property has
   // not been chosen yet. The server answers that with a sentence about property
@@ -12365,10 +12384,8 @@ export function CanvasMetricCard({
     enabled: !!objectSetVariable && !!setDefinition && !!ask,
   });
 
-  return (
-    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
-      <div className="metric-card">
-        <span className="metric-label">{label || "Metric"}</span>
+  const spine = (
+    <>
         {!objectSetVariable ? (
           <p className="canvas-widget-empty">Pick an object set variable in Settings</p>
         ) : variablesPending || metric.isPending ? (
@@ -12388,6 +12405,50 @@ export function CanvasMetricCard({
             {metricValueLabel(metric.data?.value)}
           </span>
         )}
+    </>
+  );
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      <div className="metric-card">
+        <span className="metric-label">{label || "Metric"}</span>
+        {/* p.329's Position: "Side-by-side (alongside) or Stacked (under)
+            with the metric value". The number and the line are one block
+            either way - the setting chooses the direction, so there is one
+            arrangement rather than two layouts to keep in step. */}
+        <div
+          className={`metric-body metric-body--${metricSparkPositionOf(visualizationPosition)}`}
+          data-testid="metric-body"
+          data-position={metricSparkPositionOf(visualizationPosition)}
+        >
+          {spine}
+          {drawsSpark && (
+            <span className="metric-spark" data-testid="metric-spark">
+              {/* `unresolved` is not "no readings": the variable points at an
+                  object nobody has picked yet, so nothing has been asked. A
+                  line here would be a reading the widget never took. */}
+              {spark.unresolved ? (
+                <span className="soft canvas-series-empty" data-testid="metric-spark-unpicked">
+                  Nothing picked yet
+                </span>
+              ) : (
+                <Sparkline
+                  points={spark.points}
+                  pending={spark.isPending}
+                  testId="metric-spark-line"
+                />
+              )}
+            </span>
+          )}
+        </div>
+        {/* A toggle switched on with nothing chosen. Said in edit mode only:
+            a builder needs to know what is missing, and a reader would see an
+            unexplained gap where a chart was promised. */}
+        {sparkMissing && mode === "edit" && (
+          <p className="canvas-widget-empty" data-testid="metric-spark-missing">
+            {sparkMissing}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -12398,14 +12459,24 @@ function MetricCardSettings() {
   const { declared, resolved } = useCanvasVariables();
   const {
     objectSetVariable, aggregation, property, label,
+    showVisualization, visualizationPosition, seriesVariable,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
     aggregation: node.data.props.aggregation,
     property: node.data.props.property,
     label: node.data.props.label,
+    showVisualization: node.data.props.showVisualization,
+    visualizationPosition: node.data.props.visualizationPosition,
+    seriesVariable: node.data.props.seriesVariable,
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  // p.329: "Time series set: The time series that is to be visualized. This is
+  // specified using a Time series set variable". Only those - offering the
+  // rest would be a choice that fails at read time.
+  const seriesVariables = Object.values(declared).filter(
+    (v) => v.kind === "time_series_set",
+  );
   // Which type the chosen set draws from, so the property picker offers that
   // type's properties rather than a free-text box that fails at read time.
   const typeId = (resolved[objectSetVariable as string] as { object_type_id?: string } | undefined)
@@ -12484,6 +12555,66 @@ function MetricCardSettings() {
           </select>
         </label>
       )}
+      {/* p.329's "Show visualization?" - "An optional configuration to display
+          a sparkline depicting the history of a time series with the metric.
+          Setting this toggle to Yes opens a configuration screen with the
+          following options". The two options appear only once it is on, which
+          is what "opens a configuration screen" describes. */}
+      <label className="vars-toggle">
+        <input
+          type="checkbox"
+          checked={showVisualization === true}
+          data-testid="metric-show-visualization"
+          onChange={(e) =>
+            setProp((p: { showVisualization: boolean }) =>
+              (p.showVisualization = e.target.checked))
+          }
+        />
+        Show a sparkline
+      </label>
+      {showVisualization === true && (
+        <>
+          <label className="field">
+            <span className="field-label">Time series set</span>
+            <select
+              value={(seriesVariable as string) || ""}
+              data-testid="metric-series-variable"
+              onChange={(e) =>
+                setProp((p: { seriesVariable: string | null }) =>
+                  (p.seriesVariable = e.target.value || null))
+              }
+            >
+              <option value="">Choose…</option>
+              {seriesVariables.map((v) => (
+                <option key={v.id} value={v.id}>{v.label}</option>
+              ))}
+            </select>
+            {seriesVariables.length === 0 && (
+              // Named rather than left as an empty dropdown: the variable this
+              // needs is a kind somebody has to declare first, and an empty
+              // list looks like a bug rather than a missing step.
+              <span className="field-hint">
+                This module has no time series set variables yet.
+              </span>
+            )}
+          </label>
+          <label className="field">
+            <span className="field-label">Position</span>
+            <select
+              value={metricSparkPositionOf(visualizationPosition)}
+              data-testid="metric-spark-position"
+              onChange={(e) =>
+                setProp((p: { visualizationPosition: string }) =>
+                  (p.visualizationPosition = e.target.value))
+              }
+            >
+              {Object.entries(SPARK_POSITIONS).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+          </label>
+        </>
+      )}
       </>}
     />
   );
@@ -12491,7 +12622,11 @@ function MetricCardSettings() {
 
 CanvasMetricCard.craft = {
   displayName: "Metric card",
-  props: { objectSetVariable: null, aggregation: "count", property: null, label: "" },
+  props: {
+    objectSetVariable: null, aggregation: "count", property: null, label: "",
+    showVisualization: false, visualizationPosition: DEFAULT_SPARK_POSITION,
+    seriesVariable: null,
+  },
   related: { settings: MetricCardSettings },
 };
 

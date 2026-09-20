@@ -116,3 +116,49 @@ export function valueLabel(value: unknown): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return NO_VALUE;
   return value.toLocaleString();
 }
+
+// ---- p.329's "Show visualization?" -----------------------------------------
+
+/** Where the sparkline sits relative to the number (p.329's Position).
+ *
+ * > "Position: Specifies whether the sparkline should be displayed
+ * > Side-by-side (alongside) or Stacked (under) with the metric value."
+ *
+ * Foundry's two words, and the values are its words rather than `row`/`column`
+ * so a stored document reads as the setting a builder chose.
+ */
+export const SPARK_POSITIONS: Record<string, string> = {
+  side_by_side: "Side-by-side",
+  stacked: "Stacked",
+};
+
+export const DEFAULT_SPARK_POSITION = "side_by_side";
+
+export function sparkPositionOf(raw: unknown): string {
+  const value = String(raw ?? "");
+  return value in SPARK_POSITIONS ? value : DEFAULT_SPARK_POSITION;
+}
+
+/**
+ * Whether the card should draw a sparkline at all.
+ *
+ * **Both halves, because either alone is a half-configured card.** p.329 opens
+ * the configuration on a toggle and the configuration names a variable; a
+ * toggle switched on with no variable has nothing to draw, and a variable
+ * chosen with the toggle off is a decision somebody reversed. Drawing on the
+ * toggle alone would leave an empty box under the number with no way to tell
+ * whether it was broken or unfinished.
+ */
+export function showsSpark(show: unknown, seriesVariable: unknown): boolean {
+  return show === true && typeof seriesVariable === "string" && seriesVariable !== "";
+}
+
+/** What the card says when the toggle is on and nothing is chosen yet.
+ *
+ * In edit mode only - a builder needs to be told what is missing, and a
+ * reader would only see an unexplained gap where a chart was promised. */
+export function sparkEmptyReason(show: unknown, seriesVariable: unknown): string | null {
+  if (show !== true) return null;
+  if (typeof seriesVariable === "string" && seriesVariable !== "") return null;
+  return "Pick a time series set variable to draw";
+}

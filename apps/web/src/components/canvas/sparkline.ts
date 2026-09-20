@@ -20,6 +20,38 @@ export interface Box {
   height: number;
 }
 
+/**
+ * The API's points, coerced to ones this module can reason about.
+ *
+ * **`SeriesPoints.points` is `{at: unknown; value: unknown}[]` on purpose**:
+ * the dataset engine hands back whatever the file held, and the shared type
+ * says so rather than claiming a shape nobody checked (§212). This is the one
+ * place that turns it into something typed, so every widget drawing a series
+ * coerces identically - two coercions would be two answers to "is `"12"` a
+ * reading".
+ *
+ * A non-numeric value becomes `null` rather than `Number("abc")`'s `NaN`,
+ * because `null` is the value `usable` already drops for the right reason. A
+ * numeric *string* is accepted: a CSV column of readings is strings all the
+ * way down, and refusing them would empty every sparkline over an uploaded
+ * file.
+ */
+export function toPoints(
+  raw: readonly { at: unknown; value: unknown }[] | undefined,
+): Point[] {
+  return (raw ?? []).map((p) => {
+    const value = typeof p.value === "number"
+      ? p.value
+      : typeof p.value === "string" && p.value.trim() !== ""
+        ? Number(p.value)
+        : null;
+    return {
+      at: typeof p.at === "string" ? p.at : String(p.at ?? ""),
+      value: value !== null && Number.isFinite(value) ? value : null,
+    };
+  });
+}
+
 /** A reading worth drawing: a finite number at a usable instant.
  *
  * **Nulls are dropped rather than plotted as zero**, which is the difference

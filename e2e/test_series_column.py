@@ -168,7 +168,10 @@ def test_a_missing_reading_is_a_gap_and_not_a_zero(page, module):
     eventually(lambda: page.get_by_test_id("series-cell").count(),
                lambda n: n == 3, what="the series cells")
     patchy = row_for(page, "Patchy sensor")
-    expect(patchy.get_by_test_id("series-empty")).to_have_text("One reading")
+    # `series-spark-empty`, not `series-empty`: §403 split the bare line out
+    # of the cell so the Metric Card could draw the same one, and the empty
+    # wording moved with it. The cell still reads "5 One reading".
+    expect(patchy.get_by_test_id("series-spark-empty")).to_have_text("One reading")
     expect(patchy.get_by_test_id("series-spark")).to_have_count(0)
     # And the reading it does have is still the latest value.
     expect(patchy.get_by_test_id("series-latest")).to_have_text("5")

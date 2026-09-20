@@ -2216,6 +2216,19 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .metric-value { font-size: 30px; font-weight: 600; line-height: 1.1; }
 .metric-value.soft { color: var(--ink-soft); font-weight: 400; }
 
+/* p.329's "Show visualization?" (§403). The number and the line are one block;
+   Position chooses the direction, so there is one arrangement rather than two
+   layouts to keep in step. */
+.metric-body { display: flex; gap: 10px; min-width: 0; }
+.metric-body--side_by_side { flex-direction: row; align-items: center; }
+/* "Stacked (under) with the metric value" - the line goes below, so the block
+   reads number-then-history top to bottom. */
+.metric-body--stacked { flex-direction: column; align-items: stretch; }
+/* Takes the room left over side by side, and a fixed height stacked - a
+   sparkline under a 30px number should not be taller than it. */
+.metric-spark { flex: 1 1 auto; min-width: 40px; display: flex; align-items: center; }
+.metric-body--stacked .metric-spark { height: 24px; }
+
 /* ---- clickable rows (ROADMAP phase 2, 1.3) -------------------------------- */
 /* Only when the module wires an event to this table - a row that looks
    clickable and does nothing is worse than one that looks inert. */
