@@ -77,6 +77,15 @@ describe("references", () => {
     }
   });
 
+  it("has to start with the prefix, not merely contain it", () => {
+    // Caught by the sweep. A value that only *contains* `saved:` would be
+    // sliced from the wrong place — `"x saved:c1"` would name the colour
+    // `d:c1` — so a document holding one would reference a colour that does
+    // not exist instead of holding the odd value it actually holds (§212).
+    expect(refIn("x saved:c1")).toBeNull();
+    expect(refIn("var(--saved:c1)")).toBeNull();
+  });
+
   it("is not a reference to nothing", () => {
     expect(refIn(REF_PREFIX)).toBeNull();
     expect(refIn(`${REF_PREFIX}   `)).toBeNull();
