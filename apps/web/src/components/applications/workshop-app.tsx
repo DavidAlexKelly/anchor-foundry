@@ -27,10 +27,13 @@
 
 import { Editor, Element, Frame, useEditor } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { ChangelogPanel } from "@/components/canvas/ChangelogPanel";
-import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
+import {
+  CanvasEnvProvider, CanvasParameterProvider, useCanvasEnv,
+} from "@/components/canvas/context";
+import type { DerivedColumn } from "@/components/canvas/derived-columns";
 import { useSearchParams } from "next/navigation";
 import { seedFromQuery } from "@/components/canvas/pure";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
@@ -57,9 +60,11 @@ import { UsedColoursPanel } from "@/components/canvas/UsedColoursPanel";
 import { profilerHref, profilerOn } from "@/components/canvas/profiler";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
 import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
-import { ApiError, actions as actionApi, api, canvas as canvasApi } from "@/lib/api";
 import {
-  autoRefreshOf, eventsOf, hasLayout, layoutOf, moduleFrom, pageSelectionOf, routingOf,
+  ApiError, actions as actionApi, api, canvas as canvasApi, objects as objApi,
+} from "@/lib/api";
+import {
+  autoRefreshOf, derivedPropertiesOf, eventsOf, hasLayout, layoutOf, moduleFrom, pageSelectionOf, routingOf,
   stateSavingOf,
   translationsOf,
   variablesOf,
@@ -473,6 +478,7 @@ function ActionBar({
   stateSaving,
   translations,
   autoRefresh,
+  derivedProperties,
   onView,
   onReverted,
 }: {
@@ -491,6 +497,10 @@ function ActionBar({
    * it registers variables that live in the document, so a save without it
    * would drop the registration a builder just made. */
   autoRefresh: import("@/lib/types").WorkshopModule["auto_refresh"];
+  /** Derived properties (p.168-172). In the save for the rest's reason: a
+   * column list in the layout names one, so a save without them would drop
+   * the declaration the column depends on. */
+  derivedProperties: import("@/lib/types").WorkshopModule["derived_properties"];
   /** Translations (p.207-211). In the save for the same reason as the other
    * two: the tables translate strings that live in the layout, so they have
    * to travel with it or a save would drop every translation a builder
@@ -523,6 +533,7 @@ function ActionBar({
           stateSaving,
           translations,
           autoRefresh,
+          derivedProperties,
         }),
         description,
       ),
@@ -618,6 +629,7 @@ function CanvasEnvBridge({
   seed,
   routing = false,
   autoRefresh,
+  derivedProperties,
   layout,
   pageSelection,
   stateSaving,
@@ -635,6 +647,11 @@ function CanvasEnvBridge({
    * variable bridge because what it watches is what the variables
    * resolve to. */
   autoRefresh?: unknown;
+  /** The module's derived properties (p.168-172), passed to the canvas
+   * env because p.168 declares them at the module level — a widget
+   * names one in its column list rather than carrying the
+   * declaration. */
+  derivedProperties?: unknown;
   /** The **saved** layout, which is what routing reads page IDs and per-page
    * bindings from. An unsaved page ID therefore does not appear in the URL
    * until it is saved — the same rule the Variables panel follows for usage
@@ -667,7 +684,10 @@ function CanvasEnvBridge({
   }, [profiling, enabled, actions]);
   return (
     <ProfilerRecorder on={profiling}>
-    <CanvasEnvProvider value={{ workspaceId, projectId, mode: enabled ? "edit" : "run" }}>
+    <CanvasEnvProvider value={{
+      workspaceId, projectId, mode: enabled ? "edit" : "run",
+      derivedColumns: derivedProperties,
+    }}>
       {/* Parameter state lives inside the env provider and outside the editor
           tree, so a filter set in Preview survives switching back to Edit -
           the alternative resets every filter each time the mode flips, which
@@ -735,9 +755,13 @@ function Toolbox({
   onAutoRefreshChange,
   translations,
   onTranslationsChange,
+  derivedProperties,
+  onDerivedPropertiesChange,
 }: {
   routing: boolean;
   onRoutingChange: (next: boolean) => void;
+  derivedProperties: Record<string, DerivedColumn[]>;
+  onDerivedPropertiesChange: (next: Record<string, DerivedColumn[]>) => void;
   pageSelection: string;
   onPageSelectionChange: (next: string) => void;
   stringVariables: { id: string; label: string }[];
@@ -756,6 +780,34 @@ function Toolbox({
   translations: NonNullable<import("@/lib/types").WorkshopModule["translations"]>;
   onTranslationsChange: (next: NonNullable<import("@/lib/types").WorkshopModule["translations"]>) => void;
 }) {
+  // p.168 declares a derived property *per object type*, so the panel needs
+  // the types this module actually reads and each one's properties — an
+  // expression is checked against them. The object set variables are where a
+  // module says which types it reads, so they are the source.
+  const { workspaceId } = useCanvasEnv();
+  const derivableTypeIds = useMemo(() => {
+    const out = new Set<string>();
+    for (const v of Object.values(variables)) {
+      const set = (v as { object_set?: { object_type_id?: unknown } }).object_set;
+      const id = set?.object_type_id;
+      if (typeof id === "string" && id) out.add(id);
+    }
+    return [...out].sort();
+  }, [variables]);
+  const derivableQuery = useQuery({
+    queryKey: ["canvas-derivable-types", workspaceId, derivableTypeIds.join(",")],
+    queryFn: () => Promise.all(
+      derivableTypeIds.map((id) => objApi.getType(workspaceId, id)),
+    ),
+    enabled: derivableTypeIds.length > 0,
+  });
+  const derivableTypes = (derivableQuery.data ?? []).map((type) => ({
+    id: String(type.id),
+    label: type.display_name || type.api_name,
+    properties: (type.properties ?? []).map((prop) => ({
+      api_name: prop.api_name, data_type: prop.data_type,
+    })),
+  }));
   return (
     <div className="canvas-toolbox">
       <LayoutPanel
@@ -777,6 +829,9 @@ function Toolbox({
         objectSetVariables={registrable(variables).map((v) => ({
           id: v.id, label: v.label || v.id,
         }))}
+        derivedProperties={derivedProperties}
+        onDerivedPropertiesChange={onDerivedPropertiesChange}
+        derivableTypes={derivableTypes}
         translations={translations}
         onTranslationsChange={onTranslationsChange}
       />
@@ -883,6 +938,12 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // the Save button carries it - and so a version revert takes the switch
   // back with the variables it registers.
   const [autoRefresh, setAutoRefresh] = useState(() => autoRefreshSettings(undefined));
+  // p.168-172's derived properties, held with the other module-wide
+  // settings so the Save button carries them and a revert takes them back
+  // with the layout that names them.
+  const [derivedProperties, setDerivedProperties] = useState<
+    NonNullable<import("@/lib/types").WorkshopModule["derived_properties"]>
+  >({});
   // p.207-211's tables, held here with the other two module-wide settings so
   // the Save button carries them. Never edited by this component - the switch
   // is the Settings panel's and the tables are written through the API until
@@ -905,6 +966,9 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     setStateSaving(stateSavingOf(appQuery.data.definition));
     setTranslations(translationsOf(appQuery.data.definition));
     setAutoRefresh(autoRefreshSettings(autoRefreshOf(appQuery.data.definition)));
+    setDerivedProperties(
+      (derivedPropertiesOf(appQuery.data.definition) as typeof derivedProperties) ?? {},
+    );
   }, [savedVersion, appQuery.data?.id]);
 
   // A module always lives in a project. A resolved `canvas_app` without one is
@@ -987,6 +1051,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
         pageSelection={pageSelection}
         stateSaving={stateSaving}
         autoRefresh={autoRefresh}
+        derivedProperties={derivedProperties}
       >
         <ActionBar
           app={app}
@@ -1001,6 +1066,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           stateSaving={stateSaving}
           translations={translations}
           autoRefresh={autoRefresh.enabled ? autoRefresh : undefined}
+          derivedProperties={derivedProperties}
           onView={setViewingVersion}
           onReverted={() => setReloadToken((n) => n + 1)}
         />
@@ -1023,6 +1089,8 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           onStateSavingChange={setStateSaving}
           autoRefresh={autoRefresh}
           onAutoRefreshChange={setAutoRefresh}
+          derivedProperties={derivedProperties}
+          onDerivedPropertiesChange={setDerivedProperties}
           translations={translations}
           onTranslationsChange={setTranslations}
           onPreview={(language, snapshot) => setPreviewing({ language, snapshot })}
@@ -1054,6 +1122,8 @@ function CanvasBody({
   onStateSavingChange,
   autoRefresh,
   onAutoRefreshChange,
+  derivedProperties,
+  onDerivedPropertiesChange,
   translations,
   onTranslationsChange,
   onPreview,
@@ -1077,6 +1147,8 @@ function CanvasBody({
   stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
   autoRefresh: AutoRefresh;
   onAutoRefreshChange: (next: AutoRefresh) => void;
+  derivedProperties: Record<string, DerivedColumn[]>;
+  onDerivedPropertiesChange: (next: Record<string, DerivedColumn[]>) => void;
   onStateSavingChange: (
     next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
   ) => void;
@@ -1217,6 +1289,8 @@ function CanvasBody({
           onAutoRefreshChange={onAutoRefreshChange}
           translations={translations}
           onTranslationsChange={onTranslationsChange}
+          derivedProperties={derivedProperties}
+          onDerivedPropertiesChange={onDerivedPropertiesChange}
         />
       )}
       <div className="canvas-frame-area">

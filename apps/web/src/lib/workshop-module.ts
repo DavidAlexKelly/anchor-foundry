@@ -79,6 +79,7 @@ export function moduleFrom(
     pageSelection?: string;
     translations?: WorkshopModule["translations"];
     autoRefresh?: WorkshopModule["auto_refresh"];
+    derivedProperties?: WorkshopModule["derived_properties"];
   },
 ): WorkshopModule {
   const current = isV2(definition) ? definition : undefined;
@@ -87,6 +88,7 @@ export function moduleFrom(
   const pageSelection = parts.pageSelection ?? current?.page_selection;
   const translations = parts.translations ?? current?.translations;
   const autoRefresh = parts.autoRefresh ?? current?.auto_refresh;
+  const derivedProperties = parts.derivedProperties ?? current?.derived_properties;
   return {
     format: 2,
     layout: parts.layout ?? layoutOf(definition),
@@ -101,6 +103,11 @@ export function moduleFrom(
     // `enabled: false` in every document would be a setting recorded in every
     // diff that nobody chose.
     ...(autoRefresh?.enabled ? { auto_refresh: autoRefresh } : {}),
+    // Carried for `routing`'s reason, and written only when a type has any:
+    // an empty map in every document is a key in every diff that nobody
+    // chose.
+    ...(derivedProperties && Object.keys(derivedProperties).length
+      ? { derived_properties: derivedProperties } : {}),
     ...(stateSaving ? { state_saving: stateSaving } : {}),
     // Same carry, same reason. Omitted when empty rather than written as `""`
     // so that turning it off leaves a document indistinguishable from one that
@@ -186,6 +193,16 @@ export function stateSavingOf(
  */
 export function autoRefreshOf(definition: unknown): unknown {
   return isV2(definition) ? definition.auto_refresh : undefined;
+}
+
+/** The module's derived properties, as stored (workshop p.168-172; §411).
+ *
+ * Mirrors `autoRefreshOf`: the rules belong to
+ * `components/canvas/derived-columns.ts`, which is pure and is where they are
+ * tested; this only finds the object.
+ */
+export function derivedPropertiesOf(definition: unknown): unknown {
+  return isV2(definition) ? definition.derived_properties : undefined;
 }
 
 /** Props whose value is a variable id. Mirrors `REFERENCE_PROPS` in
