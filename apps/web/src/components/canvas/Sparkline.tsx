@@ -21,10 +21,17 @@ export function Sparkline({
   points,
   pending = false,
   testId = "series-spark",
+  colour,
 }: {
   points: readonly Point[] | undefined;
   pending?: boolean;
   testId?: string;
+  /** p.175's conditional formatting reaching the line: "conditional formatting
+   * is used to style **the summarized value and the sparkline**".
+   *
+   * Undefined leaves the stylesheet's `var(--accent)` alone rather than
+   * resolving it here, so an unpainted line still follows the theme. */
+  colour?: string;
 }) {
   if (pending) {
     // Distinct from "no readings", which is a fact about the data rather than
@@ -54,7 +61,14 @@ export function Sparkline({
       {/* `vector-effect` keeps the stroke one pixel however the box is
           stretched - without it a wider box draws a thicker line, because
           `preserveAspectRatio="none"` scales strokes with the geometry. */}
-      <path d={d} fill="none" vectorEffect="non-scaling-stroke" />
+      <path
+        d={d}
+        fill="none"
+        vectorEffect="non-scaling-stroke"
+        // Inline for `cssFor`'s reason: p.105 lets an author type their own
+        // hex, and a stylesheet cannot enumerate those.
+        style={colour ? { stroke: colour } : undefined}
+      />
     </svg>
   );
 }

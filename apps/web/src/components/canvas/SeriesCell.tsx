@@ -16,6 +16,9 @@
 import { Sparkline } from "./Sparkline";
 import { latest, type Point } from "./sparkline";
 import { showNumber, type NumberFormat } from "./value-formats";
+import { strokeFor } from "./conditional-formats";
+import { cssFor } from "@/lib/conditional-format";
+import type { PropertyStyle } from "@/lib/types";
 
 export function SeriesCell({
   points,
@@ -32,10 +35,16 @@ export function SeriesCell({
    * reason.
    */
   format = null,
+  /** p.175's rules for this column, already matched against the latest value.
+   * The *same* paint reaches both marks, because p.175 styles "the summarized
+   * value and the sparkline" with one rule - two settings would let them
+   * disagree about a threshold they are both reporting. */
+  paint = null,
   pending = false,
 }: {
   points: readonly Point[] | undefined;
   format?: NumberFormat | null;
+  paint?: PropertyStyle | null;
   pending?: boolean;
 }) {
   const list = points ?? [];
@@ -43,13 +52,17 @@ export function SeriesCell({
 
   return (
     <span className="canvas-series" data-testid="series-cell">
-      <span className="canvas-series-value" data-testid="series-latest">
+      <span
+        className="canvas-series-value"
+        data-testid="series-latest"
+        style={cssFor(paint)}
+      >
         {pending ? "" : value === null ? "—" : showNumber(value, format)}
       </span>
       {/* The line itself is `Sparkline`'s, shared with the Metric Card
           (p.329) so the stroke, the empty wording and the non-scaling trick
           have one home. */}
-      <Sparkline points={points} pending={pending} />
+      <Sparkline points={points} pending={pending} colour={strokeFor(paint)} />
     </span>
   );
 }

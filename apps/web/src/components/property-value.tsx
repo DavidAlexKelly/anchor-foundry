@@ -11,13 +11,14 @@
  * type mean something" that a user can actually see.
  */
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ApiError, objects as objApi } from "@/lib/api";
 import { mediaKind } from "@/components/media-kind";
 import type {
   AttachmentRef, GeoPoint, PropertyDataType, PropertyStyle, StructField, ValueFormat,
 } from "@/lib/types";
 import { structRows } from "@/lib/struct-fields";
+import { cssFor } from "@/lib/conditional-format";
 import { formatValue } from "@/lib/value-format";
 // The Canvas Action Form's rule for which control a type gets, now shared
 // rather than duplicated (§237).
@@ -176,7 +177,7 @@ export function PropertyValue({
   // Applied to the empty marker too. A rule whose whole purpose is "colour it
   // grey when the value is null" (p.106) would otherwise be invisible on
   // precisely the values it is about.
-  const paint = styleOf(conditional);
+  const paint = cssFor(conditional);
   if (value === null || value === undefined || value === "") {
     return <span style={{ color: "var(--ink-soft)", ...paint }}>{emptyText}</span>;
   }
@@ -312,28 +313,6 @@ export function PropertyValue({
   // asked for something — an unstyled wrapper on every cell of every table is
   // a lot of DOM for nothing.
   return paint ? <span style={paint}>{String(value)}</span> : <>{String(value)}</>;
-}
-
-/** A rule's answer as inline style. Inline rather than a class because the
- * colours are author-chosen hex (p.105's "add your own custom color"), and a
- * stylesheet cannot enumerate those. */
-function styleOf(style: PropertyStyle | null | undefined): CSSProperties | undefined {
-  if (!style) return undefined;
-  const out: CSSProperties = {};
-  if (style.colour) out.color = style.colour;
-  if (style.background) {
-    out.background = style.background;
-    // A background needs room to read as one rather than as a smear behind
-    // the text, and p.102's screenshot is explicit about it: "colored boxes".
-    out.padding = "1px 6px";
-    out.borderRadius = "var(--radius)";
-  }
-  if (style.align) {
-    out.textAlign = style.align;
-    out.display = "inline-block";
-    out.minWidth = "100%";
-  }
-  return Object.keys(out).length ? out : undefined;
 }
 
 /** The input for one editable property in an action form.

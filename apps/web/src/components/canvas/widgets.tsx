@@ -119,6 +119,13 @@ import {
   formatsByColumn, formatSummary, numberFormatOf, type NumberFormat,
 } from "./value-formats";
 import {
+  METRIC_SUBJECT, paintFor, rulesByColumn, rulesOf, SERIES_SUBJECT,
+  strokeFor, subjectProperties,
+} from "./conditional-formats";
+import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
+import type { ConditionalRule } from "@/lib/types";
+import { latest as latestOf } from "./sparkline";
+import {
   // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
   // enough to collide with something later, and `labelOf` is the kind of name
   // three widgets could each want.
@@ -257,7 +264,7 @@ import {
 import { Chart, PieChart, toPoints } from "./charts";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
-import { conditionalStyle } from "@/lib/conditional-format";
+import { conditionalStyle, cssFor } from "@/lib/conditional-format";
 
 /** The grid's own line height, in pixels (`globals.css`, `.data-grid td`).
  * p.224's line count is a multiple of this, so the two have to agree; a test
@@ -3662,6 +3669,7 @@ export function CanvasObjectTable({
   inlineEditByDefault = false,
   inlineEditOneClick = false,
   seriesFormats = null,
+  seriesRules = null,
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
@@ -3683,6 +3691,10 @@ export function CanvasObjectTable({
    * that would not apply (§212) - see `value-formats.ts` for why the ontology
    * has nothing to inherit from here. */
   seriesFormats?: unknown;
+  /** p.175's conditional formatting for this module's **time series columns**,
+   * keyed by property API name. §158's rules, comparing the latest value
+   * rather than a stored property - see `conditional-formats.ts`. */
+  seriesRules?: unknown;
   /** One of the server's `object_sets.SORTS`. Sorting *by a property* is
    * refused there rather than here, because untyped properties would order
    * differently on the two stores; the settings panel therefore offers what
@@ -3828,6 +3840,7 @@ export function CanvasObjectTable({
   // cell: this validates every entry, and a twenty-five row page would run it
   // twenty-five times for an answer that cannot differ between rows.
   const columnFormats = useMemo(() => formatsByColumn(seriesFormats), [seriesFormats]);
+  const columnRules = useMemo(() => rulesByColumn(seriesRules), [seriesRules]);
   // Configured order wins, and a name that matches nothing is dropped rather
   // than rendered as an empty column: a property can be removed from the type
   // long after a table was pointed at it.
@@ -4258,6 +4271,14 @@ export function CanvasObjectTable({
                                 // p.174: the module's formatter for this
                                 // column, when one was set.
                                 format={columnFormats[p.api_name] ?? null}
+                                // p.175: one rule paints the number and the
+                                // line, so the match happens once here rather
+                                // than twice inside the cell.
+                                paint={paintFor(
+                                  columnRules[p.api_name],
+                                  SERIES_SUBJECT,
+                                  latestOf(seriesByKey.get(instance.primary_key) ?? []),
+                                )}
                               />
                             ) : (
                               <PropertyValue
@@ -4742,7 +4763,7 @@ function ObjectTableSettings() {
     lines, valueWrap, frozenColumns, emptyMode, emptyMessage,
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
     inlineEditAction, inlineEditMapping, inlineEditButtonText,
-    inlineEditByDefault, inlineEditOneClick, seriesFormats,
+    inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules,
     actions: { setProp },
   } = useNode((node) => ({
     objectTypeId: node.data.props.objectTypeId,
@@ -4773,6 +4794,7 @@ function ObjectTableSettings() {
     inlineEditByDefault: node.data.props.inlineEditByDefault,
     inlineEditOneClick: node.data.props.inlineEditOneClick,
     seriesFormats: node.data.props.seriesFormats,
+    seriesRules: node.data.props.seriesRules,
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   // **`array`, not `object_set`.** p.224 calls these outputs object sets and
@@ -4827,6 +4849,7 @@ function ObjectTableSettings() {
     return shownColumns.filter((name) => types.get(name) === "time_series");
   }, [shownColumns, detail.data]);
   const savedFormats = useMemo(() => formatsByColumn(seriesFormats), [seriesFormats]);
+  const savedRules = useMemo(() => rulesByColumn(seriesRules), [seriesRules]);
 
   // p.65's order, and p.66's disclosure. **A choice rather than a
   // requirement**: this widget is populated either by a bound object set or
@@ -4969,6 +4992,28 @@ function ObjectTableSettings() {
               if (next) next_[name] = next;
               else delete next_[name];
               p.seriesFormats = Object.keys(next_).length ? next_ : null;
+            })
+          }
+        />
+      ))}
+      {/* p.175's rules, beside p.174's formatter and on the same columns -
+          the two pages name the same pair of surfaces. */}
+      {seriesColumns.map((name) => (
+        <ConditionalFormatField
+          key={`rules-${name}`}
+          subject={SERIES_SUBJECT}
+          testId={`series-rules-${name}`}
+          value={savedRules[name] ?? null}
+          hint={`Paints ${name}'s value and its sparkline (p.175).`}
+          onChange={(next) =>
+            setProp((p: { seriesRules: Record<string, ConditionalRule[]> | null }) => {
+              // Same rebuild-and-delete as the formatter map above, for the
+              // same reason: a tombstone makes "has this column got rules"
+              // two questions instead of one.
+              const built = { ...savedRules };
+              if (next) built[name] = next;
+              else delete built[name];
+              p.seriesRules = Object.keys(built).length ? built : null;
             })
           }
         />
@@ -5235,7 +5280,7 @@ CanvasObjectTable.craft = {
     narrowHeaders: false, formatFillsCell: false,
     inlineEditAction: null, inlineEditMapping: null, inlineEditButtonText: "",
     inlineEditByDefault: false, inlineEditOneClick: false,
-    seriesFormats: null,
+    seriesFormats: null, seriesRules: null,
   },
   related: { settings: ObjectTableSettings },
 };
@@ -12403,6 +12448,7 @@ export function CanvasMetricCard({
   visualizationPosition = DEFAULT_SPARK_POSITION,
   seriesVariable = null,
   valueFormat = null,
+  valueRules = null,
 }: {
   objectSetVariable?: string | null;
   /** p.310's six, as `metric-card.ts` lists them. */
@@ -12418,6 +12464,11 @@ export function CanvasMetricCard({
    * formatting. Read through `numberFormatOf` rather than used as given,
    * because a layout document holds whatever was put there (§212). */
   valueFormat?: unknown;
+  /** p.329's **Conditional formatting**: "apply rule-based formatting to the
+   * metric value displayed, as in the example below that displays the metric
+   * in red if its value is less than or equal to zero, and in green
+   * otherwise." p.175 is the page it points at. */
+  valueRules?: unknown;
 }) {
   const {
     connectors: { connect, drag },
@@ -12428,6 +12479,9 @@ export function CanvasMetricCard({
   // p.329's sparkline: the same read the Chart makes of a time series set
   // variable, through the hook they share (§292).
   const drawsSpark = metricShowsSpark(showVisualization, seriesVariable);
+  // p.175's rules, matched against the number this card is showing. One match
+  // for both marks, the same as the table's column.
+  const cardRules = useMemo(() => rulesOf(valueRules), [valueRules]);
   const spark = useSeriesPoints(workspaceId, drawsSpark ? seriesVariable : null);
   const sparkMissing = metricSparkEmptyReason(showVisualization, seriesVariable);
 
@@ -12444,6 +12498,16 @@ export function CanvasMetricCard({
     queryFn: () => objApi.aggregateObjectSet(workspaceId, setDefinition, ask ?? {}),
     enabled: !!objectSetVariable && !!setDefinition && !!ask,
   });
+
+  // **Matched against the aggregate, not against the series.** p.329's example
+  // is about "its value" - the metric - and the sparkline beside it is the
+  // history of a different number entirely. A rule reading the line's latest
+  // point would colour the metric by something the metric does not show.
+  const cardPaint = paintFor(
+    cardRules,
+    METRIC_SUBJECT,
+    typeof metric.data?.value === "number" ? metric.data.value : null,
+  );
 
   const spine = (
     <>
@@ -12462,7 +12526,11 @@ export function CanvasMetricCard({
           // aggregation over an empty set answer `null`, and a card is one
           // large number somebody reads at a glance - so it says there is
           // nothing rather than throwing, or worse, showing a zero.
-          <span className="metric-value" data-testid="metric-value">
+          <span
+            className="metric-value"
+            data-testid="metric-value"
+            style={cssFor(cardPaint)}
+          >
             {metricValueLabel(metric.data?.value, numberFormatOf(valueFormat))}
           </span>
         )}
@@ -12497,6 +12565,7 @@ export function CanvasMetricCard({
                   points={spark.points}
                   pending={spark.isPending}
                   testId="metric-spark-line"
+                  colour={strokeFor(cardPaint)}
                 />
               )}
             </span>
@@ -12575,12 +12644,72 @@ function ValueFormatField({
   );
 }
 
+/**
+ * p.175's conditional formatting as one settings control, the way
+ * `ValueFormatField` is p.174's: a button saying how many rules there are, and
+ * §158's dialog behind it.
+ *
+ * **§158's editor, not a Workshop one** (§191, §292). It carries p.105's whole
+ * rule grammar, the ordering controls that make the Always-true fallback mean
+ * anything, and p.106's preview — and a second copy would be a second place
+ * for "first match wins" to be implemented.
+ *
+ * `properties` is one entry rather than a type's whole property list, because
+ * a rule here has exactly one thing it can read: the number the widget is
+ * showing. Offering more would be offering a comparison against a property the
+ * evaluator is never given.
+ */
+function ConditionalFormatField({
+  subject,
+  testId,
+  value,
+  onChange,
+  hint,
+}: {
+  subject: string;
+  testId: string;
+  value: unknown;
+  onChange: (next: ConditionalRule[] | null) => void;
+  hint?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rules = rulesOf(value);
+  return (
+    <div className="field">
+      <span className="field-label">Conditional formatting</span>
+      <button
+        type="button"
+        className="btn"
+        data-testid={testId}
+        onClick={() => setOpen(true)}
+      >
+        {/* The count rather than "Configured": the list is ordered and
+            first-match-wins, so how many there are is the thing an author is
+            actually keeping track of. */}
+        {rules ? `${rules.length} rule${rules.length === 1 ? "" : "s"}` : "No rules"}
+      </button>
+      {hint && <span className="field-hint">{hint}</span>}
+      {open && (
+        <ConditionalFormatEditor
+          open
+          onClose={() => setOpen(false)}
+          propertyName={subject}
+          properties={subjectProperties(subject)}
+          value={rules}
+          onSave={onChange}
+        />
+      )}
+    </div>
+  );
+}
+
 function MetricCardSettings() {
   const { workspaceId } = useCanvasEnv();
   const { declared, resolved } = useCanvasVariables();
   const {
     objectSetVariable, aggregation, property, label,
     showVisualization, visualizationPosition, seriesVariable, valueFormat,
+    valueRules,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -12588,6 +12717,7 @@ function MetricCardSettings() {
     property: node.data.props.property,
     label: node.data.props.label,
     valueFormat: node.data.props.valueFormat,
+    valueRules: node.data.props.valueRules,
     showVisualization: node.data.props.showVisualization,
     visualizationPosition: node.data.props.visualizationPosition,
     seriesVariable: node.data.props.seriesVariable,
@@ -12690,6 +12820,17 @@ function MetricCardSettings() {
           setProp((p: { valueFormat: NumberFormat | null }) => (p.valueFormat = next))
         }
       />
+      {/* p.329's **Conditional formatting**, in p.328-329's own order: under
+          Numeric formatting, above Show secondary metric. */}
+      <ConditionalFormatField
+        subject={METRIC_SUBJECT}
+        testId="metric-value-rules"
+        value={valueRules}
+        hint="Paints the number, and the sparkline with it (p.175)."
+        onChange={(next) =>
+          setProp((p: { valueRules: ConditionalRule[] | null }) => (p.valueRules = next))
+        }
+      />
       {/* p.329's "Show visualization?" - "An optional configuration to display
           a sparkline depicting the history of a time series with the metric.
           Setting this toggle to Yes opens a configuration screen with the
@@ -12758,7 +12899,8 @@ function MetricCardSettings() {
 CanvasMetricCard.craft = {
   displayName: "Metric card",
   props: {
-    objectSetVariable: null, aggregation: "count", property: null, label: "", valueFormat: null,
+    objectSetVariable: null, aggregation: "count", property: null, label: "",
+    valueFormat: null, valueRules: null,
     showVisualization: false, visualizationPosition: DEFAULT_SPARK_POSITION,
     seriesVariable: null,
   },
