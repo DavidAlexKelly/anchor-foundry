@@ -23,7 +23,7 @@ export type AccessResource = {
 };
 
 export type ModuleAccess = {
-  user: { id: string; email: string; display_name: string };
+  user: { id: string; email: string; display_name: string; active: boolean };
   workspace_role: string | null;
   project_role: string | null;
   can_open: boolean;
@@ -89,6 +89,11 @@ export function byKind(resources: AccessResource[]): AccessResource[] {
  * somebody who cannot change a thing.
  */
 export function moduleVerdict(access: ModuleAccess): string {
+  // **Before the roles, because it outranks them.** A disabled account is
+  // refused at authentication, so every role it still holds is a role it
+  // cannot use. Reading those roles out as access would tell a builder that
+  // somebody who cannot sign in can open the module.
+  if (!access.user.active) return "This account is disabled";
   if (access.can_edit) return "Can open and edit this module";
   if (access.can_open) return "Can open this module, and not edit it";
   return "Cannot open this module";
@@ -100,6 +105,9 @@ export function moduleVerdict(access: ModuleAccess): string {
  * this project, and the module is not published" knows both of the two things
  * they could change. "No access" tells them neither. */
 export function moduleReason(access: ModuleAccess): string {
+  // The roles are still worth naming for a disabled account: they are what it
+  // would have on being re-enabled, which is the question a builder looking at
+  // one is about to ask.
   const where = access.project_role
     ? `${access.project_role} on this project`
     : access.workspace_role

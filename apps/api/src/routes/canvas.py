@@ -972,6 +972,11 @@ class AccessUser(BaseModel):
     id: UUID
     email: str
     display_name: str
+    #: Whether the account can sign in at all. Carried because every role a
+    #: disabled account holds is a role it cannot use, and a panel that read
+    #: those roles out as access would be confidently wrong about the one
+    #: person a builder is least likely to think of.
+    active: bool
 
 
 class AccessResource(BaseModel):
@@ -1022,10 +1027,17 @@ async def check_access(
         row = await canvas_service.get(caller, access.project_id, app_id)
         definition = _parse_json(row["definition"])
 
+        # `get_current_user` refuses a non-active account before any route
+        # runs, so a disabled user reaches nothing whatever `effective_*_role`
+        # still says - and those functions check `status` only on their org
+        # admin branch, so they go on reporting a membership role for an
+        # account that cannot authenticate.
+        active = subject["status"] == "active"
+
         async with user_connection(user_id) as theirs:
             project_role = await resolve_project_role(theirs, user_id, access.project_id)
             workspace_role = await resolve_workspace_role(theirs, user_id, access.workspace_id)
-            can_open = await module_access.opens(
+            can_open = active and await module_access.opens(
                 theirs, workspace_id=access.workspace_id, app_id=app_id,
                 project_role=project_role,
             )
@@ -1042,14 +1054,14 @@ async def check_access(
     return ModuleAccessOut(
         user=AccessUser(
             id=subject["id"], email=subject["email"],
-            display_name=subject["display_name"],
+            display_name=subject["display_name"], active=active,
         ),
         workspace_role=workspace_role,
         project_role=project_role,
         can_open=can_open,
         # An editor of the project may change the module; p.92's "open or edit"
         # is one sentence and two different answers, which is why both are here.
-        can_edit=project_role in ("editor", "owner"),
+        can_edit=active and project_role in ("editor", "owner"),
         resources=[AccessResource(**r) for r in found],
     )
 

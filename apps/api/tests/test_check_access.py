@@ -162,6 +162,7 @@ def test_a_builder_meets_every_requirement(
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["user"]["id"] == str(fx.editor)
+    assert body["user"]["active"] is True
     assert body["can_open"] is True
     assert body["can_edit"] is True
     assert body["project_role"] == "editor"
@@ -297,3 +298,38 @@ def test_a_user_of_another_organisation_is_not_found(
     the asker has nothing to do with."""
     r = check(client, fx, app_id, str(fx.foreign))
     assert r.status_code == 404, r.text
+
+
+def test_a_disabled_account_reaches_nothing_whatever_its_roles_say(
+    client: TestClient, fx: Fixture, app_id: str
+) -> None:
+    """`get_current_user` refuses a non-active account before any route runs,
+    so every role it still holds is a role it cannot use.
+
+    `effective_workspace_role` checks `status` only on its org-admin branch, so
+    it goes on reporting `editor` for this account - which is the honest answer
+    to "what would they have if re-enabled" and the wrong one to "can they open
+    it". The panel has to hold both, because a builder looking at a disabled
+    account is about to ask the first question.
+    """
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        uid = str(conn.execute(
+            """INSERT INTO users (organisation_id, email, display_name,
+                                  org_role, cognito_sub, status)
+               VALUES (%s,%s,%s,'member',%s,'disabled') RETURNING id""",
+            (fx.org, f"gone-{fx.tag}@example.com", "Gone Away",
+             f"sub-gone-{fx.tag}"),
+        ).fetchone()[0])
+        conn.execute(
+            "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (%s,%s,'editor')",
+            (fx.workspace, uid),
+        )
+
+    body = check(client, fx, app_id, uid).json()
+    assert body["user"]["active"] is False
+    assert body["can_open"] is False
+    assert body["can_edit"] is False
+    # Still reported, because re-enabling is the remedy and this says whether
+    # it would be enough.
+    assert body["project_role"] == "editor"
+    assert body["workspace_role"] == "editor"

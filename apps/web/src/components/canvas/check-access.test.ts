@@ -18,7 +18,7 @@ function resource(over: Partial<AccessResource> = {}): AccessResource {
 
 function answer(over: Partial<ModuleAccess> = {}): ModuleAccess {
   return {
-    user: { id: "u1", email: "reader@example.com", display_name: "Reader" },
+    user: { id: "u1", email: "reader@example.com", display_name: "Reader", active: true },
     workspace_role: "viewer",
     project_role: "viewer",
     can_open: true,
@@ -109,6 +109,16 @@ describe("moduleVerdict", () => {
       .toBe("Can open and edit this module");
     expect(moduleVerdict(answer({ can_open: true, can_edit: false })))
       .toBe("Can open this module, and not edit it");
+  });
+
+  it("says an account is disabled rather than reading out the roles it keeps", () => {
+    // A disabled account is refused at authentication, so every role it still
+    // holds is one it cannot use. This outranks both other answers, including
+    // the one that would say "can open and edit".
+    expect(moduleVerdict(answer({
+      user: { id: "u1", email: "r@e.com", display_name: "Reader", active: false },
+      project_role: "owner", can_open: true, can_edit: true,
+    }))).toBe("This account is disabled");
   });
 
   it("says plainly when they cannot open it", () => {
