@@ -465,3 +465,13 @@ The obvious fix — put the mtime back after every restore — is the same mista
 The rule that holds: freeze the mtime only for `apps/api/`, where nothing hot-reloads and the mutants are checked in-process by pytest; let every web file's mtime move, because moving it is how the change is seen at all. Both failure modes were silent and both produced a plausible number, which is the same shape as everything else on this page — **a verdict you cannot make wrong is not a verdict**, and the way to tell is to check that a mutant you know is lethal actually kills.
 
 The note lives in `e2e/conftest.py` beside the guard, where the next person to write a harness will meet it.
+
+### Two more ways a browser sweep lies (§414)
+
+Both showed up in one sweep, both produced plausible numbers, and both inflate the score rather than deflate it — which is the dangerous direction, because an inflated score is never investigated.
+
+**A mutant that deletes a line can orphan a binding.** Three of §414's mutants removed the only use of an import or a const. Next's dev server puts an error overlay over the page for an unused binding, the overlay swallows clicks, and tests that never touch the feature go red. Every one of the three was scored *caught* — correctly, as it happens, but for a reason that had nothing to do with the mutation, and a mutant scored right for the wrong reason is a mutant nobody re-examines. Re-run with variants that orphan nothing — `paletteOf(x).slice(0, 0)` rather than `[]`, a condition inverted rather than a line removed, `f(x) && undefined` rather than deleting the field — all three still died, and each then failed exactly the one test written for it. **Change a value; do not delete a line.**
+
+**Run the suite with no mutant at all, against the database the sweep uses.** §414's seam table read "3 failed" for five consecutive mutants, which is a suspicious constant. A control run with the source untouched came back "2 failed": two tests were failing on their own, so every count was one real kill plus two passengers. The two were selecting a widget by clicking it on the canvas immediately after opening the builder — visible is not selectable — and they passed under `fresh-e2e.sh` and failed against the accumulated dev stack, which is §271 again. One of them had been failing since §398 and no sweep had noticed, because a sweep only ever looks at whether the number *changed*.
+
+The control run costs one suite execution and is the only thing that makes a mutant's count mean anything. **A number you never took a baseline for is not a measurement.**
