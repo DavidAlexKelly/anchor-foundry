@@ -81,11 +81,15 @@ describe("carry", () => {
 });
 
 describe("the warning", () => {
-  it("says the data is still there", () => {
+  it("makes both of p.614's claims, not just the comfortable one", () => {
     // p.614's paragraph is part of the feature: a blurred page looks like a
     // page that is protecting something, and somebody who believes that will
     // screen-share a DOM that still holds every value.
     expect(WARNING).toContain("not a security feature");
-    expect(WARNING.toLowerCase()).toContain("still");
+    // **"in this page", not "still loaded".** The sweep caught the weaker
+    // assertion: a warning saying only that the data is loaded passed it, and
+    // "loaded" is what a reader already assumes of a page that is working.
+    // The claim worth making is the one about the DOM they are about to share.
+    expect(WARNING).toContain("in this page");
   });
 });
