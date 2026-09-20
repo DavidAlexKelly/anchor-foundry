@@ -13,15 +13,8 @@
  *
  * The geometry is `sparkline.ts`'s; this file only draws.
  */
-import { emptyReason, latest, path, type Point } from "./sparkline";
-
-/** The drawing box, in the SVG's own units.
- *
- * A `viewBox` rather than pixels: the cell decides how wide the column is and
- * the path is computed once, so a resized column re-scales rather than
- * re-asking the server.
- */
-const BOX = { width: 100, height: 20 };
+import { Sparkline } from "./Sparkline";
+import { latest, type Point } from "./sparkline";
 
 export function SeriesCell({
   points,
@@ -35,42 +28,18 @@ export function SeriesCell({
   format?: (value: number) => string;
   pending?: boolean;
 }) {
-  if (pending) {
-    // Distinct from "no readings", which is a fact about the object rather
-    // than about the request. A cell that said "No readings" while the answer
-    // was still coming would be wrong for as long as the read took.
-    return <span className="soft canvas-series-pending">…</span>;
-  }
   const list = points ?? [];
   const value = latest(list);
-  const empty = emptyReason(list);
-  const d = path(list, BOX);
 
   return (
     <span className="canvas-series" data-testid="series-cell">
       <span className="canvas-series-value" data-testid="series-latest">
-        {value === null ? "—" : format(value)}
+        {pending ? "" : value === null ? "—" : format(value)}
       </span>
-      {d ? (
-        <svg
-          className="canvas-series-spark"
-          viewBox={`0 0 ${BOX.width} ${BOX.height}`}
-          preserveAspectRatio="none"
-          aria-hidden="true"
-          data-testid="series-spark"
-        >
-          {/* `vector-effect` keeps the stroke one pixel however the box is
-              stretched — without it a column twice as wide draws a line twice
-              as thick, because `preserveAspectRatio="none"` scales strokes
-              with the geometry. */}
-          <path d={d} fill="none" vectorEffect="non-scaling-stroke" />
-        </svg>
-      ) : (
-        // Said rather than left blank: "this object has no series" and "this
-        // series has one reading" are different answers, and an empty cell
-        // gives neither.
-        <span className="soft canvas-series-empty" data-testid="series-empty">{empty}</span>
-      )}
+      {/* The line itself is `Sparkline`'s, shared with the Metric Card
+          (p.329) so the stroke, the empty wording and the non-scaling trick
+          have one home. */}
+      <Sparkline points={points} pending={pending} />
     </span>
   );
 }

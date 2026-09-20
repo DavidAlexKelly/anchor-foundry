@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptyReason, latest, path, range, usable, type Point } from "./sparkline";
+import { emptyReason, latest, path, range, toPoints, usable, type Point } from "./sparkline";
 
 const BOX = { width: 100, height: 20 };
 
@@ -115,5 +115,46 @@ describe("why a cell is empty", () => {
     expect(emptyReason([])).toBe("No readings");
     expect(emptyReason([at(1, 5)])).toBe("One reading");
     expect(emptyReason([at(1, 5), at(2, 6)])).toBeNull();
+  });
+});
+
+
+describe("coercing what the engine returned", () => {
+  it("takes a numeric string, because a CSV column is strings all the way down", () => {
+    // Refusing them would empty every sparkline over an uploaded file.
+    expect(toPoints([{ at: "2026-01-01T00:00:00Z", value: "12.5" }]))
+      .toEqual([{ at: "2026-01-01T00:00:00Z", value: 12.5 }]);
+  });
+
+  it("turns a value that is not a number into null, not NaN", () => {
+    // `null` is what `usable` already drops for the right reason; `NaN` is a
+    // number that has to be caught a second time.
+    expect(toPoints([{ at: "2026-01-01T00:00:00Z", value: "abc" }])[0]?.value).toBeNull();
+    expect(toPoints([{ at: "2026-01-01T00:00:00Z", value: null }])[0]?.value).toBeNull();
+    expect(toPoints([{ at: "2026-01-01T00:00:00Z", value: {} }])[0]?.value).toBeNull();
+  });
+
+  it("keeps an empty string out of zero", () => {
+    // `Number("")` is 0 - a missing reading that would draw as a real
+    // measurement, which is the whole trap this module exists around.
+    expect(toPoints([{ at: "2026-01-01T00:00:00Z", value: "" }])[0]?.value).toBeNull();
+    expect(toPoints([{ at: "2026-01-01T00:00:00Z", value: "   " }])[0]?.value).toBeNull();
+  });
+
+  it("survives no points at all", () => {
+    expect(toPoints(undefined)).toEqual([]);
+    expect(toPoints([])).toEqual([]);
+  });
+
+  it("hands the result straight to the rest of the module", () => {
+    // The point of one coercion: what comes out is what `usable` and `path`
+    // already understand.
+    const points = toPoints([
+      { at: "2026-01-01T00:00:00Z", value: "0" },
+      { at: "2026-01-02T00:00:00Z", value: "" },
+      { at: "2026-01-03T00:00:00Z", value: 10 },
+    ]);
+    expect(usable(points)).toHaveLength(2);
+    expect(path(points, BOX)).toBe("M0 20 L100 0");
   });
 });
