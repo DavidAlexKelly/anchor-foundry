@@ -205,11 +205,19 @@ function coerce(raw: string, kind: string): unknown {
       if (raw === "true") return true;
       if (raw === "false") return false;
       return undefined;
-    // An object set is a *definition*, not a value, and a single object is the
-    // object a viewer picked. Neither survives a round trip through a query
-    // string, and Foundry says so for the set case: object set variables in the
-    // URL are "limited to a single object by RID" (p.199). Until there is a
-    // by-RID lookup to do that properly, this refuses rather than half-works.
+    // p.199's carve-out: "object set variables are limited to single objects,
+    // specified by their RID" (§416). The raw text is kept as-is, because it
+    // is a **reference** and not a value — `object-ref.ts` says what shape it
+    // has, and the server turns it back into an object against the same
+    // row-level security the click that first selected it met. Validating the
+    // shape here would be a second answer to that question and a worse one:
+    // this side cannot tell a ref to a deleted object from a ref to one this
+    // viewer may not see, and both are "nothing picked".
+    case "single_object":
+      return raw;
+    // An object *set* is a definition rather than a value, and a filter is
+    // p.199's other named exclusion. Neither survives a query string, and
+    // p.199's own workaround stands: route a string and use it in the default.
     default:
       return undefined;
   }

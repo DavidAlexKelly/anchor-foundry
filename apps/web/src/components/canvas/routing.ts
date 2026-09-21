@@ -19,6 +19,7 @@
  * though: no React, no DOM, nothing rendered.
  */
 import { referencesOf } from "../../lib/workshop-module";
+import { refFor } from "./object-ref";
 
 /** The query parameter carrying the current page (p.197).
  *
@@ -36,7 +37,14 @@ export const PAGE_PARAM = "page";
  * what gets written. It is the same list as `coerce`'s vocabulary in `pure.ts`
  * on purpose — a kind is routable exactly when the URL can be read back into
  * it. */
-export const ROUTABLE_KINDS = ["string", "number", "boolean", "date", "timestamp"];
+export const ROUTABLE_KINDS = [
+  "string", "number", "boolean", "date", "timestamp",
+  // p.199's carve-out, routable as of §416: "object set variables are limited
+  // to single objects, specified by their RID". It travels as a reference
+  // (`object-ref.ts`) rather than as a value, which is why it is the one kind
+  // here whose URL form is not `String(value)`.
+  "single_object",
+];
 
 export type RoutingVariable = {
   id: string;
@@ -155,6 +163,16 @@ export function routingParams(input: {
     if (behavior === "when_visible" && !visible.has(variable.id)) continue;
     const value = input.values[variable.id];
     if (!chosen(value, variable.default)) continue;
+    // **One kind writes a reference rather than a value** (p.199, §416). A
+    // picked object stringifies to "[object Object]", which would be a link
+    // that looks like it carries a selection and restores nothing — the exact
+    // half-working link `ROUTABLE_KINDS` exists to prevent. A value that
+    // cannot be referenced is left out of the address entirely.
+    if (variable.kind === "single_object") {
+      const ref = refFor(value);
+      if (ref) out[variable.external_id] = ref;
+      continue;
+    }
     out[variable.external_id] = String(value);
   }
 

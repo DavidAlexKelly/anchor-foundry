@@ -299,12 +299,39 @@ describe("seedFromQuery", () => {
     expect(Object.keys(seed)).toEqual([]);
   });
 
-  it("refuses object sets and picked objects rather than half-working", () => {
+  it("refuses an object set rather than half-working", () => {
+    // p.199's exclusion, and its workaround stands: route a string and use it
+    // in the set's filter default.
     const seed = seedFromQuery(
-      { v_s: iface("v_s", "object_set", "set"), v_o: iface("v_o", "single_object", "obj") },
-      new URLSearchParams("?set=x&obj=y"),
+      { v_s: iface("v_s", "object_set", "set") },
+      new URLSearchParams("?set=x"),
     );
     expect(Object.keys(seed)).toEqual([]);
+  });
+
+  it("seeds a picked object with the reference as written", () => {
+    // p.199's carve-out (§416). The raw text is kept because it is a
+    // *reference*: the server turns it back into an object against the same
+    // row-level security the click that selected it met, and this side cannot
+    // tell a ref to a deleted object from a ref to one this viewer may not
+    // see — both are "nothing picked", and only one end can know which.
+    const ref = "22222222-2222-2222-2222-222222222222:11111111-1111-1111-1111-111111111111";
+    const seed = seedFromQuery(
+      { v_o: iface("v_o", "single_object", "obj") },
+      new URLSearchParams(`?obj=${ref}`),
+    );
+    expect(seed).toEqual({ v_o: ref });
+  });
+
+  it("seeds nonsense for a picked object too, and lets the server refuse it", () => {
+    // Deliberately *not* validated here. A shape check on this side would be a
+    // second answer to a question the server already answers better — and one
+    // that would have to be kept in step with the format for ever.
+    const seed = seedFromQuery(
+      { v_o: iface("v_o", "single_object", "obj") },
+      new URLSearchParams("?obj=banana"),
+    );
+    expect(seed).toEqual({ v_o: "banana" });
   });
 });
 
