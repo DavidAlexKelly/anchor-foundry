@@ -235,6 +235,55 @@ describe("swatchFor: p.42's data source (§420)", () => {
   });
 });
 
+describe("p.80-84's Permissions (§422)", () => {
+  const seen = (access: ColourableNode["access"]) =>
+    swatchFor({ ...dataset(), access }, "permissions")!;
+
+  it("says nobody has been chosen rather than nobody can see it", () => {
+    // §210, and the state this colouring opens in: a graph drawn before
+    // anybody is named would otherwise report a permissions problem nobody
+    // has.
+    expect(seen(undefined).key).toBe("unasked");
+    expect(seen(null).key).toBe("unasked");
+  });
+
+  it("tells no access from a role", () => {
+    expect(seen({ role: null, via: "project" }).key).toBe("none");
+    expect(seen({ role: "viewer", via: "project" }).key).toBe("viewer");
+    expect(seen({ role: "owner", via: "project" }).key).toBe("owner");
+  });
+
+  it("names the door as well as the verdict", () => {
+    // p.84: "Roles do not correspond to data lineage the same way that data
+    // access does." A refusal without the scope is useless to somebody
+    // debugging *why* — and two nodes can hold the same role from two doors.
+    expect(seen({ role: null, via: "workspace" }).label).toBe("No access (workspace)");
+    expect(seen({ role: "viewer", via: "project" }).label).toBe("Viewer (project)");
+  });
+
+  it("colours a role this build does not name rather than dropping it", () => {
+    // `effective_project_role` could grow a level; an unnamed one is still
+    // access, and colouring it as a refusal would be the worse of two guesses.
+    const swatch = seen({ role: "steward", via: "project" });
+    expect(swatch.key).toBe("steward");
+    expect(swatch.label).toBe("steward (project)");
+  });
+
+  it("reads worst first and puts 'nobody chosen' last", () => {
+    const mixed = [
+      { ...dataset(), access: { role: "owner", via: "project" } },
+      { ...dataset(), access: { role: null, via: "workspace" } },
+      { ...dataset(), access: { role: "viewer", via: "project" } },
+    ];
+    expect(legendFor(mixed, "permissions").map((e) => e.key))
+      .toEqual(["none", "viewer", "owner"]);
+  });
+
+  it("is an option the picker offers", () => {
+    expect(COLOURINGS.map((o) => o.id)).toContain("permissions");
+  });
+});
+
 describe("the colouring a stored view names (§360)", () => {
   it("keeps one this build offers", () => {
     expect(colouringIn({ colouring: "health" })).toBe("health");

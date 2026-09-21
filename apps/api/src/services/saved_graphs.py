@@ -55,7 +55,7 @@ FOCUS_HINT = (
 #: shared language between them - and mirrored lists drift, so
 #: `test_saved_graphs.py` reads that file and asserts the two say the same
 #: thing. That test is the reason this is safe to write twice.
-COLOURINGS = ("status", "out_of_date", "health", "kind", "origin", "none")
+COLOURINGS = ("status", "out_of_date", "health", "kind", "origin", "permissions", "none")
 
 #: A selection is a view, not a bulk operation. Forty nodes is a large graph;
 #: four hundred is somebody's script, and storing it would make opening the
@@ -81,6 +81,13 @@ def parse(view: Any) -> dict[str, Any]:
         raise GraphViewError("a saved graph's view must be an object")
 
     known = {"focus", "column", "selected", "query", "kinds", "colouring"}
+    # **No `view_as`, and that is a decision rather than an omission** (§422).
+    # p.82's dropdown names a colleague, and a saved graph or a shared link
+    # carrying "as seen by Alice" is a claim about a person travelling further
+    # than the person who made it meant. A view saved under the Permissions
+    # colouring reopens on "Nobody chosen", which is the honest starting
+    # point — the colouring is what was being looked at, the person is who was
+    # being asked about.
     unknown = sorted(set(view) - known)
     if unknown:
         raise GraphViewError(

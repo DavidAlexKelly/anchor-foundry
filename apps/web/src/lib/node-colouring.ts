@@ -60,6 +60,8 @@ export const COLOURINGS: ColouringOption[] = [
     hint: "Dataset, model or object type" },
   { id: "origin", label: "Resource overview",
     hint: "p.38: the way the resource was created" },
+  { id: "permissions", label: "Permissions",
+    hint: "p.80: what one person can see, chosen under View as" },
   { id: "none", label: "No colour",
     hint: "p.38's first option: remove colouring altogether" },
 ];
@@ -79,6 +81,12 @@ export const DEFAULT_COLOURING = "status";
  * be missing. */
 export interface ColourableNode {
   kind: string;
+  /** p.80-84's *Permissions* (§422): what the person named under *View as*
+   *  holds on the scope that decides this node, and which scope that was.
+   *  Absent on every colouring but that one, and absent under that one until
+   *  somebody has been chosen — which `permissionSwatch` reads as "nobody
+   *  asked" rather than as "no access" (§210). */
+  access?: { role: string | null; via: string } | null;
   origin: string | null;
   health_status: string | null;
   last_run_status: string | null;
@@ -188,6 +196,33 @@ function originSwatch(node: ColourableNode): Swatch {
   return { key: "none", label: "Not a dataset", token: QUIET };
 }
 
+/** p.83's *Resource access*: "the role (such as Editor, Viewer, etc.) that is
+ *  set for the selected user on the selected resource" (§422).
+ *
+ * **Three states, not two.** A node nobody has been asked about is not a node
+ * somebody cannot see, and drawing them alike would report a permissions
+ * problem before anybody had named a person (§210). p.83's other type — *Data
+ * access in datasets* — is Markings propagated down the lineage, and this
+ * platform has none; the parity row carries that rather than a second option
+ * that would paint one colour. */
+function permissionSwatch(node: ColourableNode): Swatch {
+  const access = node.access;
+  if (access === undefined || access === null) {
+    return { key: "unasked", label: "Nobody chosen", token: QUIET };
+  }
+  if (access.role === null) {
+    // p.84's own point: the scope is part of the answer. "No access" is
+    // useless to somebody debugging without "at which door".
+    return {
+      key: "none", label: `No access (${access.via})`, token: BAD,
+    };
+  }
+  if (access.role === "viewer") {
+    return { key: "viewer", label: `Viewer (${access.via})`, token: WARN };
+  }
+  return { key: access.role, label: `${access.role} (${access.via})`, token: GOOD };
+}
+
 /** The colour one node takes under one colouring.
  *
  * An unknown colouring id falls back to the default rather than to no colour:
@@ -206,6 +241,8 @@ export function swatchFor(node: ColourableNode, colouring: string): Swatch | nul
       return kindSwatch(node);
     case "origin":
       return originSwatch(node);
+    case "permissions":
+      return permissionSwatch(node);
     default:
       return statusSwatch(node);
   }
@@ -233,6 +270,12 @@ const LEGEND_ORDER: Record<string, readonly string[]> = {
   health: ["fail", "warn", "pass", "none"],
   kind: ["dataset", "model", "object_type", "connection", "unknown"],
   origin: ["upload", "model_output", "sync", "none"],
+  // Worst first. `unasked` is here at all only so it has a place; it never
+  // shares a graph with a real verdict, because either somebody has been
+  // chosen or nobody has. A role this build does not name — the server's
+  // `effective_project_role` could grow one — sorts after everything rather
+  // than being dropped, which is the rule every colouring here follows.
+  permissions: ["none", "viewer", "editor", "owner", "unasked"],
 };
 
 /**

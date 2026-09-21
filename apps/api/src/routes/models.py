@@ -24,10 +24,14 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
-from ..middleware.permissions import ProjectAccess, require_project_role
+from ..lib.errors import ForbiddenError
+from ..middleware.permissions import (
+    ProjectAccess, project_rank_at_least, require_project_role,
+)
 from ..services import audit
 from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
+from ..services import graph_access
 from ..services import models as model_service
 from ..services import pipeline as pipeline_service
 from ..services import saved_graphs
@@ -708,10 +712,27 @@ class GraphColumn(BaseModel):
     datasets: list[str]
 
 
+class NodeAccess(BaseModel):
+    #: The role this person holds on the scope that decides this node, or null.
+    role: str | None
+    #: Which scope decided it — "project" or "workspace" (§422; p.84).
+    via: str
+
+
+class GraphViewer(BaseModel):
+    id: UUID
+    email: str
+    display_name: str | None = None
+
+
 class PipelineGraph(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     links: list[GraphLink] = []
+    #: p.82's *View as*, answered (§422). Null unless `view_as` was asked for,
+    #: so an ordinary graph read costs nothing extra — and an empty object
+    #: would be a different claim, that nobody can see anything (§210).
+    access: dict[str, NodeAccess] | None = None
     # p.55's Frequent Columns, most frequent first. Over the graph as drawn,
     # so a focused lineage view answers about its own component.
     columns: list[GraphColumn] = []
@@ -719,9 +740,28 @@ class PipelineGraph(BaseModel):
     layer_count: int
 
 
+@project_router.get("/pipeline/viewers", response_model=list[GraphViewer])
+async def pipeline_viewers(
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> list[GraphViewer]:
+    """Who p.82's *View as* dropdown may name (§422).
+
+    **Editor, not viewer**, unlike the graph itself. p.80's whole use is
+    troubleshooting somebody else's access, and a list of everybody in the
+    workspace is more than a read of this project's pipeline needs to hand
+    out — §412 drew the same line on the module access panel.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        return [
+            GraphViewer(**row)
+            for row in await graph_access.viewers(conn, workspace_id=access.workspace_id)
+        ]
+
+
 @project_router.get("/pipeline", response_model=PipelineGraph)
 async def pipeline_graph(
     focus: str | None = None,
+    view_as: UUID | None = None,
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> PipelineGraph:
     """Every dataset and model in the project as one laid-out graph. Viewer
@@ -742,9 +782,32 @@ async def pipeline_graph(
     if focus is not None and not saved_graphs.NODE_ID.fullmatch(focus):
         raise ValueError(saved_graphs.FOCUS_HINT)
     async with user_connection(access.auth.user_id) as conn:
-        return PipelineGraph(
-            **await pipeline_service.project_graph(conn, access.project_id, focus=focus)
+        graph = await pipeline_service.project_graph(
+            conn, access.project_id, focus=focus
         )
+        if view_as is not None:
+            # **Answered over the graph as drawn**, which is why this is a
+            # parameter here rather than an endpoint of its own: the node set
+            # is already in hand, so nothing has to work out a second time
+            # which nodes a focus narrowed the view to (§292).
+            #
+            # Editor-gated even though the graph is viewer-gated: asking what
+            # somebody *else* can see is not part of reading your own pipeline,
+            # and the dependency above cannot say so because the same route
+            # serves both reads. Ranked rather than listed, so a role added
+            # above editor is covered without this line being edited.
+            if not project_rank_at_least(access, "editor"):
+                raise ForbiddenError(
+                    "seeing the graph as another person needs editor access"
+                )
+            graph["access"] = await graph_access.for_nodes(
+                conn,
+                workspace_id=access.workspace_id,
+                project_id=access.project_id,
+                user_id=view_as,
+                nodes=graph["nodes"],
+            )
+        return PipelineGraph(**graph)
 
 
 # ---- moving a transform into a repository (B.1; §274) ------------------------

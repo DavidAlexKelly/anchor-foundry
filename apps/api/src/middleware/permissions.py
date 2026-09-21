@@ -101,6 +101,20 @@ def require_workspace_role(minimum: str):
     return dependency
 
 
+def project_rank_at_least(access: ProjectAccess, minimum: str) -> bool:
+    """Whether an already-resolved project role reaches `minimum`.
+
+    **For a route that serves two reads at two levels**, which a dependency
+    cannot express: §422's pipeline endpoint is viewer-gated for your own
+    graph and editor-gated for the parameter that asks what somebody *else*
+    can see. Ranked rather than compared against a list of role names, so a
+    level added above editor is covered without every caller being edited.
+    """
+    if minimum not in _PROJ_RANK:
+        raise ValueError(f"unknown project role {minimum!r}")
+    return access.rank() >= _PROJ_RANK[minimum]
+
+
 def require_project_role(minimum: str):
     """Dependency factory for project-scoped routes. Additionally verifies the
     project actually belongs to the workspace in the path - resource IDs from

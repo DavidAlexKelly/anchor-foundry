@@ -1028,10 +1028,30 @@ export const models = {
     ),
   /** The whole project as one graph — datasets and models together, already
    *  laid out by the API (see apps/api/src/services/pipeline.py). */
-  pipeline: (wid: string, pid: string, focus?: string) =>
-    request<import("./types").PipelineGraph>(
-      `/workspaces/${wid}/projects/${pid}/pipeline` +
-        (focus ? `?focus=${encodeURIComponent(focus)}` : ""),
+  pipeline: (wid: string, pid: string, focus?: string, viewAs?: string | null) => {
+    const query = new URLSearchParams();
+    if (focus) query.set("focus", focus);
+    // p.82's *View as* (§422). Sent only when somebody has been chosen, so an
+    // ordinary graph read stays a viewer-level request — the parameter is
+    // editor-gated, and attaching it unconditionally would make the page
+    // unreadable for the viewers it is otherwise open to.
+    //
+    // **`!= null`, not a falsy check.** The caller's state is a user id or
+    // `null`, and a falsy guard here quietly also swallowed `""` — which made
+    // the picker's own "nobody" handling untestable, because two guards were
+    // covering for each other and neither could be made to fail alone (§223).
+    // This one answers "was anybody chosen"; turning the dropdown's empty
+    // option into `null` is the picker's job, one layer up.
+    if (viewAs != null) query.set("view_as", viewAs);
+    const suffix = query.toString();
+    return request<import("./types").PipelineGraph>(
+      `/workspaces/${wid}/projects/${pid}/pipeline${suffix ? `?${suffix}` : ""}`,
+    );
+  },
+  /** Who p.82's *View as* dropdown may name (§422). Editor-gated. */
+  pipelineViewers: (wid: string, pid: string) =>
+    request<import("./types").GraphViewer[]>(
+      `/workspaces/${wid}/projects/${pid}/pipeline/viewers`,
     ),
 };
 

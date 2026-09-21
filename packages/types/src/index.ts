@@ -1484,6 +1484,23 @@ export interface PipelineNode {
   out_of_date_reason: string | null;
 }
 
+/** One person's access to one node, under p.82's *View as* (§422). */
+export interface NodeAccess {
+  /** The role held on the scope that decides this node, or null for none. */
+  role: string | null;
+  /** Which scope decided it — `"project"` or `"workspace"`. p.84's point: two
+   *  nodes can carry the same role from two different doors, and somebody
+   *  debugging why one card is red needs to know which. */
+  via: string;
+}
+
+/** Somebody p.82's *View as* dropdown may name. */
+export interface GraphViewer {
+  id: string;
+  email: string;
+  display_name: string | null;
+}
+
 export interface PipelineEdge {
   from: string;
   to: string;
@@ -1534,6 +1551,10 @@ export interface PipelineGraph {
   /** Node ids grouped per cycle; empty when the graph is a clean DAG. */
   cycles: string[][];
   layer_count: number;
+  /** p.82's *View as*, answered per node (§422). **Null unless somebody was
+   *  named**, which is not the same as an empty object: null says nobody
+   *  asked, `{}` would say nobody can see anything (§210). */
+  access?: Record<string, NodeAccess> | null;
 }
 
 /** Per-input dataset health as a gated run saw it, captured at run time. */
