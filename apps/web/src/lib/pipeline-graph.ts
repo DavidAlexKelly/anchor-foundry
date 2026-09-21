@@ -344,22 +344,107 @@ export function relatives(
  * Results come back in the nodes' own order, which is the graph's: the layer
  * order the server sorted them into, so "the first match" means the one
  * furthest upstream rather than whichever the search happened to reach first.
+ *
+ * **`columns` is p.11's other half** (§417): "you can either search for the
+ * name of the node or column names in datasets". One box for both, because
+ * p.11 gives one — and because the question a reader brings to it ("where does
+ * `site_id` live") does not come with a decision about which kind of name they
+ * are about to type.
+ *
+ * It costs nothing to supply: `columnsIn` already reads this index off the
+ * same rows the graph draws (§353), so finding the datasets that have a column
+ * is the histogram asked from the search box instead of from the list.
+ *
+ * Omitted means name and slug only, which is every caller written before §417
+ * and is the honest default: a search that silently started matching columns
+ * would change what an existing saved view (§360) resolves to.
  */
 export function search(
   nodes: readonly Pick<PipelineNode, "id" | "kind" | "name" | "slug">[],
   query: string,
   kinds: readonly PipelineNode["kind"][] = [],
+  columns: readonly PipelineColumn[] = [],
 ): string[] {
   const needle = query.trim().toLowerCase();
   if (needle === "" && kinds.length === 0) return [];
   const wanted = new Set(kinds);
+  const byColumn = datasetsWithColumn(columns, needle);
   return nodes
     .filter((node) => {
+      // The kind filter is p.8's Advanced tab and it applies to every match,
+      // column ones included: "show me the models called site" and "show me
+      // the models with a column called site" are both answered by nothing,
+      // because only datasets have columns.
       if (wanted.size > 0 && !wanted.has(node.kind)) return false;
       if (needle === "") return true;
       const name = node.name.toLowerCase();
       const slug = (node.slug ?? "").toLowerCase();
-      return name.includes(needle) || slug.includes(needle);
+      return name.includes(needle) || slug.includes(needle) || byColumn.has(node.id);
+    })
+    .map((node) => node.id);
+}
+
+/** The datasets holding a column whose name matches, as node ids.
+ *
+ * **Takes a needle that is already known to be non-empty.** An `if (needle ===
+ * "") return out` guard stood here and the sweep found it equivalent: both
+ * callers answer the empty query before they consult this, so nothing could
+ * reach it — and a guard that cannot fire is a claim nobody can check (§223).
+ * What it stated is pinned where it is observable instead, by the tests that
+ * ask `search` and `foundByColumn` for an empty query.
+ */
+function datasetsWithColumn(
+  columns: readonly PipelineColumn[],
+  needle: string,
+): Set<string> {
+  const out = new Set<string>();
+  for (const column of columns) {
+    if (!column.name.toLowerCase().includes(needle)) continue;
+    for (const id of column.datasets) out.add(id);
+  }
+  return out;
+}
+
+/**
+ * Which results matched **only** because of a column (p.11; §417).
+ *
+ * **A card that lights up for a reason nobody can see is worse than one that
+ * does not light up at all** (§214). Searching `site_id` highlights datasets
+ * whose names contain no such text, and without this the reader is left to
+ * guess whether the graph is answering their question or has misunderstood it.
+ * The count beside the box says how many of the results are of this kind, so
+ * the answer explains itself.
+ *
+ * **Only**, deliberately: a dataset called `sites` holding a column called
+ * `site_id` is a name match and needs no explaining, and counting it here
+ * would make the explanation bigger than the surprise it exists to cover.
+ */
+export function foundByColumn(
+  nodes: readonly Pick<PipelineNode, "id" | "kind" | "name" | "slug">[],
+  query: string,
+  columns: readonly PipelineColumn[],
+): string[] {
+  const needle = query.trim().toLowerCase();
+  // **An exit for cost, not a check for correctness**, and the sweep is how
+  // that got stated: removing it changes no answer. An empty needle makes
+  // `name.includes(needle)` true for every node, so the filter below excludes
+  // all of them and the result is `[]` either way. What it saves is the walk —
+  // the search box is empty on every render until somebody types, and without
+  // this each of those renders would build a set of every dataset holding any
+  // column in order to throw it away.
+  //
+  // Kept rather than removed under §223 because §223 is about a *check* that
+  // cannot fail. This one does not claim a behaviour; the behaviour is pinned
+  // by the empty-query tests, which pass with or without it.
+  if (needle === "") return [];
+  const byColumn = datasetsWithColumn(columns, needle);
+  if (byColumn.size === 0) return [];
+  return nodes
+    .filter((node) => {
+      if (!byColumn.has(node.id)) return false;
+      const name = node.name.toLowerCase();
+      const slug = (node.slug ?? "").toLowerCase();
+      return !name.includes(needle) && !slug.includes(needle);
     })
     .map((node) => node.id);
 }

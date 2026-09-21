@@ -8,24 +8,7 @@ import {
 } from "@/lib/graph-builds";
 import { clearSummary, looksLikeCron, scheduleSummary } from "@/lib/graph-schedules";
 import {
-  columnsIn,
-  kindsIn,
-  viewOf,
-  type GraphView,
-  GAP_X,
-  GAP_Y,
-  isDrag,
-  NODE_H,
-  NODE_W,
-  nodesInRect,
-  nodeX,
-  nodeY,
-  outOfDateNote,
-  PAD,
-  relatives,
-  search,
-  toggleSelected,
-  type Rect,
+  GAP_X, GAP_Y, NODE_H, NODE_W, PAD, columnsIn, foundByColumn, isDrag, kindsIn, nodeX, nodeY, nodesInRect, outOfDateNote, relatives, search, toggleSelected, type GraphView, type Rect, viewOf,
 } from "@/lib/pipeline-graph";
 
 // One renderer, two entry points: the project-wide Pipeline page and a
@@ -420,9 +403,19 @@ export function PipelineGraphView({
     () => new Set(columns.find((c) => c.name === column)?.datasets ?? []),
     [columns, column],
   );
+  // p.11's other half (§417): "you can either search for the name of the node
+  // or column names in datasets". The index is `graph.columns`, which §353
+  // already reads off the same rows the graph draws — **the whole graph's,
+  // not `columns` above**, which is narrowed to the selection for the
+  // histogram. Searching only inside a selection would answer "where does
+  // `site_id` live" with "wherever you were already looking".
   const found = useMemo(
-    () => search(graph.nodes, query, kinds),
-    [graph.nodes, query, kinds],
+    () => search(graph.nodes, query, kinds, graph.columns),
+    [graph.nodes, query, kinds, graph.columns],
+  );
+  const viaColumn = useMemo(
+    () => foundByColumn(graph.nodes, query, graph.columns),
+    [graph.nodes, query, graph.columns],
   );
   const matched = useMemo(() => new Set(found), [found]);
 
@@ -490,7 +483,7 @@ export function PipelineGraphView({
               background: "var(--panel)",
               color: "var(--ink)",
             }}
-            placeholder="Find a node by name…"
+            placeholder="Find a node, or a column in one…"
             data-testid="search-query"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -517,6 +510,17 @@ export function PipelineGraphView({
             <>
               <span className="slug" data-testid="search-count">
                 {found.length} of {graph.nodes.length}
+                {/* §214, and the reason this count grew a second half: a card
+                    that lights up for a reason nobody can see is worse than
+                    one that does not light up. A reader who types a column
+                    name gets datasets whose own names do not contain it, and
+                    without this they cannot tell whether the graph answered
+                    their question or misunderstood it. */}
+                {viaColumn.length > 0 && (
+                  <span data-testid="search-by-column">
+                    {` · ${viaColumn.length} by column`}
+                  </span>
+                )}
               </span>
               {/* p.8's "buttons at the bottom of the view to add all search
                   results", which here means select them: the results are

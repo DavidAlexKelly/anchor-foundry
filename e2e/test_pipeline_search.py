@@ -203,3 +203,87 @@ def test_selecting_search_results_hands_them_to_the_expansions(page, findable) -
 
     page.get_by_test_id("expand-all-downstream").click()
     expect(page.get_by_test_id("selection-count")).to_have_text("3 nodes selected")
+
+
+# p.11's other half (§417).
+ALPHA = b"id,site_id\n1,S1\n"
+BETA = b"id,val\n1,10\n"
+
+
+@pytest.fixture(scope="module")
+def columned(api):
+    """Two datasets whose **names share nothing with their columns**.
+
+    That is the whole fixture. A dataset called `Sites` holding `site_id`
+    would be found either way, and a test built on one could not tell a search
+    that reads columns from a search that never stopped reading names.
+    """
+    tag = uuid.uuid4().hex[:6]
+    workspace = api.call("GET", "/workspaces")[0]
+    project = api.call(
+        "POST", f"/workspaces/{workspace['id']}/projects",
+        {"name": f"Cols {tag}", "slug": f"cols-{tag}"},
+    )
+    base = f"/workspaces/{workspace['id']}/projects/{project['id']}"
+    api.upload_csv(f"{base}/datasets/upload", f"Alpha {tag}", ALPHA)
+    api.upload_csv(f"{base}/datasets/upload", f"Beta {tag}", BETA)
+    return {"workspace_slug": workspace["slug"],
+            "project_slug": project["slug"], "tag": tag}
+
+
+def open_columned(page, columned) -> None:
+    page.goto(f"{WEB_BASE}/{columned['workspace_slug']}/{columned['project_slug']}/pipeline")
+    expect(page.get_by_test_id("graph-search")).to_be_visible(timeout=30000)
+
+
+def test_typing_a_column_name_finds_the_dataset_holding_it(page, columned) -> None:
+    """p.11: "you can either search for the name of the node or column names in
+    datasets".
+
+    `Alpha` contains no "site_id" anywhere in its name, so a build that had
+    only ever read names finds nothing here — which is what makes this test
+    about the feature rather than about the search box.
+    """
+    open_columned(page, columned)
+    expect(matches(page)).to_have_count(0)
+
+    page.get_by_test_id("search-query").fill("site_id")
+    expect(matches(page)).to_have_count(1)
+    expect(matches(page).first).to_contain_text(f"Alpha {columned['tag']}")
+
+
+def test_the_count_says_how_many_were_found_that_way(page, columned) -> None:
+    """§214. The card that lit up does not contain the text the reader typed,
+    and without this they cannot tell whether the graph answered the question
+    or misunderstood it."""
+    open_columned(page, columned)
+    page.get_by_test_id("search-query").fill("site_id")
+    expect(page.get_by_test_id("search-count")).to_contain_text("1 of 2")
+    expect(page.get_by_test_id("search-by-column")).to_have_text(" · 1 by column")
+
+
+def test_a_name_match_is_not_reported_as_a_column_match(page, columned) -> None:
+    """The note is for results that need explaining. `Alpha` found by its own
+    name explains itself, and a note claiming otherwise would teach a reader
+    to distrust the one case it exists for.
+
+    §318: asserted after a positive wait on the match, so the absence is about
+    the product rather than about the page not having rendered.
+    """
+    open_columned(page, columned)
+    page.get_by_test_id("search-query").fill("alpha")
+    expect(matches(page)).to_have_count(1)
+    expect(page.get_by_test_id("search-by-column")).to_have_count(0)
+
+
+def test_searching_columns_looks_at_the_whole_graph(page, columned) -> None:
+    """**Not just the selection.** p.55's histogram narrows to what is
+    selected; a *search* that did the same would answer "where does this
+    column live" with "wherever you were already looking" — which is the one
+    answer the question cannot use."""
+    open_columned(page, columned)
+    # Select the dataset that does *not* have the column, then search for it.
+    page.get_by_text(f"Beta {columned['tag']}", exact=False).first.click()
+    page.get_by_test_id("search-query").fill("site_id")
+    expect(matches(page)).to_have_count(1)
+    expect(matches(page).first).to_contain_text(f"Alpha {columned['tag']}")
