@@ -304,10 +304,12 @@ def test_an_empty_project_is_an_empty_graph(client: TestClient, fx: Fixture) -> 
     # **whole** dict on purpose: an empty graph is the one case where every key
     # can be named, so a key added without a thought about what "empty" means
     # for it fails here rather than reaching a client that did not expect it.
-    # It has now caught two in two units, which is the contract working rather
-    # than a test to relax.
+    # It has now caught three in three units, which is the contract working
+    # rather than a test to relax. §422's `access` is **null and not `{}`**,
+    # which is the thought that key needed: an empty map would say nobody can
+    # see anything, where null says nobody asked (§210).
     assert r.json() == {"nodes": [], "edges": [], "links": [], "columns": [],
-                        "cycles": [], "layer_count": 0}
+                        "cycles": [], "layer_count": 0, "access": None}
 
 
 def test_an_outsider_cannot_read_the_graph(client: TestClient, fx: Fixture) -> None:
@@ -1266,3 +1268,131 @@ def test_a_source_is_a_node_a_lineage_view_can_centre_on(
     ids = {n["id"] for n in r.json()["nodes"]}
     assert f"connection:{sourced['feeder']}" in ids
     assert f"dataset:{sourced['a']}" in ids
+
+
+# ---------------------------------------------------------------------------
+# p.80-84's Permissions view (§422)
+# ---------------------------------------------------------------------------
+
+
+def seen_as(client: TestClient, fx: Fixture, user_id: str) -> dict:
+    r = client.get(f"{base(fx)}/pipeline?view_as={user_id}", headers=hdr(fx.owner_sub))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_an_ordinary_graph_read_says_nothing_about_anyone_s_access(
+    client: TestClient, fx: Fixture
+) -> None:
+    """§210, and the reason this is null rather than an empty object: nobody
+    asked, which is not the same as nobody can see anything."""
+    assert graph(client, fx)["access"] is None
+
+
+def test_the_graph_answers_for_the_person_asked_about(
+    client: TestClient, fx: Fixture, sourced: dict[str, str]
+) -> None:
+    """p.82: "This will allow you to see the user's permissions to each of the
+    nodes on the graph"."""
+    g = seen_as(client, fx, str(fx.viewer))
+    assert g["access"], "no access map came back"
+    for node in g["nodes"]:
+        assert node["id"] in g["access"], node["id"]
+        assert g["access"][node["id"]]["role"] == "viewer", node["id"]
+
+
+def test_a_project_role_and_a_workspace_role_are_answered_apart(
+    client: TestClient, fx: Fixture, ontology: dict[str, str]
+) -> None:
+    """**The claim the whole colouring rests on**, and the one a sweep found
+    untested: a person can hold one role on the project and another on the
+    workspace, and this graph draws nodes decided by each.
+
+    The org owner is the ready-made case — db 0005 resolves an org owner to
+    project `owner` by its first rule while their workspace role is `admin`,
+    two different words for the same person. Reading the project role for
+    every node passed every other test here, because the users those tests
+    name hold the same role at both levels.
+    """
+    g = seen_as(client, fx, str(fx.owner))
+    by_kind: dict[str, set] = {}
+    for node in g["nodes"]:
+        entry = g["access"].get(node["id"])
+        if entry is not None:
+            by_kind.setdefault(node["kind"], set()).add((entry["role"], entry["via"]))
+    assert by_kind["dataset"] == {("owner", "project")}, by_kind
+    assert by_kind["object_type"] == {("admin", "workspace")}, by_kind
+
+
+def test_the_scope_that_decided_travels_with_the_role(
+    client: TestClient, fx: Fixture, ontology: dict[str, str]
+) -> None:
+    """p.84: "Roles do not correspond to data lineage the same way that data
+    access does."
+
+    **The reason the graph is worth colouring by this at all**: its nodes are
+    not all scoped the same way. A dataset is decided by the project and an
+    object type by the workspace, and "viewer" from two different doors is two
+    different answers to somebody debugging why one card is red.
+    """
+    g = seen_as(client, fx, str(fx.viewer))
+    by_kind = {
+        node["kind"]: g["access"][node["id"]]["via"]
+        for node in g["nodes"] if node["id"] in g["access"]
+    }
+    assert by_kind["dataset"] == "project"
+    assert by_kind["model"] == "project"
+    assert by_kind["object_type"] == "workspace", by_kind
+
+
+def test_somebody_with_no_access_is_answered_rather_than_hidden(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The whole point of p.80's troubleshooting: the useful answer is "this
+    person cannot see it", and it has to arrive as an answer rather than as an
+    absent key that a client would draw the same as a node nobody asked about.
+    """
+    g = seen_as(client, fx, str(fx.outsider))
+    assert g["access"], "no access map came back"
+    assert {entry["role"] for entry in g["access"].values()} == {None}
+
+
+def test_asking_about_somebody_else_needs_more_than_reading(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The graph is viewer-gated; this parameter is not. Asking what somebody
+    *else* can see is not part of reading your own pipeline."""
+    r = client.get(
+        f"{base(fx)}/pipeline?view_as={fx.editor}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 403, r.text
+    # And the plain read the same viewer is entitled to still works.
+    assert client.get(
+        f"{base(fx)}/pipeline", headers=hdr(fx.viewer_sub)
+    ).status_code == 200
+
+
+def test_the_view_as_list_is_who_the_colouring_can_answer_about(
+    client: TestClient, fx: Fixture
+) -> None:
+    """§258's lesson, borrowed: a picker built from the membership table is
+    empty for the workspace's creator, who has access by a route that writes
+    no membership row. Offering a name the colouring cannot answer about, or
+    hiding one whose access somebody is trying to debug, are both wrong."""
+    r = client.get(f"{base(fx)}/pipeline/viewers", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    ids = {row["id"] for row in r.json()}
+    assert str(fx.owner) in ids, "the workspace's creator was not offered"
+    assert str(fx.viewer) in ids
+    assert str(fx.outsider) not in ids
+    # Every name offered is one the colouring answers about, which is the
+    # equality the two halves are here to keep.
+    for row in r.json():
+        assert seen_as(client, fx, row["id"])["access"]
+
+
+def test_the_view_as_list_needs_more_than_reading(
+    client: TestClient, fx: Fixture
+) -> None:
+    r = client.get(f"{base(fx)}/pipeline/viewers", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 403, r.text

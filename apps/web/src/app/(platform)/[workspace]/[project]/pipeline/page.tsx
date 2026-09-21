@@ -21,10 +21,34 @@ export default function PipelinePage() {
   const [saving, setSaving] = useState(false);
   const [opening, setOpening] = useState(false);
 
+  // p.82's *View as* (§422). Part of the query key, so choosing somebody
+  // fetches the graph with their access on it rather than colouring the copy
+  // already in hand — the answer is the server's, and a client that worked it
+  // out from roles it happened to know would be a second permissions model.
+  const [viewAs, setViewAs] = useState<string | null>(null);
   const graph = useQuery<PipelineGraph>({
-    queryKey: ["pipeline", project?.id],
-    queryFn: () => modelApi.pipeline(workspace!.id, project!.id),
+    queryKey: ["pipeline", project?.id, viewAs],
+    queryFn: () => modelApi.pipeline(workspace!.id, project!.id, undefined, viewAs),
     enabled: !!workspace && !!project,
+    // **Keep the graph on the screen while the next one is fetched.** Without
+    // this, naming somebody under *View as* changes the query key, `data`
+    // goes undefined for a moment, and the whole graph unmounts and remounts
+    // with fresh state — which lost the Permissions colouring that is the
+    // only reason the picker was on the screen, and put the reader back on
+    // Build status one click after they asked a permissions question. A
+    // browser test found it; nothing else could have.
+    placeholderData: (previous) => previous,
+  });
+  // Who may be named. Fetched once for the page rather than with each graph,
+  // and **only here**, of the places this graph is drawn: the endpoint is
+  // editor-gated, so a surface whose readers may be viewers must not ask.
+  const viewers = useQuery({
+    queryKey: ["pipeline-viewers", project?.id],
+    queryFn: () => modelApi.pipelineViewers(workspace!.id, project!.id),
+    enabled: !!workspace && !!project,
+    // A viewer gets a 403 here and that is the correct answer, not a fault to
+    // retry — the control simply is not drawn for them.
+    retry: false,
   });
 
   // p.9's builds helper (§386). **One at a time, in the order the plan gives
@@ -181,6 +205,12 @@ export default function PipelinePage() {
           building={build.isPending}
           onSchedule={(models, cron) => schedule.mutate({ models, cron })}
           scheduling={schedule.isPending}
+          viewers={viewers.data}
+          viewAs={viewAs}
+          // Passed only when the list came back: a picker with nobody on it
+          // would be a control that cannot do what it says (§214), which is
+          // exactly a viewer's case here.
+          onViewAs={viewers.data ? setViewAs : undefined}
           initialView={opened}
           onViewChange={(view) => {
             live.current = view;

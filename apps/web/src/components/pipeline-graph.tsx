@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FileState } from "@/lib/file-verdict";
-import type { PipelineGraph, PipelineNode } from "@/lib/types";
+import type { GraphViewer, PipelineGraph, PipelineNode } from "@/lib/types";
 import {
   between, buildPlan, buildSummary, cascadeCount, type PlannedModel,
 } from "@/lib/graph-builds";
@@ -316,6 +316,9 @@ export function PipelineGraphView({
   maxHeight = 560,
   initialView,
   onViewChange,
+  viewers,
+  viewAs,
+  onViewAs,
   review,
   onBuild,
   building,
@@ -325,6 +328,14 @@ export function PipelineGraphView({
   graph: PipelineGraph;
   onOpen: (node: PipelineNode) => void;
   maxHeight?: number;
+  /** p.82's *View as* (§422): who the Permissions colouring is answering
+   *  about, and the list it may be chosen from. Optional together, for the
+   *  reason `onBuild` is optional — the parameter that produces the answer is
+   *  editor-gated, so a viewer's page and a review surface simply do not pass
+   *  them and the control is not drawn. */
+  viewers?: GraphViewer[];
+  viewAs?: string | null;
+  onViewAs?: (userId: string | null) => void;
   /** A saved or shared view to open at (§360; `data-lineage` p.12). Read once,
    *  as the name says: a prop that kept overwriting the state would make the
    *  graph un-drivable the moment somebody clicked. */
@@ -456,7 +467,13 @@ export function PipelineGraphView({
   // The key for what the cards are coloured by, over the nodes actually on the
   // graph. Memoised on the node list rather than recomputed per render: the
   // graph re-renders on every pan frame, and this walks every node.
-  const legend = useMemo(() => legendFor(graph.nodes, colouring), [graph.nodes, colouring]);
+  const legend = useMemo(
+    () => legendFor(
+      graph.nodes.map((n) => ({ ...n, access: graph.access?.[n.id] ?? null })),
+      colouring,
+    ),
+    [graph.nodes, graph.access, colouring],
+  );
   // p.11's other half (§417): "you can either search for the name of the node
   // or column names in datasets". The index is `graph.columns`, which §353
   // already reads off the same rows the graph draws — **the whole graph's,
@@ -772,6 +789,45 @@ export function PipelineGraphView({
             </option>
           ))}
         </select>
+        {/* p.82's *View as*, beside the colouring it answers for rather than
+            in a panel of its own — the two are one question ("what can Alice
+            see"), and a dropdown a screen away from the colours it changes is
+            two controls for one thought.
+
+            **Only under the Permissions colouring.** Under any other it
+            changes nothing on the screen, which is §214's shape; and it costs
+            an editor-gated request, so drawing it always would spend one on
+            every reader who never asked. */}
+        {onViewAs && colouring === "permissions" && (
+          <>
+            <label className="slug" htmlFor="graph-view-as">View as</label>
+            <select
+              id="graph-view-as"
+              data-testid="graph-view-as"
+              value={viewAs ?? ""}
+              onChange={(e) => onViewAs(e.target.value || null)}
+              style={{
+                padding: "5px 8px",
+                border: "1px solid var(--line-strong)",
+                borderRadius: "var(--radius)",
+                font: "inherit",
+                fontSize: 13,
+                background: "var(--panel)",
+                color: "var(--ink)",
+              }}
+            >
+              {/* **"Nobody" is a choice and stays on the list** (§210): it is
+                  how somebody puts the graph back, and a picker you cannot
+                  leave is a mode rather than a question. */}
+              <option value="">Nobody chosen</option>
+              {(viewers ?? []).map((person) => (
+                <option key={person.id} value={person.id}>
+                  {person.display_name || person.email}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <span style={{ marginLeft: "auto" }} />
         <button className="btn quiet" onClick={() => setZoom((z) => Math.max(0.4, z - 0.15))}>
           −
@@ -985,7 +1041,13 @@ export function PipelineGraphView({
                 key={n.id}
                 node={n}
                 selected={chosen.has(n.id)}
-                swatch={swatchFor(n, colouring)}
+                // p.80's Permissions colouring reads the server's answer for
+                // the person named under *View as*; every other colouring
+                // reads the node alone (§422).
+                swatch={swatchFor(
+                  { ...n, access: graph.access?.[n.id] ?? null },
+                  colouring,
+                )}
                 lit={lit.has(n.id)}
                 matched={matched.has(n.id)}
                 review={review?.get(n.id)}
