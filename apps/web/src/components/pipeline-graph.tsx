@@ -10,6 +10,9 @@ import { clearSummary, looksLikeCron, scheduleSummary } from "@/lib/graph-schedu
 import {
   GAP_X, GAP_Y, NODE_H, NODE_W, PAD, columnsIn, foundByColumn, isDrag, kindsIn, nodeX, nodeY, nodesInRect, outOfDateNote, relatives, search, toggleSelected, type GraphView, type Rect, viewOf,
 } from "@/lib/pipeline-graph";
+import {
+  durationLabel, emptyReason, placeOf, timelineFor,
+} from "@/lib/build-timeline";
 
 // One renderer, two entry points: the project-wide Pipeline page and a
 // single dataset's lineage, which is the same endpoint with a `focus`
@@ -403,6 +406,17 @@ export function PipelineGraphView({
     () => new Set(columns.find((c) => c.name === column)?.datasets ?? []),
     [columns, column],
   );
+  // p.10's Gantt (§418). **Over the selection, which is what p.10 says**:
+  // "actual build time for the selected datasets". Nothing selected is no
+  // chart rather than the whole project, because a timeline of forty datasets
+  // nobody asked about is a picture rather than an answer — and the histogram
+  // above reads an empty selection as the whole graph for the opposite reason,
+  // which is why the two are not sharing a rule.
+  const timeline = useMemo(
+    () => timelineFor(selected.map((id) => byId.get(id)).filter((n) => n !== undefined)),
+    [selected, byId],
+  );
+  const timelineEmpty = emptyReason(timeline);
   // p.11's other half (§417): "you can either search for the name of the node
   // or column names in datasets". The index is `graph.columns`, which §353
   // already reads off the same rows the graph draws — **the whole graph's,
@@ -590,6 +604,73 @@ export function PipelineGraphView({
             >
               Update selection
             </button>
+          )}
+        </div>
+      )}
+      {selected.length > 0 && (
+        /* p.10's build timeline. Under the histogram because both are about
+           the selection, and a reader who has just narrowed to eight datasets
+           asks "what is in them" and "what did they cost" in the same breath. */
+        <div style={{ marginBottom: 8 }} data-testid="build-timeline">
+          <div className="slug" style={{ marginBottom: 4 }}>
+            Build timeline
+            {timeline.without > 0 && timeline.bars.length > 0 && (
+              /* §226 and §214: bars drawn for some of a selection would read
+                 as a chart of all of it. The count is what stops the drawing
+                 from being a claim about the selection rather than about the
+                 builds in it. */
+              <span data-testid="timeline-without">
+                {` · ${timeline.without} not built by a model`}
+              </span>
+            )}
+          </div>
+          {timelineEmpty ? (
+            <div className="slug" data-testid="timeline-empty">{timelineEmpty}</div>
+          ) : (
+            <div data-testid="timeline-bars">
+              {timeline.bars.map((bar) => {
+                const place = placeOf(bar, timeline.span);
+                return (
+                  <div
+                    key={bar.id}
+                    data-testid={`timeline-bar-${bar.id}`}
+                    data-ms={bar.ms}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "10em 1fr 5em",
+                      gap: 8,
+                      alignItems: "center",
+                      fontSize: 12,
+                      marginBottom: 2,
+                    }}
+                  >
+                    <span className="canvas-colours-use-node">{bar.name}</span>
+                    <span
+                      style={{
+                        position: "relative",
+                        height: 8,
+                        background: "var(--line)",
+                        borderRadius: 4,
+                      }}
+                    >
+                      <span
+                        data-testid={`timeline-fill-${bar.id}`}
+                        style={{
+                          position: "absolute",
+                          left: `${place.left}%`,
+                          width: `${place.width}%`,
+                          top: 0,
+                          height: 8,
+                          background: "var(--accent)",
+                          borderRadius: 4,
+                        }}
+                      />
+                    </span>
+                    <span className="slug">{durationLabel(bar.ms)}</span>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
       )}
