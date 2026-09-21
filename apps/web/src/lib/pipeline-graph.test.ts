@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  DRAG_FLOOR, GAP_X, GRAPH_KINDS, NODE_W, PAD, columnsIn, foundByColumn, isDrag, kindsIn, nodePath, nodeSection, nodesInRect, outOfDateNote, relatives, search, toggleSelected, viewOf,
+  DRAG_FLOOR, GAP_X, GRAPH_KINDS, NODE_W, PAD, columnsIn, foundByColumn, inverted, isDrag, kindsIn, nodePath, nodeSection, nodesInRect, outOfDateNote, relatives, search, toggleSelected, viewOf,
 } from "./pipeline-graph";
 
 describe("where a pipeline node opens", () => {
@@ -583,5 +583,40 @@ describe("foundByColumn (p.11; §417)", () => {
     expect(foundByColumn(NODES, "shipments", COLUMNS)).toEqual([]);
     expect(foundByColumn(NODES, "", COLUMNS)).toEqual([]);
     expect(foundByColumn(NODES, "site_id", [])).toEqual([]);
+  });
+});
+
+describe("p.12's Invert selection (§423)", () => {
+  const NODES = [{ id: "a" }, { id: "b" }, { id: "c" }];
+
+  it("takes everything that was not selected", () => {
+    expect(inverted(NODES, ["b"])).toEqual(["a", "c"]);
+  });
+
+  it("selects the whole graph when nothing was selected", () => {
+    // The honest reading of "the rest of the nodes" when the rest is all of
+    // them. **Not a path the page offers** — the chip lives on the selection
+    // bar, which is not drawn with nothing selected, and p.54's Ctrl/Cmd+A is
+    // already the control for that case. Pinned anyway because this is a
+    // total function and a caller that reaches the empty case should get the
+    // sensible answer rather than an accident.
+    expect(inverted(NODES, [])).toEqual(["a", "b", "c"]);
+  });
+
+  it("selects nothing when everything was selected", () => {
+    expect(inverted(NODES, ["a", "b", "c"])).toEqual([]);
+  });
+
+  it("ignores a selected id the graph does not draw", () => {
+    // A focused view narrows the nodes but a stored selection may still name
+    // one outside it (§360). Inverting must not resurrect it.
+    expect(inverted(NODES, ["b", "gone"])).toEqual(["a", "c"]);
+  });
+
+  it("reads in the graph's order, not the selection's", () => {
+    // Anything drawn from the result — the build plan's order, the histogram
+    // — should read the same however the selection it inverted was built.
+    expect(inverted(NODES, ["c", "a"])).toEqual(["b"]);
+    expect(inverted(NODES, ["a", "c"])).toEqual(["b"]);
   });
 });

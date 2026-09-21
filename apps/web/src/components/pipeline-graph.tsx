@@ -8,7 +8,7 @@ import {
 } from "@/lib/graph-builds";
 import { clearSummary, looksLikeCron, scheduleSummary } from "@/lib/graph-schedules";
 import {
-  GAP_X, GAP_Y, GRAPH_KINDS, NODE_H, NODE_W, PAD, columnsIn, foundByColumn, isDrag, kindsIn, nodeX, nodeY, nodesInRect, outOfDateNote, relatives, search, toggleSelected, type GraphView, type Rect, viewOf,
+  GAP_X, GAP_Y, GRAPH_KINDS, NODE_H, NODE_W, PAD, columnsIn, foundByColumn, inverted, isDrag, kindsIn, nodeX, nodeY, nodesInRect, outOfDateNote, relatives, search, toggleSelected, type GraphView, type Rect, viewOf,
 } from "@/lib/pipeline-graph";
 import {
   durationLabel, emptyReason, placeOf, timelineFor,
@@ -16,6 +16,7 @@ import {
 import {
   COLOURINGS, type Swatch, colouringIn, legendFor, swatchFor,
 } from "@/lib/node-colouring";
+import { svgFilename, svgFor } from "@/lib/graph-svg";
 
 // One renderer, two entry points: the project-wide Pipeline page and a
 // single dataset's lineage, which is the same endpoint with a `focus`
@@ -319,6 +320,7 @@ export function PipelineGraphView({
   viewers,
   viewAs,
   onViewAs,
+  exportTitle,
   review,
   onBuild,
   building,
@@ -336,6 +338,10 @@ export function PipelineGraphView({
   viewers?: GraphViewer[];
   viewAs?: string | null;
   onViewAs?: (userId: string | null) => void;
+  /** What p.12's exported picture is called — the project's name, where the
+   *  caller has one. Absent falls back to "lineage", which is a worse
+   *  filename and still a findable one. */
+  exportTitle?: string;
   /** A saved or shared view to open at (§360; `data-lineage` p.12). Read once,
    *  as the name says: a prop that kept overwriting the state would make the
    *  graph un-drivable the moment somebody clicked. */
@@ -437,6 +443,41 @@ export function PipelineGraphView({
   useEffect(() => {
     report.current?.(viewOf({ selected, column, query, kinds, colouring }));
   }, [selected, column, query, kinds, colouring]);
+
+  // p.12's SVG export. **The picture is of the graph as it looks**, so it is
+  // built at the moment of the click from the same state the cards are drawn
+  // from — the colouring in force, the selection as it stands — rather than
+  // from a snapshot taken when the component rendered.
+  //
+  // The palette is read off the live document here, which is the one thing
+  // `lib/graph-svg` cannot do for itself: a `var(--…)` in a standalone file
+  // resolves against nothing, so an export taken in dark mode would come out
+  // black-on-black without this.
+  const exportSvg = () => {
+    const svg = svgFor(graph.nodes, graph.edges, {
+      colours: Object.fromEntries(
+        graph.nodes
+          .map((n) => [
+            n.id,
+            swatchFor({ ...n, access: graph.access?.[n.id] ?? null }, colouring)?.token,
+          ])
+          .filter((pair): pair is [string, string] => pair[1] !== undefined),
+      ),
+      selected,
+      styles: getComputedStyle(document.documentElement),
+      title: exportTitle ?? "Lineage graph",
+    });
+    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = svgFilename(exportTitle ?? "lineage", new Date());
+    link.click();
+    // Released once the click has been handled. A blob URL that is never
+    // revoked keeps the whole document alive for as long as the tab is open,
+    // and a reader who exports twenty times over an afternoon is the case
+    // that turns into.
+    URL.revokeObjectURL(url);
+  };
 
   const chosen = useMemo(() => new Set(selected), [selected]);
   // The detail bar answers about *a* node, so it appears for exactly one.
@@ -828,6 +869,20 @@ export function PipelineGraphView({
             </select>
           </>
         )}
+        {/* p.12's third save-and-share mechanism: "Export graph to SVG —
+            generates a static image of your lineage graph" (§423). Beside the
+            graph tools rather than with Save and the share link, because it
+            is a different kind of sharing: those two hand somebody a *live*
+            graph they must have access to open, and this hands them a
+            picture — for the audience that cannot open the link. */}
+        <button
+          type="button"
+          className="chip"
+          data-testid="graph-export-svg"
+          onClick={exportSvg}
+        >
+          Export SVG
+        </button>
         <span style={{ marginLeft: "auto" }} />
         <button className="btn quiet" onClick={() => setZoom((z) => Math.max(0.4, z - 0.15))}>
           −
@@ -1128,6 +1183,22 @@ export function PipelineGraphView({
                 reader can watch happen — `All upstream` beside it is p.9's
                 third strategy already, and the selection itself is the first
                 (§386). Two ends at least, since "between" needs them. */}
+            {/* p.12's *Invert selection*: "de-selects all currently selected
+                nodes and selects the rest of the nodes on the graph". The one
+                of p.12's four with nothing behind it — *Select All* is §356's
+                select-every-match and *Select children* / *parents* are the
+                Expand chips above — because it is the only one that answers
+                "what did I leave out". */}
+            <button
+              type="button"
+              className="chip"
+              data-testid="selection-invert"
+              onClick={() =>
+                setSelected((current) => inverted(graph.nodes, current))
+              }
+            >
+              Invert
+            </button>
             {selected.length >= 2 && (
               <button
                 type="button"
