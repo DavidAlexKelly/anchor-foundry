@@ -475,3 +475,16 @@ Both showed up in one sweep, both produced plausible numbers, and both inflate t
 **Run the suite with no mutant at all, against the database the sweep uses.** §414's seam table read "3 failed" for five consecutive mutants, which is a suspicious constant. A control run with the source untouched came back "2 failed": two tests were failing on their own, so every count was one real kill plus two passengers. The two were selecting a widget by clicking it on the canvas immediately after opening the builder — visible is not selectable — and they passed under `fresh-e2e.sh` and failed against the accumulated dev stack, which is §271 again. One of them had been failing since §398 and no sweep had noticed, because a sweep only ever looks at whether the number *changed*.
 
 The control run costs one suite execution and is the only thing that makes a mutant's count mean anything. **A number you never took a baseline for is not a measurement.**
+
+### A mutant belongs in the group that can run it (§416)
+
+The rule above about mtimes has a consequence nobody had written down: **which group a mutant goes in is decided by which file it touches, not by which test would notice it.**
+
+A mutant on `apps/api/` checked by the *browser* suite cannot work. Writing it makes `apps/api/src` newer than the running API, and `e2e/conftest.py` refuses to run — rightly, since it cannot know what the server process loaded. §416 put "the route does not rehydrate" in the seam group because a browser test would have noticed it, and got `NO RESULT` instead of a verdict. Moved to the server group, checked in-process by pytest, it dies immediately.
+
+So: **web files in the seam group, API files in the server group.** The seam group exists for changes Next must rebuild; the server group for changes a pytest process imports fresh. A mutant in the wrong one measures the harness rather than the code.
+
+Two smaller harness rules earned the same way, both in `§415`–`§416`'s sweeps:
+
+- **An anchor that matches twice is not an anchor.** Refuse and say so (`SKIPPED (anchor x2)`) rather than mutating the first match — §416's rehydration line exists in both evaluate routes, and silently taking one would have tested a route the browser suite does not reach.
+- **Print the reason, not the tail.** A run that produced no result has a cause, and it is usually one line (`the running API is older than apps/api/src`). Truncating the output to its last few lines threw exactly that line away.
