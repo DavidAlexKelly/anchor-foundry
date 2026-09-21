@@ -363,7 +363,21 @@ export function PipelineGraphView({
   // rather than in the button so the summary and the button cannot disagree
   // about which nodes they mean (§386); the rules are in `lib/graph-builds`,
   // which has its own tests because vitest cannot parse `.tsx`.
-  const plan = buildPlan(graph.nodes, graph.edges, selected);
+  // p.57's "Force build on up-to-date datasets" (§421). Off by default,
+  // because that is p.57's default: "this builds only ancestors that are out
+  // of date... forcing a re-build can be expensive".
+  const [force, setForce] = useState(false);
+  // **Two plans, and the second is not a duplicate of the first.**
+  // `selection` is which transforms this selection *means* — the question
+  // §292 says has one answer, and the one the schedule control asks. `plan` is
+  // which of them pressing Build would run, which p.57 makes a narrower set.
+  // Scheduling off `plan` would quietly refuse to schedule a transform whose
+  // output happened to be current, which is a build default leaking into a
+  // control that has nothing to do with building.
+  const selection = buildPlan(graph.nodes, graph.edges, selected, { force: true });
+  const plan = force
+    ? selection
+    : buildPlan(graph.nodes, graph.edges, selected);
   const cascade = cascadeCount(graph.nodes, graph.edges, plan);
   // p.10's schedule, as typed. The default is the one the Models page offers,
   // so the two places a schedule can be set open on the same suggestion.
@@ -1093,6 +1107,34 @@ export function PipelineGraphView({
                 <span className="soft" data-testid="selection-build-summary">
                   {buildSummary(plan)}
                 </span>
+                {/* p.57's force option. **Shown whenever the selection
+                    resolves to a transform at all**, not only when one of them
+                    happens to be current.
+
+                    The first draft hid it unless there was something to
+                    force, on the §214 reasoning that a control which cannot
+                    change the answer should be absent. That reasoning does not
+                    fit here: this is a *policy* switch rather than an action,
+                    it does exactly what it says whenever it is pressed, and
+                    the summary beside it already states whether anything is
+                    being skipped — so a reader is never guessing. Hiding it
+                    made the control come and go as the pipeline's freshness
+                    changed underneath, which is harder to find than one that
+                    is simply there. */}
+                {selection.models.length > 0 && (
+                  <label
+                    className="soft"
+                    style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                  >
+                    <input
+                      type="checkbox"
+                      data-testid="selection-build-force"
+                      checked={force}
+                      onChange={(e) => setForce(e.target.checked)}
+                    />
+                    Force up-to-date
+                  </label>
+                )}
                 {/* §383: an ancestors build makes every upstream-triggered
                     model below it fire again on the worker's next pass, so
                     the run history will hold more builds than were asked for.
@@ -1133,27 +1175,27 @@ export function PipelineGraphView({
                   // unusable rather than earning a refusal for something the
                   // reader can already see is unfinished. Whether those five
                   // fields *mean* anything is the server's to say.
-                  disabled={scheduling || plan.models.length === 0 || !looksLikeCron(cron)}
-                  onClick={() => onSchedule(plan.models, cron)}
+                  disabled={scheduling || selection.models.length === 0 || !looksLikeCron(cron)}
+                  onClick={() => onSchedule(selection.models, cron)}
                 >
                   {scheduling ? "Saving…" : "Schedule"}
                 </button>
                 <span className="soft" data-testid="selection-schedule-summary">
-                  {scheduleSummary(plan.models)}
+                  {scheduleSummary(selection.models)}
                 </span>
                 {/* Absent rather than disabled when there is nothing to clear:
                     a control offered over a selection it would not change is
                     §214's shape, and `clearSummary` returns "" for exactly
                     that case. */}
-                {clearSummary(plan.models) && (
+                {clearSummary(selection.models) && (
                   <button
                     type="button"
                     className="btn quiet"
                     data-testid="selection-schedule-clear"
                     disabled={scheduling}
-                    onClick={() => onSchedule(plan.models, null)}
+                    onClick={() => onSchedule(selection.models, null)}
                   >
-                    {clearSummary(plan.models)}
+                    {clearSummary(selection.models)}
                   </button>
                 )}
               </div>
