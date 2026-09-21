@@ -55,14 +55,19 @@ def ref_for(value: Any) -> str | None:
 def parse_ref(raw: Any) -> tuple[UUID, UUID] | None:
     """The type and instance a ref names, or None if it names neither.
 
-    **Both halves are checked as UUIDs**, which is not ceremony: this value
-    arrives from a URL somebody may have typed, and the two ids go straight
-    into a read. A string that is not a pair of UUIDs is not a reference to
+    **Both halves are checked as UUIDs**, and that check is the whole of it: a
+    separate "is there a separator" guard stood here until the sweep found it
+    equivalent (§223). `partition` hands back the whole string when there is no
+    separator, and a whole string is not a UUID, so the guard could not fire —
+    and a guard that cannot fire is a claim nobody can check.
+
+    The value arrives from a URL somebody may have typed, and the two ids go
+    straight into a read. A string that is not a pair of UUIDs is not a reference to
     something missing — it is not a reference at all, and the difference
     matters to the caller, which treats the first as "nothing picked" and has
     no business issuing a query for the second.
     """
-    if not isinstance(raw, str) or SEPARATOR not in raw:
+    if not isinstance(raw, str):
         return None
     type_part, _, instance_part = raw.partition(SEPARATOR)
     try:

@@ -113,6 +113,11 @@ def world(client: TestClient, fx: Fixture) -> dict:
                     "external_id": "selected", "interface": True,
                     "url_behavior": "always",
                 },
+                # A plain string variable, so "only `single_object` is
+                # expanded" is a claim something can be made to break.
+                "v_text": {
+                    "id": "v_text", "kind": "string", "label": "Free text",
+                },
                 "v_name": {
                     "id": "v_name", "kind": "string", "label": "Picked name",
                     "derivation": {"transform": "object_property",
@@ -176,6 +181,23 @@ def test_a_string_that_was_never_a_reference_is_nothing_picked(client, fx, world
     for junk in ("banana", "", f"{world['type_id']}:", "a:b"):
         values = resolve(client, fx, world, {"v_sel": junk})
         assert values["v_sel"] is None, junk
+
+
+def test_a_string_variable_that_looks_like_a_reference_stays_a_string(
+    client, fx, world
+) -> None:
+    """**Only a `single_object` is expanded**, and the sweep is why this test
+    exists: widening the check to every string value passed everything else.
+
+    A `string` variable can hold anything a viewer types, and two UUIDs with a
+    colon between them is a thing somebody can type. Turning that into an
+    object would replace a value the module was given with one it was not, and
+    every widget reading it downstream would be reading something else
+    entirely — silently, because the shapes are both "truthy".
+    """
+    ref = ref_to(world, "S1")
+    values = resolve(client, fx, world, {"v_text": ref})
+    assert values["v_text"] == ref
 
 
 def test_an_object_still_arrives_whole(client, fx, world) -> None:
