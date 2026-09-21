@@ -384,13 +384,20 @@ export function search(
     .map((node) => node.id);
 }
 
-/** The datasets holding a column whose name matches, as node ids. */
+/** The datasets holding a column whose name matches, as node ids.
+ *
+ * **Takes a needle that is already known to be non-empty.** An `if (needle ===
+ * "") return out` guard stood here and the sweep found it equivalent: both
+ * callers answer the empty query before they consult this, so nothing could
+ * reach it — and a guard that cannot fire is a claim nobody can check (§223).
+ * What it stated is pinned where it is observable instead, by the tests that
+ * ask `search` and `foundByColumn` for an empty query.
+ */
 function datasetsWithColumn(
   columns: readonly PipelineColumn[],
   needle: string,
 ): Set<string> {
   const out = new Set<string>();
-  if (needle === "") return out;
   for (const column of columns) {
     if (!column.name.toLowerCase().includes(needle)) continue;
     for (const id of column.datasets) out.add(id);
@@ -418,6 +425,17 @@ export function foundByColumn(
   columns: readonly PipelineColumn[],
 ): string[] {
   const needle = query.trim().toLowerCase();
+  // **An exit for cost, not a check for correctness**, and the sweep is how
+  // that got stated: removing it changes no answer. An empty needle makes
+  // `name.includes(needle)` true for every node, so the filter below excludes
+  // all of them and the result is `[]` either way. What it saves is the walk —
+  // the search box is empty on every render until somebody types, and without
+  // this each of those renders would build a set of every dataset holding any
+  // column in order to throw it away.
+  //
+  // Kept rather than removed under §223 because §223 is about a *check* that
+  // cannot fail. This one does not claim a behaviour; the behaviour is pinned
+  // by the empty-query tests, which pass with or without it.
   if (needle === "") return [];
   const byColumn = datasetsWithColumn(columns, needle);
   if (byColumn.size === 0) return [];
