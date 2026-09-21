@@ -57,12 +57,12 @@ import type {
 // as the Fields dialog, exactly as that comment said it would ("each arrives
 // on this list the day its editor does").
 //
-// Two are still absent, and each needs a second thing this dialog has no way
-// to ask for: `attachment` needs an upload (§39), and `time_series` needs
-// `object_type_series` on the *source* to say where the points are (db 0047),
-// which is a different screen about a different resource. Offering either
-// would produce a property the server refuses — §214's rule about a control
-// that cannot work.
+// Three are still absent, and each needs a second thing this dialog has no way
+// to ask for: `attachment` needs an upload (§39), and `time_series` and
+// `geotemporal_series` both need `object_type_series` on the *source* to say
+// where the points are (db 0047, db 0097), which is a different screen about
+// a different resource. Offering any of them would produce a property the
+// server refuses — §214's rule about a control that cannot work.
 export const PROPERTY_TYPES: PropertyDataType[] = [
   "string", "integer", "float", "boolean", "date", "timestamp", "geopoint",
   // **`geoshape` needs no second control** (§425), which is what puts it on

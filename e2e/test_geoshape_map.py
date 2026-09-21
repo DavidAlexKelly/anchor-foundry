@@ -97,15 +97,26 @@ def test_the_map_opens_fitted_to_the_shape(page, module):
     speck in it, and "Fit to data" does nothing** — because the fit is
     computed from the pins, and a shape-only map has none.
 
-    Asserted by the path's own size on screen: a square a degree and a half
-    across, fitted, is a large part of a 640-wide canvas; the same square on a
-    world view is under ten pixels.
+    **Asserted as a fraction of the canvas, not in pixels.** The card's map is
+    scaled by CSS to fit the card, so a pixel count is a claim about the
+    layout rather than about the view — and the first version of this test
+    passed only because §426 was drawing the shape through the basemap's
+    transform as well as its own, which made it several canvases wide. §427's
+    track test found that; this one now measures what it meant to.
+
+    At the fitted view a square 1.5 degrees across is about a tenth of the
+    canvas; on a world view it is four thousandths. Three per cent sits well
+    clear of both.
     """
     open_the_object(page, module)
-    box = page.locator("[data-testid='map-shape-outline']").bounding_box()
-    assert box is not None
-    assert box["width"] > 40, box
-    assert box["height"] > 40, box
+    shape = page.locator("[data-testid='map-shape-outline']").bounding_box()
+    canvas = page.get_by_test_id("sov-map-outline").locator("svg").bounding_box()
+    assert shape is not None and canvas is not None
+    assert shape["width"] / canvas["width"] > 0.03, (shape, canvas)
+    assert shape["height"] / canvas["height"] > 0.03, (shape, canvas)
+    # And not the whole canvas, which is what a *failed* fit looks like from
+    # the other side — a view zoomed so far in that the shape fills it.
+    assert shape["width"] / canvas["width"] < 0.9, (shape, canvas)
 
 
 def test_a_geopoint_still_gets_its_pin(page, module):

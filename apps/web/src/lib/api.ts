@@ -1616,6 +1616,16 @@ export const objects = {
         `/series/${encodeURIComponent(property)}/points` +
         `?interval=${opts.interval ?? "none"}&aggregate=${opts.aggregate ?? "avg"}`,
     ),
+  /** One object's track: where it was, in time order (§427;
+   * `object-link-types` p.127). `seriesPoints`' counterpart, and a separate
+   * call rather than an option on it, because a track takes no interval and
+   * no aggregate — the mean of two positions is a place neither of them was
+   * (`services/time_series.py::track_sql`). */
+  seriesTrack: (wid: string, typeId: string, instanceId: string, property: string) =>
+    request<import("./types").SeriesTrack>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}` +
+        `/series/${encodeURIComponent(property)}/track`,
+    ),
   /** One search across object types, properties, link types and action types
    * (`ontology-manager` p.28). Each hit says which field matched. */
   searchOntology: (wid: string, q: string) =>

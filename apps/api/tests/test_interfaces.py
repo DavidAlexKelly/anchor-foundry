@@ -513,7 +513,7 @@ def _web(*parts: str) -> str:
 #: has no way to complete the declaration - the reasons are written out beside
 #: `PROPERTY_TYPES` in `object-type-editor.tsx`. Named here so a new base type
 #: with no editor is a failing test rather than a silent gap.
-EDITOR_GAPS = {"attachment", "time_series"}
+EDITOR_GAPS = {"attachment", "time_series", "geotemporal_series"}
 
 
 def test_every_base_type_is_offered_or_deliberately_held_back() -> None:

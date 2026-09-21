@@ -37,6 +37,12 @@ DELIBERATE_FALLBACKS = {
     # instance is a small scalar, usually its own primary key, so `string` is
     # what it is. The points live in a dataset and are never in this index.
     "time_series",
+    # **The same answer for the same reason** (§427; db 0096): a geotemporal
+    # series reference is a series id too, so `string` is what the stored
+    # value is. The track lives in a dataset and is never in this index —
+    # which also means a map drawn from one is drawn from a dataset read, not
+    # from a search.
+    "geotemporal_series",
 }
 
 #: Declared types with no entry here that are **not** falling back either — a

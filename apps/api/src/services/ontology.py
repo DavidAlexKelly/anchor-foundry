@@ -53,6 +53,12 @@ PROPERTY_TYPES = {
     # both, with the difference stated wherever a reader could assume
     # otherwise (`services/property_values.py`).
     "geoshape",
+    # **A reference, exactly as `time_series` is** (§427; `object-link-types`
+    # p.127: "a reference to a geotemporal series"; db 0096). The value on the
+    # instance is a small scalar and `object_type_series` says which dataset,
+    # key and timestamp columns hold the track - the same mechanism with a
+    # position where a time series has a number.
+    "geotemporal_series",
     # A **series id**, not a history (decision 0009, migration 0047). The value
     # stored on the instance is a small scalar - usually the instance's own
     # primary key - and `object_type_series` says which dataset, key column,
@@ -89,6 +95,7 @@ NOT_TITLE_TYPES = {
     "array": "an array is many values, and a title names one thing",
     "attachment": "an attachment's title would be a filename",
     "time_series": "a time series is a reference, not a name",
+    "geotemporal_series": "a track is a reference, not a name",
     "json": "an untyped value has no shape a heading can rely on",
 }
 

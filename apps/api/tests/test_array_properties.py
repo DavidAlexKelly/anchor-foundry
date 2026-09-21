@@ -127,6 +127,17 @@ def test_the_element_types_are_foundrys_list_and_not_this_platforms() -> None:
     assert ontology_service.PROPERTY_TYPES - array_properties.INNER_TYPES == {
         "array",        # p.86's scope is base types; one column, no recursion
         "time_series",  # a series id is already a pointer to a table (db 0047)
+        # **p.132 implies Foundry allows this one and this platform declines
+        # it, which is worth saying rather than leaving as a third silent
+        # absence** (§427). Its unsupported-reducer table lists "Geotemporal
+        # Series Reference", and a subtype can only be unsupported *as an
+        # array element* if arrays of it exist. Here the mapping is one row
+        # per property (db 0047's UNIQUE), so every element of such an array
+        # would resolve against the same dataset, key and timestamp columns -
+        # which is right only if every referenced track lives in one table,
+        # and nothing says it does. Declined until the mapping can answer
+        # per element.
+        "geotemporal_series",
     }
 
 

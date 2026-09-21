@@ -25,7 +25,8 @@
  *
  *   - media reference → a media viewer  — we have no media reference type
  *   - time series     → an interactive chart — we have no time series type
- *   - geospatial      → a Map  ✅ (geopoint, and geoshape since §426)
+ *   - geospatial      → a Map  ✅ (geopoint; geoshape since §426; a
+ *                              geotemporal series' track since §427)
  *   - everything else → a large card       ✅
  *
  * They are named in `ontology.md` §1.1 as ○ and will land with the types, not
@@ -46,6 +47,86 @@ import { conditionalStyle } from "@/lib/conditional-format";
 import { visibleProperties } from "@/components/object-properties";
 import { plot } from "@/components/series-plot";
 import type { ObjectInstance, ObjectTypeProperty, PropertyStyle } from "@/lib/types";
+
+/** A prominent `geotemporal_series` property, drawn on a Map (§427; p.11).
+ *
+ * > "Objects with prominent geohash, geoshape, or **geotemporal series
+ * > reference (GTSR)** properties will render on a Map."
+ *
+ * **A LineString through the positions, which is §426's renderer** rather
+ * than a fourth way of drawing geography: a track *is* a geometry, so the map
+ * draws it the way it draws any other, and the projection has one
+ * implementation (§292). The latest position gets a pin beside it, because
+ * "where is it now" is the question a card-sized map is usually asked — and
+ * the pin is a `points` entry rather than part of the shape, so it clusters
+ * with nothing and sits above the line.
+ *
+ * **One position is a pin and no line**, which is the honest drawing: a
+ * LineString of one point draws nothing at all, and a card that showed an
+ * empty map for an object with a known location would be worse than one that
+ * showed the location.
+ */
+function TrackCard({
+  workspaceId,
+  typeId,
+  instanceId,
+  property,
+}: {
+  workspaceId: string;
+  typeId: string;
+  instanceId: string;
+  property: ObjectTypeProperty;
+}) {
+  const track = useQuery({
+    queryKey: ["instance-track", workspaceId, typeId, instanceId, property.api_name],
+    queryFn: () => objApi.seriesTrack(workspaceId, typeId, instanceId, property.api_name),
+  });
+  const points = track.data?.points ?? [];
+  const label = property.display_name || property.api_name;
+  const last = points[points.length - 1];
+
+  return (
+    <article className="sov-card" data-property={property.api_name}>
+      <h3 className="sov-card-label">{label}</h3>
+      {track.isPending && <p className="canvas-widget-empty">Loading positions…</p>}
+      {track.isError && (
+        <p className="state error" style={{ margin: 0 }}>
+          Couldn&apos;t read this track.
+        </p>
+      )}
+      {track.data && points.length === 0 && (
+        // Declared, mapped, and empty. Saying so beats a map of the whole
+        // world, which reads as a track that failed to draw.
+        <p className="canvas-widget-empty">No positions for this object yet.</p>
+      )}
+      {points.length > 0 && (
+        <div className="sov-card-map" data-testid={`sov-track-${property.api_name}`}>
+          <MapCanvas
+            points={last
+              ? [{ id: property.api_name, lat: last.lat, lon: last.lon, label }]
+              : []}
+            shapes={points.length > 1
+              ? [{
+                id: property.api_name,
+                label,
+                // [longitude, latitude], which is GeoJSON's order and the
+                // opposite of the `lat`/`lon` the track arrives in — named
+                // fields on one side and a positional pair on the other is
+                // exactly where this gets reversed (§425).
+                value: {
+                  type: "LineString",
+                  coordinates: points.map((p) => [p.lon, p.lat]),
+                },
+              }]
+              : []}
+            total={points.length}
+            unplaceable={track.data?.unreadable ?? 0}
+          />
+        </div>
+      )}
+    </article>
+  );
+}
 
 /** A prominent `time_series` property, drawn (p.11).
  *
@@ -229,10 +310,20 @@ export function StandardObjectView({
       {prominent.length > 0 && (
         <div className="sov-cards" data-testid="sov-prominent">
           {prominent.map((p) =>
-            // A time series is not a value to print - it is a chart, and it
-            // needs a fetch the other card kinds do not.
+            // A series is not a value to print — it is a chart or a map, and
+            // either needs a fetch the other card kinds do not: the instance
+            // holds a series *id* and the points live in a dataset
+            // (decision 0009).
             p.data_type === "time_series" ? (
               <SeriesCard
+                key={p.api_name}
+                workspaceId={workspaceId}
+                typeId={typeId}
+                instanceId={instance.id}
+                property={p}
+              />
+            ) : p.data_type === "geotemporal_series" ? (
+              <TrackCard
                 key={p.api_name}
                 workspaceId={workspaceId}
                 typeId={typeId}
