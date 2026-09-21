@@ -1,4 +1,4 @@
-/** p.38-39's node colouring: what a card's colour is *about* (§419).
+/** p.38-40's node colouring: what a card's colour is *about* (§419).
  *
  * > "There are several built-in options for coloring graph nodes to give you
  * > more information about your pipeline." (p.38)
@@ -11,7 +11,7 @@
  * ---
  *
  * **Every colouring is categorical, and that is a palette decision rather than
- * a reading of p.38.** p.39 also offers quantitative ones — row count, build
+ * a reading of p.38.** p.39-40 also offer quantitative ones — row count, build
  * duration, time last built — and each wants a sequential ramp. This palette
  * declares no ramp: `--accent-wash`, `--accent` and `--accent-deep` are not
  * ordered the same way in both themes (`--accent-deep` is darker than
