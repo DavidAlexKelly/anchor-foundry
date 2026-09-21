@@ -996,3 +996,87 @@ def test_two_equally_common_columns_come_back_in_a_stable_order(
     # Both really are equally common, which is what makes the order a tiebreak
     # rather than the frequency sort doing the work.
     assert {len(c["datasets"]) for c in g["columns"]} == {2}
+
+
+# ---- p.10's build timeline (§418) --------------------------------------------
+def test_a_built_dataset_carries_the_window_of_the_run_that_made_it(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    """p.10's "actual build time". The pair is what a Gantt bar is drawn from,
+    so it has to be a real window rather than merely present."""
+    out = node(graph(client, fx), f"A {fx.tag}", "dataset")
+    assert out["build_started_at"] is not None, out
+    assert out["build_finished_at"] is not None, out
+    assert out["build_finished_at"] >= out["build_started_at"], out
+
+
+def test_a_dataset_nobody_built_has_no_window(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    """An upload has no run behind it. Null rather than a zero-length window:
+    "built instantly" and "not built" are different facts, and a Gantt that
+    drew the first for the second would invent a build."""
+    source = node(graph(client, fx), f"Source {fx.tag}", "dataset")
+    assert source["build_started_at"] is None
+    assert source["build_finished_at"] is None
+
+
+def test_a_model_and_an_object_type_carry_no_window(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    """A model is not a thing that gets built — its *output* is, one edge
+    along. The field is present so the node shape stays one shape."""
+    model = node(graph(client, fx), f"A {fx.tag}", "model")
+    assert model["build_started_at"] is None
+    assert model["build_finished_at"] is None
+
+
+def test_a_later_failed_run_does_not_move_the_window(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The whole reason the join goes through `output_version`.**
+
+    The window is the run that produced *the version this dataset currently
+    holds*, not the model's latest run. A model that has run again since and
+    failed has a latest run that built nothing — and a bar drawn from it would
+    time a build whose output nobody is looking at, on a dataset whose
+    `built_at` still points at the earlier one. Taking the latest run passes
+    every other test in this file.
+    """
+    r = client.post(
+        f"{base(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Flaky source {fx.tag}"},
+        files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    source = r.json()["id"]
+
+    r = client.post(
+        f"{base(fx)}/models", headers=hdr(fx.editor_sub),
+        json={"name": f"Flaky {fx.tag}", "code": "SELECT id FROM raw",
+              "inputs": [{"dataset_id": source, "input_alias": "raw"}]},
+    )
+    assert r.status_code == 201, r.text
+    model = r.json()["id"]
+    r = client.post(f"{base(fx)}/models/{model}/run", headers=hdr(fx.editor_sub))
+    assert r.json()["ok"], r.text
+
+    good = node(graph(client, fx), f"Flaky {fx.tag}", "dataset")
+    assert good["build_started_at"] is not None
+
+    # Break the model and run it again. The run fails, so it has no
+    # `output_version` and the dataset keeps the version it had.
+    r = client.patch(
+        f"{base(fx)}/models/{model}", headers=hdr(fx.editor_sub),
+        json={"code": "SELECT * FROM a_table_that_is_not_there"},
+    )
+    assert r.status_code == 200, r.text
+    r = client.post(f"{base(fx)}/models/{model}/run", headers=hdr(fx.editor_sub))
+    assert not r.json()["ok"], r.text
+
+    after = node(graph(client, fx), f"Flaky {fx.tag}", "dataset")
+    assert after["build_started_at"] == good["build_started_at"], (
+        "the window followed the model's latest run instead of the version "
+        "the dataset still holds"
+    )
+    assert after["build_finished_at"] == good["build_finished_at"]

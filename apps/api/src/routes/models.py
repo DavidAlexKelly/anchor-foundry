@@ -654,6 +654,12 @@ class GraphNode(BaseModel):
     # rename touches that one and a rename is not a build. Null on a model and
     # on an object type, neither of which is a thing that gets built.
     built_at: datetime | None = None
+    # p.10's "actual build time" (§418): the window of the run that produced
+    # the version this dataset currently holds. Both null on anything nobody
+    # built — an uploaded dataset has no run behind it, a model is not a thing
+    # that gets built, and an object type is synced rather than built.
+    build_started_at: datetime | None = None
+    build_finished_at: datetime | None = None
     # p.51's "upstream dataset that hasn't built and isn't up to date".
     out_of_date: bool = False
     # Which of p.51's reasons: `input_is_newer` names the dataset to rebuild,
