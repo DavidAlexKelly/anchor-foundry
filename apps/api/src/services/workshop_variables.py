@@ -189,8 +189,13 @@ URL_BEHAVIOURS = ("never", "when_visible", "always")
 # What that leaves out, and why:
 #
 # - `object_set` - p.199 allows this "limited to single objects, specified by
-#   their RID", and `single_object` with it. We have no by-RID rehydration, so
-#   either would be a key in a link with no lookup behind it.
+#   their RID". A *set* is a definition and stays out: a filter in a link is
+#   p.199's other named exclusion and has the same no-vocabulary problem
+#   `array` does. The single object p.199 carves out is `single_object`, which
+#   is routable as of §416 - the blocker this list carried until then was "we
+#   have no by-RID rehydration", and that stopped being true when the
+#   single-instance read arrived. p.199's own workaround still covers the set:
+#   route a string and use it in the set's filter default.
 # - `time_series_set` - the same one layer down: a reference to an instance and
 #   a property, derived rather than chosen, so there is no viewer selection in
 #   it to share.
@@ -204,7 +209,7 @@ URL_BEHAVIOURS = ("never", "when_visible", "always")
 # Refused at save rather than dropped at write time, because a builder who
 # ticked "Always in URL" and got nothing would have no way to know which of the
 # two ends was wrong.
-ROUTABLE_KINDS = ("string", "number", "boolean", "date", "timestamp")
+ROUTABLE_KINDS = ("string", "number", "boolean", "date", "timestamp", "single_object")
 
 # Kinds a *saved state* can preserve (p.205, "Supported variable types").
 #

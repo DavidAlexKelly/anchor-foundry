@@ -34,7 +34,10 @@ from ..middleware.permissions import (
 )
 from ..services import actions as actions_service
 from ..services import audit
+from ..services import instance_store
+from ..services import instances as instances_service
 from ..services import module_access
+from ..services import object_refs
 from ..services import ontology as ontology_service
 from ..services import orgs as org_service
 from ..services import canvas as canvas_service
@@ -738,6 +741,72 @@ def _only_visible(
     )
 
 
+async def _rehydrated(
+    conn, workspace_id: UUID, variables: dict, values: dict[str, Any],
+) -> dict[str, Any]:
+    """Turn any `single_object` value that arrived as a **ref** into the object.
+
+    p.199 allows one object in the URL, "specified by their RID", so a routed
+    selection travels as a reference and has to become an object again before
+    anything reads a property off it (§416). Done here rather than in
+    `evaluate`, which is pure and synchronous: the graph is a computation and
+    this is a database read.
+
+    **The read is the one the click would have made**, through the same store
+    and the same RLS. A link therefore cannot show its recipient an object they
+    could not have opened themselves — and it does not need a rule saying so,
+    because there is no path here that reads anything the caller's own
+    connection would refuse.
+
+    **Anything that does not resolve is "nothing picked".** A ref naming a
+    deleted object, a type this viewer cannot see, or a string that was never a
+    ref at all, all arrive at None — which is the state a detail panel is in
+    before the first click, and a state every widget already draws. The
+    alternative is a shared link that renders an error page, which tells its
+    recipient nothing they can act on and loses the rest of the view with it.
+
+    Derived properties are deliberately not filled in: a row *click* builds its
+    value from a list read, which has none either (`_with_derived` says why),
+    and a link that restored more than the click did would be a different
+    object wearing the same name.
+    """
+    wanted = {
+        vid: object_refs.parse_ref(value)
+        for vid, value in values.items()
+        if isinstance(value, str)
+        and getattr(variables.get(vid), "kind", None) == "single_object"
+    }
+    if not wanted:
+        return values
+
+    out = dict(values)
+    prefix: str | None = None
+    store = instance_store.store_for(conn)
+    for vid, ref in wanted.items():
+        out[vid] = None
+        if ref is None:
+            continue
+        type_id, instance_id = ref
+        try:
+            await ontology_service.get_type(conn, workspace_id, type_id)
+        except NotFoundError:
+            continue
+        if prefix is None:
+            prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
+        row = await store.get_instance(
+            search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id),
+        )
+        if row is None:
+            continue
+        out[vid] = {
+            "id": str(instance_id),
+            "object_type_id": str(type_id),
+            "primary_key": row.get("primary_key"),
+            "properties": row.get("properties") or {},
+        }
+    return out
+
+
 # ---- variables (roadmap phase 2, item 1.2) -----------------------------------
 @router.post("/{app_id}/variables/evaluate", response_model=EvaluateVariablesOut)
 async def evaluate_variables(
@@ -769,24 +838,30 @@ async def evaluate_variables(
         # saved ordered comparison needs the declared types (§221) - and the
         # *store* needs them too, to know what to cast.
         property_types = await _workspace_property_types(conn, access.workspace_id)
-    document = _parse_json(row["definition"])
-    try:
-        variables = variables_service.validate_module(
-            document, property_types=property_types
-        )
-    except variables_service.VariableError as exc:
-        # A saved app whose document no longer validates. Reachable: the module
-        # could have been written before a rule existed, or by something other
-        # than this API. Reported rather than swallowed, because the viewer
-        # otherwise sees widgets quietly bound to nothing.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
-        ) from exc
+        document = _parse_json(row["definition"])
+        try:
+            variables = variables_service.validate_module(
+                document, property_types=property_types
+            )
+        except variables_service.VariableError as exc:
+            # A saved app whose document no longer validates. Reachable: the
+            # module could have been written before a rule existed, or by
+            # something other than this API. Reported rather than swallowed,
+            # because the viewer otherwise sees widgets quietly bound to
+            # nothing.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+            ) from exc
+        # p.199's routed selection, turned back into an object while the
+        # connection is still open (§416). Inside the block rather than beside
+        # `evaluate` below, because the read needs a connection and `evaluate`
+        # deliberately has none.
+        values = await _rehydrated(conn, access.workspace_id, variables, body.values)
     try:
         measured: dict[str, float] | None = {} if body.profile else None
         resolved = variables_service.evaluate(
             variables,
-            body.values,
+            values,
             bound=frozenset(body.bound),
             held=body.held,
             recompute_now=frozenset(body.recompute),
@@ -1144,18 +1219,22 @@ async def evaluate_published_variables(
     async with user_connection(access.auth.user_id) as conn:
         row = await canvas_service.get_published(conn, access.workspace_id, app_id)
         property_types = await _workspace_property_types(conn, access.workspace_id)
-    document = _parse_json(row["definition"])
-    try:
-        variables = variables_service.validate_module(
-            document, property_types=property_types
-        )
-    except variables_service.VariableError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        document = _parse_json(row["definition"])
+        try:
+            variables = variables_service.validate_module(
+                document, property_types=property_types
+            )
+        except variables_service.VariableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+            ) from exc
+        # See the project-scoped route: the connection is still open here.
+        values = await _rehydrated(conn, access.workspace_id, variables, body.values)
     try:
         measured: dict[str, float] | None = {} if body.profile else None
         resolved = variables_service.evaluate(
             variables,
-            body.values,
+            values,
             bound=frozenset(body.bound),
             held=body.held,
             recompute_now=frozenset(body.recompute),

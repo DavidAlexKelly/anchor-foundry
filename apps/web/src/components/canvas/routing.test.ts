@@ -137,15 +137,34 @@ describe("routingParams", () => {
 
   it("never writes a kind the URL cannot be read back into", () => {
     // p.199. The list is `seedFromQuery`'s vocabulary: a kind is routable
-    // exactly when the other end can parse it.
-    for (const kind of ["object_set", "single_object", "time_series_set", "array"]) {
+    // exactly when the other end can parse it. `single_object` left this list
+    // in §416, when the single-instance read made p.199's "limited to single
+    // objects, specified by their RID" something this platform could honour.
+    for (const kind of ["object_set", "time_series_set", "array"]) {
       expect(ROUTABLE_KINDS).not.toContain(kind);
       const variables = { v_region: routed("v_region", { kind }) };
       expect(routingParams({ ...base, variables })).toEqual({});
     }
+  });
+
+  it("writes something for every kind on the list", () => {
+    // The other half, and it has to supply a value each kind can actually
+    // hold: `single_object` carries a reference rather than `String(value)`,
+    // so a loop that fed every kind the same string would have quietly
+    // stopped covering it the moment it was added.
+    const held: Record<string, unknown> = {
+      single_object: {
+        id: "11111111-1111-1111-1111-111111111111",
+        object_type_id: "22222222-2222-2222-2222-222222222222",
+        primary_key: "R1",
+      },
+    };
     for (const kind of ROUTABLE_KINDS) {
       const variables = { v_region: routed("v_region", { kind }) };
-      expect(routingParams({ ...base, variables })).toEqual({ region: "north" });
+      const values = kind in held ? { v_region: held[kind] } : base.values;
+      const out = routingParams({ ...base, variables, values });
+      expect(Object.keys(out), kind).toEqual(["region"]);
+      expect(out.region, kind).toBeTruthy();
     }
   });
 
@@ -205,5 +224,63 @@ describe("pageIdOf, defaultPageNode and pageNodeFor", () => {
     };
     expect(defaultPageNode(withHeader)).toBe("p1");
     expect(defaultPageNode({ ROOT: { nodes: [] } })).toBe(null);
+  });
+});
+
+describe("routing a picked object (p.199; §416)", () => {
+  const TYPE = "22222222-2222-2222-2222-222222222222";
+  const INSTANCE = "11111111-1111-1111-1111-111111111111";
+  const picked = {
+    id: INSTANCE, object_type_id: TYPE, primary_key: "R1",
+    properties: { name: "North" },
+  };
+  const variables = {
+    v_sel: {
+      id: "v_sel", kind: "single_object", external_id: "selected",
+      interface: true, url_behavior: "always",
+    },
+  };
+
+  it("writes the object as a reference", () => {
+    expect(routingParams({ enabled: true, variables, values: { v_sel: picked } }))
+      .toEqual({ selected: `${TYPE}:${INSTANCE}` });
+  });
+
+  it("never writes [object Object]", () => {
+    // What `String(value)` would have produced: a link that looks like it
+    // carries a selection and restores nothing.
+    const out = routingParams({ enabled: true, variables, values: { v_sel: picked } });
+    expect(out.selected).not.toContain("object Object");
+  });
+
+  it("leaves the key out entirely when nothing is picked", () => {
+    expect(routingParams({ enabled: true, variables, values: { v_sel: null } }))
+      .toEqual({});
+  });
+
+  it("leaves the key out when the object cannot be referenced", () => {
+    // An object with no instance id is not a shorter reference, it is one the
+    // reader cannot resolve.
+    const out = routingParams({
+      enabled: true, variables,
+      values: { v_sel: { ...picked, id: undefined } },
+    });
+    expect(out).toEqual({});
+  });
+
+  it("still refuses an object set", () => {
+    // p.199 excludes the *set*, and its workaround stands: route a string and
+    // use it in the set's filter default.
+    const out = routingParams({
+      enabled: true,
+      variables: {
+        v_set: {
+          id: "v_set", kind: "object_set", external_id: "rows",
+          interface: true, url_behavior: "always",
+        },
+      },
+      values: { v_set: { object_type_id: TYPE, filters: [] } },
+    });
+    expect(out).toEqual({});
   });
 });

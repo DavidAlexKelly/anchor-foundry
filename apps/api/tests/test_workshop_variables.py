@@ -2095,7 +2095,11 @@ def test_the_kinds_that_cannot_round_trip_are_refused() -> None:
     rather than skipped at write time: a builder who ticked "Always in URL"
     and got nothing has no way to tell which end was wrong."""
     for kind, extra in (
-        ("single_object", {}),
+        # `single_object` was here until §416. p.199's own sentence is what
+        # took it out — "object set variables are limited to single objects,
+        # specified by their RID" — and the blocker this list carried, that
+        # there was no by-RID rehydration to do it with, stopped being true
+        # when the single-instance read arrived.
         ("object_set", {"object_set": {"object_type_id": "t1", "filters": []}}),
         ("time_series_set", {"derivation": {
             "transform": "object_series", "inputs": ["v_o"],
@@ -2112,6 +2116,20 @@ def test_the_kinds_that_cannot_round_trip_are_refused() -> None:
                 "v_o": var("v_o", kind="single_object"),
                 "v_a": routed(kind=kind, **extra),
             })
+
+
+def test_one_object_is_routable_and_a_set_is_not() -> None:
+    """p.199's carve-out, as the two halves of one sentence (§416).
+
+    Kept beside the refusals rather than folded into them, because the pair is
+    the point: a *set* in the URL is the thing p.199 excludes, and the single
+    object it names is the thing it permits. A list that quietly lost either
+    half would still read as honouring the page.
+    """
+    assert "single_object" in wv.ROUTABLE_KINDS
+    assert "object_set" not in wv.ROUTABLE_KINDS
+    parsed = wv.parse({"v_a": routed(kind="single_object")})
+    assert parsed["v_a"].url_behavior == "always"
 
 
 def test_every_routable_kind_is_accepted() -> None:
