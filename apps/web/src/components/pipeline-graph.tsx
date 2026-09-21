@@ -156,6 +156,14 @@ function NodeCard({
         outlineOffset: 1,
       }}
       data-testid="graph-node"
+      // **Which node this is, and what kind**, for the same reason the three
+      // below exist: a card's identity is otherwise carried only by its text,
+      // and its text is not unique — a model's output dataset takes the
+      // model's own name (`models._ensure_output`), so "Clean orders" is two
+      // cards and a test picking one of them by words picks whichever the DOM
+      // happens to order first.
+      data-node={node.id}
+      data-kind={node.kind}
       // Which nodes are in the selection, as an attribute rather than only a
       // border: with several selected the count says how many and the borders
       // say *which*, and a border is not something a test can read without
