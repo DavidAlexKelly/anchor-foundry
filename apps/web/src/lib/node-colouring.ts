@@ -105,6 +105,21 @@ function statusSwatch(node: ColourableNode): Swatch {
     if (node.last_run_status === "error") return { key: "failed", label: "Failed", token: BAD };
     return UNKNOWN;
   }
+  // A data source's last run is its last sync too (§420), and it uses
+  // `sync_runs`' vocabulary rather than an object type's — which is why it is
+  // its own branch and not a value added to the one above.
+  if (node.kind === "connection") {
+    if (node.last_run_status === "succeeded") {
+      return { key: "ok", label: "Synced", token: GOOD };
+    }
+    if (node.last_run_status === "failed") {
+      return { key: "failed", label: "Sync failed", token: BAD };
+    }
+    if (node.last_run_status === "running") {
+      return { key: "warn", label: "Syncing", token: WARN };
+    }
+    return UNKNOWN;
+  }
   if (node.kind === "model") {
     if (node.last_run_status === "succeeded") {
       return { key: "ok", label: "Succeeded", token: GOOD };
@@ -152,6 +167,9 @@ function kindSwatch(node: ColourableNode): Swatch {
   if (node.kind === "object_type") {
     return { key: "object_type", label: "Object type", token: BAD };
   }
+  if (node.kind === "connection") {
+    return { key: "connection", label: "Data source", token: QUIET };
+  }
   return UNKNOWN;
 }
 
@@ -164,6 +182,8 @@ function originSwatch(node: ColourableNode): Swatch {
     return { key: "model_output", label: "Written by a model", token: GOOD };
   }
   if (node.origin === "sync") return { key: "sync", label: "Synced", token: BAD };
+  // A data source has no `origin` of its own, and "Not a dataset" is the
+  // honest label for it as much as for a model (§420).
   if (node.origin) return { key: node.origin, label: node.origin, token: NEUTRAL };
   return { key: "none", label: "Not a dataset", token: QUIET };
 }
@@ -211,7 +231,7 @@ const LEGEND_ORDER: Record<string, readonly string[]> = {
   status: ["failed", "stale", "warn", "ok", "unknown"],
   out_of_date: ["parent", "ancestor", "stale", "current"],
   health: ["fail", "warn", "pass", "none"],
-  kind: ["dataset", "model", "object_type", "unknown"],
+  kind: ["dataset", "model", "object_type", "connection", "unknown"],
   origin: ["upload", "model_output", "sync", "none"],
 };
 

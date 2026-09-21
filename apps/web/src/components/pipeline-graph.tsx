@@ -8,7 +8,7 @@ import {
 } from "@/lib/graph-builds";
 import { clearSummary, looksLikeCron, scheduleSummary } from "@/lib/graph-schedules";
 import {
-  GAP_X, GAP_Y, NODE_H, NODE_W, PAD, columnsIn, foundByColumn, isDrag, kindsIn, nodeX, nodeY, nodesInRect, outOfDateNote, relatives, search, toggleSelected, type GraphView, type Rect, viewOf,
+  GAP_X, GAP_Y, GRAPH_KINDS, NODE_H, NODE_W, PAD, columnsIn, foundByColumn, isDrag, kindsIn, nodeX, nodeY, nodesInRect, outOfDateNote, relatives, search, toggleSelected, type GraphView, type Rect, viewOf,
 } from "@/lib/pipeline-graph";
 import {
   durationLabel, emptyReason, placeOf, timelineFor,
@@ -44,6 +44,12 @@ function edgePath(from: PipelineNode, to: PipelineNode): string {
 }
 
 function subtitle(node: PipelineNode): string {
+  if (node.kind === "connection") {
+    // p.42's "Learn more about the different source types": the source type
+    // is what tells a reader whether this is a Postgres or an S3 bucket, and
+    // the name above it is only what somebody called it (§420).
+    return node.slug ?? "data source";
+  }
   if (node.kind === "object_type") {
     // The api_name, because that is what a person writing a transform or an
     // action against this type actually types — the display name is already
@@ -175,7 +181,9 @@ function NodeCard({
           color: "var(--ink-soft)",
         }}
       >
-        {node.kind === "object_type" ? "object type" : node.kind}
+        {node.kind === "object_type" ? "object type"
+          : node.kind === "connection" ? "data source"
+          : node.kind}
         {node.in_cycle && <span style={{ color: "var(--danger)" }}> · in a cycle</span>}
         {/* p.55's indicator. Named rather than coloured alone: "approved" and
             "rejected" are the two a reader most needs to tell apart at a
@@ -286,8 +294,15 @@ function Details({
         </>
       )}
       {when && <span className="slug">{new Date(when).toLocaleString()}</span>}
-      <button className="btn quiet" style={{ marginLeft: "auto" }} onClick={onOpen}>
-        Open {node.kind === "object_type" ? "object type" : node.kind}
+      <button
+        className="btn quiet"
+        style={{ marginLeft: "auto" }}
+        data-testid="node-open"
+        onClick={onOpen}
+      >
+        Open {node.kind === "object_type" ? "object type"
+          : node.kind === "connection" ? "data source"
+          : node.kind}
       </button>
     </div>
   );
@@ -513,7 +528,7 @@ export function PipelineGraphView({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          {(["dataset", "model", "object_type"] as const).map((kind) => (
+          {GRAPH_KINDS.map((kind) => (
             <button
               key={kind}
               type="button"
@@ -528,7 +543,9 @@ export function PipelineGraphView({
                 )
               }
             >
-              {kind === "object_type" ? "object types" : `${kind}s`}
+              {kind === "object_type" ? "object types"
+                : kind === "connection" ? "data sources"
+                : `${kind}s`}
             </button>
           ))}
           {(query.trim() !== "" || kinds.length > 0) && (

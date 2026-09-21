@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import os
 import sys
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1080,3 +1081,188 @@ def test_a_later_failed_run_does_not_move_the_window(
         "the dataset still holds"
     )
     assert after["build_finished_at"] == good["build_finished_at"]
+
+
+# ---------------------------------------------------------------------------
+# p.42's data source node (§420)
+# ---------------------------------------------------------------------------
+
+
+def _connection(client: TestClient, fx: Fixture, name: str) -> str:
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/connections",
+        headers=hdr(fx.editor_sub),
+        json={
+            "name": name, "source_type": "postgres",
+            "config": {"host": "nowhere.invalid", "port": 5432,
+                       "database": "src", "user": "u"},
+            "secret": {"password": "x"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def _sync_run(connection: str, dataset: str | None, status: str, table: str) -> None:
+    """A sync that happened, written straight in.
+
+    **Fabricated rather than performed**, and that is the honest choice here
+    rather than a shortcut: running a real sync needs a reachable source
+    database, and what this file is about is what the *graph* makes of the row
+    afterwards. `test_schema_drift.py` covers a sync that really runs.
+    """
+    import psycopg
+
+    from test_api import ADMIN_DSN
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO sync_runs (connection_id, dataset_id, mode, source_table,"
+            "                       status, finished_at) "
+            "VALUES (%s, %s, 'full', %s, %s, now())",
+            (connection, dataset, table, status),
+        )
+
+
+@pytest.fixture(scope="module")
+def sourced(client: TestClient, fx: Fixture) -> dict[str, str]:
+    """A connection that has filled two datasets here, one that has filled a
+    dataset in **a second project**, and one that has filled nothing at all.
+
+    The second is the fixture's point as much as the first, and it is the case
+    a sweep found missing: a connection with no sync runs anywhere is kept off
+    this graph by there being no row to find, which is not the same claim. A
+    workspace-scoped connection is shared, and one busily filling another
+    project's data is the one that has to be excluded *on purpose*.
+    """
+    names = {}
+    for label in ("Sourced A", "Sourced B"):
+        r = client.post(
+            f"{base(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+            data={"name": f"{label} {fx.tag}"},
+            files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")},
+        )
+        assert r.status_code == 201, r.text
+        names[label] = r.json()["id"]
+
+    # A slug of its own per run, not `fx.tag`: this database accumulates
+    # across runs (§271), and a project slug is unique within a workspace — a
+    # second run of this file would otherwise fail on the leftovers of the
+    # first, which looks like a bug in the code under test and is not.
+    stamp = uuid.uuid4().hex[:8]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.editor_sub),
+        json={"name": f"Elsewhere {stamp}", "slug": f"elsewhere-{stamp}"},
+    )
+    assert r.status_code == 201, r.text
+    other = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{other}/datasets/upload",
+        headers=hdr(fx.editor_sub), data={"name": f"Far away {stamp}"},
+        files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    far = r.json()["id"]
+
+    feeder = _connection(client, fx, f"Feeder {fx.tag}")
+    neighbour = _connection(client, fx, f"Neighbour {fx.tag}")
+    idle = _connection(client, fx, f"Idle {fx.tag}")
+    _sync_run(feeder, names["Sourced A"], "succeeded", "public.a")
+    _sync_run(feeder, names["Sourced B"], "succeeded", "public.b")
+    _sync_run(neighbour, far, "succeeded", "public.far")
+    return {"feeder": feeder, "idle": idle, "neighbour": neighbour,
+            "a": names["Sourced A"], "b": names["Sourced B"]}
+
+
+def test_a_data_source_is_a_node_upstream_of_what_it_filled(
+    client: TestClient, fx: Fixture, sourced: dict[str, str]
+) -> None:
+    """p.42's first node type: "the name of the data source as it appears in
+    Data Connection". One node, two arrows — folded the way an object type's
+    sources are, because a connection that feeds two datasets is one source."""
+    g = graph(client, fx)
+    source = node(g, f"Feeder {fx.tag}", "connection")
+    assert source["id"] == f"connection:{sourced['feeder']}"
+    # p.42's "Learn more about the different source types".
+    assert source["slug"] == "postgres"
+
+    out = [e["to"] for e in g["edges"] if e["from"] == source["id"]]
+    assert sorted(out) == sorted(
+        [f"dataset:{sourced['a']}", f"dataset:{sourced['b']}"]
+    ), out
+
+
+def test_a_connection_that_filled_nothing_here_is_not_on_this_graph(
+    client: TestClient, fx: Fixture, sourced: dict[str, str]
+) -> None:
+    """A connection may be workspace-scoped and shared across six projects.
+    Drawing it on all six would put a node with no arrow out of it on five —
+    a source that sourced nothing, which is not a fact about this pipeline.
+
+    **The busy neighbour is the case that matters**, and the sweep proved it:
+    dropping the project clause from the query left the idle connection off the
+    graph anyway, because it has no sync run to find. Only a connection that is
+    genuinely filling *something* can tell a scoped query from an unscoped one.
+    """
+    ids = {n["id"] for n in graph(client, fx)["nodes"]}
+    assert f"connection:{sourced['feeder']}" in ids
+    assert f"connection:{sourced['idle']}" not in ids
+    assert f"connection:{sourced['neighbour']}" not in ids, (
+        "a connection filling another project's data was drawn here"
+    )
+
+
+def test_a_source_sits_upstream_of_the_dataset_it_filled(
+    client: TestClient, fx: Fixture, sourced: dict[str, str]
+) -> None:
+    """The layering is what makes it lineage rather than a badge: the arrow
+    has to put the source *before* the data, or the graph reads as though the
+    dataset produced the connection."""
+    g = graph(client, fx)
+    source = node(g, f"Feeder {fx.tag}", "connection")
+    filled = node(g, f"Sourced A {fx.tag}", "dataset")
+    assert source["layer"] < filled["layer"], (source["layer"], filled["layer"])
+
+
+def test_one_arrow_per_dataset_however_often_the_sync_ran(
+    client: TestClient, fx: Fixture, sourced: dict[str, str]
+) -> None:
+    """A nightly sync is one arrow. Thirty would say the arrow got thicker
+    rather than that the job ran again — and every count drawn from `edges`
+    would be reporting how long the connection had existed."""
+    _sync_run(sourced["feeder"], sourced["a"], "succeeded", "public.a")
+    _sync_run(sourced["feeder"], sourced["a"], "succeeded", "public.a")
+    g = graph(client, fx)
+    src = f"connection:{sourced['feeder']}"
+    drawn = [e for e in g["edges"] if e["from"] == src and e["to"] == f"dataset:{sourced['a']}"]
+    assert len(drawn) == 1, drawn
+
+
+def test_a_source_reports_the_worst_of_its_syncs(
+    client: TestClient, fx: Fixture, sourced: dict[str, str]
+) -> None:
+    """§351's rule read from the other end. A source whose nightly load into
+    one dataset is failing while another still fills is a source with a
+    problem, and a graph answering "what is wrong upstream of here" must not
+    answer with the reassuring half."""
+    before = node(graph(client, fx), f"Feeder {fx.tag}", "connection")
+    assert before["last_run_status"] == "succeeded"
+
+    _sync_run(sourced["feeder"], sourced["b"], "failed", "public.b")
+    after = node(graph(client, fx), f"Feeder {fx.tag}", "connection")
+    assert after["last_run_status"] == "failed"
+
+
+def test_a_source_is_a_node_a_lineage_view_can_centre_on(
+    client: TestClient, fx: Fixture, sourced: dict[str, str]
+) -> None:
+    """A node the graph draws and cannot centre on is a node whose neighbours
+    are unreachable from it — the same argument §351 made for object types."""
+    r = client.get(
+        f"{base(fx)}/pipeline?focus=connection:{sourced['feeder']}",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    ids = {n["id"] for n in r.json()["nodes"]}
+    assert f"connection:{sourced['feeder']}" in ids
+    assert f"dataset:{sourced['a']}" in ids

@@ -70,6 +70,11 @@ from ..lib.errors import NotFoundError
 #: a literal inside a loop that nothing can ask about.
 _WORST = {"error": 0, "never_synced": 1, "syncing": 2, "ok": 3}
 
+#: The same ordering over `sync_runs.status`, which is a different vocabulary
+#: (db 0011) — a second dict rather than a merged one, because a merged one
+#: would silently rank a value from the wrong column when a typo put it there.
+_WORST_RUN = {"failed": 0, "running": 1, "succeeded": 2}
+
 
 async def project_graph(
     conn: AsyncConnection, project_id: UUID, *, focus: str | None = None
@@ -172,6 +177,36 @@ async def project_graph(
           JOIN object_types ot ON ot.id = ots.object_type_id
          WHERE d.project_id = :pid
          ORDER BY ot.display_name, ots.dataset_id
+        """,
+        {"pid": str(project_id)},
+    )
+
+    # **The data sources** (§420; `data-lineage` p.42). p.42's first node type
+    # is "the name of the data source as it appears in Data Connection", and
+    # p.43's *Syncs* indicator is the same fact on the dataset end — "datasets
+    # with this indicator on them have syncs to other databases or systems".
+    # One node and an arrow says both, which is §355's argument: a graph drawn
+    # whole does not need a badge announcing a neighbour it already draws.
+    #
+    # One row per (connection, dataset) pair, for the reason `ontology` is one
+    # row per source: the *edges* are per pair, and folding to one node per
+    # connection happens below.
+    #
+    # **Scoped by the syncs, not by the connection's own project.** A
+    # connection may be workspace-scoped (db 0003's `scope`), and one shared
+    # across six projects would otherwise appear on all six graphs — five of
+    # them as a node with no arrow out of it. A data source earns its place
+    # here by having written something in this project.
+    sources = await fetch_all(
+        conn,
+        """
+        SELECT sr.dataset_id, c.id, c.name, c.source_type,
+               sr.status AS run_status, sr.started_at, sr.finished_at
+          FROM sync_runs sr
+          JOIN connections c ON c.id = sr.connection_id
+          JOIN datasets d ON d.id = sr.dataset_id
+         WHERE d.project_id = :pid
+         ORDER BY c.name, sr.dataset_id, sr.started_at
         """,
         {"pid": str(project_id)},
     )
@@ -284,6 +319,65 @@ async def project_graph(
             held["updated_at"] = row["last_synced_at"]
     nodes.extend(by_type.values())
 
+    # **One node per data source, whatever it wrote** (§420), folded the way
+    # an object type's sources are and for the same reason: a connection that
+    # feeds three datasets is one source with three arrows out, not three
+    # nodes wearing the same name.
+    #
+    # A connection's last *run* is its last sync, which is §351's rule read
+    # from the other end — the question a red node answers here is "did the
+    # thing that writes this work", and for a data source that thing is the
+    # sync. `connections.status` is deliberately not what this carries: that
+    # column is the last *connection test*, and a source that tests fine while
+    # every sync fails is exactly the node a reader needs to see red.
+    #
+    # The **worst** status of the runs into this project, for the reason an
+    # object type reports the worst of its sources: a graph answering "what is
+    # wrong downstream of here" must not answer with the reassuring half.
+    by_source: dict[str, dict[str, Any]] = {}
+    for row in sources:
+        cid = str(row["id"])
+        status = str(row["run_status"])
+        when = row["finished_at"] or row["started_at"]
+        held = by_source.get(cid)
+        if held is None:
+            by_source[cid] = {
+                "id": f"connection:{cid}",
+                "kind": "connection",
+                "resource_id": cid,
+                "name": row["name"],
+                # p.42's "Learn more about the different source types" — the
+                # source type is what tells a reader whether this is a
+                # Postgres or an S3 bucket, and `slug` is the line the card
+                # already draws under a name (§351).
+                "slug": row["source_type"],
+                "origin": None,
+                "row_count": None,
+                "current_version": None,
+                "updated_at": when,
+                "built_at": None,
+                # A data source is not built; it writes. The pair is here so
+                # the node shape stays one shape (§418).
+                "build_started_at": None,
+                "build_finished_at": None,
+                "health_status": None,
+                # A source has nothing upstream of it, so it cannot be behind
+                # anything. Present so the node shape stays one shape.
+                "out_of_date": False,
+                "out_of_date_reason": None,
+                "language": None,
+                "trigger_mode": None,
+                "last_run_status": status,
+                "last_run_at": when,
+            }
+            continue
+        if _WORST_RUN.get(status, 9) < _WORST_RUN.get(str(held["last_run_status"]), 9):
+            held["last_run_status"] = status
+        if when is not None and (held["last_run_at"] is None or when > held["last_run_at"]):
+            held["last_run_at"] = when
+            held["updated_at"] = when
+    nodes.extend(by_source.values())
+
     known = {n["id"] for n in nodes}
     edges: list[dict[str, Any]] = []
     for row in ontology:
@@ -294,6 +388,20 @@ async def project_graph(
         src, dst = f"dataset:{row['dataset_id']}", f"object_type:{row['id']}"
         if src in known and dst in known:
             edges.append({"from": src, "to": dst, "label": None})
+    # p.42's data source, one hop upstream of what it wrote. Ordinary edges,
+    # because a sync *is* a flow — the same argument that puts a dataset →
+    # object type arrow in `edges` rather than in `links`.
+    #
+    # De-duplicated, because `sources` is one row per sync *run*: a connection
+    # that has filled the same dataset nightly for a month is one arrow, and a
+    # graph that drew thirty would say the arrow got thicker rather than that
+    # the job ran again.
+    drawn: set[tuple[str, str]] = set()
+    for row in sources:
+        pair = (f"connection:{row['id']}", f"dataset:{row['dataset_id']}")
+        if pair[0] in known and pair[1] in known and pair not in drawn:
+            drawn.add(pair)
+            edges.append({"from": pair[0], "to": pair[1], "label": None})
     for i in inputs:
         src, dst = f"dataset:{i['dataset_id']}", f"model:{i['model_id']}"
         # A model may read a dataset from another project only if something

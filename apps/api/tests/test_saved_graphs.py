@@ -25,10 +25,12 @@ from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 from src.services import saved_graphs  # noqa: E402
 
-WEB_COLOURING = os.path.join(
+_WEB_LIB = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "web", "src", "lib", "node-colouring.ts",
+    "web", "src", "lib",
 )
+WEB_COLOURING = os.path.join(_WEB_LIB, "node-colouring.ts")
+WEB_GRAPH = os.path.join(_WEB_LIB, "pipeline-graph.ts")
 
 
 @pytest.fixture(scope="module")
@@ -172,6 +174,32 @@ def test_a_kind_this_graph_does_not_draw_is_refused(
     assert "pipeline" in r.text
 
 
+def test_the_browser_draws_exactly_the_kinds_this_accepts() -> None:
+    """**The mirror §420 found already cracked.** `GRAPH_KINDS` is what the
+    graph draws and `KINDS` is what a saved view may filter to, in two
+    languages that cannot import each other. Adding p.42's data source node
+    needed both changed, and nothing would have said so — a kind drawn but not
+    accepted is a filter that refuses to save, and one accepted but not drawn
+    is a stored view that quietly matches nothing.
+
+    The refusal wording had drifted the same way and is derived from `KINDS`
+    now, which is why `FOCUS_HINT` is checked here rather than spelled out
+    again: the list is the single thing this file has to keep true.
+    """
+    source = open(WEB_GRAPH).read()
+    block = re.search(
+        r"export const GRAPH_KINDS: PipelineNode\[\"kind\"\]\[\] = \[(.*?)\];",
+        source, re.S,
+    )
+    assert block, "pipeline-graph.ts no longer declares GRAPH_KINDS"
+    kinds = re.findall(r'"(.*?)"', block.group(1))
+    assert set(kinds) == set(saved_graphs.KINDS), (kinds, saved_graphs.KINDS)
+
+    for kind in saved_graphs.KINDS:
+        assert f"'{kind}:<uuid>'" in saved_graphs.FOCUS_HINT, kind
+        assert saved_graphs.NODE_ID.fullmatch(f"{kind}:{uuid.uuid4()}"), kind
+
+
 def test_a_colouring_this_graph_does_not_offer_is_refused(
     client: TestClient, fx: Fixture
 ) -> None:
@@ -283,8 +311,11 @@ def test_a_node_selected_twice_is_selected_once(client: TestClient, fx: Fixture)
 
 def test_every_kind_chosen_is_no_filter_at_all(client: TestClient, fx: Fixture) -> None:
     """Saving it as a filter would have a reader believe one is applied."""
+    # Derived rather than spelled out: this claim is about *every* kind, and a
+    # hardcoded three stopped being every kind the day the graph drew a fourth
+    # (§420) — at which point it was asserting something narrower than it said.
     assert "kinds" not in save(
-        client, fx, view={"kinds": ["dataset", "model", "object_type"]}
+        client, fx, view={"kinds": list(saved_graphs.KINDS)}
     )["view"]
 
 

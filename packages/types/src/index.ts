@@ -1448,7 +1448,9 @@ export interface PipelineNode {
   /** An object type is on this graph when a dataset in the project backs it
    * (§351; `data-lineage` p.31) — which is what turns a pipeline view into
    * the answer to "if I change this column, what breaks?". */
-  kind: "dataset" | "model" | "object_type";
+  /** `"connection"` is p.42's *Data source* node (§420) — a connection that
+   *  has actually written a dataset in this project. */
+  kind: "dataset" | "model" | "object_type" | "connection";
   resource_id: string;
   name: string;
   /** Distance downstream; every edge points from a lower layer to a higher one. */

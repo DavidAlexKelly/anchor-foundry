@@ -198,6 +198,43 @@ describe("legendFor", () => {
   });
 });
 
+describe("swatchFor: p.42's data source (§420)", () => {
+  it("colours a source by its last sync, not by a connection test", () => {
+    // §351's rule read from the other end: the question a red node answers is
+    // "did the thing that writes this work", and for a data source that thing
+    // is the sync.
+    expect(swatchFor(node("connection", { last_run_status: "succeeded" }), "status")!.key)
+      .toBe("ok");
+    expect(swatchFor(node("connection", { last_run_status: "failed" }), "status")!.key)
+      .toBe("failed");
+  });
+
+  it("reads `sync_runs` vocabulary rather than an object type's", () => {
+    // The reason it is its own branch: db 0011's statuses are
+    // running/succeeded/failed and db 0003's are ok/error/syncing, and a
+    // source scored against the wrong list reads as never having run.
+    expect(swatchFor(node("connection", { last_run_status: "running" }), "status")!.key)
+      .toBe("warn");
+    expect(swatchFor(node("connection", { last_run_status: "ok" }), "status")!.key)
+      .toBe("unknown");
+  });
+
+  it("is its own resource type rather than an unknown one", () => {
+    expect(swatchFor(node("connection"), "kind")!.key).toBe("connection");
+  });
+
+  it("has no origin of its own, the way a model has none", () => {
+    // p.38's "the way the resource was created" is a dataset's question.
+    expect(swatchFor(node("connection"), "origin")!.key).toBe("none");
+  });
+
+  it("sorts after the three kinds it feeds", () => {
+    const mixed = [node("connection"), node("model"), node("dataset")];
+    expect(legendFor(mixed, "kind").map((e) => e.key))
+      .toEqual(["dataset", "model", "connection"]);
+  });
+});
+
 describe("the colouring a stored view names (§360)", () => {
   it("keeps one this build offers", () => {
     expect(colouringIn({ colouring: "health" })).toBe("health");
