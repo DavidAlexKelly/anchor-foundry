@@ -64,7 +64,13 @@ import type {
 // would produce a property the server refuses — §214's rule about a control
 // that cannot work.
 export const PROPERTY_TYPES: PropertyDataType[] = [
-  "string", "integer", "float", "boolean", "date", "timestamp", "geopoint", "json",
+  "string", "integer", "float", "boolean", "date", "timestamp", "geopoint",
+  // **`geoshape` needs no second control** (§425), which is what puts it on
+  // this list the day it exists: p.127's type is a GeoJSON geometry, and a
+  // geometry is a value somebody pastes rather than a declaration with a
+  // shape of its own. That is the difference between it and `struct`, whose
+  // dropdown entry had to wait for a Fields dialog.
+  "geoshape", "json",
   "struct", "array",
 ];
 

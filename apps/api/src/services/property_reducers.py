@@ -89,6 +89,11 @@ UNREDUCIBLE = {
         "so there is no single value to call highest (p.132 lists Geohash and "
         "Geoshape as unsupported)"
     ),
+    "geoshape": (
+        "a shape has no single value to order by - area, perimeter and extent "
+        "are three different answers (p.132 lists Geoshape as unsupported, "
+        "and §425 gave this platform the type the entry was waiting for)"
+    ),
     "json": (
         "a json value is this platform's untyped escape hatch, so nothing "
         "declares what shape its values have or how two of them compare"

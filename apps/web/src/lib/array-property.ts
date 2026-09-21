@@ -44,7 +44,7 @@ import type { ObjectTypeProperty, PropertyDataType } from "@/lib/types";
  */
 export const ELEMENT_TYPES: PropertyDataType[] = [
   "string", "integer", "float", "boolean", "date", "timestamp", "geopoint",
-  "json", "struct",
+  "geoshape", "json", "struct",
 ];
 
 /** What a newly-made array holds until somebody says otherwise.

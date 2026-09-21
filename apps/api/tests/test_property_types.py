@@ -565,3 +565,266 @@ def test_a_property_filter_needs_exactly_one_type(
         headers=hdr(fx.viewer_sub),
     )
     assert r.status_code == 422, "half a filter is not a filter"
+
+
+# ---------------------------------------------------------------------------
+# Geoshape (§425; `object-link-types` p.127, p.273; `functions` p.40)
+# ---------------------------------------------------------------------------
+
+LONDON = {"type": "Point", "coordinates": [-0.1278, 51.5074]}
+SQUARE = {
+    "type": "Polygon",
+    "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]]],
+}
+
+
+def coerce(value, data_type="geoshape"):
+    return property_values.coerce_property_value(data_type, value)
+
+
+def test_every_geometry_type_the_spec_names_is_accepted() -> None:
+    """p.127: "any valid GeoJSON geometry, including Points, Polygons,
+    LineStrings, and other shapes"."""
+    assert coerce(LONDON) == LONDON
+    assert coerce(SQUARE) == SQUARE
+    assert coerce({"type": "LineString", "coordinates": [[0, 0], [1, 1]]})["type"] \
+        == "LineString"
+    assert coerce({"type": "MultiPoint", "coordinates": [[0, 0]]})["type"] == "MultiPoint"
+    assert coerce({
+        "type": "MultiPolygon", "coordinates": [SQUARE["coordinates"]],
+    })["type"] == "MultiPolygon"
+    assert coerce({
+        "type": "MultiLineString", "coordinates": [[[0, 0], [1, 1]]],
+    })["type"] == "MultiLineString"
+
+
+def test_a_type_the_spec_does_not_name_is_refused() -> None:
+    """**The whole reason this is a type and not a `json` property.**
+    `{"type": "Polygn"}` is valid JSON, draws nothing and reports nothing —
+    which is what `geopoint` was before db 0029 enforced it."""
+    with pytest.raises(property_values.PropertyValueError, match="Polygn"):
+        coerce({"type": "Polygn", "coordinates": []})
+
+
+def test_a_feature_is_refused_because_it_is_not_a_geometry() -> None:
+    """A Feature is a geometry *plus* properties, and a property that stored
+    one would be an object type holding a second object type's worth of fields
+    where the schema says it holds a shape."""
+    with pytest.raises(property_values.PropertyValueError, match="Feature"):
+        coerce({"type": "Feature", "geometry": LONDON, "properties": {}})
+
+
+def test_the_positions_are_longitude_first() -> None:
+    """> "Note that positional arguments follow longitude, latitude order as
+    >  per the GeoJSON spec." (`functions` p.40)
+
+    **And the opposite way round to a geopoint**, which `object-link-types`
+    p.273 documents as "latitude,longitude". Both are kept, because
+    reconciling them would break whichever of the two this platform is
+    exporting to — so the one thing that has to be true is that each refuses
+    the other's order where it can tell.
+    """
+    # A longitude of 51.5 is legal; a latitude of 51.5 is legal too, so this
+    # pair is accepted in both orders and neither type can object. That is the
+    # honest limit of the check, and the reason the input says which it wants.
+    assert coerce(LONDON)["coordinates"] == [-0.1278, 51.5074]
+    # Where it *can* tell, it does: 120 is a legal longitude and not a legal
+    # latitude, so [45, 120] is a transposed pair and the refusal says so.
+    with pytest.raises(property_values.PropertyValueError, match="longitude, latitude"):
+        coerce({"type": "Point", "coordinates": [45.0, 120.0]})
+    # And the geopoint type refuses the same pair the other way round.
+    with pytest.raises(property_values.PropertyValueError, match="lon,lat"):
+        coerce({"lat": 120.0, "lon": 45.0}, "geopoint")
+
+
+def test_a_position_out_of_range_is_refused() -> None:
+    with pytest.raises(property_values.PropertyValueError, match="longitude 181"):
+        coerce({"type": "Point", "coordinates": [181.0, 0.0]})
+
+
+def test_the_nesting_depth_of_each_type_is_checked() -> None:
+    """**The check a look at the outer shape alone would miss.** A Point
+    holding a polygon's coordinates and a Polygon holding a bare position are
+    both valid JSON, both draw nothing, and neither is caught by asking
+    whether `coordinates` is a list."""
+    with pytest.raises(property_values.PropertyValueError):
+        coerce({"type": "Point", "coordinates": SQUARE["coordinates"]})
+    with pytest.raises(property_values.PropertyValueError):
+        coerce({"type": "Polygon", "coordinates": [0.0, 0.0]})
+
+
+def test_a_geometry_with_no_coordinates_is_refused() -> None:
+    """The half a type check alone lets through: `{"type": "Point"}` names a
+    geometry and describes none. A sweep found it — every other refusal here
+    had a test and this one was carried only by the API/worker mirror check,
+    which fires for any edit at all and says nothing about behaviour."""
+    with pytest.raises(property_values.PropertyValueError, match="needs coordinates"):
+        coerce({"type": "Point"})
+    with pytest.raises(property_values.PropertyValueError, match="needs coordinates"):
+        coerce({"type": "Polygon", "bbox": [0, 0, 1, 1]})
+
+
+def test_an_altitude_is_kept_and_a_fourth_number_is_not() -> None:
+    """RFC 7946 allows a third element; it does not allow a fourth."""
+    assert coerce({"type": "Point", "coordinates": [0.0, 0.0, 12.5]})["coordinates"] \
+        == [0.0, 0.0, 12.5]
+    with pytest.raises(property_values.PropertyValueError):
+        coerce({"type": "Point", "coordinates": [0.0, 0.0, 1.0, 2.0]})
+
+
+def test_a_geometry_collection_holds_geometries_and_not_collections() -> None:
+    """RFC 7946 §3.1.8 says to avoid nested GeometryCollections, and allowing
+    one would make the depth of a value unbounded on a read path."""
+    held = coerce({"type": "GeometryCollection", "geometries": [LONDON, SQUARE]})
+    assert [g["type"] for g in held["geometries"]] == ["Point", "Polygon"]
+    with pytest.raises(property_values.PropertyValueError, match="another one"):
+        coerce({
+            "type": "GeometryCollection",
+            "geometries": [{"type": "GeometryCollection", "geometries": []}],
+        })
+
+
+def test_a_bbox_and_foreign_members_are_dropped() -> None:
+    """A bbox that does not match its geometry is a second answer to where the
+    shape is, and this platform computes nothing from one."""
+    held = coerce({**LONDON, "bbox": [0, 0, 1, 1], "name": "London"})
+    assert held == LONDON
+
+
+def test_a_geometry_arrives_as_text_from_a_csv_column() -> None:
+    """The same reason `_coerce_geopoint` takes "lat,lon": a CSV column holding
+    a geometry holds text. The parse is JSON, because there is no plain-text
+    spelling of a polygon a spreadsheet would produce."""
+    import json
+
+    assert coerce(json.dumps(SQUARE)) == SQUARE
+    with pytest.raises(property_values.PropertyValueError, match="GeoJSON"):
+        coerce("POLYGON((0 0, 1 0, 1 1, 0 0))")
+
+
+def test_a_geoshape_round_trips_through_a_dataset_column() -> None:
+    """**The round trip is the whole reason `column_value` has a case for it.**
+    A geometry has no scalar it can be flattened to that survives — a centroid
+    is a different shape and a bbox is a different geometry — so the column
+    holds the document, which the next sync reads straight back."""
+    flat = property_values.column_value("geoshape", SQUARE)
+    assert isinstance(flat, str)
+    assert coerce(flat) == SQUARE
+
+
+def test_a_geoshape_property_is_declared_stored_and_read_back(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The type end to end: declared on an object type, written through the
+    action path, and read back as the geometry it was."""
+    tag = uuid.uuid4().hex[:6]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"Parcel{tag}", "display_name": f"Parcel {tag}",
+            "properties": [
+                {"api_name": "id", "display_name": "Id", "data_type": "string"},
+                {"api_name": "outline", "display_name": "Outline",
+                 "data_type": "geoshape"},
+            ],
+            "title_property": "id",
+        },
+    )
+    assert r.status_code == 201, r.text
+    props = {p["api_name"]: p for p in r.json()["properties"]}
+    assert props["outline"]["data_type"] == "geoshape"
+
+
+def test_a_geoshape_cannot_be_an_object_types_title(
+    client: TestClient, fx: Fixture
+) -> None:
+    """`object-link-types` p.273's "Valid as title key?" column, which marks
+    Geoshape No — and the reason is not arbitrary: a heading is one line of
+    text and a shape has none."""
+    tag = uuid.uuid4().hex[:6]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"Titled{tag}", "display_name": f"Titled {tag}",
+            "properties": [
+                {"api_name": "outline", "display_name": "Outline",
+                 "data_type": "geoshape"},
+            ],
+            "title_property": "outline",
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert "title" in r.text and "geoshape" in r.text
+
+
+def test_a_geopoint_may_still_be_a_title(client: TestClient, fx: Fixture) -> None:
+    """**The negative control for the rule above**, and p.273's own answer:
+    Geopoint is marked Yes, and "57.6,10.4" is a usable heading for a reading
+    somebody took at a place. A blanket refusal of anything geographic would
+    have passed the test above and been wrong."""
+    tag = uuid.uuid4().hex[:6]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"Reading{tag}", "display_name": f"Reading {tag}",
+            "properties": [
+                {"api_name": "where", "display_name": "Where",
+                 "data_type": "geopoint"},
+            ],
+            "title_property": "where",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+
+def test_the_title_rule_holds_on_an_edit_as_well_as_on_a_create(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**A rule enforced on create and not on update is a rule anybody can get
+    round by saving twice**, which is db 0040's lesson in this file."""
+    tag = uuid.uuid4().hex[:6]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"Edited{tag}", "display_name": f"Edited {tag}",
+            "properties": [
+                {"api_name": "id", "display_name": "Id", "data_type": "string"},
+                {"api_name": "outline", "display_name": "Outline",
+                 "data_type": "geoshape"},
+            ],
+            "title_property": "id",
+        },
+    )
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+
+    r = client.patch(
+        f"/api/workspaces/{fx.workspace}/object-types/{type_id}",
+        headers=hdr(fx.editor_sub),
+        json={
+            "properties": [
+                {"api_name": "id", "display_name": "Id", "data_type": "string"},
+                {"api_name": "outline", "display_name": "Outline",
+                 "data_type": "geoshape"},
+            ],
+            "title_property": "outline",
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert "geoshape" in r.text
+
+
+def test_an_array_of_shapes_is_allowed_and_cannot_be_reduced() -> None:
+    """Two pages, one type, and they are not in tension.
+
+    p.127: "All base types may be used in arrays… excluding the Vector and
+    Time series types" — so an array of shapes is ordinary, and a route's legs
+    or a district's parcels are what one is for. p.132 lists Geoshape among
+    the subtypes a reducer cannot take — because there is no single one of
+    them to call highest, not because the array is disallowed.
+    """
+    from src.services import array_properties, property_reducers
+
+    assert "geoshape" in array_properties.INNER_TYPES
+    assert "geoshape" in property_reducers.UNREDUCIBLE
+    assert "geoshape" not in property_reducers.OPERATIONS

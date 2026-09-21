@@ -1,0 +1,25 @@
+-- ============================================================================
+-- 0095_geoshape_action_parameter.sql
+-- Geoshape as an action parameter type (§425; `action-types` p.131).
+--
+-- > "Property type | Parameter type | Supported ... Geoshape | Geoshape | Yes"
+--
+-- **Not scope creep on 0094.** A property type an action cannot take is a
+-- property type nothing in the product can *write*: every edit to an instance
+-- goes through an action, so a geoshape that could be declared and synced but
+-- never typed would be half a type. p.131 says the parameter exists, so it
+-- does here.
+--
+-- Its own migration because 0094 has been applied, and an applied migration is
+-- immutable - the runner checksums them, which is the rule working rather than
+-- a nuisance to route around.
+--
+-- db 0044 keeps `action_parameter_type` separate from `property_data_type` on
+-- purpose (its own comment says why), which is why this is a second enum and
+-- not a shared one.
+--
+-- ADD VALUE IF NOT EXISTS: an enum label cannot be dropped, so a migration
+-- that adds one must be re-appliable after an edit (STATUS rough edges).
+-- ============================================================================
+
+ALTER TYPE action_parameter_type ADD VALUE IF NOT EXISTS 'geoshape';

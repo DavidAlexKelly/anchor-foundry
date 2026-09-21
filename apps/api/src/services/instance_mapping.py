@@ -83,6 +83,16 @@ FIELD_TYPES: dict[str, dict[str, Any]] = {
     "json": {"type": "object", "enabled": False},
     "attachment": {"type": "object", "enabled": False},
     "struct": {"type": "object", "enabled": False},
+    # **Stored and returned, not indexed** (§425). OpenSearch has a `geo_shape`
+    # field type and it is the right mapping the day there is a spatial query
+    # to run against it - but taking it now would put a *second*, stricter
+    # validator on the write path: `geo_shape` refuses an unclosed ring and a
+    # self-intersecting polygon, which `property_values._coerce_geoshape`
+    # accepts, so a sync would start failing at index time with a message
+    # nothing in this platform could explain. `enabled: False` is the same
+    # answer `json`, `attachment` and `struct` get and for the same reason -
+    # the value is composite and nothing queries inside it yet.
+    "geoshape": {"type": "object", "enabled": False},
 }
 
 # What an ordered comparison may be asked of (0006 §2). Not used by anything in
