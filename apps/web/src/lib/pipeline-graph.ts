@@ -19,6 +19,7 @@ import type { PipelineColumn, PipelineEdge, PipelineNode } from "@/lib/types";
 // `@/` alias, so an aliased value import is a module this file's own tests
 // cannot load.
 import { DEFAULT_COLOURING } from "./node-colouring";
+import { DEFAULT_LAYOUT } from "./graph-layout";
 
 /** The project-relative section each kind of node belongs to. */
 export function nodeSection(node: Pick<PipelineNode, "kind">): string {
@@ -91,26 +92,16 @@ export function outOfDateNote(
  * (apps/api/src/services/pipeline.py), so this is arithmetic rather than a
  * layout library.
  */
-export const NODE_W = 190;
-export const NODE_H = 74;
-export const GAP_X = 88;
-export const GAP_Y = 26;
-export const PAD = 28;
-
-export function nodeX(layer: number): number {
-  return PAD + layer * (NODE_W + GAP_X);
-}
-export function nodeY(position: number): number {
-  return PAD + position * (NODE_H + GAP_Y);
-}
-
-/** Two corners of a drag, in canvas coordinates. Either corner may be first. */
-export interface Rect {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-}
+// **The card geometry lives in `lib/graph-layout` now** (§424). It was here
+// while there was one arrangement; with p.11's layouts there is more than one,
+// and a second copy of "where is that card" is a marquee that selects the node
+// beside the one it was drawn over (§191). Re-exported so the callers that
+// only ever wanted the constants do not have to know which module grew.
+export {
+  GAP_X, GAP_Y, NODE_H, NODE_W, PAD, layoutIn, layoutOf, nodesInRect,
+  type Place, type Rect,
+} from "./graph-layout";
+import type { Rect } from "./graph-layout";
 
 /**
  * How far the pointer must travel before a press counts as a drag rather than
@@ -128,41 +119,6 @@ export function isDrag(rect: Rect): boolean {
     Math.abs(rect.x2 - rect.x1) >= DRAG_FLOOR ||
     Math.abs(rect.y2 - rect.y1) >= DRAG_FLOOR
   );
-}
-
-/**
- * The nodes a drag rectangle covers (p.7's Drag select mode).
- *
- * > "To use the cursor to select multiple nodes, switch to **Drag select**
- * > mode in the graph tools or hold `Shift` while clicking and dragging."
- * > (p.7)
- *
- * **Overlap, not containment.** A rectangle that visibly covers most of a card
- * has selected it as far as the person drawing it is concerned; requiring the
- * whole card means dragging past the edge of a graph you cannot see the end of
- * to pick up the node you are looking at.
- *
- * The order of the result is the graph's and **nothing promises it**, unlike
- * `toggleSelected`'s, because a rectangle has no order a reader chose. §356's
- * sweep confirmed it: sorting this output fails no test, and that is correct
- * rather than a gap (§213). A consumer that comes to need an order has to ask
- * for one here rather than assume this.
- */
-export function nodesInRect(
-  nodes: readonly Pick<PipelineNode, "id" | "layer" | "position">[],
-  rect: Rect,
-): string[] {
-  const left = Math.min(rect.x1, rect.x2);
-  const right = Math.max(rect.x1, rect.x2);
-  const top = Math.min(rect.y1, rect.y2);
-  const bottom = Math.max(rect.y1, rect.y2);
-  return nodes
-    .filter((node) => {
-      const nx = nodeX(node.layer);
-      const ny = nodeY(node.position);
-      return nx <= right && nx + NODE_W >= left && ny <= bottom && ny + NODE_H >= top;
-    })
-    .map((node) => node.id);
 }
 
 /**
@@ -487,6 +443,10 @@ export interface GraphView {
    *  is a different sentence. Narrowed by `colouringIn` at the boundary, for
    *  the reason `kinds` is narrowed by `kindsIn`. */
   colouring?: string;
+  /** p.11's arrangement (§424). In the view for the same reason the colouring
+   *  is: a graph sent with the pipeline running down the page, to fit beside
+   *  a column of text, arrives sideways without it. Narrowed by `layoutIn`. */
+  layout?: string;
 }
 
 /** The kinds this graph draws, which is what a stored filter may name. */
@@ -550,6 +510,7 @@ export function viewOf(state: {
   query: string;
   kinds: readonly string[];
   colouring: string;
+  layout: string;
 }): GraphView {
   const view: GraphView = {};
   if (state.selected.length > 0) view.selected = [...state.selected];
@@ -561,5 +522,9 @@ export function viewOf(state: {
   // a graph saved before §419 existed and one saved with the picker untouched
   // into two different records of the same view.
   if (state.colouring !== DEFAULT_COLOURING) view.colouring = state.colouring;
+  // Left out at its default for the reason the colouring is: a graph saved
+  // before §424 existed and one saved with the menu untouched are the same
+  // view, and storing the default would make them two records.
+  if (state.layout !== DEFAULT_LAYOUT) view.layout = state.layout;
   return view;
 }

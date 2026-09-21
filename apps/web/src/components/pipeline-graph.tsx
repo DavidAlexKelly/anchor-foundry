@@ -8,8 +8,12 @@ import {
 } from "@/lib/graph-builds";
 import { clearSummary, looksLikeCron, scheduleSummary } from "@/lib/graph-schedules";
 import {
-  GAP_X, GAP_Y, GRAPH_KINDS, NODE_H, NODE_W, PAD, columnsIn, foundByColumn, inverted, isDrag, kindsIn, nodeX, nodeY, nodesInRect, outOfDateNote, relatives, search, toggleSelected, type GraphView, type Rect, viewOf,
+  GRAPH_KINDS, columnsIn, foundByColumn, inverted, isDrag, kindsIn, outOfDateNote, relatives, search, toggleSelected, type GraphView, viewOf,
 } from "@/lib/pipeline-graph";
+import {
+  LAYOUTS, NODE_H, NODE_W, layoutIn, layoutOf, nodesInRect, type Place,
+  type Rect,
+} from "@/lib/graph-layout";
 import {
   durationLabel, emptyReason, placeOf, timelineFor,
 } from "@/lib/build-timeline";
@@ -35,11 +39,11 @@ import { svgFilename, svgFor } from "@/lib/graph-svg";
 /** A cubic bezier from one node's right edge to the next node's left edge.
  *  Horizontal control points keep every edge reading left-to-right even when
  *  it spans several layers. */
-function edgePath(from: PipelineNode, to: PipelineNode): string {
-  const x1 = nodeX(from.layer) + NODE_W;
-  const y1 = nodeY(from.position) + NODE_H / 2;
-  const x2 = nodeX(to.layer);
-  const y2 = nodeY(to.position) + NODE_H / 2;
+function edgePath(from: Place, to: Place): string {
+  const x1 = from.x + NODE_W;
+  const y1 = from.y + NODE_H / 2;
+  const x2 = to.x;
+  const y2 = to.y + NODE_H / 2;
   const bend = Math.max(30, (x2 - x1) / 2);
   return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
 }
@@ -72,6 +76,7 @@ function subtitle(node: PipelineNode): string {
 
 function NodeCard({
   node,
+  place,
   selected,
   swatch,
   lit = false,
@@ -81,6 +86,10 @@ function NodeCard({
   onSelect,
 }: {
   node: PipelineNode;
+  /** Where this card goes, under the layout in force (§424). Passed in rather
+   *  than computed here, because the edge curves, §354's drag rectangle and
+   *  §423's export all have to agree with it. */
+  place: Place;
   selected: boolean;
   /** p.38's colouring, already decided (§419) — `null` is p.38's "No color".
    *  Passed in rather than computed here because the legend beside the graph
@@ -114,8 +123,8 @@ function NodeCard({
       title={node.name}
       style={{
         position: "absolute",
-        left: nodeX(node.layer),
-        top: nodeY(node.position),
+        left: place.x,
+        top: place.y,
         width: NODE_W,
         height: NODE_H,
         textAlign: "left",
@@ -418,6 +427,10 @@ export function PipelineGraphView({
   // this build does not offer opens on the default, so the picker and the
   // cards cannot disagree.
   const [colouring, setColouring] = useState(() => colouringIn(initialView));
+  // p.11's Layout menu (§424). `layoutIn` narrows a stored view for the reason
+  // `colouringIn` does: a `<select>` showing an option the graph is not using
+  // is two controls disagreeing about one piece of state.
+  const [layout, setLayout] = useState(() => layoutIn(initialView));
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
@@ -429,11 +442,23 @@ export function PipelineGraphView({
   const marqueeFrom = useRef<{ x: number; y: number; base: string[] } | null>(null);
 
   const byId = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph.nodes]);
-  const canvas = useMemo(() => {
-    const width = PAD + graph.layer_count * (NODE_W + GAP_X);
-    const rows = Math.max(1, ...graph.nodes.map((n) => n.position + 1));
-    return { width: Math.max(width, 400), height: PAD * 2 + rows * (NODE_H + GAP_Y) };
-  }, [graph]);
+  // p.11's arrangement, and the canvas it needs. **One answer**, read by the
+  // cards, the edge curves, §354's marquee and §423's export — a second copy
+  // of "where is that card" is a rectangle that selects the node beside the
+  // one it was drawn over, and nothing on the screen says which copy is wrong
+  // (§191, §424).
+  const canvas = useMemo(
+    () => layoutOf(
+      graph.nodes.map((n) => ({
+        id: n.id,
+        layer: n.layer,
+        position: n.position,
+        group: swatchFor({ ...n, access: graph.access?.[n.id] ?? null }, colouring)?.key,
+      })),
+      layout,
+    ),
+    [graph.nodes, graph.access, colouring, layout],
+  );
 
   // **Reported after the render that changed it, not during.** Calling a
   // parent's setter while rendering is how a graph that reports its view ends
@@ -441,8 +466,8 @@ export function PipelineGraphView({
   const report = useRef(onViewChange);
   report.current = onViewChange;
   useEffect(() => {
-    report.current?.(viewOf({ selected, column, query, kinds, colouring }));
-  }, [selected, column, query, kinds, colouring]);
+    report.current?.(viewOf({ selected, column, query, kinds, colouring, layout }));
+  }, [selected, column, query, kinds, colouring, layout]);
 
   // p.12's SVG export. **The picture is of the graph as it looks**, so it is
   // built at the moment of the click from the same state the cards are drawn
@@ -463,6 +488,7 @@ export function PipelineGraphView({
           ])
           .filter((pair): pair is [string, string] => pair[1] !== undefined),
       ),
+      at: canvas.at,
       selected,
       styles: getComputedStyle(document.documentElement),
       title: exportTitle ?? "Lineage graph",
@@ -553,7 +579,7 @@ export function PipelineGraphView({
     // own handler — see `isDrag` for why letting both run would unselect the
     // node that was clicked.
     if (!from || !marquee || !isDrag(marquee)) return;
-    const taken = nodesInRect(graph.nodes, marquee);
+    const taken = nodesInRect(graph.nodes, marquee, canvas.at);
     setSelected(from.base.length === 0 ? taken : [...new Set([...from.base, ...taken])]);
   }
 
@@ -869,6 +895,36 @@ export function PipelineGraphView({
             </select>
           </>
         )}
+        {/* p.11's Layout menu, beside the colouring it can group by. **Not
+            gated on a selection** though p.11 gates its other layouts that
+            way: Foundry's graph is built up node by node, so "lay out these"
+            is a sensible scope, while this graph is a project drawn whole
+            (§355) — an arrangement applied to part of it would leave the rest
+            where the other arrangement put them, which is two layouts
+            overlapping on one canvas. */}
+        <label className="slug" htmlFor="graph-layout">Layout</label>
+        <select
+          id="graph-layout"
+          data-testid="graph-layout"
+          value={layout}
+          onChange={(e) => setLayout(e.target.value)}
+          style={{
+            padding: "5px 8px",
+            border: "1px solid var(--line-strong)",
+            borderRadius: "var(--radius)",
+            font: "inherit",
+            fontSize: 13,
+            background: "var(--panel)",
+            color: "var(--ink)",
+          }}
+          title={LAYOUTS.find((o) => o.id === layout)?.hint}
+        >
+          {LAYOUTS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
         {/* p.12's third save-and-share mechanism: "Export graph to SVG —
             generates a static image of your lineage graph" (§423). Beside the
             graph tools rather than with Save and the share link, because it
@@ -1033,8 +1089,8 @@ export function PipelineGraphView({
                 </marker>
               </defs>
               {graph.edges.map((e, i) => {
-                const from = byId.get(e.from);
-                const to = byId.get(e.to);
+                const from = canvas.at.get(e.from);
+                const to = canvas.at.get(e.to);
                 if (!from || !to) return null;
                 const touched = chosen.has(e.from) || chosen.has(e.to);
                 return (
@@ -1055,8 +1111,8 @@ export function PipelineGraphView({
                   order, which is exactly what keeping them out of `edges`
                   avoids on the server. */}
               {graph.links.map((l) => {
-                const from = byId.get(l.from);
-                const to = byId.get(l.to);
+                const from = canvas.at.get(l.from);
+                const to = canvas.at.get(l.to);
                 if (!from || !to) return null;
                 const touched = chosen.has(l.from) || chosen.has(l.to);
                 return (
@@ -1095,6 +1151,7 @@ export function PipelineGraphView({
               <NodeCard
                 key={n.id}
                 node={n}
+                place={canvas.at.get(n.id) ?? { x: 0, y: 0 }}
                 selected={chosen.has(n.id)}
                 // p.80's Permissions colouring reads the server's answer for
                 // the person named under *View as*; every other colouring

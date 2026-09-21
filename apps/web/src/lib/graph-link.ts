@@ -40,6 +40,7 @@ export function toParams(view: GraphView): Change {
     kind: view.kinds && view.kinds.length > 0 ? view.kinds : undefined,
     sel: view.selected && view.selected.length > 0 ? view.selected : undefined,
     colour: view.colouring,
+    layout: view.layout,
   };
 }
 
@@ -69,5 +70,7 @@ export function fromParams(params: URLSearchParams): GraphView {
   // mistyped should open on a graph missing a part, not on a refusal.
   const colouring = params.get("colour");
   if (colouring) view.colouring = colouring;
+  const layout = params.get("layout");
+  if (layout) view.layout = layout;
   return view;
 }
