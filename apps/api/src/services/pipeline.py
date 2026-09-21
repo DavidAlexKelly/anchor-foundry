@@ -97,7 +97,31 @@ async def project_graph(
                -- rename touches it, and a rename is not a build.
                (SELECT v.created_at FROM dataset_versions v
                  WHERE v.dataset_id = d.id
-                 ORDER BY v.version_number DESC LIMIT 1) AS built_at
+                 ORDER BY v.version_number DESC LIMIT 1) AS built_at,
+               -- p.10's "actual build time" (§418): the window of the run that
+               -- produced **the version this dataset currently holds**, joined
+               -- through `output_version` rather than by taking the model's
+               -- latest run.
+               --
+               -- The difference is the honest one. A model that has run again
+               -- since - and failed, or written a version this dataset was
+               -- then rolled back from - has a latest run that did not build
+               -- what is on the graph, and a Gantt bar drawn from it would
+               -- time a build whose output nobody is looking at. This pairs
+               -- with `built_at` directly above: same version, so the bar and
+               -- the timestamp can never disagree.
+               (SELECT r.started_at FROM model_runs r
+                 WHERE r.output_version = (
+                     SELECT v.id FROM dataset_versions v
+                      WHERE v.dataset_id = d.id
+                      ORDER BY v.version_number DESC LIMIT 1
+                 ) LIMIT 1) AS build_started_at,
+               (SELECT r.finished_at FROM model_runs r
+                 WHERE r.output_version = (
+                     SELECT v.id FROM dataset_versions v
+                      WHERE v.dataset_id = d.id
+                      ORDER BY v.version_number DESC LIMIT 1
+                 ) LIMIT 1) AS build_finished_at
           FROM datasets d
          WHERE d.project_id = :pid
          ORDER BY d.name
@@ -165,6 +189,10 @@ async def project_graph(
             "current_version": d["current_version"],
             "updated_at": d["updated_at"],
             "built_at": d["built_at"],
+            # p.10's Gantt (§418). Null on a dataset nobody built — an upload
+            # has no run behind it, and "no bar" is the honest drawing of that.
+            "build_started_at": d["build_started_at"],
+            "build_finished_at": d["build_finished_at"],
             # Read from the cache only - see this module's docstring.
             "health_status": _health_status(d["expectation_results"]),
             # Filled in below, once every node and edge is known.
@@ -187,6 +215,10 @@ async def project_graph(
             "current_version": None,
             "updated_at": m["last_run_at"],
             "built_at": None,
+            # A model is not built; its output dataset is, and that is the node
+            # one edge along. Present so the node shape stays one shape.
+            "build_started_at": None,
+            "build_finished_at": None,
             "health_status": None,
             # A model is not a thing that goes out of date; its *output* is,
             # and that is the dataset node one edge along. Present so the node
@@ -227,6 +259,10 @@ async def project_graph(
                 "current_version": None,
                 "updated_at": row["last_synced_at"],
                 "built_at": None,
+                # An object type is synced rather than built; the pair is here
+                # so the node shape stays one shape (§418).
+                "build_started_at": None,
+                "build_finished_at": None,
                 "health_status": None,
                 "out_of_date": False,
                 "out_of_date_reason": None,
