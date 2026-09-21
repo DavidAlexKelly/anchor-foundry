@@ -88,6 +88,22 @@ def runs(api, chain, model_id: str) -> int:
     return len(api.call("GET", f"{chain['base']}/models/{model_id}/runs"))
 
 
+def force(page) -> None:
+    """Tick p.57's "Force build on up-to-date datasets" (§421).
+
+    **Every test below that presses Build ticks this**, and that is a fact
+    about the fixture rather than a convenience: this chain is built by the
+    time the graph opens, so by p.57's default there is nothing to do. Before
+    §421 the same click silently re-ran a pipeline that was already current,
+    which is the behaviour p.57 calls expensive — so what these tests assert
+    is still "the button runs the transforms the summary counted", now with
+    the reader having said they meant it.
+    """
+    box = page.get_by_test_id("selection-build-force")
+    expect(box).to_be_visible()
+    box.check()
+
+
 def test_building_a_selected_transform_runs_it(page, api, chain) -> None:
     """**The seam.** The summary counts transforms, the button runs them, and
     the run history is where that is visible — a build nobody can see the
@@ -95,6 +111,7 @@ def test_building_a_selected_transform_runs_it(page, api, chain) -> None:
     before = runs(api, chain, chain["b"])
     open_pipeline(page, chain)
     card(page, chain, "model", "B").click()
+    force(page)
     expect(page.get_by_test_id("selection-build-summary")).to_have_text("build 1 transform")
 
     page.get_by_test_id("selection-build-run").click()
@@ -118,6 +135,7 @@ def test_selecting_a_dataset_builds_the_transform_that_writes_it(page, api, chai
     b_before = runs(api, chain, chain["b"])
     open_pipeline(page, chain)
     card(page, chain, "dataset", "A").click()
+    force(page)
     expect(page.get_by_test_id("selection-build-summary")).to_have_text("build 1 transform")
 
     page.get_by_test_id("selection-build-run").click()
@@ -144,6 +162,7 @@ def test_an_uploaded_dataset_is_reported_rather_than_silently_skipped(page, chai
 
     # Beside something that does build, both facts are on the screen at once.
     card(page, chain, "dataset", "A").click(modifiers=["ControlOrMeta"])
+    force(page)
     expect(summary).to_contain_text("build 1 transform")
     expect(summary).to_contain_text("uploaded, not built")
     expect(page.get_by_test_id("selection-build-run")).to_be_enabled()
@@ -162,6 +181,7 @@ def test_between_takes_the_path_and_the_build_follows_the_graph_order(page, chai
 
     page.get_by_test_id("expand-between").click()
     expect(page.get_by_test_id("selection-count")).to_have_text("5 nodes selected")
+    force(page)
     # Five cards, two transforms: the count that matters is of what will run.
     expect(page.get_by_test_id("selection-build-summary")).to_contain_text("build 2 transforms")
 
@@ -186,6 +206,7 @@ def test_a_build_runs_every_transform_the_summary_counted_and_upstream_first(
     card(page, chain, "dataset", "S").click()
     card(page, chain, "dataset", "B").click(modifiers=["ControlOrMeta"])
     page.get_by_test_id("expand-between").click()
+    force(page)
     expect(page.get_by_test_id("selection-build-summary")).to_contain_text("build 2 transforms")
 
     page.get_by_test_id("selection-build-run").click()
@@ -214,3 +235,121 @@ def test_between_is_offered_only_when_there_are_two_ends(page, chain) -> None:
     # And it appears as soon as there is a second end.
     card(page, chain, "dataset", "A").click(modifiers=["ControlOrMeta"])
     expect(page.get_by_test_id("expand-between")).to_be_visible()
+
+
+def test_a_current_pipeline_is_left_alone_unless_forced(page, api, chain) -> None:
+    """p.57's default (§421).
+
+    > "By default, this builds only ancestors that are out of date, but you
+    >  can choose to force a re-build of up-to-date datasets. Forcing a
+    >  re-build can be expensive in terms of build time and resources."
+
+    **This is the seam the unit tests cannot reach**: that the staleness the
+    *server* computed is what the button reads. `graph-builds.test.ts` sets
+    `out_of_date` by hand; here it is a real chain that was really built, and
+    the flag came back from `_mark_out_of_date`.
+    """
+    # Bring the whole chain current, whatever the tests above left behind.
+    api.call("POST", f"{chain['base']}/models/{chain['a']}/run")
+    api.call("POST", f"{chain['base']}/models/{chain['b']}/run")
+    a_before = runs(api, chain, chain["a"])
+    b_before = runs(api, chain, chain["b"])
+
+    open_pipeline(page, chain)
+    card(page, chain, "dataset", "S").click()
+    card(page, chain, "dataset", "B").click(modifiers=["ControlOrMeta"])
+    page.get_by_test_id("expand-between").click()
+    summary = page.get_by_test_id("selection-build-summary")
+    # §210: not "nothing to build", which is also what a selection of uploads
+    # says. This selection is finished, and the control beside it is the one
+    # thing that would change the answer.
+    expect(summary).to_have_text(
+        "nothing to build: 2 transforms are already up to date"
+    )
+    expect(page.get_by_test_id("selection-build-run")).to_be_disabled()
+    # And no cascade warning about a build that will not happen.
+    expect(page.get_by_test_id("selection-build-cascade")).to_have_count(0)
+
+    box = page.get_by_test_id("selection-build-force")
+    box.check()
+    expect(summary).to_contain_text("build 2 transforms")
+    # The upload is still named beside them: forcing changes what is run, not
+    # what cannot be (§214).
+    expect(summary).to_contain_text("uploaded, not built")
+
+    # **And it comes back off**, which is the half a checkbox most easily
+    # loses: a sweep that made `onChange` set `true` unconditionally passed
+    # every test here, because nothing had ever unticked it.
+    box.uncheck()
+    expect(summary).to_have_text(
+        "nothing to build: 2 transforms are already up to date"
+    )
+    box.check()
+    page.get_by_test_id("selection-build-run").click()
+    eventually(lambda: (runs(api, chain, chain["a"]), runs(api, chain, chain["b"])),
+               lambda pair: pair == (a_before + 1, b_before + 1),
+               what="both transforms to run when forced")
+
+
+def test_a_stale_transform_builds_without_being_forced(page, api, chain) -> None:
+    """The other half, and the one the default is *for*: a chain with
+    something behind it builds on a plain click.
+
+    Made stale rather than asserted into existence — re-running `A` writes a
+    new version of its output, which is then newer than the `B` output built
+    from it (`test_pipeline_out_of_date.py`'s fixture, in one line).
+    """
+    api.call("POST", f"{chain['base']}/models/{chain['b']}/run")
+    api.call("POST", f"{chain['base']}/models/{chain['a']}/run")
+    b_before = runs(api, chain, chain["b"])
+
+    open_pipeline(page, chain)
+    card(page, chain, "dataset", "S").click()
+    card(page, chain, "dataset", "B").click(modifiers=["ControlOrMeta"])
+    page.get_by_test_id("expand-between").click()
+    summary = page.get_by_test_id("selection-build-summary")
+    # One of the two: `B` is behind its input, `A` is not. The other is named
+    # rather than dropped — a build that ran one of two selected transforms
+    # without saying which it left alone is the reading §214 prevents.
+    expect(summary).to_have_text(
+        f"build 1 transform; 1 already up to date; 1 selected dataset is "
+        f"uploaded, not built (S {chain['tag']})"
+    )
+
+    page.get_by_test_id("selection-build-run").click()
+    eventually(lambda: runs(api, chain, chain["b"]), lambda n: n == b_before + 1,
+               what="the stale transform to run unforced")
+
+
+def test_no_cascade_warning_for_a_build_that_will_not_happen(page, api, chain) -> None:
+    """§383's warning is about what a build sets off, so a build that will not
+    happen sets nothing off.
+
+    **Both halves, because the negative alone cannot fail here** (§318): this
+    chain's models are `manual`, so nothing cascades whatever the plan says,
+    and "no warning" would have been true of a build that showed one. `B` is
+    switched to `upstream` for the length of this test so that the warning has
+    something to be about — and then the same selection shows it once forcing
+    makes the build real.
+    """
+    api.call("PATCH", f"{chain['base']}/models/{chain['b']}",
+             {"trigger_mode": "upstream"})
+    try:
+        api.call("POST", f"{chain['base']}/models/{chain['a']}/run")
+        api.call("POST", f"{chain['base']}/models/{chain['b']}/run")
+        open_pipeline(page, chain)
+        card(page, chain, "dataset", "A").click()
+        summary = page.get_by_test_id("selection-build-summary")
+        expect(summary).to_have_text(
+            "nothing to build: 1 transform is already up to date"
+        )
+        expect(page.get_by_test_id("selection-build-cascade")).to_have_count(0)
+
+        # The positive control: the same selection, forced, will run `A` — and
+        # `B` reacts to its output on the worker's next pass.
+        page.get_by_test_id("selection-build-force").check()
+        expect(summary).to_contain_text("build 1 transform")
+        expect(page.get_by_test_id("selection-build-cascade")).to_be_visible()
+    finally:
+        api.call("PATCH", f"{chain['base']}/models/{chain['b']}",
+                 {"trigger_mode": "manual"})
