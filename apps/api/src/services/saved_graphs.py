@@ -30,11 +30,25 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError, NotFoundError
 
-#: A node id as the graph builds them (`services/pipeline.py`).
-NODE_ID = re.compile(r"(dataset|model|object_type):[0-9a-fA-F-]{36}")
+#: The kinds a graph draws, and therefore the only ones a filter can name or a
+#: focus can be. **One list**, because §420 found the cost of three: adding the
+#: data source node meant a regex here, a tuple here, and the same sentence
+#: written out by hand in two refusals, and the two refusals were still naming
+#: three kinds after the graph drew four. They are derived now, so the next
+#: kind is one line (§292).
+KINDS = ("dataset", "model", "object_type", "connection")
 
-#: The kinds a graph draws, and therefore the only ones a filter can name.
-KINDS = ("dataset", "model", "object_type")
+#: A node id as the graph builds them (`services/pipeline.py`).
+NODE_ID = re.compile(rf"({'|'.join(KINDS)}):[0-9a-fA-F-]{{36}}")
+
+#: What a refusal says a focus may be, in the caller's words. `routes/models.py`
+#: reads this rather than writing its own, for the reason `parse` is shared:
+#: two refusals that disagree are one of them being wrong.
+FOCUS_HINT = (
+    "focus must be "
+    + ", ".join(f"'{kind}:<uuid>'" for kind in KINDS[:-1])
+    + f" or '{KINDS[-1]}:<uuid>'"
+)
 
 #: p.38's node colourings, as the browser offers them (§419). Mirrored from
 #: `apps/web/src/lib/node-colouring.ts` rather than shared, because there is no
@@ -79,10 +93,7 @@ def parse(view: Any) -> dict[str, Any]:
     focus = view.get("focus")
     if focus is not None:
         if not isinstance(focus, str) or not NODE_ID.fullmatch(focus):
-            raise GraphViewError(
-                "focus must be 'dataset:<uuid>', 'model:<uuid>' or "
-                "'object_type:<uuid>'"
-            )
+            raise GraphViewError(FOCUS_HINT)
         out["focus"] = focus
 
     column = view.get("column")

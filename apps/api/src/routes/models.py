@@ -740,10 +740,7 @@ async def pipeline_graph(
     # an object type is a node on this graph now, and a node the view draws and
     # cannot centre on is a node whose neighbours are unreachable from it.
     if focus is not None and not saved_graphs.NODE_ID.fullmatch(focus):
-        raise ValueError(
-            "focus must be 'dataset:<uuid>', 'model:<uuid>' or "
-            "'object_type:<uuid>'"
-        )
+        raise ValueError(saved_graphs.FOCUS_HINT)
     async with user_connection(access.auth.user_id) as conn:
         return PipelineGraph(
             **await pipeline_service.project_graph(conn, access.project_id, focus=focus)

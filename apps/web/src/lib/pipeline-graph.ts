@@ -24,6 +24,11 @@ import { DEFAULT_COLOURING } from "./node-colouring";
 export function nodeSection(node: Pick<PipelineNode, "kind">): string {
   if (node.kind === "model") return "models";
   if (node.kind === "object_type") return "objects";
+  // p.42's data source (§420). It opens where a connection is configured,
+  // which is the page that answers the question a source node raises —
+  // "where is this data coming from, and is it still pointed at the right
+  // table" — rather than the dataset it happened to write.
+  if (node.kind === "connection") return "connections";
   return "datasets";
 }
 
@@ -485,7 +490,9 @@ export interface GraphView {
 }
 
 /** The kinds this graph draws, which is what a stored filter may name. */
-export const GRAPH_KINDS: PipelineNode["kind"][] = ["dataset", "model", "object_type"];
+export const GRAPH_KINDS: PipelineNode["kind"][] = [
+  "dataset", "model", "object_type", "connection",
+];
 
 /**
  * The kinds a stored view names, minus any this build does not draw.

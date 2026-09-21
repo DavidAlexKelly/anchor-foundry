@@ -472,7 +472,17 @@ describe("the kinds a stored view names", () => {
     // `PipelineNode["kind"]` is the list, and a kind missing here is one a
     // saved view could never filter to (§191's direction: guard the mirror
     // against the thing it mirrors).
-    expect(new Set(GRAPH_KINDS)).toEqual(new Set(["dataset", "model", "object_type"]));
+    expect(new Set(GRAPH_KINDS))
+      .toEqual(new Set(["dataset", "model", "object_type", "connection"]));
+  });
+
+  it("opens a data source where a connection is configured (§420)", () => {
+    // Not the dataset it filled: the question a source node raises is "where
+    // is this data coming from, and is it still pointed at the right table",
+    // and that is answered on the connections page.
+    expect(nodeSection({ kind: "connection" })).toBe("connections");
+    expect(nodePath({ kind: "connection" }, "acme", "sales"))
+      .toBe("/acme/sales/connections");
   });
 });
 
