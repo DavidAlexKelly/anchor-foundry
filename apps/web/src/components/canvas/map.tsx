@@ -348,12 +348,22 @@ export function MapCanvas({
             vectorEffect="non-scaling-stroke"
           />
         </g>
-        {/* p.11's geoshapes, inside the same transform as the basemap so they
-            pan and zoom with it — and **before** the pins, so an area never
-            covers the control a reader clicks. `non-scaling-stroke` keeps an
-            outline one pixel wide at every zoom, which is what the basemap
-            does and for the same reason. */}
-        <g transform={`scale(${k}) translate(${-current.x} ${-current.y})`}>
+        {/* p.11's geoshapes. **In screen space, like the pins — not inside
+            the basemap's transform**, and that distinction is the whole of
+            this element.
+
+            The basemap's path is in *degrees*, so it needs the
+            `scale/translate` group to become pixels. `map-shapes.place`
+            already returns pixels, because it projects through the same
+            `MapView` the pins do — so putting it in that group applies the
+            transform twice and lands the shape several canvases to the
+            right. §426 did exactly that; §427's test that the track's line
+            ends where its pin is found it, because a pin is placed in screen
+            space and a double-transformed outline is not.
+
+            Still **before** the pins, so an area never covers the control a
+            reader clicks. */}
+        <g>
           {drawn.flatMap(({ shape, paths }) =>
             paths.map((path, i) => (
               <path

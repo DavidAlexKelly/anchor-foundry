@@ -50,7 +50,11 @@ MAX_POINTS = 5000
 
 _FIELDS = (
     "id", "object_type_source_id", "property_api_name", "dataset_id",
-    "key_column", "timestamp_column", "value_column", "created_at", "updated_at",
+    "key_column", "timestamp_column", "value_column",
+    # §427's position column (db 0097). Exactly one of `value_column` and this
+    # is set on any row, which the table's own CHECK keeps true.
+    "point_column",
+    "created_at", "updated_at",
 )
 _COLUMNS = ", ".join(_FIELDS)
 _S_COLUMNS = ", ".join(f"s.{f}" for f in _FIELDS)
@@ -90,6 +94,15 @@ async def get_series(
     return None
 
 
+#: Which kind of point each series property holds (§427).
+#:
+#: **A mapping rather than a pair of booleans**, so the refusal below can name
+#: the column a property actually wants: a `time_series` pointed at a position
+#: column and a `geotemporal_series` pointed at a numeric one are different
+#: mistakes and a shared "wrong column" would explain neither.
+SERIES_KINDS = {"time_series": "value", "geotemporal_series": "point"}
+
+
 async def set_series(
     conn: AsyncConnection,
     object_type_source_id: UUID,
@@ -98,18 +111,24 @@ async def set_series(
     dataset_id: UUID,
     key_column: str,
     timestamp_column: str,
-    value_column: str,
+    value_column: str | None = None,
+    point_column: str | None = None,
     columns: set[str],
     property_types: dict[str, str],
     created_by: UUID | None = None,
 ) -> dict[str, Any]:
     """Say where one property's points live, refusing anything that could not read.
 
-    Three refusals, and each is a chart somebody would otherwise open to find
-    empty:
+    Four refusals, and each is a chart or a map somebody would otherwise open
+    to find empty:
 
-      * the property is not declared `time_series` on this object type - a
-        series behind a string property is points nothing would ever draw;
+      * the property is not a series property at all - points behind a string
+        property are points nothing would ever draw;
+      * the kind of point does not match the kind of property (§427). A
+        `time_series` holds numbers and a `geotemporal_series` holds positions
+        (`object-link-types` p.127), so each names its own column and naming
+        the other one is a mapping that reads the wrong thing rather than
+        nothing at all - which is the worse failure, because it *works*;
       * a named column is not in the dataset. `columns` is the dataset's own
         schema, resolved by the caller, because this module does not read
         Parquet - the engine does;
@@ -122,12 +141,35 @@ async def set_series(
         raise ValueError(
             f"{property_api_name!r} is not a property of this object type"
         )
-    if declared != "time_series":
+    wants = SERIES_KINDS.get(declared)
+    if wants is None:
         raise ValueError(
-            f"{property_api_name!r} is a {declared} property - only a time_series "
-            "property can have points behind it"
+            f"{property_api_name!r} is a {declared} property - only a "
+            f"{' or a '.join(sorted(SERIES_KINDS))} property can have points "
+            "behind it"
         )
-    named = {"key": key_column, "timestamp": timestamp_column, "value": value_column}
+    given = {"value": value_column, "point": point_column}
+    other = "point" if wants == "value" else "value"
+    owner = next(k for k, v in SERIES_KINDS.items() if v == other)
+    if given[wants] is None:
+        # **The wrong column is named when one was given**, not only the
+        # missing one. "needs a value column" is true either way, and on its
+        # own it reads as a field somebody forgot — where what actually
+        # happened is that they filled in the field for the other kind of
+        # series, which is a different mistake with a different fix.
+        raise ValueError(
+            f"{property_api_name!r} is a {declared} property, so its points "
+            f"need a {wants} column"
+            + (f" — the {other} column is a {owner} property's"
+               if given[other] is not None else "")
+        )
+    if given[other] is not None:
+        raise ValueError(
+            f"{property_api_name!r} is a {declared} property, so it takes a "
+            f"{wants} column and not a {other} column"
+        )
+
+    named = {"key": key_column, "timestamp": timestamp_column, wants: given[wants]}
     missing = sorted(
         f"{role} column {column!r}" for role, column in named.items() if column not in columns
     )
@@ -138,7 +180,7 @@ async def set_series(
         )
     if len(set(named.values())) != 3:
         raise ValueError(
-            "the key, timestamp and value columns must be three different columns"
+            f"the key, timestamp and {wants} columns must be three different columns"
         )
 
     row = await fetch_one(
@@ -146,19 +188,33 @@ async def set_series(
         f"""
         INSERT INTO object_type_series
             (object_type_source_id, property_api_name, dataset_id,
-             key_column, timestamp_column, value_column, created_by)
-        VALUES (:sid, :prop, :did, :key, :ts, :val, :by)
+             key_column, timestamp_column, value_column, point_column, created_by)
+        VALUES (:sid, :prop, :did, :key, :ts, :val, :point, :by)
         ON CONFLICT (object_type_source_id, property_api_name) DO UPDATE
             SET dataset_id = EXCLUDED.dataset_id,
                 key_column = EXCLUDED.key_column,
                 timestamp_column = EXCLUDED.timestamp_column,
-                value_column = EXCLUDED.value_column
+                value_column = EXCLUDED.value_column,
+                -- **Both columns on the update, not just the one being
+                -- set.** The case that reaches this is a track re-mapped to a
+                -- *different* position column: keeping the old one would make
+                -- the save silently do nothing, and the mapping screen would
+                -- then show the new column beside points read from the old.
+                --
+                -- Retyping a property *between* the two series kinds would be
+                -- the sharper case, and it cannot happen: `PATCH
+                -- /object-types` refuses a retype while a dataset mapping
+                -- names the property. Written down because the first version
+                -- of this comment claimed that case, and a test for it turned
+                -- out to be a test of the impact check instead.
+                point_column = EXCLUDED.point_column
         RETURNING {_COLUMNS}
         """,
         {
             "sid": str(object_type_source_id), "prop": property_api_name,
             "did": str(dataset_id), "key": key_column, "ts": timestamp_column,
-            "val": value_column, "by": str(created_by) if created_by else None,
+            "val": value_column, "point": point_column,
+            "by": str(created_by) if created_by else None,
         },
     )
     assert row is not None
@@ -402,4 +458,57 @@ def points_sql(
         f"SELECT date_trunc({_literal(interval)}, {ts}) AS at, "
         f"{expression} AS value FROM dataset "
         f"WHERE {clause} GROUP BY at ORDER BY at LIMIT {capped}"
+    )
+
+
+def track_sql(
+    *,
+    key_column: str,
+    timestamp_column: str,
+    point_column: str,
+    series_id: str,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = MAX_POINTS,
+) -> str:
+    """The query that reads one geotemporal series out of its dataset (§427).
+
+    `points_sql`'s counterpart, and a separate function rather than a branch
+    in it, because **a geotemporal series has no aggregate and no interval**
+    and that is the interesting part rather than an omission:
+
+      * the mean of two positions is a place neither of them was, and on a
+        track that crosses a bay it is a point in the water. `avg` is the
+        default every chart uses and it is the one answer a map must not give;
+      * `sum` and `count` are not positions at all;
+      * `min`/`max` would need an order on positions, and there is none - the
+        same objection `property_reducers.UNREDUCIBLE` makes about geopoints
+        one layer down;
+      * `last` alone *would* work, and a bucketed track of last-known
+        positions is a real thing - but it is a different reading from the one
+        p.11 asks for ("render on a Map"), and offering one operation out of
+        five under a control that names five would be a control that mostly
+        refuses (§214). Downsampling a track belongs with whatever asks for
+        it, with its own word.
+
+    So this returns the raw points, ordered and capped, and the cap is the
+    same `MAX_POINTS` for the same reason: a decade of readings should not
+    decide how much memory the API uses.
+
+    **The point column is returned as text**, not parsed here. This module
+    does not know what a position is; `property_values._coerce_geopoint` does,
+    and it already reads every spelling a real column holds. A parse here
+    would be a second one free to disagree with it (§191).
+    """
+    key, ts, point = _quote(key_column), _quote(timestamp_column), _quote(point_column)
+    where = [f"CAST({key} AS VARCHAR) = {_literal(series_id)}"]
+    if start is not None:
+        where.append(f"{ts} >= TIMESTAMP {_literal(start.isoformat())}")
+    if end is not None:
+        where.append(f"{ts} <= TIMESTAMP {_literal(end.isoformat())}")
+    clause = " AND ".join(where)
+    capped = max(1, min(limit, MAX_POINTS))
+    return (
+        f"SELECT {ts} AS at, CAST({point} AS VARCHAR) AS point FROM dataset "
+        f"WHERE {clause} ORDER BY at LIMIT {capped}"
     )

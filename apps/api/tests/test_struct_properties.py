@@ -124,6 +124,8 @@ def test_the_field_types_are_p149s_list_and_not_this_platforms() -> None:
                          # nesting with the type system switched off
         "attachment",    # a reference the upload path issues per property
         "time_series",   # `object_type_series` names a property, not a field
+        "geotemporal_series",  # the same, and p.149's eleven field types name
+                         # GEOPOINT without naming either series type (§427)
         "geoshape",      # p.149 lists GEOPOINT and not GEOSHAPE, which is the
                          # whole answer: the constraint is the source's, and a
                          # struct column is a SQL struct whose fields are the

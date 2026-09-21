@@ -1,0 +1,40 @@
+-- ============================================================================
+-- 0096_geotemporal_series.sql
+-- Geotemporal series as a property base type (§427; `object-link-types`
+-- p.127, p.273; `object-views` p.11; `action-types` p.131).
+--
+-- > "Geotemporal series: A type for defining a property as a reference to a
+-- >  geotemporal series." (`object-link-types` p.127)
+--
+-- > "Objects with prominent geohash, geoshape, or **geotemporal series
+-- >  reference (GTSR)** properties will render on a Map." (`object-views`
+-- >  p.11)
+--
+-- **A reference, exactly as `time_series` is** (decision 0009, db 0047): the
+-- value stored on the instance is a small scalar - usually the instance's own
+-- primary key - and `object_type_series` says which dataset, key column and
+-- timestamp column hold the points behind it. p.127 says "a reference to a
+-- geotemporal series" in as many words, so this is the same shape with a
+-- different kind of point, not a second mechanism.
+--
+-- **One table, one more column.** The only difference between the two series
+-- is what a point *is*: a time series point is a number, a geotemporal one is
+-- a position. So `value_column` gains a sibling and each row carries exactly
+-- one of them - db 0087's rule about a declaration that says only half of
+-- itself, applied to a mapping rather than a property. A second table would
+-- have duplicated the key/timestamp/dataset half of every row and given
+-- `series_for_type` two places to look.
+--
+-- `value_column` becomes nullable to make room for that, and the CHECK is what
+-- keeps it honest: a mapping with neither column is a chart with no points and
+-- a mapping with both is two answers to what a point is.
+--
+-- **The position is one column, not a lat/lon pair**, and the reason is that
+-- this platform already has a geopoint: `property_values._coerce_geopoint`
+-- reads "lat,lon" text, a {lat, lon} mapping and a two-element list, which is
+-- every spelling a Parquet or CSV column actually holds. Two columns would
+-- have been a second coordinate convention to validate, and a third place for
+-- the lat/lon ordering to be got wrong.
+-- ============================================================================
+
+ALTER TYPE property_data_type ADD VALUE IF NOT EXISTS 'geotemporal_series';

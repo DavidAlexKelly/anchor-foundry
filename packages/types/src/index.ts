@@ -1684,6 +1684,12 @@ export type PropertyDataType =
    * `object_type_series` on the object type source says which dataset, key,
    * timestamp and value columns hold the points behind it. */
   | "time_series"
+  /** **A reference to a track** (Foundry `object-link-types` p.127; db 0096).
+   * The same shape as `time_series` — the instance holds a series id and
+   * `object_type_series` says which dataset, key and timestamp columns hold
+   * the points — with a *position* where a time series has a number. A
+   * prominent one renders on a Map (`object-views` p.11). */
+  | "geotemporal_series"
   /** A **schema**, not just a shape (Foundry `object-link-types` p.149; db
    * 0064). `json` already accepted the same values; what a struct adds is the
    * property declaring which fields it holds and what each one is, in
@@ -2419,6 +2425,24 @@ export interface SeriesPoints {
   aggregate: string;
   points: { at: unknown; value: unknown }[];
   /** True when the point cap cut the answer short. */
+  truncated: boolean;
+}
+
+/** One object's track — where it was, in time order (§427;
+ * `object-link-types` p.127; db 0096).
+ *
+ * **No interval and no aggregate**, unlike `SeriesPoints`, and the absence is
+ * the decision rather than an omission: the mean of two positions is a place
+ * neither of them was, and on a track that crosses a bay it is a point in the
+ * water. `services/time_series.py::track_sql` carries the whole argument. */
+export interface SeriesTrack {
+  property_api_name: string;
+  series_id: string;
+  points: { at: unknown; lat: number; lon: number }[];
+  /** Rows whose position column could not be read. Reported, never hidden —
+   * a track that silently skipped a bad reading would draw a straight line
+   * across the gap as though nothing had happened. */
+  unreadable: number;
   truncated: boolean;
 }
 

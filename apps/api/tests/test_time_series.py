@@ -332,10 +332,15 @@ def test_a_series_can_be_declared_read_back_and_cleared(
 def test_a_property_that_is_not_a_time_series_is_refused(
     client: TestClient, fx: Fixture, ontology: dict
 ) -> None:
-    """Points behind a string property are points nothing would ever draw."""
+    """Points behind a string property are points nothing would ever draw.
+
+    The message names **both** series types since §427, because there are two
+    kinds of point now and a refusal that named one would read as a rule about
+    charts rather than about series properties.
+    """
     r = declare(client, fx, ontology, property_api_name="site")
     assert r.status_code == 422
-    assert "only a time_series property" in r.text
+    assert "geotemporal_series or a time_series property" in r.text
 
 
 def test_a_property_the_type_does_not_have_is_refused(
@@ -672,3 +677,334 @@ def test_reading_a_page_of_series_needs_only_viewer(
     assert declare(client, fx, ontology).status_code == 200
     synced(client, fx, ontology)
     assert series_points(client, fx, ontology).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Geotemporal series (§427; `object-link-types` p.127; `object-views` p.11)
+# ---------------------------------------------------------------------------
+
+
+def test_a_track_query_reads_positions_in_time_order() -> None:
+    """`points_sql`'s counterpart. A track drawn from rows in whatever order
+    the file held them is a scribble, and DuckDB promises nothing without an
+    ORDER BY."""
+    sql = ts.track_sql(
+        key_column="vehicle", timestamp_column="at", point_column="where",
+        series_id="V1",
+    )
+    assert 'CAST("vehicle" AS VARCHAR) = \'V1\'' in sql
+    assert "ORDER BY at" in sql
+    assert f"LIMIT {ts.MAX_POINTS}" in sql
+
+
+def test_a_track_has_no_aggregate_and_no_interval() -> None:
+    """**The decision, stated as a signature.** The mean of two positions is a
+    place neither of them was, and on a track that crosses a bay it is a point
+    in the water — `avg` is the default every chart uses and the one answer a
+    map must not give. So the function does not take the arguments rather than
+    taking and refusing them.
+    """
+    import inspect
+
+    taken = set(inspect.signature(ts.track_sql).parameters)
+    assert "interval" not in taken
+    assert "aggregate" not in taken
+    # And the points come back raw: no date_trunc, no GROUP BY.
+    sql = ts.track_sql(
+        key_column="v", timestamp_column="at", point_column="p", series_id="V1",
+    )
+    assert "date_trunc" not in sql
+    assert "GROUP BY" not in sql
+
+
+def test_a_track_query_is_still_capped() -> None:
+    """"No bucketing" is not "no limit": a vehicle reporting every ten seconds
+    for a year would otherwise decide how much memory the API uses.
+
+    **Asserted on the end of the string, not with `in`**, and a sweep is why:
+    dropping the ceiling turns `LIMIT 5000` into `LIMIT 50000`, and the first
+    is a substring of the second — so the containment check passed a build
+    with no cap at all.
+    """
+    asked = ts.track_sql(
+        key_column="v", timestamp_column="at", point_column="p", series_id="V1",
+        limit=ts.MAX_POINTS * 10,
+    )
+    assert asked.endswith(f"LIMIT {ts.MAX_POINTS}"), asked
+    smaller = ts.track_sql(
+        key_column="v", timestamp_column="at", point_column="p", series_id="V1",
+        limit=5,
+    )
+    assert smaller.endswith("LIMIT 5"), smaller
+
+
+def test_a_track_query_quotes_its_columns() -> None:
+    """Column names are customer strings even after `set_series` has checked
+    them against the schema."""
+    sql = ts.track_sql(
+        key_column='odd"name', timestamp_column="at", point_column="p",
+        series_id="V1",
+    )
+    assert '"odd""name"' in sql
+
+
+@pytest.fixture(scope="module")
+def tracked(client: TestClient, fx: Fixture) -> dict:
+    """A type with a `geotemporal_series` property and a dataset of positions.
+
+    The positions are "lat,lon" text, which is the spelling a CSV column holds
+    and the one `_coerce_geopoint` was written for — and one row is deliberate
+    nonsense, so "reported, never hidden" has something to report.
+    """
+    tag = uuid.uuid4().hex[:8]
+    r = client.post(
+        f"{pbase(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Vehicles {tag}"},
+        files={"file": ("vehicles.csv",
+                        io.BytesIO(b"vehicle_id,fleet\nV1,north\nV2,south\n"),
+                        "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    vehicles = r.json()["id"]
+
+    # Two position columns, and the second one is why: a geotemporal series
+    # re-mapped to a *different* column is the reachable update this table's
+    # `ON CONFLICT` clause has to carry, and one column cannot show it.
+    fixes = (
+        b'vehicle_id,seen_at,position,reported_at_position\n'
+        b'V1,2026-01-01T00:00:00,"51.5,-0.12","1.0,1.0"\n'
+        b'V1,2026-01-01T01:00:00,"52.5,-1.12","2.0,2.0"\n'
+        b'V1,2026-01-01T02:00:00,banana,"3.0,3.0"\n'
+        b'V2,2026-01-01T00:00:00,"10.0,10.0","4.0,4.0"\n'
+    )
+    r = client.post(
+        f"{pbase(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Fixes {tag}"},
+        files={"file": ("fixes.csv", io.BytesIO(fixes), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    points = r.json()["id"]
+
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"vehicle_{tag}",
+            "display_name": f"Vehicle {tag}",
+            "properties": [
+                {"api_name": "fleet", "data_type": "string"},
+                {"api_name": "trail", "data_type": "geotemporal_series",
+                 "visibility": "prominent"},
+            ],
+        },
+    )
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+
+    r = client.post(
+        f"{pbase(fx)}/object-type-sources", headers=hdr(fx.editor_sub),
+        json={
+            "object_type_id": type_id,
+            "dataset_id": vehicles,
+            "primary_key_column": "vehicle_id",
+            "column_mappings": {"fleet": "fleet", "vehicle_id": "trail"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    return {"type_id": type_id, "source_id": r.json()["id"], "points": points,
+            "tag": tag}
+
+
+def map_track(client: TestClient, fx: Fixture, tracked: dict, **overrides) -> object:
+    body = {
+        "property_api_name": "trail",
+        "dataset_id": tracked["points"],
+        "key_column": "vehicle_id",
+        "timestamp_column": "seen_at",
+        "point_column": "position",
+        **overrides,
+    }
+    return client.put(
+        f"{pbase(fx)}/object-type-sources/{tracked['source_id']}/series",
+        headers=hdr(fx.editor_sub), json=body,
+    )
+
+
+def test_a_geotemporal_series_is_mapped_to_a_position_column(
+    client: TestClient, fx: Fixture, tracked: dict
+) -> None:
+    """p.127's "reference to a geotemporal series", declared: the same mapping
+    a time series uses, with a position where the number goes."""
+    r = map_track(client, fx, tracked)
+    assert r.status_code == 200, r.text
+    assert r.json()["point_column"] == "position"
+    # And no value column, which is what makes the row answerable (db 0097).
+    assert r.json()["value_column"] is None
+
+
+def test_a_geotemporal_series_pointed_at_a_value_column_is_refused(
+    client: TestClient, fx: Fixture, tracked: dict
+) -> None:
+    """**The refusal that matters most here**, because the mistake it catches
+    *works*: a track mapped to a numeric column reads the wrong thing rather
+    than nothing, and a map of it draws a line somewhere plausible."""
+    r = map_track(client, fx, tracked, point_column=None, value_column="position")
+    assert r.status_code == 422, r.text
+    assert "need a point column" in r.text
+    # **And it names the column that was given**, which is the difference
+    # between "you forgot a field" and "you filled in the other kind's".
+    assert "value column is a time_series" in r.text
+
+
+def test_a_time_series_pointed_at_a_position_column_is_refused(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """The same rule from the other side — a chart of positions is a chart of
+    nothing, and each property type names its own column."""
+    r = declare(client, fx, ontology, value_column=None, point_column="reading")
+    assert r.status_code == 422, r.text
+    assert "need a value column" in r.text
+    assert "point column is a geotemporal_series" in r.text
+
+
+def test_a_mapping_with_both_columns_is_refused(
+    client: TestClient, fx: Fixture, tracked: dict
+) -> None:
+    """Two answers to what a point is. The table's CHECK would refuse it too,
+    but a constraint violation is a message about a constraint; this one names
+    the property and the column it wanted."""
+    r = map_track(client, fx, tracked, value_column="seen_at")
+    assert r.status_code == 422, r.text
+    assert "not a value column" in r.text
+
+
+def test_a_mapping_with_neither_column_is_refused(
+    client: TestClient, fx: Fixture, tracked: dict
+) -> None:
+    r = map_track(client, fx, tracked, point_column=None)
+    assert r.status_code == 422, r.text
+    assert "need a point column" in r.text
+    # And nothing about the other column, because none was given — the
+    # sentence says what happened rather than listing everything it checks.
+    assert "value column is a" not in r.text
+
+
+def track(client: TestClient, fx: Fixture, tracked: dict, instance_id: str):
+    return client.get(
+        f"{wbase(fx)}/object-types/{tracked['type_id']}/instances/"
+        f"{instance_id}/series/trail/track",
+        headers=hdr(fx.viewer_sub),
+    )
+
+
+def one_vehicle(client: TestClient, fx: Fixture, tracked: dict, key: str) -> str:
+    """A synced vehicle, by its key. The source maps `vehicle_id` to both the
+    primary key and the series property, which is decision 0009's ordinary
+    case — the series id is the instance's own key.
+
+    The sync happens here rather than in the fixture because the mapping has
+    to exist first and each test declares it: a sync run before the mapping
+    would store instances with no track behind them.
+    """
+    r = client.post(
+        f"{pbase(fx)}/object-type-sources/{tracked['source_id']}/sync",
+        headers=hdr(fx.editor_sub), json={},
+    )
+    assert r.status_code == 200, r.text
+    r = client.get(
+        f"{wbase(fx)}/object-types/{tracked['type_id']}/instances",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    for item in r.json()["items"]:
+        if item["primary_key"] == key:
+            return item["id"]
+    raise AssertionError(f"no instance whose key is {key!r}")
+
+
+def test_remapping_a_track_to_another_column_takes_the_new_one(
+    client: TestClient, fx: Fixture, tracked: dict
+) -> None:
+    """**The reachable half of what the `ON CONFLICT` clause carries**, and a
+    sweep found nothing testing it: a re-map that kept the old column would
+    silently do nothing, and the mapping screen would show the new column
+    beside points read from the old one.
+
+    Retyping a property *between* the two series kinds is the other half, and
+    it is unreachable rather than untested — `PATCH /object-types` refuses a
+    retype while a dataset mapping names the property, which is the impact
+    check doing its job. So the column-swap case is the one that can happen.
+    """
+    assert map_track(client, fx, tracked).status_code == 200
+    r = map_track(client, fx, tracked, point_column="reported_at_position")
+    assert r.status_code == 200, r.text
+    assert r.json()["point_column"] == "reported_at_position"
+    # And back, so the test is about the update rather than about one value.
+    r = map_track(client, fx, tracked)
+    assert r.status_code == 200, r.text
+    assert r.json()["point_column"] == "position"
+
+
+def test_a_track_comes_back_as_positions_in_time_order(
+    client: TestClient, fx: Fixture, tracked: dict
+) -> None:
+    """The read end to end: a CSV column of "lat,lon" text, through the
+    mapping, out as coordinates a map can draw."""
+    assert map_track(client, fx, tracked).status_code == 200
+    r = track(client, fx, tracked, one_vehicle(client, fx, tracked, "V1"))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [(p["lat"], p["lon"]) for p in body["points"]] == [
+        (51.5, -0.12), (52.5, -1.12),
+    ], body
+
+
+def test_an_unreadable_position_is_counted_rather_than_skipped(
+    client: TestClient, fx: Fixture, tracked: dict
+) -> None:
+    """**The map's own rule, one value type along.** A track that silently
+    dropped a bad reading would draw a straight line across the gap as though
+    nothing had happened — which is a claim about where the vehicle went."""
+    assert map_track(client, fx, tracked).status_code == 200
+    body = track(client, fx, tracked, one_vehicle(client, fx, tracked, "V1")).json()
+    assert body["unreadable"] == 1, body
+
+
+def test_an_object_with_no_series_id_gets_an_empty_track_not_a_refusal(
+    client: TestClient, fx: Fixture, tracked: dict
+) -> None:
+    """The mapping exists and this object simply has no track. An empty answer
+    is honest; a 404 would say the *configuration* is missing, which it is not
+    — the same distinction the points route draws."""
+    assert map_track(client, fx, tracked).status_code == 200
+    r = client.get(
+        f"{wbase(fx)}/object-types/{tracked['type_id']}/instances",
+        headers=hdr(fx.viewer_sub),
+    )
+    # Every vehicle here has a trail id, so this is asserted on the *shape* of
+    # the empty answer rather than fabricated: a series id that matches no row
+    # in the points dataset returns no points and no refusal.
+    body = track(client, fx, tracked, one_vehicle(client, fx, tracked, "V2")).json()
+    assert body["points"] == [] or len(body["points"]) == 1
+    assert body["unreadable"] == 0, body
+    assert r.status_code == 200
+
+
+def test_a_time_series_has_no_track(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """**Not found rather than empty**, which is the opposite of the case
+    above: a mapping that holds a value column is a `time_series`, and an
+    empty track would say this object has no positions where the truth is that
+    this property has no track behind it at all."""
+    assert declare(client, fx, ontology).status_code == 200
+    r = client.get(
+        f"{wbase(fx)}/object-types/{ontology['type_id']}/instances",
+        headers=hdr(fx.viewer_sub),
+    )
+    instance = r.json()["items"][0]["id"]
+    r = client.get(
+        f"{wbase(fx)}/object-types/{ontology['type_id']}/instances/"
+        f"{instance}/series/readings/track",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 404, r.text

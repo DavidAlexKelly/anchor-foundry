@@ -43,6 +43,7 @@ from ..services import object_favourites as favourites_service
 from ..services import datasets as dataset_service
 from ..services import dataset_engine as engine
 from ..services import time_series as time_series_service
+from ..services import property_values
 from ..lib.errors import NotFoundError
 from ..services import instance_store
 from ..services import derived_properties
@@ -3816,7 +3817,8 @@ class SourceScheduleOut(BaseModel):
 
 # ---- time series (decision 0009 part 1; db 0047) -----------------------------
 class SeriesOut(BaseModel):
-    """Where one `time_series` property's points live."""
+    """Where one series property's points live — a `time_series`' numbers or a
+    `geotemporal_series`' positions (§427)."""
 
     id: UUID
     object_type_source_id: UUID
@@ -3825,7 +3827,11 @@ class SeriesOut(BaseModel):
     dataset_name: str
     key_column: str
     timestamp_column: str
-    value_column: str
+    #: Exactly one of these is set, which the table's own CHECK keeps true
+    #: (db 0097). Null is the honest shape for the other: a `geotemporal_series`
+    #: has no value column, and `""` would be a column name nobody chose.
+    value_column: str | None = None
+    point_column: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -3835,12 +3841,41 @@ class SeriesIn(BaseModel):
     dataset_id: UUID
     key_column: str = Field(min_length=1, max_length=200)
     timestamp_column: str = Field(min_length=1, max_length=200)
-    value_column: str = Field(min_length=1, max_length=200)
+    #: **One of the two, decided by the property's type** (§427; db 0097). A
+    #: `time_series` names a `value_column` and a `geotemporal_series` a
+    #: `point_column`; the service refuses the wrong one by name rather than
+    #: letting a mapping read the wrong thing, which is the worse failure
+    #: because it works.
+    value_column: str | None = Field(default=None, min_length=1, max_length=200)
+    point_column: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class SeriesPoint(BaseModel):
     at: Any
     value: Any
+
+
+class TrackPoint(BaseModel):
+    at: Any
+    lat: float
+    lon: float
+
+
+class SeriesTrack(BaseModel):
+    """One geotemporal series, as positions in time order (§427).
+
+    **No interval and no aggregate**, unlike `SeriesPoints`, and the absence
+    is the decision: the mean of two positions is a place neither of them was.
+    `time_series.track_sql` carries the whole argument.
+    """
+    property_api_name: str
+    series_id: str
+    points: list[TrackPoint]
+    #: Rows whose position column could not be read. Reported, never hidden -
+    #: the map's own rule, and a track that silently skipped a bad reading
+    #: would draw a straight line across the gap as though nothing happened.
+    unreadable: int
+    truncated: bool
 
 
 class SeriesPoints(BaseModel):
@@ -3894,6 +3929,7 @@ async def set_series(
             key_column=body.key_column,
             timestamp_column=body.timestamp_column,
             value_column=body.value_column,
+            point_column=body.point_column,
             columns=columns,
             property_types={p["api_name"]: p["data_type"] for p in properties},
             created_by=access.auth.user_id,
@@ -4072,6 +4108,94 @@ async def instance_series_points(
         interval=interval,
         aggregate=aggregate,
         points=[SeriesPoint(at=row[0], value=row[1]) for row in result.rows],
+        truncated=result.truncated,
+    )
+
+
+@router.get(
+    "/object-types/{type_id}/instances/{instance_id}/series/{property_api_name}/track",
+    response_model=SeriesTrack,
+)
+async def instance_series_track(
+    type_id: UUID,
+    instance_id: UUID,
+    property_api_name: str,
+    limit: int = Query(default=time_series_service.MAX_POINTS, ge=1),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> SeriesTrack:
+    """One object's track: where it was, in time order (§427).
+
+    `instance_series_points`' counterpart, and a separate endpoint rather than
+    a shape the other can return, because the two answer different questions
+    and take different parameters — `interval` and `aggregate` mean nothing
+    here (`time_series.track_sql` says why) and a route that accepted and
+    ignored them would be §214's control that looks like it works.
+
+    Workspace-scoped and reading the series id off the instance, for the two
+    reasons the points route gives.
+    """
+    storage = _dataset_storage()
+    async with user_connection(access.auth.user_id) as conn:
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        instance = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id)
+        )
+        if instance is None:
+            raise NotFoundError("object instance")
+        series = await time_series_service.series_for_source(
+            conn, UUID(str(instance["source_id"])), property_api_name
+        )
+        if series is None or series.get("point_column") is None:
+            # **Not found rather than empty**, which is the opposite of the
+            # empty-series-id case below: a mapping that exists but holds a
+            # value column is a `time_series`, and answering with an empty
+            # track would say this object has no positions when what is true
+            # is that this property has no track behind it at all.
+            raise NotFoundError("geotemporal series")
+
+    properties = _jsonb(instance["properties"]) or {}
+    series_id = properties.get(property_api_name)
+    if series_id is None or str(series_id).strip() == "":
+        return SeriesTrack(
+            property_api_name=property_api_name, series_id="",
+            points=[], unreadable=0, truncated=False,
+        )
+
+    sql = time_series_service.track_sql(
+        key_column=str(series["key_column"]),
+        timestamp_column=str(series["timestamp_column"]),
+        point_column=str(series["point_column"]),
+        series_id=str(series_id),
+        limit=limit,
+    )
+    local_path = await anyio.to_thread.run_sync(
+        storage.local_path, str(series["s3_location"])
+    )
+    result = await anyio.to_thread.run_sync(engine.query, local_path, sql)
+
+    points: list[TrackPoint] = []
+    unreadable = 0
+    for at, raw in result.rows:
+        try:
+            # **`_coerce_geopoint`'s job, not this route's** (§191). It already
+            # reads "lat,lon" text, a {lat, lon} mapping and a two-element
+            # list, which is every spelling a real column holds; a parse here
+            # would be a second one free to disagree with the one that
+            # validates a geopoint property.
+            place = property_values.coerce_property_value("geopoint", raw)
+        except property_values.PropertyValueError:
+            unreadable += 1
+            continue
+        if place is None:
+            unreadable += 1
+            continue
+        points.append(TrackPoint(at=at, lat=place["lat"], lon=place["lon"]))
+
+    return SeriesTrack(
+        property_api_name=property_api_name,
+        series_id=str(series_id),
+        points=points,
+        unreadable=unreadable,
         truncated=result.truncated,
     )
 
