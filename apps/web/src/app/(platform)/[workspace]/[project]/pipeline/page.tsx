@@ -205,6 +205,7 @@ export default function PipelinePage() {
           building={build.isPending}
           onSchedule={(models, cron) => schedule.mutate({ models, cron })}
           scheduling={schedule.isPending}
+          exportTitle={project?.name}
           viewers={viewers.data}
           viewAs={viewAs}
           // Passed only when the list came back: a picker with nobody on it

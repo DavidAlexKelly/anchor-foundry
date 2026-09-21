@@ -512,6 +512,32 @@ export function kindsIn(view: GraphView | undefined): PipelineNode["kind"][] {
 }
 
 /**
+ * p.12's *Invert selection*: "de-selects all currently selected nodes and
+ * selects the rest of the nodes on the graph" (§423).
+ *
+ * **The one of p.12's four with nothing behind it.** *Select All* is §356's
+ * select-every-match over the whole graph, and *Select children* / *Select
+ * parents* are §355's Expand buttons one hop each way; this is the only one
+ * that answers a question none of them do — "what did I leave out".
+ *
+ * **Over the graph as drawn**, so a focused lineage view inverts within its own
+ * component rather than reaching into a project the reader cannot see from
+ * here. That follows every other selection helper on this bar.
+ *
+ * Order is the graph's, not the selection's, because the result is not a
+ * reordering of anything the reader chose — and anything drawn from it (the
+ * build plan's order, the histogram) should read the same however the
+ * selection it inverted happened to be built.
+ */
+export function inverted(
+  nodes: readonly Pick<PipelineNode, "id">[],
+  selected: readonly string[],
+): string[] {
+  const held = new Set(selected);
+  return nodes.map((node) => node.id).filter((id) => !held.has(id));
+}
+
+/**
  * The view as the graph currently stands, with the empty parts left out.
  *
  * **Omitted rather than sent as empty**, matching what the server stores: a
