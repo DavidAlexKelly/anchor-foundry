@@ -25,17 +25,20 @@
  *
  *   - media reference → a media viewer  — we have no media reference type
  *   - time series     → an interactive chart — we have no time series type
- *   - geospatial      → a Map  ✅ (geopoint)
+ *   - geospatial      → a Map  ✅ (geopoint, and geoshape since §426)
  *   - everything else → a large card       ✅
  *
  * They are named in `ontology.md` §1.1 as ○ and will land with the types, not
  * with this file. Rendering them as plain cards in the meantime is the correct
- * behaviour, not a stub: a geopoint has a map because we can draw one.
+ * behaviour, not a stub: a geopoint has a map because we can draw one — and
+ * §425 gave this platform the geoshape p.11 names second, so that one has a
+ * map now too. The pattern holds: each rendering arrives with its type.
  */
 
 import { useQuery } from "@tanstack/react-query";
 import { objects as objApi } from "@/lib/api";
 import { MapCanvas } from "@/components/canvas/map";
+import { isGeometry } from "@/lib/geoshape";
 import { toLatLon } from "@/components/canvas/map";
 import { PropertyValue } from "@/components/property-value";
 import { ReducedValue } from "@/components/reduced-value";
@@ -129,18 +132,29 @@ function ProminentCard({
    * a rule may compare against a property this card was never given. */
   style: PropertyStyle | null;
 }) {
-  // p.11: "Objects with prominent geohash, geoshape, or geotemporal series
-  // reference properties will render on a Map." Ours is geopoint, and one
-  // point is still a map — it answers "where is this" without making somebody
-  // read a coordinate pair.
+  // p.11: "Objects with prominent geohash, **geoshape**, or geotemporal series
+  // reference properties will render on a Map." Two of the three now: a
+  // geopoint (one point is still a map — it answers "where is this" without
+  // making somebody read a coordinate pair) and, since §426, a geoshape.
+  //
+  // **A shape gets a map on the same ground a point does, and it is a
+  // stronger one**: a coordinate pair can at least be read, while a polygon's
+  // coordinates are a paragraph nobody reads at all. That is why the card
+  // draws the map rather than the summary `PropertyValue` shows in a table.
   const point = property.data_type === "geopoint" ? toLatLon(value) : null;
+  const shape = property.data_type === "geoshape" && isGeometry(value) ? value : null;
   return (
     <article className="sov-card" data-property={property.api_name}>
       <h3 className="sov-card-label">{property.display_name || property.api_name}</h3>
-      {point ? (
+      {point || shape ? (
         <div className="sov-card-map" data-testid={`sov-map-${property.api_name}`}>
           <MapCanvas
-            points={[{ id: property.api_name, ...point, label: property.display_name }]}
+            points={point
+              ? [{ id: property.api_name, ...point, label: property.display_name }]
+              : []}
+            shapes={shape
+              ? [{ id: property.api_name, label: property.display_name, value: shape }]
+              : []}
             total={1}
           />
         </div>

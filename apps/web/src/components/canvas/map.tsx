@@ -21,6 +21,7 @@
 
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { WORLD_OUTLINE } from "./basemap";
+import { boundsOf, onScreen, pathsFor } from "./map-shapes";
 
 export interface MapPoint {
   id: string;
@@ -180,14 +181,28 @@ export function clusterPoints(points: MapPoint[], view: MapView): { placed: Plac
   return { placed, offscreen };
 }
 
+/** A geoshape to draw (§426; `object-views` p.11). The label is what a hover
+ *  says; the value is whatever the property holds, and `map-shapes` decides
+ *  whether there is anything in it to draw. */
+export interface MapShape {
+  id: string;
+  label: string;
+  value: unknown;
+}
+
 export function MapCanvas({
   points,
+  shapes = [],
   unplaceable = 0,
   total,
   atLimit = false,
   onSelect,
 }: {
   points: MapPoint[];
+  /** p.11's geoshapes, drawn **under** the pins: a pin is a thing to click
+   *  and an outline is context for it, so an area that covered a pin would
+   *  hide the control. */
+  shapes?: MapShape[];
   /** Rows whose location could not be read. Reported, never hidden. */
   unplaceable?: number;
   /** Matching rows, when the source knows how many there are. A map that
@@ -208,9 +223,36 @@ export function MapCanvas({
   // that it is theirs. A filter changing under a map that keeps snapping back
   // to fit is unusable, and one that never fits at all opens on the wrong
   // continent.
-  const fitted = useMemo(() => fitView(points), [points]);
+  // **Fitted to the shapes as well as the pins** (§426), by giving `fitView`
+  // each shape's corners as points: a map of one polygon and no pins would
+  // otherwise open on the whole world with the shape a speck in it, and "Fit
+  // to data" would do nothing.
+  const fitted = useMemo(() => fitView([
+    ...points,
+    ...shapes.flatMap((shape) => {
+      const box = boundsOf(shape.value);
+      if (box === null) return [];
+      return [
+        { id: `${shape.id}:a`, label: shape.label, lat: box.minLat, lon: box.minLon },
+        { id: `${shape.id}:b`, label: shape.label, lat: box.maxLat, lon: box.maxLon },
+      ];
+    }),
+  ]), [points, shapes]);
   const current = view ?? fitted;
   const { placed, offscreen } = useMemo(() => clusterPoints(points, current), [points, current]);
+  const drawn = useMemo(
+    () => shapes.map((shape) => ({
+      shape,
+      paths: pathsFor(shape.value, current),
+      seen: onScreen(shape.value, current),
+    })),
+    [shapes, current],
+  );
+  // Counted rather than dropped, which is this file's own rule one value type
+  // along: a shape nobody can place and a shape panned away from look the
+  // same as no shape at all.
+  const shapesOff = drawn.filter((d) => d.paths.length > 0 && !d.seen).length;
+  const shapesLost = drawn.filter((d) => d.paths.length === 0).length;
 
   const zoomBy = useCallback((factor: number, anchor?: { x: number; y: number }) => {
     setView((previous) => {
@@ -306,6 +348,30 @@ export function MapCanvas({
             vectorEffect="non-scaling-stroke"
           />
         </g>
+        {/* p.11's geoshapes, inside the same transform as the basemap so they
+            pan and zoom with it — and **before** the pins, so an area never
+            covers the control a reader clicks. `non-scaling-stroke` keeps an
+            outline one pixel wide at every zoom, which is what the basemap
+            does and for the same reason. */}
+        <g transform={`scale(${k}) translate(${-current.x} ${-current.y})`}>
+          {drawn.flatMap(({ shape, paths }) =>
+            paths.map((path, i) => (
+              <path
+                key={`${shape.id}:${i}`}
+                data-testid={`map-shape-${shape.id}`}
+                d={path.d}
+                fill={path.filled ? "var(--accent-wash)" : "none"}
+                fillOpacity={path.filled ? 0.55 : undefined}
+                fillRule="evenodd"
+                stroke="var(--accent)"
+                strokeWidth={1.5}
+                vectorEffect="non-scaling-stroke"
+              >
+                <title>{shape.label}</title>
+              </path>
+            )),
+          )}
+        </g>
         {placed.map((group) => {
           const only = group.members.length === 1 ? group.members[0] : undefined;
           return only ? (
@@ -357,6 +423,13 @@ export function MapCanvas({
         <button type="button" onClick={() => setView(null)}>Fit to data</button>
         <span className="canvas-map-note">
           {points.length.toLocaleString()} placed
+          {shapes.length > 0 ? `, ${shapes.length.toLocaleString()} shape${
+            shapes.length === 1 ? "" : "s"}` : ""}
+          {shapesOff > 0 ? `, ${shapesOff.toLocaleString()} outside the view` : ""}
+          {shapesLost > 0
+            ? `, ${shapesLost.toLocaleString()} shape${
+              shapesLost === 1 ? "" : "s"} that cannot be drawn`
+            : ""}
           {offscreen > 0
             ? offscreen === points.length
               ? ", all of them outside the view"
