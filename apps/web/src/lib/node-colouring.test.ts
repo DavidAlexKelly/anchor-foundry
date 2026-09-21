@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  COLOURINGS, DEFAULT_COLOURING, type ColourableNode, legendFor, swatchFor,
+  COLOURINGS, DEFAULT_COLOURING, type ColourableNode, colouringIn, legendFor,
+  swatchFor,
 } from "./node-colouring";
 
+/** A node the graph could actually draw: every field the server sends, set.
+ *  A helper that left some out would build nodes `services/pipeline.py` never
+ *  produces, and a test over one of those proves nothing about the graph. */
+function node(kind: string, over: Partial<ColourableNode> = {}): ColourableNode {
+  return {
+    kind, origin: null, health_status: null, last_run_status: null,
+    out_of_date: false, out_of_date_reason: null, ...over,
+  };
+}
+
 function dataset(over: Partial<ColourableNode> = {}): ColourableNode {
-  return { kind: "dataset", origin: "model_output", ...over };
+  return node("dataset", { origin: "model_output", ...over });
 }
 
 describe("the options on offer", () => {
@@ -32,18 +43,18 @@ describe("the options on offer", () => {
 
 describe("swatchFor: build status", () => {
   it("colours a model by whether its run worked", () => {
-    expect(swatchFor({ kind: "model", last_run_status: "succeeded" }, "status")!.key)
+    expect(swatchFor(node("model", { last_run_status: "succeeded" }), "status")!.key)
       .toBe("ok");
-    expect(swatchFor({ kind: "model", last_run_status: "failed" }, "status")!.key)
+    expect(swatchFor(node("model", { last_run_status: "failed" }), "status")!.key)
       .toBe("failed");
   });
 
   it("colours an object type by its sync, not by a dataset's health", () => {
     // §351: an object type's last run *is* its last sync, and the question a
     // red node answers is "did the thing that writes this work".
-    expect(swatchFor({ kind: "object_type", last_run_status: "ok" }, "status")!.key)
+    expect(swatchFor(node("object_type", { last_run_status: "ok" }), "status")!.key)
       .toBe("ok");
-    expect(swatchFor({ kind: "object_type", last_run_status: "error" }, "status")!.key)
+    expect(swatchFor(node("object_type", { last_run_status: "error" }), "status")!.key)
       .toBe("failed");
   });
 
@@ -55,7 +66,7 @@ describe("swatchFor: build status", () => {
   });
 
   it("says nothing rather than guessing when a run has not happened", () => {
-    expect(swatchFor({ kind: "model", last_run_status: null }, "status")!.key)
+    expect(swatchFor(node("model", { last_run_status: null }), "status")!.key)
       .toBe("unknown");
   });
 });
@@ -108,7 +119,7 @@ describe("swatchFor: data health", () => {
 describe("swatchFor: kind and origin", () => {
   it("gives each resource type its own colour", () => {
     const tokens = ["dataset", "model", "object_type"]
-      .map((kind) => swatchFor({ kind }, "kind")!.token);
+      .map((kind) => swatchFor(node(kind), "kind")!.token);
     expect(new Set(tokens).size).toBe(3);
   });
 
@@ -120,7 +131,7 @@ describe("swatchFor: kind and origin", () => {
   it("says a model is not a dataset rather than calling it unknown", () => {
     // p.38's "the way the resource was created" is a dataset's question; a
     // model is not created the way its output is, and `origin` is null on one.
-    expect(swatchFor({ kind: "model" }, "origin")!.key).toBe("none");
+    expect(swatchFor(node("model"), "origin")!.key).toBe("none");
   });
 
   it("shows an origin it has no name for rather than dropping it", () => {
@@ -184,5 +195,37 @@ describe("legendFor", () => {
   it("puts an unnamed value last rather than dropping it", () => {
     const mixed = [dataset({ origin: "conjured" }), dataset({ origin: "upload" })];
     expect(legendFor(mixed, "origin").map((e) => e.key)).toEqual(["upload", "conjured"]);
+  });
+});
+
+describe("the colouring a stored view names (§360)", () => {
+  it("keeps one this build offers", () => {
+    expect(colouringIn({ colouring: "health" })).toBe("health");
+  });
+
+  it("keeps 'none', which is an option and not an absence", () => {
+    // The value most likely to be swallowed by a falsy check on the way
+    // through: p.38's first option is a choice somebody made.
+    expect(colouringIn({ colouring: "none" })).toBe("none");
+  });
+
+  it("falls back for a view that names nothing", () => {
+    expect(colouringIn({})).toBe(DEFAULT_COLOURING);
+    expect(colouringIn(undefined)).toBe(DEFAULT_COLOURING);
+  });
+
+  it("falls back for a colouring this build dropped", () => {
+    // A view saved by a later build. `swatchFor` would draw the default
+    // anyway; narrowing here is what stops the picker from showing an
+    // unrelated option beside cards drawn by a different rule (§214).
+    expect(colouringIn({ colouring: "spark_usage" })).toBe(DEFAULT_COLOURING);
+  });
+
+  it("narrows to something the picker can actually show", () => {
+    // The point of the fallback, said as the property rather than as one id:
+    // whatever comes back is an option the `<select>` has.
+    for (const named of ["health", "spark_usage", "", "none"]) {
+      expect(COLOURINGS.map((o) => o.id)).toContain(colouringIn({ colouring: named }));
+    }
   });
 });

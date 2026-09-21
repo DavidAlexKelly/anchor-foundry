@@ -15,6 +15,10 @@
  */
 
 import type { PipelineColumn, PipelineEdge, PipelineNode } from "@/lib/types";
+// Relative, and a value import rather than a type one: vitest resolves no
+// `@/` alias, so an aliased value import is a module this file's own tests
+// cannot load.
+import { DEFAULT_COLOURING } from "./node-colouring";
 
 /** The project-relative section each kind of node belongs to. */
 export function nodeSection(node: Pick<PipelineNode, "kind">): string {
@@ -472,6 +476,12 @@ export interface GraphView {
   /** Wire-typed as strings because that is what comes back from the server;
    *  `kindsIn` narrows it at the boundary. */
   kinds?: string[];
+  /** p.38's node colouring (§419). **A reading, not a decoration**, which is
+   *  why it belongs in a saved view at all: a graph shared to say "these three
+   *  are out of date with an ancestor" and reopened coloured by build status
+   *  is a different sentence. Narrowed by `colouringIn` at the boundary, for
+   *  the reason `kinds` is narrowed by `kindsIn`. */
+  colouring?: string;
 }
 
 /** The kinds this graph draws, which is what a stored filter may name. */
@@ -506,11 +516,17 @@ export function viewOf(state: {
   column: string | null;
   query: string;
   kinds: readonly string[];
+  colouring: string;
 }): GraphView {
   const view: GraphView = {};
   if (state.selected.length > 0) view.selected = [...state.selected];
   if (state.column !== null) view.column = state.column;
   if (state.query.trim() !== "") view.query = state.query;
   if (state.kinds.length > 0) view.kinds = [...state.kinds];
+  // The default is left out for the same reason an empty query is: it is the
+  // state somebody who chose nothing is already in, and storing it would make
+  // a graph saved before §419 existed and one saved with the picker untouched
+  // into two different records of the same view.
+  if (state.colouring !== DEFAULT_COLOURING) view.colouring = state.colouring;
   return view;
 }

@@ -3414,6 +3414,11 @@ export interface GraphViewInput {
   selected?: string[];
   query?: string;
   kinds?: string[];
+  /** p.38's node colouring (§419), by id — `lib/node-colouring`'s
+   *  `COLOURINGS`. Absent means the default, which is what the graph coloured
+   *  by before there was a choice, so a view saved before §419 opens
+   *  unchanged. */
+  colouring?: string;
 }
 
 /** A saved lineage graph. Project-scoped and shared within it, following

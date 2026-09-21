@@ -66,14 +66,24 @@ export const COLOURINGS: ColouringOption[] = [
 
 export const DEFAULT_COLOURING = "status";
 
-/** A node as this module reads it: the graph's shape, narrowed. */
+/** A node as this module reads it: the graph's shape, narrowed.
+ *
+ * **Every field required, nullable where `PipelineNode` is nullable**, which
+ * is what actually arrives — `services/pipeline.py` sets all six on every node
+ * it builds, and the wire type says so. They were optional here at first, and
+ * that was a fiction with a cost: it let this module's own tests build a node
+ * the graph can never draw, and then asserted something about it. A sweep
+ * found the seam — `!node.out_of_date` and `node.out_of_date === false`
+ * differ only on a node with no `out_of_date` at all — and the honest answer
+ * was not a test for the missing field but a type that stops claiming it can
+ * be missing. */
 export interface ColourableNode {
   kind: string;
-  origin?: string | null;
-  health_status?: string | null;
-  last_run_status?: string | null;
-  out_of_date?: boolean;
-  out_of_date_reason?: string | null;
+  origin: string | null;
+  health_status: string | null;
+  last_run_status: string | null;
+  out_of_date: boolean;
+  out_of_date_reason: string | null;
 }
 
 export interface Swatch {
@@ -239,4 +249,22 @@ export function legendFor(
   return [...seen.values()].sort(
     (a, b) => rank(a.key) - rank(b.key) || a.label.localeCompare(b.label),
   );
+}
+
+/**
+ * The colouring a stored view names, or the default if it names nothing this
+ * build offers.
+ *
+ * **`swatchFor` already falls back, and this is not the same fallback.** That
+ * one keeps the *cards* looking like a graph when a saved view (§360) names a
+ * colouring a later build dropped. This one keeps the *control* honest: the
+ * picker is a `<select>`, and a value no `<option>` carries leaves the browser
+ * showing the first option while the graph draws the default — two controls
+ * disagreeing about the same state, which is §214 exactly. Narrowing here
+ * means the select, the legend and the cards are all reading one id.
+ */
+export function colouringIn(view: { colouring?: string } | undefined): string {
+  const named = view?.colouring;
+  if (named === undefined) return DEFAULT_COLOURING;
+  return COLOURINGS.some((option) => option.id === named) ? named : DEFAULT_COLOURING;
 }

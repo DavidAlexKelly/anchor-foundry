@@ -7,9 +7,10 @@ describe("a view as a link", () => {
     expect(toParams({
       focus: "dataset:1", column: "id", query: "orders",
       kinds: ["model"], selected: ["dataset:1", "dataset:2"],
+      colouring: "health",
     })).toEqual({
       focus: "dataset:1", col: "id", q: "orders",
-      kind: ["model"], sel: ["dataset:1", "dataset:2"],
+      kind: ["model"], sel: ["dataset:1", "dataset:2"], colour: "health",
     });
   });
 
@@ -18,7 +19,7 @@ describe("a view as a link", () => {
     // value is its default has no business in a shared link.
     expect(toParams({})).toEqual({
       focus: undefined, col: undefined, q: undefined,
-      kind: undefined, sel: undefined,
+      kind: undefined, sel: undefined, colour: undefined,
     });
   });
 
@@ -28,6 +29,12 @@ describe("a view as a link", () => {
     expect(toParams({ kinds: [], selected: [] })).toMatchObject({
       kind: undefined, sel: undefined,
     });
+  });
+
+  it("carries 'no colour', which is a choice rather than an absence", () => {
+    // §210. The one colouring value that looks like emptiness: a link shared
+    // with the colours deliberately off has to arrive that way.
+    expect(toParams({ colouring: "none" })).toMatchObject({ colour: "none" });
   });
 });
 
@@ -50,6 +57,7 @@ describe("a view from a link", () => {
     const view = {
       focus: "model:abc", column: "val", query: "x",
       kinds: ["dataset", "object_type"], selected: ["dataset:9"],
+      colouring: "out_of_date",
     };
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(toParams(view))) {

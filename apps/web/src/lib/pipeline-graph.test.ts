@@ -391,7 +391,7 @@ describe("finding nodes on the graph (p.8, §356)", () => {
 describe("the view a graph is saved or shared at (p.12, §360)", () => {
   it("carries what was chosen", () => {
     expect(viewOf({
-      selected: ["dataset:1"], column: "id", query: "orders", kinds: ["model"],
+      selected: ["dataset:1"], column: "id", query: "orders", kinds: ["model"], colouring: "status",
     })).toEqual({
       selected: ["dataset:1"], column: "id", query: "orders", kinds: ["model"],
     });
@@ -400,26 +400,52 @@ describe("the view a graph is saved or shared at (p.12, §360)", () => {
   it("leaves out the parts nobody chose", () => {
     // **Omitted, not empty.** A view carrying `query: ""` and `selected: []`
     // saves as a filter nobody set and reopens looking deliberate.
-    expect(viewOf({ selected: [], column: null, query: "", kinds: [] })).toEqual({});
+    expect(viewOf({ selected: [], column: null, query: "", kinds: [], colouring: "status" })).toEqual({});
   });
 
   it("treats a blank search as no search", () => {
-    expect(viewOf({ selected: [], column: null, query: "   ", kinds: [] })).toEqual({});
+    expect(viewOf({ selected: [], column: null, query: "   ", kinds: [], colouring: "status" })).toEqual({});
   });
 
   it("copies rather than aliasing what it was given", () => {
     // The caller's arrays are React state; a view holding a reference to them
     // is a saved graph that changes after it was saved.
     const selected = ["dataset:1"];
-    const view = viewOf({ selected, column: null, query: "", kinds: [] });
+    const view = viewOf({ selected, column: null, query: "", kinds: [], colouring: "status" });
     selected.push("dataset:2");
     expect(view.selected).toEqual(["dataset:1"]);
+  });
+
+  it("carries a colouring somebody chose", () => {
+    // p.38's colouring is part of what was being looked at (§419): a graph
+    // shared to show what is out of date and reopened on build status says
+    // something else.
+    expect(viewOf({
+      selected: [], column: null, query: "", kinds: [], colouring: "out_of_date",
+    })).toEqual({ colouring: "out_of_date" });
+  });
+
+  it("leaves out the colouring nobody changed", () => {
+    // The default is the state somebody who never opened the picker is in.
+    // Storing it would make a graph saved before §419 and one saved with the
+    // picker untouched two different records of the same view.
+    expect(viewOf({
+      selected: [], column: null, query: "", kinds: [], colouring: "status",
+    })).toEqual({});
+  });
+
+  it("carries 'no colour', which is a choice and not a default", () => {
+    // The one value that looks like emptiness and is not: p.38's first option
+    // is somebody deciding the colours were in the way.
+    expect(viewOf({
+      selected: [], column: null, query: "", kinds: [], colouring: "none",
+    })).toEqual({ colouring: "none" });
   });
 
   it("keeps a column that is there and drops one that is not", () => {
     // The negative control: `column` is the one field whose empty value is
     // `null` rather than a length, so it needs saying separately.
-    expect(viewOf({ selected: [], column: "id", query: "", kinds: [] }))
+    expect(viewOf({ selected: [], column: "id", query: "", kinds: [], colouring: "status" }))
       .toEqual({ column: "id" });
   });
 });

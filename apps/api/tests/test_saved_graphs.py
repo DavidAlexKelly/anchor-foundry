@@ -11,6 +11,7 @@ name per scope, validated when it is saved rather than when it is opened.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import uuid
 
@@ -23,6 +24,11 @@ from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 from src.services import saved_graphs  # noqa: E402
+
+WEB_COLOURING = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "web", "src", "lib", "node-colouring.ts",
+)
 
 
 @pytest.fixture(scope="module")
@@ -164,6 +170,63 @@ def test_a_kind_this_graph_does_not_draw_is_refused(
                           "view": {"kinds": ["dataset", "pipeline"]}})
     assert r.status_code == 422, r.text
     assert "pipeline" in r.text
+
+
+def test_a_colouring_this_graph_does_not_offer_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.38's colourings are a fixed list, and a view naming one outside it
+    would open on the default — a shared graph quietly saying something other
+    than what it was shared to say."""
+    r = client.post(base(fx), headers=hdr(fx.editor_sub),
+                    json={"name": f"Colour {uuid.uuid4().hex[:6]}",
+                          "view": {"colouring": "spark_usage"}})
+    assert r.status_code == 422, r.text
+    assert "spark_usage" in r.text
+
+
+def test_a_colouring_is_saved_and_given_back(client: TestClient, fx: Fixture) -> None:
+    r = client.post(base(fx), headers=hdr(fx.editor_sub),
+                    json={"name": f"OOD {uuid.uuid4().hex[:6]}",
+                          "view": {"colouring": "out_of_date"}})
+    assert r.status_code == 201, r.text
+    assert r.json()["view"] == {"colouring": "out_of_date"}
+
+
+def test_no_colour_is_a_view_and_not_an_empty_one(
+    client: TestClient, fx: Fixture
+) -> None:
+    """§210: p.38's first option is somebody deciding the colours were in the
+    way. Dropped as falsy on the way through, it would reopen coloured."""
+    r = client.post(base(fx), headers=hdr(fx.editor_sub),
+                    json={"name": f"Plain {uuid.uuid4().hex[:6]}",
+                          "view": {"colouring": "none"}})
+    assert r.status_code == 201, r.text
+    assert r.json()["view"] == {"colouring": "none"}
+
+
+def test_the_browser_offers_exactly_what_this_accepts() -> None:
+    """**Two lists in two languages, pinned rather than trusted** (§416's shape).
+
+    `node-colouring.ts` is where the picker's options come from and this module
+    is what decides whether one can be saved. A colouring added there and not
+    here is a picker with an option that refuses to save; one removed there and
+    left here is a stored view the graph opens on the default without saying
+    so. Neither shows up in either end's own tests.
+    """
+    source = open(WEB_COLOURING).read()
+    block = re.search(
+        r"export const COLOURINGS: ColouringOption\[\] = \[(.*?)\n\];",
+        source, re.S,
+    )
+    assert block, "node-colouring.ts no longer declares COLOURINGS"
+    ids = re.findall(r'\{ id: "(.*?)"', block.group(1))
+    assert ids, "no colouring ids found — the shape of COLOURINGS changed"
+    assert tuple(ids) == saved_graphs.COLOURINGS
+
+    default = re.search(r'export const DEFAULT_COLOURING = "(.*?)";', source)
+    assert default, "node-colouring.ts no longer declares DEFAULT_COLOURING"
+    assert default.group(1) in saved_graphs.COLOURINGS
 
 
 def test_a_column_that_is_only_spaces_is_not_a_column(
