@@ -57,6 +57,13 @@ FOCUS_HINT = (
 #: thing. That test is the reason this is safe to write twice.
 COLOURINGS = ("status", "out_of_date", "health", "kind", "origin", "permissions", "none")
 
+#: p.11's arrangements, as the browser offers them (§424). Mirrored from
+#: `apps/web/src/lib/graph-layout.ts` and pinned by the same cross-file test
+#: that pins the colourings, for the same reason: two literals in two
+#: languages that cannot import each other drift, and neither end's own tests
+#: would notice.
+LAYOUTS = ("level", "vertical", "colour")
+
 #: A selection is a view, not a bulk operation. Forty nodes is a large graph;
 #: four hundred is somebody's script, and storing it would make opening the
 #: saved graph slower than drawing it.
@@ -80,7 +87,7 @@ def parse(view: Any) -> dict[str, Any]:
     if not isinstance(view, dict):
         raise GraphViewError("a saved graph's view must be an object")
 
-    known = {"focus", "column", "selected", "query", "kinds", "colouring"}
+    known = {"focus", "column", "selected", "query", "kinds", "colouring", "layout"}
     # **No `view_as`, and that is a decision rather than an omission** (§422).
     # p.82's dropdown names a colleague, and a saved graph or a shared link
     # carrying "as seen by Alice" is a claim about a person travelling further
@@ -167,6 +174,14 @@ def parse(view: Any) -> dict[str, Any]:
         # gets it back, because refusing it would make an honest view a
         # refusal.
         out["colouring"] = colouring
+
+    layout = view.get("layout")
+    if layout is not None:
+        if layout not in LAYOUTS:
+            raise GraphViewError(
+                f"{layout!r} is not a graph layout ({', '.join(LAYOUTS)})"
+            )
+        out["layout"] = layout
 
     return out
 

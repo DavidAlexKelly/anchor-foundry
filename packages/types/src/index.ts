@@ -3442,6 +3442,9 @@ export interface GraphViewInput {
    *  by before there was a choice, so a view saved before §419 opens
    *  unchanged. */
   colouring?: string;
+  /** p.11's arrangement (§424), by id — `lib/graph-layout`'s `LAYOUTS`.
+   *  Absent means the automatic one. */
+  layout?: string;
 }
 
 /** A saved lineage graph. Project-scoped and shared within it, following

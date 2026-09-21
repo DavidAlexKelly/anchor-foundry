@@ -31,6 +31,7 @@ _WEB_LIB = os.path.join(
 )
 WEB_COLOURING = os.path.join(_WEB_LIB, "node-colouring.ts")
 WEB_GRAPH = os.path.join(_WEB_LIB, "pipeline-graph.ts")
+WEB_LAYOUT = os.path.join(_WEB_LIB, "graph-layout.ts")
 
 
 @pytest.fixture(scope="module")
@@ -198,6 +199,43 @@ def test_the_browser_draws_exactly_the_kinds_this_accepts() -> None:
     for kind in saved_graphs.KINDS:
         assert f"'{kind}:<uuid>'" in saved_graphs.FOCUS_HINT, kind
         assert saved_graphs.NODE_ID.fullmatch(f"{kind}:{uuid.uuid4()}"), kind
+
+
+def test_a_layout_this_graph_does_not_offer_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.11's arrangements are a fixed list, and a view naming one outside it
+    would open on the automatic layout — a shared graph quietly arranged some
+    other way than the one it was shared to show."""
+    r = client.post(base(fx), headers=hdr(fx.editor_sub),
+                    json={"name": f"Layout {uuid.uuid4().hex[:6]}",
+                          "view": {"layout": "spiral"}})
+    assert r.status_code == 422, r.text
+    assert "spiral" in r.text
+
+
+def test_a_layout_is_saved_and_given_back(client: TestClient, fx: Fixture) -> None:
+    r = client.post(base(fx), headers=hdr(fx.editor_sub),
+                    json={"name": f"Vert {uuid.uuid4().hex[:6]}",
+                          "view": {"layout": "vertical"}})
+    assert r.status_code == 201, r.text
+    assert r.json()["view"] == {"layout": "vertical"}
+
+
+def test_the_browser_arranges_exactly_what_this_accepts() -> None:
+    """The colourings' cross-file check, for p.11's layouts (§424)."""
+    source = open(WEB_LAYOUT).read()
+    block = re.search(
+        r"export const LAYOUTS: LayoutOption\[\] = \[(.*?)\n\];", source, re.S,
+    )
+    assert block, "graph-layout.ts no longer declares LAYOUTS"
+    ids = re.findall(r'\{ id: "(.*?)"', block.group(1))
+    assert ids, "no layout ids found — the shape of LAYOUTS changed"
+    assert tuple(ids) == saved_graphs.LAYOUTS
+
+    default = re.search(r'export const DEFAULT_LAYOUT = "(.*?)";', source)
+    assert default, "graph-layout.ts no longer declares DEFAULT_LAYOUT"
+    assert default.group(1) in saved_graphs.LAYOUTS
 
 
 def test_a_colouring_this_graph_does_not_offer_is_refused(

@@ -7,10 +7,11 @@ describe("a view as a link", () => {
     expect(toParams({
       focus: "dataset:1", column: "id", query: "orders",
       kinds: ["model"], selected: ["dataset:1", "dataset:2"],
-      colouring: "health",
+      colouring: "health", layout: "vertical",
     })).toEqual({
       focus: "dataset:1", col: "id", q: "orders",
       kind: ["model"], sel: ["dataset:1", "dataset:2"], colour: "health",
+      layout: "vertical",
     });
   });
 
@@ -19,7 +20,7 @@ describe("a view as a link", () => {
     // value is its default has no business in a shared link.
     expect(toParams({})).toEqual({
       focus: undefined, col: undefined, q: undefined,
-      kind: undefined, sel: undefined, colour: undefined,
+      kind: undefined, sel: undefined, colour: undefined, layout: undefined,
     });
   });
 
@@ -57,7 +58,7 @@ describe("a view from a link", () => {
     const view = {
       focus: "model:abc", column: "val", query: "x",
       kinds: ["dataset", "object_type"], selected: ["dataset:9"],
-      colouring: "out_of_date",
+      colouring: "out_of_date", layout: "colour",
     };
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(toParams(view))) {

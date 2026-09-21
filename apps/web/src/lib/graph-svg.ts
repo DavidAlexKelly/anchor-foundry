@@ -37,17 +37,13 @@
  * produce a file that is no longer an image of anything.
  */
 
-import {
-  GAP_X, GAP_Y, NODE_H, NODE_W, PAD, nodeX, nodeY,
-} from "./pipeline-graph";
+import { NODE_H, NODE_W, canvasOf, type Place } from "./graph-layout";
 
 /** What this module needs of a node — the graph's shape, narrowed. */
 export interface DrawableNode {
   id: string;
   kind: string;
   name: string;
-  layer: number;
-  position: number;
 }
 
 export interface DrawableEdge {
@@ -112,6 +108,12 @@ export function clipped(text: string, limit: number): string {
 }
 
 export interface SvgOptions {
+  /** Where each card sits — `lib/graph-layout`'s answer for the layout that
+   *  was on screen (§424). **Required in spirit and optional in the type**: a
+   *  node with no place is not drawn, which is the same rule the component
+   *  follows, and passing none produces an empty picture rather than a
+   *  picture laid out by a second copy of the arithmetic. */
+  at?: Map<string, Place>;
   /** What each node's left bar says, by node id — §419's `swatchFor` applied
    *  by the caller, so the picture carries whatever reading was on screen
    *  rather than a second rule about colour. */
@@ -128,13 +130,13 @@ export interface SvgOptions {
 }
 
 /** A cubic bezier from one node's right edge to the next node's left edge —
- *  the same curve the component draws, for the same reason the geometry is
- *  shared. */
-function edgePath(from: DrawableNode, to: DrawableNode): string {
-  const x1 = nodeX(from.layer) + NODE_W;
-  const y1 = nodeY(from.position) + NODE_H / 2;
-  const x2 = nodeX(to.layer);
-  const y2 = nodeY(to.position) + NODE_H / 2;
+ *  the same curve the component draws, for the same reason the places come in
+ *  from outside. */
+function edgePath(from: Place, to: Place): string {
+  const x1 = from.x + NODE_W;
+  const y1 = from.y + NODE_H / 2;
+  const x2 = to.x;
+  const y2 = to.y + NODE_H / 2;
   const bend = Math.max(30, (x2 - x1) / 2);
   return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
 }
@@ -151,15 +153,23 @@ export function svgFor(
   edges: readonly DrawableEdge[],
   options: SvgOptions = {},
 ): string {
-  const { colours = {}, selected = [], styles, title = "Lineage graph" } = options;
+  const {
+    colours = {}, selected = [], styles, title = "Lineage graph",
+    at = new Map<string, Place>(),
+  } = options;
   const chosen = new Set(selected);
-  const byId = new Map(nodes.map((node) => [node.id, node]));
   const colour = (token: string) => resolved(token, styles);
+  const drawn = nodes
+    .map((node) => ({ node, place: at.get(node.id) }))
+    .filter((pair): pair is { node: DrawableNode; place: Place } =>
+      pair.place !== undefined);
 
-  const layers = Math.max(1, ...nodes.map((n) => n.layer + 1));
-  const rows = Math.max(1, ...nodes.map((n) => n.position + 1));
-  const width = Math.max(PAD + layers * (NODE_W + GAP_X), 400);
-  const height = PAD * 2 + rows * (NODE_H + GAP_Y);
+  // **The canvas the page would draw**, not a tight box of its own: an
+  // exported picture whose margins differ from the screen's is a second
+  // answer to the same question (§424, §191).
+  const { width, height } = canvasOf(
+    new Map(drawn.map(({ node, place }) => [node.id, place])),
+  );
 
   const parts: string[] = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" `
@@ -169,8 +179,8 @@ export function svgFor(
   ];
 
   for (const edge of edges) {
-    const from = byId.get(edge.from);
-    const to = byId.get(edge.to);
+    const from = at.get(edge.from);
+    const to = at.get(edge.to);
     // An edge to a node that is not drawn is not drawn either — a line
     // reaching off the picture would read as a node the export lost.
     if (!from || !to) continue;
@@ -180,9 +190,9 @@ export function svgFor(
     );
   }
 
-  for (const node of nodes) {
-    const x = nodeX(node.layer);
-    const y = nodeY(node.position);
+  for (const { node, place } of drawn) {
+    const x = place.x;
+    const y = place.y;
     const bar = colours[node.id];
     parts.push(
       `<g data-node="${escaped(node.id)}">`,

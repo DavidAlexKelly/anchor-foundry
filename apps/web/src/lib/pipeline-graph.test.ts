@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  DRAG_FLOOR, GAP_X, GRAPH_KINDS, NODE_W, PAD, columnsIn, foundByColumn, inverted, isDrag, kindsIn, nodePath, nodeSection, nodesInRect, outOfDateNote, relatives, search, toggleSelected, viewOf,
+  DRAG_FLOOR, GRAPH_KINDS, columnsIn, foundByColumn, inverted, isDrag, kindsIn, nodePath, nodeSection, outOfDateNote, relatives, search, toggleSelected, viewOf,
 } from "./pipeline-graph";
 
 describe("where a pipeline node opens", () => {
@@ -76,47 +76,10 @@ describe("what an out-of-date node says (p.51, §352)", () => {
 describe("selecting several nodes (p.7, p.54, §354)", () => {
   const node = (id: string, layer: number, position: number) => ({ id, layer, position });
 
-  describe("a drag rectangle", () => {
-    it("takes the nodes it is drawn over", () => {
-      const nodes = [node("a", 0, 0), node("b", 0, 1), node("c", 3, 0)];
-      // A rectangle down the first column, stopping short of layer 3.
-      expect(nodesInRect(nodes, { x1: 0, y1: 0, x2: 200, y2: 400 })).toEqual(["a", "b"]);
-    });
-
-    it("is the same rectangle drawn from either corner", () => {
-      // Dragging up-and-left is the same gesture as dragging down-and-right,
-      // and a build that trusted x1 < x2 would select nothing for half of the
-      // drags a person makes.
-      const nodes = [node("a", 0, 0), node("b", 0, 1)];
-      expect(nodesInRect(nodes, { x1: 200, y1: 400, x2: 0, y2: 0 })).toEqual(["a", "b"]);
-    });
-
-    it("takes a node it only overlaps", () => {
-      // **The decision this function makes.** A rectangle ending one pixel
-      // inside the card has selected it; requiring containment would mean
-      // dragging past the edge of a graph to pick up the node you are looking
-      // at. `nodeX(0)` is PAD, so this rect's right edge is one pixel in.
-      expect(nodesInRect([node("a", 0, 0)], { x1: 0, y1: 0, x2: PAD + 1, y2: PAD + 1 }))
-        .toEqual(["a"]);
-    });
-
-    it("leaves a node it misses entirely", () => {
-      // The negative control: overlap that never says no is not a hit test.
-      expect(nodesInRect([node("a", 0, 0)], { x1: 0, y1: 0, x2: PAD - 1, y2: 1000 }))
-        .toEqual([]);
-      expect(nodesInRect([node("a", 0, 0)], { x1: 0, y1: 0, x2: 1000, y2: PAD - 1 }))
-        .toEqual([]);
-    });
-
-    it("separates nodes in adjacent layers", () => {
-      // The gap between two layers is real space, and a rectangle in it takes
-      // neither — this is the assertion that fails if NODE_W and GAP_X are
-      // ever swapped.
-      const nodes = [node("a", 0, 0), node("b", 1, 0)];
-      const between = { x1: PAD + NODE_W + 1, y1: 0, x2: PAD + NODE_W + GAP_X - 1, y2: 1000 };
-      expect(nodesInRect(nodes, between)).toEqual([]);
-    });
-  });
+  // **The drag rectangle's tests moved to `graph-layout.test.ts`** (§424),
+  // with the function: a hit test has to ask the layout in force where a card
+  // is, and asking it here would have meant this file keeping a second copy of
+  // the arithmetic — which is the thing the move exists to prevent.
 
   describe("what counts as a drag", () => {
     it("a press that barely moves is a click", () => {
@@ -391,7 +354,7 @@ describe("finding nodes on the graph (p.8, §356)", () => {
 describe("the view a graph is saved or shared at (p.12, §360)", () => {
   it("carries what was chosen", () => {
     expect(viewOf({
-      selected: ["dataset:1"], column: "id", query: "orders", kinds: ["model"], colouring: "status",
+      selected: ["dataset:1"], column: "id", query: "orders", kinds: ["model"], colouring: "status", layout: "level",
     })).toEqual({
       selected: ["dataset:1"], column: "id", query: "orders", kinds: ["model"],
     });
@@ -400,18 +363,21 @@ describe("the view a graph is saved or shared at (p.12, §360)", () => {
   it("leaves out the parts nobody chose", () => {
     // **Omitted, not empty.** A view carrying `query: ""` and `selected: []`
     // saves as a filter nobody set and reopens looking deliberate.
-    expect(viewOf({ selected: [], column: null, query: "", kinds: [], colouring: "status" })).toEqual({});
+    expect(viewOf({ selected: [], column: null, query: "", kinds: [], colouring: "status", layout: "level" })).toEqual({});
   });
 
   it("treats a blank search as no search", () => {
-    expect(viewOf({ selected: [], column: null, query: "   ", kinds: [], colouring: "status" })).toEqual({});
+    expect(viewOf({ selected: [], column: null, query: "   ", kinds: [], colouring: "status", layout: "level" })).toEqual({});
   });
 
   it("copies rather than aliasing what it was given", () => {
     // The caller's arrays are React state; a view holding a reference to them
     // is a saved graph that changes after it was saved.
     const selected = ["dataset:1"];
-    const view = viewOf({ selected, column: null, query: "", kinds: [], colouring: "status" });
+    const view = viewOf({
+      selected, column: null, query: "", kinds: [], colouring: "status",
+      layout: "level",
+    });
     selected.push("dataset:2");
     expect(view.selected).toEqual(["dataset:1"]);
   });
@@ -421,7 +387,7 @@ describe("the view a graph is saved or shared at (p.12, §360)", () => {
     // shared to show what is out of date and reopened on build status says
     // something else.
     expect(viewOf({
-      selected: [], column: null, query: "", kinds: [], colouring: "out_of_date",
+      selected: [], column: null, query: "", kinds: [], colouring: "out_of_date", layout: "level",
     })).toEqual({ colouring: "out_of_date" });
   });
 
@@ -430,7 +396,7 @@ describe("the view a graph is saved or shared at (p.12, §360)", () => {
     // Storing it would make a graph saved before §419 and one saved with the
     // picker untouched two different records of the same view.
     expect(viewOf({
-      selected: [], column: null, query: "", kinds: [], colouring: "status",
+      selected: [], column: null, query: "", kinds: [], colouring: "status", layout: "level",
     })).toEqual({});
   });
 
@@ -438,14 +404,14 @@ describe("the view a graph is saved or shared at (p.12, §360)", () => {
     // The one value that looks like emptiness and is not: p.38's first option
     // is somebody deciding the colours were in the way.
     expect(viewOf({
-      selected: [], column: null, query: "", kinds: [], colouring: "none",
+      selected: [], column: null, query: "", kinds: [], colouring: "none", layout: "level",
     })).toEqual({ colouring: "none" });
   });
 
   it("keeps a column that is there and drops one that is not", () => {
     // The negative control: `column` is the one field whose empty value is
     // `null` rather than a length, so it needs saying separately.
-    expect(viewOf({ selected: [], column: "id", query: "", kinds: [], colouring: "status" }))
+    expect(viewOf({ selected: [], column: "id", query: "", kinds: [], colouring: "status", layout: "level" }))
       .toEqual({ column: "id" });
   });
 });
