@@ -39,6 +39,7 @@ export function toParams(view: GraphView): Change {
     q: view.query,
     kind: view.kinds && view.kinds.length > 0 ? view.kinds : undefined,
     sel: view.selected && view.selected.length > 0 ? view.selected : undefined,
+    colour: view.colouring,
   };
 }
 
@@ -63,5 +64,10 @@ export function fromParams(params: URLSearchParams): GraphView {
   if (kinds.length > 0) view.kinds = kinds;
   const selected = params.getAll("sel").filter(Boolean);
   if (selected.length > 0) view.selected = selected;
+  // Read as typed and narrowed by `colouringIn` where the graph reads it, for
+  // the reason nothing else here is validated either: a link somebody
+  // mistyped should open on a graph missing a part, not on a refusal.
+  const colouring = params.get("colour");
+  if (colouring) view.colouring = colouring;
   return view;
 }

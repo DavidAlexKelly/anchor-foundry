@@ -36,6 +36,13 @@ NODE_ID = re.compile(r"(dataset|model|object_type):[0-9a-fA-F-]{36}")
 #: The kinds a graph draws, and therefore the only ones a filter can name.
 KINDS = ("dataset", "model", "object_type")
 
+#: p.38's node colourings, as the browser offers them (§419). Mirrored from
+#: `apps/web/src/lib/node-colouring.ts` rather than shared, because there is no
+#: shared language between them - and mirrored lists drift, so
+#: `test_saved_graphs.py` reads that file and asserts the two say the same
+#: thing. That test is the reason this is safe to write twice.
+COLOURINGS = ("status", "out_of_date", "health", "kind", "origin", "none")
+
 #: A selection is a view, not a bulk operation. Forty nodes is a large graph;
 #: four hundred is somebody's script, and storing it would make opening the
 #: saved graph slower than drawing it.
@@ -59,7 +66,7 @@ def parse(view: Any) -> dict[str, Any]:
     if not isinstance(view, dict):
         raise GraphViewError("a saved graph's view must be an object")
 
-    known = {"focus", "column", "selected", "query", "kinds"}
+    known = {"focus", "column", "selected", "query", "kinds", "colouring"}
     unknown = sorted(set(view) - known)
     if unknown:
         raise GraphViewError(
@@ -127,6 +134,21 @@ def parse(view: Any) -> dict[str, Any]:
             )
             if not out["kinds"]:
                 del out["kinds"]
+
+    colouring = view.get("colouring")
+    if colouring is not None:
+        if colouring not in COLOURINGS:
+            raise GraphViewError(
+                f"{colouring!r} is not a node colouring "
+                f"({', '.join(COLOURINGS)})"
+            )
+        # Stored as given, including "none" - p.38's first option is somebody
+        # deciding the colours were in the way, which is a view rather than the
+        # absence of one. Only the default is dropped, and the browser drops
+        # that before it gets here (`viewOf`); a client that sends it anyway
+        # gets it back, because refusing it would make an honest view a
+        # refusal.
+        out["colouring"] = colouring
 
     return out
 

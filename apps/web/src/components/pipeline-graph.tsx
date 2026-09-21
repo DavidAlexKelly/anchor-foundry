@@ -13,6 +13,9 @@ import {
 import {
   durationLabel, emptyReason, placeOf, timelineFor,
 } from "@/lib/build-timeline";
+import {
+  COLOURINGS, type Swatch, colouringIn, legendFor, swatchFor,
+} from "@/lib/node-colouring";
 
 // One renderer, two entry points: the project-wide Pipeline page and a
 // single dataset's lineage, which is the same endpoint with a `focus`
@@ -40,30 +43,6 @@ function edgePath(from: PipelineNode, to: PipelineNode): string {
   return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
 }
 
-function statusColour(node: PipelineNode): string {
-  // An object type's last *run* is its last sync (§351), so it colours the
-  // way a model does rather than the way a dataset's health does — the
-  // question a red node answers here is "did the thing that writes this
-  // work", and for an object type that thing is the sync.
-  if (node.kind === "object_type") {
-    if (node.last_run_status === "ok") return "var(--accent)";
-    if (node.last_run_status === "error") return "var(--danger)";
-    return "var(--line-strong)";
-  }
-  if (node.kind === "model") {
-    if (node.last_run_status === "succeeded") return "var(--accent)";
-    if (node.last_run_status === "failed") return "var(--danger)";
-    return "var(--line-strong)";
-  }
-  // A stale dataset outranks its health here: passing expectations on data
-  // that is behind is exactly the reassuring half of the answer (§352).
-  if (node.out_of_date) return "var(--brass)";
-  if (node.health_status === "fail") return "var(--danger)";
-  if (node.health_status === "warn") return "var(--brass)";
-  if (node.health_status === "pass") return "var(--accent)";
-  return "var(--line-strong)";
-}
-
 function subtitle(node: PipelineNode): string {
   if (node.kind === "object_type") {
     // The api_name, because that is what a person writing a transform or an
@@ -87,6 +66,7 @@ function subtitle(node: PipelineNode): string {
 function NodeCard({
   node,
   selected,
+  swatch,
   lit = false,
   matched = false,
   dimmed = false,
@@ -95,6 +75,11 @@ function NodeCard({
 }: {
   node: PipelineNode;
   selected: boolean;
+  /** p.38's colouring, already decided (§419) — `null` is p.38's "No color".
+   *  Passed in rather than computed here because the legend beside the graph
+   *  has to be reading the same rule as the cards, and a card that worked out
+   *  its own colour is a second copy of that rule (§292). */
+  swatch: Swatch | null;
   /** This dataset has the column p.55's list has highlighted. */
   lit?: boolean;
   /** `code-repositories` p.55's indicator: where the reviewer has got to with
@@ -136,7 +121,12 @@ function NodeCard({
               ? "var(--danger)"
               : "var(--line-strong)"
         }`,
-        borderLeft: `4px solid ${lit ? "var(--accent)" : statusColour(node)}`,
+        // p.55's column highlight outranks p.38's colouring: the reader who
+        // clicked a column is asking one question, and the cards answering it
+        // have to be the ones that stand out.
+        borderLeft: `4px solid ${
+          lit ? "var(--accent)" : swatch?.token ?? "var(--line)"
+        }`,
         borderRadius: "var(--radius)",
         boxShadow: selected ? "var(--shadow-card-hover)" : "var(--shadow-card)",
         cursor: "pointer",
@@ -164,6 +154,10 @@ function NodeCard({
       // happens to order first.
       data-node={node.id}
       data-kind={node.kind}
+      // **The colouring's verdict, not its colour.** A test that asserted on
+      // `var(--danger)` would be asserting on the palette; what §419 is about
+      // is which bucket this card landed in, and that is the key.
+      data-colour={swatch?.key}
       // Which nodes are in the selection, as an attribute rather than only a
       // border: with several selected the count says how many and the borders
       // say *which*, and a border is not something a test can read without
@@ -373,6 +367,11 @@ export function PipelineGraphView({
   // question it answers is "where else is *this* column" — two highlighted at
   // once would light up a union nobody asked about.
   const [column, setColumn] = useState<string | null>(initialView?.column ?? null);
+  // p.38's "several built-in options for coloring graph nodes" (§419).
+  // `colouringIn` rather than the raw field: a stored view naming a colouring
+  // this build does not offer opens on the default, so the picker and the
+  // cards cannot disagree.
+  const [colouring, setColouring] = useState(() => colouringIn(initialView));
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
@@ -396,8 +395,8 @@ export function PipelineGraphView({
   const report = useRef(onViewChange);
   report.current = onViewChange;
   useEffect(() => {
-    report.current?.(viewOf({ selected, column, query, kinds }));
-  }, [selected, column, query, kinds]);
+    report.current?.(viewOf({ selected, column, query, kinds, colouring }));
+  }, [selected, column, query, kinds, colouring]);
 
   const chosen = useMemo(() => new Set(selected), [selected]);
   // The detail bar answers about *a* node, so it appears for exactly one.
@@ -425,6 +424,10 @@ export function PipelineGraphView({
     [selected, byId],
   );
   const timelineEmpty = emptyReason(timeline);
+  // The key for what the cards are coloured by, over the nodes actually on the
+  // graph. Memoised on the node list rather than recomputed per render: the
+  // graph re-renders on every pan frame, and this walks every node.
+  const legend = useMemo(() => legendFor(graph.nodes, colouring), [graph.nodes, colouring]);
   // p.11's other half (§417): "you can either search for the name of the node
   // or column names in datasets". The index is `graph.columns`, which §353
   // already reads off the same rows the graph draws — **the whole graph's,
@@ -706,6 +709,38 @@ export function PipelineGraphView({
         >
           Drag select
         </button>
+        {/* p.38's colouring, in the graph tools because that is what it is:
+            a way of reading the graph rather than a filter on it. A `select`
+            rather than six chips — the options are exclusive, and six more
+            chips beside three kind chips would read as nine filters. */}
+        <label className="slug" htmlFor="graph-colouring" style={{ marginLeft: 10 }}>
+          Colour by
+        </label>
+        <select
+          id="graph-colouring"
+          data-testid="graph-colouring"
+          value={colouring}
+          onChange={(e) => setColouring(e.target.value)}
+          style={{
+            padding: "5px 8px",
+            border: "1px solid var(--line-strong)",
+            borderRadius: "var(--radius)",
+            font: "inherit",
+            fontSize: 13,
+            background: "var(--panel)",
+            color: "var(--ink)",
+          }}
+          // What the chosen colouring is *asking*, which the label alone does
+          // not say: "Resource overview" is p.38's name for it and means
+          // nothing without "the way the resource was created" beside it.
+          title={COLOURINGS.find((o) => o.id === colouring)?.hint}
+        >
+          {COLOURINGS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
         <span style={{ marginLeft: "auto" }} />
         <button className="btn quiet" onClick={() => setZoom((z) => Math.max(0.4, z - 0.15))}>
           −
@@ -723,6 +758,47 @@ export function PipelineGraphView({
           +
         </button>
       </div>
+      {legend.length > 0 && (
+        /* **A colour with no legend is a code.** p.38 offers the reading; this
+           is what makes it readable — "why is that card brown" has no answer a
+           reader can reach by looking. The counts come with it because the
+           same list then doubles as a summary of the graph, said in the place
+           somebody is already looking. */
+        <div
+          data-testid="graph-legend"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 10,
+            alignItems: "center",
+            marginBottom: 6,
+            fontSize: 12,
+          }}
+        >
+          {legend.map((entry) => (
+            <span
+              key={entry.key}
+              data-testid={`legend-${entry.key}`}
+              data-count={entry.count}
+              style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+            >
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: 2,
+                  background: entry.token,
+                  // A token that resolves to the page's own background would
+                  // otherwise be an invisible swatch beside a label.
+                  border: "1px solid var(--line-strong)",
+                }}
+              />
+              {entry.label}
+              <span className="slug">{entry.count}</span>
+            </span>
+          ))}
+        </div>
+      )}
       <div
         style={{
           border: "1px solid var(--line)",
@@ -878,6 +954,7 @@ export function PipelineGraphView({
                 key={n.id}
                 node={n}
                 selected={chosen.has(n.id)}
+                swatch={swatchFor(n, colouring)}
                 lit={lit.has(n.id)}
                 matched={matched.has(n.id)}
                 review={review?.get(n.id)}
