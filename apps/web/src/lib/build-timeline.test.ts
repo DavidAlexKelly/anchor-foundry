@@ -37,6 +37,17 @@ describe("timelineFor", () => {
       .toEqual(["Alpha", "Beta", "Gamma"]);
   });
 
+  it("orders by time even when that is not alphabetical order", () => {
+    // **The case the test above cannot see.** Alpha, Beta and Gamma happen to
+    // have been built in alphabetical order, so sorting by name passes it —
+    // found by the sweep, which removed the start-time sort and broke nothing.
+    // Here the names run backwards against the clock, so only one order is
+    // right.
+    const late = built("dataset:a", "Alpha", "2026-01-01T10:02:00Z", "2026-01-01T10:02:10Z");
+    const early = built("dataset:z", "Zulu", "2026-01-01T10:00:00Z", "2026-01-01T10:00:10Z");
+    expect(timelineFor([late, early]).bars.map((b) => b.name)).toEqual(["Zulu", "Alpha"]);
+  });
+
   it("breaks a tie on name so renders do not reshuffle", () => {
     const first = built("dataset:z", "Zulu", "2026-01-01T10:00:00Z", "2026-01-01T10:00:10Z");
     const second = built("dataset:m", "Mike", "2026-01-01T10:00:00Z", "2026-01-01T10:00:10Z");
@@ -109,10 +120,16 @@ describe("placeOf", () => {
       .toEqual({ left: 0, width: 100 });
   });
 
-  it("gives a very short build a sliver rather than nothing", () => {
+  it("gives a very short build a sliver wide enough to see", () => {
     // A row with a real duration and no bar reads as a row with no duration.
+    //
+    // **Asserted as a floor, not as "more than nothing"** — the sweep removed
+    // the floor and this passed, because one millisecond in ten minutes is
+    // 0.000167% and that is indeed greater than zero. A width nobody can see
+    // or click is the same as no bar, so the number that matters is the one
+    // that keeps it drawable.
     const { width } = placeOf({ id: "s", name: "Short", offset: 0, ms: 1 }, 600_000);
-    expect(width).toBeGreaterThan(0);
+    expect(width).toBeGreaterThanOrEqual(0.5);
   });
 });
 
