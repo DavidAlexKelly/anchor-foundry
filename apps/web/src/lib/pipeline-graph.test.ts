@@ -7,22 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  columnsIn,
-  DRAG_FLOOR,
-  GRAPH_KINDS,
-  GAP_X,
-  isDrag,
-  NODE_W,
-  nodePath,
-  nodeSection,
-  nodesInRect,
-  outOfDateNote,
-  PAD,
-  kindsIn,
-  relatives,
-  search,
-  toggleSelected,
-  viewOf,
+  DRAG_FLOOR, GAP_X, GRAPH_KINDS, NODE_W, PAD, columnsIn, foundByColumn, isDrag, kindsIn, nodePath, nodeSection, nodesInRect, outOfDateNote, relatives, search, toggleSelected, viewOf,
 } from "./pipeline-graph";
 
 describe("where a pipeline node opens", () => {
@@ -462,5 +447,105 @@ describe("the kinds a stored view names", () => {
     // saved view could never filter to (§191's direction: guard the mirror
     // against the thing it mirrors).
     expect(new Set(GRAPH_KINDS)).toEqual(new Set(["dataset", "model", "object_type"]));
+  });
+});
+
+describe("finding by column name (p.11; §417)", () => {
+  const NODES = [
+    { id: "d1", kind: "dataset" as const, name: "Sites", slug: "sites" },
+    { id: "d2", kind: "dataset" as const, name: "Shipments", slug: "shipments" },
+    { id: "d3", kind: "dataset" as const, name: "Weather", slug: "weather" },
+    { id: "m1", kind: "model" as const, name: "Site risk", slug: "site-risk" },
+  ];
+  const COLUMNS = [
+    { name: "site_id", datasets: ["d1", "d2"] },
+    { name: "recorded_at", datasets: ["d3"] },
+  ];
+
+  it("finds the datasets that have the column", () => {
+    // p.11: "you can either search for the name of the node or column names in
+    // datasets". `Shipments` contains no "site" in its own name.
+    expect(search(NODES, "site_id", [], COLUMNS)).toEqual(["d1", "d2"]);
+  });
+
+  it("still finds by name and slug", () => {
+    // The other half of p.11's sentence, and the half that already worked —
+    // one box answers both, so neither may quietly stop working.
+    expect(search(NODES, "weather", [], COLUMNS)).toEqual(["d3"]);
+    expect(search(NODES, "site-risk", [], COLUMNS)).toEqual(["m1"]);
+  });
+
+  it("returns a node once when both its name and a column match", () => {
+    // `Sites` matches by name and holds `site_id`. Two reasons is still one
+    // card, and a duplicate id would make "5 of 40" count it twice.
+    const found = search(NODES, "site", [], COLUMNS);
+    expect(found).toEqual([...new Set(found)]);
+    expect(found).toEqual(["d1", "d2", "m1"]);
+  });
+
+  it("keeps the graph's own order", () => {
+    // The layer order the server sorted into, so "the first match" means the
+    // one furthest upstream — column matches must not be appended at the end.
+    expect(search(NODES, "site", [], COLUMNS)).toEqual(["d1", "d2", "m1"]);
+  });
+
+  it("applies the kind filter to column matches too", () => {
+    // p.8's Advanced tab. "Models with a column called site_id" is answered by
+    // nothing, because only datasets have columns — and answering it with the
+    // datasets would ignore the filter the reader set.
+    expect(search(NODES, "site_id", ["model"], COLUMNS)).toEqual([]);
+    expect(search(NODES, "site_id", ["dataset"], COLUMNS)).toEqual(["d1", "d2"]);
+  });
+
+  it("matches a column by part of its name, like a node", () => {
+    expect(search(NODES, "_id", [], COLUMNS)).toEqual(["d1", "d2"]);
+  });
+
+  it("finds nothing extra when no column matches", () => {
+    expect(search(NODES, "nothing", [], COLUMNS)).toEqual([]);
+  });
+
+  it("matches nothing for an empty query, columns or not", () => {
+    // The page opens in this state, and a search that starts by highlighting
+    // the whole graph has said nothing.
+    expect(search(NODES, "", [], COLUMNS)).toEqual([]);
+    expect(search(NODES, "   ", [], COLUMNS)).toEqual([]);
+  });
+
+  it("is name and slug only when no columns are supplied", () => {
+    // Every caller written before §417, and every saved view (§360): a search
+    // that silently started matching columns would change what an existing
+    // saved graph resolves to.
+    expect(search(NODES, "site_id")).toEqual([]);
+    expect(search(NODES, "site_id", [])).toEqual([]);
+  });
+});
+
+describe("foundByColumn (p.11; §417)", () => {
+  const NODES = [
+    { id: "d1", kind: "dataset" as const, name: "Sites", slug: "sites" },
+    { id: "d2", kind: "dataset" as const, name: "Shipments", slug: "shipments" },
+  ];
+  const COLUMNS = [{ name: "site_id", datasets: ["d1", "d2"] }];
+
+  it("names the results that would otherwise be unexplained", () => {
+    // §214: a card that lights up for a reason nobody can see is worse than
+    // one that does not light up. **Both** of these are unexplained for this
+    // query — `Sites` contains no "site_id" either, which is the case that
+    // makes the explanation worth having: a reader who typed a column name
+    // sees two cards light up and neither says the words they typed.
+    expect(foundByColumn(NODES, "site_id", COLUMNS)).toEqual(["d1", "d2"]);
+  });
+
+  it("leaves out a result whose own name already explains it", () => {
+    // `Sites` matches by name too, so it needs no explaining — counting it
+    // would make the explanation bigger than the surprise it covers.
+    expect(foundByColumn(NODES, "site", COLUMNS)).toEqual(["d2"]);
+  });
+
+  it("is empty when nothing matched by column", () => {
+    expect(foundByColumn(NODES, "shipments", COLUMNS)).toEqual([]);
+    expect(foundByColumn(NODES, "", COLUMNS)).toEqual([]);
+    expect(foundByColumn(NODES, "site_id", [])).toEqual([]);
   });
 });
