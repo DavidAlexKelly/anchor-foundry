@@ -58,6 +58,13 @@ from typing import Any
 INNER_TYPES = frozenset({
     "string", "integer", "float", "boolean", "date", "timestamp", "geopoint",
     "json", "attachment", "struct",
+    # **`geoshape` is allowed** (§425), which p.127 settles in one clause:
+    # "All base types may be used in arrays... excluding the Vector and Time
+    # series types." An array of shapes is an ordinary thing — a route's legs,
+    # a district's parcels — and it is *not* in tension with p.132 listing
+    # Geoshape among the types a reducer cannot take: an array may hold them,
+    # and there is simply no single one of them to call highest.
+    "geoshape",
 })
 
 

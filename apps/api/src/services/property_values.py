@@ -80,6 +80,163 @@ def _coerce_geopoint(value: Any) -> dict[str, float]:
     return {"lat": lat_f, "lon": lon_f}
 
 
+#: The GeoJSON geometry types, in the specification's own spelling (RFC 7946
+#: §1.4). `GeometryCollection` is here because the spec has it and `functions`
+#: p.40 says "any valid GeoJSON geometry"; a Feature is **not**, because a
+#: Feature is a geometry *plus properties*, and a property that stored one
+#: would be an object type holding a second object type's worth of fields
+#: where the schema says it holds a shape.
+GEOMETRY_TYPES = (
+    "Point", "MultiPoint", "LineString", "MultiLineString",
+    "Polygon", "MultiPolygon", "GeometryCollection",
+)
+
+#: How many coordinate arrays deep each type nests before reaching a position.
+#: `Point` is [lon, lat]; `LineString` is a list of those; `Polygon` is a list
+#: of rings, each a list of positions; and the Multi- forms add one more.
+#: Written out rather than recursed, because the spec fixes each one and a
+#: generic walk would accept a `Point` holding a polygon.
+_DEPTH = {
+    "Point": 0, "MultiPoint": 1, "LineString": 1,
+    "MultiLineString": 2, "Polygon": 2, "MultiPolygon": 3,
+}
+
+
+def _coerce_position(value: Any) -> list[float]:
+    """One GeoJSON position: **[longitude, latitude]**, in that order.
+
+    > "Note that positional arguments follow longitude, latitude order as per
+    > the GeoJSON spec." (`functions` p.40)
+
+    **The opposite order to a geopoint, and deliberately so.** `_coerce_geopoint`
+    reads lat,lon because that is what `object-link-types` p.273 documents for
+    that type and what nearly every coordinate a person types looks like; this
+    reads lon,lat because a geoshape *is* GeoJSON and a GeoJSON document with
+    the axes swapped is not a GeoJSON document. Reconciling them would break
+    one of the two, and the one it would break is whichever this platform is
+    exporting to.
+
+    The range checks are what make the difference catchable rather than
+    silent: a longitude beyond +-180 is refused outright, and for most of the
+    world a transposed pair puts the latitude out of range too. The refusal
+    says which order it wanted, because "invalid position" would leave a
+    reader guessing at exactly the thing that went wrong.
+
+    A third element is **altitude and is kept**, which RFC 7946 allows; more
+    than three is not a position.
+    """
+    if not isinstance(value, (list, tuple)) or not 2 <= len(value) <= 3:
+        raise PropertyValueError(
+            f"a GeoJSON position is [longitude, latitude], got {value!r}"
+        )
+    try:
+        numbers = [float(part) for part in value]
+    except (TypeError, ValueError) as exc:
+        raise PropertyValueError(
+            f"position coordinates are not numbers: {value!r}"
+        ) from exc
+    lon, lat = numbers[0], numbers[1]
+    if not -180 <= lon <= 180:
+        raise PropertyValueError(
+            f"longitude {lon} is out of range (GeoJSON positions are "
+            "[longitude, latitude] - did you send [lat, lon]?)"
+        )
+    if not -90 <= lat <= 90:
+        raise PropertyValueError(
+            f"latitude {lat} is out of range (GeoJSON positions are "
+            "[longitude, latitude] - did you send [lat, lon]?)"
+        )
+    return numbers
+
+
+def _coerce_coordinates(value: Any, depth: int) -> Any:
+    """`depth` arrays of positions, checked at every level.
+
+    The depth is what stops a `Point` from accepting a polygon's coordinates
+    and a `Polygon` from accepting a bare position — both of which are valid
+    JSON, both of which draw nothing, and neither of which any check on the
+    outer shape alone would catch.
+    """
+    if depth == 0:
+        return _coerce_position(value)
+    if not isinstance(value, (list, tuple)):
+        raise PropertyValueError(
+            f"expected a list of coordinates, got {value!r}"
+        )
+    return [_coerce_coordinates(part, depth - 1) for part in value]
+
+
+def _coerce_geoshape(value: Any) -> dict[str, Any]:
+    """A GeoJSON geometry object (`object-link-types` p.127; `functions` p.40).
+
+    > "GeoShape represents any valid GeoJSON geometry, including Points,
+    > Polygons, LineStrings, and other shapes."
+
+    **Validated rather than stored as typed**, which is the same judgement db
+    0029 made for every other type here: the value lives in a jsonb blob and
+    may not live in Postgres at all, so what a type means is what this
+    function enforces. A geoshape that reached storage as `{"type": "Polygn"}`
+    would draw nothing and report nothing, which is the failure a label
+    nothing enforced always is.
+
+    **A string is accepted and parsed**, because a CSV column holding a
+    geometry holds text — the same reason `_coerce_geopoint` takes "lat,lon".
+    The parse is JSON, not a geometry grammar: there is no plain-text spelling
+    of a polygon a spreadsheet would produce.
+
+    The returned object carries `type` and `coordinates` (or `geometries`) and
+    **nothing else**. RFC 7946 allows a `bbox` and foreign members, and
+    dropping them is a decision rather than an oversight: a bbox that does not
+    match its geometry is a second answer to where the shape is, and this
+    platform computes nothing from one.
+    """
+    if isinstance(value, str):
+        import json as _json
+
+        try:
+            value = _json.loads(value)
+        except ValueError as exc:
+            raise PropertyValueError(
+                f"cannot read {value!r} as GeoJSON"
+            ) from exc
+    if not isinstance(value, dict):
+        raise PropertyValueError(f"cannot read {value!r} as a geoshape")
+
+    kind = value.get("type")
+    if kind not in GEOMETRY_TYPES:
+        raise PropertyValueError(
+            f"{kind!r} is not a GeoJSON geometry type "
+            f"({', '.join(GEOMETRY_TYPES)})"
+        )
+
+    if kind == "GeometryCollection":
+        members = value.get("geometries")
+        if not isinstance(members, list):
+            raise PropertyValueError(
+                "a GeometryCollection needs a list of geometries"
+            )
+        # **Members are geometries, and a collection of collections is
+        # refused.** RFC 7946 §3.1.8 says so in as many words ("avoid nested
+        # GeometryCollections"), and allowing one would make the depth of a
+        # value unbounded on a read path.
+        out = []
+        for member in members:
+            shape = _coerce_geoshape(member)
+            if shape["type"] == "GeometryCollection":
+                raise PropertyValueError(
+                    "a GeometryCollection cannot contain another one"
+                )
+            out.append(shape)
+        return {"type": kind, "geometries": out}
+
+    if "coordinates" not in value:
+        raise PropertyValueError(f"a {kind} needs coordinates")
+    return {
+        "type": kind,
+        "coordinates": _coerce_coordinates(value["coordinates"], _DEPTH[kind]),
+    }
+
+
 ATTACHMENT_FIELDS = ("key", "filename", "content_type", "size")
 
 
@@ -368,6 +525,8 @@ def coerce_property_value(
         return _coerce_struct(value, struct_fields)
     if data_type == "geopoint":
         return _coerce_geopoint(value)
+    if data_type == "geoshape":
+        return _coerce_geoshape(value)
     if data_type == "attachment":
         return _coerce_attachment(value)
     if data_type in ("date", "timestamp"):
@@ -421,6 +580,15 @@ def column_value(data_type: str, value: Any) -> Any:
         # holds a scalar, and an array flattened to anything else - the first
         # element, a joined string - would not survive the round trip that
         # `_coerce_array` makes work.
+        import json as _json
+
+        return _json.dumps(value)
+    if data_type == "geoshape" and isinstance(value, dict):
+        # **The GeoJSON text, not a bounding box or a centroid.** A geometry
+        # has no scalar it can be flattened to that survives the round trip -
+        # a centroid is a different shape and a bbox is a different geometry -
+        # so the column holds the document, which `_coerce_geoshape` reads
+        # straight back because it accepts a string.
         import json as _json
 
         return _json.dumps(value)

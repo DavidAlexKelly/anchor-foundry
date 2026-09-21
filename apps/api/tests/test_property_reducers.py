@@ -175,7 +175,7 @@ def test_p132s_unsupported_list_is_read_in_full() -> None:
     """The guard on the test above: parametrised cases pass by being absent. If
     a fourth element type is refused, its sentence needs a case of its own."""
     assert sorted(property_reducers.UNREDUCIBLE) == [
-        "attachment", "geopoint", "json"
+        "attachment", "geopoint", "geoshape", "json"
     ]
 
 

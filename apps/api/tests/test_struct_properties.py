@@ -124,6 +124,10 @@ def test_the_field_types_are_p149s_list_and_not_this_platforms() -> None:
                          # nesting with the type system switched off
         "attachment",    # a reference the upload path issues per property
         "time_series",   # `object_type_series` names a property, not a field
+        "geoshape",      # p.149 lists GEOPOINT and not GEOSHAPE, which is the
+                         # whole answer: the constraint is the source's, and a
+                         # struct column is a SQL struct whose fields are the
+                         # eleven SQL types named there (§425)
         "array",         # p.140's shape is "Struct Array" - an array *of*
                          # structs, which db 0087 expresses as an `array`
                          # property whose `struct_fields` describe the element.

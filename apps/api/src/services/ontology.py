@@ -44,6 +44,15 @@ from .property_values import (  # noqa: F401
 PROPERTY_TYPES = {
     "string", "integer", "float", "boolean", "date", "timestamp", "geopoint",
     "json", "attachment",
+    # **A GeoJSON geometry** (§425; `object-link-types` p.127, `functions`
+    # p.40). Its own type rather than a `json` property with a convention,
+    # because a label nothing enforces is what `geopoint` was before db 0029:
+    # `{"type": "Polygn"}` is valid JSON, draws nothing and reports nothing.
+    # Note that its coordinates are [longitude, latitude] where a geopoint's
+    # are lat,lon - Foundry documents each that way and this platform keeps
+    # both, with the difference stated wherever a reader could assume
+    # otherwise (`services/property_values.py`).
+    "geoshape",
     # A **series id**, not a history (decision 0009, migration 0047). The value
     # stored on the instance is a small scalar - usually the instance's own
     # primary key - and `object_type_series` says which dataset, key column,
@@ -61,6 +70,48 @@ PROPERTY_TYPES = {
     # `array_properties` decides which ones are allowed.
     "array",
 }
+
+#: Property types that cannot be an object type's title, with the reason each
+#: one cannot - `object-link-types` p.273's "Valid as title key?" column,
+#: narrowed to the types this platform has (§425).
+#:
+#: **A reason per entry rather than one shared refusal**, because they are not
+#: the same objection: a geoshape has no text at all, a struct has too much of
+#: it, and an attachment's text is a filename that says nothing about the
+#: object. A shared message would read as a blanket rule somebody would
+#: reasonably argue with.
+#:
+#: Geopoint is deliberately **absent**: p.273 marks it Yes, and "57.6,10.4" is
+#: a usable title for a reading somebody took at a place.
+NOT_TITLE_TYPES = {
+    "geoshape": "a shape has no text to put in a heading",
+    "struct": "a struct is fields, and a heading is one line",
+    "array": "an array is many values, and a title names one thing",
+    "attachment": "an attachment's title would be a filename",
+    "time_series": "a time series is a reference, not a name",
+    "json": "an untyped value has no shape a heading can rely on",
+}
+
+
+def _check_title_property(title_property: Any, properties: list[dict[str, Any]]) -> None:
+    """p.273's title-key column, on create and on update.
+
+    **One function because there are two write paths**, which is db 0040's
+    lesson in this file: a rule enforced when a type is created and not when
+    it is edited is a rule anybody can get round by saving twice.
+    """
+    if title_property is None:
+        return
+    by_api = {str(p["api_name"]): p for p in properties}
+    if title_property not in by_api:
+        raise ValueError("title_property must be one of the defined properties")
+    titled = str(by_api[title_property].get("data_type") or "")
+    if titled in NOT_TITLE_TYPES:
+        raise ValueError(
+            f"a {titled} property cannot be an object type's title "
+            f"({NOT_TITLE_TYPES[titled]})"
+        )
+
 
 # How prominently an application should show a property (Foundry
 # `object-link-types` p.111). **A display hint, never a permission**: a hidden
@@ -832,10 +883,7 @@ async def create_type(
                 f"{prop['api_name']}: add a derived property after the object "
                 "type exists - its links have to exist first"
             )
-    if title_property is not None and title_property not in {
-        str(p["api_name"]) for p in properties
-    }:
-        raise ValueError("title_property must be one of the defined properties")
+    _check_title_property(title_property, properties)
     existing = await fetch_one(
         conn,
         "SELECT 1 AS x FROM object_types WHERE workspace_id=:wid AND api_name=:api",
@@ -1422,10 +1470,7 @@ async def update_type(
         )
     if not properties:
         raise ValueError("an object type needs at least one property")
-    if title_property is not None and title_property not in {
-        str(p["api_name"]) for p in properties
-    }:
-        raise ValueError("title_property must be one of the defined properties")
+    _check_title_property(title_property, properties)
 
     impacts = await type_impact(conn, workspace_id, type_id, properties)
     if any(i["blocking"] for i in impacts) and not acknowledge_breaking:

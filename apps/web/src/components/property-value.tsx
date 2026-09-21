@@ -18,6 +18,7 @@ import type {
   AttachmentRef, GeoPoint, PropertyDataType, PropertyStyle, StructField, ValueFormat,
 } from "@/lib/types";
 import { structRows } from "@/lib/struct-fields";
+import { GEOSHAPE_PLACEHOLDER, summarise } from "@/lib/geoshape";
 import { cssFor } from "@/lib/conditional-format";
 import { formatValue } from "@/lib/value-format";
 // The Canvas Action Form's rule for which control a type gets, now shared
@@ -201,6 +202,25 @@ export function PropertyValue({
         {value.lat.toFixed(4)}, {value.lon.toFixed(4)}
       </span>
     );
+  }
+  if (dataType === "geoshape") {
+    // The type and the size, not the coordinates (§425): a polygon's
+    // coordinates are a paragraph, and a cell holding them would push every
+    // other column off the screen. The raw value is in the tooltip, which is
+    // the same trade `formatValue` makes one branch up.
+    const said = summarise(value);
+    if (said) {
+      return (
+        <span
+          className="slug"
+          title={JSON.stringify(value)}
+          style={paint}
+          data-testid="geoshape-value"
+        >
+          {said}
+        </span>
+      );
+    }
   }
   const attached = dataType === "attachment" ? parseAttachment(value) : null;
   if (attached) {
@@ -424,7 +444,15 @@ export function PropertyInput({
       aria-label={label}
       required={required}
       aria-required={required || undefined}
-      placeholder={dataType === "geopoint" ? "lat,lon — e.g. 51.5074,-0.1278" : undefined}
+      placeholder={
+        dataType === "geopoint" ? "lat,lon — e.g. 51.5074,-0.1278"
+        // **The order, said where somebody types one** (§425). A geoshape's
+        // positions are [longitude, latitude] and a geopoint's are lat,lon;
+        // the two sit in the same form, and a value with them swapped is
+        // valid, plottable and in the wrong hemisphere.
+        : dataType === "geoshape" ? GEOSHAPE_PLACEHOLDER
+        : undefined
+      }
       value={value === null || value === undefined ? "" : String(value)}
       onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
     />

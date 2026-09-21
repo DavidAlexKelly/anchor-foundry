@@ -1668,6 +1668,17 @@ export type PropertyVisibility = "normal" | "prominent" | "hidden";
 export type PropertyDataType =
   | "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "geopoint"
   | "json" | "attachment"
+  /** **A GeoJSON geometry** (Foundry `object-link-types` p.127; `functions`
+   * p.40; db 0094). "Any valid GeoJSON geometry, including Points, Polygons,
+   * LineStrings, and other shapes."
+   *
+   * Its coordinates are **[longitude, latitude]**, which is the opposite of a
+   * `geopoint`'s lat,lon — Foundry documents each that way (p.273 for the
+   * point, `functions` p.40 for the shape) and this platform keeps both. The
+   * difference is stated wherever a reader could assume otherwise, because a
+   * value with the axes swapped is valid, plottable and in the wrong
+   * hemisphere. */
+  | "geoshape"
   /** A **series id**, not a history (decision 0009, db 0047). The value on the
    * instance is a small scalar — usually its own primary key — and
    * `object_type_series` on the object type source says which dataset, key,

@@ -84,7 +84,11 @@ import type { ActionType } from "@/lib/types";
  * plus `object`, which p.25 needs for a parameter that takes an object. */
 const PARAMETER_TYPES = [
   "string", "integer", "float", "boolean", "date", "timestamp",
-  "geopoint", "json", "attachment", "object",
+  // `action-types` p.131 settles this in one row of its table: "Geoshape |
+  // Geoshape | Yes" (§425). A property type an action cannot take is a
+  // property type nothing in the product can write, since every edit to an
+  // instance goes through one.
+  "geopoint", "geoshape", "json", "attachment", "object",
 ];
 
 /** The rule kinds this build can execute, and what to call them.
