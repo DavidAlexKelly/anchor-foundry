@@ -59,6 +59,7 @@ import {
   ApiError,
   api as platformApi,
   code as codeApi,
+  datasets as datasetApi,
   models as modelApi,
   repositories as repoApi,
   resources as resourceApi,
@@ -482,6 +483,29 @@ function FilesTab({
   // p.20's personal preferences (§432), read through the one hook the Settings
   // tab writes them with - so a font size chosen there is the font size here.
   const [editorPreferences] = useEditorPreferences();
+
+  // p.2's IntelliSense, over the names only this platform knows (§434): the
+  // project's datasets and their columns. **One listing, and it already
+  // carries the columns** - `Dataset.table_schema` is on every row, so the
+  // vocabulary is a reshape of a request several other screens already make
+  // under this key rather than a second endpoint (§162).
+  const datasetList = useQuery({
+    queryKey: ["datasets", pid],
+    queryFn: () => datasetApi.list(wid, pid),
+  });
+  const vocabulary = useMemo(
+    () => (datasetList.data
+      ? {
+        datasets: datasetList.data.map((d) => ({
+          name: d.name,
+          columns: (d.table_schema ?? []).map((c) => ({
+            name: c.name, type: c.data_type,
+          })),
+        })),
+      }
+      : undefined),
+    [datasetList.data],
+  );
   // The working set: the committed tree with unsaved edits laid over it. Kept
   // apart from the query cache so a refetch cannot silently discard typing,
   // and reset only when the ref changes - switching branch or commit is a
@@ -812,6 +836,7 @@ function FilesTab({
                   onReady={() => setEditorReady(true)}
                   onChange={(next) => setEdits((c) => ({ ...c, [selected]: next }))}
                   preferences={editorPreferences}
+                  vocabulary={vocabulary}
                 />
               </div>
               {!pinned && (
