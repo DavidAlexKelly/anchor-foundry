@@ -41,6 +41,11 @@ from . import dataset_engine as engine
 from . import models as model_service
 from .dataset_engine import DatasetEngineError
 
+#: The checks this platform runs itself. **Not a list of every name a row can
+#: have** — since §433 a repository declares its own in `repoSettings.json` and
+#: those arrive prefixed with `custom_checks.PREFIX`, so a constraint built on
+#: this tuple would refuse them. It is documentation of the built-ins and
+#: nothing reads it.
 CHECK_NAMES = ("transform_runs", "schema_compatible")
 CHECK_STATUSES = ("pass", "warn", "fail", "error")
 
@@ -167,7 +172,88 @@ async def run_checks(
             produced=schema, transform_ran=ran, actor_id=actor_id, anchor=anchor,
         )
 
+    await _run_custom_checks(
+        conn, project_id, proposal_id, actor_id=actor_id, anchor=anchor,
+    )
     return await list_checks(conn, proposal_id, anchor)
+
+
+async def _run_custom_checks(
+    conn: AsyncConnection,
+    project_id: UUID,
+    proposal_id: UUID,
+    *,
+    actor_id: UUID | None,
+    anchor: Any,
+) -> None:
+    """p.98's custom checks, over the commit's own files (§433).
+
+    **Over the whole tree, not over the declared transforms.** The two other
+    checks are about what a transform *does*; a repository's own rule is about
+    what its files *say*, and a rule about a `.md` file or about a transform
+    somebody has not declared yet is as legitimate as one about a published
+    one.
+
+    Only a commit-backed proposal has a repository and therefore a
+    `repoSettings.json` to read. A typed-changes proposal names no repository
+    (db 0039), so it has nothing to declare checks in - which is silence rather
+    than a refusal, because there is no repository that could have asked.
+    """
+    from . import code_tags, custom_checks
+    from . import repositories as repo_service
+
+    proposal = await fetch_one(
+        conn,
+        "SELECT source_repo_id, source_commit_id FROM code_proposals WHERE id = :id",
+        {"id": str(proposal_id)},
+    )
+    if proposal is None or not proposal["source_commit_id"]:
+        return
+
+    repo = await fetch_one(
+        conn,
+        "SELECT p.workspace_id FROM code_repos r JOIN projects p ON p.id = r.project_id "
+        "WHERE r.id = :rid",
+        {"rid": str(proposal["source_repo_id"])},
+    )
+    if repo is None:
+        return
+    files = await repo_service.read_tree(
+        conn,
+        workspace_id=UUID(str(repo["workspace_id"])),
+        commit_id=UUID(str(proposal["source_commit_id"])),
+    )
+    rules, refused = custom_checks.parse(code_tags.read_settings(files))
+
+    for bad in refused:
+        # `error`, which says so on the screen and does not gate. A rule
+        # nobody can read must not block a merge, and must not be silent.
+        await _record(
+            conn, proposal_id=proposal_id, model_id=None, source_path=None,
+            name=bad.check_name, status="error",
+            summary=(
+                f"This check could not be run: {bad.reason}. It is declared in "
+                f"{code_tags.SETTINGS_FILE}."
+            ),
+            detail={"reason": bad.reason}, ran_by=actor_id, anchored_at=anchor,
+        )
+
+    for rule in rules:
+        offending = custom_checks.violations(rule, files)
+        looked_at = custom_checks.scanned(files, rule.files)
+        status, summary = custom_checks.summarise(rule, offending, len(looked_at))
+        await _record(
+            conn, proposal_id=proposal_id, model_id=None, source_path=None,
+            name=rule.check_name, status=status, summary=summary,
+            detail={
+                "files": rule.files,
+                "pattern": rule.pattern.pattern,
+                "kind": "forbid" if rule.forbid else "require",
+                "scanned": len(looked_at),
+                "offending": offending,
+            },
+            ran_by=actor_id, anchored_at=anchor,
+        )
 
 
 async def _check_transform_runs(
