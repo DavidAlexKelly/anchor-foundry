@@ -357,6 +357,12 @@ def viewer_page(browser, viewer_token: str, request):
 
 
 def eventually(read, matches, *, what: str, timeout_ms: int | None = None):
+    # **`read` has to make a Playwright call** (§431). `page.url` is a cached
+    # property that Playwright refreshes while it is pumping its connection, so
+    # `eventually(lambda: page.url, ...)` reads the same stale string for the
+    # whole timeout while the page has moved on. Use `page.wait_for_url` for a
+    # URL, and keep this for values read through a locator - which pump by
+    # making a call, which is why every other use of it works.
     """Poll `read()` until `matches(...)`, then return the value.
 
     Playwright's own `expect` covers anything that *is* a locator — a count, a

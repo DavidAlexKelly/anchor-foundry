@@ -104,6 +104,8 @@ export function CommandPalette({ commands }: { commands: readonly Command[] }) {
         type="button"
         className="btn quiet command-palette-open"
         data-testid="open-command-palette"
+        /* p.11's walkthrough points at this button (§431). */
+        data-tour="commands"
         onClick={() => {
           setOpen(true);
           setQuery("");

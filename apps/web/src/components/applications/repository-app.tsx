@@ -21,6 +21,8 @@ import dynamic from "next/dynamic";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUrlState } from "@/components/use-url-state";
 import { CommandPalette } from "@/components/command-palette";
+import { Walkthrough } from "@/components/walkthrough";
+import { STEPS as WALKTHROUGH_STEPS } from "@/lib/repository-walkthrough";
 // **The tab list is imported, not declared here** (§428). The palette offers
 // every tab as a command, and a seventh tab added to a bar with a list of its
 // own would be one the palette could not reach (§292).
@@ -248,6 +250,14 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
     queryKey: ["repo-branches", rid],
     queryFn: () => repoApi.branches(wid, pid, rid),
   });
+  // Read here as well as in the Publish tab, under the same key, so the
+  // walkthrough and the tab cannot disagree about whether this project gates
+  // its code (§431). react-query serves the second reader from the first's
+  // cache, so it is one request.
+  const reviewPolicy = useQuery({
+    queryKey: ["code-review-policy", pid],
+    queryFn: () => codeApi.reviewPolicy(wid, pid),
+  });
   const tree = useQuery({
     queryKey: ["repo-tree", rid, branch, commitId],
     queryFn: () => repoApi.tree(wid, pid, rid, { branch, commitId }),
@@ -287,7 +297,7 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
   return (
     <div className="repo-app">
       <div className="repo-bar">
-        <label className="repo-ref">
+        <label className="repo-ref" data-tour="ref">
           Branch
           <select
             value={commitId ? "" : current}
@@ -319,7 +329,18 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
 
         <div className="spacer" />
         <CommandPalette commands={commands} />
-        <nav className="ds-tabs repo-tabs">
+        {/* p.11's in-app help, beside p.11's command palette — the two halves
+            of the same sentence on that page (§431). */}
+        <Walkthrough
+          steps={WALKTHROUGH_STEPS}
+          tab={tab}
+          // The one condition any step names so far. Read from the same query
+          // key the Publish tab uses, so the two cannot disagree about whether
+          // this project gates its code.
+          holds={(need) => need === "gated" && (reviewPolicy.data?.require_code_review ?? false)}
+          onTab={(next) => setParams({ tab: next })}
+        />
+        <nav className="ds-tabs repo-tabs" data-tour="tabs">
           {(TABS as readonly Tab[]).map((t) => (
             <button
               key={t}
@@ -701,7 +722,7 @@ function FilesTab({
       )}
       <div className="repo-split">
         <div>
-          <nav className="repo-tree" aria-label="Files">
+          <nav className="repo-tree" aria-label="Files" data-tour="tree">
             {paths.map((path) => (
               <button
                 key={path}
@@ -1072,7 +1093,7 @@ function PublishTab({
   ).length;
 
   return (
-    <div className="repo-publish">
+    <div className="repo-publish" data-tour="publish">
       <div className="repo-publish-head">
         <div>
           <h3>Publish {branch}</h3>
@@ -1082,7 +1103,7 @@ function PublishTab({
             afterwards changes nothing about what runs.
           </p>
           {gated && (
-            <p className="repo-publish-gated">
+            <p className="repo-publish-gated" data-tour="gate">
               This project requires code review, so a commit is not published
               directly — open a proposal for it, and applying that proposal publishes.
             </p>
@@ -2174,7 +2195,7 @@ function PullRequestsTab({
   }
 
   return (
-    <section className="code-open-proposals" data-testid="pulls-list">
+    <section className="code-open-proposals" data-testid="pulls-list" data-tour="pulls">
       {/* p.18's two controls, in the order the sentence names them: the
           button decides the list, the box narrows it. */}
       <div className="pulls-filters">
@@ -2923,6 +2944,10 @@ function StatusBar({
         className={savingIsAProblem(draftWarning) ? "chip brass" : "soft"}
         title={savingDetail(changedFiles, draftWarning)}
         data-testid="status-saving"
+        /* The walkthrough's "edits live in this browser" step points here
+           (§431), because this is the control that says so — not the commit
+           bar, which only exists once there is something to commit. */
+        data-tour="drafts"
       >
         {savingLabel(changedFiles, draftWarning)}
       </span>
