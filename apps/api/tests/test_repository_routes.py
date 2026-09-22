@@ -10,6 +10,7 @@ exists, and an empty repository reading as empty rather than as missing.
 from __future__ import annotations
 
 import json
+import pathlib
 import os
 import sys
 import uuid
@@ -22,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402
+from src.services import repo_settings
 from src.middleware import auth as auth_mw  # noqa: E402
 
 
@@ -1518,3 +1520,181 @@ def test_somebody_elses_query_cannot_be_starred_or_forgotten(
         where, headers=hdr(fx.admin_sub), json={"favourite": True}
     ).status_code == 404
     assert client.delete(where, headers=hdr(fx.admin_sub)).status_code == 404
+
+
+# ---- p.114's commit message rule (§441) --------------------------------------
+REQUIRE_MESSAGES = json.dumps({
+    "commitMessages": {
+        "required": True,
+        "errorMessage": "Say what changed — the release notes are built from these.",
+    }
+})
+REQUIRE_MESSAGES_PLAIN = json.dumps({"commitMessages": {"required": True}})
+
+
+def test_a_commit_message_is_optional_until_the_repository_asks_for_one(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Off unless the file says so**, which is the half that has to be true
+    for the other half to be safe: a requirement that arrived by default would
+    refuse the next commit in every repository that already exists, for a rule
+    nobody in them had asked for."""
+    repo = make_repo(client, fx)
+    made = commit(client, fx, repo["id"], {"src/a.sql": "SELECT 1\n"}, message="")
+    assert made["message"] == ""
+
+
+def test_the_repository_can_ask_every_commit_to_say_what_changed(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.114: "You can encourage more meaningful messages by disabling this
+    option. The commit message dialog will open before each commit and require a
+    message to be submitted." """
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"],
+           {"repoSettings.json": REQUIRE_MESSAGES}, message="turn the rule on")
+
+    refused = client.post(
+        f"{base(fx)}/{repo['id']}/commits", headers=hdr(fx.editor_sub),
+        json={"branch": "main",
+              "files": {"repoSettings.json": REQUIRE_MESSAGES, "src/a.sql": "SELECT 1\n"},
+              "message": ""},
+    )
+    assert refused.status_code == 422, refused.text
+    # The repository's own sentence, for `TagNameRefused`'s reason: it says why
+    # the rule exists, and "a commit message is required" does not.
+    assert "release notes" in refused.json()["detail"]
+
+    kept = commit(client, fx, repo["id"],
+                  {"repoSettings.json": REQUIRE_MESSAGES, "src/a.sql": "SELECT 1\n"},
+                  message="add the first transform")
+    assert kept["message"] == "add the first transform"
+
+
+def test_a_space_is_not_a_commit_message(client: TestClient, fx: Fixture) -> None:
+    """A space typed to get past a check is the check working exactly as badly
+    as no check at all."""
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {"repoSettings.json": REQUIRE_MESSAGES}, message="on")
+
+    refused = client.post(
+        f"{base(fx)}/{repo['id']}/commits", headers=hdr(fx.editor_sub),
+        json={"branch": "main",
+              "files": {"repoSettings.json": REQUIRE_MESSAGES},
+              "message": "   \n  "},
+    )
+    assert refused.status_code == 422, refused.text
+
+
+def test_the_refusal_says_where_the_rule_lives_when_nobody_wrote_a_sentence(
+    client: TestClient, fx: Fixture
+) -> None:
+    """`errorMessage` is optional. Without one, the refusal has to send the
+    reader somewhere — a rule whose source cannot be found is one nobody can
+    change."""
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {"repoSettings.json": REQUIRE_MESSAGES_PLAIN},
+           message="on")
+
+    refused = client.post(
+        f"{base(fx)}/{repo['id']}/commits", headers=hdr(fx.editor_sub),
+        json={"branch": "main", "files": {"repoSettings.json": REQUIRE_MESSAGES_PLAIN},
+              "message": ""},
+    )
+    assert refused.status_code == 422, refused.text
+    assert "repoSettings.json" in refused.json()["detail"]
+
+
+def test_a_blank_errorMessage_falls_back_rather_than_refusing_with_nothing(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The survivor this test exists for.** Dropping the `.strip()` from the
+    sentence check passed every other test here, because none of them wrote an
+    `errorMessage` that was present and useless — and that is the one shape
+    that turns a refusal into a blank 422 body nobody can act on.
+    """
+    repo = make_repo(client, fx)
+    settings = json.dumps({"commitMessages": {"required": True, "errorMessage": "   "}})
+    commit(client, fx, repo["id"], {"repoSettings.json": settings}, message="on")
+
+    refused = client.post(
+        f"{base(fx)}/{repo['id']}/commits", headers=hdr(fx.editor_sub),
+        json={"branch": "main", "files": {"repoSettings.json": settings}, "message": ""},
+    )
+    assert refused.status_code == 422, refused.text
+    assert "repoSettings.json" in refused.json()["detail"]
+
+
+def test_the_rule_that_applies_is_the_one_being_committed(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Read from the files being committed, not from the branch head.**
+
+    A commit that *removes* the requirement would otherwise be refused by the
+    rule it removes, which would make the setting one-way — and a setting
+    nobody can turn off is worse than one that was never offered (§214).
+    """
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {"repoSettings.json": REQUIRE_MESSAGES}, message="on")
+
+    relaxed = client.post(
+        f"{base(fx)}/{repo['id']}/commits", headers=hdr(fx.editor_sub),
+        json={"branch": "main", "files": {"src/a.sql": "SELECT 1\n"}, "message": ""},
+    )
+    assert relaxed.status_code == 201, relaxed.text
+
+
+def test_a_settings_file_that_will_not_parse_does_not_stop_the_repository(
+    client: TestClient, fx: Fixture
+) -> None:
+    """§299's decision, inherited: a convention fails open. The person blocked
+    by a syntax error is rarely the person who wrote it."""
+    repo = make_repo(client, fx)
+    broken = client.post(
+        f"{base(fx)}/{repo['id']}/commits", headers=hdr(fx.editor_sub),
+        json={"branch": "main", "files": {"repoSettings.json": "{ not json"},
+              "message": ""},
+    )
+    assert broken.status_code == 201, broken.text
+
+
+def test_a_block_that_does_not_say_required_is_not_a_requirement(
+    client: TestClient, fx: Fixture
+) -> None:
+    """`required` is read as `is True`, not as truthy. A settings file that
+    carried `"required": "no"` would otherwise turn the rule **on**, which is
+    the opposite of what whoever typed it meant."""
+    repo = make_repo(client, fx)
+    settings = json.dumps({"commitMessages": {"required": "no"}})
+    made = client.post(
+        f"{base(fx)}/{repo['id']}/commits", headers=hdr(fx.editor_sub),
+        json={"branch": "main", "files": {"repoSettings.json": settings}, "message": ""},
+    )
+    assert made.status_code == 201, made.text
+
+
+def test_the_browser_reads_the_same_settings_file_the_server_does() -> None:
+    """§191's mirrored-list problem, guarded rather than hoped for.
+
+    p.114's rule is enforced in `repo_settings.py` and *offered* in
+    `apps/web/src/lib/commit-message.ts` — the division every pair in this
+    repository uses, and the one that goes wrong silently. Two copies agree
+    until one of them is made stricter, and the symptom of a disagreement here
+    is a button that stays lit and a commit that is then refused, which is the
+    exact failure p.114 exists to prevent.
+
+    **The keys are what this can check and the behaviour is not**, so it says
+    so rather than implying more: the `is True` reading and the whitespace rule
+    are held by `commit-message.test.ts` and by the browser suite pressing the
+    button.
+    """
+    browser = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "apps/web/src/lib/commit-message.ts"
+    ).read_text()
+    for literal in (repo_settings.SETTINGS_FILE, repo_settings.COMMIT_BLOCK,
+                    "required", "errorMessage"):
+        assert f'"{literal}"' in browser or f"`{literal}`" in browser, (
+            f"the browser's copy of p.114's rule does not name {literal!r}; "
+            "the two halves have drifted"
+        )
