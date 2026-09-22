@@ -67,6 +67,16 @@ suite("what an empty tab says", () => {
     expect(emptyReason([], "r-1")).toBe("No open proposals for this repository.");
   });
 
+  it("says which list is empty", () => {
+    // **The word is not decoration** (§429). p.18's switch gave the tab a
+    // second list, and a Closed tab reporting "No open proposals" is a screen
+    // answering a question nobody asked.
+    expect(emptyReason([], "r-1", "closed"))
+      .toBe("No closed proposals for this repository.");
+    expect(emptyReason([proposal({ id: "t", source_repo_id: null })], "r-1", "closed"))
+      .toContain("No closed proposals for this repository.");
+  });
+
   it("**says where the others are, rather than looking like nothing is happening**", () => {
     // The case that makes this function worth having: a reviewer sent a link,
     // finding an empty tab, needs to tell "already dealt with" from "not here".

@@ -3282,3 +3282,19 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   font-family: var(--font-mono); font-size: 10px; padding: 1px 4px; margin: 0 1px;
   border: 1px solid var(--line-strong); border-radius: 3px;
 }
+
+/* ---- pull request filters (§429; `code-repositories` p.18) ---------------- */
+/* The button decides the list and the box narrows it, so they sit on one line
+   in that order — a search box above a switch reads as searching everything. */
+.pulls-filters {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.pulls-buckets { border-bottom: 0; }
+.pulls-search {
+  flex: 0 1 260px; min-width: 140px;
+  padding: 5px 9px; font-size: 12.5px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: var(--panel); color: var(--ink);
+}
+.code-open-proposals .login-note .btn { margin-left: 2px; }

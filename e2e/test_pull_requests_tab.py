@@ -50,6 +50,55 @@ def propose_commit(mod: Module, repo: dict, commit_id: str, summary: str) -> dic
     )
 
 
+def withdraw(mod: Module, proposal: dict) -> None:
+    mod.api.call("POST", f"{mod.base}/code/proposals/{proposal['id']}/withdraw", {})
+
+
+def two_proposals(mod: Module, repo: dict) -> tuple[dict, dict]:
+    """One proposal per commit, with a word of their own in each summary.
+
+    Two commits rather than two repositories, because the tab's filters are
+    about *this* repository's list — a fixture that put them in two places
+    would let a filter pass by scoping rather than by filtering.
+    """
+    # **Stamped per call, not per module.** Two repositories in one project
+    # both want a source, and a name derived from the module alone is a 409 the
+    # second time round (§271).
+    stamp = uuid.uuid4().hex[:6]
+    source = dataset(mod, f"orders_{stamp}")
+    alpha = f"alpha_{uuid.uuid4().hex[:6]}"
+    beta = f"beta_{uuid.uuid4().hex[:6]}"
+    files = {
+        "src/alpha.sql": f"-- output: {alpha}\n-- input: raw = {source}\nSELECT id FROM raw\n",
+    }
+    first = commit(mod, repo, dict(files))
+    files["src/beta.sql"] = (
+        f"-- output: {beta}\n-- input: raw = {source}\nSELECT id FROM raw\n"
+    )
+    second = commit(mod, repo, files)
+    return (
+        propose_commit(mod, repo, first["id"], "Alpha work"),
+        propose_commit(mod, repo, second["id"], "Beta work"),
+    )
+
+
+def one_proposal(mod: Module, repo: dict, summary: str) -> dict:
+    """A single open proposal with a summary of its own."""
+    stamp = uuid.uuid4().hex[:6]
+    source = dataset(mod, f"orders_{stamp}")
+    out = f"t_{stamp}"
+    made = commit(mod, repo, {
+        "src/t.sql": f"-- output: {out}\n-- input: raw = {source}\nSELECT id FROM raw\n",
+    })
+    return propose_commit(mod, repo, made["id"], summary)
+
+
+def shown(page) -> list[str]:
+    return page.locator("[data-testid^=pull-]:not([data-testid^=pull-state-])").evaluate_all(
+        "rows => rows.map(r => r.getAttribute('data-testid'))"
+    )
+
+
 def open_tab(page, repo: dict, tab: str = "pulls") -> None:
     page.goto(f"{WEB_BASE}/r/{repo['resource_id']}?tab={tab}")
     expect(page.get_by_role("button", name="Pull requests")).to_be_visible(timeout=30000)
@@ -140,6 +189,214 @@ def test_an_empty_tab_with_nothing_anywhere_says_only_that(page, api) -> None:
     expect(page.get_by_test_id("pulls-empty")).to_have_text(
         "No open proposals for this repository."
     )
+
+
+# ---- p.18's two filters (§429) ----------------------------------------------
+#
+#     "You can switch between a list of open and closed Pull requests by
+#      clicking the 'Open' / 'Closed' button at the top of the pull requests
+#      list, and use the search bar to further filter the list based on title
+#      or author."
+#
+# The rules are in `apps/web/src/lib/proposal-filters.test.ts`. What needs a
+# browser is that the two controls reach the server and the URL: the bucket is
+# a different *request*, the search is not, and both have to survive a reload
+# or a filtered list is not a list anybody can send.
+def test_the_switch_shows_the_ones_that_are_over(page, api) -> None:
+    """**The Closed list, which had no way to be seen at all.**
+
+    The tab asked for `state=open` and nothing else, so a proposal that was
+    applied or withdrawn left the screen for good — and "it is gone" and "it
+    was merged" looked the same.
+    """
+    mod = project(api, "Pulls buckets")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    still_open, closed = two_proposals(mod, repo)
+    withdraw(mod, closed)
+
+    open_tab(page, repo)
+    expect(page.get_by_test_id(f"pull-{still_open['id']}")).to_be_visible()
+    expect(page.get_by_test_id(f"pull-{closed['id']}")).to_have_count(0)
+
+    page.get_by_test_id("pulls-bucket-closed").click()
+    expect(page.get_by_test_id(f"pull-{closed['id']}")).to_be_visible()
+    expect(page.get_by_test_id(f"pull-{still_open['id']}")).to_have_count(0)
+    # And the row says *which* ending, because the bucket holds two of them.
+    expect(page.get_by_test_id(f"pull-state-{closed['id']}")).to_have_text("Closed")
+
+
+def test_the_bucket_is_in_the_url(page, api) -> None:
+    """Asserted by reloading rather than by reading the address bar: a URL
+    that is written and not read is one that looks right and does nothing."""
+    mod = project(api, "Pulls bucket link")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    _, closed = two_proposals(mod, repo)
+    withdraw(mod, closed)
+
+    open_tab(page, repo)
+    page.get_by_test_id("pulls-bucket-closed").click()
+    expect(page.get_by_test_id(f"pull-{closed['id']}")).to_be_visible()
+    assert "pulls=closed" in page.url, page.url
+
+    page.reload()
+    expect(page.get_by_test_id(f"pull-{closed['id']}")).to_be_visible(timeout=30000)
+
+
+def test_the_search_narrows_the_list(page, api) -> None:
+    mod = project(api, "Pulls search")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    alpha, beta = two_proposals(mod, repo)
+
+    open_tab(page, repo)
+    eventually(lambda: shown(page), lambda r: len(r) == 2,
+               what="both proposals to be listed")
+
+    page.get_by_test_id("pulls-search").fill("beta")
+    eventually(lambda: shown(page), lambda r: r == [f"pull-{beta['id']}"],
+               what="the search to leave one row")
+
+    page.get_by_test_id("pulls-search").fill("")
+    eventually(lambda: shown(page), lambda r: len(r) == 2,
+               what="clearing the box to bring the list back")
+
+
+def test_the_search_matches_the_author(page, api) -> None:
+    """p.18 names title *or* author, and the author is the half a title search
+    cannot reach: "who has something open" is the question a reviewer arriving
+    at a busy repository actually has."""
+    mod = project(api, "Pulls author")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    alpha, beta = two_proposals(mod, repo)
+
+    open_tab(page, repo)
+    # No summary here contains an "@", so a list that still has both rows can
+    # only have matched the address.
+    page.get_by_test_id("pulls-search").fill("owner@")
+    eventually(lambda: sorted(shown(page)),
+               lambda r: r == sorted([f"pull-{alpha['id']}", f"pull-{beta['id']}"]),
+               what="the author search to keep both rows")
+
+
+def test_a_search_that_finds_nothing_says_where_to_look(page, api) -> None:
+    """**The sentence somebody needs is not "no results".**
+
+    A reviewer searching for a proposal that was merged last week and one
+    searching for a typo get the same empty list, and they want opposite next
+    actions. So the note names the query and says how many the *other* bucket
+    has — and offers to go there.
+    """
+    mod = project(api, "Pulls search elsewhere")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    alpha, beta = two_proposals(mod, repo)
+    withdraw(mod, beta)
+
+    open_tab(page, repo)
+    page.get_by_test_id("pulls-search").fill("beta")
+    note = page.get_by_test_id("pulls-search-empty")
+    expect(note).to_contain_text("beta")
+    expect(note).to_contain_text("1 closed proposal matches")
+
+    page.get_by_test_id("pulls-switch").click()
+    expect(page.get_by_test_id(f"pull-{beta['id']}")).to_be_visible()
+    # The search came with it, rather than being cleared by the switch - the
+    # button is an answer to the search, so dropping it would undo the act.
+    expect(page.get_by_test_id("pulls-search")).to_have_value("beta")
+
+
+def test_a_search_with_no_answer_anywhere_does_not_point_at_an_empty_list(
+    page, api,
+) -> None:
+    """A button that switched to a bucket with nothing in it would be a
+    control that looks like it works (§214). The positive wait comes first —
+    the note is on screen — so the absence below is about a rendered page."""
+    mod = project(api, "Pulls search nowhere")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    two_proposals(mod, repo)
+
+    open_tab(page, repo)
+    page.get_by_test_id("pulls-search").fill("gamma")
+    expect(page.get_by_test_id("pulls-search-empty")).to_contain_text("gamma")
+    expect(page.get_by_test_id("pulls-switch")).to_have_count(0)
+
+
+def test_an_empty_bucket_says_which_list_is_empty(page, api) -> None:
+    """**The word is not decoration, and a search replaces the sentence.**
+
+    Two ways this goes wrong once there are two lists. A Closed tab reporting
+    "No open proposals" is a screen answering a question nobody asked; and a
+    tab that showed the bucket's empty note *and* the search's at once would
+    be telling somebody two things about one keystroke.
+    """
+    mod = project(api, "Pulls empty bucket")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    one_proposal(mod, repo, "Alpha work")
+
+    open_tab(page, repo)
+    page.get_by_test_id("pulls-bucket-closed").click()
+    expect(page.get_by_test_id("pulls-empty")).to_have_text(
+        "No closed proposals for this repository."
+    )
+
+    page.get_by_test_id("pulls-search").fill("beta")
+    # The search's sentence takes over: it is about the words that were typed,
+    # which is the more specific answer.
+    expect(page.get_by_test_id("pulls-search-empty")).to_contain_text("beta")
+    expect(page.get_by_test_id("pulls-empty")).to_have_count(0)
+
+
+def test_the_other_buckets_count_is_about_this_repository(page, api) -> None:
+    """**The hint counts what switching would actually show.**
+
+    A proposal is project-level and a repository is one of several (db 0039),
+    so a count taken before the repository filter would promise rows that are
+    not there — and the reader would switch, find an empty list, and conclude
+    the search is broken rather than that the proposal is somewhere else.
+    """
+    mod = project(api, "Pulls elsewhere scoped")
+    mine = repository(mod, f"Mine {mod.tag}")
+    theirs = repository(mod, f"Theirs {mod.tag}")
+    one_proposal(mod, mine, "Alpha work")
+    withdraw(mod, one_proposal(mod, mine, "Gamma work"))
+    withdraw(mod, one_proposal(mod, theirs, "Beta work"))
+
+    open_tab(page, mine)
+    # **The positive wait first, and it is what makes the negative one mean
+    # anything** (§318). The other bucket is a second request, so a page that
+    # has not received it yet offers nothing — which is indistinguishable from
+    # a page that correctly found nothing to offer. Searching for this
+    # repository's own withdrawn proposal proves the request landed and the
+    # note re-rendered; the answer is then cached under the same key, so the
+    # search below is computed from data that is already here.
+    page.get_by_test_id("pulls-search").fill("gamma")
+    expect(page.get_by_test_id("pulls-search-empty")).to_contain_text(
+        "1 closed proposal matches"
+    )
+    expect(page.get_by_test_id("pulls-switch")).to_be_visible()
+
+    # The other repository's withdrawn "Beta work" matches the words and is not
+    # in this list, so there is nothing here to offer.
+    page.get_by_test_id("pulls-search").fill("beta")
+    note = page.get_by_test_id("pulls-search-empty")
+    expect(note).to_contain_text("beta")
+    stays(lambda: note.inner_text(), lambda t: "closed proposal" not in t,
+          what="a count that does not reach into another repository")
+    expect(page.get_by_test_id("pulls-switch")).to_have_count(0)
+
+
+def test_the_search_is_in_the_url(page, api) -> None:
+    mod = project(api, "Pulls search link")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    alpha, beta = two_proposals(mod, repo)
+
+    open_tab(page, repo)
+    page.get_by_test_id("pulls-search").fill("alpha")
+    eventually(lambda: shown(page), lambda r: r == [f"pull-{alpha['id']}"],
+               what="the search to leave one row")
+
+    page.reload()
+    expect(page.get_by_test_id("pulls-search")).to_have_value("alpha", timeout=30000)
+    eventually(lambda: shown(page), lambda r: r == [f"pull-{alpha['id']}"],
+               what="the reloaded page to be filtered the same way")
 
 
 # ---- the Settings tab (§279) -------------------------------------------------

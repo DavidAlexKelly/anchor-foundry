@@ -60,6 +60,15 @@ import {
 import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
 import { describe as describeProposal, emptyReason, forRepository } from "@/lib/pull-requests";
 import {
+  BUCKETS,
+  BUCKET_LABELS,
+  DEFAULT_BUCKET,
+  type Bucket,
+  filtered as filteredProposals,
+  searchEmptyNote,
+  switchLabel,
+} from "@/lib/proposal-filters";
+import {
   hasChanges,
   headline,
   isGap,
@@ -370,6 +379,12 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
           openId={url.get("proposal") ?? undefined}
           onOpen={(id) => setParams({ proposal: id })}
           onClose={() => setParams({ proposal: undefined })}
+          // p.18's two controls, in the URL because the list somebody is
+          // looking at is a link they can send (item 0.4).
+          bucket={url.oneOf("pulls", BUCKETS, DEFAULT_BUCKET)}
+          onBucket={(next) => setParams({ pulls: next === DEFAULT_BUCKET ? undefined : next })}
+          query={url.get("q") ?? ""}
+          onQuery={(next) => setParams({ q: next })}
         />
       )}
       {tab === "publish" && (
@@ -2034,6 +2049,10 @@ function PullRequestsTab({
   openId,
   onOpen,
   onClose,
+  bucket,
+  onBucket,
+  query,
+  onQuery,
 }: {
   wid: string;
   pid: string;
@@ -2041,11 +2060,17 @@ function PullRequestsTab({
   openId?: string;
   onOpen: (id: string) => void;
   onClose: () => void;
+  bucket: Bucket;
+  onBucket: (next: Bucket) => void;
+  query: string;
+  onQuery: (next: string) => void;
 }) {
   const queryClient = useQueryClient();
   const proposals = useQuery({
-    queryKey: ["code-proposals", pid],
-    queryFn: () => codeApi.proposals(wid, pid, "open"),
+    // **The bucket is in the key, so switching refetches** (§429). The server
+    // understands `closed` as a bucket over two endings rather than a state.
+    queryKey: ["code-proposals", pid, bucket],
+    queryFn: () => codeApi.proposals(wid, pid, bucket),
   });
 
   // Asked of the project and filtered here rather than asked of the
@@ -2054,7 +2079,31 @@ function PullRequestsTab({
   // the count of what is elsewhere is what makes an empty tab legible.
   const all = proposals.data ?? [];
   const ours = forRepository(all, rid);
-  const empty = proposals.isSuccess ? emptyReason(all, rid) : null;
+  const shown = filteredProposals(ours, query);
+
+  // **Only asked when the search here has failed** (§429). The other bucket's
+  // rows answer one question - "is the thing you are looking for over there" -
+  // and a tab that fetched a project's whole closed history to show three open
+  // proposals would get slower every month it was used.
+  const other: Bucket = bucket === "open" ? "closed" : "open";
+  const elsewhere = useQuery({
+    queryKey: ["code-proposals", pid, other],
+    queryFn: () => codeApi.proposals(wid, pid, other),
+    enabled: query.trim() !== "" && proposals.isSuccess && shown.length === 0,
+  });
+  const otherMatches = filteredProposals(
+    forRepository(elsewhere.data ?? [], rid), query,
+  ).length;
+
+  // The bucket's own empty state, which says where a repository's proposals
+  // are (§276), is the right sentence only when nothing is being searched for
+  // - otherwise it would answer a question nobody asked.
+  const empty = proposals.isSuccess && query.trim() === ""
+    ? emptyReason(all, rid, bucket)
+    : null;
+  const searchEmpty = proposals.isSuccess
+    ? searchEmptyNote(query, shown.length, otherMatches, bucket)
+    : null;
 
   if (openId) {
     return (
@@ -2086,6 +2135,33 @@ function PullRequestsTab({
 
   return (
     <section className="code-open-proposals" data-testid="pulls-list">
+      {/* p.18's two controls, in the order the sentence names them: the
+          button decides the list, the box narrows it. */}
+      <div className="pulls-filters">
+        <div className="ds-tabs pulls-buckets" role="group" aria-label="Which proposals">
+          {BUCKETS.map((b) => (
+            <button
+              key={b}
+              type="button"
+              className={`ds-tab${b === bucket ? " on" : ""}`}
+              aria-pressed={b === bucket}
+              data-testid={`pulls-bucket-${b}`}
+              onClick={() => onBucket(b)}
+            >
+              {BUCKET_LABELS[b]}
+            </button>
+          ))}
+        </div>
+        <input
+          type="search"
+          className="pulls-search"
+          data-testid="pulls-search"
+          aria-label="Search by title or author"
+          placeholder="Title or author…"
+          value={query}
+          onChange={(e) => onQuery(e.target.value)}
+        />
+      </div>
       {proposals.isPending && <div className="state">Loading proposals…</div>}
       {empty && (
         // **Says where the others are rather than looking like nothing is
@@ -2094,8 +2170,26 @@ function PullRequestsTab({
         // shape belongs to no repository, so it genuinely is somewhere else.
         <p className="login-note" data-testid="pulls-empty">{empty}</p>
       )}
+      {searchEmpty && (
+        <p className="login-note" data-testid="pulls-search-empty">
+          {searchEmpty}
+          {switchLabel(otherMatches, bucket) && (
+            <>
+              {" "}
+              <button
+                type="button"
+                className="btn quiet"
+                data-testid="pulls-switch"
+                onClick={() => onBucket(other)}
+              >
+                {switchLabel(otherMatches, bucket)}
+              </button>
+            </>
+          )}
+        </p>
+      )}
       <ul className="code-log">
-        {ours.map((p) => (
+        {shown.map((p) => (
           <li key={p.id}>
             <button
               type="button"
@@ -2105,6 +2199,16 @@ function PullRequestsTab({
             >
               <span className="code-log-summary">{p.summary}</span>
               <span className="code-log-meta">
+                {/* **Which ending, on the row** (§429). The Closed bucket
+                    holds two of them, and a list that called both "Closed"
+                    would throw away the one fact somebody opens it for. The
+                    word is p.17's, through the same translator the Branches
+                    tab uses, so the two screens cannot drift (§292). */}
+                {p.state !== "open" && (
+                  <span className="chip" data-testid={`pull-state-${p.id}`}>
+                    {proposalStateLabel(p.state)}
+                  </span>
+                )}
                 <span className="chip brass">{describeProposal(p)}</span>
                 {p.created_by_email ?? "unknown"}
               </span>

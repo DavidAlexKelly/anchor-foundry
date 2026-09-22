@@ -388,6 +388,65 @@ def test_the_proposal_list_filters_by_state(
     assert proposal["id"] not in {p["id"] for p in still_open.json()}
 
 
+def test_closed_is_a_bucket_over_two_endings(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """p.18's Open / Closed switch, against three states (§429).
+
+    "You can switch between a list of open and closed Pull requests by
+     clicking the 'Open' / 'Closed' button at the top of the pull requests
+     list"
+
+    Foundry has two buckets and `code_proposal_state` has three, because how a
+    proposal ended is a fact the review record keeps. So `closed` asks for
+    everything that is not open, and **both** endings have to come back — a
+    bucket that quietly meant `applied` would hide every withdrawn proposal
+    from the only list that can show it.
+    """
+    # Each one changes the model, because a proposal that asks for an edit
+    # that has already happened is refused at the door.
+    withdrawn = propose(client, fx, model, "SELECT id, val FROM raw", summary="Dropped")
+    client.post(f"{cbase(fx)}/proposals/{withdrawn['id']}/withdraw", headers=hdr(fx.editor_sub))
+
+    applied = propose(client, fx, model, "SELECT val FROM raw", summary="Landed")
+    client.post(f"{cbase(fx)}/proposals/{applied['id']}/reviews",
+                headers=hdr(fx.owner_sub), json={"verdict": "approve"})
+    assert client.post(f"{cbase(fx)}/proposals/{applied['id']}/apply",
+                       headers=hdr(fx.editor_sub)).status_code == 200
+
+    still_open = propose(client, fx, model, "SELECT id, val FROM raw", summary="Waiting")
+
+    r = client.get(f"{cbase(fx)}/proposals?state=closed", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    closed = {p["id"]: p["state"] for p in r.json()}
+    assert closed.get(withdrawn["id"]) == "withdrawn"
+    assert closed.get(applied["id"]) == "applied"
+    # And the open one is not in it, or the switch shows the same list twice.
+    assert still_open["id"] not in closed
+
+    # **Membership, not equality** (§271). The project is the file's fixture and
+    # every test before this one leaves its proposals in it, so a set equality
+    # here passes on an empty database and fails on a used one — which is the
+    # wrong way round for an assertion about a filter.
+    opened = {p["id"] for p in client.get(
+        f"{cbase(fx)}/proposals?state=open", headers=hdr(fx.viewer_sub)).json()}
+    assert still_open["id"] in opened
+    assert withdrawn["id"] not in opened
+    assert applied["id"] not in opened
+
+
+def test_a_state_that_is_not_a_state_is_refused(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """`closed` is the one bucket, not an invitation to invent others.
+
+    A parameter that accepted anything and matched nothing would answer an
+    empty list to a typo, which reads as "there are none" (§214).
+    """
+    r = client.get(f"{cbase(fx)}/proposals?state=merged", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 422, r.text
+
+
 # ---- the review surface (ROADMAP.md phase 2, item 2.7) -----------------------
 def test_a_side_by_side_diff_carries_both_sides_line_numbers() -> None:
     """A comment anchors to a line of a file. Recovering that from a unified

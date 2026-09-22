@@ -490,6 +490,16 @@ Two smaller harness rules earned the same way, both in `§415`–`§416`'s sweep
 - **Print the reason, not the tail.** A run that produced no result has a cause, and it is usually one line (`the running API is older than apps/api/src`). Truncating the output to its last few lines threw exactly that line away.
 - **Restart the stack between groups.** A sweep's server group writes and restores files under `apps/api/src`, which leaves every one of them newer than the running API — so the seam group that follows is refused by `conftest.py` before a single test runs, and reports the same count for the baseline and every mutant. §422 saw `5 errors in 0.74s` seven times in a row; a `dev-down && dev-up` between the groups is the whole fix. `awake()` does not catch it, because the stack is up and answering — it is simply the wrong build.
 
+### A sweep that shares a backup name corrupts the tree (§429)
+
+Every sweep in this repository saves each file it will mutate and copies the saved bytes back after each run. §429's saved them as `pul-<basename>.orig`, and its two server files were `apps/api/src/services/code.py` and `apps/api/src/routes/code.py` — **two different files with one name.** The second backup overwrote the first, and the restore then wrote the service's bytes into the route. The working tree was corrupt from the first mutant onwards.
+
+What is worth recording is how close it came to being invisible. The corruption does not fail loudly: the mutants that followed reported `1 error in 1.67s` where the baseline said `3 passed`, which reads like a mutant that broke an import — exactly the kind of number a sweep produces all the time. It was caught by opening the file, not by reading the log, and a sweep whose later mutants had happened to still pass would have left a route file replaced by a service file with a green column beside it.
+
+So: **key the backup by the whole path, and assert the names are distinct before writing any of them.** A one-line `assert len({backup_name(p) for p in FILES}) == len(FILES)` is the whole fix, and it is worth having in every sweep rather than in the ones whose files happen to collide — this repository has several pairs (`routes/models.py` and `services/models.py`, `routes/objects.py` and `services/objects.py`), so the next sweep to touch a route and its service hits it too.
+
+A sweep is a program that edits the source tree. It deserves the same rule as any other: **a restore that cannot be wrong is worth more than a result that can.**
+
 ### A test that walks a table cannot check the table (§428)
 
 §428's hint table — the words that find a tab, "diff" for Pull requests, "log" for History — was checked by a test that iterated it: for every tab, for every hint, assert the hint finds the tab. It reads like thorough coverage and it is worth nothing. A mutant that deleted `"editor"` from the table deleted the test for `"editor"` along with it, and the suite came back **green with one fewer test**.

@@ -626,6 +626,19 @@ async def update_proposal(
     return await get_proposal(conn, project_id, proposal_id)
 
 
+#: p.18's second bucket, which is not one of our states (§429).
+#:
+#: "You can switch between a list of open and closed Pull requests by clicking
+#:  the 'Open' / 'Closed' button at the top of the pull requests list"
+#:
+#: Foundry has two buckets; `code_proposal_state` (db 0031) has three, because
+#: *how* a proposal ended is a fact the review record keeps - applied and
+#: withdrawn are different things and the row says which. So "closed" is a
+#: bucket over states rather than a fourth state: everything that is not open,
+#: with each row still naming its own ending.
+CLOSED = "closed"
+
+
 async def list_proposals(
     conn: AsyncConnection, project_id: UUID, state: str | None = None
 ) -> list[dict[str, Any]]:
@@ -642,7 +655,9 @@ async def list_proposals(
            -- Cast both sides to text: a bare `:state IS NULL` gives Postgres
            -- no way to infer the parameter's type and it refuses the whole
            -- statement ("could not determine data type of parameter").
-           AND (CAST(:state AS text) IS NULL OR CAST(state AS text) = CAST(:state AS text))
+           AND (CAST(:state AS text) IS NULL
+                OR (CAST(:state AS text) = 'closed' AND state <> 'open')
+                OR CAST(state AS text) = CAST(:state AS text))
          ORDER BY created_at DESC
         """,
         {"pid": str(project_id), "state": state},

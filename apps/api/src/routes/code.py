@@ -424,7 +424,9 @@ def _detail(row: dict[str, Any]) -> ProposalDetail:
 
 @router.get("/proposals", response_model=list[ProposalSummary])
 async def list_proposals(
-    state: str | None = Query(default=None, pattern="^(open|applied|withdrawn)$"),
+    # `closed` is p.18's bucket rather than a state (§429): everything that is
+    # not open, which here is two endings and not one.
+    state: str | None = Query(default=None, pattern="^(open|applied|withdrawn|closed)$"),
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> list[ProposalSummary]:
     async with user_connection(access.auth.user_id) as conn:
