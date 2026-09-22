@@ -1586,7 +1586,8 @@ button { font: inherit; cursor: pointer; }
   background: none; border: none; padding: 0; cursor: pointer;
   font: inherit; font-family: var(--font-mono); color: var(--ink);
 }
-.repo-branch-name:hover { color: var(--accent-deep); text-decoration: underline; }
+/* A label now, not a control (§430) — "View code" beside it is the button. */
+.repo-branch-view { padding: 2px 8px; font-size: 11.5px; }
 .repo-branch-tag {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em;
   color: var(--ink-soft); border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px;
@@ -1632,6 +1633,12 @@ button { font: inherit; cursor: pointer; }
 .repo-publish-orphans p { margin: 0; }
 .code-open-proposals { margin-bottom: 16px; max-width: 720px; }
 .repo-publish-gated { margin: 6px 0 0; font-size: 12.5px; color: var(--brass); max-width: 70ch; }
+/* p.16's dropdown, answered in a sentence (§430). Softer than the gate note
+   above it: that one says what you must do, this one says what will happen. */
+.repo-publish-lands {
+  margin: 4px 0 0; font-size: 12.5px; color: var(--ink-soft); max-width: 70ch;
+}
+.repo-publish-lands code { font-family: var(--font-mono); font-size: 12px; }
 /* `.state` is a whole-page empty state with 48px of air. Inside the publish
    panel it is a one-line result sitting between two things, so it keeps the
    colour and loses the padding. */

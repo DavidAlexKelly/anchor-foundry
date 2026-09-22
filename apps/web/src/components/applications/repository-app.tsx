@@ -394,6 +394,7 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
           rid={rid}
           branch={current}
           pinned={!!commitId}
+          defaultBranch={repo.data?.default_branch ?? "main"}
         />
       )}
       {tab === "branches" && (
@@ -990,12 +991,14 @@ function PublishTab({
   rid,
   branch,
   pinned,
+  defaultBranch,
 }: {
   wid: string;
   pid: string;
   rid: string;
   branch: string;
   pinned: boolean;
+  defaultBranch: string;
 }) {
   const queryClient = useQueryClient();
   const [result, setResult] = useState<PublishPlan | null>(null);
@@ -1082,6 +1085,31 @@ function PublishTab({
             <p className="repo-publish-gated">
               This project requires code review, so a commit is not published
               directly — open a proposal for it, and applying that proposal publishes.
+            </p>
+          )}
+          {gated && (
+            /* **Where it will land, said before it exists** (§430).
+             *
+             * p.16 puts a dropdown here: "If you want to merge your changes
+             * into a branch other than master, select a different branch from
+             * the dropdown menu." There is no dropdown, and the reason is
+             * worth a sentence on the screen rather than only in a document:
+             * a proposal here is a request to *publish*, and applying one
+             * makes the code live. Landing it anywhere but the branch every
+             * reader opens would leave the repository saying one thing and
+             * the transforms doing another — which is the staleness §283
+             * exists to prevent, chosen on purpose.
+             *
+             * The review surface says the same thing again once the proposal
+             * exists (`proposal-landing.ts`). Saying it twice is deliberate:
+             * this is the moment somebody is looking for the dropdown. */
+            <p className="repo-publish-lands" data-testid="publish-lands-on">
+              Applying it publishes these transforms and moves{" "}
+              <code>{defaultBranch}</code> to this commit. A proposal always
+              lands on the default branch — applying one is what makes code
+              live here, so it goes where the repository&apos;s readers are. To
+              move one branch onto another without publishing, use Merge on the
+              Branches tab.
             </p>
           )}
         </div>
@@ -1334,11 +1362,23 @@ function BranchesTab({
         <ul>
           {known.map((b) => (
             <li key={b.id} className={b.name === current ? "on" : undefined}>
-              <button type="button" className="repo-branch-name" onClick={() => onSwitch(b.name)}>
-                {b.name}
-              </button>
+              {/* **The name is a label and "View code" is the control** (§430).
+                  p.17: "Click 'View code' next to a branch name to view the
+                  code on that branch." It was the name itself that navigated,
+                  which worked and said nothing: a bare branch name that turns
+                  out to be a link to another tab is a control named after its
+                  neighbourhood rather than after what it does (§337). */}
+              <span className="repo-branch-name">{b.name}</span>
               {b.name === defaultBranch && <span className="repo-branch-tag">default</span>}
               {b.name === current && <span className="repo-branch-tag">viewing</span>}
+              <button
+                type="button"
+                className="btn quiet repo-branch-view"
+                data-testid={`branch-view-${b.name}`}
+                onClick={() => onSwitch(b.name)}
+              >
+                View code
+              </button>
               <code className="repo-sha">
                 {b.head_commit_id ? b.head_commit_id.slice(0, 8) : "no commits"}
               </code>
