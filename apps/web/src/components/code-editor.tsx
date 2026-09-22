@@ -17,6 +17,8 @@
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import { useEffect, useRef, useState } from "react";
+import type { EditorPreferences } from "@/lib/editor-preferences";
+import { DEFAULTS, monacoOptions } from "@/lib/editor-preferences";
 
 // Route every worker request at the plain editor worker. The languages this
 // editor offers - SQL, Python, Markdown - are tokenised by Monarch on the main
@@ -59,11 +61,17 @@ export function CodeEditor({
   onChange,
   reveal,
   onReady,
+  preferences = DEFAULTS,
 }: {
   path: string;
   value: string;
   readOnly?: boolean;
   onChange?: (next: string) => void;
+  /** p.20's personal editor preferences (§432). **Defaulted here rather than
+   *  required**, so every caller that has no opinion gets the values this file
+   *  used to hard-code — and gets them from the one module that defines them,
+   *  which is what stops the Settings tab and the editor disagreeing. */
+  preferences?: EditorPreferences;
   /** A line to scroll to and put the caret on (§286).
    *
    * **A `{line}` object rather than a bare number**, so asking twice for the
@@ -123,14 +131,14 @@ export function CodeEditor({
       }}
       options={{
         readOnly,
-        minimap: { enabled: false },
-        fontSize: 12.5,
         fontFamily: "var(--font-mono)",
         lineNumbers: "on",
         scrollBeyondLastLine: false,
         automaticLayout: true,
         renderWhitespace: "selection",
-        tabSize: 2,
+        // The four p.20 lets somebody choose. Spread last so a preference
+        // cannot be silently overridden by a literal above it.
+        ...monacoOptions(preferences),
       }}
     />
   );
