@@ -18,25 +18,19 @@
 
 import { useEffect } from "react";
 
+// Relative, not `@/`: a **value** import, and vitest resolves no path alias.
+import { headerProps } from "./module-header";
+
 /** The Craft.js node map, as stored. */
 type Layout = Record<string, unknown>;
 
 function headerTitle(layout: Layout | null | undefined): string | null {
-  for (const node of Object.values(layout ?? {})) {
-    if (typeof node !== "object" || node === null) continue;
-    const record = node as { type?: unknown; props?: Record<string, unknown> };
-    // A node's `type` is `{resolvedName}` from the builder and a bare string in
-    // hand-written and converted documents. Both are in the stored corpus.
-    const type = record.type;
-    const name =
-      typeof type === "object" && type !== null
-        ? (type as { resolvedName?: unknown }).resolvedName
-        : type;
-    if (String(name ?? "") !== "CanvasHeader") continue;
-    const title = record.props?.title;
-    if (typeof title === "string" && title.trim()) return title.trim();
-  }
-  return null;
+  // The walk itself moved to `module-header.ts` when p.47's favourite toggle
+  // needed the same node from a page with no editor on it (§437). One
+  // implementation, imported by both — a second copy of "find the header"
+  // would be the thing that disagreed the first time a document shape changed.
+  const title = headerProps(layout)?.title;
+  return typeof title === "string" && title.trim() ? title.trim() : null;
 }
 
 export function moduleTitle(

@@ -25,7 +25,9 @@ import { Editor, Frame, useEditor } from "@craftjs/core";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { canvas as canvasApi } from "@/lib/api";
+import { canvas as canvasApi, resources as resourcesApi } from "@/lib/api";
+import { FavouriteStar } from "@/components/application-shell";
+import { favouriteAllowed } from "@/components/canvas/module-header";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
 import { CANVAS_RESOLVER } from "@/components/canvas/widgets";
@@ -158,6 +160,12 @@ export default function PublishedAppPage() {
             {app.data.description ? ` · ${app.data.description}` : ""}
           </p>
         </div>
+        {/* p.47: "Toggle the ability for users to favorite the module in view
+            mode." **This route is view mode** — the builder opens the same
+            module as a resource at `/r/{id}`, where the star is the one every
+            application's header carries (§436). What p.47 adds is the star
+            *here*, and a document's say over whether it is offered. */}
+        {favouriteAllowed(definition) && <ModuleStar resourceId={app.data.resource_id} />}
       </div>
       {/* p.166 calls this "for testing purposes", so somebody who arrived on a
           hand-edited link has to be told that what they are looking at is not
@@ -233,5 +241,35 @@ export default function PublishedAppPage() {
         </Editor>
       )}
     </main>
+  );
+}
+
+/**
+ * The star on a published module (§437; p.47).
+ *
+ * **It resolves the resource first, and is absent when that fails.** Not
+ * defensiveness: a module published to a *group* is readable by people with no
+ * access to the project it lives in — `app_isolation` lets the app through and
+ * `resource_isolation` does not — and for them `/r/{id}` is a page that says
+ * the resource is not here. A shortcut that leads to that is not a shortcut,
+ * so the honest answer is not to offer one (§214). Everyone who can open the
+ * module the ordinary way resolves it and gets the star.
+ *
+ * `retry: false`, because the interesting outcome is the 404 and retrying it
+ * three times only delays the decision not to draw anything.
+ */
+function ModuleStar({ resourceId }: { resourceId: string }) {
+  const resource = useQuery({
+    // The same key `/r/{id}` uses, so following the shortcut afterwards finds
+    // the answer already cached rather than asking again.
+    queryKey: ["resource", resourceId],
+    queryFn: () => resourcesApi.resolve(resourceId),
+    retry: false,
+  });
+  if (!resource.isSuccess) return null;
+  return (
+    <div className="app-toolbar">
+      <FavouriteStar resource={resource.data} />
+    </div>
   );
 }

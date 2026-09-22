@@ -490,6 +490,16 @@ Two smaller harness rules earned the same way, both in `§415`–`§416`'s sweep
 - **Print the reason, not the tail.** A run that produced no result has a cause, and it is usually one line (`the running API is older than apps/api/src`). Truncating the output to its last few lines threw exactly that line away.
 - **Restart the stack between groups.** A sweep's server group writes and restores files under `apps/api/src`, which leaves every one of them newer than the running API — so the seam group that follows is refused by `conftest.py` before a single test runs, and reports the same count for the baseline and every mutant. §422 saw `5 errors in 0.74s` seven times in a row; a `dev-down && dev-up` between the groups is the whole fix. `awake()` does not catch it, because the stack is up and answering — it is simply the wrong build.
 
+### The positive you wait for has to be downstream of the absence (§437)
+
+`e2e/conftest.py`'s `settled` states the rule §318 earned — "every test that asserts an absence waits for a presence first" — and §437 found the half of it that had not been written down: **which presence.**
+
+p.47's toggle takes a star off the published module, so the test waits for the module's frame to render and then asserts the star's count is zero. It passed. It also passed against a mutant that offered the star to every module, because the star waits on a *second* round trip — the module's resource has to resolve before anything can be drawn — and the frame is up well before that. The wait was for a presence, and it was a presence that says nothing about the thing being asserted absent.
+
+The sweep is the only reason this is known. The test was green, the feature worked, and the check was measuring how quickly the page painted.
+
+So: **a presence that renders from different data than the absence is not a guard.** Wait for something the absent thing would have had to overtake — the network going quiet on a page whose requests are bounded, a sibling drawn from the same query, or the state the decision is read from. `e2e/test_module_favourite.py` takes the first of those and says why it is available there.
+
 ### A sweep that shares a backup name corrupts the tree (§429)
 
 Every sweep in this repository saves each file it will mutate and copies the saved bytes back after each run. §429's saved them as `pul-<basename>.orig`, and its two server files were `apps/api/src/services/code.py` and `apps/api/src/routes/code.py` — **two different files with one name.** The second backup overwrote the first, and the restore then wrote the service's bytes into the route. The working tree was corrupt from the first mutant onwards.

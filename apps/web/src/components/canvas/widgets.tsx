@@ -13812,7 +13812,7 @@ function glyphFor(icon: string | undefined, label: string | undefined): string {
 function HeaderSettings() {
   const {
     title, sticky, orientation, height, width, collapsible, collapsedByDefault,
-    titleColour,
+    titleColour, allowFavourite,
     actions: { setProp },
   } = useNode((node) => ({
     title: node.data.props.title,
@@ -13823,6 +13823,7 @@ function HeaderSettings() {
     collapsible: node.data.props.collapsible,
     collapsedByDefault: node.data.props.collapsedByDefault,
     titleColour: node.data.props.titleColour,
+    allowFavourite: node.data.props.allowFavourite,
   }));
   const vertical = orientation === "vertical";
   const { palette, scheme } = useSavedColours();
@@ -13959,6 +13960,30 @@ function HeaderSettings() {
         />
         Stays put while the page scrolls
       </label>
+      {/* p.47: "Toggle the ability for users to favorite the module in view
+          mode." A module-wide setting rather than a style, so it sits with the
+          other one rather than in the style block. */}
+      <label className="vars-toggle field">
+        <input
+          type="checkbox"
+          checked={allowFavourite !== false}
+          data-testid="header-allow-favourite"
+          onChange={(e) =>
+            setProp((p: { allowFavourite: boolean }) => (p.allowFavourite = e.target.checked))
+          }
+        />
+        Viewers may favourite this module
+      </label>
+      {/* **Names the surface, because this control has no effect on the one
+          the builder is looking at** (§337). A module opened for editing is a
+          resource like any other and keeps the star in its application header;
+          p.47's toggle is about view mode, and a builder who unticked it and
+          saw their own star still there would reasonably conclude it was
+          broken. */}
+      <p className="field-hint">
+        Unticking it removes the star from the published module. Your own,
+        in the header above, is the one every resource has.
+      </p>
     </>
   );
 }
@@ -13969,6 +13994,12 @@ CanvasHeader.craft = {
     title: "", sticky: true, orientation: "horizontal",
     height: 0, width: 220, collapsible: false, collapsedByDefault: false,
     background: null, titleColour: null,
+    // p.47's favourite toggle. **Written into new documents as `true` and
+    // read as "not false" everywhere else** (`module-header.ts`): a default
+    // in `craft.props` reaches the document somebody is editing now and no
+    // document written before it existed, so the reader cannot rely on the
+    // key being there and the two have to agree on what absent means.
+    allowFavourite: true,
   },
   isCanvas: true,
   related: { settings: HeaderSettings },
