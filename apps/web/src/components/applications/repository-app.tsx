@@ -22,6 +22,10 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUrlState } from "@/components/use-url-state";
 import { CommandPalette } from "@/components/command-palette";
 import { Walkthrough } from "@/components/walkthrough";
+import {
+  EditorPreferencesSection,
+  useEditorPreferences,
+} from "@/components/editor-preferences";
 import { STEPS as WALKTHROUGH_STEPS } from "@/lib/repository-walkthrough";
 // **The tab list is imported, not declared here** (§428). The palette offers
 // every tab as a command, and a seventh tab added to a bar with a list of its
@@ -475,6 +479,9 @@ function FilesTab({
   onSwitchBranch: (name: string) => void;
 }) {
   const queryClient = useQueryClient();
+  // p.20's personal preferences (§432), read through the one hook the Settings
+  // tab writes them with - so a font size chosen there is the font size here.
+  const [editorPreferences] = useEditorPreferences();
   // The working set: the committed tree with unsaved edits laid over it. Kept
   // apart from the query cache so a refetch cannot silently discard typing,
   // and reset only when the ref changes - switching branch or commit is a
@@ -804,6 +811,7 @@ function FilesTab({
                   reveal={reveal}
                   onReady={() => setEditorReady(true)}
                   onChange={(next) => setEdits((c) => ({ ...c, [selected]: next }))}
+                  preferences={editorPreferences}
                 />
               </div>
               {!pinned && (
@@ -2340,7 +2348,18 @@ function SettingsTab({ wid, pid }: { wid: string; pid: string }) {
 
   return (
     <section className="repo-settings" data-testid="settings-tab">
-      <p className="field-label">Code review</p>
+      {/* p.20's two halves, in its own order: "code authors can configure
+          their personal editor preferences **and** repository administrators
+          can control the repository's behavior and policies" (§432). The
+          personal one first, because it is the one every reader of this tab
+          can change - p.20 notes that most of the rest is for administrators. */}
+      <EditorPreferencesSection />
+
+      <p className="field-label repo-settings-admin">Code review</p>
+      <p className="login-note" data-testid="settings-admin-scope">
+        This is the project&apos;s, not yours — changing it changes how
+        everybody&apos;s work lands.
+      </p>
       <label className="row-actions" style={{ alignItems: "center", gap: 8 }}>
         <input
           type="checkbox"
