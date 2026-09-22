@@ -568,6 +568,7 @@ function LineageDialog({
         <PipelineGraphView
           graph={graph.data}
           maxHeight={380}
+          inspect={{ workspaceId, projectId }}
           // A dataset node is deliberately inert: the list this dialog was
           // opened over is right behind it. Everything else navigates, which
           // since §351 includes an object type (p.32).

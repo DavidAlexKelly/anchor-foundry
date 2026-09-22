@@ -3405,3 +3405,33 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   background: var(--panel); font-size: 12.5px; text-decoration: none;
 }
 .rb-favourites a:hover { border-color: var(--line-strong); }
+
+/* `data-lineage` p.45-47's Preview and Code tabs, under the graph (§439).
+   Bounded height on purpose: p.45 puts these "in the bottom left of the
+   interface", beneath a graph that is the thing being read — a panel that
+   grew with three hundred rows would push the picture off the screen every
+   time somebody selected a node. */
+.gi { border-top: 1px solid var(--line); padding: 10px 16px 14px; }
+.gi-tabs {
+  display: flex; align-items: center; gap: 2px;
+  border-bottom: 1px solid var(--line); margin-bottom: 10px;
+}
+.gi-tab {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 6px 12px; font: inherit; font-size: 13px; color: var(--ink-soft);
+  cursor: pointer;
+}
+.gi-tab:hover { color: var(--ink); }
+.gi-tab.is-active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.gi-nocode { margin-left: 10px; }
+.gi-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.gi-search { width: 180px; font-size: 13px; padding: 4px 8px; }
+.gi-open { margin-left: auto; }
+.gi-state { margin: 0; }
+.gi .ds-scroll { max-height: 220px; overflow-y: auto; }
+.gi-code {
+  margin: 0; max-height: 220px; overflow: auto;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 12px; font-size: 12.5px; line-height: 1.5;
+  background: var(--paper); white-space: pre; tab-size: 2;
+}

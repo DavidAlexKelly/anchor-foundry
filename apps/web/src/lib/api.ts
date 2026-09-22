@@ -934,6 +934,12 @@ export const scheduledSync = {
 export const models = {
   list: (wid: string, pid: string) =>
     request<import("./types").Model[]>(`/workspaces/${wid}/projects/${pid}/models`),
+  /** One transform, by id. The route has answered since the Models page was
+   *  written; nothing in `apps/web` asked for one until §439's Code tab, which
+   *  wants a single transform's body and would otherwise have fetched every
+   *  model in the project to read one of them. */
+  get: (wid: string, pid: string, mid: string) =>
+    request<import("./types").Model>(`/workspaces/${wid}/projects/${pid}/models/${mid}`),
   create: (
     wid: string,
     pid: string,
