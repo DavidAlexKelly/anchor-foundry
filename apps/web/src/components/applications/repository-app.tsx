@@ -27,6 +27,7 @@ import {
   useEditorPreferences,
 } from "@/components/editor-preferences";
 import { STEPS as WALKTHROUGH_STEPS } from "@/lib/repository-walkthrough";
+import { messagePlaceholder, messageProblem, settingsFrom } from "@/lib/commit-message";
 // **The tab list is imported, not declared here** (§428). The palette offers
 // every tab as a command, and a seventh tab added to a bar with a list of its
 // own would be one the palette could not reach (§292).
@@ -641,6 +642,15 @@ function FilesTab({
     enabled: problemsOpen && !pinned,
   });
 
+  // p.114's rule, read from the working tree rather than from the branch head
+  // (§441): the settings that apply are the ones this commit will land with,
+  // so a commit that *relaxes* the rule is not refused by the rule it removes.
+  // The server checks the same thing on the same files — this decides what to
+  // offer, and a browser rule that could not be the server's would be worse
+  // than none (§191).
+  const commitSettings = settingsFrom(working);
+  const messageMissing = messageProblem(message, commitSettings);
+
   const commit = useMutation({
     mutationFn: () =>
       repoApi.commit(wid, pid, rid, { branch, files: working, message }),
@@ -960,14 +970,15 @@ function FilesTab({
           <input
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="What changed, and why"
+            placeholder={messagePlaceholder(commitSettings)}
             aria-label="Commit message"
+            data-testid="commit-message"
           />
           {locked ? (
             <button
               className="btn"
               type="submit"
-              disabled={commitToSandbox.isPending}
+              disabled={commitToSandbox.isPending || messageMissing !== null}
               data-testid="commit-to-sandbox"
             >
               {commitToSandbox.isPending
@@ -975,7 +986,11 @@ function FilesTab({
                 : `Commit to a new branch from ${branch}`}
             </button>
           ) : (
-            <button className="btn" type="submit" disabled={commit.isPending}>
+            <button
+              className="btn"
+              type="submit"
+              disabled={commit.isPending || messageMissing !== null}
+            >
               {commit.isPending ? "Committing…" : `Commit to ${branch}`}
             </button>
           )}
@@ -995,6 +1010,14 @@ function FilesTab({
           >
             Discard
           </button>
+          {/* p.114: the requirement is met **before** the press. A disabled
+              button with no reason beside it is the control §214 is about, and
+              the reason is the repository's own where it wrote one. */}
+          {messageMissing && (
+            <span className="form-error repo-commit-why" data-testid="commit-message-why">
+              {messageMissing}
+            </span>
+          )}
         </form>
       )}
       {/* **Only when work is at risk** (§281). A save and a clear are the

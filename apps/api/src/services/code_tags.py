@@ -15,7 +15,6 @@ What lives here is the other half of p.17: **`repoSettings.json`**.
 """
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 from uuid import UUID
@@ -25,19 +24,14 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError, NotFoundError
 
-#: Foundry's own settings file, at the root of the repository (p.17, p.20).
-#: **The first thing in this platform to read it**, and the reason to start
-#: here rather than to invent a settings table: the rule is about a repository's
-#: contents and it travels with them — a branch that adds it, a commit that
-#: relaxes it, and a `git log` that says who changed the convention and when. A
-#: column in `code_repos` would have none of that.
-SETTINGS_FILE = "repoSettings.json"
-
-#: How long a regex from a customer's settings file may be. **A regex is code**,
-#: and one assembled to be pathological is the ordinary way a validator becomes
-#: a denial of service. Length is a blunt guard and it is not the only one — see
-#: `_compiled`.
-MAX_REGEX_LENGTH = 200
+# The settings file itself moved to `repo_settings.py` when p.114's commit
+# message rule became its second reader (§441). Re-exported here because this
+# module's callers have imported `read_settings` and `SETTINGS_FILE` from it
+# since §299, and a name that moves is a name every caller has to be found for
+# — the one implementation is over there (§292).
+from .repo_settings import (  # noqa: F401
+    MAX_REGEX_LENGTH, SETTINGS_FILE, read_settings,
+)
 
 
 class TagNameRefused(Exception):
@@ -49,26 +43,6 @@ class TagNameRefused(Exception):
     platform that replaced it with "invalid tag name" would be throwing away the
     only part of the refusal that helps.
     """
-
-
-def read_settings(files: dict[str, str]) -> dict[str, Any]:
-    """`repoSettings.json` from a commit's files, or `{}`.
-
-    **Absent and unreadable are the same answer here, deliberately.** A settings
-    file with a syntax error would otherwise stop every tag in the repository
-    until somebody fixed it, and the person blocked is rarely the person who
-    broke it. The convention stops being enforced, which is visible in the next
-    tag anybody makes; the alternative fails closed on a rule that is a
-    convention rather than a permission.
-    """
-    raw = files.get(SETTINGS_FILE)
-    if raw is None:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except ValueError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
 
 
 def _compiled(settings: dict[str, Any]) -> tuple[re.Pattern[str] | None, str | None]:

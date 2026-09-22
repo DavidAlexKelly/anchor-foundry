@@ -37,6 +37,7 @@ from ..services import code_tags as tag_service
 from ..services import code_test_runs as test_run_service
 from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
+from ..services import repo_settings
 from ..services import repositories as repo_service
 from ..services import scratchpad
 from ..services import scratchpad_queries
@@ -1105,8 +1106,26 @@ async def create_commit(
     request: Request,
     access: ProjectAccess = Depends(require_project_role("editor")),
 ) -> CommitOut:
+    """p.114's commit message rule is enforced here.
+
+    **Read from the files being committed, not from the branch head.** A commit
+    that *relaxes* the rule would otherwise be refused by the rule it removes,
+    and a commit that adds one is written by somebody who is asking for it. The
+    settings that apply are the ones the repository will have when this lands.
+    """
     async with user_connection(access.auth.user_id) as conn:
         await repo_service.get_repository(conn, project_id=access.project_id, repo_id=repo_id)
+        try:
+            repo_settings.check_message(
+                body.message, repo_settings.read_settings(body.files)
+            )
+        except repo_settings.CommitMessageRefused as exc:
+            # 422, the way the tag-name refusal above is raised: the message is
+            # the request body and it is the thing that is wrong. The
+            # repository's own sentence where it set one.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
         row = await repo_service.commit(
             conn,
             repo_id=repo_id,
