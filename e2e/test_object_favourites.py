@@ -21,6 +21,7 @@ object and not the other.
 from __future__ import annotations
 
 import re
+import time
 import uuid
 
 import pytest
@@ -84,13 +85,26 @@ def unstar_everything(api, module) -> None:
     user, so a favourite left behind is one the next run's empty-state
     assertion has to contend with — which is §310's lesson about shared state,
     applied before it costs anything.
+
+    **Both kinds, since §436.** The listing is one list — a resource shortcut
+    and an object shortcut share a table and a cap — so a clear-out that
+    assumed every row had a type and an instance built a path reading
+    `/None/None` the first time somebody starred a dataset in this workspace.
+    The failure was loud and in the *other* suite's baseline, which is the good
+    version of this mistake.
     """
     for f in api.call("GET", f"/workspaces/{module.workspace_id}/object-favourites"):
-        api.call(
-            "DELETE",
-            f"/workspaces/{module.workspace_id}/object-favourites"
-            f"/{f['object_type_id']}/{f['instance_id']}",
-        )
+        if f.get("resource_id"):
+            api.call(
+                "DELETE",
+                f"/workspaces/{module.workspace_id}/resource-favourites/{f['resource_id']}",
+            )
+        else:
+            api.call(
+                "DELETE",
+                f"/workspaces/{module.workspace_id}/object-favourites"
+                f"/{f['object_type_id']}/{f['instance_id']}",
+            )
 
 
 def test_starring_an_object_puts_a_shortcut_in_the_sidebar(page, api, objects) -> None:
@@ -207,4 +221,48 @@ def test_a_shortcut_to_a_deleted_object_says_so_rather_than_vanishing(
     note = page.get_by_test_id("object-link-missing")
     expect(note).to_be_visible(timeout=30000)
     expect(note).to_contain_text("no longer here")
+    unstar_everything(api, objects)
+
+
+def test_the_shortcut_is_named_after_the_title_rather_than_the_key(
+    page, api, objects
+) -> None:
+    """**The label is the other half of what a press needs, and it arrives
+    separately.**
+
+    Which property titles a type is the type's answer, not the instance's, so
+    the star reads it out of a second query — and a star drawn before that one
+    lands sends the primary key instead. db 0074 stores the label once, so the
+    shortcut reads "1" for ever afterwards: the row is not wrong on screen, it
+    is wrong in the table, which is the kind of defect an assertion about the
+    star's own appearance never reaches.
+
+    The type request is held up here on purpose. The window is a few
+    milliseconds on a warm database and a test that raced it would be a test of
+    how fast the machine is — this one found the defect only on a fresh one.
+    """
+    unstar_everything(api, objects)
+    open_first_object(page, objects)
+    here = page.url
+
+    def slowly(route):
+        time.sleep(2)
+        route.continue_()
+
+    page.route(f"**/object-types/{objects.object_type_id}", slowly)
+    page.goto(here)
+    # The view is up — the instance came back — and the star is not on it yet,
+    # because the name it would write is still in flight.
+    expect(page.get_by_test_id("standard-object-view")).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("favourite-star")).to_have_count(0)
+
+    page.unroute(f"**/object-types/{objects.object_type_id}")
+    star = page.get_by_test_id("favourite-star")
+    expect(star).to_be_visible(timeout=30000)
+    star.click()
+    expect(star).to_have_attribute("aria-pressed", "true", timeout=30000)
+
+    kept = api.call("GET", f"/workspaces/{objects.workspace_id}/object-favourites")
+    labels = [f["label"] for f in kept]
+    assert labels == ["Ely"], f"the shortcut was stored as {labels}, not the title"
     unstar_everything(api, objects)

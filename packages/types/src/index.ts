@@ -3445,14 +3445,27 @@ export interface ScratchpadResult {
  * date: resolving it live would mean one read against the instance store per
  * shortcut before a sidebar could draw. Opening the favourite shows the
  * current object either way. */
-export interface ObjectFavourite {
+/** One shortcut, of either kind (§312, §436; db 0074, 0100).
+ *
+ * **Exactly one subject is set**, which the database enforces rather than
+ * this type: a union of two interfaces would make every reader narrow twice,
+ * once to render a row and once to decide where it goes. */
+export interface Favourite {
   id: string;
-  object_type_id: string;
-  object_type_name: string;
-  instance_id: string;
+  object_type_id: string | null;
+  object_type_name: string | null;
+  instance_id: string | null;
+  /** Set on a shortcut to a resource rather than to an object (§436). */
+  resource_id: string | null;
+  /** What kind of resource it points at, so a row can say so without a
+   *  second read. */
+  resource_kind: ResourceKind | null;
   label: string;
   created_at: string;
 }
+
+/** @deprecated The name from when there was only one subject (§312). */
+export type ObjectFavourite = Favourite;
 
 /** p.29's indexing-issue filter (§315). Two values rather than one, because
  * p.29 names two things that can be wrong — "unregistered *or* have failed to

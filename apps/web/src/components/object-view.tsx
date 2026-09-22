@@ -182,6 +182,13 @@ function FavouriteStar({
     ? String(instance.properties[titleProperty.api_name] ?? instance.primary_key)
     : instance.primary_key;
 
+  // **The type is part of the answer, not decoration.** The label sent is
+  // read out of `type.data`, so a star drawn before that query lands sends
+  // the primary key instead of the title property's value — and the shortcut
+  // it writes reads "1" for ever, because db 0074 stores the label once. The
+  // star is drawn when both queries have answered, which is the same rule
+  // `canShowStar` already states applied to the other half of what a press
+  // needs (§210).
   const isFavourite = state.data?.favourite ?? false;
   const toggle = useMutation({
     mutationFn: async () => {
@@ -205,7 +212,7 @@ function FavouriteStar({
     },
   });
 
-  if (!canShowStar(state.data !== undefined)) return null;
+  if (!canShowStar(state.data !== undefined && type.data !== undefined)) return null;
 
   return (
     <div className="row-actions" style={{ justifyContent: "flex-end" }}>

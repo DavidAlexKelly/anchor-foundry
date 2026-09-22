@@ -3381,3 +3381,27 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .ds-rename-files { list-style: none; margin: 0 0 8px; padding: 0; font-size: 12.5px; }
 .ds-rename-files li { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
 .ds-rename-files a { font-family: var(--font-mono); font-size: 12px; }
+
+/* ---- favourites over resources (§436; `getting-started` p.34) ------------- */
+/* The star sits in the application bar beside Copy link, so it is the same
+   control in every application rather than six that drifted. */
+.app-star { width: 26px; padding: 0; line-height: 22px; font-size: 14px; text-align: center; }
+.app-star.on { color: var(--brass); border-color: var(--brass); }
+.app-star-error { margin-left: 6px; font-size: 11.5px; }
+/* A strip above the browser rather than a column beside it: a project's
+   contents are the page, and shortcuts are a header to them. */
+.rb-favourites { margin-bottom: 14px; }
+.rb-favourites h2 {
+  margin: 0 0 6px; font-size: 10.5px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-soft);
+}
+.rb-favourites ul {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+.rb-favourites a {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel); font-size: 12.5px; text-decoration: none;
+}
+.rb-favourites a:hover { border-color: var(--line-strong); }

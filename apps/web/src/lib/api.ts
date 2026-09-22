@@ -634,6 +634,26 @@ export const egressPolicies = {
     ),
 };
 
+/** p.34's other star (§436): a shortcut to a resource rather than to an
+ * object. Workspace-scoped, like the object half — a favourite is a note to
+ * yourself about what you are reading, and the list that holds them is the
+ * workspace's. */
+export const resourceFavourites = {
+  starred: (wid: string, rid: string) =>
+    request<{ favourite: boolean }>(
+      `/workspaces/${wid}/resource-favourites/${rid}`,
+    ),
+  add: (wid: string, rid: string, label: string) =>
+    request<import("./types").Favourite>(
+      `/workspaces/${wid}/resource-favourites`,
+      { method: "PUT", body: JSON.stringify({ resource_id: rid, label }) },
+    ),
+  remove: (wid: string, rid: string) =>
+    request<void>(`/workspaces/${wid}/resource-favourites/${rid}`, {
+      method: "DELETE",
+    }),
+};
+
 export const datasets = {
   list: (wid: string, pid: string) =>
     request<import("./types").Dataset[]>(`/workspaces/${wid}/projects/${pid}/datasets`),
@@ -1426,8 +1446,11 @@ export const objects = {
    *
    * Whose they are never travels in the request: db 0074's policy pins every
    * read and write to the caller. */
+  /** Every shortcut in this workspace, of either kind (§436). One listing,
+   *  because there is one store and one cap — each screen keeps the rows it
+   *  can open. */
   favourites: (wid: string) =>
-    request<import("./types").ObjectFavourite[]>(
+    request<import("./types").Favourite[]>(
       `/workspaces/${wid}/object-favourites`,
     ),
   isFavourite: (wid: string, typeId: string, instanceId: string) =>

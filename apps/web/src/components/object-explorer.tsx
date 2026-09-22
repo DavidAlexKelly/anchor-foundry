@@ -889,15 +889,21 @@ function Favourites({
       {kept.data?.length === 0 && (
         <p className="ox-note" data-testid="favourites-empty">{favouritesEmptyReason()}</p>
       )}
+      {/* **Objects only, here.** Since §436 a favourite can point at a
+          resource too, and this aside opens things by type and instance — a
+          shortcut to a Workshop module has nothing for `onOpen` to do with
+          it. The resource ones are listed where they can be opened, in the
+          project's resource browser. One store, one cap, two lists, each
+          beside what it leads back to. */}
       <ul className="ox-saved-list">
-        {kept.data?.map((f) => (
+        {kept.data?.filter((f) => f.instance_id !== null).map((f) => (
           <li key={f.id}>
             <button
               type="button"
               className="ox-saved-open"
               data-testid={`favourite-open-${f.instance_id}`}
               onClick={() =>
-                onOpen({ typeId: f.object_type_id, instanceId: f.instance_id })
+                onOpen({ typeId: f.object_type_id!, instanceId: f.instance_id! })
               }
             >
               <strong>{rowLabel(f)}</strong>
