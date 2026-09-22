@@ -29,12 +29,15 @@ import type { Command } from "./command-palette";
 // **`checks` beside `pulls`**, which is the order `code-repositories.md` §1
 // lists them and the order the work happens in: propose, then see what ran.
 export const TABS = [
-  "files", "history", "branches", "pulls", "checks", "publish", "settings",
+  "files", "docs", "history", "branches", "pulls", "checks", "publish", "settings",
 ] as const;
 export type Tab = (typeof TABS)[number];
 
 export const TAB_LABELS: Record<Tab, string> = {
   files: "Files",
+  // p.67's in-product documentation (§442). Beside Files, because it is a file
+  // in the repository and the one the rest of the tab is read through.
+  docs: "Docs",
   history: "History",
   branches: "Branches",
   pulls: "Pull requests",
@@ -54,6 +57,7 @@ export const TAB_LABELS: Record<Tab, string> = {
  *  makes a deletion visible. */
 const TAB_HINTS: Record<Tab, string[]> = {
   files: ["code", "tree", "editor"],
+  docs: ["readme", "documentation"],
   history: ["commits", "log"],
   branches: ["merge"],
   pulls: ["pull requests", "proposals", "review", "diff"],

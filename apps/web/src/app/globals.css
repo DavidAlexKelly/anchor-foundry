@@ -3435,3 +3435,10 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   padding: 10px 12px; font-size: 12.5px; line-height: 1.5;
   background: var(--paper); white-space: pre; tab-size: 2;
 }
+
+/* p.67's README, in the repository's Docs tab (§442). The Markdown itself is
+   styled by `canvas-markdown`, which is the same renderer — what is here is
+   the page around it: a readable measure, because documentation read at the
+   full width of a repository application is documentation nobody finishes. */
+.repo-docs { padding: 16px 20px 32px; max-width: 46rem; }
+.repo-docs-empty { margin: 16px 20px; }

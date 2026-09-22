@@ -218,6 +218,7 @@ import {
   toEdits, undoRow, type Staged,
 } from "./inline-edit";
 import { readerLayout } from "./reader-layout";
+import { MarkdownView } from "../markdown-view";
 import { SeriesCell } from "./SeriesCell";
 import { Sparkline } from "./Sparkline";
 import { useSeriesPoints } from "./series-points";
@@ -3134,129 +3135,6 @@ CanvasDateTimePicker.craft = {
 };
 
 // ---- Markdown -------------------------------------------------------------------
-/** p.314-319's Markdown widget.
- *
- * The parsing, the URL rule and p.317's two alignment precedences all live in
- * `markdown.ts` and are tested without a browser. What is here is the part that
- * has to be React: turning the tree into elements.
- *
- * **There is no `dangerouslySetInnerHTML` in this file, and that is the design
- * rather than an accident.** `parseMarkdown` returns plain objects, so every
- * string below reaches the DOM as a text child, which React escapes. Raw HTML
- * an author typed is shown as the characters they typed.
- */
-function renderInline(nodes: Inline[]): React.ReactNode {
-  return nodes.map((node, index) => {
-    switch (node.kind) {
-      case "text":
-        return <React.Fragment key={index}>{node.text}</React.Fragment>;
-      case "code":
-        return <code key={index}>{node.text}</code>;
-      case "strong":
-        return <strong key={index}>{renderInline(node.children)}</strong>;
-      case "em":
-        return <em key={index}>{renderInline(node.children)}</em>;
-      case "del":
-        return <del key={index}>{renderInline(node.children)}</del>;
-      case "mark":
-        return <mark key={index}>{renderInline(node.children)}</mark>;
-      case "break":
-        return <br key={index} />;
-      case "link":
-        // `noreferrer` as well as `noopener`: an app's Markdown is written by
-        // one person and read by the workspace, and the reader did not choose
-        // to tell the destination where they came from.
-        return (
-          <a key={index} href={node.href} target="_blank" rel="noreferrer noopener">
-            {renderInline(node.children)}
-          </a>
-        );
-      case "image":
-        return <img key={index} src={node.src} alt={node.alt} />;
-    }
-  });
-}
-
-function renderBlock(block: Block, key: number, widget: Align): React.ReactNode {
-  // p.317's "Code blocks remain left-aligned and full-width regardless of the
-  // selected alignment", decided in the model rather than here.
-  const style = { textAlign: blockAlignment(block, widget) } as React.CSSProperties;
-  switch (block.kind) {
-    case "heading":
-      return React.createElement(
-        `h${block.level}`,
-        { key, style, className: "canvas-markdown-heading" },
-        renderInline(block.children),
-      );
-    case "paragraph":
-      return <p key={key} style={style}>{renderInline(block.children)}</p>;
-    case "code":
-      // **The style is applied here too, and that is the point.** Leaving it off
-      // let the browser compute `start`, which looks left-aligned and is only
-      // left-aligned by inheritance - so `blockAlignment`'s answer for the one
-      // block kind it exists for was computed and thrown away, and any future
-      // rule setting `text-align` on the container would have taken code blocks
-      // with it. The browser suite caught it as `start` != `left`.
-      return (
-        <pre key={key} style={style} className="canvas-markdown-code">
-          <code>{block.text}</code>
-        </pre>
-      );
-    case "rule":
-      return <hr key={key} />;
-    case "quote":
-      return (
-        <blockquote key={key} className="canvas-markdown-quote">
-          {block.blocks.map((b, i) => renderBlock(b, i, widget))}
-        </blockquote>
-      );
-    case "list": {
-      const Tag = block.ordered ? "ol" : "ul";
-      return (
-        <Tag key={key} style={style} className="canvas-markdown-list">
-          {block.items.map((item, i) => (
-            <li key={i} className={item.done === undefined ? undefined : "canvas-markdown-task"}>
-              {item.done !== undefined && (
-                // Shown, and not editable: p.318 lists a task list as a
-                // *syntax*, so the tick is what the author wrote. A checkbox a
-                // viewer could clear would be a control with nowhere to put the
-                // answer.
-                <input type="checkbox" checked={item.done} readOnly disabled />
-              )}
-              {renderInline(item.children)}
-            </li>
-          ))}
-        </Tag>
-      );
-    }
-    case "table":
-      return (
-        <table key={key} className="canvas-markdown-table">
-          <thead>
-            <tr>
-              {block.head.map((cell, i) => (
-                <th key={i} style={{ textAlign: columnAlignment(block.align[i] ?? null, widget) }}>
-                  {renderInline(cell)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {block.rows.map((row, r) => (
-              <tr key={r}>
-                {row.map((cell, i) => (
-                  <td key={i} style={{ textAlign: columnAlignment(block.align[i] ?? null, widget) }}>
-                    {renderInline(cell)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      );
-  }
-}
-
 export function CanvasMarkdown({
   source = "text",
   text = "",
@@ -3305,7 +3183,7 @@ export function CanvasMarkdown({
         <p className="canvas-widget-empty">Markdown - add text in Settings</p>
       ) : (
         <div className={classes.join(" ")} data-testid="markdown">
-          {blocks.map((block, i) => renderBlock(block, i, widgetAlign))}
+          <MarkdownView blocks={blocks} align={widgetAlign} />
         </div>
       )}
     </div>
