@@ -16,7 +16,7 @@
  * - which is the property decision 0003 was chosen for.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUrlState } from "@/components/use-url-state";
@@ -28,6 +28,11 @@ import {
 } from "@/components/editor-preferences";
 import { STEPS as WALKTHROUGH_STEPS } from "@/lib/repository-walkthrough";
 import { messagePlaceholder, messageProblem, settingsFrom } from "@/lib/commit-message";
+import { MarkdownView } from "@/components/markdown-view";
+import { parse as parseMarkdown } from "@/components/canvas/markdown";
+import {
+  emptyReason as readmeEmpty, linkify, mentionedResources, readmeFrom,
+} from "@/lib/readme";
 // **The tab list is imported, not declared here** (§428). The palette offers
 // every tab as a command, and a seventh tab added to a bar with a list of its
 // own would be one the palette could not reach (§292).
@@ -385,6 +390,15 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
           rid={rid}
           branch={current}
           onOpenCommit={(id) => setParams({ commit: id, tab: "files", file: undefined })}
+        />
+      )}
+      {tab === "docs" && (
+        <DocsTab
+          wid={wid}
+          pid={pid}
+          rid={rid}
+          branch={current}
+          onOpenFile={(path) => setParams({ tab: "files", file: path })}
         />
       )}
       {tab === "settings" && <SettingsTab wid={wid} pid={pid} />}
@@ -3547,5 +3561,90 @@ function FileChangesPanel({
         </table>
       )}
     </section>
+  );
+}
+
+/**
+ * p.67's in-product documentation: the repository's README, rendered (§442).
+ *
+ * > "You can provide users with documentation on projects in Code Repositories
+ * > by adding a README file… Edit or add a `README.md` file to your repository
+ * > to get started." (p.67)
+ *
+ * The syntax is `canvas/markdown.ts`'s and the two link forms are
+ * `lib/readme.ts`'s; both are tested without a browser. What is here is the
+ * fetching — including p.68's *"resources referenced like this will
+ * automatically be named"*, which is a lookup per distinct id and the one part
+ * of this page that cannot be a pure function.
+ *
+ * **The branch's README, not the default branch's.** A repository is read on
+ * whichever branch the reader is on, and documentation that lagged behind the
+ * code beside it would be documentation about a different repository.
+ */
+function DocsTab({
+  wid,
+  pid,
+  rid,
+  branch,
+  onOpenFile,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  branch: string;
+  onOpenFile: (path: string) => void;
+}) {
+  const tree = useQuery({
+    // The same key the Files tab uses, so opening Docs is not a second fetch
+    // of the same tree.
+    queryKey: ["repo-tree", rid, branch, undefined],
+    queryFn: () => repoApi.tree(wid, pid, rid, { branch }),
+  });
+  const source = tree.data ? readmeFrom(tree.data.files) : null;
+  const ids = useMemo(() => (source ? mentionedResources(source) : []), [source]);
+  const named = useQueries({
+    queries: ids.map((id) => ({
+      queryKey: ["resource", id],
+      queryFn: () => resourceApi.resolve(id),
+      // The id came out of somebody's prose, so a miss is ordinary rather than
+      // exceptional — three retries would only slow the page down.
+      retry: false,
+    })),
+  });
+  const names = useMemo(() => {
+    const out: Record<string, string> = {};
+    ids.forEach((id, at) => {
+      const got = named[at]?.data;
+      if (got) out[id] = got.name;
+    });
+    return out;
+  }, [ids, named]);
+
+  if (tree.isPending) return <p className="state">Loading the documentation…</p>;
+  if (tree.isError) return <p className="state error">{(tree.error as Error).message}</p>;
+  if (source === null || !source.trim()) {
+    return <p className="state repo-docs-empty" data-testid="docs-empty">{readmeEmpty()}</p>;
+  }
+
+  const blocks = parseMarkdown(linkify(source, { repositoryId: rid, names }));
+  return (
+    <div
+      className="repo-docs canvas-markdown"
+      data-testid="repo-docs"
+      // p.68: a `repo://` file "will automatically open when clicked". The
+      // href is a real address and works on its own — this only saves the
+      // round trip, which is what makes the tab switch feel like a tab switch
+      // rather than a page load.
+      onClick={(event) => {
+        const anchor = (event.target as HTMLElement).closest("a");
+        const href = anchor?.getAttribute("href");
+        const inThisRepository = href?.startsWith(`/r/${rid}?tab=files&file=`);
+        if (!inThisRepository) return;
+        event.preventDefault();
+        onOpenFile(decodeURIComponent(href!.split("file=")[1]!));
+      }}
+    >
+      <MarkdownView blocks={blocks} />
+    </div>
   );
 }

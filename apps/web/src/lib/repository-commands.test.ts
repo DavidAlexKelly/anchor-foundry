@@ -129,6 +129,8 @@ describe("repositoryCommands", () => {
  * exists: deleting a word from the source deleted its case too, and the suite
  * went on passing with one fewer test. Written out, a deleted word fails. */
 const FINDS: ReadonlyArray<readonly [string, string]> = [
+  ["readme", "docs"],
+  ["documentation", "docs"],
   ["code", "files"], ["tree", "files"], ["editor", "files"],
   ["commits", "history"], ["log", "history"],
   ["merge", "branches"],
