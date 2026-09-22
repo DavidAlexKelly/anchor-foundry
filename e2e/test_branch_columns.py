@@ -125,3 +125,87 @@ def test_propose_changes_takes_you_where_a_proposal_is_made(page, api) -> None:
     open_branches(page, repo)
     page.get_by_test_id("branch-propose-work").click()
     page.wait_for_url(lambda url: "tab=publish" in url and "branch=work" in url, timeout=30000)
+
+
+# ---- p.17's "View code", and p.16's dropdown that is not here (§430) ---------
+def test_view_code_opens_the_branch_in_the_editor(page, api) -> None:
+    """p.17: "Click 'View code' next to a branch name to view the code on that
+    branch."
+
+    **The capability was here and the name was not**, which is why the parity
+    row read ○ for as long as it did: the branch *name* was the button, so a
+    reader who did not think to click a label never found it, and one who did
+    got taken to another tab by a control that had said nothing about going
+    anywhere (§337).
+    """
+    mod = project(api, "Branches view code")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"src/a.sql": declaring(f"d_{uuid.uuid4().hex[:6]}")})
+    mod.api.call("POST", f"{mod.base}/repositories/{repo['id']}/branches",
+                 {"name": "work", "from_branch": "main"})
+    commit(mod, repo, {"src/b.sql": declaring(f"w_{uuid.uuid4().hex[:6]}")}, branch="work")
+
+    open_branches(page, repo)
+    # The name is still on the row - it stopped being the control, not the
+    # label, and a list of buttons with no branch names on it would be worse
+    # than the thing this fixed.
+    expect(page.locator(".repo-branch-list .repo-branch-name")).to_have_text(
+        ["main", "work"], timeout=30000
+    )
+    page.get_by_test_id("branch-view-work").click()
+    page.wait_for_url(lambda url: "tab=files" in url and "branch=work" in url, timeout=30000)
+    # And the tree it opens is that branch's, not the default's - the file
+    # committed only to `work` is the proof.
+    expect(page.locator(".repo-tree").get_by_role("button", name="src/b.sql")).to_be_visible(
+        timeout=30000
+    )
+
+
+def test_the_publish_tab_says_where_a_proposal_will_land(page, api) -> None:
+    """**p.16's dropdown, answered in a sentence.**
+
+        "If you want to merge your changes into a branch other than master,
+         select a different branch from the dropdown menu." (p.16)
+
+    There is no dropdown, and the screen says why rather than leaving somebody
+    hunting for one: a proposal here is a request to *publish*, so it lands on
+    the branch every reader opens. Said at the moment they would be looking
+    for the control, which is before the proposal exists — the review surface
+    says it again afterwards (§283).
+    """
+    mod = project(api, "Branches landing note")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"src/a.sql": declaring(f"d_{uuid.uuid4().hex[:6]}")})
+    mod.api.call("POST", f"{mod.base}/repositories/{repo['id']}/branches",
+                 {"name": "work", "from_branch": "main"})
+    commit(mod, repo, {"src/b.sql": declaring(f"w_{uuid.uuid4().hex[:6]}")}, branch="work")
+    mod.api.call("PUT", f"{mod.base}/code/review-policy", {"require_code_review": True})
+
+    page.goto(f"{WEB_BASE}/r/{repo['resource_id']}?tab=publish&branch=work")
+    note = page.get_by_test_id("publish-lands-on")
+    expect(note).to_be_visible(timeout=30000)
+    # The branch it names is the repository's default, not the one being
+    # published - which is the whole content of the sentence.
+    expect(note).to_contain_text("main")
+    expect(note).to_contain_text("default branch")
+    # And it points at the control that *does* move one branch onto another.
+    expect(note).to_contain_text("Merge")
+
+    mod.api.call("PUT", f"{mod.base}/code/review-policy", {"require_code_review": False})
+
+
+def test_an_ungated_project_is_not_told_about_landing(page, api) -> None:
+    """The sentence is about applying a *proposal*, and an ungated project
+    publishes directly — telling it about a landing that will not happen is
+    the kind of note people learn to read past.
+
+    The positive wait comes first: the publish button proves the tab rendered,
+    so the absence below is about a page rather than about a race (§318).
+    """
+    mod = project(api, "Branches ungated")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"src/a.sql": declaring(f"d_{uuid.uuid4().hex[:6]}")})
+
+    page.goto(f"{WEB_BASE}/r/{repo['resource_id']}?tab=publish")
+    expect(page.get_by_role("button", name="Publish 1 transform")).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("publish-lands-on")).to_have_count(0)
