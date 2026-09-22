@@ -126,8 +126,14 @@ export function ResourceSummary({
  * here: an unfilled star means "not a favourite", so drawing one before the
  * server has said would tell somebody their shortcut is gone — and the press
  * that follows would remove a favourite they still had.
+ *
+ * **Exported, because a second surface offers it** (§437): p.47 lets a
+ * Workshop module offer the same star to viewers of the published module, and
+ * that route draws its own chrome rather than this shell's. One
+ * implementation, imported by both — a copy there would be a second star with
+ * its own idea of when to invalidate the list it writes into (§292).
  */
-function FavouriteStar({ resource }: { resource: ResolvedResource }) {
+export function FavouriteStar({ resource }: { resource: ResolvedResource }) {
   const client = useQueryClient();
   const known = useQuery({
     queryKey: ["resource-favourite", resource.id],
