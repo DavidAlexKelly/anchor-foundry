@@ -1090,6 +1090,14 @@ function CommentBubble({
       className={`review-comment${comment.outdated ? " outdated" : ""}${
         comment.resolved_at ? " resolved" : ""
       }`}
+      // **Both states as attributes, not only as a class** (§440). A class is
+      // how the bubble is drawn; these two are what it *claims* — that the
+      // proposal moved under this remark, and that somebody decided the
+      // conversation was over — and they are the two a browser test has to be
+      // able to ask about without reading a stylesheet (§337).
+      data-testid="review-comment"
+      data-outdated={comment.outdated ? "true" : "false"}
+      data-resolved={comment.resolved_at ? "true" : "false"}
     >
       <p className="review-comment-meta">
         <strong>{comment.author_email ?? "unknown"}</strong>{" "}
@@ -1105,6 +1113,7 @@ function CommentBubble({
       <button
         type="button"
         className="review-say-link"
+        data-testid="comment-settle"
         onClick={() => onSettle(comment.id, !comment.resolved_at)}
       >
         {comment.resolved_at ? "Reopen" : "Resolve"}
