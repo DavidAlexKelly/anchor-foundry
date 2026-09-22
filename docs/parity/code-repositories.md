@@ -87,7 +87,7 @@ The protected-branch rule is the one to take seriously. It is what makes the Pul
 | **Draft persistence across reload** | ✅ | §281, `localStorage` keyed by repository *and branch* — the same path on two branches is two files |
 | IntelliSense over platform types | ○ | Monaco's built-ins only |
 | Linting and error checking | ○ | needs §2.4 Problems |
-| Command palette on F1 | ○ | (p.11) |
+| **Command palette on F1** | ✅ §428 | (p.11) over the *application's* commands — tabs, branches, files — not Monaco's. The editor binds F1 to its own palette and calls `preventDefault`, so with the caret in the editor Monaco answers and this one stays shut; anywhere else on the page it opens. A command that cannot run is shown greyed with the reason rather than left out, and the highlight is tracked by command id, not by row |
 | In-app help walkthrough | ○ | (p.11) |
 
 > **Do persistence before tabs.** Uncommitted edits live in `useState` keyed by path (`repository-app.tsx:206`) with no persistence anywhere. That survives switching files but not a page reload — so a five-tab editor with unsaved work is five ways to lose work at once. Tabs are what make the loss expensive; ship `localStorage` keyed by repository and branch first.

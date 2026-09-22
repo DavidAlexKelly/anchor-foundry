@@ -489,3 +489,11 @@ Two smaller harness rules earned the same way, both in `§415`–`§416`'s sweep
 - **An anchor that matches twice is not an anchor.** Refuse and say so (`SKIPPED (anchor x2)`) rather than mutating the first match — §416's rehydration line exists in both evaluate routes, and silently taking one would have tested a route the browser suite does not reach.
 - **Print the reason, not the tail.** A run that produced no result has a cause, and it is usually one line (`the running API is older than apps/api/src`). Truncating the output to its last few lines threw exactly that line away.
 - **Restart the stack between groups.** A sweep's server group writes and restores files under `apps/api/src`, which leaves every one of them newer than the running API — so the seam group that follows is refused by `conftest.py` before a single test runs, and reports the same count for the baseline and every mutant. §422 saw `5 errors in 0.74s` seven times in a row; a `dev-down && dev-up` between the groups is the whole fix. `awake()` does not catch it, because the stack is up and answering — it is simply the wrong build.
+
+### A test that walks a table cannot check the table (§428)
+
+§428's hint table — the words that find a tab, "diff" for Pull requests, "log" for History — was checked by a test that iterated it: for every tab, for every hint, assert the hint finds the tab. It reads like thorough coverage and it is worth nothing. A mutant that deleted `"editor"` from the table deleted the test for `"editor"` along with it, and the suite came back **green with one fewer test**.
+
+The tell is in the denominator, not the failures: `71 passed (71)` became `70 passed (70)`. A sweep that only asks "did the count of failures change" cannot see that, which is why the rule is **read the total as well** — a mutant that moves the denominator has eaten a check rather than passed one.
+
+The fix is to write the table out again in the test, as a list of `[word, tab]` pairs, plus one assertion that the pairs cover every tab. It is duplication, and the duplication is the point: the source says what the words are and the test says what they must still be, so deleting one is a disagreement rather than a quiet subtraction. **A check generated from the thing it checks is not a check.**
