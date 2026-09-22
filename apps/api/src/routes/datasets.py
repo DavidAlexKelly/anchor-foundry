@@ -28,6 +28,7 @@ from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import expectations
 from ..services import dataset_engine as engine
+from ..services import dataset_references as reference_service
 from ..services import datasets as ds_service
 from ..services.dataset_engine import DatasetEngineError
 from ..services.storage import LocalStorageGateway, StorageGateway
@@ -321,6 +322,57 @@ async def get_dataset(
     async with user_connection(access.auth.user_id) as conn:
         row = await ds_service.get(conn, access.project_id, dataset_id)
     return _out(row)
+
+
+class ReferenceOut(BaseModel):
+    """One file that declares this dataset by name (§435)."""
+
+    repository_id: UUID
+    #: What the web addresses a repository by, so a screen can link to the file.
+    resource_id: UUID
+    repository: str
+    branch: str
+    path: str
+    #: The aliases it reads it under. Empty on a file that writes it.
+    aliases: list[str] = []
+
+
+class ReferencesOut(BaseModel):
+    reads: list[ReferenceOut]
+    writes: list[ReferenceOut]
+    #: One sentence about what renaming would cost, or null when nothing names
+    #: it. Written here rather than in the browser because the *reason* is a
+    #: fact about how publishing resolves a declaration, and a second writer of
+    #: it would be a second answer to what a rename does.
+    warning: str | None
+
+
+@router.get("/{dataset_id}/references", response_model=ReferencesOut)
+async def dataset_references(
+    dataset_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> ReferencesOut:
+    """Which repository files name this dataset (§435; `dataset-preview` p.2).
+
+    **Viewer, not editor.** "What reads this dataset" is a question about
+    understanding the pipeline, and the screen that asks it before a rename is
+    only one of the places it belongs. A floor above reading would make the
+    warning invisible to exactly the people who should see it before asking
+    somebody else to rename something.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await ds_service.get(conn, access.project_id, dataset_id)
+        found = await reference_service.naming(
+            conn,
+            project_id=access.project_id,
+            workspace_id=access.workspace_id,
+            name=str(row["name"]),
+        )
+    return ReferencesOut(
+        reads=[ReferenceOut(**r) for r in found["reads"]],
+        writes=[ReferenceOut(**w) for w in found["writes"]],
+        warning=reference_service.warning(found, str(row["name"])),
+    )
 
 
 @router.patch("/{dataset_id}", response_model=DatasetOut)

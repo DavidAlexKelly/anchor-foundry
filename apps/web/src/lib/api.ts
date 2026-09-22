@@ -639,6 +639,13 @@ export const datasets = {
     request<import("./types").Dataset[]>(`/workspaces/${wid}/projects/${pid}/datasets`),
   get: (wid: string, pid: string, did: string) =>
     request<import("./types").Dataset>(`/workspaces/${wid}/projects/${pid}/datasets/${did}`),
+  /** Which repository files declare this dataset by name (§435). Read before
+   *  offering a rename, because a rename edits every one of them at a
+   *  distance. */
+  references: (wid: string, pid: string, did: string) =>
+    request<import("./types").DatasetReferences>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/references`,
+    ),
   versions: (wid: string, pid: string, did: string) =>
     request<import("./types").DatasetVersion[]>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/versions`,

@@ -3363,3 +3363,21 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   background: var(--panel); color: var(--ink);
 }
 .repo-settings-check span { color: var(--ink); }
+
+/* ---- renaming a dataset (§435; `dataset-preview` p.2) --------------------- */
+.ds-rename { margin-bottom: 20px; }
+.ds-rename-row { display: flex; align-items: center; gap: 8px; margin: 6px 0 8px; }
+.ds-rename-row input {
+  flex: 0 1 320px; padding: 5px 8px; font-size: 13px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: var(--panel); color: var(--ink);
+}
+/* Brass rather than red: renaming is a legitimate thing to do and the sentence
+   is a cost, not a refusal. A danger colour here would make people stop
+   reading it. */
+.ds-rename-warning {
+  margin: 0 0 8px; font-size: 12.5px; color: var(--brass); max-width: 78ch;
+}
+.ds-rename-files { list-style: none; margin: 0 0 8px; padding: 0; font-size: 12.5px; }
+.ds-rename-files li { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.ds-rename-files a { font-family: var(--font-mono); font-size: 12px; }

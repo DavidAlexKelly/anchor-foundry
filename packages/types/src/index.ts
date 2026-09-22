@@ -1284,6 +1284,30 @@ export interface DatasetParsePreview {
   truncated: boolean;
 }
 
+/** A repository file that declares a dataset by name (§435;
+ *  `dataset-preview` p.2). */
+export interface DatasetReference {
+  repository_id: string;
+  /** What the web addresses a repository by, so a screen can link to the file. */
+  resource_id: string;
+  repository: string;
+  branch: string;
+  path: string;
+  /** The aliases it reads the dataset under. Empty on a file that writes it. */
+  aliases: string[];
+}
+
+/** What naming a dataset costs (§435).
+ *
+ * **`warning` is written by the server**, because the reason is a fact about
+ * how publishing resolves a declaration — a second writer of it in the browser
+ * would be a second answer to what a rename does. */
+export interface DatasetReferences {
+  reads: DatasetReference[];
+  writes: DatasetReference[];
+  warning: string | null;
+}
+
 export interface DatasetVersion {
   id: string;
   version_number: number;

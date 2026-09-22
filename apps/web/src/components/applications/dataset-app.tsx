@@ -30,10 +30,17 @@ import {
   whyNotParseable,
   type ParseOptions,
 } from "@/lib/parse-options";
+import Link from "next/link";
 import { useUrlState } from "@/components/use-url-state";
+import {
+  NOTHING_NAMES_IT,
+  fileHref,
+  nameToSend,
+  renameProblem,
+} from "@/lib/dataset-rename";
 import { PipelineGraphView } from "@/components/pipeline-graph";
 import { nodePath } from "@/lib/pipeline-graph";
-import type { ResolvedResource, TabularResult } from "@/lib/types";
+import type { DatasetReference, ResolvedResource, TabularResult } from "@/lib/types";
 
 const TABS = ["preview", "schema", "history", "lineage", "details"] as const;
 type Tab = (typeof TABS)[number];
@@ -925,6 +932,148 @@ function LineageTab({ resource }: { resource: ResolvedResource }) {
   );
 }
 
+/**
+ * p.2's rename, and what it would cost (§435).
+ *
+ * **In Details rather than in a header, because this application has no header
+ * of its own.** p.2 puts the file operations beside the name; here the name is
+ * the shell's, above every application, and putting a control that changes it
+ * into a bar this component does not own would be reaching past the screen.
+ * The other facts about the dataset are here, and so is the one that changes
+ * one of them.
+ *
+ * **The cost is on the screen before the button is pressed, and it is on the
+ * screen when there is none.** A warning that appears only sometimes is one a
+ * reader learns to look for; its absence has to say something too.
+ */
+function RenameDataset({
+  wid, pid, did, current,
+}: { wid: string; pid: string; did: string; current: string }) {
+  const queryClient = useQueryClient();
+  const [typed, setTyped] = useState(current);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  /** What named this dataset *before* the rename, kept because the live list
+   *  is about the new name and immediately says nothing declares it.
+   *
+   *  **That sentence is true and, on its own, misleading.** The files that
+   *  declared the old name are broken at exactly this moment, and a screen
+   *  that answered a rename with "renaming it breaks nothing" would be
+   *  reassuring somebody about the thing they have just done. So the list
+   *  they were warned about stays on screen as what is left to fix. */
+  const [broke, setBroke] = useState<
+    { name: string; files: DatasetReference[] } | null
+  >(null);
+
+  const references = useQuery({
+    queryKey: ["ds-references", did],
+    queryFn: () => datasetApi.references(wid, pid, did),
+  });
+
+  const rename = useMutation({
+    mutationFn: (name: string) => datasetApi.update(wid, pid, did, { name }),
+    onSuccess: (next) => {
+      setFailure(null);
+      setDone(next.name);
+      setTyped(next.name);
+      const named = [
+        ...(references.data?.writes ?? []),
+        ...(references.data?.reads ?? []),
+      ];
+      setBroke(named.length > 0 ? { name: current, files: named } : null);
+      // The name is on the shell's breadcrumb and in every listing, and the
+      // references are keyed on it, so all three have to hear about it.
+      queryClient.invalidateQueries({ queryKey: ["ds-detail", did] });
+      queryClient.invalidateQueries({ queryKey: ["ds-references", did] });
+      queryClient.invalidateQueries({ queryKey: ["datasets", pid] });
+      queryClient.invalidateQueries({ queryKey: ["resource", did] });
+    },
+    onError: (e: Error) =>
+      setFailure(e instanceof ApiError ? e.message : "Couldn't rename it."),
+  });
+
+  const problem = renameProblem(current, typed);
+  const found = references.data;
+  const named = (found?.reads.length ?? 0) + (found?.writes.length ?? 0);
+
+  return (
+    <section className="ds-rename" data-testid="dataset-rename">
+      <h2 className="ds-h2">Name</h2>
+      <div className="ds-rename-row">
+        <input
+          type="text"
+          aria-label="Dataset name"
+          data-testid="rename-input"
+          value={typed}
+          onChange={(e) => {
+            setTyped(e.target.value);
+            setDone(null);
+          }}
+        />
+        <button
+          type="button"
+          className="btn"
+          data-testid="rename-save"
+          disabled={problem !== null || rename.isPending}
+          onClick={() => rename.mutate(nameToSend(typed))}
+        >
+          {rename.isPending ? "Renaming…" : "Rename"}
+        </button>
+      </div>
+      {/* The refusal is said rather than only disabling the button: a control
+          that is grey for a reason nobody can read is a control that looks
+          broken (§214). Not while the name is simply unchanged, which is the
+          state the form opens in and needs no explaining. */}
+      {problem && typed.trim() !== current && (
+        <p className="login-note" data-testid="rename-problem">{problem}</p>
+      )}
+      {failure && <p className="form-error" data-testid="rename-failure">{failure}</p>}
+      {done && (
+        <p className="login-note" data-testid="rename-done">
+          Renamed to {done}. Its link has not changed.
+        </p>
+      )}
+      {broke && (
+        <div className="ds-rename-broke" data-testid="rename-broke">
+          <p className="ds-rename-warning">
+            {broke.files.length === 1 ? "1 file" : `${broke.files.length} files`}
+            {" still declare"}{broke.files.length === 1 ? "s" : ""}{" "}
+            <code>{broke.name}</code>. Open each and update the declaration.
+          </p>
+          <ul className="ds-rename-files">
+            {broke.files.map((r) => (
+              <li key={`${r.repository_id}:${r.path}`}>
+                <Link href={fileHref(r)}>{r.repository} / {r.path}</Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {references.isPending && <p className="soft">Checking what names it…</p>}
+      {found && (
+        <p
+          className={found.warning ? "ds-rename-warning" : "login-note"}
+          data-testid="rename-warning"
+        >
+          {found.warning ?? NOTHING_NAMES_IT}
+        </p>
+      )}
+      {found && named > 0 && (
+        <ul className="ds-rename-files" data-testid="rename-files">
+          {[...found.writes.map((r) => ({ ...r, writes: true })),
+            ...found.reads.map((r) => ({ ...r, writes: false }))].map((r) => (
+            <li key={`${r.repository_id}:${r.path}:${r.writes}`}>
+              <span className="chip">{r.writes ? "writes" : "reads"}</span>
+              <Link href={fileHref(r)}>{r.repository} / {r.path}</Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function DetailsTab({ wid, pid, did }: { wid: string; pid: string; did: string }) {
   const detail = useQuery({
     queryKey: ["ds-detail", did],
@@ -940,6 +1089,8 @@ function DetailsTab({ wid, pid, did }: { wid: string; pid: string; did: string }
   const d = detail.data;
   return (
     <div className="ds-details">
+      <RenameDataset wid={wid} pid={pid} did={did} current={d.name} />
+
       <dl className="app-facts">
         <div>
           <dt>Origin</dt>
