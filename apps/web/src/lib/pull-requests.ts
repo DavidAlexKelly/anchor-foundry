@@ -62,23 +62,28 @@ export function describe(proposal: CodeProposal): string {
 export function emptyReason(
   proposals: readonly CodeProposal[],
   repositoryId: string,
+  /** Which list is empty (§429). **Not a default**, because a sentence that
+   *  said "open" on the Closed tab would be a screen answering a question
+   *  nobody asked — and it did, for as long as there was only one list. */
+  bucket: "open" | "closed" = "open",
 ): string | null {
   if (forRepository(proposals, repositoryId).length > 0) return null;
+  const none = `No ${bucket} proposals for this repository.`;
   const elsewhere = proposals.length - forRepository(proposals, repositoryId).length;
   if (elsewhere === 0) {
-    return "No open proposals for this repository.";
+    return none;
   }
   const other = unrepositoried(proposals).length;
   if (other === elsewhere) {
     return (
-      `No open proposals for this repository. ${elsewhere} in this project ` +
+      `${none} ${elsewhere} in this project ` +
       `${elsewhere === 1 ? "changes a transform" : "change transforms"} directly ` +
       `rather than publishing a commit, and ${elsewhere === 1 ? "is" : "are"} ` +
       `reviewed on the Models screen.`
     );
   }
   return (
-    `No open proposals for this repository. ${elsewhere} in this project ` +
+    `${none} ${elsewhere} in this project ` +
     `${elsewhere === 1 ? "belongs" : "belong"} to something else.`
   );
 }
