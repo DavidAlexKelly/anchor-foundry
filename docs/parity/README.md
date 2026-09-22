@@ -500,6 +500,16 @@ The sweep is the only reason this is known. The test was green, the feature work
 
 So: **a presence that renders from different data than the absence is not a guard.** Wait for something the absent thing would have had to overtake — the network going quiet on a page whose requests are bounded, a sibling drawn from the same query, or the state the decision is read from. `e2e/test_module_favourite.py` takes the first of those and says why it is available there.
 
+### A control found by the name it would have if it were right (§440)
+
+§437's rule has a sibling, and §440 walked into it from the other side.
+
+The review surface only puts a `+` on a diff cell that holds a line, because a blank cell is the absence of a line rather than line zero — giving it a number would make it commentable. The test for that asks whether "Comment on live line 4" exists on a proposal that only adds. Removing the guard survived: the blank cell's button *does* appear, and it announces itself as "Comment on live line **null**", so the locator matched nothing and the assertion passed for the wrong reason.
+
+The shape is worth naming because it looks like careful work. Addressing a control by its accessible name is the right habit (§337), and it is exactly what fails here: **a locator built from the correct label cannot see the control when the label is what went wrong.** The assertion was about a name, and the claim was about a count.
+
+The remedy is one more line and is general: **assert the population, not only the absence.** Three live lines and four proposed ones is seven places a comment may hang; the mutant makes it eight, and a count notices whatever the eighth calls itself.
+
 ### A sweep that shares a backup name corrupts the tree (§429)
 
 Every sweep in this repository saves each file it will mutate and copies the saved bytes back after each run. §429's saved them as `pul-<basename>.orig`, and its two server files were `apps/api/src/services/code.py` and `apps/api/src/routes/code.py` — **two different files with one name.** The second backup overwrote the first, and the restore then wrote the service's bytes into the route. The working tree was corrupt from the first mutant onwards.
