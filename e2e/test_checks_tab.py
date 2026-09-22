@@ -18,6 +18,7 @@ branch selector, and that a check opens the change it is about.
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 from playwright.sync_api import expect
@@ -184,3 +185,47 @@ def test_a_failing_check_leads_the_list_and_the_verdict(page, api) -> None:
                what="the failing check to lead the list")
     expect(page.get_by_test_id("checks-verdict")).to_contain_text("failing")
     expect(page.get_by_test_id("checks-verdict")).to_contain_text("blocks the proposal")
+
+
+# ---- p.98's custom checks (§433) --------------------------------------------
+#
+#     "Custom checks can be created as Gradle tasks… In order for tasks to get
+#      executed during CI checks, there must be a CI task that depends on your
+#      custom task." (p.98)
+#
+# Gradle is the mechanism and only the capability transfers: a repository
+# declares a check of its own in `repoSettings.json` and it runs with the
+# platform's. The rules are proved in `apps/api/tests/test_custom_checks.py`.
+# What needs a browser is that the Checks tab needed *nothing* for this — the
+# machinery was built general enough that a repository's own check arrives on
+# the screen beside the platform's, with its own sentence on it.
+def test_a_repositorys_own_check_reaches_the_tab(page, api) -> None:
+    mod = project(api, "Custom checks tab")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    source = dataset(mod, f"orders_{mod.tag}")
+    settings = json.dumps({"checks": [
+        {"name": "no-select-star", "files": "*.sql", "forbid": r"SELECT\s+\*",
+         "message": "Name the columns you need rather than SELECT *."},
+    ]})
+    commit(mod, repo, {"repoSettings.json": settings})
+    sandbox(mod, repo, "work")
+    made = commit(mod, repo, {
+        "repoSettings.json": settings,
+        "src/t.sql": sql(f"c_{uuid.uuid4().hex[:6]}", source,
+                         body="SELECT * FROM raw"),
+    }, branch="work")
+    proposal = propose(mod, repo, made["id"], "Add a transform")
+    run_checks(mod, proposal["id"])
+
+    open_checks(page, repo, branch="work")
+    row = page.get_by_text("repo:no-select-star")
+    expect(row).to_be_visible(timeout=30000)
+    # **The repository's own sentence, not a regex.** Somebody wrote it for
+    # their colleagues, and replacing it with the pattern would throw away the
+    # only part of the refusal that helps (§299's argument, twice).
+    expect(page.get_by_test_id("checks-tab")).to_contain_text(
+        "Name the columns you need rather than SELECT *."
+    )
+    # And the branch reads as failing, which is what a CI check that fails is
+    # for - the tab is where somebody looks before merging.
+    expect(page.get_by_test_id("checks-verdict")).to_contain_text("fail")
