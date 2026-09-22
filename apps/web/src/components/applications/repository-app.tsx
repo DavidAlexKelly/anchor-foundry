@@ -20,6 +20,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUrlState } from "@/components/use-url-state";
+import { CommandPalette } from "@/components/command-palette";
+// **The tab list is imported, not declared here** (§428). The palette offers
+// every tab as a command, and a seventh tab added to a bar with a list of its
+// own would be one the palette could not reach (§292).
+import {
+  TABS,
+  TAB_LABELS,
+  type Tab,
+  repositoryCommands,
+} from "@/lib/repository-commands";
 import {
   discardQuestion,
   draftKey,
@@ -206,22 +216,6 @@ const CodeEditor = dynamic(
   { ssr: false, loading: () => <div className="code-editor-loading">Loading editor…</div> },
 );
 
-// **`pulls` before `publish`, because that is the order the work happens in**
-// and `code-repositories.md` §1 lists Pull requests before anything of ours.
-// **`checks` beside `pulls`**, which is the order `code-repositories.md` §1
-// lists them and the order the work happens in: propose, then see what ran.
-const TABS = ["files", "history", "branches", "pulls", "checks", "publish", "settings"] as const;
-type Tab = (typeof TABS)[number];
-
-const TAB_LABELS: Record<Tab, string> = {
-  files: "Files",
-  history: "History",
-  branches: "Branches",
-  pulls: "Pull requests",
-  checks: "Checks",
-  publish: "Publish",
-  settings: "Settings",
-};
 
 export function RepositoryApplication({ resource }: { resource: ResolvedResource }) {
   const url = useUrlState();
@@ -251,6 +245,35 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
   });
 
   const current = branch ?? repo.data?.default_branch ?? "main";
+
+  // p.11's palette, over the controls on this bar (§428). Rebuilt when any of
+  // them changes, because which commands are *disabled* is a fact about the
+  // page's current state - "already here", "viewing a commit" - and a palette
+  // built once would be answering about the page the reader arrived on.
+  const commands = useMemo(
+    () => repositoryCommands(
+      {
+        tab,
+        branch: current,
+        branches: (branches.data ?? []).map((b) => b.name),
+        files: Object.keys(tree.data?.files ?? {}).sort(),
+        openFile: openPath ?? null,
+        pinned: !!commitId,
+      },
+      {
+        goToTab: (next) => setParams({ tab: next }),
+        // The same change the bar's picker makes, including clearing the
+        // commit - though this command is disabled while one is pinned.
+        switchBranch: (name) => setParams({ branch: name, file: undefined, commit: undefined }),
+        // **`tab: "files"` as well as the file.** Opening a file from the
+        // Checks tab and staying on Checks would look like the command did
+        // nothing; the editor is where a file opens.
+        openFile: (path) => setParams({ tab: "files", file: path }),
+        backToBranch: () => setParams({ commit: undefined }),
+      },
+    ),
+    [tab, current, branches.data, tree.data, openPath, commitId, setParams],
+  );
 
   return (
     <div className="repo-app">
@@ -286,6 +309,7 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
         )}
 
         <div className="spacer" />
+        <CommandPalette commands={commands} />
         <nav className="ds-tabs repo-tabs">
           {(TABS as readonly Tab[]).map((t) => (
             <button
@@ -461,27 +485,31 @@ function FilesTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
-  // **There is no effect on `openPath` here, and that is deliberate** (§213).
+  // **The strip follows `?file=`, and that is back after §282 removed it**
+  // (§428). The comment it replaces said the effect had nothing left to catch:
+  // `openFile` below does its own opening, and every other writer of `?file=`
+  // only ever *cleared* it, which an effect on a path ignores anyway. That was
+  // true when it was written and stopped being true the moment the command
+  // palette existed - a command that opens a file sits above this tab, has no
+  // reach into its strip, and set `?file=` to a real path while the strip went
+  // on showing "No file open". A browser test found it in the unit that added
+  // it, which is the test §282's version of this comment said did not exist.
   //
-  // The obvious one to write: a deep link, the back button and a jump from the
-  // History tab all move `?file=`, so the strip looks like it needs to follow
-  // the URL wherever it goes. It was written, and it was the *only* way a file
-  // opened - which is how §282 shipped a bug that took a browser test to find.
-  // An effect keyed on a value only fires when the value **changes**, and
-  // `router.replace` does not land synchronously: close the last tab and click
-  // the same file in the tree before the router catches up, and `openPath`
-  // reads `src/a.sql` the whole way through, cleared and set again inside a
-  // window React never observes. The tab never reopened while the address bar
-  // went on naming it.
+  // **It does not replace `openFile`'s own call, it sits beside it**, and that
+  // is what keeps §282's bug fixed: an effect keyed on a value only fires when
+  // the value **changes**, and `router.replace` does not land synchronously, so
+  // closing the last tab and clicking the same file before the router catches
+  // up leaves `openPath` reading one path the whole way through - cleared and
+  // set again inside a window React never observes. `openFile` covers that
+  // case by opening the tab directly; this covers the one where the path
+  // arrives from somewhere that cannot reach the strip at all.
   //
-  // Once `openFile` below does its own opening, the effect had nothing left to
-  // catch. Every route that sets `?file=` to an actual path goes through it;
-  // the other three call sites (the branch select, `onOpenCommit`, `onSwitch`)
-  // only ever clear it, which the effect ignored anyway. And `useUrlState`
-  // replaces rather than pushes, so within this application there are no
-  // history entries to go back *to* - a fresh URL is a fresh mount, and the
-  // seed above handles that. Keeping it would have been a second mechanism
-  // that no test could reach, which is the shape §280 deleted too.
+  // Safe to have both because `openTab` is idempotent: a path already open is
+  // not opened twice and does not move.
+  useEffect(() => {
+    if (openPath === undefined) return;
+    setTabs((current) => openTab(current, openPath));
+  }, [openPath]);
 
   // Written on every change. `localStorage` is synchronous and these are small,
   // and the alternative - debouncing - would mean a reload in the debounce
