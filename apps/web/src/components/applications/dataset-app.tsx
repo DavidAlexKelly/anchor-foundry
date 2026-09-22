@@ -39,6 +39,7 @@ import {
   renameProblem,
 } from "@/lib/dataset-rename";
 import { PipelineGraphView } from "@/components/pipeline-graph";
+import { Table } from "@/components/tabular";
 import { nodePath } from "@/lib/pipeline-graph";
 import type { DatasetReference, ResolvedResource, TabularResult } from "@/lib/types";
 
@@ -116,35 +117,6 @@ export function DatasetApplication({ resource }: { resource: ResolvedResource })
   );
 }
 
-function Table({ result }: { result: TabularResult }) {
-  return (
-    <div className="ds-scroll">
-      <table className="ds-table">
-        <thead>
-          <tr>
-            {result.columns.map((c) => (
-              <th key={c.name} scope="col">
-                {c.name}
-                <span className="ds-coltype">{c.data_type}</span>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {result.rows.map((row, i) => (
-            <tr key={i}>
-              {row.map((cell, j) => (
-                <td key={j}>
-                  {cell === null ? <span className="ds-null">null</span> : String(cell)}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 /** Says loudly that what is on screen is not the dataset as it is now.
  *
@@ -917,6 +889,7 @@ function LineageTab({ resource }: { resource: ResolvedResource }) {
       <PipelineGraphView
         graph={graph.data}
         maxHeight={520}
+        inspect={{ workspaceId: resource.workspace_id, projectId: resource.project_id! }}
         onOpen={(node) => {
           // The dataset itself is what this app is already showing, so only
           // the other kinds navigate — an object type among them since §351

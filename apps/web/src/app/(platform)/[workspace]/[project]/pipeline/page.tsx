@@ -198,6 +198,15 @@ export default function PipelinePage() {
           key={openedKey}
           graph={graph.data}
           onOpen={open}
+          // The graph came back, so both ids resolved — but the fetch is
+          // keyed on them rather than gated on them, so TypeScript cannot know
+          // that. Passed when they are there, which is also the honest answer
+          // if they ever are not.
+          inspect={
+            workspace && project
+              ? { workspaceId: workspace.id, projectId: project.id }
+              : undefined
+          }
           // Only here, of the four places this graph is drawn: a review
           // surface and a dataset application are views of somebody's work,
           // and the project's own pipeline page is where work starts (§386).

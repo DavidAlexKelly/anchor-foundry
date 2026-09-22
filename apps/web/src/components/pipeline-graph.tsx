@@ -21,6 +21,7 @@ import {
   COLOURINGS, type Swatch, colouringIn, legendFor, swatchFor,
 } from "@/lib/node-colouring";
 import { svgFilename, svgFor } from "@/lib/graph-svg";
+import { GraphInspector, type InspectFrom } from "@/components/graph-inspector";
 
 // One renderer, two entry points: the project-wide Pipeline page and a
 // single dataset's lineage, which is the same endpoint with a `focus`
@@ -335,9 +336,19 @@ export function PipelineGraphView({
   building,
   onSchedule,
   scheduling,
+  inspect,
 }: {
   graph: PipelineGraph;
   onOpen: (node: PipelineNode) => void;
+  /** `data-lineage` p.45's Preview and Code tabs (§439): where to read the
+   *  selected node's rows and the transform behind them.
+   *
+   * **Optional, for `onBuild`'s reason.** The review surface draws the graph a
+   * *proposal* would produce, whose datasets may not exist yet and whose
+   * transforms are the ones under review rather than the ones running — a
+   * Preview tab there would be a control that cannot do what it says (§214).
+   * The three callers looking at a real project pass it. */
+  inspect?: InspectFrom;
   maxHeight?: number;
   /** p.82's *View as* (§422): who the Permissions colouring is answering
    *  about, and the list it may be chosen from. Optional together, for the
@@ -1181,6 +1192,13 @@ export function PipelineGraphView({
           </div>
         </div>
         {selectedNode && <Details node={selectedNode} onOpen={() => onOpen(selectedNode)} />}
+        {/* p.45: "select it in your data lineage graph, then choose the
+            Preview tab in the bottom left of the interface." Under the Details
+            strip rather than instead of it — the strip answers "what is this"
+            for every node kind, and these tabs only exist for two of them. */}
+        {selectedNode && inspect && (
+          <GraphInspector node={selectedNode} graph={graph} from={inspect} />
+        )}
         {selected.length > 0 && (
           /* What a selection says for itself. The count is the part that
              matters: the histogram above is now answering about these nodes,
