@@ -10,9 +10,13 @@
  * needs to know where they are without reading carefully.
  */
 
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useState } from "react";
 import { kindLabel } from "@/components/resource-browser";
 import { CopyLinkButton } from "@/components/use-url-state";
+import { ApiError, resourceFavourites } from "@/lib/api";
+import { canShowStar, starGlyph, starLabel } from "@/lib/favourites";
 import type { ResolvedResource } from "@/lib/types";
 
 export function ApplicationShell({
@@ -53,6 +57,11 @@ export function ApplicationShell({
             that shares it belongs where the chrome is. */}
         <div className="app-toolbar">
           {toolbar}
+          {/* p.34's "from within an open resource" (§436). Here rather than in
+              each application, for the same reason `CopyLinkButton` is: the
+              thing being starred is the resource, which every application
+              shares and none of them owns. */}
+          <FavouriteStar resource={resource} />
           <CopyLinkButton />
         </div>
       </header>
@@ -105,5 +114,65 @@ export function ResourceSummary({
         A dedicated application for this resource type is {buildingIn}.
       </p>
     </div>
+  );
+}
+
+
+/**
+ * The star that keeps a shortcut to this resource (§436; `getting-started`
+ * p.34).
+ *
+ * **Absent until the answer is known**, which is §312's rule and matters more
+ * here: an unfilled star means "not a favourite", so drawing one before the
+ * server has said would tell somebody their shortcut is gone — and the press
+ * that follows would remove a favourite they still had.
+ */
+function FavouriteStar({ resource }: { resource: ResolvedResource }) {
+  const client = useQueryClient();
+  const known = useQuery({
+    queryKey: ["resource-favourite", resource.id],
+    queryFn: () => resourceFavourites.starred(resource.workspace_id, resource.id),
+  });
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const isFavourite = known.data?.favourite ?? false;
+  const toggle = useMutation({
+    mutationFn: async () => {
+      if (isFavourite) await resourceFavourites.remove(resource.workspace_id, resource.id);
+      else await resourceFavourites.add(resource.workspace_id, resource.id, resource.name);
+    },
+    onSuccess: async () => {
+      setFailure(null);
+      await client.invalidateQueries({ queryKey: ["resource-favourite", resource.id] });
+      // The list that holds it is the workspace's, and it is on another screen.
+      await client.invalidateQueries({ queryKey: ["object-favourites", resource.workspace_id] });
+    },
+    // **The cap's refusal is shown rather than swallowed.** A star that did
+    // nothing and said nothing is the control §214 is about.
+    onError: (e: Error) => setFailure(e instanceof ApiError ? e.message : "Couldn't."),
+  });
+
+  if (!canShowStar(known.isSuccess)) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`btn quiet app-star${isFavourite ? " on" : ""}`}
+        data-testid="resource-favourite"
+        data-favourite={isFavourite}
+        aria-label={starLabel(isFavourite)}
+        title={starLabel(isFavourite)}
+        disabled={toggle.isPending}
+        onClick={() => toggle.mutate()}
+      >
+        {starGlyph(isFavourite)}
+      </button>
+      {failure && (
+        <span className="form-error app-star-error" data-testid="resource-favourite-error">
+          {failure}
+        </span>
+      )}
+    </>
   );
 }

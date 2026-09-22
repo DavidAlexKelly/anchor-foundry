@@ -22,8 +22,15 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
 import { useState } from "react";
-import { resources as resourcesApi } from "@/lib/api";
+import { objects as objectsApi, resources as resourcesApi } from "@/lib/api";
+import {
+  kindWord,
+  resourceHref,
+  resourcesOnly,
+  rowLabel,
+} from "@/lib/favourites";
 import type { Resource, ResourceKind } from "@/lib/types";
 import { useUrlState } from "@/components/use-url-state";
 import {
@@ -122,6 +129,7 @@ export function ResourceBrowser({
 
   return (
     <section className="resource-browser">
+      <FavouriteResources workspaceId={workspaceId} />
       <div className="rb-controls">
         <input
           className="rb-search"
@@ -261,5 +269,44 @@ function ResourceRow({ resource }: { resource: Resource }) {
         <time dateTime={resource.updated_at}>{whenText(resource.updated_at)}</time>
       </td>
     </tr>
+  );
+}
+
+
+/**
+ * p.34's shortcuts, to the resources this screen opens (§436).
+ *
+ * **Here rather than in a platform sidebar**, which is the reasoning §312 set
+ * down and this follows: Foundry's sidebar is platform-wide and ours is not,
+ * so a favourite is listed where it can be opened. Object shortcuts are in
+ * the Explorer's aside for the same reason.
+ *
+ * **Silent when there are none**, unlike the Explorer's list. That one is a
+ * panel somebody opened; this sits above a project's whole contents, and a
+ * permanent empty box over the thing you came to read is the kind of furniture
+ * people learn to look past.
+ */
+function FavouriteResources({ workspaceId }: { workspaceId: string }) {
+  const kept = useQuery({
+    queryKey: ["object-favourites", workspaceId],
+    queryFn: () => objectsApi.favourites(workspaceId),
+  });
+  const rows = resourcesOnly(kept.data ?? []);
+  if (rows.length === 0) return null;
+
+  return (
+    <aside className="rb-favourites" aria-label="Favourites" data-testid="rb-favourites">
+      <h2>Favourites</h2>
+      <ul>
+        {rows.map((f) => (
+          <li key={f.id}>
+            <Link href={resourceHref(f)} data-testid={`favourite-resource-${f.resource_id}`}>
+              <strong>{rowLabel(f)}</strong>
+              {kindWord(f) && <span className="slug">{kindWord(f)}</span>}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </aside>
   );
 }

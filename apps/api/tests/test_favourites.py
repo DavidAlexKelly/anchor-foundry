@@ -1,15 +1,16 @@
-"""Favourite objects (§312; db 0074; `getting-started` p.34).
+"""Favourites: a shortcut to an object or a resource (§312, §436).
+
+    "You can add and remove favorites with the star icon while navigating the
+     folder structure or **from within an open resource** in a Palantir
+     platform application." (`getting-started` p.34)
 
     "When you navigate to an individual object view, you can select the star
      next to its title to save it as a favorite. This will add the object to
-     your sidebar… Think of favorites as shortcuts that you can add and remove
-     to keep frequently used resources close at hand." (p.34)
+     your sidebar." (p.34)
 
-The star and the sidebar need a browser. What is here is everything that is
-*not* a screen: that starring twice is one star, that the list is private, that
-a full list refuses rather than evicting, and that a favourite survives the
-object it points at going away — which p.34's "shortcut" implies and db 0074
-cannot enforce, because an instance is not a row this schema can reference.
+Two sentences, two subjects, **one table and one cap** (db 0074, widened by db
+0100). §312 built the second sentence; §436 built the first and joined them,
+because the only difference between the two is the shape of the way back.
 """
 from __future__ import annotations
 
@@ -80,6 +81,32 @@ def mine(client, fx, *, sub=None):
     r = client.get(f"{wbase(fx)}/object-favourites", headers=hdr(sub or fx.editor_sub))
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def star_resource(client, fx, resource_id, *, label="", sub=None):
+    return client.put(
+        f"{wbase(fx)}/resource-favourites",
+        headers=hdr(sub or fx.editor_sub),
+        json={"resource_id": str(resource_id), "label": label},
+    )
+
+
+def clear(client, fx, sub) -> None:
+    """Empty this person's list, whichever kind each row is.
+
+    **Both kinds, because the cap counts both** (§436). A clear-out that only
+    unstarred objects would leave a resource favourite behind and make every
+    cap test one short, in a way that looks like an off-by-one in the cap.
+    """
+    for f in mine(client, fx, sub=sub):
+        if f.get("resource_id"):
+            client.delete(f"{wbase(fx)}/resource-favourites/{f['resource_id']}",
+                          headers=hdr(sub))
+        else:
+            client.delete(
+                f"{wbase(fx)}/object-favourites/{f['object_type_id']}/{f['instance_id']}",
+                headers=hdr(sub),
+            )
 
 
 # --- The star ---------------------------------------------------------------
@@ -219,16 +246,12 @@ def test_a_full_list_refuses_rather_than_evicting(client: TestClient, fx: Fixtur
     the least recent would delete a decision — and the person it happened to
     would find out by not finding something.
     """
-    from src.services.object_favourites import MAX_FAVOURITES
+    from src.services.favourites import MAX_FAVOURITES
 
     # Its own person, so the cap is about this test rather than about whatever
     # else has run against this workspace.
     who = fx.viewer_sub
-    for f in mine(client, fx, sub=who):
-        client.delete(
-            f"{wbase(fx)}/object-favourites/{f['object_type_id']}/{f['instance_id']}",
-            headers=hdr(who),
-        )
+    clear(client, fx, who)
 
     for _ in range(MAX_FAVOURITES):
         assert star(client, fx, a_type, uuid.uuid4(), sub=who).status_code == 200
@@ -245,14 +268,10 @@ def test_a_full_list_still_lets_you_restar_something_in_it(
     """The cap counts rows about to be *added*. Refusing a re-star of something
     already in a full list would make the button fail on the object it is
     already pointing at."""
-    from src.services.object_favourites import MAX_FAVOURITES
+    from src.services.favourites import MAX_FAVOURITES
 
     who = fx.viewer_sub
-    for f in mine(client, fx, sub=who):
-        client.delete(
-            f"{wbase(fx)}/object-favourites/{f['object_type_id']}/{f['instance_id']}",
-            headers=hdr(who),
-        )
+    clear(client, fx, who)
     kept = uuid.uuid4()
     assert star(client, fx, a_type, kept, label="first", sub=who).status_code == 200
     for _ in range(MAX_FAVOURITES - 1):
@@ -304,3 +323,184 @@ def test_the_newest_favourite_is_first(client: TestClient, fx: Fixture,
     star(client, fx, a_type, newer, label="apple", sub=who)
     listed = [f["instance_id"] for f in mine(client, fx, sub=who)]
     assert listed.index(str(newer)) < listed.index(str(older))
+
+
+# ---- p.34's other star: a resource (§436) -----------------------------------
+@pytest.fixture()
+def a_resource(client: TestClient, fx: Fixture) -> dict:
+    """A dataset, which is a resource like any other — the star is on the
+    application shell, so what kind it is never reaches this code."""
+    import io
+
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub),
+        data={"name": f"starred_{uuid.uuid4().hex[:8]}"},
+        files={"file": ("d.csv", io.BytesIO(b"id\n1\n"), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    listed = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/resources",
+        headers=hdr(fx.editor_sub),
+    ).json()["resources"]
+    return next(x for x in listed if x["name"] == r.json()["name"])
+
+
+def starred_resource(client, fx, resource_id, *, sub=None) -> bool:
+    r = client.get(f"{wbase(fx)}/resource-favourites/{resource_id}",
+                   headers=hdr(sub or fx.editor_sub))
+    assert r.status_code == 200, r.text
+    return bool(r.json()["favourite"])
+
+
+def test_a_resource_can_be_starred_and_unstarred(
+    client: TestClient, fx: Fixture, a_resource: dict
+) -> None:
+    """p.34's first sentence, which db 0074 did not build."""
+    assert starred_resource(client, fx, a_resource["id"]) is False
+
+    made = star_resource(client, fx, a_resource["id"], label=a_resource["name"])
+    assert made.status_code == 200, made.text
+    assert made.json()["resource_id"] == a_resource["id"]
+    assert starred_resource(client, fx, a_resource["id"]) is True
+
+    client.delete(f"{wbase(fx)}/resource-favourites/{a_resource['id']}",
+                  headers=hdr(fx.editor_sub))
+    assert starred_resource(client, fx, a_resource["id"]) is False
+
+
+def test_a_star_is_about_one_resource_rather_than_about_having_any(
+    client: TestClient, fx: Fixture, a_resource: dict
+) -> None:
+    """**Both halves of "this one".**
+
+    A read that answered "is anything starred" and a delete that removed
+    everything both pass every test written against a single resource — and
+    both are one missing `WHERE` away. Two resources is the smallest fixture
+    that can tell them apart.
+    """
+    other = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub),
+        data={"name": f"second_{uuid.uuid4().hex[:8]}"},
+        files={"file": ("d.csv", __import__("io").BytesIO(b"id\n1\n"), "text/csv")},
+    )
+    assert other.status_code == 201, other.text
+    listed = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/resources",
+        headers=hdr(fx.editor_sub),
+    ).json()["resources"]
+    second = next(x for x in listed if x["name"] == other.json()["name"])
+
+    assert star_resource(client, fx, a_resource["id"]).status_code == 200
+    # Starring one does not star the other.
+    assert starred_resource(client, fx, second["id"]) is False
+
+    assert star_resource(client, fx, second["id"]).status_code == 200
+    client.delete(f"{wbase(fx)}/resource-favourites/{a_resource['id']}",
+                  headers=hdr(fx.editor_sub))
+    # Unstarring one does not unstar the other.
+    assert starred_resource(client, fx, second["id"]) is True
+    assert starred_resource(client, fx, a_resource["id"]) is False
+    client.delete(f"{wbase(fx)}/resource-favourites/{second['id']}",
+                  headers=hdr(fx.editor_sub))
+
+
+def test_starring_a_resource_twice_is_the_same_star(
+    client: TestClient, fx: Fixture, a_resource: dict
+) -> None:
+    """**PUT, because a toggle whose state arrived a moment ago must not fail
+    for having worked.**"""
+    first = star_resource(client, fx, a_resource["id"], label="one")
+    second = star_resource(client, fx, a_resource["id"], label="two")
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+    # The label is refreshed, because the moment somebody stars it again is the
+    # one moment we are holding the current name (§435 made renaming possible).
+    assert second.json()["label"] == "two"
+    assert len([f for f in mine(client, fx) if f.get("resource_id") == a_resource["id"]]) == 1
+
+
+def test_a_star_with_no_label_takes_the_resources_name(
+    client: TestClient, fx: Fixture, a_resource: dict
+) -> None:
+    """A row in a sidebar with an empty label is a shortcut nobody can read."""
+    made = star_resource(client, fx, a_resource["id"])
+    assert made.json()["label"] == a_resource["name"]
+
+
+def test_a_resource_from_another_workspace_is_not_found(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**404, not a constraint error.** The foreign key would refuse it with a
+    message about an index; resolving it under the caller's own connection
+    gives the same answer every other read of a resource gives, which says
+    nothing about whether it exists."""
+    refused = star_resource(client, fx, uuid.uuid4())
+    assert refused.status_code == 404, refused.text
+
+
+def test_both_kinds_arrive_in_one_listing(
+    client: TestClient, fx: Fixture, a_type: str, a_resource: dict
+) -> None:
+    """**The sidebar is one list** (p.34's "your sidebar").
+
+    Worth its own test because the listing joins two tables to serve one row
+    shape: an inner join to either would silently drop the other kind, which
+    is the sidebar quietly losing half of itself.
+    """
+    who = fx.admin_sub
+    clear(client, fx, who)
+    instance = uuid.uuid4()
+    assert star(client, fx, a_type, instance, label="An object", sub=who).status_code == 200
+    assert star_resource(client, fx, a_resource["id"], sub=who).status_code == 200
+
+    rows = mine(client, fx, sub=who)
+    assert len(rows) == 2
+    by_kind = {("resource" if r.get("resource_id") else "object"): r for r in rows}
+    assert by_kind["object"]["instance_id"] == str(instance)
+    assert by_kind["object"]["resource_id"] is None
+    assert by_kind["resource"]["resource_id"] == a_resource["id"]
+    assert by_kind["resource"]["instance_id"] is None
+    # And a resource row says what kind of thing it points at, so a sidebar can
+    # draw it without a second read.
+    assert by_kind["resource"]["resource_kind"] == "dataset"
+
+
+def test_the_cap_counts_both_kinds(
+    client: TestClient, fx: Fixture, a_type: str, a_resource: dict
+) -> None:
+    """**One cap, because it is a rule about a sidebar rather than about a
+    kind.** Counting them separately would let somebody keep two hundred
+    shortcuts in a list that stops being "close at hand" long before that."""
+    from src.services.favourites import MAX_FAVOURITES
+
+    who = fx.viewer_sub
+    clear(client, fx, who)
+    for _ in range(MAX_FAVOURITES):
+        assert star(client, fx, a_type, uuid.uuid4(), sub=who).status_code == 200
+
+    full = star_resource(client, fx, a_resource["id"], sub=who)
+    assert full.status_code == 409, full.text
+    assert str(MAX_FAVOURITES) in full.json()["detail"]
+    clear(client, fx, who)
+
+
+def test_a_resource_favourite_is_private(
+    client: TestClient, fx: Fixture, a_resource: dict
+) -> None:
+    """The same rule db 0074 wrote for objects, and it lives in the row policy
+    rather than in a service — a colleague reading everybody's shortcuts is
+    what the per-user design exists to prevent."""
+    clear(client, fx, fx.admin_sub)
+    assert star_resource(client, fx, a_resource["id"], sub=fx.editor_sub).status_code == 200
+    assert starred_resource(client, fx, a_resource["id"], sub=fx.admin_sub) is False
+    assert [f for f in mine(client, fx, sub=fx.admin_sub)] == []
+
+
+def test_unstarring_something_never_starred_is_not_found(
+    client: TestClient, fx: Fixture, a_resource: dict
+) -> None:
+    refused = client.delete(f"{wbase(fx)}/resource-favourites/{uuid.uuid4()}",
+                            headers=hdr(fx.editor_sub))
+    assert refused.status_code == 404, refused.text

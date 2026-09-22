@@ -39,7 +39,7 @@ from ..lib.cron import next_run_after
 from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
-from ..services import object_favourites as favourites_service
+from ..services import favourites as favourites_service
 from ..services import datasets as dataset_service
 from ..services import dataset_engine as engine
 from ..services import time_series as time_series_service
@@ -1498,12 +1498,23 @@ def _parsed(body: SearchDefinitionIn) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-# ---- Favourite objects (§312; db 0074; `getting-started` p.34) ---------------
+# ---- Favourites (§312, §436; db 0074, 0100; `getting-started` p.34) ---------
 class FavouriteOut(BaseModel):
+    """One shortcut, of either kind.
+
+    **Every subject field is optional and exactly one pair is set** (db 0100's
+    CHECK). A model per kind was the alternative and it would have made the
+    listing a union the browser has to narrow twice — once to render a row and
+    once to decide where it goes.
+    """
+
     id: UUID
-    object_type_id: UUID
+    object_type_id: UUID | None = None
     object_type_name: str | None = None
-    instance_id: UUID
+    instance_id: UUID | None = None
+    resource_id: UUID | None = None
+    #: What kind of resource it is, so a row can say so without a second read.
+    resource_kind: str | None = None
     label: str
     created_at: datetime
 
@@ -1574,7 +1585,7 @@ async def add_object_favourite(
         # refused, and this turns that into the message a caller can act on.
         await ontology_service.get_type(conn, access.workspace_id, body.object_type_id)
         try:
-            row = await favourites_service.add(
+            row = await favourites_service.add_object(
                 conn,
                 user_id=access.auth.user_id,
                 workspace_id=access.workspace_id,
@@ -1598,7 +1609,7 @@ async def remove_object_favourite(
     because that is what the star has: it sits on an object view, which knows
     the object and has never been told the row's id."""
     async with user_connection(access.auth.user_id) as conn:
-        await favourites_service.remove(
+        await favourites_service.remove_object(
             conn, object_type_id=type_id, instance_id=instance_id
         )
 
