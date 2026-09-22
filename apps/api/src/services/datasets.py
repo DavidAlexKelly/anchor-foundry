@@ -344,6 +344,24 @@ async def update(
     schema_policy: str | None = None,
 ) -> dict[str, Any]:
     await get(conn, project_id, dataset_id)  # 404 shape before update
+    if name is not None:
+        # **The name is an address** (db 0099): a transform declares what it
+        # reads by name, so two datasets with one name in a project make the
+        # publish planner pick a table nobody chose. The constraint refuses it
+        # either way; this is the sentence that says *which* dataset has the
+        # name, which an index name cannot.
+        taken = await fetch_one(
+            conn,
+            "SELECT slug FROM datasets "
+            " WHERE project_id = :pid AND name = :name AND id <> :did",
+            {"pid": str(project_id), "name": name, "did": str(dataset_id)},
+        )
+        if taken is not None:
+            raise ConflictError(
+                f"another dataset in this project is already called {name!r} "
+                f"(slug {taken['slug']!r}). A transform declares what it reads "
+                "by name, so two of them cannot share one."
+            )
     row = await fetch_one(
         conn,
         f"""
