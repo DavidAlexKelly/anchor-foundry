@@ -46,14 +46,28 @@ import type { ActionFormSection } from "@platform/types";
  * because in here a section is only ever a thing to lay out. */
 export type FormSection = ActionFormSection;
 
+import type { StructField } from "./types";
+
 /** As much of an action's parameter as a form layout needs. */
 export interface FormParameter {
   api_name: string;
   display_name?: string;
   required?: boolean;
+  /** Which control the form draws, and — since §450 — which rule decides
+   * whether a required parameter has been answered: a struct is the one type
+   * whose empty value is an object rather than a blank. */
+  data_type?: string;
   /** p.25's hidden parameter: supplied by the caller and never drawn, whatever
    * any section says about it. */
   hidden?: boolean;
+  /** `action-types` p.66's nested fields on a struct parameter (§450).
+   *
+   * **Here because the form draws it**, which is this type's whole criterion:
+   * `FormParameter` is the slice of a parameter the section layout and the
+   * form need, and a struct that arrived without its fields renders as a box
+   * nobody can fill in. Optional like the rest — a caller with a bare
+   * `{api_name}` is still a form parameter. */
+  struct_fields?: StructField[] | null;
 }
 
 function side(spec: unknown): Record<string, unknown> {

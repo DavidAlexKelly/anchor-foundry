@@ -24,6 +24,9 @@ import { formatValue } from "@/lib/value-format";
 // The Canvas Action Form's rule for which control a type gets, now shared
 // rather than duplicated (§237).
 import { inputTypeFor } from "@/components/canvas/pure";
+import {
+  asStruct, fieldLabel, setField, unknownFieldsNote,
+} from "@/lib/struct-parameter";
 
 function isGeoPoint(value: unknown): value is GeoPoint {
   return (
@@ -37,15 +40,19 @@ function isGeoPoint(value: unknown): value is GeoPoint {
  *
  * **A JSON string counts, and that is the round trip rather than laxity** —
  * exactly the reasoning `property_values._coerce_attachment` gives for
- * accepting one on the way in. Two places produce the string form: write-back
- * stores the whole reference as JSON text in the dataset column, so the next
- * sync reads it back; and `pure.seedActionForm` stringifies every object it
- * seeds a form with.
+ * accepting one on the way in. Write-back stores the whole reference as JSON
+ * text in the dataset column, so the next sync reads it back as text and a
+ * form opened on that object is seeded with it.
  *
- * §237 found the second the way the server found the first. A form re-opened on
- * an object that already carries an attachment seeds the parameter as JSON
- * text; reading only the object form meant the file input kept its `required`,
- * and the browser refused to submit a value that was already there.
+ * §237 found this the way the server found it: a form re-opened on an object
+ * that already carries an attachment read only the object form, so the file
+ * input kept its `required` and the browser refused to submit a value that
+ * was already there.
+ *
+ * `pure.seedActionForm` used to be a second producer of the string form — it
+ * stringified every object it seeded — and §450 stopped it, because p.66's
+ * struct has no reader that parses the text back and would have drawn a row
+ * of empty boxes over a value the object already had.
  */
 function isAttachment(value: unknown): value is AttachmentRef {
   const parsed = parseAttachment(value);
@@ -365,6 +372,7 @@ export function PropertyInput({
   onChange,
   label,
   required = false,
+  structFields,
 }: {
   workspaceId: string;
   dataType: PropertyDataType | undefined;
@@ -375,6 +383,15 @@ export function PropertyInput({
    * enforced here: the server refuses a missing required value, and a second
    * rule in the browser would be a second answer to one question. */
   required?: boolean;
+  /** `action-types` p.66's nested fields, for a `struct` (§450). **Given, not
+   *  derived**: the schema is the property's, and the server sends it down
+   *  resolved so this end has nothing that could disagree with the ontology.
+   *
+   *  **Required is not passed down to a field.** p.25's required is about the
+   *  parameter — whether the struct was answered at all — and marking every
+   *  field required would refuse a struct whose optional fields are blank,
+   *  which is a rule Foundry does not state and this build would be inventing. */
+  structFields?: StructField[] | null;
 }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -411,6 +428,59 @@ export function PropertyInput({
         {uploadError && <div className="form-error">{uploadError}</div>}
         {current && <p className="login-note">Attached: {current.filename}</p>}
       </div>
+    );
+  }
+
+  // `action-types` p.66's struct parameter (§450): "the type contains nested
+  // parameter fields that have their own individual names and base types".
+  // **One control per declared field**, which is the only shape a struct can
+  // be filled in correctly — and the reason a struct parameter was refused
+  // outright until the fields could reach this end.
+  //
+  // p.68 asks for exactly this shape and for the grouping: "a struct parameter
+  // can be populated through action forms similarly to any other parameter
+  // type. However, struct parameter fields are rendered as a **group** in the
+  // form instead of individually."
+  //
+  // p.67-68's field-by-field mapping ("each individual field of the struct
+  // property is mapped to a specific field of a struct parameter"… "a mapping
+  // … must be complete") needs nothing here, and that is worth saying rather
+  // than leaving as a gap: the parameter's fields *are* the property's,
+  // derived from the rule on the way down, so the mapping is complete by
+  // construction and p.68's "if any breaking changes are to be made to the
+  // struct property type … the related action types must also be modified"
+  // cannot arise — there is no second copy to modify.
+  if (dataType === "struct") {
+    if (!structFields || structFields.length === 0) {
+      return (
+        <p className="form-error" data-testid="struct-fields-unknown">
+          {unknownFieldsNote(label)}
+        </p>
+      );
+    }
+    const current = asStruct(value);
+    // **`aria-label` rather than a `<legend>`**, which would be the usual
+    // answer: the group's name is already on every control inside it
+    // (`fieldLabel` qualifies each field with the parameter), so a visible
+    // legend would say it a third time — and a visually-hidden one needs a
+    // utility class this stylesheet does not have.
+    return (
+      <fieldset className="struct-fields" aria-label={label} data-testid="struct-fields">
+        {structFields.map((field) => (
+          <label key={field.api_name} className="field">
+            <span className="field-label">
+              {field.display_name.trim() || field.api_name}
+            </span>
+            <PropertyInput
+              workspaceId={workspaceId}
+              dataType={field.data_type as PropertyDataType}
+              value={current[field.api_name] ?? null}
+              label={fieldLabel(label, field)}
+              onChange={(next) => onChange(setField(value, field.api_name, next))}
+            />
+          </label>
+        ))}
+      </fieldset>
     );
   }
 

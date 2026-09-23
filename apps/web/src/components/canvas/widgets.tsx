@@ -229,6 +229,7 @@ import {
   hasConditions, labelOf as parameterLabel,
   requiredElsewhere, unreachableNote, type FormParameter, type FormSection,
 } from "@/lib/action-sections";
+import { isFilled } from "@/lib/struct-parameter";
 import { hasOverrides, overrideKey } from "@/lib/action-overrides";
 import {
   emptyNote as noChoicesNote, labelOf as choiceLabel, offerFor,
@@ -4163,6 +4164,10 @@ export function CanvasObjectTable({
                                   <PropertyInput
                                     workspaceId={workspaceId}
                                     dataType={p.data_type as never}
+                                    // The inline-edit grid edits *properties*,
+                                    // so the fields are on the property here
+                                    // rather than derived from a rule (§450).
+                                    structFields={p.struct_fields}
                                     label={p.display_name || p.api_name}
                                     value={cellValue(
                                       staged, instance.id, parameter,
@@ -11953,7 +11958,17 @@ export function CanvasActionForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offersQ.data, seeded]);
 
-  const missingRequired = visible.filter((p) => p.required && !hasValue(values[p.api_name]));
+  // p.66's struct is filled in field by field, and what the form holds after
+  // somebody clears the last field is `{}` — which `hasValue` calls a value.
+  // That is the right answer for the attachment reference it was written for
+  // and the wrong one here, so the struct case is named rather than folded
+  // into `hasValue`: an empty *array* parameter is a third question this is
+  // not deciding (§450).
+  const supplied = (p: FormParameter, value: unknown) =>
+    p.data_type === "struct" ? isFilled(value) : hasValue(value);
+  const missingRequired = visible.filter(
+    (p) => p.required && !supplied(p, values[p.api_name]),
+  );
   // A required parameter inside a section this form is not showing. The server
   // still requires it, so the submission would be refused — and saying
   // "Priority is required" beside no Priority box is §214's shape, a control
@@ -12036,7 +12051,11 @@ export function CanvasActionForm({
         ) : (
         <PropertyInput
           workspaceId={workspaceId}
-          dataType={(parameter as { data_type?: string }).data_type as never}
+          dataType={parameter.data_type as never}
+          // p.66's nested fields, sent down with the parameter (§450). The
+          // server derives them from the property the rule writes, so this
+          // form has nothing that could disagree with the ontology.
+          structFields={parameter.struct_fields}
           value={values[parameter.api_name] ?? null}
           onChange={(next) => {
             setTyped((was) => ({ ...was, [parameter.api_name]: true }));

@@ -522,6 +522,41 @@ The shape is worth naming because narrowing is the obvious thing to do when a su
 
 So: **name the file, not a filter** — and if a group is genuinely too slow for that, name the tests with `::` so a rename is an error rather than a silent deselection. The tell is cheap and worth looking for: if the mutants' failure counts never move off the baseline's, check what was selected before believing the score.
 
+### A summary line that carries a duration is never equal to itself (§450)
+
+§317's rule is to take a baseline, and §449's is that a `-k` filter is a second
+list of test names. §450 found the failure one step further in: the baseline was
+taken, the whole file was named, the groups were split correctly — and the
+*comparison* was wrong.
+
+The harness read pytest's last summary line and scored a mutant `caught` when it
+differed from the baseline's. That line ends `in 52.47s`, and no two runs of
+anything take the same time. So **every** pytest mutant differed from the
+baseline, and every one was scored caught — including two that changed nothing
+at all. The tell was not in the verdict column, which read clean; it was that
+`73 passed` appeared beside the word `caught`, which is the baseline's own
+number.
+
+Two of that sweep's adversarial mutants were survivors reported as kills, and
+both turned out to be unreachable guards worth deleting — so the bug hid exactly
+the thing the adversarial pass exists to find. The vitest group was unaffected
+only by luck: its tally line (`Tests  67 passed (67)`) has no duration in it.
+
+So: **compare the counts, not the line.** `summary.split(" in ")[0]` is the
+whole fix. And the general form is the one this page keeps arriving at from new
+directions — a verdict computed from a value that changes on its own is not a
+verdict, and the way to tell is to check that a mutant you know is harmless
+actually survives.
+
+### A clean first pass means the list came from the test file (§350, §450)
+
+Recorded on §350's row and worth having here, because §450 walked into it again:
+its three groups scored 22 of 22, which is not a result to celebrate but a
+question to answer. The adversarial pass that followed — seven mutants written
+by reading the *source* and poking at the branches a reader would doubt — found
+three unreachable guards in code written that same afternoon. Two were in a
+function whose every reachable line was already covered.
+
 ### A sweep that shares a backup name corrupts the tree (§429)
 
 Every sweep in this repository saves each file it will mutate and copies the saved bytes back after each run. §429's saved them as `pul-<basename>.orig`, and its two server files were `apps/api/src/services/code.py` and `apps/api/src/routes/code.py` — **two different files with one name.** The second backup overwrote the first, and the restore then wrote the service's bytes into the route. The working tree was corrupt from the first mutant onwards.

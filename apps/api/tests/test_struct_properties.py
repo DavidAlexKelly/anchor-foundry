@@ -8,8 +8,13 @@ item 7; Foundry `object-link-types` p.149-150, `ontology` p.58-59; db 0064).
 *values* since migration 0003; what a struct adds is the property saying what
 the value is supposed to contain. So almost every test here is about a claim
 being enforced rather than about a value being stored - p.149's four
-constraints, the two write paths agreeing about them, and the three places
-that decline to carry a struct saying so rather than half-working.
+constraints, the two write paths agreeing about them, and the places that
+decline to carry a struct saying so rather than half-working.
+
+Actions were one of those places and are not any more (§450): `action-types`
+p.66's struct parameter carries the declared fields, so the two tests at the
+bottom of this file say what a struct property and an action may do together
+rather than that they may not.
 """
 from __future__ import annotations
 
@@ -387,7 +392,7 @@ def test_an_edit_keeps_the_fields_because_they_travel_with_the_property(
     ]
 
 
-# ---- the three refusals ------------------------------------------------------
+# ---- what a struct property may and may not be -------------------------------
 def test_a_shared_property_cannot_be_a_struct(client: TestClient, fx: Fixture) -> None:
     """p.178's shared property is one *definition* edited in one place and
     shown everywhere it is attached; a struct's definition is its fields, and
@@ -403,17 +408,23 @@ def test_a_shared_property_cannot_be_a_struct(client: TestClient, fx: Fixture) -
     assert "shared property" in r.text
 
 
-def test_an_action_cannot_make_a_struct_property_editable(
+def test_an_action_can_make_a_struct_property_editable(
     client: TestClient, fx: Fixture
 ) -> None:
-    """p.150 lists Actions among the applications that use structs, so this is
-    a gap rather than a scope call - and it is refused *at save time*, where
-    the person who typed it is still looking at it, rather than at click time
-    in front of somebody who did not.
+    """**This used to be a refusal, and §450 is what lifted it.**
 
-    Refused rather than offered-and-broken for §237's reason: `inputTypeFor`
-    answers "text" for any type it does not name, so an allowed struct
-    parameter would render as a box no viewer could ever fill in correctly.
+    `action-types` p.66: "struct property values can be created and modified
+    with actions, through values supplied in a struct parameter." The refusal
+    that stood here was about this platform rather than about the page — a
+    struct is a schema (p.149), so coercing one needs the property's declared
+    *fields*, and no action write path carried them. They are threaded now, so
+    the conversion produces exactly the pairing p.73 asks for: a struct
+    parameter writing a struct property.
+
+    Kept on this file rather than moved, because what it guards is the same
+    thing it always guarded — that the two ends of a struct property agree
+    about actions — and a reader who finds p.150's gap noted here should find
+    the answer in the same place.
     """
     tag = uuid.uuid4().hex[:6]
     type_id = client.post(
@@ -431,16 +442,30 @@ def test_an_action_cannot_make_a_struct_property_editable(
         json={"object_type_id": type_id, "api_name": f"move_{tag}",
               "display_name": "Move", "editable_properties": ["address"]},
     )
-    assert r.status_code == 422, r.text
-    assert "struct" in r.text
+    assert r.status_code == 201, r.text
+    parameter = next(
+        p for p in r.json()["parameters"] if p["api_name"] == "address"
+    )
+    assert parameter["data_type"] == "struct", parameter
+    # And it arrives with the fields, which is what makes it drawable — a
+    # struct parameter without them is the box §237 refused it for.
+    assert [f["api_name"] for f in parameter["struct_fields"]] == [
+        f["api_name"] for f in ADDRESS
+    ], parameter["struct_fields"]
 
 
-def test_an_action_definition_cannot_declare_a_struct_parameter(
+def test_a_struct_parameter_cannot_write_an_ordinary_property(
     client: TestClient, fx: Fixture
 ) -> None:
-    """The same refusal on the other path. Two ways in, one answer - the shape
-    §237 found when the Canvas action form grew a second renderer and the two
-    disagreed about which types worked."""
+    """What replaced the blanket refusal: p.73's pairing, on the definition
+    path.
+
+    *"A struct parameter can only be used to create or modify struct
+    properties."* A struct parameter is allowed as of §450 — this is the rule
+    that stops one being wired to a property it cannot write, refused at save
+    time where the person who typed it is still looking at it rather than at
+    click time in front of somebody who did not.
+    """
     tag = uuid.uuid4().hex[:6]
     type_id = client.post(
         f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
@@ -458,7 +483,9 @@ def test_an_action_definition_cannot_declare_a_struct_parameter(
         headers=hdr(fx.editor_sub),
         json={"parameters": [{"api_name": "code", "display_name": "Code",
                               "data_type": "struct"}],
-              "rules": [], "criteria": []},
+              "rules": [{"kind": "modify_object",
+                         "config": {"property": "code", "parameter": "code"}}],
+              "criteria": []},
     )
     assert r.status_code == 422, r.text
-    assert "struct" in r.text
+    assert "struct property" in r.text
