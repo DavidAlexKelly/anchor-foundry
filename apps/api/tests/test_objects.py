@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import os
 import sys
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1065,3 +1066,119 @@ def test_edit_only_properties_reports_only_the_flagged_ones() -> None:
         {"api_name": "note", "edit_only": True},
         {"api_name": "other", "edit_only": False},
     ]) == {"note"}
+
+
+# ---- p.15's icon and colour (§449) -------------------------------------------
+def _a_type_with_a_look(client: TestClient, fx: Fixture) -> dict:
+    """A type somebody has chosen an icon and a colour for."""
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"Ship{uuid.uuid4().hex[:8]}",
+            "display_name": "Ship",
+            "icon": "🚢",
+            "colour": "#b3261e",
+            "properties": [{"api_name": "hull", "data_type": "string"}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_an_icon_and_colour_can_be_chosen(client: TestClient, fx: Fixture) -> None:
+    """`object-link-types` p.15: *"Icon: Select the default icon to customize
+    the icon and color of the object type; this icon and color will be
+    displayed in user applications when a user views an object of this
+    type."*"""
+    made = _a_type_with_a_look(client, fx)
+    assert made["icon"] == "🚢"
+    assert made["colour"] == "#b3261e"
+
+
+def test_an_edit_that_says_nothing_about_them_leaves_them_alone(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The defect §449 found, and the reason this test exists.**
+
+    This route is a whole-definition replacement, and `icon` and `colour`
+    defaulted to `cube` and `#2f6f4f` rather than to *unchanged* — so every
+    edit of a type wrote those over whatever somebody had chosen. Nothing in
+    `apps/web` sent either field, so *every* edit did it: a description, a
+    property, a group.
+
+    The `status` field beside them had already made this argument in its own
+    comment — "a client that has never heard of statuses must not silently
+    demote a type somebody promoted" — and the two fields it was not applied
+    to are these.
+    """
+    made = _a_type_with_a_look(client, fx)
+    edited = client.patch(
+        f"{wbase(fx)}/object-types/{made['id']}", headers=hdr(fx.editor_sub),
+        json={
+            "display_name": "Ship",
+            "description": "Now with a description",
+            "properties": [{"api_name": "hull", "data_type": "string"}],
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["icon"] == "🚢", edited.json()
+    assert edited.json()["colour"] == "#b3261e", edited.json()
+    assert edited.json()["description"] == "Now with a description"
+
+
+def test_an_edit_that_names_them_changes_them(client: TestClient, fx: Fixture) -> None:
+    """**The other direction, which "unchanged" must not cost.** A field that
+    could only ever be set at creation would be a control nobody could
+    correct."""
+    made = _a_type_with_a_look(client, fx)
+    edited = client.patch(
+        f"{wbase(fx)}/object-types/{made['id']}", headers=hdr(fx.editor_sub),
+        json={
+            "display_name": "Ship",
+            "icon": "⚓",
+            "colour": "#1d4ed8",
+            "properties": [{"api_name": "hull", "data_type": "string"}],
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["icon"] == "⚓"
+    assert edited.json()["colour"] == "#1d4ed8"
+
+
+def test_one_of_the_two_can_be_changed_without_the_other(
+    client: TestClient, fx: Fixture
+) -> None:
+    """They are two settings p.15 offers together, not one. A recolour that
+    also cleared the icon would be the same defect at half the size."""
+    made = _a_type_with_a_look(client, fx)
+    edited = client.patch(
+        f"{wbase(fx)}/object-types/{made['id']}", headers=hdr(fx.editor_sub),
+        json={
+            "display_name": "Ship",
+            "colour": "#1d4ed8",
+            "properties": [{"api_name": "hull", "data_type": "string"}],
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["colour"] == "#1d4ed8"
+    assert edited.json()["icon"] == "🚢", edited.json()
+
+
+def test_a_type_created_without_a_look_still_gets_the_platforms_default(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Create still defaults, and only create.** "Unchanged" has nothing to
+    keep on a type that does not exist yet, so the two verbs answer
+    differently on purpose — and a type with no colour at all would be one the
+    Explorer could not draw."""
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"Plain{uuid.uuid4().hex[:8]}",
+            "display_name": "Plain",
+            "properties": [{"api_name": "a", "data_type": "string"}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["icon"] == "cube"
+    assert r.json()["colour"].startswith("#")

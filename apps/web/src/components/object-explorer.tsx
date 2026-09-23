@@ -36,6 +36,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
 import { ApiError, actions as actionApi, objects as objApi } from "@/lib/api";
+import { glyph, swatch } from "@/lib/object-type-icon";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import {
@@ -541,6 +542,18 @@ export function ObjectExplorer({
                     checked={selected.includes(t.id)}
                     onChange={(e) => toggleType(t.id, e.target.checked)}
                   />
+                  {/* p.15: the icon and colour "will be displayed in user
+                      applications when a user views an object of this type".
+                      The Explorer's type list is the first of those, and the
+                      list where one type has to be told from thirty (§449). */}
+                  <span
+                    className="ot-mark"
+                    data-testid={`type-mark-${t.id}`}
+                    style={{ background: swatch(t) }}
+                    aria-hidden="true"
+                  >
+                    {glyph(t)}
+                  </span>
                   <span>{t.display_name}</span>
                 </label>
               ))}
