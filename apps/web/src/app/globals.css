@@ -3451,3 +3451,13 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 1.45em;
 }
+
+/* p.64's widget selector, grouped (§447). The heading is small and sticky-free
+   on purpose: a group label that competed with the widget names would make the
+   list harder to scan than the flat one it replaced. */
+.canvas-palette-search { width: 100%; font-size: 13px; padding: 5px 8px; margin-bottom: 8px; }
+.canvas-palette-group {
+  margin: 12px 0 4px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft);
+}
+.canvas-palette > section:first-of-type .canvas-palette-group { margin-top: 2px; }

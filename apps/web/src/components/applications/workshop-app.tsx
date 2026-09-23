@@ -62,6 +62,9 @@ import { UsedColoursPanel } from "@/components/canvas/UsedColoursPanel";
 import { profilerHref, profilerOn } from "@/components/canvas/profiler";
 import { redactHref, redactOn } from "@/components/canvas/redact";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
+import {
+  emptyNote as paletteEmptyNote, grouped, matching,
+} from "@/lib/widget-palette";
 import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
 import {
   ApiError, actions as actionApi, api, canvas as canvasApi, objects as objApi,
@@ -864,8 +867,57 @@ function Toolbox({
           describes the document rather than offering anything to drag. */}
       <UsedColoursPanel palette={savedColours} onPaletteChange={onSavedColoursChange} />
       <p className="field-label canvas-toolbox-heading">Widgets</p>
-      {PALETTE.map((p) => (
-        <PaletteItem key={p.key} componentKey={p.key} label={p.label} hint={p.hint} />
+      <WidgetPalette />
+    </div>
+  );
+}
+
+/**
+ * p.64's widget selector, grouped and filterable (§447).
+ *
+ * The categories and the filter are `lib/widget-palette.ts`'s and are tested
+ * without a browser. What is here is the markup and the one piece of state.
+ *
+ * **A panel rather than p.64's modal**, with the reasoning written out in
+ * that module: a modal buys room, and grouping buys the same thing without
+ * taking the canvas away while somebody chooses.
+ */
+function WidgetPalette() {
+  const [query, setQuery] = useState("");
+  const groups = grouped(matching(PALETTE, query));
+  return (
+    <div className="canvas-palette" data-testid="widget-palette">
+      <input
+        className="canvas-palette-search"
+        value={query}
+        placeholder="Search widgets…"
+        aria-label="Search widgets"
+        data-testid="widget-search"
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {groups.length === 0 && (
+        <p className="canvas-widget-empty" data-testid="widget-palette-empty">
+          {paletteEmptyNote(query)}
+        </p>
+      )}
+      {groups.map((group) => (
+        <section key={group.category.id} data-testid={`widget-group-${group.category.id}`}>
+          <p className="canvas-palette-group">
+            {group.category.label}
+            {/* Where the grouping comes from. Foundry's categories are its
+                own, and a builder who wants to know why the Markdown widget
+                is under Visualization can go and read p.276. */}
+            <span className="soft"> {group.category.source}</span>
+          </p>
+          {group.items.map((item) => (
+            <PaletteItem
+              key={item.key}
+              componentKey={item.key as Parameters<typeof PaletteItem>[0]["componentKey"]}
+              label={item.label}
+              hint={item.hint}
+            />
+          ))}
+        </section>
       ))}
     </div>
   );
