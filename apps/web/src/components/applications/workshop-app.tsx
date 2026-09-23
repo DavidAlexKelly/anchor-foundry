@@ -970,7 +970,10 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   });
   const actionCandidates: ActionCandidate[] = (actionTypes.data ?? []).map((a) => ({
     id: a.id,
-    label: `${a.display_name} · ${a.object_type_name}`,
+    // **The subject, whichever kind it is** (§451). `object_type_name` is null
+    // on an interface action, and a template literal renders that as the word
+    // "null" — a label TypeScript is perfectly happy with.
+    label: `${a.display_name} · ${a.subject_name}`,
     editable: a.editable_properties,
   }));
 

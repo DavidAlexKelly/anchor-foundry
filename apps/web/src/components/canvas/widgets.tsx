@@ -11636,11 +11636,43 @@ export function CanvasActionForm({
   });
   const actionType = actionTypesQ.data?.find((a) => a.id === actionTypeId) ?? null;
 
+  // **The objects this action can be run against** — and for an interface
+  // action that is every object of every implementing type, which is
+  // `action-types` p.62's interface reference parameter: it "shows objects of
+  // any type that implements the interface" (§451).
+  //
+  // Two queries rather than one with a branch inside it, because they have
+  // different keys and only one of them ever runs: a shared key would let a
+  // cached page of one type answer for the other.
   const instancesQ = useQuery({
     queryKey: ["canvas-widget-instances", actionType?.object_type_id],
-    queryFn: () => objApi.listInstances(workspaceId, actionType!.object_type_id, 25, 0),
-    enabled: !!actionType && !subjectVariable,
+    queryFn: () => objApi.listInstances(workspaceId, actionType!.object_type_id!, 25, 0),
+    enabled: !!actionType?.object_type_id && !subjectVariable,
   });
+  const membersQ = useQuery({
+    queryKey: ["canvas-widget-interface-members", actionType?.interface_id],
+    queryFn: () =>
+      objApi.evaluateInterfaceSet(workspaceId, actionType!.interface_id!, { limit: 25 }),
+    // **`!!actionType?.interface_id` is load-bearing and cannot be asserted**,
+    // which is worth saying rather than leaving as an untested line (§213,
+    // §223). Without it the query runs before `actionType` has loaded, the
+    // `!` assertions read through `null`, and React Query *swallows* the
+    // TypeError into an error state nothing renders — no request is made, the
+    // dropdown still fills from the other read, and the page looks identical.
+    // So a mutant removing it survives every check a browser can make, and the
+    // guard stays on the strength of what it prevents rather than of a test.
+    enabled: !!actionType?.interface_id && !subjectVariable,
+  });
+  // One list, because the dropdown is one control. An interface page calls its
+  // rows `instances` and a type's page calls them `items`; both rows carry an
+  // id, a primary key and the properties p.25's seeding reads — the last of
+  // which is why this is the *interface's* vocabulary on that side, which is
+  // also the vocabulary the action's parameters are named in (p.59).
+  const choosable: {
+    id: string; primary_key: unknown; properties?: Record<string, unknown>;
+  }[] = actionType?.interface_id
+    ? (membersQ.data?.instances ?? [])
+    : (instancesQ.data?.items ?? []);
 
   const [picked, setPicked] = useState("");
   // **`unknown`, not `string`, as of §237.** An attachment parameter's value is
@@ -11664,7 +11696,7 @@ export function CanvasActionForm({
   // at all and its rule quietly wrote nothing.
   const chosen = subjectVariable
     ? subject
-    : instancesQ.data?.items.find((i) => i.id === picked);
+    : choosable.find((i) => i.id === picked);
   const chosenKey = String(chosen?.id ?? "");
   const [seeded, setSeeded] = useState<string | null>(null);
   // Which fields the reader has actually typed in. **The only thing that keeps
@@ -12155,9 +12187,9 @@ export function CanvasActionForm({
               <span className="field-label">Record</span>
               <select value={picked} onChange={(e) => setPicked(e.target.value)} disabled={!live}>
                 <option value="">Choose…</option>
-                {instancesQ.data?.items.map((i) => (
+                {choosable.map((i) => (
                   <option key={i.id} value={i.id}>
-                    {i.primary_key}
+                    {String(i.primary_key)}
                   </option>
                 ))}
               </select>

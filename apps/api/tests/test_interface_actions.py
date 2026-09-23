@@ -1,0 +1,698 @@
+"""An action type whose subject is an interface (`action-types` p.59-65; db
+0101; §451).
+
+> "You can use interface action rules whenever the edits can apply to all the
+> object types that implement the interface. In other words, you can use
+> interface action rules only to modify the interface shared properties or to
+> delete objects." (p.59)
+
+> "Actions created with interface action rules can be applied to objects whose
+> object type implements the interface, just like any object-specific action
+> type. For a given object, all object-type-specific and interface-based
+> actions that can be applied to that object will appear in the action
+> dropdown." (p.64)
+
+**The design this file is really about is that there is only one executor.**
+An interface action's rules name the interface's shared properties; every
+implementation already says which of its own properties those are
+(`object_type_interfaces.property_mapping`), so running one against a concrete
+object is a *rename* and everything after it — coercion, required and
+constraint checks, edit-only, the dataset write, the revert — is the path
+object actions already take. A second executor would be a second set of
+refusals to keep in step (§292), and p.64's "just like any object-specific
+action type" is the page asking for exactly that.
+
+So the tests split in two: the pure rename, which has no database in it, and
+the cases where one implementation cannot keep the interface's promise —
+which p.59 and p.62 both describe and which can only be found at submission.
+"""
+from __future__ import annotations
+
+import io
+import os
+import sys
+import uuid
+
+import pytest
+from fastapi.testclient import TestClient
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
+from src.main import create_app  # noqa: E402
+from src.middleware import auth as auth_mw  # noqa: E402
+from src.services import actions as actions_service  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def fx() -> Fixture:
+    return Fixture()
+
+
+@pytest.fixture(scope="module")
+def client() -> TestClient:
+    auth_mw.configure_verifier(LocalVerifier())
+    app = create_app()
+    with TestClient(app, raise_server_exceptions=True) as c:
+        yield c
+
+
+@pytest.fixture(autouse=True)
+def _fresh_identity_cache() -> None:
+    auth_mw.clear_identity_cache()
+
+
+def wbase(fx: Fixture) -> str:
+    return f"/api/workspaces/{fx.workspace}"
+
+
+def pbase(fx: Fixture) -> str:
+    return f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+
+
+# ---- the rename, with no database in it -------------------------------------
+def rule(prop: str, parameter: str, **extra) -> dict:
+    return {"kind": "modify_object",
+            "config": {"property": prop, "parameter": parameter, **extra}}
+
+
+def test_a_rule_is_rewritten_into_the_types_own_vocabulary() -> None:
+    """p.59's whole mechanism in one line: the interface says
+    `last_inspection_date`, this type calls it `surveyed_on`, and the rule that
+    reaches the executor says the second."""
+    out = actions_service.rules_for_implementation(
+        [rule("last_inspection_date", "when")],
+        mapping={"last_inspection_date": "surveyed_on"},
+        interface_name="Inspectable", type_name="Facility",
+    )
+    assert out[0]["config"]["property"] == "surveyed_on"
+    # The parameter keeps its name: it is the *action's* vocabulary, which is
+    # the interface's, and the submitted values are keyed by it.
+    assert out[0]["config"]["parameter"] == "when"
+
+
+def test_the_rules_it_was_given_are_not_changed() -> None:
+    """A rename that mutated its input would rewrite the action type itself —
+    and `get_action_type` caches nothing, so the damage would be one request's
+    and invisible in the next. The executor hands these straight from the read.
+    """
+    original = [rule("last_inspection_date", "when")]
+    actions_service.rules_for_implementation(
+        original, mapping={"last_inspection_date": "surveyed_on"},
+        interface_name="Inspectable", type_name="Facility",
+    )
+    assert original[0]["config"]["property"] == "last_inspection_date"
+
+
+def test_a_rule_naming_another_object_type_is_left_alone() -> None:
+    """Its property is already that type's own — the interface has nothing to
+    do with it — so translating it would rename a word that was never in the
+    interface's vocabulary."""
+    other = rule("status", "s", object_type=str(uuid.uuid4()))
+    out = actions_service.rules_for_implementation(
+        [other], mapping={"status": "renamed"},
+        interface_name="Inspectable", type_name="Facility",
+    )
+    assert out[0]["config"]["property"] == "status"
+
+
+def test_a_rule_that_is_not_a_modify_is_left_alone() -> None:
+    """p.62 allows a delete on an interface, and a delete names no property.
+    A rename that tried to translate one would be reading a key that is not
+    there."""
+    deletion = {"kind": "delete_object", "config": {"object": "target"}}
+    out = actions_service.rules_for_implementation(
+        [deletion], mapping={},
+        interface_name="Inspectable", type_name="Facility",
+    )
+    assert out == [deletion]
+
+
+def test_a_property_this_type_maps_nothing_to_is_refused() -> None:
+    """**The case p.59's sentence exists to prevent**, and the one that can
+    only be caught here.
+
+    An interface's *optional* property may be left unmapped
+    (`check_implementation` says so). An action writing one therefore has
+    nothing to write on this type — and dropping it silently would make one
+    submission change different things depending on which object it ran
+    against, which is the opposite of "the edits apply to all the object types
+    that implement the interface".
+    """
+    with pytest.raises(actions_service.InterfaceSubjectError) as excinfo:
+        actions_service.rules_for_implementation(
+            [rule("inspection_status", "how")],
+            mapping={"last_inspection_date": "surveyed_on"},
+            interface_name="Inspectable", type_name="Facility",
+        )
+    # Both names, because neither alone says what to do about it.
+    assert "Facility" in str(excinfo.value)
+    assert "inspection_status" in str(excinfo.value)
+
+
+# ---- p.62's primary key, which is about every action type -------------------
+def test_writing_the_column_an_object_is_identified_by_is_refused() -> None:
+    """p.62: "primary key values cannot be modified by any action type."
+
+    **Not a rule about interfaces**, though p.62 raises it there — an interface
+    action is where nobody can see it coming, because each implementation
+    decides which of its own columns a shared property is. The refusal names
+    the column, since that is the thing the writer has to change.
+    """
+    with pytest.raises(actions_service.InterfaceSubjectError) as excinfo:
+        actions_service.check_primary_key_writes(
+            {"code": "new"},
+            column_mappings={"code": "facility_code"},
+            primary_key_column="facility_code",
+            type_name="Facility",
+        )
+    assert "facility_code" in str(excinfo.value)
+
+
+def test_writing_any_other_column_is_not() -> None:
+    """The half that makes the check a check: a property mapped to an ordinary
+    column passes, and one mapped to no column at all (p.113's edit-only) is
+    not compared against the key."""
+    actions_service.check_primary_key_writes(
+        {"status": "open", "note": "edit only"},
+        column_mappings={"status": "status_col"},
+        primary_key_column="facility_code",
+        type_name="Facility",
+    )
+
+
+# ---- the whole path, against the database -----------------------------------
+INSPECTABLE = [
+    {"api_name": "last_inspection_date", "display_name": "Last inspection",
+     "data_type": "string", "required": True},
+    {"api_name": "inspection_status", "display_name": "Inspection status",
+     "data_type": "string", "required": False},
+]
+
+FACILITIES = b"facility_code,surveyed_on,state\nF1,2020-01-01,due\n"
+VEHICLES = b"vin,checked_on,state\nV1,2021-06-01,due\n"
+
+
+def _make_type(client: TestClient, fx: Fixture, api_name: str, props: list[str]) -> str:
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"{api_name}{fx.tag}",
+            "display_name": f"{api_name} {fx.tag}",
+            "properties": [{"api_name": p, "data_type": "string"} for p in props],
+            "title_property": props[0],
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def _sync(client: TestClient, fx: Fixture, type_id: str, csv: bytes,
+          key: str, mappings: dict[str, str], name: str) -> str:
+    r = client.post(
+        f"{pbase(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"{name} {fx.tag}"},
+        files={"file": (f"{name}.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    r = client.post(
+        f"{pbase(fx)}/object-type-sources", headers=hdr(fx.editor_sub),
+        json={"object_type_id": type_id, "dataset_id": r.json()["id"],
+              "primary_key_column": key, "column_mappings": mappings},
+    )
+    assert r.status_code == 201, r.text
+    assert client.post(
+        f"{pbase(fx)}/object-type-sources/{r.json()['id']}/sync",
+        headers=hdr(fx.editor_sub),
+    ).status_code == 200
+    r = client.get(
+        f"{wbase(fx)}/object-types/{type_id}/instances", headers=hdr(fx.viewer_sub)
+    )
+    return r.json()["items"][0]["id"]
+
+
+@pytest.fixture(scope="module")
+def world(client: TestClient, fx: Fixture) -> dict:
+    """`ontology` p.60-62's own example: `Inspectable`, implemented by two
+    types that call its properties different things.
+
+    **Two implementations and not one**, because the whole claim is that one
+    action reaches both — a single implementation would let a rename that did
+    nothing pass every assertion.
+    """
+    r = client.post(
+        f"{wbase(fx)}/interfaces", headers=hdr(fx.admin_sub),
+        json={"api_name": f"Inspectable{fx.tag}", "display_name": "Inspectable",
+              "properties": INSPECTABLE},
+    )
+    assert r.status_code == 201, r.text
+    interface_id = r.json()["id"]
+
+    facility = _make_type(client, fx, "Facility", ["facility_code", "surveyed_on", "state"])
+    vehicle = _make_type(client, fx, "Vehicle", ["vin", "checked_on", "state"])
+    for type_id, mapping in (
+        (facility, {"last_inspection_date": "surveyed_on", "inspection_status": "state"}),
+        (vehicle, {"last_inspection_date": "checked_on", "inspection_status": "state"}),
+    ):
+        r = client.put(
+            f"{wbase(fx)}/object-types/{type_id}/interfaces", headers=hdr(fx.editor_sub),
+            json=[{"interface_id": interface_id, "property_mapping": mapping}],
+        )
+        assert r.status_code == 200, r.text
+
+    return {
+        "interface_id": interface_id,
+        "facility": facility,
+        "vehicle": vehicle,
+        "facility_instance": _sync(
+            client, fx, facility, FACILITIES, "facility_code",
+            {"surveyed_on": "surveyed_on", "state": "state"}, "Facilities",
+        ),
+        "vehicle_instance": _sync(
+            client, fx, vehicle, VEHICLES, "vin",
+            {"checked_on": "checked_on", "state": "state"}, "Vehicles",
+        ),
+    }
+
+
+def _interface_action(client: TestClient, fx: Fixture, world: dict,
+                      properties: list[str]) -> dict:
+    r = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"interface_id": world["interface_id"],
+              "api_name": f"inspect_{uuid.uuid4().hex[:8]}",
+              "display_name": "Record inspection",
+              "editable_properties": properties},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_an_action_type_can_be_created_on_an_interface(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.59's "under Interfaces, pick the desired interface and rule type",
+    through the same endpoint p.30's screen uses.
+
+    The conversion is the one every action gets — one parameter per editable
+    property, one `modify_object` rule pairing them — over the *interface's*
+    properties, which is p.59's "add the shared properties that you want to
+    include in the action".
+    """
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    assert action["object_type_id"] is None, action
+    assert action["interface_id"] == world["interface_id"], action
+    assert action["subject_name"] == "Inspectable", action
+    assert [p["api_name"] for p in action["parameters"]] == ["last_inspection_date"]
+    assert action["rules"][0]["config"] == {
+        "property": "last_inspection_date", "parameter": "last_inspection_date",
+    }
+
+
+def test_an_action_needs_exactly_one_subject(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """Neither is an action with nothing to act on; both is two answers to one
+    question. db 0101's CHECK says the same thing, and this is the sentence —
+    an integrity error names a constraint, not a mistake."""
+    for subject in (
+        {},
+        {"interface_id": world["interface_id"], "object_type_id": world["facility"]},
+    ):
+        r = client.post(
+            f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+            json={"api_name": f"both_{uuid.uuid4().hex[:8]}",
+                  "display_name": "Ambiguous",
+                  "editable_properties": ["last_inspection_date"], **subject},
+        )
+        assert r.status_code == 422, r.text
+        assert "exactly one" in r.text
+
+
+def test_a_property_no_implementing_type_shares_is_refused(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.59: "you cannot create any property types that are specific to bugs or
+    feature requests". `state` is a real property of both implementations and
+    is not the interface's name for it, so naming it here is exactly the
+    mistake the sentence describes."""
+    r = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"interface_id": world["interface_id"],
+              "api_name": f"bad_{uuid.uuid4().hex[:8]}",
+              "display_name": "Wrong vocabulary",
+              "editable_properties": ["state"]},
+    )
+    assert r.status_code == 422, r.text
+    assert "not properties of this interface" in r.text
+
+
+def test_one_action_writes_both_implementations(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """**p.59's promise, and the only test that can show it.**
+
+    One action, two objects of two types that store the interface's property in
+    two differently named columns of two different datasets. Read back off each
+    object, because a result saying `ok` is the endpoint agreeing with itself.
+    """
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    for type_id, instance, prop, said in (
+        (world["facility"], world["facility_instance"], "surveyed_on", "2024-03-03"),
+        (world["vehicle"], world["vehicle_instance"], "checked_on", "2024-04-04"),
+    ):
+        r = client.post(
+            f"{pbase(fx)}/actions/{action['id']}/execute", headers=hdr(fx.editor_sub),
+            json={"instance_id": instance,
+                  "values": {"last_inspection_date": said}},
+        )
+        assert r.status_code == 200, r.text
+        got = client.get(
+            f"{wbase(fx)}/object-types/{type_id}/instances/{instance}",
+            headers=hdr(fx.viewer_sub),
+        ).json()["properties"]
+        assert got[prop] == said, got
+
+
+def test_an_object_of_a_type_that_does_not_implement_it_is_not_found(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """The subject is looked up among the implementations, so an object of any
+    other type is not one this action has. **404 rather than a refusal**: from
+    the caller's side it is the same "no such object instance" the object-type
+    path raises, and which types were consulted is not something they asked
+    about."""
+    outsider = _make_type(client, fx, "Outsider", ["code", "state"])
+    instance = _sync(
+        client, fx, outsider, b"code,state\nO1,due\n", "code",
+        {"state": "state"}, "Outsiders",
+    )
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    r = client.post(
+        f"{pbase(fx)}/actions/{action['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": instance, "values": {"last_inspection_date": "x"}},
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_an_objects_action_list_includes_the_interfaces(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.64: "for a given object, all object-type-specific and interface-based
+    actions that can be applied to that object will appear in the action
+    dropdown" — *the* dropdown, one list, so the merge is the server's.
+
+    Asserted as a pair, because either half alone passes for a listing that
+    dropped the other (§226): the type's own action must still be there.
+    """
+    interface_action = _interface_action(client, fx, world, ["last_inspection_date"])
+    r = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": world["facility"],
+              "api_name": f"own_{uuid.uuid4().hex[:8]}",
+              "display_name": "Facility only", "editable_properties": ["state"]},
+    )
+    assert r.status_code == 201, r.text
+    own = r.json()
+
+    listed = client.get(
+        f"{wbase(fx)}/action-types?object_type_id={world['facility']}",
+        headers=hdr(fx.viewer_sub),
+    ).json()
+    ids = {a["id"] for a in listed}
+    assert own["id"] in ids, listed
+    assert interface_action["id"] in ids, listed
+
+    # And not on a type that does not implement it, which is what makes the
+    # clause a filter rather than a listing of everything.
+    outsider = _make_type(client, fx, "Unrelated", ["code"])
+    other = client.get(
+        f"{wbase(fx)}/action-types?object_type_id={outsider}",
+        headers=hdr(fx.viewer_sub),
+    ).json()
+    assert interface_action["id"] not in {a["id"] for a in other}, other
+
+
+def test_an_unmapped_optional_property_is_refused_at_submission(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.59's promise, from the side that breaks it — and the reason the
+    refusal is at submission rather than at save time: the action is valid, and
+    it is *this object's type* that cannot keep the promise.
+
+    A third implementation that maps only the required property. The action was
+    already legal, and stays legal for the two types that do map it.
+    """
+    partial = _make_type(client, fx, "Kiosk", ["kiosk_code", "seen_on"])
+    r = client.put(
+        f"{wbase(fx)}/object-types/{partial}/interfaces", headers=hdr(fx.editor_sub),
+        json=[{"interface_id": world["interface_id"],
+               "property_mapping": {"last_inspection_date": "seen_on"}}],
+    )
+    assert r.status_code == 200, r.text
+    instance = _sync(
+        client, fx, partial, b"kiosk_code,seen_on\nK1,2019-01-01\n", "kiosk_code",
+        {"seen_on": "seen_on"}, "Kiosks",
+    )
+    action = _interface_action(client, fx, world, ["inspection_status"])
+    r = client.post(
+        f"{pbase(fx)}/actions/{action['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": instance, "values": {"inspection_status": "done"}},
+    )
+    assert r.status_code == 422, r.text
+    assert "inspection_status" in r.text
+
+
+def test_writing_the_property_a_type_is_identified_by_fails_on_submission(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.62's own example, in this platform's terms: "always ensure that the
+    action rule does not modify properties that are likely to be used as a
+    primary key by some of the object types that implement the interface".
+
+    A fourth type maps the interface's date onto the very column its objects
+    are identified by. The action is the same one that works everywhere else,
+    and against this object it fails on submission — which is p.62's word.
+    """
+    keyed = _make_type(client, fx, "Ticket", ["title", "state"])
+    r = client.put(
+        f"{wbase(fx)}/object-types/{keyed}/interfaces", headers=hdr(fx.editor_sub),
+        json=[{"interface_id": world["interface_id"],
+               "property_mapping": {"last_inspection_date": "title"}}],
+    )
+    assert r.status_code == 200, r.text
+    instance = _sync(
+        client, fx, keyed, b"title,state\nT1,due\n", "title",
+        {"title": "title", "state": "state"}, "Tickets",
+    )
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    r = client.post(
+        f"{pbase(fx)}/actions/{action['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": instance, "values": {"last_inspection_date": "renamed"}},
+    )
+    assert r.status_code == 422, r.text
+    assert "primary key" in r.text
+
+
+def test_an_interface_action_is_not_offered_for_inline_editing(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.135's inline edit writes one type's dataset, and p.59's interface may
+    have several.
+
+    **Refused where the grid asks rather than where the batch runs** (§214):
+    the Explorer and the Object Table both draw only the actions
+    `inline_edit_refusals` calls eligible, so an action offered here and
+    refused a click later is a control that looks like it works.
+    """
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    assert action["inline_edit_refusals"], action
+    assert "interface" in " ".join(action["inline_edit_refusals"])
+
+
+def test_a_batch_of_an_interface_action_is_refused_and_says_why(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """The other end of the same sentence: `inline_edit_refusals` decides what
+    a *grid* may offer, and this endpoint can be called without one.
+
+    **It is the same check**, and a mutant is how that was established: a
+    second guard inside the batch handler survived every test here, because
+    `execute_batch` consults the refusals first and never reaches it. The guard
+    is gone; this asserts that the endpoint refuses, which is the claim that
+    was worth having either way.
+    """
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    r = client.post(
+        f"{pbase(fx)}/actions/{action['id']}/execute-batch", headers=hdr(fx.editor_sub),
+        json={"edits": [{"instance_id": world["facility_instance"],
+                         "values": {"last_inspection_date": "2024-05-05"}}]},
+    )
+    assert r.status_code == 422, r.text
+    assert "interface" in r.text
+
+
+def test_an_interface_actions_run_can_be_reverted(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.155: the toast is "your only opportunity to revert the action", and an
+    interface action's run is a run like any other.
+
+    **The run stores no object type of its own**, so the undo resolves the
+    subject the way the apply did. Read back off the object, because a revert
+    reporting success is the endpoint agreeing with itself — and the value it
+    must restore is the one the *previous* test left, so this one writes its
+    own first and puts that back.
+    """
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    before = client.get(
+        f"{wbase(fx)}/object-types/{world['vehicle']}/instances/{world['vehicle_instance']}",
+        headers=hdr(fx.viewer_sub),
+    ).json()["properties"]["checked_on"]
+
+    r = client.post(
+        f"{pbase(fx)}/actions/{action['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": world["vehicle_instance"],
+              "values": {"last_inspection_date": "2099-12-31"}},
+    )
+    assert r.status_code == 200, r.text
+    run_id = r.json()["run_id"]
+
+    r = client.post(
+        f"{pbase(fx)}/actions/{action['id']}/runs/{run_id}/undo",
+        headers=hdr(fx.editor_sub),
+    )
+    assert r.status_code == 200, r.text
+    after = client.get(
+        f"{wbase(fx)}/object-types/{world['vehicle']}/instances/{world['vehicle_instance']}",
+        headers=hdr(fx.viewer_sub),
+    ).json()["properties"]["checked_on"]
+    assert after == before, (before, after)
+
+
+def test_a_property_inherited_from_a_parent_interface_can_be_written(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """`object-link-types` p.53: "interfaces may extend any number of other
+    interfaces", and an inherited property is one every implementation supplies
+    just the same — so an action on the child may write it.
+
+    **The child declares nothing of its own**, which is what makes the
+    assertion able to fail: an action built from the interface's *own*
+    properties would find no property at all here and refuse, and one built
+    from the effective shape finds the parent's.
+    """
+    r = client.post(
+        f"{wbase(fx)}/interfaces", headers=hdr(fx.admin_sub),
+        json={"api_name": f"Serviceable{fx.tag}", "display_name": "Serviceable",
+              "properties": [], "extends": [world["interface_id"]]},
+    )
+    assert r.status_code == 201, r.text
+    child = r.json()["id"]
+    assert [p["api_name"] for p in r.json()["effective_properties"]] == [
+        "last_inspection_date", "inspection_status",
+    ], r.json()["effective_properties"]
+
+    r = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"interface_id": child, "api_name": f"child_{uuid.uuid4().hex[:8]}",
+              "display_name": "Record inspection (inherited)",
+              "editable_properties": ["last_inspection_date"]},
+    )
+    assert r.status_code == 201, r.text
+    assert [p["api_name"] for p in r.json()["parameters"]] == ["last_inspection_date"]
+
+
+def test_two_interfaces_may_each_have_an_action_of_the_same_name(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """db 0101's two partial unique indexes: **a name is unique within its
+    subject**, whichever kind of subject that is.
+
+    The old `UNIQUE (object_type_id, api_name)` could not survive the column
+    becoming nullable — Postgres counts every NULL as distinct, so it stopped
+    constraining interface actions at all. The check that replaced it has to
+    read `interface_id`, and a version that only read the object type would
+    make one name usable by one interface in the whole workspace.
+    """
+    shared = f"shared_{uuid.uuid4().hex[:8]}"
+    second = client.post(
+        f"{wbase(fx)}/interfaces", headers=hdr(fx.admin_sub),
+        json={"api_name": f"Auditable{fx.tag}", "display_name": "Auditable",
+              "properties": INSPECTABLE},
+    )
+    assert second.status_code == 201, second.text
+    for interface_id in (world["interface_id"], second.json()["id"]):
+        r = client.post(
+            f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+            json={"interface_id": interface_id, "api_name": shared,
+                  "display_name": "Record inspection",
+                  "editable_properties": ["last_inspection_date"]},
+        )
+        assert r.status_code == 201, r.text
+
+
+def test_a_second_action_of_that_name_on_one_interface_is_refused(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """The other half, and the one that makes the rule a rule. **The message
+    says which kind of subject it clashed with**, because "already exists on
+    this object type" is a sentence about a thing the action does not have.
+    """
+    name = f"twice_{uuid.uuid4().hex[:8]}"
+    body = {"interface_id": world["interface_id"], "api_name": name,
+            "display_name": "Record inspection",
+            "editable_properties": ["last_inspection_date"]}
+    assert client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub), json=body
+    ).status_code == 201
+    r = client.post(f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub), json=body)
+    assert r.status_code == 409, r.text
+    assert "interface" in r.text, r.text
+
+
+def test_the_definition_of_an_interface_action_is_saved_and_checked(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.59's limit on the *edit* path, not just on creation.
+
+    `set_definition` validates the document against the subject's declared
+    properties, and for an interface action the subject is the interface — so
+    a rule naming a property specific to one implementation is refused with the
+    message any unknown property gets, and one naming a shared property is
+    saved. Both halves, because a validator that refused everything would pass
+    the first assertion on its own.
+    """
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    refused = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "when", "display_name": "When",
+                            "data_type": "string"}],
+            # `surveyed_on` is Facility's own name for the interface's
+            # property. An interface action may not use it.
+            "rules": [{"kind": "modify_object",
+                       "config": {"property": "surveyed_on", "parameter": "when"}}],
+            "criteria": [],
+        },
+    )
+    assert refused.status_code == 422, refused.text
+
+    ok = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "when", "display_name": "When",
+                            "data_type": "string"}],
+            "rules": [{"kind": "modify_object",
+                       "config": {"property": "last_inspection_date",
+                                  "parameter": "when"}}],
+            "criteria": [],
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    # And it still runs, which is what saying "saved" is worth.
+    r = client.post(
+        f"{pbase(fx)}/actions/{action['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": world["facility_instance"], "values": {"when": "2028-08-08"}},
+    )
+    assert r.status_code == 200, r.text

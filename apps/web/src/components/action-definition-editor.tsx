@@ -142,10 +142,19 @@ function side(spec: unknown): Record<string, unknown> {
  * somewhere else does not re-fetch the first three.
  */
 function PropertySelect({
-  workspaceId, typeId, value, label, onChange,
+  workspaceId, typeId, interfaceId, value, label, onChange,
 }: {
   workspaceId: string;
+  /** The object type whose properties this rule writes, or `""` when the
+   *  subject is an interface — see `interfaceId`. */
   typeId: string;
+  /** The interface whose **shared** properties to offer instead
+   *  (`action-types` p.59, §451): "you can use interface action rules only to
+   *  modify the interface shared properties". An interface action's rules are
+   *  written in that vocabulary and the implementations translate it, so
+   *  offering any one type's own names here would be offering words the rule
+   *  may not use. */
+  interfaceId?: string | null;
   value: string;
   label: string;
   onChange: (next: string) => void;
@@ -153,11 +162,28 @@ function PropertySelect({
   const type = useQuery({
     queryKey: ["object-type", typeId],
     queryFn: () => objApi.getType(workspaceId, typeId),
+    // **`!!typeId` alone**, and the `!interfaceId &&` that stood beside it is
+    // gone (§223): `ruleTypeId` is `""` exactly when the subject is an
+    // interface and the rule names no type of its own, so the second half was
+    // already implied by the first. A mutant removing it changed nothing,
+    // which is the only way to tell a guard from a restatement.
+    enabled: !!typeId,
   });
+  const iface = useQuery({
+    queryKey: ["interface", interfaceId],
+    queryFn: () => objApi.getInterface(workspaceId, interfaceId!),
+    enabled: !!interfaceId,
+  });
+  // **Effective, not own**: p.53 lets an interface extend any number of
+  // others, and an inherited property is one every implementation supplies
+  // just the same — so a rule may write it.
+  const offered = interfaceId
+    ? (iface.data?.effective_properties ?? [])
+    : (type.data?.properties ?? []);
   return (
     <select value={value} aria-label={label} onChange={(e) => onChange(e.target.value)}>
       <option value="">Choose…</option>
-      {(type.data?.properties ?? []).map((prop) => (
+      {offered.map((prop) => (
         <option key={prop.api_name} value={prop.api_name}>
           {prop.display_name || prop.api_name}
         </option>
@@ -871,7 +897,16 @@ export function ActionDefinitionEditor({
             setRules(rules.map((rule, j) => (j === i ? { ...rule, config: next } : rule)));
           // Which object this rule writes, and therefore whose properties its
           // pickers offer. Absent `object_type` means the action's own.
-          const ruleTypeId = String(config.object_type ?? action.object_type_id);
+          // Which object this rule writes, and therefore whose properties its
+          // pickers offer. Absent `object_type` means the action's own subject
+          // — which since §451 may be an interface, and then there is no type
+          // id at all: `String(null)` is `"null"`, and the picker would have
+          // asked for an object type by that name.
+          const ruleTypeId = String(
+            config.object_type ?? action.object_type_id ?? "",
+          );
+          const ruleInterfaceId =
+            config.object_type ? null : action.interface_id ?? null;
           /** Point the rule at another type, or back at the subject.
            *
            * Both fields move together: an `object_type` with no `object` names
@@ -966,6 +1001,7 @@ export function ActionDefinitionEditor({
                       <PropertySelect
                         workspaceId={workspaceId}
                         typeId={ruleTypeId}
+                        interfaceId={ruleInterfaceId}
                         value={String(config.property ?? "")}
                         label={`Rule ${i + 1} property`}
                         onChange={(next) => patch({ ...config, property: next })}
@@ -1034,6 +1070,7 @@ export function ActionDefinitionEditor({
                       <PropertySelect
                         workspaceId={workspaceId}
                         typeId={ruleTypeId}
+                        interfaceId={ruleInterfaceId}
                         value={Object.keys((config.properties as object) ?? {})[0] ?? ""}
                         label={`Rule ${i + 1} creates property`}
                         onChange={(next) => {
