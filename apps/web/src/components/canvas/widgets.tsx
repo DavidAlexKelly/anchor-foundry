@@ -13549,6 +13549,8 @@ export function CanvasHeader({
   collapsedByDefault = false,
   background = null,
   titleColour = null,
+  icon = "",
+  iconColour = null,
   children,
 }: {
   title?: string;
@@ -13576,6 +13578,23 @@ export function CanvasHeader({
    * into every document is a value that stops following the theme the moment
    * the theme changes. */
   titleColour?: string | null;
+  /** p.47's application logo: *"Enable an application logo by choosing an icon
+   * or uploading an image. **Icon:** Choose an icon and an icon color."*
+   *
+   * **A glyph, not a picker** (§445) — the divergence `workshop.md` already
+   * records for a Button and a Page, applied where p.47 names it: this
+   * platform has no icon library, so a logo is one or two characters an author
+   * types. The *behaviour* p.47 describes is faithful; the library is not
+   * built, and an emoji or an initial is a mark somebody recognises where an
+   * empty square is not.
+   *
+   * p.47's **Image** half stays ○: it needs an upload, which attachments
+   * (§39) has a shape for and this does not. */
+  icon?: string;
+  /** p.47: *"Choose an icon and an icon color."* Null is the theme's ink, for
+   *  `titleColour`'s reason — a default written into every document stops
+   *  following the theme the moment the theme changes. */
+  iconColour?: string | null;
   children?: React.ReactNode;
 }) {
   const {
@@ -13656,6 +13675,20 @@ export function CanvasHeader({
             {isCollapsed ? "»" : "«"}
           </button>
         )}
+        {/* p.47's logo. **It survives the collapsed state, where the title
+            does not**, and the two are different things rather than an
+            inconsistency: p.49 drops *labels*, and a logo is a mark rather
+            than a word — a collapsed header with nothing at the top of it is
+            one nobody can tell from a blank rail. */}
+        {icon.trim() && (
+          <span
+            className="canvas-header-logo"
+            data-testid="header-logo"
+            style={{ color: resolveBackground(iconColour, saved) ?? undefined }}
+          >
+            {icon.trim().slice(0, 2)}
+          </span>
+        )}
         {/* The title goes with the text: p.49 drops labels in the collapsed
             state, and a title is nothing but a label. */}
         {!isCollapsed && title.trim() && (
@@ -13690,7 +13723,7 @@ function glyphFor(icon: string | undefined, label: string | undefined): string {
 function HeaderSettings() {
   const {
     title, sticky, orientation, height, width, collapsible, collapsedByDefault,
-    titleColour, allowFavourite,
+    titleColour, allowFavourite, icon, iconColour,
     actions: { setProp },
   } = useNode((node) => ({
     title: node.data.props.title,
@@ -13702,6 +13735,8 @@ function HeaderSettings() {
     collapsedByDefault: node.data.props.collapsedByDefault,
     titleColour: node.data.props.titleColour,
     allowFavourite: node.data.props.allowFavourite,
+    icon: node.data.props.icon,
+    iconColour: node.data.props.iconColour,
   }));
   const vertical = orientation === "vertical";
   const { palette, scheme } = useSavedColours();
@@ -13716,6 +13751,67 @@ function HeaderSettings() {
         />
         <span className="field-hint">{"{{v_id}}"} shows a variable&apos;s current value</span>
       </label>
+      {/* p.47's application logo, above the title because that is the order
+          it appears in. **One or two characters**, which is the divergence
+          this platform already takes for a Button and a Page — and the hint
+          says so, because somebody expecting a picker should find out here
+          rather than by typing a word and watching it cut in half (§337). */}
+      <label className="field">
+        <span className="field-label">Logo</span>
+        <input
+          value={icon ?? ""}
+          maxLength={2}
+          placeholder="◎"
+          data-testid="header-icon"
+          onChange={(e) => setProp((p: { icon: string }) => (p.icon = e.target.value))}
+        />
+        <span className="field-hint">
+          One or two characters — an emoji or an initial. There is no icon
+          library here; it stays visible when a vertical header is collapsed.
+        </span>
+      </label>
+      {icon?.trim() && (
+        <label className="field">
+          <span className="field-label">Logo colour</span>
+          <select
+            data-testid="header-icon-colour"
+            value={textColourChoice(iconColour, palette)}
+            onChange={(e) =>
+              setProp((p: { iconColour: string | null }) => {
+                p.iconColour =
+                  e.target.value === "default"
+                    ? null
+                    : e.target.value === "custom"
+                      ? resolveBackground(iconColour, { palette, scheme }) ?? "#16232f"
+                      : e.target.value;
+              })
+            }
+          >
+            <option value="default">Default — follows the theme</option>
+            {palette.length > 0 && (
+              <optgroup label="Saved colours">
+                {palette.map((colour) => (
+                  <option key={colour.id} value={refTo(colour.id)}>{colour.name}</option>
+                ))}
+              </optgroup>
+            )}
+            <option value="custom">Custom…</option>
+          </select>
+        </label>
+      )}
+      {textColourChoice(iconColour, palette) === "custom" && (
+        <label className="field">
+          <span className="field-label">Logo colour (hex)</span>
+          <input
+            type="text"
+            data-testid="header-icon-colour-hex"
+            value={iconColour ?? ""}
+            placeholder="#16232f"
+            onChange={(e) =>
+              setProp((p: { iconColour: string }) => (p.iconColour = e.target.value))}
+          />
+        </label>
+      )}
       {/* p.47: "Choose a custom color for the title text." Directly under the
           title it colours rather than in a style section further down: the two
           are one decision, and a colour control separated from the thing it
@@ -13872,6 +13968,9 @@ CanvasHeader.craft = {
     title: "", sticky: true, orientation: "horizontal",
     height: 0, width: 220, collapsible: false, collapsedByDefault: false,
     background: null, titleColour: null,
+    // p.47's application logo (§445). Empty is no logo, which is what a
+    // header has had until now.
+    icon: "", iconColour: null,
     // p.47's favourite toggle. **Written into new documents as `true` and
     // read as "not false" everywhere else** (`module-header.ts`): a default
     // in `craft.props` reaches the document somebody is editing now and no

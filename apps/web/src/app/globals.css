@@ -3442,3 +3442,12 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    full width of a repository application is documentation nobody finishes. */
 .repo-docs { padding: 16px 20px 32px; max-width: 46rem; }
 .repo-docs-empty { margin: 16px 20px; }
+
+/* p.47's application logo (§445). Sized off the header's own text so it reads
+   as a mark beside the title rather than as another word, and kept from
+   shrinking when a vertical header runs out of room. */
+.canvas-header-logo {
+  font-size: 1.45em; line-height: 1; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.45em;
+}
