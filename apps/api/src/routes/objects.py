@@ -723,8 +723,19 @@ class ObjectTypeUpdate(BaseModel):
 
     display_name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=2000)
-    icon: str = Field(default="cube", max_length=64)
-    colour: str = Field(default="#2f6f4f", max_length=32)
+    # p.15's icon and colour. **Optional and defaulting to *unchanged*** —
+    # which is the argument the `status` field below already makes, applied to
+    # the two fields it was not: this is a whole-definition replacement, and a
+    # client that has never heard of them must not silently reset them.
+    #
+    # It was not theoretical (§449). Nothing in `apps/web` sent either one, so
+    # every edit of an object type — a description, a property, a group —
+    # wrote `cube` and `#2f6f4f` over whatever somebody had chosen. The field
+    # was on the wire and absent from the screen, which is §275's shape: the
+    # control that looks like it works, in its quietest form, because there
+    # was no control at all.
+    icon: str | None = Field(default=None, max_length=64)
+    colour: str | None = Field(default=None, max_length=32)
     properties: list[PropertyIn] = Field(min_length=1, max_length=100)
     title_property: str | None = Field(default=None, max_length=100)
     # p.253's developmental state. Optional and defaulting to *unchanged* -

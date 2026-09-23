@@ -2677,6 +2677,8 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .sov-type {
   margin: 0; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
   color: var(--ink-soft);
+  /* The type's mark sits on this line since §449. */
+  display: flex; align-items: center; gap: 6px;
 }
 .sov-title { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: 700; }
 /* `auto-fill` with a floor, so one prominent property is a wide card and four
@@ -3461,3 +3463,28 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft);
 }
 .canvas-palette > section:first-of-type .canvas-palette-group { margin-top: 2px; }
+
+/* An object type's mark (§449; `object-link-types` p.15). One size, used in
+   the editor's preview, the Explorer's list and the object view — p.15 says
+   the icon and colour appear "when a user views an object of this type", and
+   a mark that changed size between those screens would read as three
+   different things. */
+.ot-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 6px; flex: 0 0 auto;
+  font-size: 12px; line-height: 1; color: #fff;
+}
+.ot-look { align-items: center; gap: 8px; }
+.ot-look input[type="text"] { width: 4.5rem; text-align: center; }
+.ot-look input[type="color"] { width: 2.5rem; height: 1.9rem; padding: 2px; }
+/* Smaller in the Explorer's chip list than in the editor's preview: these sit
+   inline with 12.5px text, and a 22px square beside it would be the loudest
+   thing in a list of thirty. */
+.ox-type .ot-mark { width: 16px; height: 16px; border-radius: 4px; font-size: 9.5px; }
+/* Beside the type's name in the object view, at the size that line reads at.
+   `letter-spacing` is reset inside the mark: the eyebrow's 0.08em is for a
+   word, and inside a 18px square it pushes a single character off centre. */
+.sov-type .ot-mark {
+  width: 18px; height: 18px; border-radius: 5px;
+  font-size: 10.5px; letter-spacing: 0;
+}

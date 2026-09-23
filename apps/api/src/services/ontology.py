@@ -1385,8 +1385,10 @@ async def update_type(
     type_id: UUID,
     display_name: str,
     description: str,
-    icon: str,
-    colour: str,
+    #: p.15's icon and colour. **None means unchanged**, not a default — see
+    #: `ObjectTypeUpdate` for what that omission cost (§449).
+    icon: str | None,
+    colour: str | None,
     properties: list[dict[str, Any]],
     title_property: str | None,
     updated_by: UUID,
@@ -1490,8 +1492,14 @@ async def update_type(
         text(
             """
             UPDATE object_types
-               SET display_name = :name, description = :descr, icon = :icon,
-                   colour = :colour, title_property_id = NULL,
+               SET display_name = :name, description = :descr,
+                   -- **COALESCE, so an omitted field keeps what is there.**
+                   -- Decided in SQL rather than by reading the row first and
+                   -- choosing in Python: a read-then-write is two statements
+                   -- and a window between them, and this is one.
+                   icon = COALESCE(:icon, icon),
+                   colour = COALESCE(:colour, colour),
+                   title_property_id = NULL,
                    status = CAST(:status AS ontology_status),
                    visibility = CAST(:vis AS property_visibility),
                    deprecation = CAST(:depr AS jsonb)

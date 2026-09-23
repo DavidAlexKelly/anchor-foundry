@@ -510,6 +510,18 @@ The shape is worth naming because it looks like careful work. Addressing a contr
 
 The remedy is one more line and is general: **assert the population, not only the absence.** Three live lines and four proposed ones is seven places a comment may hang; the mutant makes it eight, and a count notices whatever the eighth calls itself.
 
+### A `-k` filter is a second list of test names (§449)
+
+§317's rule is that a number you never took a baseline for is not a measurement. §449 found the version of that failure which *does* take a baseline, and still measures nothing.
+
+Its server group narrowed a 56-test file with `-k 'icon or colour or look or default'` to keep the runs short. The baseline came back "5 passed, 51 deselected" — a plausible number — and then **every one of the five mutants survived**, including one that deleted the assignment entirely. Applied by hand, the same mutant killed a test immediately.
+
+The filter had selected five tests. Five *other* tests: not one of the new ones has `icon`, `colour`, `look` or `default` anywhere in its name, and the words matched elsewhere in the file. The group was running, passing, and never touching the code under test.
+
+The shape is worth naming because narrowing is the obvious thing to do when a suite is slow, and the filter is written once and then never read again while the test names move underneath it. **A `-k` expression is a second list of the tests you meant**, kept in step with the first by nobody.
+
+So: **name the file, not a filter** — and if a group is genuinely too slow for that, name the tests with `::` so a rename is an error rather than a silent deselection. The tell is cheap and worth looking for: if the mutants' failure counts never move off the baseline's, check what was selected before believing the score.
+
 ### A sweep that shares a backup name corrupts the tree (§429)
 
 Every sweep in this repository saves each file it will mutate and copies the saved bytes back after each run. §429's saved them as `pul-<basename>.orig`, and its two server files were `apps/api/src/services/code.py` and `apps/api/src/routes/code.py` — **two different files with one name.** The second backup overwrote the first, and the restore then wrote the service's bytes into the route. The working tree was corrupt from the first mutant onwards.

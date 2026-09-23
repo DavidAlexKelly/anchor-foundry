@@ -24,6 +24,7 @@ import { Dialog, Field } from "@/components/dialog";
 import { ValueFormatEditor, formattable } from "@/components/value-format-editor";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import { copyRulesTo } from "@/lib/copy-format-rules";
+import { MAX_GLYPH, glyph, iconHint, swatch } from "@/lib/object-type-icon";
 import { DerivedPropertyEditor } from "@/components/derived-property-editor";
 import { SharedPropertyPicker } from "@/components/shared-property-picker";
 import { StatusField } from "@/components/status-field";
@@ -745,6 +746,13 @@ export function EditObjectTypeDialog({
 }) {
   const [displayName, setDisplayName] = useState(type.display_name);
   const [description, setDescription] = useState(type.description);
+  // p.15's icon and colour (§449). **Seeded from the type, and sent on every
+  // save** — the fields existed on the wire and on no screen, so every edit
+  // wrote the route's defaults over whatever somebody had chosen. The server
+  // treats an omitted field as unchanged now; sending them is what makes this
+  // dialog able to *set* them.
+  const [icon, setIcon] = useState(type.icon ?? "");
+  const [colour, setColour] = useState(type.colour ?? "");
   const [status, setStatus] = useState(type.status);
   const [deprecation, setDeprecation] = useState(type.deprecation);
   const [properties, setProperties] = useState<PropertyInput[]>(
@@ -775,6 +783,8 @@ export function EditObjectTypeDialog({
   const body = {
     display_name: displayName,
     description,
+    icon,
+    colour,
     properties: named,
     title_property: titleProperty || null,
   };
@@ -851,6 +861,42 @@ export function EditObjectTypeDialog({
             onChange={(e) => setDescription(e.target.value)}
             maxLength={2000}
           />
+        </Field>
+        {/* p.15: "Select the default icon to customize the icon and color of
+            the object type; this icon and color will be displayed in user
+            applications when a user views an object of this type." One field
+            for the two, because p.15 offers them as one choice — and with the
+            mark itself beside them, since a colour picked without seeing what
+            it is behind is a colour picked twice. */}
+        <Field
+          label="Icon and colour"
+          hint={iconHint(icon, type.icon)}
+        >
+          <div className="row-actions ot-look">
+            <span
+              className="ot-mark"
+              data-testid="type-mark-preview"
+              style={{ background: swatch({ colour }) }}
+            >
+              {glyph({ display_name: displayName, icon })}
+            </span>
+            <input
+              type="text"
+              value={icon}
+              maxLength={MAX_GLYPH}
+              placeholder="◆"
+              aria-label="Icon"
+              data-testid="type-icon"
+              onChange={(e) => setIcon(e.target.value)}
+            />
+            <input
+              type="color"
+              value={/^#[0-9a-f]{6}$/i.test(colour) ? colour : "#2f6f4f"}
+              aria-label="Colour"
+              data-testid="type-colour"
+              onChange={(e) => setColour(e.target.value)}
+            />
+          </div>
         </Field>
         {/* p.253's developmental state, above the properties because
             p.256's propagation reaches them - the warning has to be readable

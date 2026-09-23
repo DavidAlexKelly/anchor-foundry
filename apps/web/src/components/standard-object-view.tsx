@@ -38,6 +38,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { objects as objApi } from "@/lib/api";
+import { glyph, swatch } from "@/lib/object-type-icon";
 import { MapCanvas } from "@/components/canvas/map";
 import { isGeometry } from "@/lib/geoshape";
 import { toLatLon } from "@/components/canvas/map";
@@ -302,7 +303,22 @@ export function StandardObjectView({
     <div className="sov" data-testid="standard-object-view" data-state="ready">
       {!hideHeader && (
         <header className="sov-head">
-          <p className="sov-type">{type.data.display_name}</p>
+          {/* p.15's own sentence, and the screen it names: the icon and
+              colour "will be displayed in user applications **when a user
+              views an object of this type**" (§449). Beside the type's name
+              rather than the object's title — it is the *type* that is
+              marked, and an object's own title is not. */}
+          <p className="sov-type">
+            <span
+              className="ot-mark"
+              data-testid="sov-type-mark"
+              style={{ background: swatch(type.data) }}
+              aria-hidden="true"
+            >
+              {glyph(type.data)}
+            </span>
+            {type.data.display_name}
+          </p>
           <h2 className="sov-title">{title}</h2>
         </header>
       )}
