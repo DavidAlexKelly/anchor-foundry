@@ -696,3 +696,59 @@ def test_the_definition_of_an_interface_action_is_saved_and_checked(
         json={"instance_id": world["facility_instance"], "values": {"when": "2028-08-08"}},
     )
     assert r.status_code == 200, r.text
+
+
+def test_a_delete_rule_on_an_interface_reaches_either_implementing_type(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.62's "Delete actions on interfaces", which **already worked** and had
+    nothing saying so (§452).
+
+    It falls out of §451's design rather than needing anything: a delete names
+    no property, so the rename leaves it alone, and the subject is resolved
+    across the implementations like any other. That is the shape a ○ should be
+    checked for before it is written — this one was written in the same commit
+    that made it untrue.
+
+    Both types, because either alone passes for a path that resolved the
+    subject once and kept it: the rows are deleted from two different datasets.
+    """
+    action = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"interface_id": world["interface_id"],
+              "api_name": f"retire_{uuid.uuid4().hex[:8]}",
+              "display_name": "Retire",
+              "editable_properties": ["last_inspection_date"]},
+    ).json()
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={"parameters": [], "rules": [{"kind": "delete_object", "config": {}}],
+              "criteria": []},
+    )
+    assert r.status_code == 200, r.text
+
+    # Two objects of their own, because every other test in this file needs the
+    # fixture's to still be there.
+    doomed = _make_type(client, fx, "Doomed", ["doomed_code", "retired_on"])
+    spare = _make_type(client, fx, "Spare", ["spare_code", "retired_on"])
+    for type_id in (doomed, spare):
+        assert client.put(
+            f"{wbase(fx)}/object-types/{type_id}/interfaces", headers=hdr(fx.editor_sub),
+            json=[{"interface_id": world["interface_id"],
+                   "property_mapping": {"last_inspection_date": "retired_on"}}],
+        ).status_code == 200
+    first = _sync(client, fx, doomed, b"doomed_code,retired_on\nD1,\n",
+                  "doomed_code", {"retired_on": "retired_on"}, "Doomed")
+    second = _sync(client, fx, spare, b"spare_code,retired_on\nS1,\n",
+                   "spare_code", {"retired_on": "retired_on"}, "Spare")
+
+    for type_id, instance in ((doomed, first), (spare, second)):
+        r = client.post(
+            f"{pbase(fx)}/actions/{action['id']}/execute", headers=hdr(fx.editor_sub),
+            json={"instance_id": instance, "values": {}},
+        )
+        assert r.status_code == 200, r.text
+        left = client.get(
+            f"{wbase(fx)}/object-types/{type_id}/instances", headers=hdr(fx.viewer_sub)
+        ).json()["items"]
+        assert left == [], left
