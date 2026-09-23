@@ -1688,10 +1688,14 @@ def test_the_browser_reads_the_same_settings_file_the_server_does() -> None:
     are held by `commit-message.test.ts` and by the browser suite pressing the
     button.
     """
-    browser = (
-        pathlib.Path(__file__).resolve().parents[3]
-        / "apps/web/src/lib/commit-message.ts"
-    ).read_text()
+    web = pathlib.Path(__file__).resolve().parents[3] / "apps/web/src/lib"
+    # **Two files, since §444 split the parser out from the rule it was
+    # written for.** Read together rather than one of them, because the keys
+    # are what this checks and they are now spread across both — and the check
+    # went red on the split, which is the point of having it.
+    browser = "\n".join(
+        (web / name).read_text() for name in ("settings-file.ts", "commit-message.ts")
+    )
     for literal in (repo_settings.SETTINGS_FILE, repo_settings.COMMIT_BLOCK,
                     "required", "errorMessage"):
         assert f'"{literal}"' in browser or f"`{literal}`" in browser, (

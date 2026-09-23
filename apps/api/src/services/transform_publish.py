@@ -101,10 +101,11 @@ async def plan(
             )
         seen[found.output] = path
 
-    datasets_by_name = {
-        str(row["name"]): row
-        for row in await ds_service.list_for_project(conn, project_id)
-    }
+    project_datasets = await ds_service.list_for_project(conn, project_id)
+    datasets_by_name = {str(row["name"]): row for row in project_datasets}
+    # p.115's dataset aliases, the half that is a resolution rule rather than
+    # an editor setting (§444).
+    datasets_by_id = {str(row["id"]): row for row in project_datasets}
     existing = {
         str(row["name"]): dict(row)
         for row in await fetch_all(
@@ -122,13 +123,28 @@ async def plan(
 
     steps: list[dict[str, Any]] = []
     for path, found in declared:
-        missing = sorted(
-            {name for name in found.inputs.values() if name not in datasets_by_name}
-        )
+        resolved: dict[str, dict[str, Any]] = {}
+        missing: list[str] = []
+        for reference in sorted(set(found.inputs.values())):
+            row = _input_row(reference, datasets_by_id, datasets_by_name)
+            if row is None:
+                missing.append(reference)
+            else:
+                resolved[reference] = row
         if missing:
             raise PublishError(
                 f"{path} reads " + ", ".join(missing)
                 + ", which this project does not have"
+                # **Says which kind of reference failed**, because the two have
+                # different remedies: a name that is gone was renamed and the
+                # file has to follow it, and an id that is gone is a dataset
+                # that was deleted or belongs to another project (§444).
+                + (
+                    " — an id that resolves to nothing here is a dataset that "
+                    "was deleted, or one in another project"
+                    if any(_looks_like_id(name) for name in missing)
+                    else ""
+                )
             )
 
         current = by_source.get((str(repo_id), path))
@@ -163,11 +179,15 @@ async def plan(
             "renames": bool(current and str(current["name"]) != found.output),
             "inputs": [
                 {
-                    "dataset_id": datasets_by_name[name]["id"],
+                    "dataset_id": resolved[reference]["id"],
                     "input_alias": alias,
-                    "dataset": name,
+                    # **The dataset's name, whichever way the file named it.**
+                    # A plan that echoed the id back would make the publish
+                    # preview unreadable exactly where p.115 says to prefer an
+                    # id — the screen's job is to say what will be read.
+                    "dataset": str(resolved[reference]["name"]),
                 }
-                for alias, name in sorted(found.inputs.items())
+                for alias, reference in sorted(found.inputs.items())
             ],
             "code": files[path],
         })
@@ -337,6 +357,46 @@ def _has_declaration(path: str, source: str) -> bool:
         # used to declare is gone - calling it orphaned would suggest deleting
         # a model because somebody typed a syntax error.
         return True
+
+
+def _looks_like_id(reference: str) -> bool:
+    """Whether a declaration's right-hand side is meant as a dataset id.
+
+    p.115: *"Datasets can be referenced in code by using their exact location
+    in Foundry (path) or by using their unique resource identifier (RID)…
+    it is recommended to use RIDs where possible, as this allows resources to
+    be moved from one location to another without needing any updates to the
+    code in the repository."* Here the second form is the dataset's own id.
+
+    **Shape, not a lookup.** A name that happens to parse as a UUID is not a
+    name anybody gave a dataset — `datasets.slugify` would not produce one and
+    §435's refusal would not accept one — so the shape decides which table to
+    look in, and the id table is tried first either way.
+    """
+    try:
+        UUID(reference)
+    except ValueError:
+        return False
+    return True
+
+
+def _input_row(
+    reference: str,
+    by_id: dict[str, dict[str, Any]],
+    by_name: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """The dataset a declaration's right-hand side means, or None.
+
+    **Id first, then name**, and never the other way round: an id is exact and
+    a name is not, so a project where somebody had named a dataset after
+    another's id would otherwise resolve to whichever the dictionary happened
+    to answer for.
+    """
+    if _looks_like_id(reference):
+        found = by_id.get(reference)
+        if found is not None:
+            return dict(found)
+    return dict(by_name[reference]) if reference in by_name else None
 
 
 async def resolve_commit(

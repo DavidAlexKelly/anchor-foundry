@@ -11,6 +11,10 @@ import {
 const vocabulary: Vocabulary = {
   datasets: [
     {
+      // Ids, since §444: p.115's setting makes the editor insert one, and a
+      // fixture without them cannot tell a list that inserts the name from
+      // one that inserts the id.
+      id: "11111111-1111-1111-1111-111111111111",
       name: "raw_orders",
       columns: [
         { name: "id", type: "BIGINT" },
@@ -18,11 +22,13 @@ const vocabulary: Vocabulary = {
         { name: "placed_at", type: "TIMESTAMP" },
       ],
     },
-    { name: "raw_returns", columns: [{ name: "id", type: "BIGINT" }] },
-    { name: "customers", columns: [] },
+    { id: "22222222-2222-2222-2222-222222222222", name: "raw_returns",
+      columns: [{ name: "id", type: "BIGINT" }] },
+    { id: "33333333-3333-3333-3333-333333333333", name: "customers", columns: [] },
     // **Capitals, because names here are free text** and a matcher that
     // lower-cased only the query would answer "ord" with nothing.
-    { name: "Orders_Q1", columns: [{ name: "Total", type: "DOUBLE" }] },
+    { id: "44444444-4444-4444-4444-444444444444", name: "Orders_Q1",
+      columns: [{ name: "Total", type: "DOUBLE" }] },
   ],
 };
 
@@ -233,5 +239,73 @@ describe("columnSummary", () => {
     // A dataset that has never been written has no columns, and an empty
     // string would read as a rendering bug.
     expect(columnSummary([])).toBe("no columns yet");
+  });
+});
+
+// ---- p.115's dataset aliases (§444) -----------------------------------------
+const ID = "11111111-1111-1111-1111-111111111111";
+
+describe("p.115's dataset references", () => {
+  const at = (line: string, opts?: { preferIds?: boolean }) =>
+    completionsFor(line, line, vocabulary, opts);
+
+  it("inserts the name by default", () => {
+    // Every repository here was written before the setting, and their
+    // declarations name datasets by name.
+    const [first] = at("-- input: raw = raw_ord");
+    expect(first!.label).toBe("raw_orders");
+    expect(first!.insert).toBe("raw_orders");
+  });
+
+  it("inserts the id and still shows the name when the repository asks", () => {
+    // p.115: "the editor will present the dataset name over the RID".
+    const [first] = at("-- input: raw = raw_ord", { preferIds: true });
+    expect(first!.label).toBe("raw_orders");
+    expect(first!.insert).toBe(ID);
+  });
+
+  it("matches what was typed against the name, not the id", () => {
+    // Typing four letters of a name must find it however the editor is set;
+    // nobody types the first four characters of a UUID.
+    expect(at("-- input: raw = ord", { preferIds: true }).map((c) => c.label))
+      .toContain("raw_orders");
+  });
+
+  it("leaves aliases and columns inserting what they show", () => {
+    // The setting is about *dataset references*. An alias is this file's own
+    // word and a column is the table's.
+    const alias = at("SELECT x FROM ra", { preferIds: true });
+    expect(alias.every((c) => c.insert === c.label)).toBe(true);
+  });
+
+  it("offers a file's columns when the input was declared by id", () => {
+    // **The case p.115 recommends**, and the one that breaks if the lookup is
+    // by name alone: a file full of ids would get no column completions at all.
+    const file = [`-- input: raw = ${ID}`, "SELECT raw."].join("\n");
+    expect(completionsFor("SELECT raw.", file, vocabulary).map((c) => c.label))
+      .toEqual(["id", "total", "placed_at"]);
+  });
+
+  it("names the dataset an alias points at, even when the file used an id", () => {
+    // `raw — aabbccdd-…` tells nobody which table they are about to write a
+    // column of.
+    const file = [`-- input: raw = ${ID}`, "SELECT x FROM ra"].join("\n");
+    const [alias] = completionsFor("SELECT x FROM ra", file, vocabulary);
+    expect(alias!.detail).toBe("raw_orders");
+  });
+
+  it("prefers the id over a name that happens to match it", () => {
+    // Exactness first: a project where somebody named a dataset after
+    // another's id would otherwise resolve to whichever came first.
+    const odd: Vocabulary = {
+      datasets: [
+        { id: "aaaaaaaa-0000-0000-0000-000000000000", name: ID,
+          columns: [{ name: "wrong", type: "TEXT" }] },
+        ...vocabulary.datasets,
+      ],
+    };
+    const file = [`-- input: raw = ${ID}`, "SELECT raw."].join("\n");
+    expect(completionsFor("SELECT raw.", file, odd).map((c) => c.label))
+      .toEqual(["id", "total", "placed_at"]);
   });
 });

@@ -22,37 +22,13 @@
  *
  * Pure and in `lib/` because vitest cannot parse `.tsx`.
  */
+// Relative, not `@/`: **value** imports, and vitest resolves no path alias.
+import { COMMIT_BLOCK, SETTINGS_FILE, type Settings } from "./settings-file";
 
-/** Foundry's own settings file, at the root of the repository (p.17, p.105). */
-export const SETTINGS_FILE = "repoSettings.json";
-
-/** p.114's block. The key is ours; the behaviour is p.114's — see
- *  `repo_settings.py`, which says why it is spelled like `tagNameValidation`. */
-export const COMMIT_BLOCK = "commitMessages";
-
-type Settings = Record<string, unknown>;
-
-/**
- * `repoSettings.json` out of the working tree, or `{}`.
- *
- * **Absent and unreadable are the same answer**, which is §299's decision
- * inherited rather than re-argued: a convention fails open, because the person
- * a syntax error blocks is rarely the person who wrote it. Here it matters
- * twice over — this reads a file somebody may be *in the middle of editing*,
- * so a half-typed brace must not disable the button they are about to press.
- */
-export function settingsFrom(files: Record<string, string | undefined>): Settings {
-  const raw = files[SETTINGS_FILE];
-  if (raw === undefined) return {};
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Settings)
-      : {};
-  } catch {
-    return {};
-  }
-}
+// Re-exported because callers have imported them from here since §441, and a
+// name that moves is a name every caller has to be found for. The one
+// implementation is in `settings-file.ts` (§292, §444).
+export { COMMIT_BLOCK, SETTINGS_FILE, settingsFrom } from "./settings-file";
 
 /**
  * Whether this repository asks every commit to say what changed.

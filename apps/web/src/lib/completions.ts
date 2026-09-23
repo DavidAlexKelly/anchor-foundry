@@ -41,8 +41,16 @@
 export type CompletionKind = "dataset" | "alias" | "column";
 
 export interface Completion {
-  /** What to insert. */
+  /** What the list shows. */
   label: string;
+  /** What is typed when it is chosen.
+   *
+   * **Separate from the label since §444**, which is p.115's sentence in one
+   * field: *"the editor will present the dataset name over the RID"*. A
+   * repository that prefers ids gets a list of names and a file full of ids,
+   * which is the whole point — an id is unreadable and a name does not
+   * survive a rename, so the screen shows one and the file holds the other. */
+  insert: string;
   kind: CompletionKind;
   /** Shown beside the label: a dataset's row count, a column's type, the
    *  dataset an alias points at. A list of bare names makes somebody pick the
@@ -53,7 +61,7 @@ export interface Completion {
 /** What this file has declared, and what the project holds. */
 export interface Vocabulary {
   /** Every dataset in the project, with something to say about each. */
-  datasets: { name: string; columns: { name: string; type: string }[] }[];
+  datasets: { id: string; name: string; columns: { name: string; type: string }[] }[];
 }
 
 /** `-- input: alias = name`, in either language's comment prefix. The same
@@ -134,6 +142,7 @@ export function contextAt(before: string): {
  */
 export function completionsFor(
   before: string, text: string, vocabulary: Vocabulary,
+  { preferIds = false }: { preferIds?: boolean } = {},
 ): Completion[] {
   const where = contextAt(before);
   if (where === null) return [];
@@ -145,6 +154,10 @@ export function completionsFor(
       .filter((d) => keep(d.name))
       .map((d) => ({
         label: d.name,
+        // p.115's setting, and the only place it has any effect: what the
+        // editor types for you. A file that already names a dataset by either
+        // form goes on working whichever way this is set.
+        insert: preferIds ? d.id : d.name,
         kind: "dataset" as const,
         detail: columnSummary(d.columns),
       }));
@@ -155,7 +168,15 @@ export function completionsFor(
   if (where.kind === "alias") {
     return inputs
       .filter((i) => keep(i.alias))
-      .map((i) => ({ label: i.alias, kind: "alias" as const, detail: i.dataset }));
+      .map((i) => ({
+        label: i.alias,
+        insert: i.alias,
+        kind: "alias" as const,
+        // **What the alias points at, named.** A file that declares its input
+        // by id would otherwise offer `raw — aabbccdd-…`, which tells nobody
+        // which table they are about to write a column of.
+        detail: datasetOf(vocabulary, i.dataset)?.name ?? i.dataset,
+      }));
   }
 
   // A column, of the dataset the alias points at. **An alias this file has not
@@ -164,11 +185,23 @@ export function completionsFor(
   // asked is worse than answering none.
   const declared = inputs.find((i) => i.alias === where.alias);
   if (!declared) return [];
-  const dataset = vocabulary.datasets.find((d) => d.name === declared.dataset);
+  const dataset = datasetOf(vocabulary, declared.dataset);
   if (!dataset) return [];
   return dataset.columns
     .filter((c) => keep(c.name))
-    .map((c) => ({ label: c.name, kind: "column" as const, detail: c.type }));
+    .map((c) => ({ label: c.name, insert: c.name, kind: "column" as const, detail: c.type }));
+}
+
+/** The dataset a declaration's right-hand side means, by either form.
+ *
+ * **Id first, then name**, which is `transform_publish._input_row`'s rule and
+ * has to be: a file that names its inputs by id would otherwise get no column
+ * completions at all, and p.115 recommends exactly that file. */
+function datasetOf(
+  vocabulary: Vocabulary, reference: string,
+): Vocabulary["datasets"][number] | undefined {
+  return vocabulary.datasets.find((d) => d.id === reference)
+    ?? vocabulary.datasets.find((d) => d.name === reference);
 }
 
 /** What a dataset row says about itself. Columns rather than a row count: the
