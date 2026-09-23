@@ -218,6 +218,7 @@ import {
   toEdits, undoRow, type Staged,
 } from "./inline-edit";
 import { readerLayout } from "./reader-layout";
+import { PALETTE as WIDGET_LIST } from "./widget-list";
 import { MarkdownView } from "../markdown-view";
 import { SeriesCell } from "./SeriesCell";
 import { Sparkline } from "./Sparkline";
@@ -14551,47 +14552,15 @@ export const CANVAS_RESOLVER = {
   CanvasActionForm,
 };
 
-export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: string }[] = [
-  { key: "CanvasHeader", label: "Header", hint: "A toolbar above every page; one per module" },
-  { key: "CanvasPage", label: "Page", hint: "A screen of the app; Tabs move between them" },
-  { key: "CanvasSection", label: "Section", hint: "Columns, rows, a flow or a toolbar" },
-  { key: "CanvasLoopSection", label: "Loop", hint: "One embedded module per object in a set" },
-  { key: "CanvasOverlay", label: "Overlay", hint: "A modal or drawer over the page" },
-  { key: "CanvasTabs", label: "Tabs", hint: "One button per page" },
-  { key: "CanvasButton", label: "Button", hint: "Runs the events wired to its click" },
-  { key: "CanvasContainer", label: "Container", hint: "A box to arrange other widgets in" },
-  { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
-  { key: "CanvasFilterList", label: "Filter list", hint: "Property filters over an object set, with counts" },
-  { key: "CanvasFilterPills", label: "Filter pills", hint: "The filters on a set, shown as pills a viewer can remove" },
-  { key: "CanvasUserSelect", label: "User select", hint: "Pick one or several people from the organisation" },
-  { key: "CanvasProminentTerms", label: "Prominent terms", hint: "A curated list of values to filter by, each with its count" },
-  { key: "CanvasNumericInput", label: "Numeric input", hint: "A number the viewer types, with units and grouping" },
-  { key: "CanvasTextInput", label: "Text input", hint: "A line or a paragraph the viewer types" },
-  { key: "CanvasStringSelector", label: "String selector", hint: "Pick one or many from a list of strings" },
-  { key: "CanvasDateTimePicker", label: "Date and time", hint: "A single date and time, in a chosen timezone" },
-  { key: "CanvasMarkdown", label: "Markdown", hint: "Formatted text, typed or read from a string variable" },
-  { key: "CanvasObjectSetTitle", label: "Object set title", hint: "One object's title, or an object type and how many there are" },
-  { key: "CanvasPropertyList", label: "Property list", hint: "The properties of one object, in a grid" },
-  { key: "CanvasLinksWidget", label: "Links", hint: "One object's links, in expandable sections" },
-  { key: "CanvasObjectViewWidget", label: "Object view", hint: "The whole object view for one object, embedded" },
-  { key: "CanvasObjectDropdown", label: "Object dropdown", hint: "Pick one object from a searchable list" },
-  { key: "CanvasObjectSelector", label: "Object selector", hint: "Pick several objects from a searchable list" },
-  { key: "CanvasPieChart", label: "Pie chart", hint: "Objects grouped by a property, as proportional slices" },
-  { key: "CanvasStepper", label: "Stepper", hint: "Progress through a multi-step workflow, in order or not" },
-  { key: "CanvasTimeline", label: "Timeline", hint: "Objects from any number of sets, as events in time order" },
-  { key: "CanvasMediaPreview", label: "Media preview", hint: "An image, video or audio file, from a URL or an attachment" },
-  { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
-  { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
-  { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },
-  { key: "CanvasSearch", label: "Search", hint: "Narrow an object set by a property prefix" },
-  { key: "CanvasPivotTable", label: "Pivot table", hint: "Counts by two properties at once, over an object set" },
-  { key: "CanvasTimeSeries", label: "Time series", hint: "When the objects in a set last changed" },
-  { key: "CanvasEmbeddedModule", label: "Embedded module", hint: "Another Workshop module, shown inside this one" },
-  { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
-  { key: "CanvasMap", label: "Map", hint: "Pins from a geopoint property or location columns" },
-  { key: "CanvasMetricCard", label: "Metric card", hint: "One number over an object set" },
-  { key: "CanvasActionForm", label: "Action form", hint: "Write back to an object instance" },
-];
+// The list itself is `widget-list.ts`, so a test can read it (§447).
+// Re-exported here because every caller has imported it from this module
+// since the builder was written — **and narrowed to the resolver's keys on the
+// way through**, which is the one thing the data file cannot do for itself: it
+// must not import `widgets.tsx` back. The cast is checked by
+// `widget-palette.test.ts`, which asserts the two lists hold the same keys.
+export const PALETTE = WIDGET_LIST as {
+  key: keyof typeof CANVAS_RESOLVER; label: string; hint: string;
+}[];
 
 /** Toolbox drag-source button - creates a new node of `Component` when
  * dropped onto the canvas. Kept here since it needs the same
