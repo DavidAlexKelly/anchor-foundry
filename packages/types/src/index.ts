@@ -2915,8 +2915,17 @@ export interface ActionCriterion {
 
 export interface ActionType {
   id: string;
-  object_type_id: string;
-  object_type_name: string;
+  /** **Null on an interface action** (`action-types` p.59; db 0101, §451).
+   * Exactly one of this and `interface_id` is set, so a screen that needs "what
+   * does this act on" reads `subject_name` rather than branching. */
+  object_type_id: string | null;
+  object_type_name: string | null;
+  interface_id?: string | null;
+  interface_name?: string | null;
+  /** The subject's display name, whichever kind of subject it is — derived by
+   * the server so a label is one expression rather than a `??` in every
+   * component that draws one. */
+  subject_name: string;
   api_name: string;
   display_name: string;
   description: string;

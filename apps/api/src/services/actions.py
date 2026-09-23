@@ -1104,6 +1104,18 @@ def inline_edit_refusals(action_type: dict[str, Any]) -> list[str]:
     as the executor's refusals: it names what is wrong and what would fix it.
     """
     reasons: list[str] = []
+    # **p.135's inline edit is a table of one type's rows** (§451). An
+    # interface action's rows may belong to several, and a batch writes one
+    # dataset — so the grid must not offer one, rather than offering it and
+    # meeting the executor's refusal a click later (§214). Said here because
+    # this is the one place that decides what a grid may offer, and both the
+    # Explorer and the Object Table read it.
+    if action_type.get("object_type_id") is None and action_type.get("interface_id"):
+        reasons.append(
+            "an inline edit writes one object type's dataset, and this action "
+            "is on an interface, whose objects may be of several "
+            "(action-types p.59)"
+        )
     rules = list(action_type.get("rules") or [])
     subject_modifies = [
         r for r in rules
@@ -1335,17 +1347,39 @@ async def list_action_types(
     params: dict[str, Any] = {"wid": str(workspace_id)}
     where = "at.workspace_id = :wid"
     if object_type_id is not None:
-        where += " AND at.object_type_id = :tid"
+        # **p.64's merge, and it happens here rather than in a caller**: "for a
+        # given object, all object-type-specific and interface-based actions
+        # that can be applied to that object will appear in the action
+        # dropdown" — *the* dropdown, one list. A browser that asked twice and
+        # concatenated would be a second answer to "which actions apply to
+        # this type", and the two would drift the first time either query
+        # gained a condition (§292).
+        where += """ AND (at.object_type_id = :tid
+                          OR at.interface_id IN (
+                              SELECT interface_id FROM object_type_interfaces
+                               WHERE object_type_id = :tid))"""
         params["tid"] = str(object_type_id)
     rows = await fetch_all(
         conn,
         f"""
         SELECT at.id, at.object_type_id, ot.display_name AS object_type_name,
+               at.interface_id, i.display_name AS interface_name,
+               -- **The subject's name, derived once here** (§451). Every
+               -- screen that labels an action wants "what does this act on",
+               -- and an interface action has no object type to read it from —
+               -- so a `COALESCE` in each caller would be the same expression
+               -- written as many times as there are readers (§292).
+               COALESCE(ot.display_name, i.display_name) AS subject_name,
                at.api_name, at.display_name, at.description,
                at.status, at.deprecation, at.allow_revert,
                at.created_at, at.updated_at
           FROM action_types at
-          JOIN object_types ot ON ot.id = at.object_type_id
+          -- **LEFT, and that is db 0101's whole consequence for the reads.**
+          -- An inner join on either table drops every action whose subject is
+          -- the other kind — silently, as an empty listing rather than an
+          -- error.
+          LEFT JOIN object_types ot ON ot.id = at.object_type_id
+          LEFT JOIN interfaces i ON i.id = at.interface_id
          WHERE {where}
          ORDER BY at.display_name
         """,
@@ -1361,11 +1395,23 @@ async def get_action_type(
         conn,
         """
         SELECT at.id, at.object_type_id, ot.display_name AS object_type_name,
+               at.interface_id, i.display_name AS interface_name,
+               -- **The subject's name, derived once here** (§451). Every
+               -- screen that labels an action wants "what does this act on",
+               -- and an interface action has no object type to read it from —
+               -- so a `COALESCE` in each caller would be the same expression
+               -- written as many times as there are readers (§292).
+               COALESCE(ot.display_name, i.display_name) AS subject_name,
                at.api_name, at.display_name, at.description,
                at.status, at.deprecation, at.allow_revert,
                at.created_at, at.updated_at
           FROM action_types at
-          JOIN object_types ot ON ot.id = at.object_type_id
+          -- **LEFT, and that is db 0101's whole consequence for the reads.**
+          -- An inner join on either table drops every action whose subject is
+          -- the other kind — silently, as an empty listing rather than an
+          -- error.
+          LEFT JOIN object_types ot ON ot.id = at.object_type_id
+          LEFT JOIN interfaces i ON i.id = at.interface_id
          WHERE at.id = :aid AND at.workspace_id = :wid
         """,
         {"aid": str(action_type_id), "wid": str(workspace_id)},
@@ -1379,7 +1425,11 @@ async def create_shell_action_type(
     conn: AsyncConnection,
     *,
     workspace_id: UUID,
-    object_type_id: UUID,
+    object_type_id: UUID | None = None,
+    #: `action-types` p.59's interface action (§451; db 0101). **Exactly one
+    #: subject**, checked here as well as by db 0101's CHECK, because the
+    #: constraint reports an integrity error and this reports a sentence.
+    interface_id: UUID | None = None,
     api_name: str,
     display_name: str,
     description: str,
@@ -1417,29 +1467,55 @@ async def create_shell_action_type(
     ontology_status.check_status(status, kind="action type")
     note = ontology_status.parse_deprecation(deprecation, status)
 
+    from . import interfaces as interfaces_service
     from . import ontology as ontology_service
 
-    await ontology_service.get_type(conn, workspace_id, object_type_id)  # 404 if invisible
+    if (object_type_id is None) == (interface_id is None):
+        raise ValueError(
+            "an action type acts on an object type or on an interface, and "
+            "exactly one of the two (action-types p.59)"
+        )
+    # 404 if invisible, whichever kind of subject it is — read before the name
+    # check below for `create_action_type`'s stated reason: a refusal about the
+    # name would otherwise stand in for "no such subject".
+    if object_type_id is not None:
+        await ontology_service.get_type(conn, workspace_id, object_type_id)
+    else:
+        await interfaces_service.get_interface(conn, workspace_id, interface_id)
+    subject = "object type" if object_type_id is not None else "interface"
     existing = await fetch_one(
         conn,
-        "SELECT 1 AS x FROM action_types WHERE object_type_id=:tid AND api_name=:api",
-        {"tid": str(object_type_id), "api": api_name},
+        """
+        SELECT 1 AS x FROM action_types
+         WHERE api_name = :api
+           AND object_type_id IS NOT DISTINCT FROM CAST(:tid AS uuid)
+           AND interface_id IS NOT DISTINCT FROM CAST(:iid AS uuid)
+        """,
+        {
+            "api": api_name,
+            "tid": str(object_type_id) if object_type_id else None,
+            "iid": str(interface_id) if interface_id else None,
+        },
     )
     if existing is not None:
-        raise ConflictError(f"an action named {api_name!r} already exists on this object type")
+        raise ConflictError(f"an action named {api_name!r} already exists on this {subject}")
 
     row = await fetch_one(
         conn,
         """
-        INSERT INTO action_types (workspace_id, object_type_id, api_name, display_name,
+        INSERT INTO action_types (workspace_id, object_type_id, interface_id,
+                                  api_name, display_name,
                                   description, created_by, status, deprecation)
-        VALUES (:wid, :tid, :api, :name, :descr, :by,
+        VALUES (:wid, CAST(:tid AS uuid), CAST(:iid AS uuid), :api, :name, :descr, :by,
                 CAST(:status AS ontology_status), CAST(:depr AS jsonb))
-        RETURNING id, object_type_id, api_name, display_name, description,
+        RETURNING id, object_type_id, interface_id, api_name, display_name, description,
                   status, deprecation, created_at, updated_at
         """,
         {
-            "wid": str(workspace_id), "tid": str(object_type_id), "api": api_name,
+            "wid": str(workspace_id),
+            "tid": str(object_type_id) if object_type_id else None,
+            "iid": str(interface_id) if interface_id else None,
+            "api": api_name,
             "name": display_name, "descr": description, "by": str(created_by),
             "status": status,
             "depr": json.dumps(note) if note is not None else None,
@@ -1453,7 +1529,13 @@ async def create_action_type(
     conn: AsyncConnection,
     *,
     workspace_id: UUID,
-    object_type_id: UUID,
+    object_type_id: UUID | None = None,
+    #: p.59's interface action (§451). `editable_properties` then names the
+    #: **interface's** properties — "you can use interface action rules only to
+    #: modify the interface shared properties or to delete objects" — and the
+    #: concrete property each rule writes is found through the implementation's
+    #: mapping at submission, once the subject's own type is known.
+    interface_id: UUID | None = None,
     api_name: str,
     display_name: str,
     description: str,
@@ -1474,14 +1556,35 @@ async def create_action_type(
     if not editable_properties:
         raise ValueError("an action must make at least one property editable")
 
+    from . import interfaces as interfaces_service
     from . import ontology as ontology_service
 
-    await ontology_service.get_type(conn, workspace_id, object_type_id)
-    declared = await ontology_service.list_properties(conn, object_type_id)
+    if (object_type_id is None) == (interface_id is None):
+        raise ValueError(
+            "an action type acts on an object type or on an interface, and "
+            "exactly one of the two (action-types p.59)"
+        )
+    # **The subject's declared properties, whichever kind of subject it is.**
+    # p.59 makes an interface action's editable properties the interface's
+    # shared ones, and from here the conversion below is identical — one
+    # parameter per property, typed from it, and a `modify_object` rule
+    # pairing them. An interface's *effective* properties rather than its own,
+    # because p.53 lets an interface extend any number of others and an
+    # inherited property is one an implementation must supply just the same.
+    if object_type_id is not None:
+        await ontology_service.get_type(conn, workspace_id, object_type_id)
+        declared = await ontology_service.list_properties(conn, object_type_id)
+        subject = "object type"
+    else:
+        interface = await interfaces_service.get_interface(
+            conn, workspace_id, interface_id
+        )
+        declared = list(interface["effective_properties"])
+        subject = "interface"
     known = {p["api_name"] for p in declared}
     unknown = [p for p in editable_properties if p not in known]
     if unknown:
-        raise ValueError(f"not properties of this object type: {', '.join(unknown)}")
+        raise ValueError(f"not properties of this {subject}: {', '.join(unknown)}")
     # **The same refusals `_validate_definition` makes, on the path that does
     # not go through it.** This conversion writes one parameter per editable
     # property, typed from the property, plus a `modify_object` rule pairing
@@ -1508,6 +1611,7 @@ async def create_action_type(
         conn,
         workspace_id=workspace_id,
         object_type_id=object_type_id,
+        interface_id=interface_id,
         api_name=api_name,
         display_name=display_name,
         description=description,
@@ -1553,11 +1657,13 @@ async def create_action_type(
                 "ord": order,
             },
         )
-    object_type = await ontology_service.get_type(conn, workspace_id, object_type_id)
-    return {
-        **(await _with_definition(conn, [dict(row)]))[0],
-        "object_type_name": object_type["display_name"],
-    }
+    # **Read back through `get_action_type`**, rather than dressing up the
+    # INSERT's own row. That read is where the subject's name is derived
+    # (§451), and a create that assembled its own answer would be a second
+    # shape for one resource — which is exactly what it was: the old line here
+    # looked the object type up and added `object_type_name` by hand, and an
+    # interface action has no object type to look up.
+    return await get_action_type(conn, workspace_id, action_type_id)
 
 
 def check_display_name(display_name: Any) -> str:
@@ -2027,7 +2133,8 @@ async def get_run(
     row = await fetch_one(
         conn,
         """
-        SELECT r.*, at.object_type_id, at.allow_revert, at.display_name AS action_name
+        SELECT r.*, at.object_type_id, at.interface_id, at.allow_revert,
+               at.display_name AS action_name
           FROM action_runs r
           JOIN action_types at ON at.id = r.action_type_id
          WHERE r.id = :id AND at.workspace_id = :wid
@@ -2426,6 +2533,115 @@ async def parameter_usages(
                     if str(row["name"]) not in modules:
                         modules.append(str(row["name"]))
     return usages
+
+
+# ---- `action-types` p.59-62: an action whose subject is an interface --------
+class InterfaceSubjectError(ValueError):
+    """An interface action that cannot be run against this particular object.
+
+    Its own class because the answer is *not* "the action is wrong" — p.59's
+    whole promise is that interface rules "apply to all the object types that
+    implement the interface", and the cases below are the ones where a
+    particular implementation cannot keep it. The action is fine; this object
+    is not one it can be run against, and the message has to say which.
+    """
+
+
+def rules_for_implementation(
+    rules: list[dict[str, Any]],
+    *,
+    mapping: dict[str, str],
+    interface_name: str,
+    type_name: str,
+) -> list[dict[str, Any]]:
+    """An interface action's rules, in one implementing type's vocabulary
+    (`action-types` p.59-62; §451).
+
+    > "You can use interface action rules whenever the edits can apply to all
+    > the object types that implement the interface." (p.59)
+
+    An interface action's rules name the interface's **shared properties**,
+    because that is all an interface has. Every implementation maps those names
+    onto its own (`object_type_interfaces.property_mapping`), so running one
+    against a concrete object is a rename and nothing else — after which the
+    executor is the executor, unchanged. **That is the whole design**: one
+    write path, one set of refusals, one revert, rather than a second executor
+    that would have to be kept in step with the first (§292).
+
+    Pure, and deliberately: which type an object is, and what that type maps,
+    are reads; *what the rules then say* is arithmetic, and this is the part
+    worth being able to ask without a database.
+
+    **A rule naming another object type is left alone.** Its `property` is
+    already that type's own — the interface has nothing to do with it — and
+    rewriting it through this mapping would translate a name that was never in
+    the interface's vocabulary.
+
+    **An unmapped property is refused rather than skipped.** An interface's
+    *optional* property may be left unmapped by an implementation
+    (`check_implementation` says so, and p.62's "design interfaces around
+    capabilities" is why it exists) — so an action writing one has nothing to
+    write on this type, and silently dropping it would make the same submission
+    change different things depending on which object it was run against. That
+    is precisely what p.59's sentence promises will not happen.
+    """
+    out: list[dict[str, Any]] = []
+    for rule in rules:
+        config = _json(rule.get("config")) or {}
+        if str(rule.get("kind")) != "modify_object" or config.get("object_type"):
+            out.append(rule)
+            continue
+        prop = str(config.get("property", ""))
+        target = mapping.get(prop)
+        if not target:
+            raise InterfaceSubjectError(
+                f"{type_name} implements {interface_name} without mapping "
+                f"{prop!r} to one of its own properties, so this action has "
+                f"nothing to write on it (action-types p.59)"
+            )
+        out.append({**rule, "config": {**config, "property": target}})
+    return out
+
+
+def check_primary_key_writes(
+    writes: dict[str, Any],
+    *,
+    column_mappings: dict[str, str],
+    primary_key_column: str,
+    type_name: str,
+) -> None:
+    """`action-types` p.62's refusal, for every action type (§451).
+
+    > "Note that primary key values cannot be modified by any action type.
+    > Therefore, an action will fail on submission if the action tries to
+    > modify a primary key property for a selected object type." (p.62)
+
+    **"Any action type", and that is not a sentence about interfaces.** p.62
+    raises it there because an interface action is the case where nobody can
+    see it coming — the rule names a shared property and each implementation
+    decides which of its own columns that is, so one of them may have chosen
+    the column its identity is in. But the rule is general, and this platform
+    had no refusal at all: an object identity here is
+    `(source_id, primary_key)` and `dataset_engine.write_rows` finds the row by
+    its **old** key, so a write to that column succeeded and quietly made the
+    object a different object. Every later reference to it — a link, a
+    favourite, an action run waiting to be reverted — pointed at a key nothing
+    had any more.
+
+    **At submission rather than at save time**, which is p.62's own word and
+    this platform's only option: the key is a *column* on a
+    `object_type_sources` row, and a type can be mapped to a different dataset
+    in each project, so the same action is legal in one project and not in
+    another. Refusing at save time would refuse it everywhere on the strength
+    of one project's mapping.
+    """
+    for prop in writes:
+        if column_mappings.get(prop) == primary_key_column:
+            raise InterfaceSubjectError(
+                f"{prop!r} is the column {type_name} is identified by "
+                f"({primary_key_column!r}), and a primary key cannot be "
+                "modified by any action type (action-types p.62)"
+            )
 
 
 def struct_fields_for_parameters(
@@ -2966,11 +3182,34 @@ async def set_definition(
     from . import ontology as ontology_service
 
     action_type = await get_action_type(conn, workspace_id, action_type_id)
-    object_type_id = UUID(str(action_type["object_type_id"]))
-    property_types = {
-        p["api_name"]: p["data_type"]
-        for p in await ontology_service.list_properties(conn, object_type_id)
-    }
+    # **The subject's declared properties, whichever kind of subject it is**
+    # (§451). This is also where `action-types` p.59's rule is enforced — "you
+    # can use interface action rules only to modify the interface shared
+    # properties" — and it is enforced by there being nothing else to name: an
+    # interface action's rules are checked against the interface's effective
+    # properties, so a rule naming a property of one implementing type is
+    # refused with the message any unknown property gets. A separate check
+    # would be a second list of what an interface has.
+    if action_type["object_type_id"] is not None:
+        subject_id = UUID(str(action_type["object_type_id"]))
+        property_types = {
+            p["api_name"]: p["data_type"]
+            for p in await ontology_service.list_properties(conn, subject_id)
+        }
+    else:
+        from . import interfaces as interfaces_service
+
+        subject_id = UUID(str(action_type["interface_id"]))
+        interface = await interfaces_service.get_interface(
+            conn, workspace_id, subject_id
+        )
+        # **Effective, not own** — p.53 lets an interface extend any number of
+        # others, and a property inherited from a parent is one every
+        # implementation supplies just the same.
+        property_types = {
+            str(p["api_name"]): str(p["data_type"])
+            for p in interface["effective_properties"]
+        }
     # p.45's one difference between an override condition and a submission
     # criterion: "only parameters which appear above the current parameter in
     # the form hierarchy can be referenced". The hierarchy is §328's form, so
@@ -3114,7 +3353,7 @@ async def set_definition(
         )
     _validate_definition(
         parameters=parameters, rules=rules, criteria=criteria,
-        property_types=property_types, object_type_id=object_type_id,
+        property_types=property_types, object_type_id=subject_id,
         link_types=await link_types_for(conn, workspace_id),
         workspace_properties=await properties_by_type(conn, workspace_id),
         # Keyed by id, so a rule's `webhook` field resolves without a second

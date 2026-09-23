@@ -1590,7 +1590,10 @@ export default function ObjectsPage() {
                       <StatusBadge status={a.status} />
                       <div className="slug">{a.api_name}</div>
                     </td>
-                    <td>{a.object_type_name}</td>
+                    {/* The subject, which since §451 may be an interface
+                        (`action-types` p.59) — `object_type_name` is null
+                        there and would render as an empty cell. */}
+                    <td>{a.subject_name}</td>
                     <td>{a.editable_properties.map((p) => <span key={p} className="chip" style={{ marginRight: 4 }}>{p}</span>)}</td>
                     <td>
                       {canEditOntology && (

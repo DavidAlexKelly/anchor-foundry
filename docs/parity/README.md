@@ -548,6 +548,26 @@ directions — a verdict computed from a value that changes on its own is not a
 verdict, and the way to tell is to check that a mutant you know is harmless
 actually survives.
 
+### A run that errored has no verdict (§451)
+
+§450's rule was that a verdict must compare the counts rather than a line that
+carries a duration. §451 found the other half of the same mistake: a comparison
+of counts calls `5 errors` different from `5 passed`, and scores the mutant
+**caught**.
+
+It is nothing of the kind — the suite did not run. One of §451's seam mutants
+reported `5 errors` inside its group and was a clean `1 failed, 4 passed` when
+re-run on its own a minute later; the group's restore had left the dev server
+mid-rebuild. Both numbers "differ from the baseline", and only one of them is a
+result.
+
+So the harness reads the summary for the word *error* and prints `NO RESULT`,
+which is what §416's rule about groups already asks for in the other direction.
+The general form is the one this page keeps finding from new angles: **a verdict
+is a comparison of two things that ran.** Anything else is arithmetic on
+noise — and it always inflates the score, which is the direction nobody
+investigates.
+
 ### A clean first pass means the list came from the test file (§350, §450)
 
 Recorded on §350's row and worth having here, because §450 walked into it again:

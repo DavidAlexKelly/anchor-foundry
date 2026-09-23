@@ -2596,3 +2596,36 @@ def test_the_fields_come_from_the_type_the_rule_writes(
     assert [f["api_name"] for f in parameter["struct_fields"]] == ["verdict", "days"], (
         parameter["struct_fields"]
     )
+
+
+def test_a_rule_with_no_parameter_is_refused_for_that_and_not_for_structs(
+    client: TestClient, fx: Fixture, struct_type_id: str
+) -> None:
+    """**Which refusal a malformed rule meets**, and the reason p.73's checks
+    skip a rule that names nothing.
+
+    `_check_struct_rules` runs before the rule loop that refuses a parameter
+    nothing declares — so a `modify_object` rule with a struct property and an
+    empty parameter reaches it first, and without the skip it is refused for
+    being "written by a parameter that is not a struct one". That sends
+    somebody to p.73 to read about struct parameters when what they actually
+    did was leave a box empty.
+
+    Found by a mutant that turned the skip into a no-op and broke nothing
+    (§451's adversarial pass), which is what an unasserted branch looks like
+    from outside.
+    """
+    action = make_action(client, fx, struct_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [
+            {"api_name": "resolution", "display_name": "Resolution",
+             "data_type": "struct"},
+        ],
+        "rules": [
+            {"kind": "modify_object", "config": {"property": "resolution", "parameter": ""}},
+        ],
+        "criteria": [],
+    })
+    assert r.status_code == 422, r.text
+    assert "not a parameter" in r.json()["detail"], r.json()["detail"]
+    assert "struct parameter" not in r.json()["detail"], r.json()["detail"]

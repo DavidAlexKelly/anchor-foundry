@@ -44,6 +44,7 @@ from ..services import dataset_engine as engine
 from ..services import datasets as dataset_service
 from ..lib.errors import ConflictError, NotFoundError
 from ..services import instance_store
+from ..services import interfaces as interfaces_service
 from ..services import notification_store
 from ..services import object_type_usage as usage_service
 from ..services import notifications as notifications_service
@@ -179,8 +180,18 @@ class ActionCriterionOut(BaseModel):
 
 class ActionTypeOut(BaseModel):
     id: UUID
-    object_type_id: UUID
-    object_type_name: str
+    #: **Null on an interface action** (`action-types` p.59; db 0101, §451).
+    #: Exactly one of this and `interface_id` is set — which is why neither is
+    #: optional-with-a-default here: a payload carrying neither has no subject,
+    #: and a model that let it through would make a screen infer one.
+    object_type_id: UUID | None
+    object_type_name: str | None
+    interface_id: UUID | None = None
+    interface_name: str | None = None
+    #: The subject's display name, whichever kind of subject it is. Derived in
+    #: the query rather than by each reader, so an action's label is one
+    #: expression instead of a `??` in every component that draws one.
+    subject_name: str
     api_name: str
     display_name: str
     description: str
@@ -232,7 +243,13 @@ class ActionTypeOut(BaseModel):
 
 
 class ActionTypeCreate(BaseModel):
-    object_type_id: UUID
+    #: p.30's screen, and exactly one of these two. p.59's interface action is
+    #: created the same way — "under Interfaces, pick the desired interface and
+    #: rule type" — and `editable_properties` then names the interface's shared
+    #: properties. The refusal lives in the service so that both this route and
+    #: the ontology import meet the same sentence.
+    object_type_id: UUID | None = None
+    interface_id: UUID | None = None
     api_name: str = Field(min_length=1, max_length=100, pattern="^[a-z][a-z0-9_]{0,99}$")
     display_name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=2000)
@@ -480,6 +497,7 @@ async def create_action_type(
             conn,
             workspace_id=access.workspace_id,
             object_type_id=body.object_type_id,
+            interface_id=body.interface_id,
             api_name=body.api_name,
             display_name=body.display_name,
             description=body.description,
@@ -496,7 +514,16 @@ async def create_action_type(
             resource_type="action_type",
             resource_id=row["id"],
             workspace_id=access.workspace_id,
-            metadata={"api_name": body.api_name, "object_type_id": str(body.object_type_id)},
+            # The subject that was actually given, rather than `str(None)` for
+            # the one that was not — an audit row reading `object_type_id:
+            # "None"` is worse than one that omits the key (§451).
+            metadata={
+                "api_name": body.api_name,
+                **({"object_type_id": str(body.object_type_id)}
+                   if body.object_type_id else {}),
+                **({"interface_id": str(body.interface_id)}
+                   if body.interface_id else {}),
+            },
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
@@ -1311,8 +1338,23 @@ async def undo_action(
             # not exist, and naming which half was wrong tells them about a run
             # in an action type they addressed by guess.
             raise NotFoundError("action run")
-        object_type_id = UUID(str(run["object_type_id"]))
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        if run["object_type_id"] is not None:
+            object_type_id = UUID(str(run["object_type_id"]))
+        else:
+            # An interface action's run (§451). The concrete type is the
+            # object's, resolved the same way the apply resolved it — through
+            # `_interface_subject`, so a revert and the write it undoes cannot
+            # disagree about which type they are acting on (§292). The run
+            # stores no type of its own, and adding one would be a second
+            # answer to a question the object already answers.
+            object_type_id, _found, _implementation = await _interface_subject(
+                conn,
+                workspace_id=access.workspace_id,
+                interface_id=UUID(str(run["interface_id"])),
+                instance_id=str(run["instance_id"]),
+                search_prefix=prefix,
+            )
         instance = await instance_store.store_for(conn).get_instance(
             search_prefix=prefix, object_type_id=object_type_id,
             instance_id=str(run["instance_id"]),
@@ -1801,6 +1843,44 @@ async def _counted_as(
         raise
 
 
+async def _interface_subject(
+    conn: Any,
+    *,
+    workspace_id: UUID,
+    interface_id: UUID,
+    instance_id: str,
+    search_prefix: str,
+) -> tuple[UUID, dict[str, Any], dict[str, Any]]:
+    """Which implementing type this object belongs to, the object, and the
+    implementation that says how to read it (`action-types` p.62; §451).
+
+    **Asked of each implementation in turn**, because an interface has no
+    instances of its own (db 0065's own words) and the instance store is scoped
+    by object type on every call. The order is `implementations_of`'s, which is
+    by the type's display name and stable — so an id that somehow existed under
+    two types would resolve the same way on every run rather than differently
+    per request.
+
+    A 404 rather than a refusal when nothing has it: from the caller's side
+    this is the same "no such object instance" the object-type path raises, and
+    the fact that several types were consulted is not something the caller
+    asked about.
+    """
+    implementations = await interfaces_service.implementations_of(
+        conn, workspace_id, interface_id
+    )
+    store = instance_store.store_for(conn)
+    for implementation in implementations:
+        type_id = UUID(str(implementation["object_type_id"]))
+        found = await store.get_instance(
+            search_prefix=search_prefix, object_type_id=type_id,
+            instance_id=instance_id,
+        )
+        if found is not None:
+            return type_id, found, implementation
+    raise NotFoundError("object instance")
+
+
 @project_router.post("/{action_type_id}/execute", response_model=ExecuteResult)
 async def execute_action(
     action_type_id: UUID,
@@ -1820,12 +1900,46 @@ async def execute_action(
     try:
         async with user_connection(access.auth.user_id) as conn:
             action_type = await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
-            object_type_id = UUID(str(action_type["object_type_id"]))
             prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
-            instance = await instance_store.store_for(conn).get_instance(
-                search_prefix=prefix, object_type_id=object_type_id,
-                instance_id=str(body.instance_id),
-            )
+            if action_type["object_type_id"] is not None:
+                object_type_id = UUID(str(action_type["object_type_id"]))
+                # The *concrete* type's name, which for an object action is the
+                # subject and for an interface action is whichever
+                # implementation the object turned out to be. Named once here
+                # because the refusals below say it (§451, §337).
+                type_name = str(action_type["object_type_name"] or "this type")
+                instance = await instance_store.store_for(conn).get_instance(
+                    search_prefix=prefix, object_type_id=object_type_id,
+                    instance_id=str(body.instance_id),
+                )
+            else:
+                # `action-types` p.59's interface action (§451). **The subject's
+                # own type is not known until submission** — p.62's interface
+                # reference parameter "shows objects of any type that implements
+                # the interface" — so it is found by asking each implementation
+                # for this instance. A read per implementing type, which is a
+                # handful and bounded by the interface; the store is scoped by
+                # object type on every call by design (`instance_store`'s own
+                # docstring), so a lookup by id alone is not a thing to add for
+                # one caller.
+                object_type_id, instance, implementation = await _interface_subject(
+                    conn,
+                    workspace_id=access.workspace_id,
+                    interface_id=UUID(str(action_type["interface_id"])),
+                    instance_id=str(body.instance_id),
+                    search_prefix=prefix,
+                )
+                type_name = str(implementation["display_name"])
+                # p.59's rename, and the only thing that differs from here on.
+                action_type = {
+                    **action_type,
+                    "rules": actions_service.rules_for_implementation(
+                        action_type["rules"],
+                        mapping=implementation["property_mapping"],
+                        interface_name=str(action_type["subject_name"]),
+                        type_name=type_name,
+                    ),
+                }
             if instance is None:
                 raise NotFoundError("object instance")
             # 404s if this instance's source isn't a mapping in this project.
@@ -2174,6 +2288,18 @@ async def execute_action(
                 edit_only=edit_only,
                 link_types=link_types,
             )
+            # p.62: "primary key values cannot be modified by any action type.
+            # Therefore, an action will fail on submission…" — which is where
+            # this is, for the reason that sentence gives and because the key is
+            # a *column* on this project's source rather than a property (§451).
+            actions_service.check_primary_key_writes(
+                values,
+                column_mappings={
+                    prop: col for col, prop in column_mappings.items()
+                },
+                primary_key_column=str(source["primary_key_column"]),
+                type_name=type_name,
+            )
             # p.116, at apply time and before anything is written. Only what this
             # action *writes* is checked on the subject: a required property that
             # was already empty is indexing's business (it reports), and refusing
@@ -2419,7 +2545,14 @@ async def execute_action(
                 if values:
                     await instance_store.store_for(conn).update_properties(
                         search_prefix=prefix,
-                        object_type_id=UUID(str(action_type["object_type_id"])),
+                        # **The type the subject turned out to be**, which for
+                        # an interface action is not the action's own (§451).
+                        # It was `action_type["object_type_id"]` and that is
+                        # `None` there — the write landed in the dataset and
+                        # the index update raised, which is the half of
+                        # decision 0008's ordering that is *meant* to be
+                        # survivable and is still not a thing to leave.
+                        object_type_id=object_type_id,
                         instance_id=str(body.instance_id),
                         properties=values,
                     )
@@ -2738,6 +2871,14 @@ async def execute_batch(
                 )
             seen.add(edit.instance_id)
 
+        # **No guard for an interface action here** (§451, §223). One was
+        # written — a batch reads one source, one property list and one set of
+        # column mappings and stages one dataset version, and an interface's
+        # rows may belong to several types — and a mutant proved it
+        # unreachable: `inline_edit_refusals` is consulted above and already
+        # names the interface case, so every path into this line has an object
+        # type. One refusal, in the place that also decides what a grid may
+        # offer, rather than the same sentence twice.
         object_type_id = UUID(str(action_type["object_type_id"]))
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         properties = await ontology_service.list_properties(conn, object_type_id)
