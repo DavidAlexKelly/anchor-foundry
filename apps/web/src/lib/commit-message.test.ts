@@ -4,6 +4,7 @@ import {
   COMMIT_BLOCK, SETTINGS_FILE, messagePlaceholder, messageProblem, messageRequired,
   settingsFrom,
 } from "./commit-message";
+import { REFERENCES_BLOCK, prefersIds } from "./settings-file";
 
 const required = (extra: Record<string, unknown> = {}) => ({
   [COMMIT_BLOCK]: { required: true, ...extra },
@@ -121,5 +122,50 @@ describe("messagePlaceholder", () => {
 
   it("is the ordinary invitation otherwise", () => {
     expect(messagePlaceholder({})).toBe("What changed, and why");
+  });
+});
+
+// ---- p.115's dataset aliases (§444) -----------------------------------------
+describe("prefersIds", () => {
+  it("is off unless the file asks", () => {
+    // Every repository here predates the setting and names datasets by name.
+    expect(prefersIds({})).toBe(false);
+    expect(prefersIds({ [REFERENCES_BLOCK]: {} })).toBe(false);
+  });
+
+  it("is on for p.115's id preference", () => {
+    expect(prefersIds({ [REFERENCES_BLOCK]: { prefer: "id" } })).toBe(true);
+  });
+
+  it("reads the value written out, so an unknown one changes nothing", () => {
+    // p.115's other option is the path form, and a settings file carrying a
+    // word nobody here understands should keep the behaviour it had rather
+    // than pick one.
+    expect(prefersIds({ [REFERENCES_BLOCK]: { prefer: "name" } })).toBe(false);
+    expect(prefersIds({ [REFERENCES_BLOCK]: { prefer: "rid" } })).toBe(false);
+    expect(prefersIds({ [REFERENCES_BLOCK]: { prefer: true } })).toBe(false);
+  });
+
+  it("is not fooled by a block of the wrong shape", () => {
+    expect(prefersIds({ [REFERENCES_BLOCK]: "id" })).toBe(false);
+    expect(prefersIds({ [REFERENCES_BLOCK]: null })).toBe(false);
+  });
+
+  it("reads the key p.115's file actually carries", () => {
+    // Written out rather than built from the constant — the fixture bug §441
+    // hit and this repository has now met five times.
+    expect(REFERENCES_BLOCK).toBe("datasetReferences");
+    expect(prefersIds({ datasetReferences: { prefer: "id" } })).toBe(true);
+  });
+
+  it("is read out of the same file the commit rule is", () => {
+    // One settings file, one parser: a repository declares its conventions in
+    // one place, and both rules go through `settingsFrom`.
+    const file = { [SETTINGS_FILE]: JSON.stringify({
+      commitMessages: { required: true },
+      datasetReferences: { prefer: "id" },
+    }) };
+    expect(messageRequired(settingsFrom(file))).toBe(true);
+    expect(prefersIds(settingsFrom(file))).toBe(true);
   });
 });

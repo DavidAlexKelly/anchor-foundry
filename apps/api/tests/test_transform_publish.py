@@ -2247,3 +2247,164 @@ def test_moving_several_is_editor_level(
         json={"model_ids": [model["id"]], "repository_id": repo["id"]},
     )
     assert r.status_code == 403, r.text
+
+
+# ---- p.115's dataset references by id (§444) ---------------------------------
+def dataset_id(client: TestClient, fx: Fixture, name: str) -> str:
+    r = client.get(f"{pbase(fx)}/datasets", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    return next(d["id"] for d in r.json() if d["name"] == name)
+
+
+def test_a_transform_may_name_its_input_by_id(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """p.115: *"Datasets can be referenced in code by using their exact
+    location in Foundry (path) or by using their unique resource identifier
+    (RID)… it is recommended to use RIDs where possible, as this allows
+    resources to be moved from one location to another without needing any
+    updates to the code in the repository."*
+
+    Here the second form is the dataset's own id, which is the thing §435
+    established cannot change.
+    """
+    name = source
+    rid = dataset_id(client, fx, name)
+    out = f"daily_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/a.sql": sql(out, rid)})
+
+    published = do_publish(client, fx, repo["id"])
+    assert published.status_code == 200, published.text
+    step = published.json()["steps"][0]
+    assert step["output"] == out
+    # **The name, not the id.** A plan that echoed the id back would make the
+    # publish preview unreadable exactly where p.115 says to prefer an id.
+    assert step["inputs"][0]["dataset"] == name
+    assert step["inputs"][0]["dataset_id"] == rid
+
+
+def test_renaming_the_dataset_does_not_break_a_file_that_named_it_by_id(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**The whole point of p.115**, and the thing §435 documented as the
+    hazard: a transform that reads by name stops publishing the moment
+    somebody fixes a typo."""
+    name = source
+    rid = dataset_id(client, fx, name)
+    out = f"daily_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/a.sql": sql(out, rid)})
+    assert do_publish(client, fx, repo["id"]).status_code == 200
+
+    renamed = client.patch(
+        f"{pbase(fx)}/datasets/{rid}", headers=hdr(fx.editor_sub),
+        json={"name": f"{name}_renamed"},
+    )
+    assert renamed.status_code == 200, renamed.text
+
+    again = do_publish(client, fx, repo["id"])
+    assert again.status_code == 200, again.text
+    assert again.json()["steps"][0]["inputs"][0]["dataset"] == f"{name}_renamed"
+
+
+def test_a_name_that_is_gone_still_refuses(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """The other half of the same claim: reading by name is unchanged, so the
+    refusal §435 relies on is still there."""
+    name = source
+    out = f"daily_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/a.sql": sql(out, name)})
+    assert do_publish(client, fx, repo["id"]).status_code == 200
+
+    rid = dataset_id(client, fx, name)
+    client.patch(f"{pbase(fx)}/datasets/{rid}", headers=hdr(fx.editor_sub),
+                 json={"name": f"{name}_moved"})
+
+    refused = do_publish(client, fx, repo["id"])
+    assert refused.status_code == 422, refused.text
+    assert name in refused.json()["detail"]
+
+
+def test_an_id_that_resolves_to_nothing_says_which_kind_of_reference_failed(
+    client: TestClient, fx: Fixture, repo: dict
+) -> None:
+    """The two have different remedies: a name that is gone was renamed and
+    the file has to follow it; an id that is gone is a dataset that was
+    deleted, or one in another project."""
+    out = f"daily_{uuid.uuid4().hex[:8]}"
+    absent = str(uuid.uuid4())
+    commit(client, fx, repo["id"], {"src/a.sql": sql(out, absent)})
+
+    refused = do_publish(client, fx, repo["id"])
+    assert refused.status_code == 422, refused.text
+    detail = refused.json()["detail"]
+    assert absent in detail
+    assert "another project" in detail
+
+
+def test_a_name_that_is_gone_is_not_explained_as_an_id(
+    client: TestClient, fx: Fixture, repo: dict
+) -> None:
+    """The sentence about ids is added only when one failed. A refusal about
+    a renamed dataset that talked about other projects would send somebody
+    looking in the wrong place."""
+    out = f"daily_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/a.sql": sql(out, "no_such_dataset")})
+
+    refused = do_publish(client, fx, repo["id"])
+    assert refused.status_code == 422, refused.text
+    assert "another project" not in refused.json()["detail"]
+
+
+def test_a_long_name_that_is_not_an_id_is_not_explained_as_one(
+    client: TestClient, fx: Fixture, repo: dict
+) -> None:
+    """**The survivor this test exists for.** `_looks_like_id` could be
+    replaced by "is it thirty-six characters" and every other test here still
+    passed, because every id in them is a real UUID and no name is that long.
+
+    The two are not the same. A thirty-six character *name* that is gone was
+    renamed, and telling its author to look in another project sends them
+    somewhere the dataset has never been.
+    """
+    out = f"daily_{uuid.uuid4().hex[:8]}"
+    # Thirty-six characters, and a name rather than an id: the declaration
+    # syntax allows letters, digits, `_`, `.` and `-`.
+    long_name = "a" * 36
+    assert len(long_name) == 36
+    commit(client, fx, repo["id"], {"src/a.sql": sql(out, long_name)})
+
+    refused = do_publish(client, fx, repo["id"])
+    assert refused.status_code == 422, refused.text
+    detail = refused.json()["detail"]
+    assert long_name in detail
+    assert "another project" not in detail
+
+
+def test_a_dataset_in_another_project_is_not_reachable_by_id(
+    client: TestClient, fx: Fixture, repo: dict
+) -> None:
+    """**The refusal §381 built, kept.** p.115's ids make references survive a
+    rename; they must not become a way round the project boundary that
+    `models._validate_and_set_inputs` enforces — which is `datasets-lineage`'s
+    *Move to another project* row and this document's *Project references* row,
+    both ○ by the same decision.
+    """
+    other = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.editor_sub),
+        json={"name": f"Elsewhere {uuid.uuid4().hex[:6]}"},
+    )
+    assert other.status_code == 201, other.text
+    elsewhere = other.json()["id"]
+    name = f"orders_{uuid.uuid4().hex[:8]}"
+    made = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{elsewhere}/datasets/upload",
+        headers=hdr(fx.editor_sub), data={"name": name},
+        files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")},
+    )
+    assert made.status_code == 201, made.text
+
+    out = f"daily_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/a.sql": sql(out, made.json()["id"])})
+    refused = do_publish(client, fx, repo["id"])
+    assert refused.status_code == 422, refused.text

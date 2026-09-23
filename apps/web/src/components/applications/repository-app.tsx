@@ -28,6 +28,7 @@ import {
 } from "@/components/editor-preferences";
 import { STEPS as WALKTHROUGH_STEPS } from "@/lib/repository-walkthrough";
 import { messagePlaceholder, messageProblem, settingsFrom } from "@/lib/commit-message";
+import { prefersIds } from "@/lib/settings-file";
 import { MarkdownView } from "@/components/markdown-view";
 import { parse as parseMarkdown } from "@/components/canvas/markdown";
 import {
@@ -512,6 +513,9 @@ function FilesTab({
     () => (datasetList.data
       ? {
         datasets: datasetList.data.map((d) => ({
+          // p.115's id, which the completion inserts when this repository
+          // prefers one (§444).
+          id: d.id,
           name: d.name,
           columns: (d.table_schema ?? []).map((c) => ({
             name: c.name, type: c.data_type,
@@ -861,6 +865,10 @@ function FilesTab({
                   onChange={(next) => setEdits((c) => ({ ...c, [selected]: next }))}
                   preferences={editorPreferences}
                   vocabulary={vocabulary}
+                  // p.115's dataset aliases, read from the working tree the
+                  // same way §441's commit rule is — the setting that applies
+                  // is the one the repository has as it stands.
+                  preferIds={prefersIds(commitSettings)}
                 />
               </div>
               {!pinned && (

@@ -77,9 +77,15 @@ function kindOf(kind: "dataset" | "alias" | "column"): number {
  * copies of every suggestion — and one registered with the vocabulary captured
  * would go on offering the datasets that existed when the editor mounted.
  */
-function useCompletions(vocabulary: Vocabulary | undefined) {
+function useCompletions(vocabulary: Vocabulary | undefined, preferIds: boolean) {
   const latest = useRef<Vocabulary | undefined>(vocabulary);
   latest.current = vocabulary;
+  // **Through a ref for the vocabulary's reason** (§444): the setting lives in
+  // a file somebody may be editing, so it changes while the editor is open,
+  // and a provider registered with it captured would keep inserting whichever
+  // form was set when the editor mounted.
+  const ids = useRef(preferIds);
+  ids.current = preferIds;
 
   useEffect(() => {
     const provider: monaco.languages.CompletionItemProvider = {
@@ -103,11 +109,20 @@ function useCompletions(vocabulary: Vocabulary | undefined) {
           endColumn: word.endColumn,
         };
         return {
-          suggestions: completionsFor(before, model.getValue(), known).map((c) => ({
+          suggestions: completionsFor(
+            before, model.getValue(), known, { preferIds: ids.current },
+          ).map((c) => ({
             label: c.label,
             kind: kindOf(c.kind),
             detail: c.detail,
-            insertText: c.label,
+            // **`c.insert`, not `c.label`** — p.115: "the editor will present
+            // the dataset name over the RID". The two are the same string
+            // everywhere except there.
+            insertText: c.insert,
+            // Monaco filters what it shows against the typed word using
+            // `filterText`, which defaults to the label. Said explicitly so
+            // an id being inserted cannot quietly become what is matched on.
+            filterText: c.label,
             range,
           })),
         };
@@ -129,6 +144,7 @@ export function CodeEditor({
   onReady,
   preferences = DEFAULTS,
   vocabulary,
+  preferIds = false,
 }: {
   path: string;
   value: string;
@@ -160,8 +176,12 @@ export function CodeEditor({
    *  listing arrives, which is a real state: the editor opens before it, and
    *  offering nothing is better than offering a list that is not yet true. */
   vocabulary?: Vocabulary;
+  /** p.115's dataset aliases: whether the completion types the dataset's id
+   *  rather than its name (§444). False unless the repository's
+   *  `repoSettings.json` asks. */
+  preferIds?: boolean;
 }) {
-  useCompletions(vocabulary);
+  useCompletions(vocabulary, preferIds);
 
   // Monaco measures itself on mount; rendering it before the panel has a size
   // gives a zero-height editor that never recovers.
