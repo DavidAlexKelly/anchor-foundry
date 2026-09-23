@@ -2202,3 +2202,397 @@ def test_an_object_written_twice_is_reported_once(
     assert r.json()["ok"] is True, r.json()["error"]
     assert _touched(r.json()) == {"1": "modified"}
     assert len(r.json()["touched"]) == 1, r.json()["touched"]
+
+
+# ---- p.66's struct parameters (§450) ------------------------------------------
+RESOLUTION_FIELDS = [
+    {"api_name": "summary", "data_type": "string"},
+    {"api_name": "owner", "data_type": "string"},
+    {"api_name": "hours", "data_type": "integer"},
+]
+
+
+@pytest.fixture(scope="module")
+def struct_type_id(client: TestClient, fx: Fixture) -> str:
+    """A type with a struct property, which is what p.66's parameter writes."""
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"StructTicket{fx.tag}",
+            "display_name": f"StructTicket {fx.tag}",
+            "properties": [
+                {"api_name": "status", "data_type": "string"},
+                {"api_name": "resolution", "data_type": "struct",
+                 "struct_fields": RESOLUTION_FIELDS},
+            ],
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_a_struct_property_becomes_a_struct_parameter(
+    client: TestClient, fx: Fixture, struct_type_id: str
+) -> None:
+    """`action-types` p.66: *"Struct property values can be created and
+    modified with actions, through values supplied in a struct parameter."*
+
+    The conversion writes one parameter per editable property, typed from the
+    property — so this is the whole of p.66 on the path most actions are made
+    by, and it was refused outright until §450.
+    """
+    action = make_action(client, fx, struct_type_id, ["resolution"])
+    parameter = next(p for p in action["parameters"] if p["api_name"] == "resolution")
+    assert parameter["data_type"] == "struct"
+
+
+def test_a_struct_parameter_can_be_declared_and_wired_by_hand(
+    client: TestClient, fx: Fixture, struct_type_id: str
+) -> None:
+    """The definition PUT, which is the other way an action is written."""
+    action = make_action(client, fx, struct_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [
+            {"api_name": "resolution", "display_name": "Resolution",
+             "data_type": "struct"},
+        ],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "resolution", "parameter": "resolution"}}],
+        "criteria": [],
+    })
+    assert r.status_code == 200, r.text
+
+
+def test_a_struct_property_cannot_be_written_by_an_ordinary_parameter(
+    client: TestClient, fx: Fixture, struct_type_id: str
+) -> None:
+    """p.73: *"Struct property values can only be created or modified through
+    struct parameters. Other forms of entry… are not supported."*
+
+    Refused at save time, where the person who wrote the rule is looking at
+    it — the alternative is a coercion failure at run time, met by somebody
+    else entirely.
+    """
+    action = make_action(client, fx, struct_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [
+            {"api_name": "resolution", "display_name": "Resolution",
+             "data_type": "string"},
+        ],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "resolution", "parameter": "resolution"}}],
+        "criteria": [],
+    })
+    assert r.status_code == 422, r.text
+    assert "struct parameter" in r.json()["detail"]
+
+
+def test_a_struct_parameter_cannot_write_an_ordinary_property(
+    client: TestClient, fx: Fixture, struct_type_id: str
+) -> None:
+    """p.73's converse: *"A struct parameter can only be used to create or
+    modify struct properties."* The case that catches a parameter somebody
+    changed the type of after wiring it up."""
+    action = make_action(client, fx, struct_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [
+            {"api_name": "status", "display_name": "Status", "data_type": "struct"},
+        ],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "status", "parameter": "status"}}],
+        "criteria": [],
+    })
+    assert r.status_code == 422, r.text
+    assert "struct property" in r.json()["detail"]
+
+
+def test_a_struct_property_is_written_by_one_parameter_not_two(
+    client: TestClient, fx: Fixture, struct_type_id: str
+) -> None:
+    """p.73: *"A struct property mapping in actions cannot [read] more than one
+    parameter."*"""
+    action = make_action(client, fx, struct_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [
+            {"api_name": "first", "display_name": "First", "data_type": "struct"},
+            {"api_name": "second", "display_name": "Second", "data_type": "struct"},
+        ],
+        "rules": [
+            {"kind": "modify_object",
+             "config": {"property": "resolution", "parameter": "first"}},
+            {"kind": "modify_object",
+             "config": {"property": "resolution", "parameter": "second"}},
+        ],
+        "criteria": [],
+    })
+    assert r.status_code == 422, r.text
+    assert "two struct parameters" in r.json()["detail"]
+
+
+def test_the_same_parameter_twice_is_not_two_parameters(
+    client: TestClient, fx: Fixture, struct_type_id: str
+) -> None:
+    """p.73 limits the *mapping* to one parameter, not the number of rules. A
+    check that counted rules would refuse a definition that names one
+    parameter twice, which breaks nothing."""
+    action = make_action(client, fx, struct_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [
+            {"api_name": "resolution", "display_name": "Resolution",
+             "data_type": "struct"},
+        ],
+        "rules": [
+            {"kind": "modify_object",
+             "config": {"property": "resolution", "parameter": "resolution"}},
+            {"kind": "modify_object",
+             "config": {"property": "resolution", "parameter": "resolution"}},
+        ],
+        "criteria": [],
+    })
+    assert r.status_code == 200, r.text
+
+
+STRUCT_TICKETS = (
+    b'ticket_id,status,resolution\n'
+    b'1,open,"{""summary"": ""first"", ""owner"": ""ana"", ""hours"": 2}"\n'
+)
+
+
+@pytest.fixture(scope="module")
+def struct_instance(client: TestClient, fx: Fixture, struct_type_id: str) -> str:
+    """A synced instance of the struct type, so an action has something to
+    modify and a column to write the struct back to."""
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub), data={"name": f"StructTickets {fx.tag}"},
+        files={"file": ("tickets.csv", io.BytesIO(STRUCT_TICKETS), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    dataset_id = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={
+            "object_type_id": struct_type_id, "dataset_id": dataset_id,
+            "primary_key_column": "ticket_id",
+            "column_mappings": {"status": "status", "resolution": "resolution"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    source_id = r.json()["id"]
+    assert client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/object-type-sources/{source_id}/sync",
+        headers=hdr(fx.editor_sub),
+    ).status_code == 200
+    r = client.get(
+        f"{wbase(fx)}/object-types/{struct_type_id}/instances", headers=hdr(fx.viewer_sub)
+    )
+    return r.json()["items"][0]["id"]
+
+
+def struct_of(client: TestClient, fx: Fixture, struct_type_id: str, instance: str) -> dict:
+    r = client.get(
+        f"{wbase(fx)}/object-types/{struct_type_id}/instances/{instance}",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["properties"]["resolution"]
+
+
+def test_a_struct_value_submitted_by_an_action_is_written(
+    client: TestClient, fx: Fixture, struct_type_id: str, struct_instance: str
+) -> None:
+    """**The seam, and the whole of p.66.**
+
+    Everything above is about what a definition may *say*; this is the value
+    arriving. Read back off the object rather than off the response, because a
+    result saying `ok` is the endpoint agreeing with itself.
+    """
+    action = make_action(client, fx, struct_type_id, ["resolution"])
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": struct_instance,
+              "values": {"resolution": {
+                  "summary": "closed out", "owner": "bo", "hours": 5}}},
+    )
+    assert r.status_code == 200, r.text
+    assert struct_of(client, fx, struct_type_id, struct_instance) == {
+        "summary": "closed out", "owner": "bo", "hours": 5,
+    }
+
+
+def test_the_submitted_struct_is_coerced_against_the_propertys_own_fields(
+    client: TestClient, fx: Fixture, struct_type_id: str, struct_instance: str
+) -> None:
+    """**The reason the fields had to be threaded through at all.**
+
+    A struct is a schema (`object-link-types` p.149), so its type label does
+    not say what a value must contain. Coerced against the property's declared
+    fields, an undeclared key is dropped and a numeric string becomes a number
+    — which is `_coerce_struct`'s rule, reached here only because
+    `apply_rules` now carries the fields.
+
+    Without them the coercer is handed `struct_fields=None` and refuses, so a
+    green result here is the plumbing working rather than the check being
+    absent.
+    """
+    action = make_action(client, fx, struct_type_id, ["resolution"])
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": struct_instance,
+              "values": {"resolution": {
+                  "summary": "tidied", "owner": "cy", "hours": "7",
+                  "unexpected": "dropped"}}},
+    )
+    assert r.status_code == 200, r.text
+    stored = struct_of(client, fx, struct_type_id, struct_instance)
+    assert stored == {"summary": "tidied", "owner": "cy", "hours": 7}, stored
+
+
+def test_a_value_that_is_not_a_struct_is_refused(
+    client: TestClient, fx: Fixture, struct_type_id: str, struct_instance: str
+) -> None:
+    """The other half of coercing: a type that only ever accepted is not a
+    type (`coerce_property_value`'s own argument)."""
+    action = make_action(client, fx, struct_type_id, ["resolution"])
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": struct_instance, "values": {"resolution": "not a struct"}},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_struct_parameter_is_sent_down_with_the_fields_it_writes(
+    client: TestClient, fx: Fixture, struct_type_id: str
+) -> None:
+    """**The half a form cannot work without**, and the one nothing above
+    checks: p.66's parameter reaching a reader *with its nested fields*.
+
+    Every test above is about what the definition may say and what a
+    submission does. A form draws neither — it draws controls, one per declared
+    field, and `pure.inputTypeFor` answers `"text"` for a type it does not
+    name. A struct sent without its fields is therefore a single text box,
+    which is the control §214 refuses and the reason the parameter type was
+    refused outright before §450.
+
+    Derived from the rule rather than stored on the parameter (p.73 allows one
+    struct parameter per struct property), so the assertion is that the
+    *property's* declaration arrived.
+    """
+    action = make_action(client, fx, struct_type_id, ["resolution"])
+    r = client.get(
+        f"{wbase(fx)}/action-types/{action['id']}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 200, r.text
+    parameter = next(
+        p for p in r.json()["parameters"] if p["api_name"] == "resolution"
+    )
+    assert [f["api_name"] for f in parameter["struct_fields"]] == [
+        f["api_name"] for f in RESOLUTION_FIELDS
+    ], parameter["struct_fields"]
+    # The *types* too, and not the parameter's own: p.66 gives each nested
+    # field "their own individual names and base types", and a form that read
+    # the parameter's type three times would draw three identical boxes.
+    assert [f["data_type"] for f in parameter["struct_fields"]] == [
+        f["data_type"] for f in RESOLUTION_FIELDS
+    ], parameter["struct_fields"]
+
+
+def test_an_ordinary_parameter_carries_no_fields_at_all(
+    client: TestClient, fx: Fixture, struct_type_id: str
+) -> None:
+    """`null`, not `[]` (§210). "This is not a struct" and "this struct has no
+    fields" are different states, and p.149 says the second cannot happen — so
+    an empty list here would be a claim that is never true."""
+    action = make_action(client, fx, struct_type_id, ["status"])
+    r = client.get(
+        f"{wbase(fx)}/action-types/{action['id']}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 200, r.text
+    parameter = next(p for p in r.json()["parameters"] if p["api_name"] == "status")
+    assert parameter["struct_fields"] is None, parameter
+
+
+def test_the_effective_parameters_carry_the_same_fields(
+    client: TestClient, fx: Fixture, struct_type_id: str
+) -> None:
+    """The form asks this route instead of the read above once a parameter has
+    p.45's overrides on it, and it draws whichever answer it gets — so a route
+    that omitted the fields would make a working form lose its controls the
+    moment somebody added a condition to an unrelated parameter.
+    """
+    action = make_action(client, fx, struct_type_id, ["resolution"])
+    r = client.post(
+        f"{wbase(fx)}/action-types/{action['id']}/effective-parameters",
+        headers=hdr(fx.viewer_sub), json={"values": {}},
+    )
+    assert r.status_code == 200, r.text
+    parameter = next(p for p in r.json() if p["api_name"] == "resolution")
+    assert [f["api_name"] for f in parameter["struct_fields"]] == [
+        f["api_name"] for f in RESOLUTION_FIELDS
+    ], parameter["struct_fields"]
+
+
+@pytest.fixture(scope="module")
+def other_struct_type_id(client: TestClient, fx: Fixture) -> str:
+    """A *second* type with a struct property, for a rule that writes it.
+
+    p.73 pairs a struct parameter with a struct property; it does not say the
+    property has to belong to the action's own subject. A `create_object` rule
+    naming another type is the ordinary case, and the fields it needs are that
+    type's.
+    """
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"StructReport{fx.tag}",
+            "display_name": f"StructReport {fx.tag}",
+            "properties": [
+                {"api_name": "report_id", "data_type": "string"},
+                {"api_name": "outcome", "data_type": "struct",
+                 "struct_fields": [
+                     {"api_name": "verdict", "data_type": "string"},
+                     {"api_name": "days", "data_type": "integer"},
+                 ]},
+            ],
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_the_fields_come_from_the_type_the_rule_writes(
+    client: TestClient, fx: Fixture, struct_type_id: str, other_struct_type_id: str
+) -> None:
+    """**The target is resolved, not assumed.**
+
+    A rule naming an `object_type` writes *that* type's property. Reading the
+    subject's fields for every rule would hand this parameter nothing — the
+    subject has no `outcome` — and the form would then say it was not told the
+    fields while the definition it came from is perfectly valid.
+
+    The two types both have a struct property and they are different structs,
+    which is what makes the assertion able to fail: a lookup against the wrong
+    type answers `None` here rather than answering plausibly.
+    """
+    action = make_action(client, fx, struct_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [
+            {"api_name": "outcome", "display_name": "Outcome", "data_type": "struct"},
+            {"api_name": "report_id", "display_name": "Report", "data_type": "string"},
+        ],
+        "rules": [
+            {"kind": "create_object",
+             "config": {"object_type": other_struct_type_id,
+                        "primary_key": "report_id",
+                        "properties": {"outcome": "outcome",
+                                       "report_id": "report_id"}}},
+        ],
+        "criteria": [],
+    })
+    assert r.status_code == 200, r.text
+    parameter = next(p for p in r.json()["parameters"] if p["api_name"] == "outcome")
+    assert [f["api_name"] for f in parameter["struct_fields"]] == ["verdict", "days"], (
+        parameter["struct_fields"]
+    )

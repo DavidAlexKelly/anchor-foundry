@@ -647,6 +647,26 @@ def edit_only_properties(properties: list[dict[str, Any]]) -> set[str]:
     return {str(p["api_name"]) for p in properties if p.get("edit_only")}
 
 
+def struct_fields_of(properties: list[dict[str, Any]]) -> dict[str, Any]:
+    """`{api_name: its declared fields}` for the struct properties (db 0064).
+
+    **Only the ones that have fields**, so the map is empty for the ordinary
+    object type and a caller can pass it everywhere without thinking about it.
+
+    Read by the action write path, which coerces `action-types` p.66's struct
+    parameter against the property it writes (§450). A struct is a *schema*
+    (`object-link-types` p.149), so its type label alone does not say what a
+    value must contain — this is the half that does, and `edit_only_properties`
+    above is the same move for the same reason: one derivation, named, rather
+    than the same comprehension in each caller.
+    """
+    return {
+        str(p["api_name"]): p["struct_fields"]
+        for p in properties
+        if p.get("struct_fields")
+    }
+
+
 def required_properties(properties: list[dict[str, Any]]) -> set[str]:
     """The api names a value is compulsory for (`object-link-types` p.116)."""
     return {str(p["api_name"]) for p in properties if p.get("required")}

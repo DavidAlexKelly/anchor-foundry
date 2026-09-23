@@ -18,6 +18,7 @@ import type {
   ActionExecuteResult,
   ActionType,
   ObjectInstance,
+  ObjectTypeProperty,
   PropertyDataType,
 } from "@/lib/types";
 
@@ -28,7 +29,7 @@ function EditInstanceDialog({
   projectId,
   instance,
   actionTypes,
-  propertyTypes,
+  properties,
   onClose,
   onApplied,
 }: {
@@ -36,7 +37,11 @@ function EditInstanceDialog({
   projectId: string;
   instance: ObjectInstance;
   actionTypes: ActionType[];
-  propertyTypes: Record<string, PropertyDataType>;
+  /** The subject's properties by `api_name` — **the whole row, not its type
+   * name**. A struct needs its declared fields as well as its type to draw a
+   * control anybody can fill in (§450), and a second map beside the types
+   * would be a second place to forget one. */
+  properties: Record<string, ObjectTypeProperty>;
   onClose: () => void;
   /** What was applied, for p.154's success message. The dialog is gone by the
    * time it is drawn, so the action's name travels with the result — there is
@@ -92,10 +97,15 @@ function EditInstanceDialog({
           </Field>
         )}
         {(activeAction?.editable_properties ?? []).map((p) => (
-          <Field key={p} label={p} hint={propertyTypes[p]}>
+          <Field key={p} label={p} hint={properties[p]?.data_type}>
             <PropertyInput
               workspaceId={workspaceId}
-              dataType={propertyTypes[p]}
+              dataType={properties[p]?.data_type as PropertyDataType}
+              // `action-types` p.66's fields (§450). Read straight off the
+              // property here, which is where they live — this dialog writes
+              // properties by name, so there is no rule to derive them from
+              // and nothing in between to get it wrong.
+              structFields={properties[p]?.struct_fields}
               value={values[p]}
               onChange={(next) => setValues({ ...values, [p]: next })}
               label={p}
@@ -313,8 +323,8 @@ export default function ObjectInstancesPage() {
           projectId={project.id}
           instance={editing}
           actionTypes={actionTypes.data}
-          propertyTypes={Object.fromEntries(
-            properties.map((p) => [p.api_name, p.data_type]),
+          properties={Object.fromEntries(
+            properties.map((p) => [p.api_name, p]),
           )}
           onClose={() => setEditing(null)}
           onApplied={(result, id, name) =>

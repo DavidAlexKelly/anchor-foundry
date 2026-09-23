@@ -374,6 +374,37 @@ describe("Workshop p.512's local parameter defaults", () => {
   });
 });
 
+describe("seeding a composite value", () => {
+  const RESOLUTION = [
+    { api_name: "resolution", data_type: "struct", required: true, hidden: false },
+  ];
+  const PLAIN = [
+    { api_name: "status", data_type: "string", required: false, hidden: false,
+      default_value: "open" },
+    { api_name: "note", data_type: "string", required: false, hidden: false },
+  ];
+
+  it("hands an object to the control as an object", () => {
+    // `action-types` p.66's struct is drawn as one control per declared field,
+    // and a control reading fields off a *string* finds none — a form opened
+    // on an object that already carries the struct would show empty boxes and
+    // write them back (§450). The same applies to §237's attachment
+    // reference, which only survived stringification because
+    // `property-value.isAttachment` parses the text back.
+    const current = { summary: "done", hours: 2 };
+    expect(seedActionForm(RESOLUTION, { resolution: current }).resolution)
+      .toEqual(current);
+  });
+
+  it("still hands a text box a string", () => {
+    // The other half, and the reason this is a type test rather than an
+    // equality one: every ordinary control is given `value` straight, and a
+    // number arriving as a number would make a controlled input uncontrolled.
+    expect(typeof seedActionForm(PLAIN, { status: 4 }).status).toBe("string");
+    expect(typeof seedActionForm(PLAIN, {}).note).toBe("string");
+  });
+});
+
 describe("hasValue", () => {
   /** p.25's required check, written down in §237 because the expression it
    * replaced had become accidentally correct. */

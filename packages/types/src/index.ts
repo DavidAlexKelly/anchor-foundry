@@ -2841,6 +2841,19 @@ export interface ActionParameter {
   api_name: string;
   display_name: string;
   data_type: string;
+  /** `action-types` p.66's nested fields, on a `struct` parameter (§450).
+   *
+   * **Derived by the server from the property this parameter writes**, never
+   * stored on the parameter: p.73 allows one struct parameter per struct
+   * property, so the property's schema *is* the parameter's, and a stored copy
+   * would be free to disagree with the ontology the moment somebody adds a
+   * field (§191).
+   *
+   * Null on every other parameter — and on a struct parameter whose property
+   * could not be resolved, which is not the same as one with no fields
+   * (§210): the form says what it does not know rather than offering a text
+   * box a struct can never be typed into (§214). */
+  struct_fields?: StructField[] | null;
   required: boolean;
   /** `null` means no default, which is not the same as a default of null - see
    * migration 0044. */

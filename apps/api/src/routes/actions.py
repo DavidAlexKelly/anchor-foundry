@@ -107,6 +107,14 @@ class ActionParameterOut(BaseModel):
     api_name: str
     display_name: str
     data_type: str
+    #: `action-types` p.66's struct parameter fields, **derived from the
+    #: property the parameter writes** rather than stored on it (§450): p.73
+    #: allows one struct parameter per struct property, so the property's
+    #: schema is the parameter's, and a copy here would be free to disagree
+    #: with the ontology. Null on every other parameter — and on a struct
+    #: parameter whose property this end could not resolve, which is not the
+    #: same as one with no fields (§210).
+    struct_fields: list[dict[str, Any]] | None = None
     required: bool
     default_value: Any | None
     hidden: bool
@@ -346,7 +354,50 @@ def _may_edit(access: WorkspaceAccess) -> bool:
     return access.role in ("editor", "admin")
 
 
-def _action_type_out(row: dict[str, Any], *, may_edit: bool = True) -> ActionTypeOut:
+async def _struct_fields_by_action(
+    access: WorkspaceAccess, rows: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """`{action type id: {parameter: its declared fields}}` (§450).
+
+    `action-types` p.66's struct parameter cannot be drawn without the fields,
+    and they are **not on the parameter row**: p.73 allows one struct parameter
+    per struct property, so the property's schema is the parameter's and a
+    stored copy would be free to disagree with the ontology (§191). The form
+    therefore has to be told, and this is what tells it.
+
+    **Nothing is read for an action with no struct parameter**, which is nearly
+    all of them — the Actions table lists a whole workspace, and a properties
+    read per row there would be a query nobody's screen needed. When one does,
+    it is a single workspace-wide query for every struct property there is,
+    because a rule may name any type in the workspace and the alternative is a
+    read per type named across the rows.
+    """
+    needed = [
+        row for row in rows
+        if any(str(p.get("data_type")) == "struct" for p in row["parameters"])
+    ]
+    if not needed:
+        return {}
+    async with user_connection(access.auth.user_id) as conn:
+        by_type = await actions_service.struct_fields_by_type(
+            conn, access.workspace_id
+        )
+    return {
+        str(row["id"]): actions_service.struct_fields_for_parameters(
+            [{**r, "config": _parse_json(r["config"])} for r in row["rules"]],
+            by_type,
+            str(row["object_type_id"]),
+        )
+        for row in needed
+    }
+
+
+def _action_type_out(
+    row: dict[str, Any],
+    *,
+    may_edit: bool = True,
+    struct_fields: dict[str, Any] | None = None,
+) -> ActionTypeOut:
     rules = [{**r, "config": _parse_json(r["config"])} for r in row["rules"]]
     # `default_value` is deliberately not run through `_parse_json` - see
     # `bind_parameters`: a jsonb scalar comes back already decoded, and parsing
@@ -362,7 +413,15 @@ def _action_type_out(row: dict[str, Any], *, may_edit: bool = True) -> ActionTyp
     # `for_reader` supplies in the same breath rather than leaving to a second
     # call somebody can forget — see its docstring for the form that broke.
     parameters = [
-        filters_service.for_reader(p, may_edit=may_edit) for p in row["parameters"]
+        {
+            **filters_service.for_reader(p, may_edit=may_edit),
+            # p.66's nested fields, derived rather than stored (§450). Absent
+            # rather than empty for a parameter this call was not given them
+            # for: `{}` would say "a struct with no fields" and the truth is
+            # that nothing looked (§210).
+            "struct_fields": (struct_fields or {}).get(str(p["api_name"])),
+        }
+        for p in row["parameters"]
     ]
     return ActionTypeOut(
         **{
@@ -399,7 +458,13 @@ async def list_action_types(
     # **The same redaction the single read does** (p.40-41; §331). A rule that
     # held on one route and not the other would be no rule at all — and this is
     # the route the Actions table actually calls.
-    return [_action_type_out(r, may_edit=_may_edit(access)) for r in rows]
+    fields = await _struct_fields_by_action(access, rows)
+    return [
+        _action_type_out(
+            r, may_edit=_may_edit(access), struct_fields=fields.get(str(r["id"]))
+        )
+        for r in rows
+    ]
 
 
 @router.post(
@@ -435,7 +500,8 @@ async def create_action_type(
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
-    return _action_type_out(row)
+    fields = await _struct_fields_by_action(access, [row])
+    return _action_type_out(row, struct_fields=fields.get(str(row["id"])))
 
 
 @router.get("/action-types/{action_type_id}", response_model=ActionTypeOut)
@@ -445,7 +511,10 @@ async def get_action_type(
 ) -> ActionTypeOut:
     async with user_connection(access.auth.user_id) as conn:
         row = await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
-    return _action_type_out(row, may_edit=_may_edit(access))
+    fields = await _struct_fields_by_action(access, [row])
+    return _action_type_out(
+        row, may_edit=_may_edit(access), struct_fields=fields.get(str(row["id"]))
+    )
 
 
 @router.patch("/action-types/{action_type_id}", response_model=ActionTypeOut)
@@ -515,7 +584,8 @@ async def update_action_type(
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
             )
-    return _action_type_out(row)
+    fields = await _struct_fields_by_action(access, [row])
+    return _action_type_out(row, struct_fields=fields.get(str(row["id"])))
 
 
 @router.delete(
@@ -630,7 +700,8 @@ async def set_action_definition(
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
-    return _action_type_out(row)
+    fields = await _struct_fields_by_action(access, [row])
+    return _action_type_out(row, struct_fields=fields.get(str(row["id"])))
 
 
 @router.get("/action-types/{action_type_id}/runs", response_model=list[ActionRunOut])
@@ -958,9 +1029,20 @@ async def effective_action_parameters(
         action_type["parameters"], values=body.values, user=user, order=order
     )
     may_edit = _may_edit(access)
+    # p.66's struct parameters, with the fields the form needs to draw one
+    # (§450) — through the same helper the action-type reads use, because a
+    # form that drew different controls depending on whether the action had an
+    # override would be two answers to one question (§292).
+    fields_by_parameter = (
+        await _struct_fields_by_action(access, [action_type])
+    ).get(str(action_type["id"])) or {}
     return [
         ActionParameterOut(
-            **{**filters_service.for_reader(row, may_edit=may_edit), "overrides": []}
+            **{
+                **filters_service.for_reader(row, may_edit=may_edit),
+                "overrides": [],
+                "struct_fields": fields_by_parameter.get(str(row["api_name"])),
+            }
         )
         for row in resolved
     ]
@@ -1255,6 +1337,7 @@ async def undo_action(
         )
         properties = await ontology_service.list_properties(conn, object_type_id)
         property_types = {p["api_name"]: p["data_type"] for p in properties}
+        struct_fields = ontology_service.struct_fields_of(properties)
         edit_only = {
             p["api_name"] for p in properties if p.get("edit_only")
         }
@@ -1751,6 +1834,11 @@ async def execute_action(
             )
             properties = await ontology_service.list_properties(conn, object_type_id)
             property_types = {p["api_name"]: p["data_type"] for p in properties}
+            # p.66's struct parameter is coerced against the *property's*
+            # declared fields, which is the one thing its type label does not
+            # carry (§450). Built in the same loop as the types, the way
+            # `coerce_rows` builds it on the sync path.
+            struct_fields = ontology_service.struct_fields_of(properties)
             # The subject's properties with no dataset column (p.113). Only the
             # subject's: a rule writing another object's property is checked
             # against *that* type's source, and edit-only there is not built.
@@ -1971,13 +2059,14 @@ async def execute_action(
                     conn, access.project_id, UUID(str(named["source_id"]))
                 )
                 named_mappings: dict[str, str] = _parse_json(named_source["column_mappings"])
+                named_declared = await ontology_service.list_properties(
+                    conn, UUID(target["object_type_id"])
+                )
                 modification_contexts[key] = {
                     "property_types": {
-                        p["api_name"]: p["data_type"]
-                        for p in await ontology_service.list_properties(
-                            conn, UUID(target["object_type_id"])
-                        )
+                        p["api_name"]: p["data_type"] for p in named_declared
                     },
+                    "struct_fields": ontology_service.struct_fields_of(named_declared),
                     "mapped_properties": set(named_mappings.values()),
                 }
                 modification_rows[key] = {
@@ -2028,11 +2117,12 @@ async def execute_action(
                 )
                 target_mappings: dict[str, str] = _parse_json(target_source["column_mappings"])
                 sources_by_type[target] = target_source
+                target_declared = await ontology_service.list_properties(conn, UUID(target))
                 contexts[target] = {
                     "property_types": {
-                        p["api_name"]: p["data_type"]
-                        for p in await ontology_service.list_properties(conn, UUID(target))
+                        p["api_name"]: p["data_type"] for p in target_declared
                     },
+                    "struct_fields": ontology_service.struct_fields_of(target_declared),
                     "mapped_properties": set(target_mappings.values()),
                 }
 
@@ -2079,6 +2169,7 @@ async def execute_action(
                 bound,
                 rules=action_type["rules"],
                 property_types=property_types,
+                struct_fields=struct_fields,
                 mapped_properties=set(column_mappings.values()),
                 edit_only=edit_only,
                 link_types=link_types,
@@ -2651,6 +2742,7 @@ async def execute_batch(
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         properties = await ontology_service.list_properties(conn, object_type_id)
         property_types = {p["api_name"]: p["data_type"] for p in properties}
+        struct_fields = ontology_service.struct_fields_of(properties)
         edit_only = ontology_service.edit_only_properties(properties)
         required = ontology_service.required_properties(properties)
         constrained = ontology_service.constrained_properties(properties)
@@ -2709,6 +2801,7 @@ async def execute_batch(
                 bound,
                 rules=rules,
                 property_types=property_types,
+                struct_fields=struct_fields,
                 mapped_properties=set(mappings.values()),
                 edit_only=edit_only,
                 link_types=link_types,

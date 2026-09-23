@@ -115,11 +115,47 @@ def bind_parameters(
     return bound
 
 
+def _write_value(
+    property_types: dict[str, str],
+    struct_fields: dict[str, Any] | None,
+    prop: str,
+    value: Any,
+) -> Any:
+    """One value, coerced against what its property declares (§450).
+
+    **One function rather than four call sites**, which is the other half of
+    what the struct fields cost: the four were identical, and the one that
+    forgot the new keyword would have written an uncoerced struct without
+    failing anything (§292).
+    """
+    from . import ontology as ontology_service
+
+    return ontology_service.coerce_property_value(
+        property_types.get(prop, "string"),
+        value,
+        struct_fields=(struct_fields or {}).get(prop),
+    )
+
+
 def apply_rules(
     bound: dict[str, Any],
     *,
     rules: list[dict[str, Any]],
     property_types: dict[str, str],
+    #: `{property: its declared fields}` for the struct properties this type
+    #: has (db 0064) — the one thing a type's *label* does not carry, and what
+    #: `action-types` p.66's struct parameter needs to be coerced against
+    #: (§450).
+    #:
+    #: **A map beside `property_types` rather than a richer one**, which is the
+    #: shape `property_values.coerce_rows` already uses on the *other* write
+    #: path. An earlier comment here predicted the opposite — that the fields
+    #: should be folded into `property_types` because a parallel map would have
+    #: to be threaded through eight construction sites. Only the sites that
+    #: *coerce* need it, and there are four; the eight build a map that answers
+    #: a different question. Two write paths with one shape beats two write
+    #: paths with two.
+    struct_fields: dict[str, Any] | None = None,
     mapped_properties: set[str],
     edit_only: set[str] = frozenset(),
     link_types: dict[str, dict[str, Any]] | None = None,
@@ -215,8 +251,8 @@ def apply_rules(
             parameter = str(config.get("target", ""))
             if parameter not in bound:
                 continue  # nothing supplied, so nothing to link to
-            writes[prop] = ontology_service.coerce_property_value(
-                property_types.get(prop, "string"), bound[parameter]
+            writes[prop] = _write_value(
+                property_types, struct_fields, prop, bound[parameter]
             )
             continue
         if kind != "modify_object":
@@ -245,8 +281,8 @@ def apply_rules(
             raise ValueError(
                 f"{prop!r} has no dataset column mapped on this instance's source"
             )
-        writes[prop] = ontology_service.coerce_property_value(
-            property_types.get(prop, "string"), bound[parameter]
+        writes[prop] = _write_value(
+            property_types, struct_fields, prop, bound[parameter]
         )
     if not writes and not writes_elsewhere and not any(
         str(r["kind"]) in ("create_object", "delete_object") for r in rules
@@ -451,8 +487,8 @@ def object_modifications(
             )
         merged.setdefault(key, {})[prop] = (
             None if value is None
-            else ontology_service.coerce_property_value(
-                context["property_types"].get(prop, "string"), value
+            else _write_value(
+                context["property_types"], context.get("struct_fields"), prop, value
             )
         )
     return [
@@ -723,6 +759,7 @@ def object_creations(
                 "this project"
             )
         property_types = context["property_types"]
+        struct_fields = context.get("struct_fields")
         mapped_properties = context["mapped_properties"]
         key_parameter = str(config.get("primary_key", ""))
         key = bound.get(key_parameter)
@@ -1445,12 +1482,16 @@ async def create_action_type(
     unknown = [p for p in editable_properties if p not in known]
     if unknown:
         raise ValueError(f"not properties of this object type: {', '.join(unknown)}")
-    # **The same refusal `_validate_definition` makes, on the path that does not
-    # go through it.** This conversion writes one parameter per editable
-    # property, typed from the property, so a struct property here would insert
-    # a struct parameter that the definition PUT would refuse a moment later -
-    # two answers to one question, and the one a person meets first would be
-    # silence. See `_UNSUPPORTED_PARAMETER_TYPES`.
+    # **The same refusals `_validate_definition` makes, on the path that does
+    # not go through it.** This conversion writes one parameter per editable
+    # property, typed from the property, plus a `modify_object` rule pairing
+    # them — so a property whose type cannot be a parameter would insert one
+    # the definition PUT would refuse a moment later: two answers to one
+    # question, and the one a person meets first would be silence.
+    #
+    # **A struct property passes now** (§450): it becomes a struct parameter
+    # writing a struct property, which is exactly the pairing p.73 asks for.
+    # See `_UNSUPPORTED_PARAMETER_TYPES` for what still does not.
     declared_types = {p["api_name"]: str(p["data_type"]) for p in declared}
     refused = [
         prop for prop in editable_properties
@@ -2069,24 +2110,29 @@ async def mark_as_revert(
 # for - a parameter that takes a whole instance.
 _PARAMETER_TYPES = frozenset(_ONTOLOGY_PROPERTY_TYPES | {"object"})
 
-# **`struct` is refused as a parameter, and it is a boundary rather than an
-# oversight** (db 0064). p.150 lists Actions among the applications that "use
-# actions to create and modify struct property values", so this is a gap, and
-# it is named here rather than discovered at click time.
+# **`struct` is allowed as of §450** — `action-types` p.66: "Struct property
+# values can be created and modified with actions, through values supplied in a
+# struct parameter."
 #
-# Why not simply allow it: a struct is a *schema* (`object-link-types` p.149),
-# so coercing one needs the property's declared fields as well as its type -
-# and every write path in this module reads a `property_types` map of
-# `{name: type}` built in eight places across this file and `routes/actions.py`.
-# Threading a second parallel map through all eight is the shape this codebase
-# has found stale five times (§191, §244); the fields belong *in* that map, and
-# widening it is its own unit rather than a rider on the type's.
+# The refusal that stood here said why it stood: coercing a struct needs the
+# property's declared *fields* as well as its type, and no write path carried
+# them. It also predicted the fix — fold the fields into `property_types` —
+# and that prediction was wrong in a useful way. Only the four sites that
+# *coerce* need the fields; the eight that build a `{name: type}` map answer a
+# different question and did not have to change. `apply_rules` takes a
+# `struct_fields` map beside the types, which is the shape
+# `property_values.coerce_rows` already uses on the sync path, so the two write
+# paths now carry the declaration the same way.
 #
-# Refused **at save time**, where the person who typed it is still looking at
-# it, for `_validate_definition`'s stated reason - and refused rather than
-# offered-and-broken for §237's: `pure.inputTypeFor` answers "text" for any
-# type it does not name, so an allowed struct parameter would render as a box
-# no viewer could ever fill in correctly, which is a control that cannot work.
+# p.66's other sentence — "the supported base types for struct parameter fields
+# are BOOLEAN, DATE, DOUBLE, GEOPOINT, INTEGER, LONG, STRING, and TIMESTAMP" —
+# needs nothing here. A struct parameter's fields *are* the property's (p.73
+# allows one parameter per property), so the list is already enforced where the
+# fields are declared: `struct_fields.FIELD_TYPES`, which is that same list with
+# this platform's collapse of the integer and float widths. A second copy of it
+# on this side would be a second answer to one question (§292).
+#
+# What is still refused is in `_validate_definition`: p.73's limitations.
 _UNSUPPORTED_PARAMETER_TYPES = {
     # p.36's "The starting set could also be set to an `ObjectReference` list
     # parameter" is the first thing that will want one, and it is a named ○ on
@@ -2099,11 +2145,6 @@ _UNSUPPORTED_PARAMETER_TYPES = {
         "an array parameter needs a control that collects several values and a "
         "starting-set kind that reads one, neither of which this build has yet "
         "(action-types p.36)"
-    ),
-    "struct": (
-        "a struct parameter needs the property's declared fields to check a "
-        "value against, which this action's write path does not carry yet "
-        "(object-link-types p.149-150)"
     ),
 }
 #: p.75's five, plus p.89's side effect.
@@ -2223,6 +2264,46 @@ async def properties_by_type(
         entry = grouped.setdefault(str(row["object_type_id"]), {})
         if row["api_name"]:
             entry[str(row["api_name"])] = str(row["data_type"])
+    return grouped
+
+
+async def struct_fields_by_type(
+    conn: AsyncConnection, workspace_id: UUID
+) -> dict[str, dict[str, Any]]:
+    """Every struct property in the workspace, and its declared fields (§450).
+
+    The shape `properties_by_type` above has, for the same reason: a rule may
+    name any type in the workspace, so `action-types` p.66's parameter fields
+    have to be looked up against *that* type rather than against the one the
+    action hangs off. One query rather than one read per referenced type.
+
+    Only the struct properties, so the map is empty for an ontology with no
+    structs and a caller can pass it everywhere without asking first.
+
+    **The rows arrive ready to use, and two guards that said otherwise are
+    gone** (§223, and a sweep is what settled both). The first decoded a
+    `struct_fields` that came back as JSON *text*: `list_properties` above
+    reads the same column with no parsing at all, so the driver decodes it and
+    the branch could never run. The second skipped a property whose fields were
+    empty, which `WHERE … IS NOT NULL` and p.149's "at least one field" make
+    two reasons impossible. Each survived a mutant that disabled it, which is
+    the only way to tell a guard from a comment.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT ot.id AS object_type_id, p.api_name, p.struct_fields
+          FROM object_types ot
+          JOIN object_type_properties p ON p.object_type_id = ot.id
+         WHERE ot.workspace_id = :wid AND p.struct_fields IS NOT NULL
+        """,
+        {"wid": str(workspace_id)},
+    )
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["object_type_id"]), {})[str(row["api_name"])] = (
+            row["struct_fields"]
+        )
     return grouped
 
 
@@ -2347,6 +2428,145 @@ async def parameter_usages(
     return usages
 
 
+def struct_fields_for_parameters(
+    rules: list[dict[str, Any]],
+    struct_fields_by_type: dict[str, dict[str, Any]],
+    object_type_id: str,
+) -> dict[str, Any]:
+    """`{parameter: the fields it writes}` for the struct parameters (§450).
+
+    **Derived from the rule, never stored on the parameter.** p.73 allows a
+    struct parameter to write exactly one struct property, so the property's
+    schema *is* the parameter's — and a copy on the parameter would be a
+    second declaration of one thing, free to disagree with the ontology the
+    moment somebody adds a field (§191).
+
+    What it is for: a form cannot draw a struct parameter without knowing its
+    fields, and `pure.inputTypeFor` answers "text" for a type it does not
+    name — so a parameter sent without them would render as a box no viewer
+    could fill in correctly, which is the control §214 is about.
+
+    A parameter whose property has no declared fields is absent rather than
+    empty: `{}` would say "a struct with no fields", and the honest answer is
+    that this end does not know (§210).
+
+    **The target is resolved the way `_check_struct_rules` resolves it** — a
+    rule naming an `object_type` writes *that* type's property. Reading the
+    subject's fields for every rule would leave a parameter that creates or
+    modifies another type with no fields at all, and the form would then say it
+    was not told them while the definition it came from was perfectly valid.
+    """
+    out: dict[str, Any] = {}
+    for rule in rules:
+        config = rule.get("config") or {}
+        kind = str(rule.get("kind"))
+        pairs: list[tuple[str, str]]
+        if kind == "modify_object":
+            pairs = [(str(config.get("property", "")), str(config.get("parameter", "")))]
+        elif kind == "create_object":
+            pairs = [
+                (str(prop), str(parameter))
+                for prop, parameter in (config.get("properties") or {}).items()
+            ]
+        else:
+            continue
+        declared = struct_fields_by_type.get(
+            str(config.get("object_type") or object_type_id)
+        ) or {}
+        for prop, parameter in pairs:
+            # **`fields` alone**, not `parameter and fields` (§223). A rule
+            # writing a struct property with no parameter named cannot be
+            # stored: `_check_struct_rules` refuses it at save time, because a
+            # struct property may only be written by a struct parameter and the
+            # empty string is not one. The guard survived a mutant that removed
+            # it, which is what unreachable looks like from outside.
+            fields = declared.get(prop)
+            if fields:
+                out[parameter] = fields
+    return out
+
+
+def _check_struct_rules(
+    *,
+    rules: list[dict[str, Any]],
+    struct_parameters: set[str],
+    property_types: dict[str, str],
+    object_type_id: UUID,
+    workspace_properties: dict[str, dict[str, str]],
+) -> None:
+    """`action-types` p.73's limitations on struct parameters (§450).
+
+    Three of p.73's four are checkable here, and they are three ways of saying
+    that a struct parameter and a struct property go together or not at all:
+
+      * *"Struct property values can only be created or modified through
+        struct parameters"* — so a struct property read from an ordinary
+        parameter is refused. Without this, a string parameter mapped to a
+        struct property would reach the coercer and be rejected at *run* time,
+        by which point the person who wrote the rule is not the person looking
+        at the error.
+      * *"A struct parameter can only be used to create or modify struct
+        properties"* — the converse, and the one that catches a parameter
+        somebody changed the type of after wiring it up.
+      * *"A struct property mapping in actions cannot [read] more than one
+        parameter"* — one property, one parameter. p.73 words it as a limit on
+        the *mapping*, and two rules writing the same property from two struct
+        parameters is the shape it rules out.
+
+    p.73's fourth — that only a reference to another object's struct property
+    may default a struct parameter's field — has nothing to check against:
+    parameter defaults are `action_parameter_defaults`' business and no
+    default kind names a struct field. It is the row's ○.
+
+    **Checked at save time**, where the person who wrote the rule is still
+    looking at it, which is `_validate_definition`'s stated reason for
+    existing.
+    """
+    from_struct: dict[str, str] = {}
+    for rule in rules:
+        kind = str(rule.get("kind", ""))
+        config = rule.get("config") or {}
+        if kind == "modify_object":
+            target = str(config.get("object_type") or object_type_id)
+            declared = (
+                property_types if not config.get("object_type")
+                else workspace_properties.get(target) or {}
+            )
+            pairs = [(str(config.get("property", "")), str(config.get("parameter", "")))]
+        elif kind == "create_object":
+            target = str(config.get("object_type") or object_type_id)
+            declared = workspace_properties.get(target) or {}
+            pairs = [
+                (str(prop), str(parameter))
+                for prop, parameter in (config.get("properties") or {}).items()
+            ]
+        else:
+            continue
+        for prop, parameter in pairs:
+            if not prop or not parameter:
+                continue
+            is_struct_property = declared.get(prop) == "struct"
+            is_struct_parameter = parameter in struct_parameters
+            if is_struct_property and not is_struct_parameter:
+                raise ValueError(
+                    f"{prop!r} is a struct property, so it can only be written by a "
+                    f"struct parameter — {parameter!r} is not one (action-types p.73)"
+                )
+            if is_struct_parameter and not is_struct_property:
+                raise ValueError(
+                    f"{parameter!r} is a struct parameter, so it can only write a "
+                    f"struct property — {prop!r} is not one (action-types p.73)"
+                )
+            if is_struct_property:
+                already = from_struct.get(f"{target}.{prop}")
+                if already is not None and already != parameter:
+                    raise ValueError(
+                        f"{prop!r} is written by two struct parameters, {already!r} and "
+                        f"{parameter!r}; p.73 allows one"
+                    )
+                from_struct[f"{target}.{prop}"] = parameter
+
+
 def _validate_definition(
     *,
     parameters: list[dict[str, Any]],
@@ -2365,6 +2585,11 @@ def _validate_definition(
     that argument for Workshop variables and it is the same one.
     """
     seen: set[str] = set()
+    #: The struct parameters this definition declares, for p.73's limitations
+    #: below — collected here rather than re-derived, because the rule loop
+    #: needs to know which parameters are structs and the parameter loop is
+    #: where that is already being read.
+    struct_parameters: set[str] = set()
     for parameter in parameters:
         name = str(parameter.get("api_name", ""))
         if not _API_NAME_RE.match(name):
@@ -2389,6 +2614,19 @@ def _validate_definition(
             )
         if not str(parameter.get("display_name") or "").strip():
             raise ValueError(f"parameter {name!r} needs a display name")
+        if data_type == "struct":
+            struct_parameters.add(name)
+
+    # `action-types` p.73's limitations on struct parameters, checked together
+    # because each is about the *pairing* of a parameter with a property and
+    # neither half can see it alone (§450).
+    _check_struct_rules(
+        rules=rules,
+        struct_parameters=struct_parameters,
+        property_types=property_types,
+        object_type_id=object_type_id,
+        workspace_properties=workspace_properties,
+    )
 
     # p.106's "only a single webhook as a writeback", tracked across the loop
     # because the rule that breaks it is the *second* one.

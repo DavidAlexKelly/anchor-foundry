@@ -3488,3 +3488,13 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   width: 18px; height: 18px; border-radius: 5px;
   font-size: 10.5px; letter-spacing: 0;
 }
+
+/* `action-types` p.66's struct parameter: one control per declared field
+   (§450). Inset and ruled on one side, so a form holding a struct beside four
+   ordinary parameters reads as one answer rather than as five. */
+.struct-fields {
+  border: none; border-left: 2px solid var(--line);
+  margin: 0 0 4px; padding: 2px 0 2px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.struct-fields .field { margin: 0; }

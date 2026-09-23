@@ -263,8 +263,8 @@ export function seedActionForm(
    * here rather than answered by a second seeding function: two of those would
    * be two places for the order above to drift. */
   localDefaults: Record<string, unknown> = {},
-): Record<string, string> {
-  const seeded: Record<string, string> = {};
+): Record<string, unknown> {
+  const seeded: Record<string, unknown> = {};
   for (const parameter of parameters) {
     const sources = [
       properties[parameter.api_name],
@@ -273,8 +273,20 @@ export function seedActionForm(
     ];
     const found = sources.find((v) => v !== undefined && v !== null);
     const value = found === undefined ? "" : found;
+    // **An object seeds as an object** (§450). It used to be stringified,
+    // which was harmless while the only composite value was §237's attachment
+    // reference — `isAttachment` parses the JSON text back, and the note on it
+    // records this function as one of the two places that produce it. p.66's
+    // struct has no such second reader: a control that draws one box per
+    // declared field is handed a *string*, reads no fields off it, and shows
+    // a reader a row of empty boxes for a value the object already carries.
+    // And `hasValue` then calls that string an answer, so Submit goes live for
+    // a value the server would refuse (§214).
+    //
+    // Everything else is still a string, which is what a text box and a number
+    // box want and what every caller of this has always been handed.
     seeded[parameter.api_name] =
-      typeof value === "object" ? JSON.stringify(value) : String(value);
+      value !== null && typeof value === "object" ? value : String(value);
   }
   return seeded;
 }
