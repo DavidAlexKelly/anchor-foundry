@@ -89,6 +89,11 @@ const PARAMETER_TYPES = [
   // property type nothing in the product can write, since every edit to an
   // instance goes through one.
   "geopoint", "geoshape", "json", "attachment", "object",
+  // `action-types` p.60's Object type parameter (db 0102, §453): an interface
+  // action's create has to be told what to make, and no *property* is ever an
+  // object type — so this is the second word in the list that the ontology has
+  // no use for, beside `object`.
+  "object_type",
 ];
 
 /** The rule kinds this build can execute, and what to call them.
@@ -1038,19 +1043,51 @@ export function ActionDefinitionEditor({
                     {/* A create can name any type with a dataset in this
                         project (§139); the properties below then come from
                         *that* type, which is what the server checks against. */}
-                    <Field label="Of type">
-                      <TypePicker
-                        workspaceId={workspaceId}
-                        value={config.object_type ? ruleTypeId : ""}
-                        label={`Rule ${i + 1} creates type`}
-                        testId={`rule-${i + 1}-creates-type`}
-                        placeholder="This object type"
-                        onChange={(id) => {
-                          const { object_type: _t, properties: _p, ...rest } = config;
-                          patch(id ? { ...rest, object_type: id } : rest);
-                        }}
-                      />
-                    </Field>
+                    {/* p.60: on an interface action the type is not known
+                        until somebody submits, so the rule names the parameter
+                        that will say — the same shape as the primary key below
+                        it, and for the same reason. The two ways of naming a
+                        type are exclusive, and the server refuses a rule that
+                        does both; only one is offered here, chosen by what the
+                        action acts on, so that refusal is unreachable from
+                        this dialog. */}
+                    {action.interface_id ? (
+                      <Field label="Of type chosen by">
+                        <select
+                          value={String(config.object_type_parameter ?? "")}
+                          aria-label={`Rule ${i + 1} creates type from`}
+                          onChange={(e) => {
+                            const { object_type_parameter: _c, ...rest } = config;
+                            patch(e.target.value
+                              ? { ...rest, object_type_parameter: e.target.value }
+                              : rest);
+                          }}
+                        >
+                          <option value="">Choose…</option>
+                          {parameters
+                            .filter((p) => p.data_type === "object_type")
+                            .map((p) => (
+                              <option key={p.api_name} value={p.api_name}>
+                                {p.api_name}
+                              </option>
+                            ))}
+                        </select>
+                      </Field>
+                    ) : (
+                      <Field label="Of type">
+                        <TypePicker
+                          workspaceId={workspaceId}
+                          value={config.object_type ? ruleTypeId : ""}
+                          label={`Rule ${i + 1} creates type`}
+                          testId={`rule-${i + 1}-creates-type`}
+                          placeholder="This object type"
+                          onChange={(id) => {
+                            const { object_type: _t, properties: _p, ...rest } = config;
+                            patch(id ? { ...rest, object_type: id } : rest);
+                          }}
+                        />
+                      </Field>
+                    )}
                     {/* The primary key is separate because it is not a
                         property - an object's identity lives in a dataset
                         column, which is frequently mapped to nothing. */}

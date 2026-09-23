@@ -752,3 +752,270 @@ def test_a_delete_rule_on_an_interface_reaches_either_implementing_type(
             f"{wbase(fx)}/object-types/{type_id}/instances", headers=hdr(fx.viewer_sub)
         ).json()["items"]
         assert left == [], left
+
+
+# ---- p.60's Create on an interface (§453) ------------------------------------
+def create_rule(**config) -> dict:
+    return {"kind": "create_object", "config": config}
+
+
+IMPLEMENTATIONS = {
+    "fac": {"display_name": "Facility",
+            "property_mapping": {"last_inspection_date": "surveyed_on"}},
+    "veh": {"display_name": "Vehicle",
+            "property_mapping": {"last_inspection_date": "checked_on"}},
+}
+
+
+def test_the_chosen_type_becomes_an_ordinary_cross_type_create() -> None:
+    """p.60: "an 'Object type' parameter will be automatically generated to
+    indicate the object type that should be created".
+
+    The rewrite's whole purpose: after it, the rule is a shape the executor
+    already handles — a named `object_type` and that type's own property
+    names — so nothing below it had to learn about interfaces.
+    """
+    out = actions_service.creation_rules_for_interface(
+        [create_rule(object_type_parameter="kind", primary_key="key",
+                     properties={"last_inspection_date": "when"})],
+        bound={"kind": "veh", "key": "V9", "when": "2026-01-01"},
+        implementations=IMPLEMENTATIONS, interface_name="Inspectable",
+    )
+    assert out[0]["config"]["object_type"] == "veh"
+    assert out[0]["config"]["properties"] == {"checked_on": "when"}
+    # The primary key is a *value* the rule collects and is not renamed.
+    assert out[0]["config"]["primary_key"] == "key"
+    # And the parameter that chose the type is gone, because the rule no longer
+    # has a choice to make.
+    assert "object_type_parameter" not in out[0]["config"]
+
+
+def test_a_create_that_names_a_type_outright_is_left_alone() -> None:
+    """p.59 limits what may be *modified* on the subject; a rule creating a
+    named type's object is not about the subject at all, so it needs no
+    translation and must not get one."""
+    rule = create_rule(object_type="other", primary_key="key",
+                       properties={"status": "s"})
+    out = actions_service.creation_rules_for_interface(
+        [rule], bound={}, implementations=IMPLEMENTATIONS,
+        interface_name="Inspectable",
+    )
+    assert out == [rule]
+
+
+def test_choosing_nothing_is_refused_rather_than_defaulted() -> None:
+    """There is no type this could sensibly pick, and picking the first
+    implementation would put somebody's row in a table they did not name."""
+    with pytest.raises(actions_service.InterfaceSubjectError) as excinfo:
+        actions_service.creation_rules_for_interface(
+            [create_rule(object_type_parameter="kind", primary_key="key",
+                         properties={"last_inspection_date": "when"})],
+            bound={"key": "X"}, implementations=IMPLEMENTATIONS,
+            interface_name="Inspectable",
+        )
+    assert "kind" in str(excinfo.value)
+
+
+def test_choosing_a_type_that_does_not_implement_it_is_refused() -> None:
+    """The parameter is a value a caller supplies, so the dropdown offering
+    only implementations is a convenience and this is the rule."""
+    with pytest.raises(actions_service.InterfaceSubjectError) as excinfo:
+        actions_service.creation_rules_for_interface(
+            [create_rule(object_type_parameter="kind", primary_key="key",
+                         properties={"last_inspection_date": "when"})],
+            bound={"kind": "outsider", "key": "X"},
+            implementations=IMPLEMENTATIONS, interface_name="Inspectable",
+        )
+    assert "outsider" in str(excinfo.value)
+
+
+def test_a_property_the_chosen_type_maps_nothing_to_is_refused() -> None:
+    """p.59's promise on the create side: an interface's optional property may
+    be unmapped, and a create that silently dropped it would make one
+    submission produce different rows depending on the type chosen."""
+    with pytest.raises(actions_service.InterfaceSubjectError) as excinfo:
+        actions_service.creation_rules_for_interface(
+            [create_rule(object_type_parameter="kind", primary_key="key",
+                         properties={"inspection_status": "how"})],
+            bound={"kind": "fac", "key": "X"},
+            implementations=IMPLEMENTATIONS, interface_name="Inspectable",
+        )
+    assert "Facility" in str(excinfo.value)
+    assert "inspection_status" in str(excinfo.value)
+
+
+def test_one_create_action_makes_an_object_of_whichever_type_was_chosen(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """**p.59's own example, end to end**: "you can use a 'Create a ticket'
+    action type to create bugs and feature requests".
+
+    One action, submitted twice, producing a row in two different datasets —
+    which is the duplication an interface exists to remove, and the thing a
+    rule naming a type outright could not do. Read back off each type, because
+    a result saying `ok` is the endpoint agreeing with itself.
+    """
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "kind", "display_name": "Object type",
+                 "data_type": "object_type", "required": True},
+                {"api_name": "key", "display_name": "Key",
+                 "data_type": "string", "required": True},
+                {"api_name": "when", "display_name": "When",
+                 "data_type": "string", "required": True},
+            ],
+            "rules": [create_rule(object_type_parameter="kind", primary_key="key",
+                                  properties={"last_inspection_date": "when"})],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    for type_id, key, column, said in (
+        (world["facility"], "F9", "surveyed_on", "2030-01-01"),
+        (world["vehicle"], "V9", "checked_on", "2030-02-02"),
+    ):
+        r = client.post(
+            f"{pbase(fx)}/actions/{action['id']}/execute", headers=hdr(fx.editor_sub),
+            json={"instance_id": world["facility_instance"],
+                  "values": {"kind": type_id, "key": key, "when": said}},
+        )
+        assert r.status_code == 200, r.text
+        rows = client.get(
+            f"{wbase(fx)}/object-types/{type_id}/instances", headers=hdr(fx.viewer_sub)
+        ).json()["items"]
+        made = next((x for x in rows if x["primary_key"] == key), None)
+        assert made is not None, rows
+        assert made["properties"][column] == said, made
+
+
+def test_a_create_rule_that_names_no_chooser_and_no_type_is_refused(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """An interface action's own subject is an interface, which has no rows —
+    so a create defaulting to "the action's own type" has no type at all. The
+    message says which of the two things the rule is missing rather than
+    reporting an object type nobody named."""
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "key", "display_name": "Key", "data_type": "string"},
+                {"api_name": "when", "display_name": "When", "data_type": "string"},
+            ],
+            "rules": [create_rule(primary_key="key",
+                                  properties={"last_inspection_date": "when"})],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert "object type this workspace does not have" in r.text
+
+
+def test_the_chooser_has_to_be_an_object_type_parameter(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """A string parameter would collect a type id perfectly well and the form
+    would draw a text box for it — which is §214's control that can only be
+    satisfied by somebody who already knows a UUID."""
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "kind", "display_name": "Object type",
+                 "data_type": "string"},
+                {"api_name": "key", "display_name": "Key", "data_type": "string"},
+                {"api_name": "when", "display_name": "When", "data_type": "string"},
+            ],
+            "rules": [create_rule(object_type_parameter="kind", primary_key="key",
+                                  properties={"last_inspection_date": "when"})],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert "object_type parameter" in r.text
+
+
+def test_the_interface_read_carries_the_types_that_implement_it(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.60's list, on the wire: "the user will be prompted to pick an object
+    type from a list".
+
+    **Tested here rather than beside the other interface reads**, because this
+    is the caller that needs it — the picker for an Object type parameter, and
+    the only reason the detail grew the field. Asserted as a pair with a type
+    that does *not* implement it, since a read returning every object type in
+    the workspace would satisfy the first half on its own and offer a picker
+    whose extra options can only be refused (§214).
+    """
+    r = client.get(
+        f"{wbase(fx)}/interfaces/{world['interface_id']}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 200, r.text
+    implementing = {i["object_type_id"] for i in r.json()["implementations"]}
+    assert world["facility"] in implementing, implementing
+    assert world["vehicle"] in implementing, implementing
+
+    outsider = _make_type(client, fx, "Bystander", ["code"])
+    assert outsider not in implementing, implementing
+    # And the names come with them, because an id is not something to pick from
+    # a list.
+    assert all(i["display_name"] for i in r.json()["implementations"])
+
+
+def test_a_create_cannot_both_name_a_type_and_choose_one(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """Two answers to "what does this make", and the rewrite would honour the
+    parameter while the dialog showed the named type — a rule that does
+    something other than what it reads as."""
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "kind", "display_name": "Object type",
+                 "data_type": "object_type"},
+                {"api_name": "key", "display_name": "Key", "data_type": "string"},
+                {"api_name": "when", "display_name": "When", "data_type": "string"},
+            ],
+            "rules": [create_rule(object_type_parameter="kind",
+                                  object_type=world["facility"],
+                                  primary_key="key",
+                                  properties={"last_inspection_date": "when"})],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert "one or the other" in r.text
+
+
+def test_a_chooser_that_is_not_a_parameter_at_all_is_refused(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """The name is checked before its type, because the two are different
+    mistakes: a parameter that does not exist is a typo, and one of the wrong
+    type is a control that would collect the wrong thing. A rule reading a
+    name nothing declares would fail at submission with nothing bound, which
+    is p.60's choice silently never made."""
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "key", "display_name": "Key", "data_type": "string"},
+                {"api_name": "when", "display_name": "When", "data_type": "string"},
+            ],
+            "rules": [create_rule(object_type_parameter="missing", primary_key="key",
+                                  properties={"last_inspection_date": "when"})],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert "which is not a parameter" in r.text

@@ -2215,7 +2215,14 @@ async def mark_as_revert(
 # arrived: a property type no parameter can hold is a property no action could
 # ever write. `object` is the one word p.25 needs that the ontology has no use
 # for - a parameter that takes a whole instance.
-_PARAMETER_TYPES = frozenset(_ONTOLOGY_PROPERTY_TYPES | {"object"})
+#
+# **`object_type` is the second such word** (db 0102, §453): p.60's "an 'Object
+# type' parameter will be automatically generated to indicate the object type
+# that should be created". An interface has no rows, so a create on one has to
+# be told what to make — and no *property* is ever an object type, so widening
+# the property enum to reach it would put a value in front of every dropdown in
+# the Ontology Manager that nothing could store.
+_PARAMETER_TYPES = frozenset(_ONTOLOGY_PROPERTY_TYPES | {"object", "object_type"})
 
 # **`struct` is allowed as of §450** — `action-types` p.66: "Struct property
 # values can be created and modified with actions, through values supplied in a
@@ -2603,6 +2610,85 @@ def rules_for_implementation(
     return out
 
 
+def creation_rules_for_interface(
+    rules: list[dict[str, Any]],
+    *,
+    bound: dict[str, Any],
+    implementations: dict[str, dict[str, Any]],
+    interface_name: str,
+) -> list[dict[str, Any]]:
+    """`create_object` rules on an interface action, in the chosen type's
+    vocabulary (`action-types` p.60; §453).
+
+    > "Because the action type is only associated with an interface, an 'Object
+    > type' parameter will be automatically generated to indicate the object
+    > type that should be created." (p.60)
+
+    An interface has no rows, so a create on one has to be told what to make.
+    The rule names a parameter — `object_type_parameter`, exactly the shape
+    `primary_key` already has — and the submitted value is an object type id.
+    This resolves it, checks it against the interface's implementations, and
+    rewrites the rule into an ordinary cross-type create: `object_type` set to
+    the chosen id and the properties renamed through that implementation's
+    mapping.
+
+    **Done once, after binding and before anything reads the rules**, which is
+    what keeps the rest of the executor unchanged: `creation_targets`, the
+    per-type contexts and `object_creations` all see a rule of a shape they
+    already handle. A branch inside each of them would be the same decision
+    made three times.
+
+    A rule that names no parameter is left alone — it is a create naming a type
+    outright, which is legal on an interface action for the same reason it is
+    legal anywhere: p.59 limits what may be *modified* on the subject, and a
+    rule creating a named type's object is not about the subject at all.
+    """
+    out: list[dict[str, Any]] = []
+    for rule in rules:
+        config = _json(rule.get("config")) or {}
+        named = str(config.get("object_type_parameter") or "")
+        if str(rule.get("kind")) != "create_object" or not named:
+            out.append(rule)
+            continue
+        chosen = bound.get(named)
+        if not chosen:
+            # p.60's parameter is how the type is chosen, so a submission that
+            # leaves it empty has not said what to create. Refused rather than
+            # defaulted: there is no type this could sensibly pick, and picking
+            # the first implementation would put somebody's row in a table they
+            # did not name.
+            raise InterfaceSubjectError(
+                f"this action creates an object of {interface_name} and "
+                f"{named!r} was not supplied, so there is nothing to say which "
+                "object type to create (action-types p.60)"
+            )
+        implementation = implementations.get(str(chosen))
+        if implementation is None:
+            raise InterfaceSubjectError(
+                f"{chosen!r} does not implement {interface_name}, so an object "
+                "of it would not be one this action's rules describe "
+                "(action-types p.60)"
+            )
+        mapping = implementation["property_mapping"]
+        properties: dict[str, str] = {}
+        for prop, parameter in (config.get("properties") or {}).items():
+            target = mapping.get(str(prop))
+            if not target:
+                raise InterfaceSubjectError(
+                    f"{implementation['display_name']} implements "
+                    f"{interface_name} without mapping {prop!r} to one of its "
+                    "own properties, so this action cannot set it on a new one "
+                    "(action-types p.59)"
+                )
+            properties[target] = parameter
+        rewritten = {k: v for k, v in config.items() if k != "object_type_parameter"}
+        out.append({
+            **rule,
+            "config": {**rewritten, "object_type": str(chosen), "properties": properties},
+        })
+    return out
+
+
 def check_primary_key_writes(
     writes: dict[str, Any],
     *,
@@ -2806,6 +2892,11 @@ def _validate_definition(
     #: needs to know which parameters are structs and the parameter loop is
     #: where that is already being read.
     struct_parameters: set[str] = set()
+    #: `{parameter: its declared type}`, for the rule loop below — p.60's
+    #: Object type parameter has to be *that* type and not merely a declared
+    #: name (§453). Collected in the loop that already reads it, for
+    #: `struct_parameters`' reason one line up.
+    declared_types: dict[str, str] = {}
     for parameter in parameters:
         name = str(parameter.get("api_name", ""))
         if not _API_NAME_RE.match(name):
@@ -2814,6 +2905,7 @@ def _validate_definition(
             raise ValueError(f"two parameters are both named {name!r}")
         seen.add(name)
         data_type = str(parameter.get("data_type", ""))
+        declared_types[name] = data_type
         if data_type not in _PARAMETER_TYPES:
             raise ValueError(f"parameter {name!r} has unknown type {data_type!r}")
         # db 0083: a type on a string is a claim nothing reads, and it would
@@ -2869,12 +2961,40 @@ def _validate_definition(
             properties = config.get("properties") or {}
             if not isinstance(properties, dict) or not properties:
                 raise ValueError("a create_object rule needs at least one property to set")
-            target = str(config.get("object_type") or object_type_id)
-            target_properties = workspace_properties.get(target)
-            if target_properties is None:
-                raise ValueError(
-                    "a create_object rule names an object type this workspace does not have"
-                )
+            # p.60's Object type parameter (§453). A create on an interface
+            # has no type to name — the submission picks one — so the rule
+            # names the parameter that will say, exactly as it already names
+            # the one that will say the primary key. The properties are then
+            # the *interface's*, which is what `property_types` already holds
+            # for an interface action, and the implementation's mapping
+            # translates them at submission.
+            chooser = str(config.get("object_type_parameter") or "")
+            if chooser:
+                if chooser not in seen:
+                    raise ValueError(
+                        f"a create_object rule reads {chooser!r} to choose an object "
+                        "type, which is not a parameter"
+                    )
+                if str(declared_types.get(chooser)) != "object_type":
+                    raise ValueError(
+                        f"{chooser!r} chooses the object type a create_object rule "
+                        "makes, so it has to be an object_type parameter "
+                        "(action-types p.60)"
+                    )
+                if config.get("object_type"):
+                    raise ValueError(
+                        "a create_object rule names an object type and a parameter "
+                        "that chooses one; it can have one or the other"
+                    )
+                target_properties = property_types
+            else:
+                target = str(config.get("object_type") or object_type_id)
+                target_properties = workspace_properties.get(target)
+                if target_properties is None:
+                    raise ValueError(
+                        "a create_object rule names an object type this workspace "
+                        "does not have"
+                    )
             for prop, parameter in properties.items():
                 if str(parameter) not in seen:
                     raise ValueError(

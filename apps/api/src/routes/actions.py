@@ -2189,6 +2189,28 @@ async def execute_action(
                     "mappings": named_mappings,
                 }
 
+            # p.60's Object type parameter, resolved (§453). **Here, after
+            # binding and before anything reads the rules**: everything below
+            # — the targets, the per-type contexts, the coercion, the write —
+            # then sees an ordinary cross-type create, which is a shape they
+            # already handle. A branch inside each would be one decision made
+            # four times.
+            if action_type["interface_id"] is not None:
+                action_type = {
+                    **action_type,
+                    "rules": actions_service.creation_rules_for_interface(
+                        action_type["rules"],
+                        bound=bound,
+                        implementations={
+                            str(row["object_type_id"]): row
+                            for row in await interfaces_service.implementations_of(
+                                conn, access.workspace_id,
+                                UUID(str(action_type["interface_id"])),
+                            )
+                        },
+                        interface_name=str(action_type["subject_name"]),
+                    ),
+                }
             # **One context per object type this action creates into.** A rule
             # creating another type's object has to be checked and coerced against
             # *that* type and written into *its* dataset - which is the lookup that
