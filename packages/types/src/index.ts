@@ -2327,6 +2327,19 @@ export interface InterfaceDetail extends InterfaceSummary {
   /** Own plus inherited, resolved by the server because it is the server that
    * refuses an implementation. */
   effective_properties: InterfaceProperty[];
+  /** The object types that implement it (§453). On the detail rather than the
+   * summary, where `implementation_count` lives: a listing wants how many, and
+   * only somebody looking at one interface wants which. `action-types` p.60's
+   * Object type parameter is the caller — "the user will be prompted to pick
+   * an object type from a list", and this is that list. */
+  implementations: InterfaceImplementor[];
+}
+
+/** One object type's implementation of an interface, as a picker needs it. */
+export interface InterfaceImplementor {
+  object_type_id: string;
+  api_name: string;
+  display_name: string;
 }
 
 /** An interface as it appears on an object type: enough to draw a label. */

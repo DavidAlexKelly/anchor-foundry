@@ -11649,6 +11649,16 @@ export function CanvasActionForm({
     queryFn: () => objApi.listInstances(workspaceId, actionType!.object_type_id!, 25, 0),
     enabled: !!actionType?.object_type_id && !subjectVariable,
   });
+  // p.60's list of object types to pick from — the interface's
+  // implementations, which the detail read carries (§453). Its own query
+  // rather than a field on the action type: which types implement an interface
+  // changes without the action changing, and a copy on the action would be
+  // free to go stale (§191).
+  const interfaceQ = useQuery({
+    queryKey: ["interface", actionType?.interface_id],
+    queryFn: () => objApi.getInterface(workspaceId, actionType!.interface_id!),
+    enabled: !!actionType?.interface_id,
+  });
   const membersQ = useQuery({
     queryKey: ["canvas-widget-interface-members", actionType?.interface_id],
     queryFn: () =>
@@ -12035,7 +12045,43 @@ export function CanvasActionForm({
             action to ask. **The refusal is the server's either way** (p.34's
             second sentence), so this is a convenience over a rule rather than
             the rule itself. */}
-        {offer ? (
+        {parameter.data_type === "object_type" ? (
+          /* `action-types` p.60's Object type parameter (§453): "the user will
+             be prompted to pick an object type from a list". **The list is the
+             interface's implementations**, because those are the only types a
+             rule written in the interface's vocabulary can produce — the
+             server refuses any other, and offering one would be a control
+             whose only outcome is that refusal (§214).
+
+             Its own branch rather than a kind of `offer`: an offer is p.33's
+             narrowed set of *objects*, resolved per submission against the
+             other values, and this is a fixed list that depends on nothing. */
+          <select
+            aria-label={parameterLabel(parameter)}
+            required={parameter.required}
+            data-testid="object-type-parameter"
+            value={values[parameter.api_name] === null
+              || values[parameter.api_name] === undefined
+              ? "" : String(values[parameter.api_name])}
+            onChange={(e) => {
+              setTyped((was) => ({ ...was, [parameter.api_name]: true }));
+              setValues({
+                ...values,
+                [parameter.api_name]: e.target.value === "" ? null : e.target.value,
+              });
+            }}
+          >
+            <option value="">Choose an object type…</option>
+            {(interfaceQ.data?.implementations ?? []).map((implementor) => (
+              <option
+                key={implementor.object_type_id}
+                value={implementor.object_type_id}
+              >
+                {implementor.display_name}
+              </option>
+            ))}
+          </select>
+        ) : offer ? (
           <select
             aria-label={parameterLabel(parameter)}
             required={parameter.required}

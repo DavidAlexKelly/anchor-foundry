@@ -1,0 +1,40 @@
+-- ============================================================================
+-- 0102_object_type_parameter.sql
+-- A parameter whose value is an *object type* (`action-types` p.60; §453).
+--
+--     "Because the action type is only associated with an interface, an
+--      'Object type' parameter will be automatically generated to indicate the
+--      object type that should be created. If using a form or a table, the
+--      user will be prompted to pick an object type from a list." (p.60)
+--
+-- **The second word p.25 needs that the ontology has no use for.** The enum is
+-- `ontology.PROPERTY_TYPES` plus `object` — a parameter holding a whole
+-- instance — and this is the same move one level up: a parameter holding a
+-- *type*. No property is ever an object type, so widening the property enum to
+-- reach it would put a value in front of every dropdown in the Ontology
+-- Manager that nothing could ever store.
+--
+-- **Why p.60 needs one at all.** An interface has no rows; a create has to make
+-- a row of something, and which something is not knowable until somebody says.
+-- Every other way of saying it is worse: a rule naming a type would make one
+-- action per implementation, which is the duplication interfaces exist to
+-- remove (p.59's "you can use a 'Create a ticket' action type to create bugs
+-- and feature requests"); and inferring it from the values would mean guessing
+-- from a set of shared property names that every implementation answers to.
+--
+-- **Not stored anywhere new.** The value is an object type id and goes in
+-- `action_runs.submitted_values` with every other parameter, so a run says
+-- which type it created without a column to say it in.
+--
+-- p.61's other half — "objects cannot be created without a primary key…
+-- any object type without a primary key assigned in the rule will fail during
+-- submission" — needs nothing here, and that is worth stating rather than
+-- leaving as an absence: a `create_object` rule in this platform has *always*
+-- required a `primary_key` naming a parameter, refused at save time
+-- (`_validate_definition`), because a row with no identity is not a created
+-- object. p.61 describes a submission-time failure because Foundry's primary
+-- key is a *property* and may be absent per implementation; here it is a value
+-- the rule collects, so the failure it warns about cannot be reached.
+-- ============================================================================
+
+ALTER TYPE action_parameter_type ADD VALUE IF NOT EXISTS 'object_type';

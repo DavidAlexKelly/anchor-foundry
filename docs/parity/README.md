@@ -568,6 +568,31 @@ is a comparison of two things that ran.** Anything else is arithmetic on
 noise — and it always inflates the score, which is the direction nobody
 investigates.
 
+### The baseline is a mutant too, and a web mutant needs time to compile (§453)
+
+Two corollaries of §451's rule, both earned the same afternoon.
+
+**Hold the baseline to the standard you hold the mutants to.** §453's seam
+group printed `baseline  7 errors` above three verdicts that read `caught`, and
+all three happened to be right — which is the worst possible outcome, because
+the column looked like a result. A baseline that errored is not a measurement
+and no verdict taken against it means anything. The harness refuses to continue
+now, rather than printing numbers nobody can use.
+
+**Give the dev server time to rebuild.** The errors had one cause: the harness
+writes a web file and starts the suite immediately, so Next is still compiling
+the *previous* state when the first test navigates. §316's rule was that a web
+file's mtime must move; this is the other half — the mtime moving is what
+starts the rebuild, and the rebuild is not instant. Eight seconds after every
+apply and every restore, for web files only; `apps/api` needs none, because
+pytest imports the source itself.
+
+The tell is the same one as always, and it is worth stating as a habit rather
+than a rule: **when a mutant's run errors, apply it by hand and run the suite
+once.** Every time that has been done in this repository the mutant turned out
+to be a clean kill, and every time it was *not* done the number went into a
+column as though it meant something.
+
 ### A clean first pass means the list came from the test file (§350, §450)
 
 Recorded on §350's row and worth having here, because §450 walked into it again:

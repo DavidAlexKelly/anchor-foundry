@@ -267,3 +267,183 @@ def test_an_ordinary_actions_form_never_asks_for_an_interface_set(
     settled(page)
     expect(record(page).locator("option")).to_have_count(3)  # Choose…, F1, F2
     assert asked == [], asked
+
+
+def _plain_type(api, world, name: str, key: str, column: str, rows: bytes) -> str:
+    """An object type whose **key column is not a required property**.
+
+    `Module.object_type` marks it required, which is right for a table that is
+    only ever read: p.116 then refuses a *create* that does not set it, and
+    every create here would be about that rather than about p.60. The key is a
+    dataset column and not a property (`object_creations`' own argument), so a
+    type that maps only its data columns is the honest fixture for a create.
+    """
+    tag = uuid.uuid4().hex[:6]
+    dataset = api.upload_csv(
+        f"/workspaces/{world.workspace_id}/projects/{world.project_id}/datasets/upload",
+        f"{name} {tag}", rows,
+    )
+    declared = api.call(
+        "POST", f"/workspaces/{world.workspace_id}/object-types",
+        {"api_name": f"{name}{tag}", "display_name": f"{name} {tag}",
+         "properties": [{"api_name": column, "display_name": column.title(),
+                         "data_type": "string"}]},
+    )
+    source = api.call(
+        "POST", f"/workspaces/{world.workspace_id}/projects/{world.project_id}"
+                f"/object-type-sources",
+        {"object_type_id": declared["id"], "dataset_id": dataset["id"],
+         "primary_key_column": key, "column_mappings": {column: column}},
+    )
+    api.call(
+        "POST", f"/workspaces/{world.workspace_id}/projects/{world.project_id}"
+                f"/object-type-sources/{source['id']}/sync", None,
+    )
+    return declared["id"]
+
+
+def test_a_create_on_an_interface_asks_which_object_type_to_make(
+    page, api, world
+) -> None:
+    """`action-types` p.60: "an 'Object type' parameter will be automatically
+    generated to indicate the object type that should be created. If using a
+    form or a table, the user will be prompted to **pick an object type from a
+    list**."
+
+    **The list is the interface's implementations**, and both halves are
+    asserted: either alone passes for a picker that offered every object type
+    in the workspace, which is a control whose extra options can only ever be
+    refused (§214).
+
+    Then the submission, read back off the type that was chosen — because
+    p.59's example is one action making bugs *and* feature requests, and a
+    picker that drew correctly while the create ignored it would look
+    identical.
+    """
+    interface = api.call(
+        "POST", f"/workspaces/{world.workspace_id}/interfaces",
+        {"api_name": f"Raisable{world.tag}", "display_name": f"Raisable {world.tag}",
+         "properties": [{"api_name": "raised_on", "display_name": "Raised on",
+                         "data_type": "string", "required": True}]},
+    )
+    bugs = _plain_type(api, world, "Bugs", "bug_id", "found_on",
+                       b"bug_id,found_on\nB0,2020-01-01\n")
+    wishes = _plain_type(api, world, "Wishes", "wish_id", "asked_on",
+                         b"wish_id,asked_on\nW0,2020-01-01\n")
+    for type_id, column in ((bugs, "found_on"), (wishes, "asked_on")):
+        api.call(
+            "PUT",
+            f"/workspaces/{world.workspace_id}/object-types/{type_id}/interfaces",
+            [{"interface_id": interface["id"],
+              "property_mapping": {"raised_on": column}}],
+        )
+    action = api.call(
+        "POST", f"/workspaces/{world.workspace_id}/action-types",
+        {"interface_id": interface["id"],
+         "api_name": f"raise_{uuid.uuid4().hex[:8]}",
+         "display_name": "Raise", "editable_properties": ["raised_on"]},
+    )
+    api.call(
+        "PUT", f"/workspaces/{world.workspace_id}/action-types/{action['id']}/definition",
+        {
+            "parameters": [
+                {"api_name": "kind", "display_name": "Object type",
+                 "data_type": "object_type", "required": True},
+                {"api_name": "key", "display_name": "Key",
+                 "data_type": "string", "required": True},
+                {"api_name": "when", "display_name": "When",
+                 "data_type": "string", "required": True},
+            ],
+            "rules": [{"kind": "create_object",
+                       "config": {"object_type_parameter": "kind",
+                                  "primary_key": "key",
+                                  "properties": {"raised_on": "when"}}}],
+            "criteria": [],
+        },
+    )
+    mod = Module(api, "Interface create form", beside=world)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "form": {"resolvedName": "CanvasActionForm",
+                     "props": {"actionTypeId": action["id"], "objectVariable": None}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+    open_module(page, mod)
+    settled(page)
+
+    picker = page.get_by_test_id("object-type-parameter")
+    expect(picker).to_be_visible(timeout=30000)
+    # Both implementing types, and nothing else: "Choose an object type…" plus
+    # the two. A third would be a type this action's rules cannot describe.
+    expect(picker.locator("option")).to_have_count(3)
+
+    record(page).select_option(index=1)
+    picker.select_option(value=wishes)
+    page.get_by_label("Key", exact=True).fill("W-NEW")
+    page.get_by_label("When", exact=True).fill("2031-07-07")
+    page.get_by_role("button", name="Submit").click()
+    expect(page.locator("text=Saved.")).to_be_visible(timeout=15000)
+
+    made = eventually(
+        lambda: stored(api, world, wishes, "W-NEW", "asked_on"),
+        lambda v: v == "2031-07-07",
+        what="the wish the form created",
+    )
+    assert made == "2031-07-07", made
+
+
+def test_the_editor_offers_only_object_type_parameters_as_the_chooser(
+    page, api, world
+) -> None:
+    """p.60's chooser, in the dialog that wires it.
+
+    The rule names the parameter that will say which type to create, and only
+    an `object_type` parameter can — a string one would collect the id
+    perfectly well and the form would draw a text box for it, which is §214's
+    control that can only be satisfied by somebody who already knows a UUID.
+    The server refuses that; this is the half that means nobody meets the
+    refusal.
+
+    **Both halves asserted**, because a dropdown offering every parameter
+    contains the right one too.
+    """
+    action = api.call(
+        "POST", f"/workspaces/{world.workspace_id}/action-types",
+        {"interface_id": world.interface["id"],
+         "api_name": f"wire_{uuid.uuid4().hex[:8]}",
+         "display_name": "Wire up", "editable_properties": ["last_inspection_date"]},
+    )
+    api.call(
+        "PUT", f"/workspaces/{world.workspace_id}/action-types/{action['id']}/definition",
+        {
+            "parameters": [
+                {"api_name": "kind", "display_name": "Object type",
+                 "data_type": "object_type", "required": True},
+                {"api_name": "key", "display_name": "Key",
+                 "data_type": "string", "required": True},
+                {"api_name": "when", "display_name": "When",
+                 "data_type": "string", "required": True},
+            ],
+            "rules": [{"kind": "create_object",
+                       "config": {"object_type_parameter": "kind",
+                                  "primary_key": "key",
+                                  "properties": {"last_inspection_date": "when"}}}],
+            "criteria": [],
+        },
+    )
+
+    page.goto(f"{WEB_BASE}/{world.workspace_slug}/{world.project_slug}/objects")
+    expect(page.get_by_role("heading", name="Actions", exact=True)).to_be_visible(
+        timeout=30000
+    )
+    row = page.locator("tbody tr").filter(has_text="Wire up").first
+    row.get_by_role("button", name="Parameters").click()
+
+    chooser = page.get_by_role("combobox", name="Rule 1 creates type from")
+    expect(chooser).to_be_visible(timeout=15000)
+    options = set(chooser.locator("option").all_text_contents())
+    assert "kind" in options, options
+    assert {"key", "when"}.isdisjoint(options), options

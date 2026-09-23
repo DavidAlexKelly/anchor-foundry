@@ -2481,6 +2481,14 @@ class InterfaceSummary(BaseModel):
     updated_at: datetime
 
 
+class InterfaceImplementorOut(BaseModel):
+    """One object type that implements an interface, as a picker needs it."""
+
+    object_type_id: UUID
+    api_name: str
+    display_name: str
+
+
 class InterfaceDetail(BaseModel):
     id: UUID
     api_name: str
@@ -2494,6 +2502,13 @@ class InterfaceDetail(BaseModel):
     # implementation is checked against — resolved here rather than by the
     # browser, because it is the server that refuses.
     effective_properties: list[InterfacePropertyOut] = Field(default_factory=list)
+    #: The object types that implement it, with their names (§453). **On the
+    #: detail and not the summary**, which is where `implementation_count`
+    #: lives: a listing wants to know *how many*, and only somebody looking at
+    #: one interface wants to know which. `action-types` p.60's Object type
+    #: parameter is the caller that needs the list — "the user will be prompted
+    #: to pick an object type from a list", and this is that list.
+    implementations: list[InterfaceImplementorOut] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -2531,6 +2546,16 @@ async def get_interface(
         row = await interfaces_service.get_interface(
             conn, access.workspace_id, interface_id
         )
+        # Its own read rather than a join in `get_interface`: the two writing
+        # routes that return this model have no implementations to report — one
+        # that was just created has none — so the list belongs to the read that
+        # somebody opened an interface to get.
+        row = {
+            **row,
+            "implementations": await interfaces_service.implementations_of(
+                conn, access.workspace_id, interface_id
+            ),
+        }
     return InterfaceDetail(**row)
 
 
