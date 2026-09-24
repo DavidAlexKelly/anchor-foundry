@@ -240,6 +240,7 @@ export function ObjectView({
   allowToggle = true,
   hideHeader = false,
   canComment = false,
+  dragIcon = false,
 }: {
   workspaceId: string;
   typeId: string;
@@ -260,6 +261,8 @@ export function ObjectView({
   allowToggle?: boolean;
   /** Workshop p.262's Hide header. */
   hideHeader?: boolean;
+  /** Workshop p.570's drag zone on the header's icon (§457). */
+  dragIcon?: boolean;
 }) {
   // Null while unresolved *and* when there is genuinely none, which is why the
   // switch is drawn from the query rather than from this: "no configured view"
@@ -361,6 +364,7 @@ export function ObjectView({
           typeId={typeId}
           instance={shown}
           hideHeader={hideHeader}
+          dragIcon={dragIcon}
         />
       )}
     </div>

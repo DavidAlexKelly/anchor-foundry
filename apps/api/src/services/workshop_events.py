@@ -43,7 +43,10 @@ from typing import Any
 # else commits an entry. It is distinct from `change`, which fires per
 # keystroke: the whole point of p.465's setting is to run something **once**,
 # when the entry is finished, rather than on every character of it.
-TRIGGERS = ("click", "row_select", "change", "submit")
+# `drop` is p.568's "An event can also be configured to fire after the drop" -
+# a Section drop zone's, and it fires after the dropped objects are written to
+# the zone's output variable, so an effect that reads that variable sees them.
+TRIGGERS = ("click", "row_select", "change", "submit", "drop")
 
 # Effects the browser runs. `run_action` is the only one that *writes* - the
 # rest move the reader around - which is why it is the only one whose outcome

@@ -69,6 +69,8 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   // elsewhere, so this one prop is upstream while `variable` is downstream.
   groupsVariable: "read",
   outputVariable: "write",
+  // p.568: the drop zone writes what was dropped on it.
+  dropVariable: "write",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",

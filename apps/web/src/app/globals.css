@@ -2459,6 +2459,16 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 
 /* ---- sections (ROADMAP phase 2, 1.4) -------------------------------------- */
 .canvas-section { min-width: 0; }
+/* p.564-568's drop zone. Positioned so its overlay can sit over the section's
+   contents rather than push them aside while something is dragged over. */
+.canvas-section[data-drop-zone] { position: relative; }
+.canvas-section[data-drop-zone="over"] { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.canvas-drop-overlay {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--accent-wash); opacity: 0.92;
+  color: var(--accent-deep); font-weight: 600;
+}
 .canvas-section-parts { display: flex; min-width: 0; }
 .canvas-section--columns > .canvas-section-parts { flex-direction: row; }
 .canvas-section--rows > .canvas-section-parts { flex-direction: column; }
