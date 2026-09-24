@@ -470,6 +470,56 @@ async def implementations_of(
     return out
 
 
+async def members_page(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    interface_id: UUID,
+    *,
+    limit: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """A page of the objects implementing this interface, and how many there
+    are (`action-types` p.62; §454).
+
+    > "The 'interface reference' parameter shows objects of any type that
+    > implements the interface." (p.62)
+
+    **Deliberately not `/interfaces/{id}/evaluate`'s fan-out**, and the
+    difference is the whole of that route: filters translated onto each
+    implementation's own property names, a merged sort, and p.61's depth bound
+    on how far a caller may page. A dropdown asks for none of the three — it
+    wants the first `limit` objects and a count — so routing it through the
+    evaluator would mean building an empty filter list, a sort nobody chose and
+    a depth check that cannot fail, to reach the two lines underneath.
+
+    If an interface reference ever gains p.36's filters, this collapses into
+    that evaluator rather than growing a second copy of it; the row says so.
+
+    Each row carries `object_type_name`, because a heterogeneous list has to
+    say what each object *is* and a single-type one never does.
+    """
+    from . import instance_store
+    from . import instances as instances_service
+
+    implementations = await implementations_of(conn, workspace_id, interface_id)
+    prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
+    store = instance_store.store_for(conn)
+    rows: list[dict[str, Any]] = []
+    total = 0
+    for implementation in implementations:
+        page, count = await store.list_for_type(
+            search_prefix=prefix,
+            object_type_id=UUID(str(implementation["object_type_id"])),
+            limit=limit, offset=0,
+        )
+        total += count
+        for row in page:
+            rows.append({**row, "object_type_name": implementation["display_name"]})
+    # **Truncated after the merge, not before**: each type was asked for a whole
+    # page because any of them could fill one, which is the same reasoning the
+    # evaluator's own comment gives for reading `offset + limit` from each.
+    return rows[:limit], total
+
+
 async def implementations_by_type(
     conn: AsyncConnection,
     workspace_id: UUID,

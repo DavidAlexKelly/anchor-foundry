@@ -116,6 +116,12 @@ class ActionParameterOut(BaseModel):
     #: parameter whose property this end could not resolve, which is not the
     #: same as one with no fields (§210).
     struct_fields: list[dict[str, Any]] | None = None
+    #: p.62's interface reference (db 0103, §454): the interface an `object`
+    #: parameter's value must implement. **Beside `object_type_id` and never
+    #: with it** — p.62 calls the two "similar", differing only in what the
+    #: list shows, so the value is an object's id either way and only the
+    #: constraint changes.
+    interface_id: UUID | None = None
     required: bool
     default_value: Any | None
     hidden: bool
@@ -648,6 +654,11 @@ class ActionParameterIn(BaseModel):
     #: db 0083's object type. Refused on a parameter that is not an `object`,
     #: because a type on a string is a claim nothing reads.
     object_type_id: UUID | None = None
+    #: p.62's interface reference (db 0103, §454): "shows objects of any type
+    #: that implements the interface". The same claim as `object_type_id` made
+    #: about an interface, and refused beside it — an object parameter is
+    #: constrained one way or not at all.
+    interface_id: UUID | None = None
     #: p.36's filters: `{property, values: [{kind, ...}]}`, ANDed, each value
     #: list read as an OR (§331).
     dropdown_filters: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
@@ -930,6 +941,57 @@ async def action_parameter_choices(
                         ),
                     )
                     for r in rows
+                ],
+            ))
+
+        # p.62's interface reference (§454): "the 'interface reference'
+        # parameter shows objects of any type that implements the interface. If
+        # using a form or a table, the user could then pick an object from a
+        # list."
+        #
+        # **Its own pass rather than a branch in the loop above**, because the
+        # loop is built around one type: p.36's filters are compiled against
+        # that type's properties and p.37's walk starts from it. An interface
+        # set has its own filter vocabulary (§254 rewrites them onto each
+        # implementation), and narrowing one is a separate question from
+        # offering one — a named ○ rather than a branch pretending to be
+        # finished.
+        for parameter in choices_service.object_parameters(action_type["parameters"]):
+            constrained = choices_service.interface_of(parameter)
+            if constrained is None:
+                continue
+            try:
+                interface = await interfaces_service.get_interface(
+                    conn, access.workspace_id, UUID(constrained)
+                )
+            except NotFoundError:
+                # An interface the caller cannot see. Omitted for the reason the
+                # loop above omits an invisible type: "nothing to choose from"
+                # and "not yours to look at" are different things.
+                continue
+            rows, total = await interfaces_service.members_page(
+                conn, access.workspace_id, UUID(constrained),
+                limit=choices_service.MAX_CHOICES,
+            )
+            out.append(ParameterChoices(
+                parameter=str(parameter["api_name"]),
+                # **No object type, because there is no one type**, which is
+                # the whole of p.62's difference. The name is the interface's,
+                # so the control still reads "Choose a Ticket…".
+                object_type_id=None,
+                object_type_name=str(interface["display_name"]),
+                truncated=total > len(rows),
+                items=[
+                    ParameterChoice(
+                        id=UUID(str(row["id"])),
+                        primary_key=str(row["primary_key"]),
+                        # The interface's own vocabulary has no title property,
+                        # so the primary key qualified by what the object *is* —
+                        # which is the one thing a heterogeneous list has to say
+                        # and a single-type one never does.
+                        label=f"{row['primary_key']} · {row['object_type_name']}",
+                    )
+                    for row in rows
                 ],
             ))
 
@@ -2138,8 +2200,33 @@ async def execute_action(
             # thing that writes it.
             bound.update(writeback_outputs)
 
+            # p.62's interface reference parameters, resolved once (§454).
+            # **Here, because every reader below needs the same answer**: which
+            # type the named object turned out to be decides what a rule
+            # writes, which source it is checked against and which index row is
+            # updated — and asking three times would be three chances for them
+            # to differ. An interface has no rows of its own, so this is a read
+            # per implementation until one answers, and `_interface_subject` is
+            # the same walk the subject takes.
+            parameter_types: dict[str, str] = {}
+            for parameter in action_type["parameters"]:
+                constrained = choices_service.interface_of(parameter)
+                name = str(parameter["api_name"])
+                named_id = bound.get(name)
+                if not constrained or not named_id:
+                    continue
+                found_type, _row, _impl = await _interface_subject(
+                    conn,
+                    workspace_id=access.workspace_id,
+                    interface_id=UUID(constrained),
+                    instance_id=str(named_id),
+                    search_prefix=prefix,
+                )
+                parameter_types[name] = str(found_type)
             deletions = actions_service.object_deletions(
-                bound, rules=action_type["rules"], default_object_type_id=object_type_id
+                bound, rules=action_type["rules"],
+                default_object_type_id=object_type_id,
+                parameter_types=parameter_types,
             )
             # Read once and handed to everything that needs it: a far-side link
             # rule names the object type it writes *through its link type*, so the

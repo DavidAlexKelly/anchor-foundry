@@ -447,3 +447,165 @@ def test_the_editor_offers_only_object_type_parameters_as_the_chooser(
     options = set(chooser.locator("option").all_text_contents())
     assert "kind" in options, options
     assert {"key", "when"}.isdisjoint(options), options
+
+
+def test_an_interface_reference_offers_objects_of_every_implementing_type(
+    page, api, world
+) -> None:
+    """`action-types` p.62: "the 'interface reference' parameter shows objects
+    of any type that implements the interface. If using a form or a table, the
+    user could then pick an object from a list."
+
+    **The population, not a member** (§440): a list holding only one type's
+    objects satisfies any assertion about one of them. And the label says which
+    type each object is — the one thing a heterogeneous list has to carry and a
+    single-type one never does.
+    """
+    action = api.call(
+        "POST", f"/workspaces/{world.workspace_id}/action-types",
+        {"object_type_id": world.facility,
+         "api_name": f"byref_{uuid.uuid4().hex[:8]}",
+         "display_name": "Retire by reference",
+         "editable_properties": ["surveyed_on"]},
+    )
+    api.call(
+        "PUT", f"/workspaces/{world.workspace_id}/action-types/{action['id']}/definition",
+        {
+            "parameters": [
+                {"api_name": "subject", "display_name": "Which object",
+                 "data_type": "object", "required": True,
+                 "interface_id": world.interface["id"]},
+            ],
+            "rules": [{"kind": "delete_object", "config": {"object": "subject"}}],
+            "criteria": [],
+        },
+    )
+    mod = Module(api, "Interface reference form", beside=world)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "form": {"resolvedName": "CanvasActionForm",
+                     "props": {"actionTypeId": action["id"], "objectVariable": None}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+    open_module(page, mod)
+    settled(page)
+
+    picker = page.get_by_role("combobox", name="Which object")
+    expect(picker).to_be_visible(timeout=30000)
+    texts = " ".join(picker.locator("option").all_text_contents())
+    # Both implementing types' objects, from two different datasets.
+    assert "F1" in texts and "F2" in texts and "V1" in texts, texts
+    # And each says what it is, because the list is heterogeneous.
+    assert "·" in texts, texts
+
+
+def test_opening_and_saving_the_dialog_keeps_the_interface_constraint(
+    page, api, world
+) -> None:
+    """**The trap §329, §331 and §333 each fell into, one field later.**
+
+    This dialog saves the parameters whole, so a field it does not read is one
+    it overwrites with nothing the moment somebody opens it to fix a label. The
+    constraint is read into its state and drawn in a control; neither is worth
+    anything unless the round trip is asserted, and the round trip is the thing
+    that broke three times before.
+
+    Saving without touching the control is the case, because that is what
+    somebody editing a different parameter does.
+    """
+    action = api.call(
+        "POST", f"/workspaces/{world.workspace_id}/action-types",
+        {"object_type_id": world.facility,
+         "api_name": f"keep_{uuid.uuid4().hex[:8]}",
+         "display_name": "Keeps its constraint",
+         "editable_properties": ["surveyed_on"]},
+    )
+    api.call(
+        "PUT", f"/workspaces/{world.workspace_id}/action-types/{action['id']}/definition",
+        {
+            "parameters": [
+                {"api_name": "subject", "display_name": "Which object",
+                 "data_type": "object", "required": True,
+                 "interface_id": world.interface["id"]},
+            ],
+            "rules": [{"kind": "delete_object", "config": {"object": "subject"}}],
+            "criteria": [],
+        },
+    )
+
+    page.goto(f"{WEB_BASE}/{world.workspace_slug}/{world.project_slug}/objects")
+    expect(page.get_by_role("heading", name="Actions", exact=True)).to_be_visible(
+        timeout=30000
+    )
+    row = page.locator("tbody tr").filter(has_text="Keeps its constraint").first
+    row.get_by_role("button", name="Parameters").click()
+
+    # Drawn in the state it is actually in — a control that always reads "Not
+    # said" is §214's, and it is also what a mutant leaves behind.
+    picker = page.get_by_role("combobox", name="Parameter 1 interface")
+    expect(picker).to_have_value(world.interface["id"], timeout=15000)
+
+    page.get_by_role("button", name="Save", exact=True).click()
+    saved = eventually(
+        lambda: api.call(
+            "GET", f"/workspaces/{world.workspace_id}/action-types/{action['id']}",
+        )["parameters"][0].get("interface_id"),
+        lambda v: v == world.interface["id"],
+        what="the interface constraint after a save that did not touch it",
+    )
+    assert saved == world.interface["id"], saved
+
+
+def test_picking_an_interface_clears_the_object_type_beside_it(
+    page, api, world
+) -> None:
+    """The two constraints are exclusive, and the server refuses both — so the
+    dialog has to clear one when the other is chosen, or a reader can build a
+    definition whose only outcome is that refusal (§214).
+
+    **Asserted through the save**, because the state the dialog holds is not
+    the claim: what matters is the document it writes.
+    """
+    action = api.call(
+        "POST", f"/workspaces/{world.workspace_id}/action-types",
+        {"object_type_id": world.facility,
+         "api_name": f"swap_{uuid.uuid4().hex[:8]}",
+         "display_name": "Swaps its constraint",
+         "editable_properties": ["surveyed_on"]},
+    )
+    api.call(
+        "PUT", f"/workspaces/{world.workspace_id}/action-types/{action['id']}/definition",
+        {
+            "parameters": [
+                {"api_name": "subject", "display_name": "Which object",
+                 "data_type": "object", "required": True,
+                 "object_type_id": world.vehicle},
+            ],
+            "rules": [{"kind": "delete_object", "config": {"object": "subject"}}],
+            "criteria": [],
+        },
+    )
+
+    page.goto(f"{WEB_BASE}/{world.workspace_slug}/{world.project_slug}/objects")
+    expect(page.get_by_role("heading", name="Actions", exact=True)).to_be_visible(
+        timeout=30000
+    )
+    row = page.locator("tbody tr").filter(has_text="Swaps its constraint").first
+    row.get_by_role("button", name="Parameters").click()
+
+    picker = page.get_by_role("combobox", name="Parameter 1 interface")
+    expect(picker).to_be_visible(timeout=15000)
+    picker.select_option(value=world.interface["id"])
+    page.get_by_role("button", name="Save", exact=True).click()
+
+    saved = eventually(
+        lambda: api.call(
+            "GET", f"/workspaces/{world.workspace_id}/action-types/{action['id']}",
+        )["parameters"][0],
+        lambda p: p.get("interface_id") == world.interface["id"],
+        what="the swapped constraint",
+    )
+    assert saved["object_type_id"] is None, saved
