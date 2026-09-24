@@ -104,6 +104,9 @@ export const CATEGORY_OF: Record<string, CategoryId> = {
   CanvasActionForm: "events",
 
   CanvasEmbeddedModule: "other",
+  // p.543's "Embed Foundry applications" lists the Iframe beside the Embedded
+  // Module, so it sits where that one does (§455).
+  CanvasIframe: "other",
   CanvasDatasetTable: "other",
 };
 
