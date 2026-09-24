@@ -613,6 +613,20 @@ is two rules. **A baseline must pass completely**, and the harness now refuses
 one that does not. And when a test passes under `fresh-e2e.sh` and fails on the
 dev stack, **look for a read that does not retry** before looking anywhere else.
 
+### What the server saves, a reader must be able to open (§458)
+
+§457's browser test named the Object View widget `CanvasObjectView`, its
+component's name, where the builder's resolver knows it as
+`CanvasObjectViewWidget`. The save was accepted, and the module then could not
+be opened by anyone, the author included. Craft does not skip a node it has no
+component for; it fails the whole deserialize with a stack trace.
+
+The server now refuses such a layout on save, naming the widget. Its list is a
+second copy of `CANVAS_RESOLVER`, and a test reads the resolver out of
+`widgets.tsx` and compares both ways (§191). The check runs **on the way in
+only**. A document saved before it existed has nothing for its reader to fix,
+and refusing to evaluate one would lock readers out rather than protect them.
+
 ### A red check that everyone has stopped reading is not a check (§456)
 
 The browser job on `main` failed on every merge from at least §415 to §455,

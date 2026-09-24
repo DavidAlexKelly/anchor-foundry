@@ -1968,6 +1968,58 @@ def embedded_modules(document: Any) -> set[str]:
 EMBEDDING_NODES = ("CanvasEmbeddedModule", "CanvasLoopSection")
 
 
+#: Every component the builder's resolver can draw (`CANVAS_RESOLVER` in
+#: `widgets.tsx`). **A second copy, and a test reads the first to hold them
+#: together** (§191's rule): the list is the whole contract between a saved
+#: document and the page that renders it.
+#:
+#: Why the server needs it at all (§458): Craft cannot deserialize a node whose
+#: `resolvedName` it has no component for, and it does not skip one - the whole
+#: module fails to open, for every reader, with a stack trace. A document saved
+#: through the API rather than the builder could carry such a name, and a
+#: browser test did, by naming the Object View widget `CanvasObjectView`: the
+#: save was accepted and the module then could not be opened by anyone.
+WIDGETS = frozenset({
+    "CanvasHeader", "CanvasPage", "CanvasOverlay", "CanvasUnused", "CanvasSection",
+    "CanvasTabs", "CanvasButton", "CanvasContainer", "CanvasText", "CanvasFilterList",
+    "CanvasFilterPills", "CanvasUserSelect", "CanvasProminentTerms",
+    "CanvasParameterControl", "CanvasNumericInput", "CanvasTextInput",
+    "CanvasStringSelector", "CanvasDateTimePicker", "CanvasMarkdown",
+    "CanvasObjectSetTitle", "CanvasPropertyList", "CanvasLinksWidget",
+    "CanvasObjectViewWidget", "CanvasObjectDropdown", "CanvasObjectSelector",
+    "CanvasPieChart", "CanvasStepper", "CanvasTimeline", "CanvasMediaPreview",
+    "CanvasIframe", "CanvasDatasetTable", "CanvasObjectTable", "CanvasObjectCards",
+    "CanvasSearch", "CanvasPivotTable", "CanvasTimeSeries", "CanvasEmbeddedModule",
+    "CanvasLoopSection", "CanvasChart", "CanvasMap", "CanvasMetricCard",
+    "CanvasActionForm",
+})
+
+
+def unknown_widgets(layout: Any) -> list[dict[str, str]]:
+    """Nodes naming a component the builder does not have (§458).
+
+    Only the `{"resolvedName": ...}` form is checked. A bare string type is a
+    plain HTML element (`"div"`), which Craft draws without a component, and
+    `workshop_format._resolved_name` records that both forms occur in saved
+    documents. Returned rather than raised, like `dangling_references`, so the
+    route words the refusal; called on the way in only, because a reader of a
+    document saved before this check has nothing to fix.
+    """
+    found: list[dict[str, str]] = []
+    if not isinstance(layout, dict):
+        return found
+    for node_id, node in layout.items():
+        if not isinstance(node, dict):
+            continue
+        node_type = node.get("type")
+        if not isinstance(node_type, dict):
+            continue
+        name = str(node_type.get("resolvedName") or "")
+        if name not in WIDGETS:
+            found.append({"node": str(node_id), "widget": name})
+    return found
+
+
 def _embedding_node(node: Any) -> str | None:
     node_type = node.get("type")
     resolved = node_type.get("resolvedName") if isinstance(node_type, dict) else node_type

@@ -1666,6 +1666,41 @@ def test_an_entry_may_be_committed_with_the_enter_key() -> None:
     assert events["e_1"].on == "submit"
 
 
+def test_the_widget_list_is_the_builders_resolver() -> None:
+    """§458's list is a second copy of `CANVAS_RESOLVER`, so it is read out of
+    `widgets.tsx` and compared both ways. A widget added to the builder and not
+    here would be refused on save; one removed from the builder and left here
+    would be accepted and then fail to open - the failure the list exists for."""
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "web", "src", "components", "canvas",
+        "widgets.tsx",
+    )
+    with open(path, encoding="utf-8") as handle:
+        source = handle.read()
+    block = source.split("export const CANVAS_RESOLVER = {", 1)[1].split("};", 1)[0]
+    resolver = {line.strip().rstrip(",") for line in block.splitlines() if line.strip()}
+    assert len(resolver) > 30, "the resolver block was not read"
+    assert resolver == set(wv.WIDGETS)
+
+
+def test_a_node_naming_no_widget_is_reported() -> None:
+    """Reported with the node, and only for the component form: a bare string
+    type is a plain HTML element, which Craft draws without a component."""
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": []},
+        "a": {"type": {"resolvedName": "CanvasObjectView"}},
+        "b": {"type": {"resolvedName": ""}},
+        "c": {"type": "div"},
+        "d": {"type": {"resolvedName": "CanvasText"}},
+        "e": "not a node",
+    }
+    assert wv.unknown_widgets(layout) == [
+        {"node": "a", "widget": "CanvasObjectView"},
+        {"node": "b", "widget": ""},
+    ]
+    assert wv.unknown_widgets(None) == []
+
+
 def test_a_section_may_fire_an_event_on_drop() -> None:
     """p.568: "An event can also be configured to fire after the drop." """
     events = we.parse(
