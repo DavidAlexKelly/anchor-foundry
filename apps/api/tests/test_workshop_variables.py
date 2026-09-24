@@ -1775,6 +1775,71 @@ def test_a_drop_zones_output_is_a_usage() -> None:
     ]
 
 
+def menu_layout(kind: str = "menu") -> dict:
+    """A button with two items, inside a section - so a lookup that only read
+    the page level would not find it."""
+    return {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["sec"]},
+        "sec": {"type": {"resolvedName": "CanvasSection"}, "nodes": ["btn"], "props": {}},
+        "btn": {"type": {"resolvedName": "CanvasButton"},
+                "props": {"buttonType": kind, "items": [
+                    {"id": "i_csv", "label": "CSV"}, {"id": "i_copy", "label": "Copy"},
+                    {"label": "no id"}, "junk"]}},
+    }
+
+
+def item_event(item, on: str = "click") -> dict:
+    return {"e_1": {"id": "e_1", "trigger": {"node": "btn", "on": on, "item": item},
+                    "effects": [set_var("v_a", "x")]}}
+
+
+def test_an_event_may_fire_from_one_item_of_a_menu_button() -> None:
+    """p.483's Menu buttons "provide multiple options", each its own click."""
+    for kind in ("menu", "twoPart"):
+        events = we.parse(item_event("i_copy"), layout=menu_layout(kind),
+                          variables=wv.parse({"v_a": var("v_a", label="A")}))
+        assert events["e_1"].item == "i_copy"
+
+
+def test_a_menu_buttons_own_click_is_not_an_event() -> None:
+    """Clicking a Menu button opens its menu, so an event on it never fires. A
+    Two-part button's own click is its primary button, which is an event."""
+    plain = {"e_1": {"id": "e_1", "trigger": {"node": "btn", "on": "click"},
+                     "effects": [set_var("v_a", "x")]}}
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    with pytest.raises(we.EventError, match="opens the menu"):
+        we.parse(plain, layout=menu_layout("menu"), variables=variables)
+    assert we.parse(plain, layout=menu_layout("twoPart"), variables=variables)["e_1"].item is None
+    assert we.parse(plain, layout=menu_layout("inline"), variables=variables)["e_1"].item is None
+
+
+def test_an_item_the_button_does_not_have_is_refused() -> None:
+    """Named by id, so a deleted item's event is refused as a deleted widget's
+    is. An item without an id is not an item, and neither is junk."""
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    # "None" is what an item saved without an id would be called if it counted.
+    for bad in ("i_gone", "no id", "None"):
+        with pytest.raises(we.EventError, match="does not have"):
+            we.parse(item_event(bad), layout=menu_layout(), variables=variables)
+    with pytest.raises(we.EventError, match="has no items"):
+        we.parse(item_event("i_csv"), layout=menu_layout("inline"), variables=variables)
+
+
+def test_an_item_is_a_non_empty_name_and_only_clicks_come_from_one() -> None:
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    for bad in ("", 3, ["i_csv"]):
+        with pytest.raises(we.EventError, match="must name one"):
+            we.parse(item_event(bad), layout=menu_layout(), variables=variables)
+    with pytest.raises(we.EventError, match="only a click"):
+        we.parse(item_event("i_csv", on="change"), layout=menu_layout(), variables=variables)
+
+
+def test_without_a_layout_an_item_is_only_checked_for_shape() -> None:
+    """The same rule as a trigger's node: no layout, no membership check."""
+    events = we.parse(item_event("anything"))
+    assert events["e_1"].item == "anything"
+
+
 def test_a_trigger_this_platform_does_not_have_is_refused() -> None:
     """Including the one `submit` was nearly called. The vocabulary is closed so
     a document cannot carry a trigger nothing will ever fire — which would be a

@@ -201,6 +201,17 @@ export interface TriggerCandidate {
   id: string;
   label: string;
   widget: string;
+  /** A Menu or Two-part button's items (p.483; §462), each a click of its own. */
+  buttonType?: "menu" | "twoPart";
+  items?: { id: string; label: string }[];
+}
+
+/** The item a trigger on this widget starts with: a Menu button's first item,
+ * since its own click only opens the menu and the server refuses an event on
+ * it; nothing for anything else, including a Two-part button, whose own click
+ * is its main button. */
+function startingItem(node: TriggerCandidate | undefined): string | undefined {
+  return node?.buttonType === "menu" ? node.items?.[0]?.id : undefined;
 }
 
 export interface PageCandidate {
@@ -295,7 +306,11 @@ export function EventsPanel({
     if (!node) return;
     const on = triggersFor(node.widget)[0]?.on ?? "click";
     const id = newEventId();
-    onChange({ ...events, [id]: { id, trigger: { node: node.id, on }, effects: [] } });
+    const item = startingItem(node);
+    onChange({
+      ...events,
+      [id]: { id, trigger: { node: node.id, on, ...(item ? { item } : {}) }, effects: [] },
+    });
     setOpenId(id);
   }
 
@@ -350,6 +365,9 @@ export function EventsPanel({
               <span>
                 {triggersFor(node?.widget ?? "").find((t) => t.on === event.trigger?.on)?.label ??
                   event.trigger?.on}
+                {event.trigger?.item
+                  ? ` · ${node?.items?.find((i) => i.id === event.trigger.item)?.label ?? event.trigger.item}`
+                  : ""}
                 {" · "}
                 {effects.length} {effects.length === 1 ? "effect" : "effects"}
               </span>
@@ -369,6 +387,8 @@ export function EventsPanel({
                       const still = triggersFor(picked.widget).some(
                         (t) => t.on === event.trigger?.on,
                       );
+                      // An item belongs to one button, so it does not travel.
+                      const item = startingItem(picked);
                       update(id, {
                         ...event,
                         trigger: {
@@ -376,6 +396,7 @@ export function EventsPanel({
                           on: still
                             ? event.trigger.on
                             : triggersFor(picked.widget)[0]?.on ?? "click",
+                          ...(item ? { item } : {}),
                         },
                       });
                     }}
@@ -403,6 +424,31 @@ export function EventsPanel({
                     ))}
                   </select>
                 </label>
+                {/* p.483: a Menu or Two-part button's items are clicks of their
+                    own. A Two-part button's main button is one more choice; a
+                    Menu button's own click only opens the menu, so it is not. */}
+                {node?.buttonType && (node.items?.length ?? 0) > 0 && (
+                  <label className="field">
+                    <span className="field-label">Which</span>
+                    <select
+                      disabled={readOnly}
+                      data-testid="event-item"
+                      value={event.trigger?.item ?? ""}
+                      onChange={(e) => {
+                        const { item: _dropped, ...rest } = event.trigger;
+                        update(id, {
+                          ...event,
+                          trigger: e.target.value ? { ...rest, item: e.target.value } : rest,
+                        });
+                      }}
+                    >
+                      {node.buttonType === "twoPart" && <option value="">The main button</option>}
+                      {node.items!.map((i) => (
+                        <option key={i.id} value={i.id}>{i.label || i.id}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
 
                 <p className="field-label">
                   Then, in order

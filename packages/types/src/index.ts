@@ -568,7 +568,8 @@ export interface WorkshopInterface {
  * immediately, so the next effect sees it. Built in item 1.3. */
 export interface WorkshopEvent {
   id: string;
-  trigger: { node: string; on: string };
+  /** `item`: which item of a Menu or Two-part button fires it (p.483; §462). */
+  trigger: { node: string; on: string; item?: string | null };
   effects: WorkshopEffect[];
 }
 
