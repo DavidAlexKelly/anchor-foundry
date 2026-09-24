@@ -40,6 +40,14 @@ export interface WorkshopEventDef {
   effects?: WorkshopEffect[];
 }
 
+/** What an `export` effect asks for (§459; p.489). */
+export interface ExportRequest {
+  definition: unknown;
+  format: "csv" | "clipboard";
+  fileName: string | null;
+  properties: string[] | null;
+}
+
 export interface EventContext {
   /** Go to a page (roadmap 1.4). Absent in a context that has no pages, in
    * which case a navigate effect is skipped rather than throwing — see the
@@ -104,6 +112,11 @@ export interface EventContext {
     config: { action: string; subject: string; values?: Record<string, string> },
     context: { object?: EventContext["object"] | null },
   ) => void;
+  /** p.489's Export: write the objects of a set to a file or the clipboard
+   * (§459). The runner hands over the set's *definition*, read the way
+   * `run_action` reads its subject; fetching the rows and saying how it went
+   * is the capability's job, since both need the network. */
+  exportObjects?: (config: ExportRequest) => void;
   /** The module's variables as last resolved. Read by `run_action` to find
    * the object its subject variable holds, when this click did not set it. */
    variables?: Record<string, unknown>;
@@ -320,6 +333,22 @@ export function run(
         context.setAutoRefreshPaused?.(false);
       } else if (effect.type === "disable_auto_refresh") {
         context.setAutoRefreshPaused?.(true);
+      } else if (effect.type === "export") {
+        // Not added to `written`: an export reads the module and changes
+        // nothing in it. The set is read the way `run_action` reads its
+        // subject - this click's writes first - so a button that narrows a
+        // set and then exports it exports the narrowed one.
+        const variable = String(config.variable ?? "");
+        const definition = written[variable] ?? context.variables?.[variable];
+        if (!variable || !definition || !context.exportObjects) continue;
+        context.exportObjects({
+          definition,
+          format: config.format === "clipboard" ? "clipboard" : "csv",
+          fileName: typeof config.file_name === "string" ? config.file_name : null,
+          properties: Array.isArray(config.properties)
+            ? config.properties.filter((p): p is string => typeof p === "string")
+            : null,
+        });
       } else if (effect.type === "open_url") {
         const url = typeof config.url === "string"
           ? interpolate(config.url, { ...payload, ...written })

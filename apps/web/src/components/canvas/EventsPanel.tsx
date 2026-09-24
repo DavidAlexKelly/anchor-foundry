@@ -28,7 +28,8 @@
 import { useState } from "react";
 import type { WorkshopEffect, WorkshopEvent, WorkshopVariable } from "@/lib/types";
 import { useQuery } from "@tanstack/react-query";
-import { canvas as canvasApi } from "@/lib/api";
+import { canvas as canvasApi, objects as objApi } from "@/lib/api";
+import { staticTypeOf } from "./object-export";
 import { newEventId } from "@/lib/workshop-module";
 
 /** Mirrors `TRIGGERS` in the service, with the widgets each one belongs to.
@@ -167,6 +168,13 @@ const EFFECTS: { type: string; label: string; hint: string }[] = [
     label: "Open a Workshop module",
     hint: "a new tab, with values passed into that module's interface",
   },
+  // p.489's Export. The hint says what "Excel" becomes here, because a
+  // builder who read p.489 is looking for that word.
+  {
+    type: "export",
+    label: "Export an object set",
+    hint: "as a CSV file, which Excel opens, or to the clipboard",
+  },
 ];
 
 /** Widget names that can fire something, for the caller reading the tree.
@@ -274,6 +282,9 @@ export function EventsPanel({
   const recomputable = Object.values(variables).filter(
     (v) => v.derivation && (v.recompute ?? "automatic") !== "automatic",
   );
+  // p.489's input: "an object set variable". Derived ones included - a
+  // filtered set is the usual thing to export.
+  const sets = Object.values(variables).filter((v) => v.kind === "object_set");
 
   function update(id: string, next: WorkshopEvent) {
     onChange({ ...events, [id]: next });
@@ -405,6 +416,8 @@ export function EventsPanel({
                     count={effects.length}
                     variables={writable}
                     recomputable={recomputable}
+                    sets={sets}
+                    allVariables={variables}
                     objects={objects}
                     pages={pages}
                     tabSections={tabSections ?? []}
@@ -463,6 +476,8 @@ function EffectEditor({
   count,
   variables,
   recomputable,
+  sets,
+  allVariables,
   objects,
   pages,
   tabSections,
@@ -476,6 +491,10 @@ function EffectEditor({
   onMove,
   onRemove,
 }: {
+  /** p.489's object set variables, derived included. */
+  sets: WorkshopVariable[];
+  /** Every declared variable, for working out which type a set holds. */
+  allVariables: Record<string, WorkshopVariable>;
   effect: WorkshopEffect;
   index: number;
   count: number;
@@ -599,6 +618,17 @@ function EffectEditor({
             </label>
           )}
         </>
+      )}
+
+      {effect.type === "export" && (
+        <ExportEditor
+          config={config}
+          sets={sets}
+          allVariables={allVariables}
+          workspaceId={workspaceId}
+          readOnly={readOnly}
+          onChange={(patch) => setConfig(patch)}
+        />
       )}
 
       {effect.type === "open_module" && (
@@ -783,6 +813,120 @@ function EffectEditor({
   );
 }
 
+
+/** Configuring p.489's Export (§459): the set, where it goes, what it is
+ * called, and which properties it carries.
+ *
+ * The properties are **ticked from the type's own list** when the document can
+ * say which type the set holds (`staticTypeOf`). When it cannot - a traversal
+ * lands on a type only the server works out - the panel says the export will
+ * carry every property rather than offering a box to type names into: names
+ * typed blind are a column list nobody can check. None ticked means every
+ * property, which is what an export with no choice made writes.
+ */
+function ExportEditor({
+  config,
+  sets,
+  allVariables,
+  workspaceId,
+  readOnly,
+  onChange,
+}: {
+  config: Record<string, unknown>;
+  sets: WorkshopVariable[];
+  allVariables: Record<string, WorkshopVariable>;
+  workspaceId?: string;
+  readOnly: boolean;
+  onChange: (patch: Record<string, unknown>) => void;
+}) {
+  const variable = String(config.variable ?? "");
+  const typeId = variable ? staticTypeOf(variable, allVariables as never) : null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId!, typeId!),
+    enabled: !!typeId && !!workspaceId,
+  });
+  const chosen = Array.isArray(config.properties)
+    ? (config.properties as unknown[]).filter((p): p is string => typeof p === "string")
+    : [];
+  const toggle = (name: string) => {
+    const next = chosen.includes(name) ? chosen.filter((p) => p !== name) : [...chosen, name];
+    onChange({ properties: next.length > 0 ? next : undefined });
+  };
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Object set</span>
+        <select
+          disabled={readOnly}
+          data-testid="effect-export-variable"
+          value={variable}
+          // A new set is a new type, so the old property choice goes with it.
+          onChange={(e) =>
+            onChange({ variable: e.target.value || undefined, properties: undefined })}
+        >
+          <option value="">Pick an object set</option>
+          {sets.map((v) => (
+            <option key={v.id} value={v.id}>{v.label || v.id}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Export to</span>
+        <select
+          disabled={readOnly}
+          data-testid="effect-export-format"
+          value={config.format === "clipboard" ? "clipboard" : "csv"}
+          onChange={(e) =>
+            onChange({ format: e.target.value === "clipboard" ? "clipboard" : undefined })}
+        >
+          <option value="csv">A CSV file</option>
+          <option value="clipboard">The clipboard</option>
+        </select>
+        <span className="field-hint">
+          p.489&apos;s Excel is written as CSV, which Excel opens; the clipboard
+          pastes into a spreadsheet as rows and columns
+        </span>
+      </label>
+      {config.format !== "clipboard" && (
+        <label className="field">
+          <span className="field-label">File name</span>
+          <input
+            disabled={readOnly}
+            data-testid="effect-export-file-name"
+            value={typeof config.file_name === "string" ? config.file_name : ""}
+            placeholder="The object type and today's date"
+            onChange={(e) => onChange({ file_name: e.target.value || undefined })}
+          />
+        </label>
+      )}
+      <fieldset className="field" disabled={readOnly}>
+        <legend className="field-label">Properties</legend>
+        {typeId === null && variable ? (
+          <p className="field-hint" data-testid="effect-export-properties-unknown">
+            This set&apos;s object type is only known once it is computed, so
+            its properties cannot be listed here: the export carries all of them.
+          </p>
+        ) : type.data ? (
+          type.data.properties.map((p) => (
+            <label key={p.api_name} className="vars-toggle">
+              <input
+                type="checkbox"
+                data-testid={`effect-export-property-${p.api_name}`}
+                checked={chosen.includes(p.api_name)}
+                onChange={() => toggle(p.api_name)}
+              />
+              {p.display_name || p.api_name}
+            </label>
+          ))
+        ) : null}
+        <span className="field-hint">
+          None chosen exports every property, after the key
+        </span>
+      </fieldset>
+    </>
+  );
+}
 
 /** Configuring a `run_action`.
  *

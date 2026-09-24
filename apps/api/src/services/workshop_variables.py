@@ -2175,6 +2175,7 @@ def displayed(
     visible: "set[str] | frozenset[str]",
     *,
     bound: "frozenset[str]" = frozenset(),
+    events: Any = None,
 ) -> set[str]:
     """Which variables a set of on-screen nodes needs computed (§392; p.75).
 
@@ -2229,6 +2230,24 @@ def displayed(
             # a Text widget what it was showing and got `ALPHA=`.
             wanted |= template_references(props, variables)
 
+    # **What an on-screen widget's events read** (§459). A button's Export
+    # names the set it writes, a `run_action` the variable holding its object,
+    # an Open-module the values it passes - and none of them is a widget prop,
+    # so a set referenced *only* by the button that exports it was never
+    # computed, the runner found nothing to export, and the click did
+    # nothing. A widget that can fire an event is displaying what the event
+    # reads as much as a table displays its set.
+    if isinstance(events, dict):
+        for raw in events.values():
+            if not isinstance(raw, dict):
+                continue
+            trigger = raw.get("trigger")
+            if not isinstance(trigger, dict) or str(trigger.get("node")) not in visible:
+                continue
+            for effect in raw.get("effects") or []:
+                if isinstance(effect, dict):
+                    wanted |= _named_in(effect.get("config"), variables)
+
     # The closure. Breadth rather than recursion because `parse` has already
     # refused cycles, so the only reason to track what has been walked is to
     # avoid re-walking a diamond - and a diamond is the ordinary case, not an
@@ -2244,6 +2263,30 @@ def displayed(
                 wanted.add(ref)
                 frontier.append(ref)
     return wanted
+
+
+def _named_in(value: Any, variables: dict[str, "Variable"]) -> set[str]:
+    """Declared variable ids an effect's config names, however deep.
+
+    A string that *is* a declared id, or carries one as a `{{token}}`. That
+    reads a little wider than each effect's own schema - `set_variable`'s
+    target is named too, though it is written rather than read - and wider is
+    the safe side: computing one more variable costs a little, and missing one
+    makes an event quietly do nothing.
+    """
+    found: set[str] = set()
+    if isinstance(value, str):
+        if value in variables:
+            found.add(value)
+        if "{{" in value:
+            found |= {n for n in TEMPLATE_TOKEN.findall(value) if n in variables}
+    elif isinstance(value, dict):
+        for inner in value.values():
+            found |= _named_in(inner, variables)
+    elif isinstance(value, list):
+        for inner in value:
+            found |= _named_in(inner, variables)
+    return found
 
 
 def dangling_references(layout: Any, variables: dict[str, Variable]) -> list[dict[str, str]]:

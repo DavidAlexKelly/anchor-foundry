@@ -753,6 +753,8 @@ def _only_visible(
             # skipping these variables' own derivations (p.127). The closure
             # stops there for the same reason.
             bound=frozenset(body.bound),
+            # And what those nodes' events read (§459).
+            events=document.get("events") if isinstance(document, dict) else None,
         )
     )
 

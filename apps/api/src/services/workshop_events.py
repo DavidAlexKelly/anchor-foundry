@@ -93,26 +93,35 @@ EFFECTS = (
     # reads - `?externalId=value` per interface variable - so this effect is
     # that query built from a mapping rather than by hand.
     "open_module",
+    # p.489's Export: "take an object set variable as an input and trigger the
+    # export of the objects in the object set to either Excel or the user's
+    # clipboard", with an optional file name and choice of properties (§459).
+    "export",
 )
+
+# The formats an `export` may write. p.489 names Excel and the clipboard;
+# Excel is written as CSV here, which is the format p.489 itself falls back
+# to whenever the columns are not plain properties. There is no spreadsheet
+# library in this platform, and a hand-rolled XLSX writer would be a second
+# file format to get subtly wrong for the sake of a file Excel opens anyway.
+EXPORT_FORMATS = ("csv", "clipboard")
+
+# The most properties one export may name. A column list longer than this is
+# a report, and the object type has fewer properties than this in practice.
+MAX_EXPORT_PROPERTIES = 200
 
 # The three above, and the fact that binds them: each names a section.
 SECTION_EFFECTS = ("expand_section", "collapse_section", "toggle_section")
 
-# Named, refused, and blocked on something real rather than on effort: `export`
-# needs a download surface the viewer route does not have. Refusing with the
-# reason beats accepting and silently doing nothing, which is what an unknown
-# effect type would otherwise do.
-#
-# `navigate` moved out of this list with item 1.4: pages exist now.
-# `run_action` moved out with the second half of 1.3: its parameters are bound
-# to variables, which was the design question holding it.
-#
-# `recompute` moved out of this list once p.76's two non-automatic recompute
-# behaviours existed. It was here for precisely the right reason and for
-# precisely as long as the reason held: with every derived variable recomputing
-# on every resolve there was nothing for it to trigger, so accepting it would
-# have saved a click that does nothing.
-PLANNED_EFFECTS = ("export",)
+# There was a `PLANNED_EFFECTS` here: effects named and refused because
+# something real blocked them, which beat accepting one and doing nothing.
+# `navigate` left it with pages (1.4), `run_action` with parameter binding
+# (1.3), `recompute` with p.76's non-automatic behaviours, and `export` last
+# (§459). Its reason - "a download surface the viewer route does not have" -
+# stopped being true once a browser could build the file itself, which is how
+# §423 already exports the lineage picture. With nothing left in it the list
+# and its refusal were code no event could reach, so both are gone; an effect
+# that is not in `EFFECTS` is still refused, by the check that follows.
 
 # What a `run_action` may write. A wider form is a form, not an event.
 MAX_ACTION_VALUES = 20
@@ -381,6 +390,57 @@ def parse(
     return events
 
 
+def _check_export(eid: str, config: dict[str, Any], declared: dict[str, Any]) -> None:
+    """p.489's Export, as far as a saved document can be checked (§459).
+
+    The variable must be an **object set**: p.489's input is "an object set
+    variable", and an export of anything else has no rows to write. Which
+    properties exist is not checked here - that needs the object type, which
+    this module does not read - so a named property the type lacks exports as
+    an empty column, and the browser's panel only offers the real ones.
+    """
+    target = config.get("variable")
+    if not target or not isinstance(target, str):
+        raise EventError(f"event {eid!r}: export needs an object set variable to export")
+    if declared and target not in declared:
+        raise EventError(
+            f"event {eid!r} exports {target!r}, which this module does not declare"
+        )
+    variable = declared.get(target) if declared else None
+    if variable is not None and getattr(variable, "kind", None) != "object_set":
+        raise EventError(
+            f"event {eid!r} exports {getattr(variable, 'label', target)!r}, which is a "
+            f"{getattr(variable, 'kind', '?')} - p.489 exports the objects in an object set"
+        )
+    fmt = config.get("format", "csv")
+    if fmt not in EXPORT_FORMATS:
+        raise EventError(
+            f"event {eid!r}: export format {fmt!r} is not one of {', '.join(EXPORT_FORMATS)}"
+        )
+    properties = config.get("properties")
+    if properties is not None:
+        if not isinstance(properties, list) or not all(
+            isinstance(p, str) and p for p in properties
+        ):
+            raise EventError(
+                f"event {eid!r}: export properties must be a list of property names"
+            )
+        if len(properties) > MAX_EXPORT_PROPERTIES:
+            raise EventError(
+                f"event {eid!r} exports {len(properties)} properties; at most "
+                f"{MAX_EXPORT_PROPERTIES}"
+            )
+    name = config.get("file_name")
+    if name is not None:
+        # A name, not a path: the browser decides where a download goes, and a
+        # separator in the name is either stripped or an attempt at somewhere.
+        if not isinstance(name, str) or any(c in name for c in "/\\") or len(name) > 120:
+            raise EventError(
+                f"event {eid!r}: an export file name is a plain name of at most 120 "
+                "characters, without / or \\"
+            )
+
+
 def _parse_effect(
     eid: str,
     raw: Any,
@@ -394,11 +454,6 @@ def _parse_effect(
     if not isinstance(raw, dict):
         raise EventError(f"event {eid!r}: each effect must be an object")
     kind = raw.get("type")
-    if kind in PLANNED_EFFECTS:
-        raise EventError(
-            f"the {kind} effect is not built yet - accepting it would save an event "
-            "that silently does nothing when somebody clicks"
-        )
     if kind not in EFFECTS:
         raise EventError(
             f"event {eid!r} has effect {kind!r}; expected one of {', '.join(EFFECTS)}"
@@ -619,6 +674,8 @@ def _parse_effect(
                     "recompute - it already recomputes when its inputs change. Set its "
                     "recompute behaviour to one of the event-driven options first"
                 )
+    elif kind == "export":
+        _check_export(eid, config, declared)
     elif kind == "switch_tab":
         # **p.84's event, and the one Layout event that writes its variable.**
         # That difference lives in the browser (`tab-selection.ts` and
