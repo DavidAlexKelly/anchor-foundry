@@ -477,6 +477,35 @@ def test_saving_a_v1_definition_is_refused(client: TestClient, fx: Fixture) -> N
     assert "pre-Workshop" in r.json()["detail"]
 
 
+def test_a_layout_naming_a_widget_the_builder_lacks_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """§458. Craft cannot open a document naming a component it has no entry
+    for - the whole module fails, for every reader - so a save that accepted
+    one would be a module nobody could open again. A browser test found it by
+    calling the Object View widget `CanvasObjectView`. The refusal names the
+    widget, which is the part somebody can act on; the version is not moved."""
+    app_id = _new_app(client, fx)
+    bad = {"format": 2, "variables": {}, "events": {}, "layout": {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["v"]},
+        "v": {"type": {"resolvedName": "CanvasObjectView"}, "props": {}, "parent": "ROOT"},
+    }}
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": bad})
+    assert r.status_code == 422, r.text
+    assert "CanvasObjectView" in r.json()["detail"]
+    assert "not a widget this builder has" in r.json()["detail"]
+    got = client.get(f"{base(fx)}/{app_id}", headers=hdr(fx.editor_sub))
+    assert got.status_code == 200, got.text
+    assert "v" not in ((got.json().get("definition") or {}).get("layout") or {})
+
+    # The counterweight: the same layout with the widget's real name saves.
+    bad["layout"]["v"]["type"]["resolvedName"] = "CanvasObjectViewWidget"
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": bad})
+    assert r.status_code == 200, r.text
+
+
 def test_an_empty_definition_still_saves(client: TestClient, fx: Fixture) -> None:
     """`{}` is not a v1 document, it is an app with nothing in it - which is
     what every app is before somebody drags a widget onto it."""

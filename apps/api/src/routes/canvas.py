@@ -527,6 +527,22 @@ async def save_definition(
                 "migration 0034; a client sending this one is older than that conversion."
             ),
         )
+    # §458: a node naming a component the builder does not have. Craft cannot
+    # open such a document at all, so a save that accepted one would be a
+    # module nobody could open again - including the person who saved it.
+    unknown = variables_service.unknown_widgets(
+        body.definition.get("layout") if isinstance(body.definition, dict) else None
+    )
+    if unknown:
+        names = ", ".join(sorted({u["widget"] or "(no name)" for u in unknown}))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"this layout uses {names}, which is not a widget this builder has - "
+                "a module containing one cannot be opened, so it is refused here "
+                "rather than saved"
+            ),
+        )
     async with user_connection(access.auth.user_id) as conn:
         # The workspace's actions, so a `run_action` naming one that is not
         # here - or writing a property it does not make editable - is refused
