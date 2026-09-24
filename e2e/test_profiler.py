@@ -460,6 +460,15 @@ def test_filtering_does_not_move_the_timelines_zero(page, two_pages):
     breakdown = page.get_by_test_id("profiler-breakdown")
     expect(breakdown).to_contain_text("First page value", timeout=30000)
 
+    # **The run has to continue well past the first load, so this makes it.**
+    # The early bar's offset is (its start) / (the run's end), and without a
+    # pause the run's end is however soon this line clicked: on a slow runner
+    # the first load started late and the second page followed at once, and
+    # the bar sat at 54% - failing the precondition below on timing alone. A
+    # pause is the input here, not a wait for something: what is being set up
+    # is "the second page was opened some time after the first", which is the
+    # situation a filter-to-compare exists for.
+    page.wait_for_timeout(3000)
     page.get_by_role("button", name="Second", exact=True).click()
     expect(breakdown).to_contain_text("Second page value", timeout=30000)
 

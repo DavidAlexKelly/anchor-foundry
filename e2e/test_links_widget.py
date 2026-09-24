@@ -452,7 +452,10 @@ def test_ticking_a_link_records_the_end_and_saves_an_override(page, api, seed) -
     page.get_by_test_id(f"links-pick-{seed.reports_to}:inbound").check()
     page.get_by_test_id(f"links-label-{seed.reports_to}:inbound").fill("Team")
     page.get_by_role("button", name="Save", exact=True).click()
-    expect(page.get_by_text("Saved", exact=False).first).to_be_visible()
+    # The builder's own note, not any text containing "Saved": since §414 the
+    # colours panel says "Saved colours" before anything is saved, so the
+    # document below was read before the save reached it.
+    expect(page.locator(".ws-actions .sub")).to_contain_text("saved", timeout=15000)
 
     saved = mod.definition()["layout"]["lw"]["props"]["links"]
     assert saved == [{"key": f"{seed.reports_to}:inbound", "label": "Team"}], saved

@@ -56,6 +56,19 @@ describe("referencesOf", () => {
     expect(referencesOf("nonsense")).toEqual([]);
     expect(referencesOf({ steps: "not a list" })).toEqual([]);
     expect(referencesOf({ steps: [null, 7, {}, { completedVariable: 3 }] })).toEqual([]);
+    expect(referencesOf({ interface: "v_a" })).toEqual([]);
+    expect(referencesOf({ interface: ["v_a"] })).toEqual([]);
+    expect(referencesOf({ interface: { region: 3, other: "" } })).toEqual([]);
+  });
+
+  it("reads an embed's interface mapping, by external ID", () => {
+    // p.127: the host variable an embed passes in. The server's
+    // `references()` reads it the same way (test_workshop_variables.py).
+    expect(referencesOf({ moduleId: "m1", interface: { region: "v_r", size: "v_s" } }))
+      .toEqual([
+        { prop: "interface.region", ref: "v_r" },
+        { prop: "interface.size", ref: "v_s" },
+      ]);
   });
 });
 
@@ -87,6 +100,16 @@ describe("remapReferences", () => {
     const props = { steps: [{ label: "One", completedVariable: "v_old" }] };
     remapReferences(props, swap);
     expect(props.steps[0]?.completedVariable).toBe("v_old");
+  });
+
+  it("rewrites an embed's mapping and keeps its external IDs", () => {
+    // A pasted embed that still named the source module's variable would be
+    // refused on save - the host half of the mapping has to be declared here.
+    expect(remapReferences({ interface: { region: "v_old", size: "v_kept" } }, swap))
+      .toEqual({ interface: { region: "v_new", size: "v_kept" } });
+    const props = { interface: { region: "v_old" } };
+    remapReferences(props, swap);
+    expect(props.interface.region).toBe("v_old");
   });
 
   it("keeps the other keys of a step", () => {

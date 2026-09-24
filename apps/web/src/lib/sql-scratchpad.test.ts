@@ -112,8 +112,19 @@ describe("what a history row says", () => {
   });
 
   it("says what the star will do, not what it is", () => {
-    expect(starLabel(query({ favourite: false }))).toBe("Add to favourites");
-    expect(starLabel(query({ favourite: true }))).toBe("Remove from favourites");
+    expect(starLabel(query({ sql: "SELECT 1", favourite: false })))
+      .toBe("Add SELECT 1 to favourites");
+    expect(starLabel(query({ sql: "SELECT 1", favourite: true })))
+      .toBe("Remove SELECT 1 from favourites");
+  });
+
+  it("names the query, so it is not the repository's own star", () => {
+    // The header's star is "Add to favourites" (§436); the two must differ,
+    // and a long query is shortened as Forget's label shortens it.
+    const long = `SELECT ${"x, ".repeat(40)}y FROM t`;
+    expect(starLabel(query({ sql: long, favourite: false })))
+      .toBe(`Add ${oneLine(long, 40)} to favourites`);
+    expect(starLabel(query({ sql: long, favourite: false }))).not.toBe("Add to favourites");
   });
 });
 

@@ -151,7 +151,9 @@ def test_a_history_entry_can_be_recalled_starred_and_forgotten(page, api) -> Non
     expect(empty).to_contain_text("Star a query in History")
 
     page.get_by_test_id("scratchpad-tab-history").click()
-    page.get_by_role("button", name="Add to favourites").first.click()
+    # By the query's name: the repository's own header star is "Add to
+    # favourites" too (§436), and `.first` of that name starred the repository.
+    page.get_by_role("button", name=f"Add SELECT id FROM `{name}` to favourites").click()
     page.get_by_test_id("scratchpad-tab-favourites").click()
     expect(page.locator(".repo-scratchpad-list")).to_contain_text(
         f"SELECT id FROM `{name}`", timeout=30000)

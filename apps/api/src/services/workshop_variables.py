@@ -426,6 +426,19 @@ def references(props: Any) -> list[tuple[str, str]]:
                 ref = entry.get(inner)
                 if isinstance(ref, str) and ref:
                     found.append((f"{prop}[{index}].{inner}", ref))
+    # **An embed's interface mapping** (p.127): child external ID -> a variable
+    # of *this* module. Not a prop that names one variable, so it was in
+    # neither list above - and since §392 that made a host's mapped variable
+    # invisible twice over. `displayed()` left it out of what an on-screen
+    # embed needs, so the host sent the child nothing and the child's
+    # filtered table showed every row; and `usages()` reported it unused. The
+    # save path's own check of the mapping (in `validate_module`) still runs
+    # first, because its message names the external ID.
+    mapping = props.get("interface")
+    if isinstance(mapping, dict):
+        for external_id, ref in mapping.items():
+            if isinstance(ref, str) and ref:
+                found.append((f"interface.{external_id}", ref))
     return found
 
 
