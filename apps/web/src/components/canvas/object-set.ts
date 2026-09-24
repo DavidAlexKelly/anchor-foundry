@@ -30,7 +30,7 @@ export interface SetPage {
   typeId: string | null;
   /** What narrowed the set, so a widget can say so rather than showing a
    *  filtered count with no sign it was filtered. */
-  filters: { property: string; value: unknown }[];
+  filters: { property: string; op?: string; value: unknown }[];
   offset: number;
   setOffset: (next: number) => void;
   isPending: boolean;
@@ -76,7 +76,7 @@ export function useSetPage(
   });
 
   const resolved = definition as
-    | { object_type_id?: string; filters?: { property: string; value: unknown }[] }
+    | { object_type_id?: string; filters?: { property: string; op?: string; value: unknown }[] }
     | undefined;
   return {
     rows: page.data?.instances,
@@ -104,18 +104,8 @@ export function selectionOf(instance: ObjectInstance, typeId: string | null) {
   };
 }
 
-/** "12 Sites where region = north" — the count, and what narrowed it. */
-export function describeSet(
-  total: number,
-  typeName: string | undefined,
-  filters: { property: string; value: unknown }[],
-): string {
-  const noun = `${typeName ?? "object"}${total === 1 ? "" : "s"}`;
-  const where = filters.length
-    ? ` where ${filters.map((f) => `${f.property} = ${String(f.value)}`).join(" and ")}`
-    : "";
-  return `${total.toLocaleString()} ${noun}${where}`;
-}
+/** Moved to `filter-clause.ts`, beside the words it is written in. */
+export { describeSet } from "./filter-clause";
 
 /** Whether an element is actually on screen.
  *
