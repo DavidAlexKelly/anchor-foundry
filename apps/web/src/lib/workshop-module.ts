@@ -258,6 +258,8 @@ export const REFERENCE_PROPS = [
   // p.513's Output object set on the Inline Action widget - the clauses naming
   // what a submission created or modified. A write. See the API's copy.
   "outputVariable",
+  // p.568's Output object set on a Section drop zone (§457).
+  "dropVariable",
   "name",
 ] as const;
 

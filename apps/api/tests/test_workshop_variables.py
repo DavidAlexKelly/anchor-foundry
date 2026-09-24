@@ -1271,6 +1271,86 @@ def test_narrow_set_refuses_clauses_it_cannot_mean_rather_than_dropping_them() -
         wv.evaluate(variables, {"v_clauses": [{"property": "region", "op": "eq"}]})
 
 
+# ---- a drop zone's clauses (§457, p.568) --------------------------------------
+def dropped(type_id: str, *keys: str) -> list[dict]:
+    """What a Section drop zone writes: the type, then the keys (`drag-payload.ts`)."""
+    return [
+        {"property": wv.OBJECT_TYPE_CLAUSE, "op": "eq", "value": type_id},
+        {"property": "$primary_key", "op": "in", "value": list(keys)},
+    ]
+
+
+def test_a_drop_of_the_sets_own_type_narrows_to_what_was_dropped() -> None:
+    """p.568's "Output object set", as `narrow_set` reads it. The type clause
+    is checked and then removed, because no store has a property by that name
+    and leaving it in would filter to nothing."""
+    resolved = wv.evaluate(narrowing_module(), {"v_clauses": dropped(TYPE_ID, "S1", "S2")})
+    assert resolved["v_visible"]["filters"] == [
+        {"property": "$primary_key", "op": "in", "value": ["S1", "S2"]},
+    ]
+
+
+def test_a_drop_of_another_type_narrows_to_nothing() -> None:
+    """**The reason the clause exists.** A key is only a key within its type:
+    "S1" dropped from another type would otherwise pick whichever site is also
+    "S1", and the table would show a real object nobody dragged. Nothing is
+    the honest answer, and `in []` is how the store spells it."""
+    other = "22222222-2222-2222-2222-222222222222"
+    resolved = wv.evaluate(narrowing_module(), {"v_clauses": dropped(other, "S1")})
+    assert resolved["v_visible"]["filters"] == [
+        {"property": "$primary_key", "op": "in", "value": []},
+    ]
+
+
+def test_a_mismatched_drop_keeps_the_base_sets_own_filters() -> None:
+    """Narrowed to nothing *within* the base, not replaced by a bare type: the
+    base's filters are what the module's author wrote, and dropping them would
+    be a different set that happens to be empty today."""
+    variables = wv.parse({
+        "v_sites": object_set_var(
+            "v_sites", label="Open sites",
+            object_set={"object_type_id": TYPE_ID,
+                        "filters": [{"property": "status", "op": "eq", "value": "open"}]},
+        ),
+        "v_clauses": var("v_clauses", kind="array", label="Dropped"),
+        "v_visible": object_set_var(
+            "v_visible", label="Visible",
+            derivation={"transform": "narrow_set", "inputs": ["v_sites", "v_clauses"]},
+        ),
+    })
+    other = "22222222-2222-2222-2222-222222222222"
+    resolved = wv.evaluate(variables, {"v_clauses": dropped(other, "S1")})
+    assert resolved["v_visible"]["filters"] == [
+        {"property": "status", "op": "eq", "value": "open"},
+        {"property": "$primary_key", "op": "in", "value": []},
+    ]
+
+
+def test_a_type_clause_is_only_the_one_that_names_a_type() -> None:
+    """A clause on an ordinary property survives the check untouched, and one
+    that is not a dict at all is left for `object_sets.parse` to refuse - the
+    type check must neither eat real clauses nor crash on junk."""
+    resolved = wv.evaluate(narrowing_module(), {"v_clauses": [
+        *dropped(TYPE_ID, "S1"), {"property": "region", "op": "eq", "value": "north"},
+    ]})
+    assert [f["property"] for f in resolved["v_visible"]["filters"]] == ["$primary_key", "region"]
+    with pytest.raises(wv.VariableError, match="each filter must be an object"):
+        wv.evaluate(narrowing_module(), {"v_clauses": [*dropped(TYPE_ID, "S1"), "junk"]})
+
+
+def test_the_browser_writes_the_type_clause_this_reads() -> None:
+    """One string on each side of the wire, pinned the way `PRIMARY_KEY_FILTER`
+    is: a drop zone writing a name this module does not strip would narrow
+    every drop to nothing, and the two files would each look right alone."""
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "web", "src", "components", "canvas",
+        "drag-payload.ts",
+    )
+    with open(path, encoding="utf-8") as handle:
+        source = handle.read()
+    assert f'export const OBJECT_TYPE_CLAUSE = "{wv.OBJECT_TYPE_CLAUSE}";' in source
+
+
 def test_narrow_set_refuses_something_that_is_not_a_list() -> None:
     variables = narrowing_module()
     with pytest.raises(wv.VariableError, match="list of filter clauses"):
@@ -1584,6 +1664,27 @@ def test_an_entry_may_be_committed_with_the_enter_key() -> None:
         variables=wv.parse({"v_a": var("v_a", label="A")}),
     )
     assert events["e_1"].on == "submit"
+
+
+def test_a_section_may_fire_an_event_on_drop() -> None:
+    """p.568: "An event can also be configured to fire after the drop." """
+    events = we.parse(
+        {"e_1": event("e_1", node="sec", on="drop", effects=[set_var("v_a", "x")])},
+        layout={"sec": node({"dropHandling": True})},
+        variables=wv.parse({"v_a": var("v_a", label="A")}),
+    )
+    assert events["e_1"].on == "drop"
+
+
+def test_a_drop_zones_output_is_a_usage() -> None:
+    """The variable a drop zone writes cannot be deleted out from under it,
+    and a drop zone naming an undeclared one is refused like any binding."""
+    variables = wv.parse({"v_dropped": var("v_dropped", kind="array", label="Dropped")})
+    layout = {"sec": node({"dropHandling": True, "dropVariable": "v_dropped"})}
+    assert wv.usages(layout, variables)["v_dropped"] == [{"node": "sec", "prop": "dropVariable"}]
+    assert wv.dangling_references(layout, {}) == [
+        {"node": "sec", "prop": "dropVariable", "variable": "v_dropped"}
+    ]
 
 
 def test_a_trigger_this_platform_does_not_have_is_refused() -> None:

@@ -360,6 +360,11 @@ REFERENCE_PROPS = (
     # obvious binding to remember, and this one was still nearly missed because
     # the widget already had `subjectVariable` and looked complete.
     "outputVariable",
+    # p.567-568's **Output object set** on a Section drop zone: "Select the
+    # object set variable that the dropped data should be written to". A
+    # write, in the same currency as p.224's outputs and p.513's - a clause
+    # list a `narrow_set` reads - led by `OBJECT_TYPE_CLAUSE` (§457).
+    "dropVariable",
     "name",
 )
 
@@ -1770,6 +1775,13 @@ def _object_series(
     }
 
 
+#: A clause saying which object type the rest of its list is about (§457).
+#: Written by a Section drop zone ahead of the dropped keys, read and removed by
+#: `_narrow_set`. The browser writes the same string (`drag-payload.ts`), and a
+#: test pins the two together the way `PRIMARY_KEY_FILTER` is pinned.
+OBJECT_TYPE_CLAUSE = "$object_type"
+
+
 def _narrow_set(
     variable: Variable, base: Any, clauses: Any,
     property_types: "dict[str, dict[str, str]] | None" = None,
@@ -1791,6 +1803,13 @@ def _narrow_set(
     **An empty list is no filter, not an empty set** — the same rule
     `filter_set` follows, for the same reason: a viewer who has touched
     nothing yet should see everything.
+
+    **A clause may name the type it is about** (`OBJECT_TYPE_CLAUSE`), and a
+    drop zone's always does (§457). Checked against the base and then removed,
+    because no store has a property by that name. A type other than the base's
+    narrows to nothing, for the reason the clause exists: a dropped object's
+    key is only a key within its own type, so "N1" dropped from Sites onto a
+    set of Staff would otherwise pick whichever member of Staff is also "N1".
     """
     from . import object_sets
 
@@ -1802,6 +1821,15 @@ def _narrow_set(
         raise VariableError(
             f"{variable.label!r} expects a list of filter clauses, not {type(clauses).__name__}"
         )
+    def names_type(c: Any) -> bool:
+        return isinstance(c, dict) and c.get("property") == OBJECT_TYPE_CLAUSE
+
+    if any(c.get("value") != base["object_type_id"] for c in clauses if names_type(c)):
+        return {**base, "filters": [
+            *(base.get("filters") or []),
+            {"property": object_sets.PRIMARY_KEY_FILTER, "op": "in", "value": []},
+        ]}
+    clauses = [c for c in clauses if not names_type(c)]
     combined = {**base, "filters": [*(base.get("filters") or []), *clauses]}
     try:
         object_sets.parse(combined, property_types=_types_for(combined, property_types))

@@ -85,6 +85,14 @@ const TRIGGERS: {
     label: "Submitted",
     widgets: ["CanvasTextInput"],
   },
+  {
+    // p.568: "An event can also be configured to fire after the drop." Fires
+    // once the dropped objects are in the drop zone's output variable, so an
+    // effect that reads it sees what was dropped.
+    on: "drop",
+    label: "Dropped on",
+    widgets: ["CanvasSection"],
+  },
 ];
 
 /** Mirrors `EFFECTS`. The one the server still refuses with a reason

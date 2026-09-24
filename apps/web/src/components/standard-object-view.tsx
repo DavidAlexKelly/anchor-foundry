@@ -48,6 +48,7 @@ import { conditionalStyle } from "@/lib/conditional-format";
 import { visibleProperties } from "@/components/object-properties";
 import { plot } from "@/components/series-plot";
 import type { ObjectInstance, ObjectTypeProperty, PropertyStyle } from "@/lib/types";
+import { OBJECT_MEDIA_TYPE, objectPayload } from "@/components/canvas/drag-payload";
 
 /** A prominent `geotemporal_series` property, drawn on a Map (§427; p.11).
  *
@@ -261,6 +262,7 @@ export function StandardObjectView({
   typeId,
   instance,
   hideHeader = false,
+  dragIcon = false,
 }: {
   workspaceId: string;
   typeId: string;
@@ -269,6 +271,10 @@ export function StandardObjectView({
    * The Explorer and the traversal dialog never pass it; a module embedding
    * this view under a title of its own does. */
   hideHeader?: boolean;
+  /** Workshop p.570's drag zone: "The icon in the object view widget header
+   * can be dragged onto compatible drop zones". Only the Object View *widget*
+   * passes it, in a running module, which is where there are drop zones. */
+  dragIcon?: boolean;
 }) {
   const type = useQuery({
     queryKey: ["object-type", typeId],
@@ -312,8 +318,16 @@ export function StandardObjectView({
             <span
               className="ot-mark"
               data-testid="sov-type-mark"
-              style={{ background: swatch(type.data) }}
+              style={{ background: swatch(type.data), ...(dragIcon ? { cursor: "grab" } : {}) }}
               aria-hidden="true"
+              draggable={dragIcon || undefined}
+              title={dragIcon ? `Drag ${title} to a drop zone` : undefined}
+              onDragStart={dragIcon ? (event) => {
+                event.dataTransfer.setData(
+                  OBJECT_MEDIA_TYPE, objectPayload(typeId, instance.primary_key),
+                );
+                event.dataTransfer.effectAllowed = "copy";
+              } : undefined}
             >
               {glyph(type.data)}
             </span>

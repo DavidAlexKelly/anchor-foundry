@@ -205,6 +205,10 @@ import {
 } from "./media";
 import { frameRefusal, frameTitle, safeFrameUrl, youtubeEmbedUrl } from "./frame";
 import {
+  MAX_DRAGGED_OBJECTS, OBJECT_MEDIA_TYPE, OBJECT_SET_MEDIA_TYPE, carriesPayload, collectKeys,
+  droppedClauses, objectPayload, objectSetPayload,
+} from "./drag-payload";
+import {
   // Aliased for the same reason: `sortsOf`, `labelOf` and `toRequest` are names
   // any widget with an ordering could want.
   FIXED_SORTS as TABLE_FIXED_SORTS, MAX_SORTS as TABLE_MAX_SORTS,
@@ -3871,6 +3875,7 @@ export function CanvasObjectTable({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const inEditMode = mode === "run" && !!liveAction
     && Object.keys(editMapping).length > 0 && editing(editOpen, inlineEditByDefault);
+  const rowsDrag = mode === "run" && !inEditMode && !!effectiveTypeId;
   const queryClient = useQueryClient();
   const submit = useMutation({
     mutationFn: () =>
@@ -4040,6 +4045,17 @@ export function CanvasObjectTable({
                     aria-current={
                       activeKeys.includes(instance.primary_key) ? "true" : undefined
                     }
+                    // p.570's drag zone: "Cells in an object table can be
+                    // dragged onto compatible drop zones", carrying the
+                    // row's object. Not while inline editing, where a drag
+                    // is somebody selecting the text they are typing.
+                    draggable={rowsDrag || undefined}
+                    onDragStart={rowsDrag ? (event) => {
+                      event.dataTransfer.setData(
+                        OBJECT_MEDIA_TYPE, objectPayload(effectiveTypeId!, instance.primary_key),
+                      );
+                      event.dataTransfer.effectAllowed = "copy";
+                    } : undefined}
                     onClick={
                       rowsAreClickable
                         ? () => {
@@ -5248,7 +5264,13 @@ export function CanvasObjectSetTitle({
   titleOverride = "",
   renderWhenEmpty = false,
   placeholderTypeId = null,
+  enableDrag = false,
 }: {
+  /** p.274's Enable drag: "Enables dragging the objects within the object set
+   * to an accepting drop zone. Must … have fewer than 500 objects within the
+   * object set." p.274's other condition, a data bank service, is Foundry's
+   * transport for the drag and has no counterpart to install here. */
+  enableDrag?: boolean;
   objectSetVariable?: string | null;
   /** p.274's Contains single object. */
   single?: boolean;
@@ -5310,6 +5332,27 @@ export function CanvasObjectSetTitle({
     renderWhenEmpty: empty || showingPlaceholder,
   });
 
+  // p.274's drag. The keys are fetched ahead of the drag, because `dragstart`
+  // is synchronous and a drag that had to wait for a request would carry
+  // nothing. Sorted by key so the pages cannot shift under the walk.
+  const total = setPage.total ?? 0;
+  const dragWanted = enableDrag && mode === "run" && !showingPlaceholder && !!setPage.typeId;
+  const tooMany = total > MAX_DRAGGED_OBJECTS;
+  const dragKeys = useQuery({
+    queryKey: ["set-title-drag", workspaceId, JSON.stringify(setDefinition ?? null), total],
+    queryFn: () => collectKeys(
+      async (offset, limit) =>
+        (await objApi.evaluateObjectSet(workspaceId, setDefinition, {
+          limit, offset, sort: "key",
+        })).instances,
+      total,
+    ),
+    enabled: dragWanted && total > 0 && !tooMany,
+  });
+  const dragPayload = dragWanted && dragKeys.data && setPage.typeId
+    ? objectSetPayload(setPage.typeId, dragKeys.data)
+    : null;
+
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       {!objectSetVariable ? (
@@ -5325,7 +5368,22 @@ export function CanvasObjectSetTitle({
           </p>
         )
       ) : (
-        <h3 className="canvas-set-title" data-testid="set-title">
+        <h3
+          className="canvas-set-title"
+          data-testid="set-title"
+          data-drag={dragWanted ? (dragPayload ? "ready" : tooMany ? "refused" : "pending") : undefined}
+          draggable={!!dragPayload || undefined}
+          style={dragPayload ? { cursor: "grab" } : undefined}
+          // Said rather than silently inert: a title that will not drag looks
+          // exactly like one whose drag is broken.
+          title={dragWanted && tooMany
+            ? "Too many objects to drag: an object set can be dragged while it has fewer than 500"
+            : undefined}
+          onDragStart={dragPayload ? (event) => {
+            event.dataTransfer.setData(OBJECT_SET_MEDIA_TYPE, dragPayload);
+            event.dataTransfer.effectAllowed = "copy";
+          } : undefined}
+        >
           {showIconOf(showIcon) && (
             // **A mark in the type's colour, not the named icon**, because this
             // platform has no icon set - the `icon` field holds a name like
@@ -5349,9 +5407,10 @@ function ObjectSetTitleSettings() {
   const { workspaceId } = useCanvasEnv();
   const {
     objectSetVariable, single, showIcon, titleOverride, renderWhenEmpty,
-    placeholderTypeId,
+    placeholderTypeId, enableDrag,
     actions: { setProp },
   } = useNode((node) => ({
+    enableDrag: node.data.props.enableDrag,
     objectSetVariable: node.data.props.objectSetVariable,
     single: node.data.props.single,
     showIcon: node.data.props.showIcon,
@@ -5407,6 +5466,19 @@ function ObjectSetTitleSettings() {
         />
         <span className="field-label">Show icon</span>
       </label>
+      {/* p.274's order: Enable drag comes after Show icon. */}
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={!!enableDrag}
+          data-testid="set-title-enable-drag"
+          onChange={(e) => setProp((p: { enableDrag: boolean }) => (p.enableDrag = e.target.checked))}
+        />
+        <span className="field-label">Enable drag</span>
+        <span className="field-hint">
+          Onto a section with Drop Handling. Only while the set has fewer than 500 objects
+        </span>
+      </label>
       {/* p.274: "This option is only available when Contains single object is
           disabled." */}
       {!singleOf(single) && (
@@ -5460,7 +5532,7 @@ CanvasObjectSetTitle.craft = {
   displayName: "Object set title",
   props: {
     objectSetVariable: null, single: false, showIcon: false,
-    titleOverride: "", renderWhenEmpty: false, placeholderTypeId: null,
+    titleOverride: "", renderWhenEmpty: false, placeholderTypeId: null, enableDrag: false,
   },
   related: { settings: ObjectSetTitleSettings },
 };
@@ -6024,7 +6096,7 @@ export function CanvasObjectViewWidget({
   const {
     connectors: { connect, drag },
   } = useNode();
-  const { workspaceId } = useCanvasEnv();
+  const { workspaceId, mode } = useCanvasEnv();
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending } = useCanvasVariables();
 
@@ -6065,6 +6137,8 @@ export function CanvasObjectViewWidget({
             initialStandard={viewModeOf(viewMode) === "standard"}
             allowToggle={allowToggleOf(allowToggle)}
             hideHeader={hideHeaderOf(hideHeader)}
+            // p.570: in a running module the header's icon is a drag zone.
+            dragIcon={mode === "run"}
           />
         </div>
       )}
@@ -13213,8 +13287,25 @@ export function CanvasSection({
   title = "",
   tabs = "",
   tabVariable = null,
+  dropHandling = false,
+  dropLabel = "",
+  dropIcon = "",
+  dropVariable = null,
   children,
 }: {
+  /** p.564-568's **Drop Handling**: this section becomes a drop zone for
+   * objects dragged from a table cell, an Object View's icon or an Object Set
+   * Title (p.569-570). Off by default, because a section that swallowed every
+   * drag on the page would be a surprise. */
+  dropHandling?: boolean;
+  /** p.566's Drop label and Drop icon: what the zone shows while something
+   * droppable is over it. The icon is typed, as the header's is, because this
+   * platform has no icon set to choose from. */
+  dropLabel?: string;
+  dropIcon?: string;
+  /** p.568's Output object set: where the dropped objects are written, as the
+   * clause list a `narrow_set` reads (`drag-payload.ts`). */
+  dropVariable?: string | null;
   /** p.55: "Collapsible sections, with Expand / Collapse / Toggle events".
    * A collapsible section draws a header with its own control; p.82's three
    * events act on it from anywhere in the module. */
@@ -13338,6 +13429,68 @@ export function CanvasSection({
   };
   const parsed = parseWeights(weights, parts.length);
 
+  // p.564-568's drop zone. The hooks run whether or not drop handling is on,
+  // for the reason the collapse block gives: a hook that depends on a toggle
+  // is a hook-order bug waiting for the first author who flips it.
+  const { events: moduleEvents } = useCanvasVariables();
+  const dropEvents = eventsFor(moduleEvents, nodeId, "drop");
+  const dropContext = useEventContext(undefined, useOverlayIds());
+  const [dragOver, setDragOver] = React.useState(false);
+  const [dropRefused, setDropRefused] = React.useState(false);
+  // **Run mode only.** In the builder a drag is the builder moving widgets
+  // around, and a section that caught it would be a section nobody could drop
+  // a widget into.
+  const dropZone = dropHandling && mode === "run";
+  // `dragenter` as well as `dragover`: the first is what lights the zone the
+  // moment a payload arrives, and the second - repeated while it stays - is
+  // what a browser needs cancelled before it will let anything be dropped.
+  const acceptDrag = (event: React.DragEvent) => {
+    // Only a drag carrying one of the two types p.568 names. Anything else
+    // - a file, a link, some text - passes over as though nothing were here.
+    if (!carriesPayload(Array.from(event.dataTransfer.types))) return;
+    event.preventDefault();
+    // The innermost zone takes it, so a drop zone inside another one is
+    // not also a drop on the outer.
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    setDragOver(true);
+    setDropRefused(false);
+  };
+  const dropHandlers = dropZone ? {
+    onDragEnter: acceptDrag,
+    onDragOver: acceptDrag,
+    onDragLeave: (event: React.DragEvent) => {
+      // `dragleave` fires on every child the pointer crosses, so it only
+      // counts once the pointer has left the section itself. **By position,
+      // not by `relatedTarget`**: Chromium sends a drag's leave with no
+      // related target, so "is it still inside?" asked that way always
+      // answers no, and the overlay went out at the first child boundary.
+      const box = event.currentTarget.getBoundingClientRect();
+      const inside = event.clientX > box.left && event.clientX < box.right
+        && event.clientY > box.top && event.clientY < box.bottom;
+      if (!inside) setDragOver(false);
+    },
+    onDrop: (event: React.DragEvent) => {
+      if (!carriesPayload(Array.from(event.dataTransfer.types))) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setDragOver(false);
+      const clauses = droppedClauses((type) => event.dataTransfer.getData(type));
+      // Said, rather than ignored: a drop that did nothing looks exactly like
+      // a drop zone that is broken.
+      setDropRefused(clauses === null);
+      if (clauses === null) return;
+      if (dropVariable) setVariable(dropVariable, clauses);
+      if (dropEvents.length > 0) {
+        const keys = clauses[1]?.value;
+        runEvents(dropEvents, {
+          ...dropContext,
+          payload: { count: Array.isArray(keys) ? keys.length : 0 },
+        });
+      }
+    },
+  } : {};
+
   const partsRef = React.useRef<HTMLDivElement>(null);
   // What the section looks like *during* a drag. Deliberately transient: the
   // prop is written once, on release, so a drag is one undo step rather than
@@ -13410,8 +13563,25 @@ export function CanvasSection({
       // light and dark mode based on the brightness of the background".
       data-scheme={schemeFor({ background }, saved)}
       style={styleFor({ background, padding, customPadding, border }, saved)}
+      data-drop-zone={dropZone ? (dragOver ? "over" : "ready") : undefined}
+      data-testid={dropZone ? `drop-zone-${nodeId}` : undefined}
+      {...dropHandlers}
     >
       {marker && <p className="canvas-hidden-marker">{marker}</p>}
+      {dropZone && dragOver && (
+        // p.566: "the text and icon that will appear on the drop zone" while a
+        // payload is over it. Drawn over the section's contents rather than in
+        // place of them, so what is being dropped onto stays visible.
+        <div className="canvas-drop-overlay" data-testid={`drop-overlay-${nodeId}`}>
+          {dropIcon.trim() && <span aria-hidden="true">{dropIcon.trim()}</span>}
+          <span>{dropLabel.trim() || "Drop here"}</span>
+        </div>
+      )}
+      {dropZone && dropRefused && (
+        <p className="state error" role="status" data-testid={`drop-refused-${nodeId}`}>
+          That drag did not carry objects this zone can take.
+        </p>
+      )}
       {collapsible && (
         <button
           type="button"
@@ -13479,6 +13649,7 @@ export function CanvasSection({
         <p className="canvas-section-label">
           {SECTION_LABELS[direction] ?? "Section"}
           {shares && parts.length > 1 ? ` · ${parsed.map(roundWeight).join(":")}` : ""}
+          {dropHandling ? " · drop zone" : ""}
         </p>
       )}
       <div
@@ -13578,8 +13749,16 @@ function SectionSettings() {
     title,
     tabs,
     tabVariable,
+    dropHandling,
+    dropLabel,
+    dropIcon,
+    dropVariable,
     actions: { setProp },
   } = useNode((node) => ({
+    dropHandling: node.data.props.dropHandling,
+    dropLabel: node.data.props.dropLabel,
+    dropIcon: node.data.props.dropIcon,
+    dropVariable: node.data.props.dropVariable,
     direction: node.data.props.direction,
     scroll: node.data.props.scroll,
     weights: node.data.props.weights,
@@ -13786,6 +13965,66 @@ function SectionSettings() {
           </label>
         </>
       )}
+      {/* p.564-568, in p.565-568's order: the toggle, then how the zone looks
+          while something is over it, then where the dropped data goes. */}
+      <label className="vars-toggle field">
+        <input
+          type="checkbox"
+          checked={!!dropHandling}
+          data-testid="section-drop-handling"
+          onChange={(e) =>
+            setProp((p: { dropHandling: boolean }) => (p.dropHandling = e.target.checked))}
+        />
+        Drop Handling
+      </label>
+      {dropHandling && (
+        <>
+          <label className="field">
+            <span className="field-label">Drop label</span>
+            <input
+              value={dropLabel ?? ""}
+              placeholder="Drop here"
+              data-testid="section-drop-label"
+              onChange={(e) => setProp((p: { dropLabel: string }) => (p.dropLabel = e.target.value))}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">Drop icon</span>
+            <input
+              value={dropIcon ?? ""}
+              placeholder="+"
+              maxLength={4}
+              data-testid="section-drop-icon"
+              onChange={(e) => setProp((p: { dropIcon: string }) => (p.dropIcon = e.target.value))}
+            />
+            <span className="field-hint">A character or emoji; this platform has no icon set</span>
+          </label>
+          <label className="field">
+            <span className="field-label">Output object set</span>
+            <select
+              value={dropVariable ?? ""}
+              data-testid="section-drop-variable"
+              onChange={(e) =>
+                setProp((p: { dropVariable: string | null }) =>
+                  (p.dropVariable = e.target.value || null))}
+            >
+              <option value="">None — only fire the On drop event</option>
+              {Object.values(declared)
+                .filter((v) => v.kind === "array")
+                .map((v) => (
+                  <option key={v.id} value={v.id}>{v.label || v.id}</option>
+                ))}
+            </select>
+            {/* The same currency as the Object Table's outputs, and the same
+                instruction for turning it into a set. */}
+            <span className="field-hint">
+              Holds the dropped objects as clauses; derive an object set from it
+              with narrow set. Objects of another type narrow it to nothing.
+              Add an On drop event in the Events panel.
+            </span>
+          </label>
+        </>
+      )}
       <NodeStyleFields padding border />
     </>
   );
@@ -13798,6 +14037,7 @@ CanvasSection.craft = {
     background: null, padding: null, customPadding: null, border: null,
     collapsible: false, collapsedByDefault: false, collapsedWhen: null, title: "",
     tabs: "", tabVariable: null,
+    dropHandling: false, dropLabel: "", dropIcon: "", dropVariable: null,
   },
   isCanvas: true,
   related: { settings: SectionSettings },
