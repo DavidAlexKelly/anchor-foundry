@@ -176,7 +176,7 @@ describe("export (p.489, §459)", () => {
       variable: "v_s", format: "clipboard", file_name: "sites", properties: ["name", 3, "region"],
     }))], context);
     expect(exportObjects).toHaveBeenCalledWith({
-      definition: SET, format: "clipboard", fileName: "sites",
+      variable: "v_s", definition: SET, format: "clipboard", fileName: "sites",
       // A non-name in the list is dropped rather than sent as a column.
       properties: ["name", "region"],
     });
@@ -189,7 +189,7 @@ describe("export (p.489, §459)", () => {
     const { context } = contextWith({ exportObjects, variables: { v_s: SET } });
     run([event(exporting({ variable: "v_s", format: "xlsx", properties: "name" }))], context);
     expect(exportObjects).toHaveBeenCalledWith({
-      definition: SET, format: "csv", fileName: null, properties: null,
+      variable: "v_s", definition: SET, format: "csv", fileName: null, properties: null,
     });
   });
 
@@ -203,10 +203,21 @@ describe("export (p.489, §459)", () => {
     expect(exportObjects.mock.calls[0]?.[0].definition).toEqual(narrowed);
   });
 
-  it("does nothing without a set to export", () => {
+  it("does nothing when no set is named", () => {
     const exportObjects = vi.fn();
     const { context } = contextWith({ exportObjects, variables: {} });
-    run([event(exporting({ variable: "v_s" }), exporting({}))], context);
+    run([event(exporting({}))], context);
     expect(exportObjects).not.toHaveBeenCalled();
+  });
+
+  it("hands over a set that has not resolved yet, rather than skipping it", () => {
+    // A set nothing on screen shows resolves after the page draws; a click
+    // before then used to do nothing at all. The capability waits for it.
+    const exportObjects = vi.fn();
+    const { context } = contextWith({ exportObjects, variables: {} });
+    run([event(exporting({ variable: "v_s" }))], context);
+    expect(exportObjects).toHaveBeenCalledWith(expect.objectContaining({
+      variable: "v_s", definition: null,
+    }));
   });
 });

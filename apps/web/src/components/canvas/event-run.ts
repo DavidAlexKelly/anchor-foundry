@@ -42,6 +42,11 @@ export interface WorkshopEventDef {
 
 /** What an `export` effect asks for (§459; p.489). */
 export interface ExportRequest {
+  /** The set variable the export names. Carried beside its definition so the
+   * capability can wait for the variable to resolve when the click came first
+   * - see the note in the `export` branch of `run`. */
+  variable: string;
+  /** What the set held at the click, or null when it had not resolved yet. */
   definition: unknown;
   format: "csv" | "clipboard";
   fileName: string | null;
@@ -340,9 +345,16 @@ export function run(
         // set and then exports it exports the narrowed one.
         const variable = String(config.variable ?? "");
         const definition = written[variable] ?? context.variables?.[variable];
-        if (!variable || !definition || !context.exportObjects) continue;
+        // **An unresolved set is handed over as null, not skipped.** A set
+        // nothing on screen displays is computed after the page draws, so a
+        // reader who clicks at once reaches here before it has a value - and
+        // skipping made that click do nothing at all, silently. That was CI's
+        // first run of this effect: the button was pressed the moment it
+        // drew. The capability waits for the module to finish resolving.
+        if (!variable || !context.exportObjects) continue;
         context.exportObjects({
-          definition,
+          variable,
+          definition: definition ?? null,
           format: config.format === "clipboard" ? "clipboard" : "csv",
           fileName: typeof config.file_name === "string" ? config.file_name : null,
           properties: Array.isArray(config.properties)

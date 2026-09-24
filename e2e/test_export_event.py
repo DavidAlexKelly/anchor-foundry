@@ -135,3 +135,22 @@ def test_the_builder_configures_an_export(page, api) -> None:
     page.get_by_test_id("effect-export-variable").select_option("v_either")
     expect(page.get_by_test_id("effect-export-properties-unknown")).to_be_visible()
     expect(page.get_by_test_id("effect-export-property-region")).to_have_count(0)
+
+
+def test_a_click_before_the_set_resolves_still_exports(page, api) -> None:
+    """What CI found on this effect's first run. The set is shown by nothing
+    on screen, so it resolves after the page draws, and a click that lands
+    first found no set: the runner skipped it and the button did nothing, with
+    nothing said. The module's resolves are held back here until after the
+    click, which is that race made certain rather than likely."""
+    mod = build(api, "Export early", {"file_name": "early"})
+    held = []
+    page.route("**/variables/evaluate", lambda route: held.append(route))
+    open_module(page, mod)
+    with page.expect_download() as waiting:
+        page.get_by_role("button", name="Export", exact=True).click()
+        assert held, "no resolve was held back - the race was not set up"
+        # Removing the route lets every held request through.
+        page.unroute("**/variables/evaluate")
+    assert waiting.value.suggested_filename == "early.csv"
+    expect(status(page)).to_contain_text("Exported 2 objects to early.csv.")

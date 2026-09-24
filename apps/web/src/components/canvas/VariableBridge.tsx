@@ -143,6 +143,14 @@ export function VariableBridge({
   const { values } = useCanvasParameters();
   const [resolved, setResolved] = useState<Record<string, unknown>>({});
   const [pending, setPending] = useState(enabled);
+  // The latest of both, for a capability that has to wait on them from inside
+  // a callback (§459's export clicked before its set resolved). A callback
+  // closes over the render it was made in, so reading the state directly
+  // would wait forever on a value that has since arrived.
+  const resolvedRef = useRef(resolved);
+  resolvedRef.current = resolved;
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
   // Which request's answer we are still willing to accept. Two resolves in
   // flight can land out of order, and an older one overwriting a newer one
   // would show the previous filter's results with the current filter on screen
@@ -415,7 +423,9 @@ export function VariableBridge({
             },
             exportObjects: (request) => {
               setStatus(null);
-              void exportObjects(workspaceId, request).then(setStatus);
+              void settledValue(request.variable, request.definition, resolvedRef, pendingRef)
+                .then((definition) => exportObjects(workspaceId, { ...request, definition }))
+                .then(setStatus);
             },
             status,
             dismiss: () => setStatus(null),
@@ -458,6 +468,31 @@ export function VariableBridge({
   );
 }
 
+
+/** A variable's value once the module has finished resolving, or `fallback`
+ * when there already is one.
+ *
+ * Polled rather than subscribed: this runs once per click, the wait is a
+ * resolve round trip, and a subscription would be machinery for one caller.
+ * Capped, so a module whose resolve keeps failing reports "nothing to export"
+ * rather than leaving the click hanging.
+ */
+async function settledValue(
+  variable: string,
+  fallback: unknown,
+  resolvedRef: { current: Record<string, unknown> },
+  pendingRef: { current: boolean },
+  timeoutMs = 15000,
+): Promise<unknown> {
+  if (fallback) return fallback;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = resolvedRef.current[variable];
+    if (value && !pendingRef.current) return value;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  return resolvedRef.current[variable] ?? null;
+}
 
 /** p.489's Export, end to end (§459): read the set, write the file, say so.
  *
