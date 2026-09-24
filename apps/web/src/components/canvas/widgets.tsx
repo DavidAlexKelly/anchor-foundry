@@ -203,6 +203,7 @@ import {
   SOURCES as MEDIA_SOURCES, attachmentOf, resolveMedia, sizeLabel,
   sourceOf as mediaSourceOf,
 } from "./media";
+import { frameRefusal, frameTitle, safeFrameUrl, youtubeEmbedUrl } from "./frame";
 import {
   // Aliased for the same reason: `sortsOf`, `labelOf` and `toRequest` are names
   // any widget with an ordering could want.
@@ -7665,6 +7666,187 @@ CanvasMediaPreview.craft = {
   related: { settings: MediaPreviewSettings },
 };
 
+// ---- Iframe (p.545-547) -----------------------------------------------------
+/** p.545's Iframe widget: "embedding of external, full-page applications
+ * within Workshop, providing builders with a way to add custom views to their
+ * modules" (§455).
+ *
+ * p.546's URL, "as a static string or a string variable", with the variable
+ * winning when one is bound — the precedence §209's Markdown and the Media
+ * Preview already use, for their reason: an author who bound a variable has
+ * said the URL is not theirs to write.
+ *
+ * **The refusals are `frame.ts`'s**, and a refused URL says *why* rather than
+ * drawing an empty box (§214): a frame showing nothing looks exactly like a
+ * page that failed to load, and the two have different fixes.
+ *
+ * **Sandboxed**, with the four permissions a full-page application actually
+ * needs and none of the top-level ones: a framed page may not navigate this
+ * module away from under the viewer. `no-referrer`, because the module's URL
+ * names the workspace and the app, and neither is the framed site's business.
+ *
+ * **Inert in the builder.** An iframe captures every click on it, so a builder
+ * could not select the widget they had just dropped; `pointer-events: none`
+ * in edit mode is what makes the frame a widget rather than a hole in the
+ * canvas.
+ *
+ * Not built, and named rather than approximated: p.548-552's **Slate** source,
+ * which embeds an application this platform does not have; and p.552-553's
+ * **Bidirectional** mode, which is a contract with an npm package
+ * (`@osdk/workshop-iframe-custom-widget`) the framed application has to
+ * install — a protocol to design, not a widget setting.
+ */
+export function CanvasIframe({
+  url = "",
+  textVariable = null,
+  title = "",
+  height = 480,
+}: {
+  /** p.546's URL, as a static string. */
+  url?: string;
+  /** …or as a string variable. */
+  textVariable?: string | null;
+  /** The frame's accessible name. */
+  title?: string;
+  height?: number;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const { resolved } = useCanvasVariables();
+  const raw = textVariable ? resolved[textVariable] : url;
+  const target = safeFrameUrl(raw);
+  const refusal = frameRefusal(raw);
+  const px = Math.max(120, Math.min(Number(height) || 480, 2000));
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {refusal ? (
+        <p className="canvas-widget-empty" data-testid="iframe-refused">{refusal}</p>
+      ) : !target ? (
+        <p className="canvas-widget-empty" data-testid="iframe-empty">
+          {textVariable ? "The variable holds no URL yet" : "No URL set"}
+        </p>
+      ) : (
+        <iframe
+          src={target}
+          title={frameTitle(title, target)}
+          data-testid="iframe"
+          className="canvas-iframe"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+          referrerPolicy="no-referrer"
+          loading="lazy"
+          style={{
+            height: `${px}px`,
+            pointerEvents: mode === "edit" ? "none" : undefined,
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function IframeSettings() {
+  const {
+    url, textVariable, title, height,
+    actions: { setProp },
+  } = useNode((node) => ({
+    url: node.data.props.url,
+    textVariable: node.data.props.textVariable,
+    title: node.data.props.title,
+    height: node.data.props.height,
+  }));
+  const { declared } = useCanvasVariables();
+  const strings = Object.values(declared).filter((v) => v.kind === "string");
+  // p.547's one-click conversion, offered only while it would change something.
+  const embed = textVariable ? null : youtubeEmbedUrl(url);
+
+  return (
+    <WidgetSetup
+      inputs={<>
+      <label className="field">
+        <span className="field-label">URL</span>
+        <input
+          type="text"
+          value={url ?? ""}
+          placeholder="https://… or a path on this platform"
+          disabled={!!textVariable}
+          data-testid="iframe-url"
+          onChange={(e) => setProp((p: { url: string }) => (p.url = e.target.value))}
+        />
+        <span className="field-hint">
+          To frame one of this platform&apos;s own pages without its top bar, add
+          <code> ?embedded=true</code> (p.547)
+        </span>
+      </label>
+      {embed && (
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="iframe-youtube"
+          onClick={() => setProp((p: { url: string }) => (p.url = embed))}
+        >
+          Convert to YouTube&apos;s embed URL
+        </button>
+      )}
+      <label className="field">
+        <span className="field-label">…or from a variable</span>
+        <select
+          value={textVariable ?? ""}
+          data-testid="iframe-variable"
+          onChange={(e) =>
+            setProp((p: { textVariable: string | null }) =>
+              (p.textVariable = e.target.value || null))}
+        >
+          <option value="">Use the URL above</option>
+          {strings.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          type="text"
+          value={title ?? ""}
+          data-testid="iframe-title"
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+        <span className="field-hint">
+          What a screen reader calls the frame. Without one it is named after the
+          site it shows
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Height</span>
+        <input
+          type="number"
+          min={120}
+          max={2000}
+          value={Number(height) || 480}
+          data-testid="iframe-height"
+          onChange={(e) =>
+            setProp((p: { height: number }) => (p.height = Number(e.target.value)))}
+        />
+        <span className="field-hint">
+          p.545 advises against more than one iframe on screen at once: each is a
+          whole page, with the memory of one
+        </span>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasIframe.craft = {
+  displayName: "Iframe",
+  props: { url: "", textVariable: null, title: "", height: 480 },
+  related: { settings: IframeSettings },
+};
+
 // ---- Object dropdown (p.455-458) --------------------------------------------
 /** p.455-458's Object Dropdown: "used to select a single object from a list of
  * objects".
@@ -14635,6 +14817,7 @@ export const CANVAS_RESOLVER = {
   CanvasStepper,
   CanvasTimeline,
   CanvasMediaPreview,
+  CanvasIframe,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,

@@ -2,8 +2,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect } from "react";
 import { api } from "@/lib/api";
 import { clearSignedIn, isSignedIn, loginHrefFor } from "@/lib/auth";
 import { AnchorGlyph } from "@/components/glyph";
@@ -34,6 +34,44 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
 
   return (
     <>
+      {/* In a Suspense boundary because it reads the query string, which a
+          statically rendered page does not have until the client does — and a
+          layout that read it bare would fail `next build` for every page under
+          it. */}
+      <Suspense fallback={null}>
+        <Topbar signOut={signOut} pathname={pathname} name={me.data?.display_name} />
+      </Suspense>
+      {children}
+    </>
+  );
+}
+
+/** The platform's top bar — **unless the page is framed** (`workshop` p.547;
+ * §455).
+ *
+ * > "When embedding another Foundry application, you can hide the Foundry
+ * > sidebar by adding the `embedded=true` URL query parameter."
+ *
+ * This platform's chrome is a top bar rather than a sidebar, and it is the
+ * thing p.547 is about: a module framing one of these pages would otherwise
+ * show a second wordmark, a second navigation and a second Sign out button
+ * *inside* its own, which is a page that cannot tell where it is.
+ *
+ * **Only the bar goes.** The sign-in redirect above still runs, so
+ * `embedded=true` hides chrome and grants nothing — a framed page nobody is
+ * signed in to still sends its viewer to log in.
+ */
+function Topbar({
+  signOut, pathname, name,
+}: {
+  signOut: () => void;
+  pathname: string;
+  name: string | undefined;
+}) {
+  const embedded = useSearchParams().get("embedded") === "true";
+  if (embedded) return null;
+  return (
+    <>
       <header className="topbar">
         <Link className="wordmark" href="/home">
           <AnchorGlyph /> ANCHOR
@@ -52,11 +90,10 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
               page: a notification is addressed to a person, and somebody who
               works in three workspaces has one inbox. */}
           <NotificationBell />
-          {me.data && <span>{me.data.display_name}</span>}
+          {name && <span>{name}</span>}
           <button onClick={signOut}>Sign out</button>
         </div>
       </header>
-      {children}
     </>
   );
 }

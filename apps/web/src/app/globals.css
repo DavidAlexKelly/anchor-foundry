@@ -3498,3 +3498,12 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   display: flex; flex-direction: column; gap: 8px;
 }
 .struct-fields .field { margin: 0; }
+
+/* `workshop` p.545's Iframe widget (§455). The full width of its section, as
+   the "full-page application" p.545 describes; the height is the widget's own
+   setting, because a framed page has no intrinsic height to report. */
+.canvas-iframe {
+  display: block; width: 100%;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--paper);
+}

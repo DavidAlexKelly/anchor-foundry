@@ -593,6 +593,26 @@ once.** Every time that has been done in this repository the mutant turned out
 to be a clean kill, and every time it was *not* done the number went into a
 column as though it meant something.
 
+### A baseline with one failure is not a baseline (§455)
+
+§317's rule was to take a baseline; §453's was that an *errored* baseline is no
+measurement. §455 found the case between them. The seam group's baseline read
+`1 failed, 6 passed` — a plausible number, the kind a sweep reports all the time
+— and every mutant was then scored against it. Five differed and were called
+kills. One did not, and was called a survivor.
+
+The one failing test was the very test that survivor existed to trip. The mutant
+had made the builder-inertness check fail, and it *already* failed, so the count
+did not move. A passenger in the baseline does not just add noise to every
+verdict; when it is the right test, it **silently turns a kill into a survival**,
+and a survival is exactly what somebody then spends an hour writing a test for.
+
+The passenger was §271's trap: a one-shot `evaluate` of a computed style,
+which passed on a fresh database and failed on the accumulated one. So the rule
+is two rules. **A baseline must pass completely**, and the harness now refuses
+one that does not. And when a test passes under `fresh-e2e.sh` and fails on the
+dev stack, **look for a read that does not retry** before looking anywhere else.
+
 ### A clean first pass means the list came from the test file (§350, §450)
 
 Recorded on §350's row and worth having here, because §450 walked into it again:

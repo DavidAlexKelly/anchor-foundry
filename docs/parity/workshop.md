@@ -433,6 +433,7 @@ Our generic parameter control was a defensible design, but it was *our* design, 
 | Foundry | Ours |
 |---|---|
 | Embedded modules | ✅ `CanvasEmbeddedModule` |
+| **Iframe** | ◑ §455 `CanvasIframe` | (p.543, p.545–547) — "embedding of external, full-page applications within Workshop" (p.545). p.546's URL "as a static string or a string variable", the variable winning when bound — §209's Markdown and the Media Preview's precedence, for their reason. **The URL rule is the Media Preview's plus one refusal**, not a second copy of the scheme logic (§292): everything `safeMediaUrl` refuses is refused, and so is *every* `data:` URL, because media may render an inline image from one and a frame renders a *document* — served with this app's origin behind it, which is the `javascript:` case by a longer route and exactly what an author binding the URL to a string variable would hand to whoever controls that variable. A refused URL says why rather than drawing an empty frame (§214), since an empty frame looks exactly like a page that failed to load. Sandboxed without top-level navigation, so a framed page cannot move the module out from under its viewer; `no-referrer`, because the module's URL names the workspace and the app. **Inert in the builder**, where an iframe would otherwise swallow the click that selects it. p.547's **YouTube conversion** is offered in the settings panel and disappears once taken. **p.547's `embedded=true` needed the shell, not the widget**: this platform's chrome is a top bar, and a module framing one of its pages drew a second wordmark, navigation and Sign out *inside* its own — the parameter now hides the bar and nothing else, so the sign-in redirect still runs and it grants no access. **⊘:** p.548–552's **Slate** source, which embeds an application this platform does not have. **○:** p.552–553's **Bidirectional** mode, which is a contract with an npm package (`@osdk/workshop-iframe-custom-widget`) the framed application installs — a message protocol to design, not a widget setting. `apps/web/src/components/canvas/frame.test.ts`, `e2e/test_iframe.py`. **The sweep scored 6/0 pure and 6/0 seam, and the first seam run's number was wrong**: its baseline read `1 failed, 6 passed`, and the one failure was the builder-inertness test — so the mutant that test exists to kill was scored a survivor against a baseline that was already failing it. The test read the frame's computed style with a one-shot `evaluate`, passed on a fresh database and failed on the accumulated one: §271's trap exactly. It waits for the style now, and the harness refuses a baseline with any failure in it. The adversarial pass added the three claims nothing asserted — the sandbox withholding top-level navigation, `no-referrer`, and a cleared Height box not collapsing the frame to nothing. |
 | Observability Chart | ⊘ | **Out of scope** (p.538–542). Plots platform telemetry for a single resource — execution counts, latency, compute utilisation. Observability is the product behind it, and it is not one of the five in scope |
 | — | `CanvasDatasetTable` — ours, no Foundry equivalent. Keep; a dataset-backed table is useful and Foundry's absence of one is a consequence of everything going through the ontology. |
 
@@ -458,14 +459,14 @@ cites before building on it.
 
 ## 11. Cross-application interactivity
 
-| Feature | Status |
-|---|---|
-| Drag and drop between Workshop and other applications | ○ |
-| App Pairing widget | ○ |
-| Commands | ○ |
-| Iframe embed of other platform applications | ○ |
+| Feature | Status | Notes |
+|---|---|---|
+| Drag and drop between Workshop and other applications | ○ | (p.562, p.564–568) — the Workshop half is §2's **Drop zones for drag payloads** row, which is where it belongs: p.564 says the same components serve "cross-application interactivity *and interactions between widgets*", so there is one feature here, and it is counted once. |
+| App Pairing widget | ⊘ | (p.572) — **out of scope, and the page says why**: it connects "supported Palantir platform applications (such as **Gotham's Gaia and Graph**) to Workshop modules". Gotham is not part of this platform, which the Interfaces row decided for the same pages' neighbours (p.51–73), and a pairing with nothing to pair with is a widget whose every setting is a refusal. |
+| Commands | ⊘ | (p.574) — "a common interface… to declare and execute operations in **other Palantir platform applications embedded in a module**", plus AIP Chatbots. The applications it drives are App Pairing's and the chatbots are AIP's; neither exists here, so there is no operation for a command to name. |
+| Iframe embed of other platform applications | ◑ §455 | (p.543–547) — built as the **Iframe** widget in §10's Other table, with p.547's `embedded=true` honoured by the platform shell. |
 
-Low priority — these are worth having only once there are several applications to interact *with*.
+**§455 corrected this table**, which had four rows and no citations — §307's shape, a ○ with nothing to check it against — and a closing line saying the section was "worth having only once there are several applications to interact *with*". That premise had quietly come true (Workshop, the Object Explorer, the Ontology Manager, Code Repositories and the dataset pages are several applications), and reading the pages the rows stood for split them three ways: one already counted elsewhere, two that target products this platform does not have, and one that was simply unbuilt.
 
 ---
 
