@@ -2881,6 +2881,12 @@ export interface ActionParameter {
    * enough to render a notification and not well enough to refuse a
    * submission. */
   object_type_id?: string | null;
+  /** p.62's interface reference (db 0103, §454): the interface this object
+   * parameter's value must implement — "shows objects of any type that
+   * implements the interface". **Never set beside `object_type_id`**: p.62
+   * calls the two similar, differing only in what the list shows, so an object
+   * parameter is constrained one way or not at all. */
+  interface_id?: string | null;
   /** p.36's object dropdown filters (§331; db 0084). **Empty for a caller who
    * may not edit the action type** — p.40's static filter values are readable
    * by anyone who can read the definition, and its example reveals that an

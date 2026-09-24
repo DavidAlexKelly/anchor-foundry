@@ -2069,6 +2069,10 @@ export interface ActionDefinitionInput {
     /** db 0083: which object type an `object` parameter holds (§330). Refused
      * on any other type, because a type on a string is a claim nothing reads. */
     object_type_id?: string | null;
+    /** p.62's interface reference (db 0103, §454): the interface an `object`
+     * parameter's value must implement. Never sent beside `object_type_id` —
+     * an object parameter is constrained one way or not at all. */
+    interface_id?: string | null;
     /** p.36's object dropdown filters (§331). Empty for a caller who may not
      * edit the action type, which is p.40-41's redaction. */
     dropdown_filters?: import("./types").ActionDropdownFilter[];

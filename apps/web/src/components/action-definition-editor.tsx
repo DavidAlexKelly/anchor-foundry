@@ -574,6 +574,13 @@ export function ActionDefinitionEditor({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
+  // p.62's interface reference (§454). Read once for the whole dialog: every
+  // object parameter offers the same list, and a query per row would be one
+  // request per parameter for one answer.
+  const interfaces = useQuery({
+    queryKey: ["interfaces", workspaceId],
+    queryFn: () => objApi.listInterfaces(workspaceId),
+  });
   const [parameters, setParameters] = useState<Parameter[]>(
     action.parameters.map((p) => ({
       api_name: p.api_name,
@@ -585,6 +592,11 @@ export function ActionDefinitionEditor({
       // db 0083: which object type this parameter holds (§330). Part of the
       // parameter, like the blocks below.
       object_type_id: p.object_type_id ?? null,
+      // p.62's interface reference (db 0103, §454). **Loaded here or silently
+      // deleted**: this dialog saves the parameters whole, so a field it does
+      // not read is one it overwrites with nothing the moment somebody opens
+      // it to fix a label — the trap §329, §331 and §333 each fell into.
+      interface_id: p.interface_id ?? null,
       // p.36's dropdown filters (§331). Empty for a caller who may not edit
       // the action, which is p.40-41's redaction — and this dialog is only
       // opened by somebody who may.
@@ -1520,8 +1532,38 @@ export function ActionDefinitionEditor({
                     testId={`parameter-${i + 1}-object-type`}
                     placeholder="Not said"
                     onChange={(next) =>
-                      patchParameter(i, { object_type_id: next || null })}
+                      // **The two clear each other**, because db 0103 refuses
+                      // both and the server's message would be about a
+                      // combination this dialog let somebody build (§454).
+                      patchParameter(i, {
+                        object_type_id: next || null,
+                        ...(next ? { interface_id: null } : {}),
+                      })}
                   />
+                </Field>
+                {/* p.62's interface reference: the same claim about an
+                    interface — "shows objects of any type that implements the
+                    interface". Beside the type picker rather than a mode
+                    switch above it, because p.62 calls the two similar and a
+                    reader choosing between them is choosing *what to constrain
+                    by*, not what kind of parameter to make. */}
+                <Field label="…or any object implementing">
+                  <select
+                    value={p.interface_id ?? ""}
+                    aria-label={`Parameter ${i + 1} interface`}
+                    onChange={(e) =>
+                      patchParameter(i, {
+                        interface_id: e.target.value || null,
+                        ...(e.target.value ? { object_type_id: null } : {}),
+                      })}
+                  >
+                    <option value="">Not said</option>
+                    {(interfaces.data ?? []).map((iface) => (
+                      <option key={iface.id} value={iface.id}>
+                        {iface.display_name}
+                      </option>
+                    ))}
+                  </select>
                 </Field>
                 {untypedNote(p) && (
                   <p className="field-hint" data-testid="parameter-untyped">

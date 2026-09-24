@@ -1019,3 +1019,305 @@ def test_a_chooser_that_is_not_a_parameter_at_all_is_refused(
     )
     assert r.status_code == 422, r.text
     assert "which is not a parameter" in r.text
+
+
+# ---- p.62's interface reference parameter (§454) -----------------------------
+def _reference_action(client: TestClient, fx: Fixture, world: dict,
+                      *, rules: list[dict], extra: dict | None = None) -> dict:
+    """An action on an object type whose `subject` parameter is an interface
+    reference — p.62's "instead of an object reference parameter"."""
+    action = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": world["facility"],
+              "api_name": f"ref_{uuid.uuid4().hex[:8]}",
+              "display_name": "By reference",
+              "editable_properties": ["state"]},
+    ).json()
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "subject", "display_name": "Which object",
+                 "data_type": "object",
+                 "interface_id": world["interface_id"], **(extra or {})},
+            ],
+            "rules": rules,
+            "criteria": [],
+        },
+    )
+    return {"action": action, "response": r}
+
+
+def test_an_object_parameter_can_be_constrained_to_an_interface(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.62: "an 'interface reference' parameter… constrained to the selected
+    interface".
+
+    **A column beside db 0083's rather than a second parameter type**, which is
+    p.62's own word — the two are "similar" and differ only in what the list
+    shows, so the value is an object's id either way.
+    """
+    made = _reference_action(
+        client, fx, world,
+        rules=[{"kind": "delete_object", "config": {"object": "subject"}}],
+    )
+    assert made["response"].status_code == 200, made["response"].text
+    parameter = made["response"].json()["parameters"][0]
+    assert parameter["interface_id"] == world["interface_id"], parameter
+    assert parameter["object_type_id"] is None, parameter
+
+
+def test_a_parameter_cannot_name_both_a_type_and_an_interface(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """Two answers to "which objects may this hold". db 0103's CHECK says the
+    same thing; this is the sentence, because an integrity error names a
+    constraint rather than a mistake."""
+    made = _reference_action(
+        client, fx, world,
+        rules=[{"kind": "delete_object", "config": {"object": "subject"}}],
+        extra={"object_type_id": world["vehicle"]},
+    )
+    assert made["response"].status_code == 422, made["response"].text
+    assert "one or the other" in made["response"].text
+
+
+def test_only_an_object_parameter_may_name_an_interface(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """The rule db 0083's column already has, one column over: a constraint on
+    a string is a claim nothing reads, sitting in the document looking like it
+    meant something."""
+    action = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": world["facility"],
+              "api_name": f"bad_{uuid.uuid4().hex[:8]}",
+              "display_name": "Wrong type", "editable_properties": ["state"]},
+    ).json()
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "subject", "display_name": "Which",
+                            "data_type": "string",
+                            "interface_id": world["interface_id"]}],
+            "rules": [], "criteria": [],
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert "only an `object` parameter" in r.text
+
+
+def test_a_delete_rule_naming_one_cannot_also_name_a_type(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """The reference says which object *and* what type it is, so a rule that
+    also named one would be saying something the submission is about to
+    contradict."""
+    made = _reference_action(
+        client, fx, world,
+        rules=[{"kind": "delete_object",
+                "config": {"object": "subject", "object_type": world["vehicle"]}}],
+    )
+    assert made["response"].status_code == 422, made["response"].text
+    assert "interface reference" in made["response"].text
+
+
+def test_a_modify_rule_naming_one_is_refused_and_says_why(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.62 names the interface reference for a *delete*, and for the subject
+    of a modify on an interface — which this platform resolves from the
+    instance rather than from a parameter (§451).
+
+    A modify rule naming one as *another* object is the case that is not built:
+    its property would be in the interface's vocabulary and would need
+    translating per implementation. Refused with a sentence rather than
+    half-working (§214), and a ○ on the row.
+    """
+    made = _reference_action(
+        client, fx, world,
+        rules=[{"kind": "modify_object",
+                "config": {"object": "subject", "property": "state",
+                           "parameter": "subject"}}],
+    )
+    assert made["response"].status_code == 422, made["response"].text
+    assert "interface reference" in made["response"].text
+
+
+def test_a_delete_by_interface_reference_reaches_either_type(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """**p.62's sentence, end to end**: "'Delete' action rules can have an
+    'interface reference' parameter assigned to them, instead of an object
+    reference parameter. This interface reference, constrained to a specific
+    interface, will indicate the object to be deleted."
+
+    The action hangs off one object type and deletes an object of *another* —
+    which is the whole point of the reference, and impossible with db 0083's
+    column, since that names one type.
+
+    Two types, because either alone passes for a path that resolved the
+    reference once and kept the answer.
+    """
+    doomed = _make_type(client, fx, "Refdoomed", ["rd_code", "state"])
+    spare = _make_type(client, fx, "Refspare", ["rs_code", "state"])
+    for type_id in (doomed, spare):
+        assert client.put(
+            f"{wbase(fx)}/object-types/{type_id}/interfaces", headers=hdr(fx.editor_sub),
+            json=[{"interface_id": world["interface_id"],
+                   "property_mapping": {"last_inspection_date": "state"}}],
+        ).status_code == 200
+    first = _sync(client, fx, doomed, b"rd_code,state\nRD1,due\n",
+                  "rd_code", {"state": "state"}, "Refdoomed")
+    second = _sync(client, fx, spare, b"rs_code,state\nRS1,due\n",
+                   "rs_code", {"state": "state"}, "Refspare")
+
+    made = _reference_action(
+        client, fx, world,
+        rules=[{"kind": "delete_object", "config": {"object": "subject"}}],
+    )
+    assert made["response"].status_code == 200, made["response"].text
+
+    for type_id, instance in ((doomed, first), (spare, second)):
+        r = client.post(
+            f"{pbase(fx)}/actions/{made['action']['id']}/execute",
+            headers=hdr(fx.editor_sub),
+            json={"instance_id": world["facility_instance"],
+                  "values": {"subject": instance}},
+        )
+        assert r.status_code == 200, r.text
+        left = client.get(
+            f"{wbase(fx)}/object-types/{type_id}/instances", headers=hdr(fx.viewer_sub)
+        ).json()["items"]
+        assert left == [], left
+
+
+def test_a_reference_to_an_object_of_no_implementing_type_is_refused(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.34's check, widened by p.62: "the value selected is also validated
+    before the action is executed".
+
+    A dropdown offering only implementing types' objects is a convenience; this
+    is the rule, and it runs whether or not anybody drew a form.
+    """
+    # A second column, because a source has to map at least one property.
+    outsider = _make_type(client, fx, "Refoutsider", ["ro_code", "note"])
+    instance = _sync(client, fx, outsider, b"ro_code,note\nRO1,x\n", "ro_code",
+                     {"note": "note"}, "Refoutsider")
+    made = _reference_action(
+        client, fx, world,
+        rules=[{"kind": "delete_object", "config": {"object": "subject"}}],
+    )
+    assert made["response"].status_code == 200, made["response"].text
+    r = client.post(
+        f"{pbase(fx)}/actions/{made['action']['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": world["facility_instance"], "values": {"subject": instance}},
+    )
+    assert r.status_code == 422, r.text
+    assert "implements the interface" in r.text
+
+
+def test_the_dropdown_offers_objects_of_every_implementing_type(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """p.62: "shows objects of any type that implements the interface. If using
+    a form or a table, the user could then pick an object from a list."
+
+    Asserted as the *population*, because a list holding only one type's
+    objects satisfies any assertion about one of them (§440). The label carries
+    which type each is — the one thing a heterogeneous list has to say.
+    """
+    made = _reference_action(
+        client, fx, world,
+        rules=[{"kind": "delete_object", "config": {"object": "subject"}}],
+    )
+    assert made["response"].status_code == 200, made["response"].text
+    r = client.post(
+        f"{wbase(fx)}/action-types/{made['action']['id']}/parameter-choices",
+        headers=hdr(fx.viewer_sub), json={"values": {}},
+    )
+    assert r.status_code == 200, r.text
+    offer = next(o for o in r.json() if o["parameter"] == "subject")
+    assert offer["object_type_id"] is None, offer
+    assert offer["object_type_name"] == "Inspectable", offer
+    keys = {i["primary_key"] for i in offer["items"]}
+    assert {"F1", "V1"} <= keys, keys
+    assert any("·" in i["label"] for i in offer["items"]), offer["items"]
+
+
+def test_an_optional_reference_nobody_filled_in_is_left_alone(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """§338's rule, one parameter type later: "an optional parameter left blank
+    means something, and it is not 'this action cannot run'".
+
+    Resolving a reference is a read across every implementation, and resolving
+    an empty one finds nothing — so a form submitted without touching an
+    optional reference would 404 for an object nobody named. The rule that has
+    to be *checked* is the skip, because the resolution happens whether or not
+    any rule reads the parameter.
+    """
+    action = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": world["facility"],
+              "api_name": f"opt_{uuid.uuid4().hex[:8]}",
+              "display_name": "Optional reference",
+              "editable_properties": ["state"]},
+    ).json()
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "state", "display_name": "State", "data_type": "string"},
+                {"api_name": "subject", "display_name": "Which object",
+                 "data_type": "object", "required": False,
+                 "interface_id": world["interface_id"]},
+            ],
+            "rules": [{"kind": "modify_object",
+                       "config": {"property": "state", "parameter": "state"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+    r = client.post(
+        f"{pbase(fx)}/actions/{action['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": world["facility_instance"], "values": {"state": "seen"}},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_the_dropdown_says_when_it_has_more_members_than_it_can_hold(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """§256's trap, at p.62's list: a control that silently shows the first
+    page makes "not in the list" and "not allowed" look the same.
+
+    One implementing type with a page and one more object, so the count comes
+    from the fan-out rather than from any single read.
+    """
+    many = _make_type(client, fx, "Crowd", ["crowd_code", "state"])
+    assert client.put(
+        f"{wbase(fx)}/object-types/{many}/interfaces", headers=hdr(fx.editor_sub),
+        json=[{"interface_id": world["interface_id"],
+               "property_mapping": {"last_inspection_date": "state"}}],
+    ).status_code == 200
+    rows = b"crowd_code,state\n" + b"".join(
+        f"C{n},due\n".encode() for n in range(51)
+    )
+    _sync(client, fx, many, rows, "crowd_code", {"state": "state"}, "Crowd")
+
+    made = _reference_action(
+        client, fx, world,
+        rules=[{"kind": "delete_object", "config": {"object": "subject"}}],
+    )
+    assert made["response"].status_code == 200, made["response"].text
+    r = client.post(
+        f"{wbase(fx)}/action-types/{made['action']['id']}/parameter-choices",
+        headers=hdr(fx.viewer_sub), json={"values": {}},
+    )
+    assert r.status_code == 200, r.text
+    offer = next(o for o in r.json() if o["parameter"] == "subject")
+    assert offer["truncated"] is True, offer["truncated"]
+    assert len(offer["items"]) == 50, len(offer["items"])

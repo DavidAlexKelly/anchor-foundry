@@ -38,6 +38,7 @@ from ..lib.db import fetch_all
 from . import action_filters
 from . import action_search_arounds as search_arounds
 from . import instance_store
+from . import interfaces as interfaces_service
 from . import object_set_eval
 from . import object_sets
 from . import instances as instances_service
@@ -85,6 +86,18 @@ def type_of(parameter: dict[str, Any]) -> str | None:
     arrive together because they are the same claim read twice.
     """
     declared = parameter.get("object_type_id")
+    return str(declared) if declared else None
+
+
+def interface_of(parameter: dict[str, Any]) -> str | None:
+    """Which interface this parameter's object must implement (p.62; §454).
+
+    `type_of`'s sibling, and the same rule: **db 0103's column and nothing
+    else.** The two are mutually exclusive, so a parameter answers at most one
+    of them, and a parameter answering neither is the untyped object parameter
+    `type_of` describes — a text box and no p.34 check.
+    """
+    declared = parameter.get("interface_id")
     return str(declared) if declared else None
 
 
@@ -248,31 +261,57 @@ async def check_object_values(
     A parameter nobody has declared a type for is not checked, because there is
     nothing to check it against that is not a guess — see `type_of`.
     """
-    wanted: list[tuple[str, str, dict[str, Any]]] = []
+    wanted: list[tuple[str, str | None, str | None, dict[str, Any]]] = []
     for parameter in object_parameters(parameters):
         name = str(parameter.get("api_name", ""))
         value = bound.get(name)
         if value is None or value == "":
             continue
         type_id = type_of(parameter)
-        if type_id is None:
+        interface_id = interface_of(parameter)
+        if type_id is None and interface_id is None:
             continue
-        wanted.append((name, type_id, parameter))
+        wanted.append((name, type_id, interface_id, parameter))
 
     if not wanted:
         return
 
     prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
     store = instance_store.store_for(conn)
-    for name, type_id, parameter in wanted:
+    for name, type_id, interface_id, parameter in wanted:
         value = str(bound[name])
-        row = await store.get_instance(
-            search_prefix=prefix, object_type_id=type_id, instance_id=value,
-        )
-        if row is None:
-            raise ValueError(
-                f"{value!r} is not an object of the type {name!r} asks for"
+        if interface_id is not None:
+            # p.62: an interface reference "shows objects of any type that
+            # implements the interface", so the check is the same one widened —
+            # an object of *some* implementation. Asked of each in turn, for
+            # `_interface_subject`'s reason: an interface has no rows of its
+            # own and the store is scoped by object type on every call.
+            row = None
+            for implementation in await interfaces_service.implementations_of(
+                conn, workspace_id, UUID(interface_id)
+            ):
+                row = await store.get_instance(
+                    search_prefix=prefix,
+                    object_type_id=UUID(str(implementation["object_type_id"])),
+                    instance_id=value,
+                )
+                if row is not None:
+                    type_id = str(implementation["object_type_id"])
+                    break
+            if row is None:
+                raise ValueError(
+                    f"{value!r} is not an object of any type that implements "
+                    f"the interface {name!r} asks for"
+                )
+        else:
+            assert type_id is not None
+            row = await store.get_instance(
+                search_prefix=prefix, object_type_id=type_id, instance_id=value,
             )
+            if row is None:
+                raise ValueError(
+                    f"{value!r} is not an object of the type {name!r} asks for"
+                )
         # p.34's second sentence, with p.36's filters in it (§331) and p.37's
         # walk (§333). The type is not the whole of "the value selected is also
         # validated": a dropdown narrowed to three objects and a check that

@@ -292,7 +292,8 @@ def apply_rules(
 
 
 def object_deletions(
-    bound: dict[str, Any], *, rules: list[dict[str, Any]], default_object_type_id: UUID
+    bound: dict[str, Any], *, rules: list[dict[str, Any]], default_object_type_id: UUID,
+    parameter_types: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """The objects this action removes (p.75).
 
@@ -327,7 +328,13 @@ def object_deletions(
                 f"{parameter!r} names the object to delete and no value was supplied"
             )
         deletions.append({
-            "object_type_id": str(config.get("object_type") or default_object_type_id),
+            # p.62: "'Delete' action rules can have an 'interface reference'
+            # parameter assigned to them… this interface reference… will
+            # indicate the object to be deleted" (§454). The resolved type
+            # first, for `modification_targets`' reason.
+            "object_type_id": (parameter_types or {}).get(parameter) or str(
+                config.get("object_type") or default_object_type_id
+            ),
             "instance_id": str(named),
         })
     return deletions
@@ -376,6 +383,12 @@ def modification_targets(
                 f"{parameter!r} names the object to change and no value was supplied"
             )
         if kind == "modify_object":
+            # **No interface-reference case here** (§454, §223). A modify rule
+            # naming one is refused at save time — its property would be in the
+            # interface's vocabulary and only the subject's rules translate that
+            # — so a lookup for the resolved type could never run. It was
+            # written, and a mutant that removed it broke nothing, which is
+            # what unreachable looks like from outside.
             type_id = str(config.get("object_type") or default_object_type_id)
         else:
             link = (link_types or {}).get(str(config.get("link_type", "")))
@@ -442,6 +455,10 @@ def object_modifications(
             continue
         link = (link_types or {}).get(str(config.get("link_type", "")))
         if kind == "modify_object":
+            # **No interface-reference case here** (§454, §223). A modify
+            # rule naming one is refused at save time, so a lookup for the
+            # type it resolved to could never run — written, and a mutant
+            # that removed it broke nothing.
             type_id = str(config.get("object_type") or default_object_type_id)
         elif link is None:
             raise ValueError("this action names a link type this workspace does not have")
@@ -1245,8 +1262,8 @@ def seed_from_instance(
 # ---- parameters and rules ----------------------------------------------------
 _PARAMETER_COLUMNS = (
     "id, action_type_id, api_name, display_name, data_type, required, "
-    "default_value, hidden, sort_order, object_type_id, dropdown_filters, "
-    "dropdown_search_around, options_from"
+    "default_value, hidden, sort_order, object_type_id, interface_id, "
+    "dropdown_filters, dropdown_search_around, options_from"
 )
 
 
@@ -2892,6 +2909,12 @@ def _validate_definition(
     #: needs to know which parameters are structs and the parameter loop is
     #: where that is already being read.
     struct_parameters: set[str] = set()
+    #: The object parameters constrained to an interface (p.62; db 0103, §454).
+    #: The rule loop needs them for the same reason it needs `struct_parameters`
+    #: — what a rule may say about an object depends on how the parameter
+    #: naming it is constrained — and the parameter loop is where that is
+    #: already being read.
+    interface_parameters: set[str] = set()
     #: `{parameter: its declared type}`, for the rule loop below — p.60's
     #: Object type parameter has to be *that* type and not merely a declared
     #: name (§453). Collected in the loop that already reads it, for
@@ -2915,6 +2938,24 @@ def _validate_definition(
                 f"parameter {name!r} is a {data_type}, so it cannot name an "
                 "object type; only an `object` parameter holds one"
             )
+        # p.62's interface reference (db 0103, §454). The same rule as the line
+        # above for the same reason, plus the one db 0103's CHECK states: an
+        # object parameter is constrained by a type or by an interface, and
+        # both at once is two answers to "which objects may this hold".
+        if parameter.get("interface_id"):
+            if data_type != "object":
+                raise ValueError(
+                    f"parameter {name!r} is a {data_type}, so it cannot name an "
+                    "interface; only an `object` parameter holds one "
+                    "(action-types p.62)"
+                )
+            if parameter.get("object_type_id"):
+                raise ValueError(
+                    f"parameter {name!r} names an object type and an interface; "
+                    "an object parameter is constrained by one or the other "
+                    "(action-types p.62)"
+                )
+            interface_parameters.add(name)
         if data_type in _UNSUPPORTED_PARAMETER_TYPES:
             raise ValueError(
                 f"parameter {name!r} cannot be a {data_type}: "
@@ -3162,6 +3203,21 @@ def _validate_definition(
                 raise ValueError(
                     f"a delete_object rule reads {named!r}, which is not a parameter"
                 )
+            # p.62's interface reference (§454): "'Delete' action rules can
+            # have an 'interface reference' parameter assigned to them, instead
+            # of an object reference parameter. This interface reference…
+            # will indicate the object to be deleted." Its type is not known
+            # until submission, so there is no type to check here — and a rule
+            # that also named one would be saying something the parameter is
+            # about to contradict.
+            if named and str(named) in interface_parameters:
+                if config.get("object_type"):
+                    raise ValueError(
+                        f"{named!r} is an interface reference, so it says which "
+                        "object to delete and what type it is; the rule cannot "
+                        "also name an object type (action-types p.62)"
+                    )
+                continue
             target = str(config.get("object_type") or object_type_id)
             if named and target not in workspace_properties:
                 raise ValueError(
@@ -3185,6 +3241,21 @@ def _validate_definition(
         if parameter not in seen:
             raise ValueError(f"a rule reads {parameter!r}, which is not a parameter")
         named = config.get("object")
+        if named and str(named) in interface_parameters:
+            # p.62 names the interface reference for a *delete*, and for the
+            # subject of a modify on an interface — which this platform resolves
+            # from the instance rather than from a parameter (§451). A modify
+            # rule naming one as *another* object is the case that is not built:
+            # the property it writes would be in the interface's vocabulary and
+            # would need renaming per implementation, exactly as the subject's
+            # rules do. Refused with a sentence rather than half-working (§214),
+            # and named as a ○ on the row.
+            raise ValueError(
+                f"{named!r} is an interface reference, and a modify rule cannot "
+                "change an object named by one yet — its properties would be "
+                "the interface's, which only the subject's rules translate "
+                "(action-types p.62)"
+            )
         if named and str(named) not in seen:
             raise ValueError(
                 f"a modify_object rule changes {named!r}, which is not a parameter"
@@ -3535,10 +3606,11 @@ async def set_definition(
                 INSERT INTO action_parameters
                     (action_type_id, api_name, display_name, data_type, required,
                      default_value, hidden, sort_order, section_id, object_type_id,
+                     interface_id,
                      dropdown_filters, dropdown_search_around, options_from)
                 VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type), :required,
                         CAST(:default AS jsonb), :hidden, :ord, :section,
-                        CAST(:otype AS uuid), CAST(:filters AS jsonb),
+                        CAST(:otype AS uuid), CAST(:iface AS uuid), CAST(:filters AS jsonb),
                         CAST(:around AS jsonb), CAST(:options AS jsonb))
                 """
             ),
@@ -3561,6 +3633,15 @@ async def set_definition(
                 "otype": (
                     str(parameter["object_type_id"])
                     if parameter.get("object_type_id") else None
+                ),
+                # p.62's interface reference (db 0103, §454): the same claim as
+                # `otype` made about an interface instead — "shows objects of
+                # any type that implements the interface". Mutually exclusive
+                # with it, which db 0103's CHECK enforces and
+                # `_validate_definition` says in a sentence.
+                "iface": (
+                    str(parameter["interface_id"])
+                    if parameter.get("interface_id") else None
                 ),
                 # p.36's dropdown filters (db 0084). Part of the parameter, like
                 # its type and its override blocks.
