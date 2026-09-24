@@ -420,6 +420,10 @@ export interface CanvasActions {
     config: { action: string; subject: string; values?: Record<string, string> },
     context: { object?: { id?: string } | null },
   ) => void;
+  /** p.489's Export (§459). Here beside `run` because it shares the one
+   * thing that makes `run` a capability rather than a function: an outcome
+   * somebody has to be told about, which `status` already carries. */
+  exportObjects: (request: import("./event-run").ExportRequest) => void;
   /** What the last run did. Kept as one value rather than a list: an app that
    * accumulated a log of every click would bury the one that failed. */
   status: { ok: boolean; message: string } | null;
@@ -428,6 +432,7 @@ export interface CanvasActions {
 
 const ActionsContext = createContext<CanvasActions>({
   run: () => {},
+  exportObjects: () => {},
   status: null,
   dismiss: () => {},
 });

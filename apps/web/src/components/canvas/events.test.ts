@@ -164,3 +164,60 @@ describe("set_variable still behaves as p.80 says", () => {
     expect(resetVariables).not.toHaveBeenCalled();
   });
 });
+
+describe("export (p.489, §459)", () => {
+  const SET = { object_type_id: "t1", filters: [] };
+  const exporting = (config: Record<string, unknown>) => ({ type: "export", config });
+
+  it("hands over the set the variable holds, and the settings, verbatim", () => {
+    const exportObjects = vi.fn();
+    const { context, setVariables } = contextWith({ exportObjects, variables: { v_s: SET } });
+    run([event(exporting({
+      variable: "v_s", format: "clipboard", file_name: "sites", properties: ["name", 3, "region"],
+    }))], context);
+    expect(exportObjects).toHaveBeenCalledWith({
+      variable: "v_s", definition: SET, format: "clipboard", fileName: "sites",
+      // A non-name in the list is dropped rather than sent as a column.
+      properties: ["name", "region"],
+    });
+    // An export changes nothing in the module.
+    expect(setVariables).not.toHaveBeenCalled();
+  });
+
+  it("defaults to a file, with the type's name and every property", () => {
+    const exportObjects = vi.fn();
+    const { context } = contextWith({ exportObjects, variables: { v_s: SET } });
+    run([event(exporting({ variable: "v_s", format: "xlsx", properties: "name" }))], context);
+    expect(exportObjects).toHaveBeenCalledWith({
+      variable: "v_s", definition: SET, format: "csv", fileName: null, properties: null,
+    });
+  });
+
+  it("exports what this click just wrote, not what was resolved before it", () => {
+    // p.80's order: a button that narrows a set and then exports it exports
+    // the narrowed one.
+    const exportObjects = vi.fn();
+    const narrowed = { object_type_id: "t1", filters: [{ property: "r", op: "eq", value: "n" }] };
+    const { context } = contextWith({ exportObjects, variables: { v_s: SET } });
+    run([event(set("v_s", narrowed), exporting({ variable: "v_s" }))], context);
+    expect(exportObjects.mock.calls[0]?.[0].definition).toEqual(narrowed);
+  });
+
+  it("does nothing when no set is named", () => {
+    const exportObjects = vi.fn();
+    const { context } = contextWith({ exportObjects, variables: {} });
+    run([event(exporting({}))], context);
+    expect(exportObjects).not.toHaveBeenCalled();
+  });
+
+  it("hands over a set that has not resolved yet, rather than skipping it", () => {
+    // A set nothing on screen shows resolves after the page draws; a click
+    // before then used to do nothing at all. The capability waits for it.
+    const exportObjects = vi.fn();
+    const { context } = contextWith({ exportObjects, variables: {} });
+    run([event(exporting({ variable: "v_s" }))], context);
+    expect(exportObjects).toHaveBeenCalledWith(expect.objectContaining({
+      variable: "v_s", definition: null,
+    }));
+  });
+});

@@ -875,12 +875,12 @@ def test_setting_a_derived_variable_is_refused_and_says_what_to_set_instead() ->
     assert "Computed" in str(raised.value), "named by label, not by id"
 
 
-def test_an_unbuilt_effect_says_so_rather_than_saving_a_dead_click() -> None:
-    # `navigate` was the example here until item 1.4 built it, and `run_action`
-    # until the second half of 1.3. `export` is the one still waiting, on a
-    # download surface the viewer route does not have.
-    with pytest.raises(we.EventError, match="not built yet"):
-        we.parse({"e_1": event("e_1", effects=[{"type": "export", "config": {}}])},
+def test_an_effect_this_platform_does_not_have_is_refused() -> None:
+    # `navigate`, `run_action`, `recompute` and `export` were each the example
+    # here in turn, refused as "not built yet" until they were (§459 was the
+    # last). What is left is the general rule: an effect nothing will run.
+    with pytest.raises(we.EventError, match="expected one of"):
+        we.parse({"e_1": event("e_1", effects=[{"type": "print", "config": {}}])},
                  layout={"btn": node({})})
 
 
@@ -995,12 +995,65 @@ def test_run_action_is_built_now_and_accepted() -> None:
     assert [e.type for e in events["e_1"].effects] == ["run_action"]
 
 
-def test_the_one_effect_still_waiting_on_something_says_so() -> None:
-    """`export` remains refused, blocked on something real rather than on
-    effort: the viewer route has no download surface."""
-    with pytest.raises(we.EventError, match="not built yet"):
-        we.parse({"e_1": event("e_1", effects=[{"type": "export", "config": {}}])},
-                 layout={"btn": node({})})
+def export_vars() -> dict:
+    return {
+        "v_sites": object_set_var(
+            "v_sites", label="Sites", object_set={"object_type_id": TYPE_ID, "filters": []}),
+        "v_name": var("v_name", label="Name"),
+    }
+
+
+def export_event(config: dict):
+    return we.parse(
+        {"e_1": event("e_1", effects=[{"type": "export", "config": config}])},
+        layout={"btn": node({})}, variables=wv.parse(export_vars()),
+    )
+
+
+def test_an_export_of_an_object_set_is_accepted() -> None:
+    """p.489: "Export events take an object set variable as an input and
+    trigger the export of the objects in the object set to either Excel or the
+    user's clipboard. An application builder may optionally configure a file
+    name and select the set of properties that should be included." """
+    events = export_event({"variable": "v_sites", "format": "clipboard",
+                           "properties": ["name", "region"], "file_name": "sites"})
+    assert events["e_1"].effects[0].type == "export"
+    assert export_event({"variable": "v_sites"})["e_1"].effects[0].config == {
+        "variable": "v_sites"}
+
+
+def test_an_export_needs_an_object_set_it_declares() -> None:
+    with pytest.raises(we.EventError, match="needs an object set variable"):
+        export_event({})
+    with pytest.raises(we.EventError, match="does not declare"):
+        export_event({"variable": "v_gone"})
+    with pytest.raises(we.EventError, match="p.489 exports the objects in an object set"):
+        export_event({"variable": "v_name"})
+
+
+def test_an_export_refuses_a_format_it_cannot_write() -> None:
+    """Excel is written as CSV (`EXPORT_FORMATS` says why), so `xlsx` is not a
+    format an event can name - it would promise a file this does not make."""
+    with pytest.raises(we.EventError, match="is not one of csv, clipboard"):
+        export_event({"variable": "v_sites", "format": "xlsx"})
+
+
+def test_an_exports_properties_are_a_list_of_names() -> None:
+    for bad in ("name", ["name", ""], ["name", 3], [None]):
+        with pytest.raises(we.EventError, match="list of property names"):
+            export_event({"variable": "v_sites", "properties": bad})
+    too_many = [f"p{i}" for i in range(we.MAX_EXPORT_PROPERTIES + 1)]
+    with pytest.raises(we.EventError, match="at most"):
+        export_event({"variable": "v_sites", "properties": too_many})
+    most = too_many[:-1]
+    assert export_event({"variable": "v_sites", "properties": most})["e_1"].effects
+
+
+def test_an_export_file_name_is_a_name_not_a_path() -> None:
+    for bad in ("../sites", "a\\b", "x" * 121, 7):
+        with pytest.raises(we.EventError, match="plain name"):
+            export_event({"variable": "v_sites", "file_name": bad})
+    assert export_event({"variable": "v_sites", "file_name": "x" * 120})["e_1"].effects
 
 
 def test_an_action_needs_an_object_to_act_on() -> None:
@@ -2951,14 +3004,6 @@ def test_recomputing_an_automatic_variable_is_refused() -> None:
         )
 
 
-def test_recompute_is_no_longer_a_planned_effect() -> None:
-    """It was in `PLANNED_EFFECTS` for precisely the right reason and for
-    precisely as long as the reason held: with every derived variable
-    recomputing on every resolve there was nothing for it to trigger."""
-    assert "recompute" not in we.PLANNED_EFFECTS
-    assert "recompute" in we.EFFECTS
-
-
 def test_the_builder_offers_every_effect_the_server_accepts() -> None:
     """**The guard that would have caught §190's gap.**
 
@@ -2997,7 +3042,7 @@ def test_the_builder_offers_every_effect_the_server_accepts() -> None:
         "the scan is not reading EventsPanel.tsx - it should have found this "
         f"entry's label, and found {catalogue.get('reset_variable')!r}"
     )
-    accepted = set(we.EFFECTS) - set(we.PLANNED_EFFECTS)
+    accepted = set(we.EFFECTS)
     assert offered == accepted, (
         f"the builder offers {sorted(offered)}; the server accepts "
         f"{sorted(accepted)}. An effect the server takes but the panel does not "
@@ -3932,3 +3977,53 @@ def test_measuring_is_opt_in() -> None:
     assert wv.evaluate(variables, {"v_region": "north"}) == wv.evaluate(
         variables, {"v_region": "north"}, timings={}
     )
+
+
+def _event_layout() -> dict:
+    return {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["btn", "far"]},
+        "btn": node({}),
+        "far": node({}),
+    }
+
+
+def test_an_on_screen_buttons_events_need_what_they_read() -> None:
+    """§459. A set named only by the Export on a visible button was never
+    computed, so the runner had nothing to export and the click did nothing.
+    Every string in an effect's config that is a declared id counts, however
+    deep, and so does a `{{token}}` in text."""
+    variables = wv.parse({
+        "v_set": object_set_var("v_set", label="Set",
+                                object_set={"object_type_id": TYPE_ID, "filters": []}),
+        "v_obj": var("v_obj", kind="single_object", label="Obj"),
+        "v_note": var("v_note", label="Note"),
+        "v_other": var("v_other", label="Other"),
+    })
+    events = {
+        "e_1": {"trigger": {"node": "btn", "on": "click"}, "effects": [
+            {"type": "export", "config": {"variable": "v_set"}},
+            {"type": "run_action", "config": {"subject": "v_obj",
+                                              "values": {"note": "by {{v_note}}"}}},
+        ]},
+        # On a node that is not on screen: nothing it reads is needed.
+        "e_2": {"trigger": {"node": "far", "on": "click"}, "effects": [
+            {"type": "export", "config": {"variable": "v_other"}},
+        ]},
+    }
+    assert wv.displayed(_event_layout(), variables, {"ROOT", "btn"}, events=events) == {
+        "v_set", "v_obj", "v_note",
+    }
+    # Without the events, the button reads nothing - which was the bug.
+    assert wv.displayed(_event_layout(), variables, {"ROOT", "btn"}) == set()
+
+
+def test_an_events_reads_survive_whatever_a_document_holds() -> None:
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    for events in (None, [], {"e": "junk"}, {"e": {"trigger": "btn"}},
+                   {"e": {"trigger": {"node": "btn"}, "effects": ["junk", {"config": 3}]}},
+                   {"e": {"trigger": {"node": "btn"},
+                          "effects": [{"config": {"xs": [["v_a"]]}}]}}):
+        got = wv.displayed(_event_layout(), variables, {"btn"}, events=events)
+        assert got <= {"v_a"}, events
+    nested = {"e": {"trigger": {"node": "btn"}, "effects": [{"config": {"xs": [["v_a"]]}}]}}
+    assert wv.displayed(_event_layout(), variables, {"btn"}, events=nested) == {"v_a"}

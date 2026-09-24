@@ -586,6 +586,35 @@ def test_a_caller_that_says_what_is_on_screen_gets_only_that(
     assert "v_offscreen" not in values
 
 
+def test_a_visible_buttons_event_brings_what_it_reads(
+    client: TestClient, fx: Fixture
+) -> None:
+    """§459, over the wire. The off-screen variable is read by the event of a
+    button that *is* on screen, so it is computed; with the button off screen
+    it is not. Without this the Export on a button exporting a set nothing
+    else shows found no set and did nothing."""
+    app_id = _new_app(client, fx)
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["here", "btn"]},
+        "here": {"type": {"resolvedName": "CanvasParameterControl"},
+                 "props": {"variable": "v_shown"}},
+        "btn": {"type": {"resolvedName": "CanvasButton"}, "props": {"label": "Go"}},
+    }
+    document = _module(_LAZY_VARS, layout)
+    document["events"] = {"e_1": {"id": "e_1", "trigger": {"node": "btn", "on": "click"},
+                                  "effects": [{"type": "set_variable", "config": {
+                                      "variable": "v_region", "value": "{{v_offscreen}}"}}]}}
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": document})
+    assert r.status_code == 200, r.text
+    shown = client.post(f"{base(fx)}/{app_id}/variables/evaluate", headers=hdr(fx.viewer_sub),
+                        json={"values": {}, "visible": ["ROOT", "here", "btn"]})
+    assert shown.json()["values"]["v_offscreen"] == "elsewhere", shown.text
+    hidden = client.post(f"{base(fx)}/{app_id}/variables/evaluate", headers=hdr(fx.viewer_sub),
+                         json={"values": {}, "visible": ["ROOT", "here"]})
+    assert "v_offscreen" not in hidden.json()["values"], hidden.text
+
+
 def test_a_caller_that_says_nothing_still_gets_everything(
     client: TestClient, fx: Fixture
 ) -> None:

@@ -24,7 +24,13 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { actions as actionApi, ApiError, canvas as canvasApi } from "@/lib/api";
+import {
+  actions as actionApi, ApiError, canvas as canvasApi, objects as objApi,
+} from "@/lib/api";
+import type { ExportRequest } from "./event-run";
+import {
+  collectRows, csvOf, exportColumns, exportFileName, tsvOf,
+} from "./object-export";
 import {
   CanvasActionsProvider,
   CanvasPageProvider,
@@ -137,6 +143,14 @@ export function VariableBridge({
   const { values } = useCanvasParameters();
   const [resolved, setResolved] = useState<Record<string, unknown>>({});
   const [pending, setPending] = useState(enabled);
+  // The latest of both, for a capability that has to wait on them from inside
+  // a callback (§459's export clicked before its set resolved). A callback
+  // closes over the render it was made in, so reading the state directly
+  // would wait forever on a value that has since arrived.
+  const resolvedRef = useRef(resolved);
+  resolvedRef.current = resolved;
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
   // Which request's answer we are still willing to accept. Two resolves in
   // flight can land out of order, and an older one overwriting a newer one
   // would show the previous filter's results with the current filter on screen
@@ -407,6 +421,12 @@ export function VariableBridge({
                 values: config.values ?? {},
               });
             },
+            exportObjects: (request) => {
+              setStatus(null);
+              void settledValue(request.variable, request.definition, resolvedRef, pendingRef)
+                .then((definition) => exportObjects(workspaceId, { ...request, definition }))
+                .then(setStatus);
+            },
             status,
             dismiss: () => setStatus(null),
           }}
@@ -448,6 +468,88 @@ export function VariableBridge({
   );
 }
 
+
+/** A variable's value once the module has finished resolving, or `fallback`
+ * when there already is one.
+ *
+ * Polled rather than subscribed: this runs once per click, the wait is a
+ * resolve round trip, and a subscription would be machinery for one caller.
+ * Capped, so a module whose resolve keeps failing reports "nothing to export"
+ * rather than leaving the click hanging.
+ */
+async function settledValue(
+  variable: string,
+  fallback: unknown,
+  resolvedRef: { current: Record<string, unknown> },
+  pendingRef: { current: boolean },
+  timeoutMs = 15000,
+): Promise<unknown> {
+  if (fallback) return fallback;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = resolvedRef.current[variable];
+    if (value && !pendingRef.current) return value;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  return resolvedRef.current[variable] ?? null;
+}
+
+/** p.489's Export, end to end (§459): read the set, write the file, say so.
+ *
+ * **Every outcome is reported**, the refusal and the failures included,
+ * through the strip `run_action` already uses: a button that was pressed and
+ * produced no file looks exactly like one that is broken. The rows are read
+ * a page at a time and the type once, for its property names.
+ */
+async function exportObjects(
+  workspaceId: string,
+  request: ExportRequest,
+): Promise<{ ok: boolean; message: string }> {
+  const definition = request.definition as { object_type_id?: string } | null;
+  const typeId = definition?.object_type_id;
+  if (!typeId) return { ok: false, message: "There is no object set to export yet." };
+  try {
+    const [first, type] = await Promise.all([
+      objApi.evaluateObjectSet(workspaceId, definition, { limit: 1, offset: 0, sort: "key" }),
+      objApi.getType(workspaceId, typeId),
+    ]);
+    const got = await collectRows(
+      async (offset, limit) =>
+        (await objApi.evaluateObjectSet(workspaceId, definition, {
+          limit, offset, sort: "key",
+        })).instances,
+      first.total,
+    );
+    if ("refused" in got) return { ok: false, message: got.refused };
+    const columns = exportColumns(type.properties, request.properties);
+    const count = `${got.rows.length} object${got.rows.length === 1 ? "" : "s"}`;
+    if (request.format === "clipboard") {
+      await navigator.clipboard.writeText(tsvOf(columns, got.rows));
+      return { ok: true, message: `Copied ${count} to the clipboard.` };
+    }
+    const name = exportFileName(request.fileName, type.display_name, new Date());
+    const url = URL.createObjectURL(
+      new Blob([csvOf(columns, got.rows)], { type: "text/csv;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.click();
+    // After the click has had its turn: revoking at once can cancel the
+    // download in some browsers before it has read the blob.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return { ok: true, message: `Exported ${count} to ${name}.` };
+  } catch (e) {
+    return {
+      ok: false,
+      message: e instanceof ApiError
+        ? e.message
+        : request.format === "clipboard"
+          ? "The clipboard would not take the export. Try the file instead."
+          : "The export did not go through.",
+    };
+  }
+}
 
 /** What the last `run_action` did.
  *
