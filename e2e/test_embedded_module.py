@@ -137,7 +137,14 @@ def test_an_embedded_module_is_not_editable_in_place(page, modules):
 
     # Presence before absence: the inner content is there, so "no drag handles"
     # is about the inner editor being disabled rather than about an empty box.
-    assert embedded.locator("[draggable='true']").count() == 0
+    # **The table's rows are, and should be.** Since §457 a row in a running
+    # module is a drag *source* - p.570's "cells in an object table can be
+    # dragged onto compatible drop zones" - so they are waited for, and then
+    # everything draggable that is not one of them is a Craft handle. A
+    # one-shot count of every `[draggable]` passed only while it happened to
+    # run before the rows had loaded.
+    expect(embedded.locator("tbody tr").first).to_be_visible()
+    expect(embedded.locator("[draggable='true']:not(tbody tr)")).to_have_count(0)
 
 
 def test_the_host_still_works_around_the_embed(page, modules):

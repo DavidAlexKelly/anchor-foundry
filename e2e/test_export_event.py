@@ -147,9 +147,16 @@ def test_a_click_before_the_set_resolves_still_exports(page, api) -> None:
     held = []
     page.route("**/variables/evaluate", lambda route: held.append(route))
     open_module(page, mod)
+    # The first resolve is debounced, so on a slow runner it has not been sent
+    # when the page has drawn. Wait until one is actually being held - a click
+    # before that would test nothing, which is what CI's second run found.
+    for _ in range(100):
+        if held:
+            break
+        page.wait_for_timeout(100)
+    assert held, "no resolve was held back - the race was not set up"
     with page.expect_download() as waiting:
         page.get_by_role("button", name="Export", exact=True).click()
-        assert held, "no resolve was held back - the race was not set up"
         # Removing the route lets every held request through.
         page.unroute("**/variables/evaluate")
     assert waiting.value.suggested_filename == "early.csv"
