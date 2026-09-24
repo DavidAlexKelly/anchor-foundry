@@ -3520,6 +3520,68 @@ def test_a_parked_widget_is_a_usage_and_is_never_displayed() -> None:
     assert wv.displayed(layout, variables, {"ROOT", "CanvasUnused"}) == set()
 
 
+def embed_layout(kind: str = "CanvasEmbeddedModule") -> dict:
+    return {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["emb"]},
+        "emb": {"type": {"resolvedName": kind},
+                "props": {"moduleId": "m1", "interface": {"region": "v_host_region",
+                                                          "unmapped": ""}}},
+    }
+
+
+def test_an_on_screen_embed_needs_what_it_passes_in() -> None:
+    """**The browser suite's failure since §392, as one assertion.**
+
+    An embed's `interface` mapping names the host variable it passes to the
+    child (p.127) — but not through a prop that names one variable, so the
+    lazy rule could not see it. The host computed nothing, sent the child no
+    value, and the child's table filtered by that value showed every row.
+    """
+    variables = wv.parse({"v_host_region": var("v_host_region", label="Region")})
+    assert wv.displayed(embed_layout(), variables, {"ROOT", "emb"}) == {"v_host_region"}
+    # And the same for a loop, the other node that passes values in (p.134).
+    assert wv.displayed(embed_layout("CanvasLoopSection"), variables, {"emb"}) == {
+        "v_host_region"
+    }
+
+
+def test_an_embed_off_screen_needs_nothing_computed() -> None:
+    """The counterweight: a mapping is a reference like any other, so an embed
+    on a page nobody is looking at computes nothing either (p.75)."""
+    variables = wv.parse({"v_host_region": var("v_host_region", label="Region")})
+    assert wv.displayed(embed_layout(), variables, {"ROOT"}) == set()
+
+
+def test_a_variable_passed_into_an_embed_is_a_usage() -> None:
+    """The same hole from the other side: a variable only an embed reads
+    reported no usages, so the Variables panel offered to delete it. The
+    external ID is in the prop, because that is what says which row of the
+    embed's panel to unmap first."""
+    variables = wv.parse({"v_host_region": var("v_host_region", label="Region")})
+    assert wv.usages(embed_layout(), variables)["v_host_region"] == [
+        {"node": "emb", "prop": "interface.region"}
+    ]
+
+
+def test_an_embed_mapped_to_nothing_declared_is_dangling() -> None:
+    """A mapping value is a reference, so it is held to the same rule as every
+    other: one naming no declared variable is reported, not skipped."""
+    assert wv.dangling_references(embed_layout(), {}) == [
+        {"node": "emb", "prop": "interface.region", "variable": "v_host_region"}
+    ]
+
+
+def test_a_mapping_is_read_only_where_it_names_a_variable() -> None:
+    """What a saved document can hold, straight into `references()`: a row
+    left unmapped, a value that is not a string, a mapping that is not a map.
+    None of them is a reference, and none of them may raise - `usages()` runs
+    on documents the save path has not yet refused."""
+    assert wv.references({"interface": {"a": "", "b": 3, "c": None}}) == []
+    assert wv.references({"interface": ["v_a"]}) == []
+    assert wv.references({"interface": "v_a"}) == []
+    assert wv.references({"interface": {"a": "v_a"}}) == [("interface.a", "v_a")]
+
+
 def test_two_widgets_reading_one_set_do_not_walk_it_twice() -> None:
     """A diamond is the ordinary case, not an edge one: a table and a chart on
     one page reading the same filtered set. The assertion is on the answer

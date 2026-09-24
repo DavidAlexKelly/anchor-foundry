@@ -613,6 +613,36 @@ is two rules. **A baseline must pass completely**, and the harness now refuses
 one that does not. And when a test passes under `fresh-e2e.sh` and fails on the
 dev stack, **look for a read that does not retry** before looking anywhere else.
 
+### A red check that everyone has stopped reading is not a check (§456)
+
+The browser job on `main` failed on every merge from at least §415 to §455,
+over forty merges, and each one was merged anyway, because "the four
+browser failures" had become background noise. They were four failures, and
+only one of them was a flake:
+
+- **A real regression, introduced with the rule it broke.** §392's lazy
+  evaluation computes only the variables that on-screen widgets reference, and
+  `references()` did not read an embed's `interface` mapping. So a host
+  computed nothing for the variable it passes to an embedded module, the child
+  got no value, and its filtered table showed every row. p.127's whole
+  mechanism had been broken in view mode since §392, and the one test that
+  said so was already red.
+- **Two tests that matched a name a later feature reused.** §436 gave every
+  application header a star called "Add to favourites", and the scratchpad
+  test's `.first` of that name starred the repository. §414's colours panel
+  says "Saved colours", and the Links test's `get_by_text("Saved").first` was
+  satisfied before the save happened. In both cases the page changed and the
+  test kept matching, just not what it meant to match. The scratchpad fix was
+  in the product rather than in the test: two buttons with one accessible name
+  cannot be told apart by a screen reader either.
+- **One timing assumption.** The profiler test's precondition depended on how
+  fast the test clicked. Now the test makes the gap it depends on instead.
+
+The rule: **a check that is red for a reason nobody has read is red for every
+other reason too.** A new failure cannot be seen next to the old ones, and the
+old ones are not all what they look like. When CI is red, the next unit of
+work is making it green.
+
 ### A clean first pass means the list came from the test file (§350, §450)
 
 Recorded on §350's row and worth having here, because §450 walked into it again:

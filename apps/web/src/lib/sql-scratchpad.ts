@@ -70,9 +70,18 @@ export function ranNote(query: ScratchpadQuery): string | null {
   return query.run_count > 1 ? `ran ${query.run_count} times` : null;
 }
 
-/** p.15's star, as a label that says what pressing it does. */
+/**
+ * p.15's star, as a label that says what pressing it does — and to which query.
+ *
+ * **The query is in the name** for the same reason it is in Forget's. Since
+ * §436 every application's header carries its own star, also called "Add to
+ * favourites", for the repository itself; a row star with the same name is
+ * two buttons nobody can tell apart without seeing them, and the browser test
+ * that asked for the first of them starred the repository instead.
+ */
 export function starLabel(query: ScratchpadQuery): string {
-  return query.favourite ? "Remove from favourites" : "Add to favourites";
+  const which = oneLine(query.sql, 40);
+  return query.favourite ? `Remove ${which} from favourites` : `Add ${which} to favourites`;
 }
 
 /**

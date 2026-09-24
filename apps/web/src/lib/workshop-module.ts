@@ -314,6 +314,17 @@ export function referencesOf(props: unknown): Reference[] {
       }
     });
   }
+  // An embed's interface mapping (p.127): child external ID -> a variable of
+  // this module. The server's `references()` reads it the same way, and was
+  // missing it the same way - which is how a routed page left a mapped
+  // variable out of what it needs, and a copied embed kept pointing at the
+  // source module's ids.
+  const mapping = bag.interface;
+  if (mapping && typeof mapping === "object" && !Array.isArray(mapping)) {
+    for (const [externalId, ref] of Object.entries(mapping as Record<string, unknown>)) {
+      if (typeof ref === "string" && ref) found.push({ prop: `interface.${externalId}`, ref });
+    }
+  }
   return found;
 }
 
@@ -341,6 +352,15 @@ export function remapReferences(
       }
       return copy;
     });
+  }
+  const mapping = next.interface;
+  if (mapping && typeof mapping === "object" && !Array.isArray(mapping)) {
+    next.interface = Object.fromEntries(
+      Object.entries(mapping as Record<string, unknown>).map(([externalId, value]) => [
+        externalId,
+        typeof value === "string" && replacement.has(value) ? replacement.get(value) : value,
+      ]),
+    );
   }
   return next;
 }
