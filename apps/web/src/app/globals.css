@@ -2935,6 +2935,33 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 .canvas-section-toggle:hover { color: var(--accent); }
 
+/* p.13's section header and p.58's three formats (§473). The header is a row:
+   an icon, then the title - a heading, or the collapse control when the
+   section collapses - with the description under it. */
+.canvas-section-header { display: flex; align-items: flex-start; gap: 8px; }
+.canvas-section-header-icon { font-size: 16px; line-height: 1.4; }
+.canvas-section-header-text { min-width: 0; flex: 1 1 auto; }
+.canvas-section-title {
+  margin: 0; font-family: var(--font-body); font-size: 13.5px; font-weight: 600;
+  color: var(--ink); padding: 4px 0;
+}
+.canvas-section-description { margin: 0 0 2px; font-size: 12.5px; color: var(--ink-soft); }
+/* Block: "in its own container above the body" - a bar of its own, divided
+   from the body by a rule. */
+.canvas-section-header--block {
+  background: var(--surface-2); border-bottom: 1px solid var(--line);
+  padding: 4px 10px; border-radius: var(--radius) var(--radius) 0 0;
+}
+/* A body with no padding of its own still starts clear of the bar; a
+   padding set on the section, which moves to the body, overrides this. */
+.canvas-section--header-block > .canvas-section-parts { padding-top: 8px; }
+/* Contained: "within the body area" - no bar and no rule, the title simply
+   the first thing in the box. */
+.canvas-section-header--contained { margin-bottom: 6px; }
+/* Floating: "above the body area and … on the background of the parent
+   section" - outside the box, which starts below it (`styleTarget`). */
+.canvas-section-header--floating { background: transparent; margin-bottom: 6px; }
+
 /* **`[hidden]` alone does not hide this.** The UA stylesheet's
    `[hidden] { display: none }` is one attribute selector, and
    `.canvas-section-parts` sets `display: flex` with a class - which wins on

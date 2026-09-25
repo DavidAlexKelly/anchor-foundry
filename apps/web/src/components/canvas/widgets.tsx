@@ -288,6 +288,7 @@ import {
 import { Chart, PieChart, SegmentedBarChart, toPoints } from "./charts";
 import { SEGMENT_MODES, segmentModeOf, segmentedFrom } from "./chart-segments";
 import { useAttachmentUrl } from "./use-attachment-url";
+import { HEADER_STYLES, headerStyleOf, paddingTarget, styleTarget } from "./section-header";
 import {
   DEFAULT_LOGO_HEIGHT, MAX_LOGO_HEIGHT, MIN_LOGO_HEIGHT, headerMark, imageRefOf, logoHeightOf,
   logoPositionOf, logoPositionsFor, type ImageRef,
@@ -13935,8 +13936,24 @@ export function CanvasSection({
   dropLabel = "",
   dropIcon = "",
   dropVariable = null,
+  showHeader = false,
+  headerIcon = "",
+  description = "",
+  headerStyle = "block",
   children,
 }: {
+  /** p.13's "toggle on the options for Section Header" (§473): a header
+   * with the `title`, an icon and a description, drawn whether or not the
+   * section collapses. A collapsible section has always drawn a header of its
+   * own; this is the same header for one that does not. */
+  showHeader?: boolean;
+  /** p.15's section icon, typed as every icon here is. */
+  headerIcon?: string;
+  /** p.28's "subheadings to provide context for section headers as a
+   * rendered Description". */
+  description?: string;
+  /** p.58's Block, Contained or Floating (`section-header.ts`). */
+  headerStyle?: string;
   /** p.564-568's **Drop Handling**: this section becomes a drop zone for
    * objects dragged from a table cell, an Object View's icon or an Object Set
    * Title (p.569-570). Off by default, because a section that swallowed every
@@ -14198,15 +14215,47 @@ export function CanvasSection({
     commit(resized(index, current + (event.key === forward ? 0.05 : -0.05)));
   };
 
+  // p.58's header formats. A floating header moves the section's box to the
+  // body (`section-header.styleTarget`), so the header sits on the parent.
+  const withHeader = showHeader === true;
+  const formatted = headerStyleOf(headerStyle);
+  const { padding: boxPadding, ...boxStyle } =
+    styleFor({ background, padding, customPadding, border }, saved) as React.CSSProperties;
+  const boxOnBody = styleTarget(withHeader, formatted) === "body";
+  const paddingOnBody = paddingTarget(withHeader, formatted) === "body";
+  const toggle = collapsible ? (
+    <button
+      type="button"
+      className="canvas-section-toggle"
+      data-testid={`section-toggle-${nodeId}`}
+      aria-expanded={!shut}
+      onClick={() =>
+        setCollapsed(nodeId, {
+          collapsed: !shut,
+          // The same bookkeeping p.82's events do: remember what the
+          // backing variable said, so a later change to it takes over
+          // again rather than being outvoted forever by one click.
+          against: collapsedWhen ? asCollapsed(backing) : null,
+        })
+      }
+    >
+      <span aria-hidden="true">{shut ? "▸" : "▾"}</span> {title || "Section"}
+    </button>
+  ) : null;
+
   if (hidden) return null;
   return (
     <div
       ref={(ref) => connectDragDrop(ref, connect, drag)}
-      className={`canvas-section canvas-section--${direction}`}
+      className={`canvas-section canvas-section--${direction}${
+        withHeader ? ` canvas-section--header-${formatted}` : ""}`}
       // p.59-60: "widgets within that section automatically switch between
       // light and dark mode based on the brightness of the background".
       data-scheme={schemeFor({ background }, saved)}
-      style={styleFor({ background, padding, customPadding, border }, saved)}
+      style={{
+        ...(boxOnBody ? {} : boxStyle),
+        ...(paddingOnBody ? {} : { padding: boxPadding }),
+      }}
       data-drop-zone={dropZone ? (dragOver ? "over" : "ready") : undefined}
       data-testid={dropZone ? `drop-zone-${nodeId}` : undefined}
       {...dropHandlers}
@@ -14226,25 +14275,27 @@ export function CanvasSection({
           That drag did not carry objects this zone can take.
         </p>
       )}
-      {collapsible && (
-        <button
-          type="button"
-          className="canvas-section-toggle"
-          data-testid={`section-toggle-${nodeId}`}
-          aria-expanded={!shut}
-          onClick={() =>
-            setCollapsed(nodeId, {
-              collapsed: !shut,
-              // The same bookkeeping p.82's events do: remember what the
-              // backing variable said, so a later change to it takes over
-              // again rather than being outvoted forever by one click.
-              against: collapsedWhen ? asCollapsed(backing) : null,
-            })
-          }
+      {withHeader ? (
+        <div
+          className={`canvas-section-header canvas-section-header--${formatted}`}
+          data-testid={`section-header-${nodeId}`}
         >
-          <span aria-hidden="true">{shut ? "▸" : "▾"}</span> {title || "Section"}
-        </button>
-      )}
+          {headerIcon.trim() && (
+            <span className="canvas-section-header-icon" aria-hidden="true">
+              {headerIcon.trim().slice(0, 2)}
+            </span>
+          )}
+          <div className="canvas-section-header-text">
+            {/* p.28: section headers are "the second largest text", under the
+                page header - so a heading, and the collapse control is that
+                heading when the section collapses. */}
+            {toggle ?? <h3 className="canvas-section-title">{title || "Section"}</h3>}
+            {description.trim() && (
+              <p className="canvas-section-description">{description}</p>
+            )}
+          </div>
+        </div>
+      ) : toggle}
       {tabbed && labels.length > 0 && (
         // `tablist`/`tab`/`tabpanel` rather than a row of buttons: the roles
         // are what make arrow keys, "tab 2 of 3" and the panel association
@@ -14303,6 +14354,8 @@ export function CanvasSection({
         // somebody opens it - and a widget that was mid-edit is still there.
         hidden={shut}
         style={{
+          ...(boxOnBody ? boxStyle : {}),
+          ...(paddingOnBody ? { padding: boxPadding } : {}),
           gap,
           ...(direction === "rows" && minHeight > 0 ? { minHeight } : {}),
           ...(direction === "rows" && scroll ? { overflowY: "auto" } : {}),
@@ -14397,8 +14450,16 @@ function SectionSettings() {
     dropLabel,
     dropIcon,
     dropVariable,
+    showHeader,
+    headerIcon,
+    description,
+    headerStyle,
     actions: { setProp },
   } = useNode((node) => ({
+    showHeader: node.data.props.showHeader,
+    headerIcon: node.data.props.headerIcon,
+    description: node.data.props.description,
+    headerStyle: node.data.props.headerStyle,
     dropHandling: node.data.props.dropHandling,
     dropLabel: node.data.props.dropLabel,
     dropIcon: node.data.props.dropIcon,
@@ -14544,6 +14605,18 @@ function SectionSettings() {
             *between* children, padding is the space around all of them. */}
         <span className="field-hint">Between its widgets, not around them</span>
       </label>
+      {/* p.13's Section Header (§473), before Collapsible because p.13
+          toggles them in that order and a collapsible section's control is
+          its header. */}
+      <label className="vars-toggle field">
+        <input
+          type="checkbox"
+          checked={showHeader === true}
+          data-testid="section-show-header"
+          onChange={(e) => setProp((p: { showHeader: boolean }) => (p.showHeader = e.target.checked))}
+        />
+        Section header
+      </label>
       {/* p.55's collapsible sections. Its own block rather than folded into
           the style fields: collapsing is behaviour, and p.82 gives it three
           events - none of which the style block has. */}
@@ -14556,21 +14629,58 @@ function SectionSettings() {
         />
         Collapsible
       </label>
-      {collapsible && (
+      {(collapsible || showHeader === true) && (
+        <label className="field">
+          <span className="field-label">Header</span>
+          <input
+            value={title ?? ""}
+            placeholder="Section"
+            data-testid="section-title"
+            onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+          />
+          <span className="field-hint">
+            A section that collapses to a bare chevron is one nobody can
+            identify once it is shut
+          </span>
+        </label>
+      )}
+      {showHeader === true && (
         <>
           <label className="field">
-            <span className="field-label">Header</span>
+            <span className="field-label">Header icon</span>
             <input
-              value={title ?? ""}
-              placeholder="Section"
-              data-testid="section-title"
-              onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+              value={headerIcon ?? ""}
+              maxLength={2}
+              placeholder="◎"
+              data-testid="section-header-icon"
+              onChange={(e) => setProp((p: { headerIcon: string }) => (p.headerIcon = e.target.value))}
             />
-            <span className="field-hint">
-              A section that collapses to a bare chevron is one nobody can
-              identify once it is shut
-            </span>
           </label>
+          <label className="field">
+            <span className="field-label">Description</span>
+            <input
+              value={description ?? ""}
+              data-testid="section-description"
+              onChange={(e) => setProp((p: { description: string }) => (p.description = e.target.value))}
+            />
+            <span className="field-hint">A subheading under the title (p.28)</span>
+          </label>
+          <label className="field">
+            <span className="field-label">Header format</span>
+            <select
+              value={headerStyleOf(headerStyle)}
+              data-testid="section-header-style"
+              onChange={(e) => setProp((p: { headerStyle: string }) => (p.headerStyle = e.target.value))}
+            >
+              {Object.entries(HEADER_STYLES).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+          </label>
+        </>
+      )}
+      {collapsible && (
+        <>
           <label className="vars-toggle field">
             <input
               type="checkbox"
@@ -14682,6 +14792,7 @@ CanvasSection.craft = {
     collapsible: false, collapsedByDefault: false, collapsedWhen: null, title: "",
     tabs: "", tabVariable: null,
     dropHandling: false, dropLabel: "", dropIcon: "", dropVariable: null,
+    showHeader: false, headerIcon: "", description: "", headerStyle: "block",
   },
   isCanvas: true,
   related: { settings: SectionSettings },
