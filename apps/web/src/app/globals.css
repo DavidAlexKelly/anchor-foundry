@@ -23,6 +23,13 @@
   --brass-wash: #f3ede1;
   --danger: #8c2f22;
   --danger-wash: #f6e9e6;
+  --danger-deep: #6a2319;
+  /* p.486's success and warning intents (§461). Dark enough to carry white
+     button text at body size. */
+  --success: #2f6b43;
+  --success-deep: #214d30;
+  --warning: #8f5b0e;
+  --warning-deep: #6b440a;
 
   --font-display: "Archivo", sans-serif;
   --font-body: "Public Sans", sans-serif;
@@ -2473,6 +2480,46 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-confirm p { margin: 0 0 8px; }
 
 .canvas-button-wrap { display: inline-flex; align-items: center; gap: 6px; }
+/* p.486's "Fill available horizontal space in row and column layouts". */
+.canvas-button-wrap--fill { display: flex; width: 100%; }
+
+/* ---- p.486's button colours and styles (§461) ----------------------------- */
+/* Each intent sets a colour and its hover shade; the rules below paint from
+   them. Hover and disabled are restated here because `.btn:hover` and
+   `.btn:disabled` paint the accent, and a disabled danger button turned teal. */
+.btn.btn-intent-primary { --btn: var(--accent); --btn-deep: var(--accent-deep); }
+.btn.btn-intent-success { --btn: var(--success); --btn-deep: var(--success-deep); }
+.btn.btn-intent-warning { --btn: var(--warning); --btn-deep: var(--warning-deep); }
+.btn.btn-intent-danger { --btn: var(--danger); --btn-deep: var(--danger-deep); }
+.btn.btn-intent-primary, .btn.btn-intent-success, .btn.btn-intent-warning, .btn.btn-intent-danger,
+.btn.btn-intent-primary:disabled, .btn.btn-intent-success:disabled,
+.btn.btn-intent-warning:disabled, .btn.btn-intent-danger:disabled {
+  background: var(--btn); border: 1px solid var(--btn); color: #fff;
+}
+.btn.btn-intent-primary:hover:not(:disabled), .btn.btn-intent-success:hover:not(:disabled),
+.btn.btn-intent-warning:hover:not(:disabled), .btn.btn-intent-danger:hover:not(:disabled) {
+  background: var(--btn-deep); border-color: var(--btn-deep);
+}
+/* `none`: p.486's first intent, and the one with no colour to fill. */
+.btn.btn-intent-none, .btn.btn-intent-none:disabled {
+  background: transparent; border: 1px solid var(--line-strong); color: var(--ink);
+}
+.btn.btn-intent-none:hover:not(:disabled) { background: var(--accent-wash); }
+/* A custom colour arrives as an inline style, so hover darkens it rather than
+   replacing it with a colour nobody chose. */
+.btn.btn-intent-custom { border: 1px solid transparent; }
+.btn.btn-intent-custom:hover:not(:disabled) { filter: brightness(0.9); }
+/* Minimal: "removes the border … the background color and text color … will
+   be reversed" (p.486). */
+.btn.btn-minimal, .btn.btn-minimal:disabled {
+  background: transparent; border-color: transparent; color: var(--btn, var(--ink));
+}
+.btn.btn-minimal:hover:not(:disabled) { background: var(--accent-wash); border-color: transparent; }
+.btn.btn-tag { padding: 2px 10px; font-size: 12px; border-radius: 999px; }
+.btn.btn-large { padding: 11px 20px; font-size: 15px; }
+.btn.btn-fill { width: 100%; }
+.btn .btn-icon--left { margin-right: 6px; }
+.btn .btn-icon--right { margin-left: 6px; }
 .canvas-button-wrap .canvas-widget-empty { margin: 0; }
 
 /* ---- sections (ROADMAP phase 2, 1.4) -------------------------------------- */

@@ -204,6 +204,7 @@ import {
   sourceOf as mediaSourceOf,
 } from "./media";
 import { frameRefusal, frameTitle, safeFrameUrl, youtubeEmbedUrl } from "./frame";
+import { buttonLook, customColourOf, intentOf } from "./button-look";
 import {
   MAX_DRAGGED_OBJECTS, OBJECT_MEDIA_TYPE, OBJECT_SET_MEDIA_TYPE, carriesPayload, collectKeys,
   droppedClauses, objectPayload, objectSetPayload,
@@ -14855,7 +14856,35 @@ export function CanvasButton({
   icon = "",
   style = "primary",
   enabledVariable = null,
+  intent = null,
+  customColour = null,
+  leftIcon = "",
+  rightIcon = "",
+  description = "",
+  hideWhenFalse = false,
+  minimal = false,
+  tag = false,
+  large = false,
+  fill = false,
 }: {
+  /** p.486's Button color: an intent, or `custom` with `customColour`. Unset
+   * on a button saved before §461, which `button-look.ts` reads from `style`. */
+  intent?: string | null;
+  customColour?: string | null;
+  /** p.486's Left icon and Right icon, as typed glyphs: this platform has no
+   * icon set, the same divergence as `icon` below. */
+  leftIcon?: string;
+  rightIcon?: string;
+  /** p.486's Description: "a tooltip when hovering over the button". */
+  description?: string;
+  /** p.486's "State if false": hidden rather than disabled while the
+   * variable is false. */
+  hideWhenFalse?: boolean;
+  /** p.486's Display & formatting. */
+  minimal?: boolean;
+  tag?: boolean;
+  large?: boolean;
+  fill?: boolean;
   label?: string;
   /** Shown instead of the label in a collapsed header (p.49). One or two
    * characters - an emoji, an initial. **Foundry offers an icon library and we
@@ -14882,25 +14911,47 @@ export function CanvasButton({
   // Only an explicitly falsy value disables. `undefined` is "not resolved
   // yet", which must not read as "not allowed" - a button that is dead until
   // the first resolve lands is a button people click twice.
-  const disabled =
-    mode === "edit" || (!!enabledVariable && gate !== undefined && !gate);
+  const gateFalse = !!enabledVariable && gate !== undefined && !gate;
+  const disabled = mode === "edit" || gateFalse;
+  const look = buttonLook({ intent, style, customColour, minimal, tag, large, fill });
+  const text = interpolate(label ?? "", resolved);
+
+  // p.486's "State if false: … disabled or hidden". Hidden only for a reader:
+  // a builder who could not see the button could not select it to change the
+  // setting back.
+  if (hideWhenFalse && gateFalse && mode === "run") return null;
 
   return (
-    <span ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-button-wrap">
+    <span
+      ref={(ref) => connectDragDrop(ref, connect, drag)}
+      className={`canvas-button-wrap${fill ? " canvas-button-wrap--fill" : ""}`}
+    >
       <button
         type="button"
-        className={`btn${style === "primary" ? "" : ` ${style}`}${collapsed ? " btn-collapsed" : ""}`}
+        className={`${look.className}${collapsed ? " btn-collapsed" : ""}`}
+        style={look.style}
         disabled={disabled}
-        // The label becomes the accessible name when the text is dropped, so a
-        // collapsed header is still navigable by anything that is not eyes.
-        title={collapsed ? interpolate(label ?? "", resolved) : undefined}
-        aria-label={collapsed ? interpolate(label ?? "", resolved) : undefined}
+        // p.486's Description is the tooltip. The label becomes the accessible
+        // name when the text is dropped, so a collapsed header is still
+        // navigable by anything that is not eyes.
+        title={description.trim() || (collapsed ? text : undefined)}
+        aria-label={collapsed ? text : undefined}
         onClick={() => {
           if (mode === "edit") return;
           if (wired.length > 0) runEvents(wired, eventContext);
         }}
       >
-        {collapsed ? glyphFor(icon, label) : interpolate(label ?? "", resolved)}
+        {collapsed ? glyphFor(icon || leftIcon, label) : (
+          <>
+            {leftIcon.trim() && (
+              <span className="btn-icon btn-icon--left" aria-hidden="true">{leftIcon.trim()}</span>
+            )}
+            {text}
+            {rightIcon.trim() && (
+              <span className="btn-icon btn-icon--right" aria-hidden="true">{rightIcon.trim()}</span>
+            )}
+          </>
+        )}
       </button>
       {mode === "edit" && !collapsed && wired.length === 0 && (
         <span className="canvas-widget-empty"> nothing wired to this click yet</span>
@@ -14915,13 +14966,48 @@ function ButtonSettings() {
     icon,
     style,
     enabledVariable,
+    intent,
+    customColour,
+    leftIcon,
+    rightIcon,
+    description,
+    hideWhenFalse,
+    minimal,
+    tag,
+    large,
+    fill,
     actions: { setProp },
   } = useNode((node) => ({
     label: node.data.props.label,
     icon: node.data.props.icon,
     style: node.data.props.style,
     enabledVariable: node.data.props.enabledVariable,
+    intent: node.data.props.intent,
+    customColour: node.data.props.customColour,
+    leftIcon: node.data.props.leftIcon,
+    rightIcon: node.data.props.rightIcon,
+    description: node.data.props.description,
+    hideWhenFalse: node.data.props.hideWhenFalse,
+    minimal: node.data.props.minimal,
+    tag: node.data.props.tag,
+    large: node.data.props.large,
+    fill: node.data.props.fill,
   }));
+  // What the button is showing now, including a pre-§461 button's `style`.
+  const shownIntent = intentOf({ intent, style, customColour });
+  const toggle = (key: "minimal" | "tag" | "large" | "fill", label: string, hint: string) => (
+    <label className="field canvas-toggle">
+      <input
+        type="checkbox"
+        checked={!!({ minimal, tag, large, fill }[key])}
+        data-testid={`button-${key}`}
+        onChange={(e) =>
+          setProp((p: Record<string, unknown>) => (p[key] = e.target.checked))}
+      />
+      <span className="field-label">{label}</span>
+      <span className="field-hint">{hint}</span>
+    </label>
+  );
   const { declared } = useCanvasVariables();
   // p.65 in full: the tab configures "the input and output variables of a
   // widget … **as well as** any additional configuration and display options".
@@ -14954,6 +15040,24 @@ function ButtonSettings() {
           The button is greyed out while this variable is empty or false
         </span>
       </label>
+      {/* p.486's "State if false", which only means something once there is
+          a variable to be false. */}
+      {enabledVariable && (
+        <label className="field">
+          <span className="field-label">When false</span>
+          <select
+            value={hideWhenFalse ? "hidden" : "disabled"}
+            data-testid="button-state-if-false"
+            onChange={(e) =>
+              setProp((p: { hideWhenFalse: boolean }) =>
+                (p.hideWhenFalse = e.target.value === "hidden"))}
+          >
+            <option value="disabled">Disabled</option>
+            <option value="hidden">Hidden</option>
+          </select>
+          <span className="field-hint">Hidden applies to readers; the builder always shows it</span>
+        </label>
+      )}
       </>}
       configuration={<>
       <label className="field">
@@ -14979,16 +15083,73 @@ function ButtonSettings() {
         </span>
       </label>
       <label className="field">
-        <span className="field-label">Style</span>
+        <span className="field-label">Left icon</span>
+        <input
+          value={leftIcon ?? ""}
+          maxLength={2}
+          data-testid="button-left-icon"
+          onChange={(e) => setProp((p: { leftIcon: string }) => (p.leftIcon = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Right icon</span>
+        <input
+          value={rightIcon ?? ""}
+          maxLength={2}
+          data-testid="button-right-icon"
+          onChange={(e) => setProp((p: { rightIcon: string }) => (p.rightIcon = e.target.value))}
+        />
+        <span className="field-hint">A character or emoji either side of the label</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Description</span>
+        <input
+          value={description ?? ""}
+          data-testid="button-description"
+          onChange={(e) =>
+            setProp((p: { description: string }) => (p.description = e.target.value))}
+        />
+        <span className="field-hint">Shown as a tooltip when a reader hovers the button</span>
+      </label>
+      {/* p.486's Button color: five intents, or a custom colour. */}
+      <label className="field">
+        <span className="field-label">Colour</span>
         <select
-          value={style ?? "primary"}
-          onChange={(e) => setProp((p: { style: string }) => (p.style = e.target.value))}
+          value={intent === "custom" ? "custom" : shownIntent}
+          data-testid="button-intent"
+          onChange={(e) =>
+            setProp((p: { intent: string }) => (p.intent = e.target.value))}
         >
+          <option value="none">None</option>
           <option value="primary">Primary</option>
-          <option value="quiet">Quiet</option>
+          <option value="success">Success</option>
+          <option value="warning">Warning</option>
           <option value="danger">Danger</option>
+          <option value="custom">Custom</option>
         </select>
       </label>
+      {intent === "custom" && (
+        <label className="field">
+          <span className="field-label">Custom colour</span>
+          <input
+            value={customColour ?? ""}
+            placeholder="#14646e"
+            data-testid="button-custom-colour"
+            onChange={(e) =>
+              setProp((p: { customColour: string | null }) =>
+                (p.customColour = e.target.value || null))}
+          />
+          <span className="field-hint">
+            {customColour && !customColourOf(customColour)
+              ? "Not a colour yet: use #rgb or #rrggbb"
+              : "A hex colour, #rgb or #rrggbb"}
+          </span>
+        </label>
+      )}
+      {toggle("minimal", "Minimal style", "No border; the colour moves to the text")}
+      {toggle("tag", "Tag style", "A narrower, rounded button")}
+      {toggle("large", "Large style", "A bigger button")}
+      {toggle("fill", "Fill available space", "As wide as the section it is in")}
       </>}
     />
   );
@@ -14996,7 +15157,14 @@ function ButtonSettings() {
 
 CanvasButton.craft = {
   displayName: "Button",
-  props: { label: "Button", icon: "", style: "primary", enabledVariable: null },
+  props: {
+    label: "Button", icon: "", style: "primary", enabledVariable: null,
+    // `intent` is null, not "primary": Craft fills a saved node's missing
+    // props from these, so a default here would override the `style` of every
+    // button saved before §461 - an old danger button turned primary.
+    intent: null, customColour: null, leftIcon: "", rightIcon: "", description: "",
+    hideWhenFalse: false, minimal: false, tag: false, large: false, fill: false,
+  },
   related: { settings: ButtonSettings },
 };
 
