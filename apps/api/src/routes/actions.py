@@ -32,6 +32,7 @@ from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import action_metrics
 from ..services import action_revert
+from ..services import object_edits
 from ..services import action_choices as choices_service
 from ..services import action_filters as filters_service
 from ..services import action_search_arounds as search_arounds_service
@@ -1536,6 +1537,17 @@ async def undo_action(
             search_prefix=prefix, object_type_id=object_type_id,
             instance_id=str(run["instance_id"]),
         ) or instance
+        if ok:
+            # An undo is an edit like any other in p.402's trail - "even if
+            # the corresponding ontology edits are reverted" the record of the
+            # edit stays, and this is the record of the revert beside it.
+            await object_edits.record(
+                conn, workspace_id=access.workspace_id, object_type_id=object_type_id,
+                primary_key=str(instance["primary_key"]), action_run_id=undo_run_id,
+                edited_by=access.auth.user_id,
+                before=_parse_json(instance["properties"]),
+                after=_parse_json(restored["properties"]),
+            )
         await audit.record(
             conn,
             organisation_id=access.auth.organisation_id,
@@ -2274,6 +2286,8 @@ async def execute_action(
                     "source": named_source,
                     "primary_key": str(named["primary_key"]),
                     "mappings": named_mappings,
+                    # What it was, for p.402's edit history (§470).
+                    "before": _parse_json(named["properties"]),
                 }
 
             # p.60's Object type parameter, resolved (§453). **Here, after
@@ -2359,6 +2373,7 @@ async def execute_action(
                         "object_type_id": str(object_type_id),
                         "source": dict(source),
                         "primary_key": str(instance["primary_key"]),
+                        "before": _parse_json(instance["properties"]),
                     })
                     continue
                 named = await instance_store.store_for(conn).get_instance(
@@ -2379,6 +2394,7 @@ async def execute_action(
                     "source": named_source,
                     "primary_key": str(named["primary_key"]),
                     "instance_id": deletion["instance_id"],
+                    "before": _parse_json(named["properties"]),
                 })
                 sources_by_type.setdefault(deletion["object_type_id"], named_source)
 
@@ -2783,6 +2799,40 @@ async def execute_action(
                         other_modifications=len(modifications),
                     ),
                 )
+                # p.402's edit history (§470): every object this run changed,
+                # after the write succeeded. The recorder skips a type whose
+                # tracking is off, so this costs one read per object otherwise.
+                edits = object_edits.EditRecorder(
+                    conn, workspace_id=access.workspace_id, action_run_id=run_id,
+                    edited_by=access.auth.user_id,
+                )
+                # A deleted subject needs no guard here: `updated_instance`
+                # falls back to `instance` when the object is gone, so the
+                # diff is empty and the removal below is its only record. (A
+                # guard for it survived the mutation sweep as equivalent.)
+                await edits.record(
+                    object_type_id, str(instance["primary_key"]),
+                    _parse_json(instance["properties"]),
+                    _parse_json(updated_instance["properties"]),
+                )
+                for modification in modifications:
+                    row = modification_rows[
+                        (modification["object_type_id"], modification["instance_id"])
+                    ]
+                    await edits.record(
+                        UUID(modification["object_type_id"]), row["primary_key"],
+                        row["before"], {**row["before"], **modification["properties"]},
+                    )
+                for creation in creations:
+                    await edits.record(
+                        UUID(creation["object_type_id"]), str(creation["primary_key"]),
+                        None, creation["properties"],
+                    )
+                for removal in removals:
+                    await edits.record(
+                        UUID(removal["object_type_id"]), removal["primary_key"],
+                        removal["before"], None,
+                    )
             await audit.record(
                 conn,
                 organisation_id=access.auth.organisation_id,
@@ -3064,6 +3114,7 @@ async def execute_batch(
                 "primary_key": str(instance["primary_key"]),
                 "source": source,
                 "values": values,
+                "before": stored,
                 # Edit-only properties have no column by definition (p.113), so
                 # they reach the instance store below and nothing else.
                 "column_updates": {
@@ -3173,6 +3224,16 @@ async def execute_batch(
                 dataset_version=dataset_versions.get(str(row["source"]["dataset_id"])),
                 error=error,
             )
+            if ok:
+                # p.402's trail, per object and per run: a batch is many
+                # edits submitted at once, and each object's history shows
+                # its own.
+                await object_edits.record(
+                    conn, workspace_id=access.workspace_id, object_type_id=object_type_id,
+                    primary_key=row["primary_key"], action_run_id=row["run_id"],
+                    edited_by=access.auth.user_id,
+                    before=row["before"], after={**row["before"], **row["values"]},
+                )
         # **One write for the submission, not one per row** (§324;
         # `ontology-manager` p.32: "Many objects edited in bulk at once will
         # only be recorded as a single write"). This route recorded *none*

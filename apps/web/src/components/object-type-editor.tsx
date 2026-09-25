@@ -779,6 +779,16 @@ export function EditObjectTypeDialog({
     queryFn: () => objApi.listObjectTypeGroups(workspaceId),
   });
 
+  // p.402's "Track user edit history" (§470). Its own resource and its own
+  // write, as the groups are, and for their reason: sent only when changed.
+  const editHistory = useQuery({
+    queryKey: ["object-type-edit-history", workspaceId, type.id],
+    queryFn: () => objApi.editHistorySetting(workspaceId, type.id),
+  });
+  const [tracking, setTracking] = useState<boolean | null>(null);
+  const originalTracking = !!editHistory.data?.since;
+  const tracked = tracking ?? originalTracking;
+
   const named = properties.filter((p) => p.api_name.trim());
   const body = {
     display_name: displayName,
@@ -822,6 +832,9 @@ export function EditObjectTypeDialog({
       if (!sameSelection(selectedGroupIds, originalGroupIds)) {
         await objApi.setGroupsForObjectType(workspaceId, type.id, selectedGroupIds);
       }
+      if (editHistory.data && tracked !== originalTracking) {
+        await objApi.setEditHistory(workspaceId, type.id, tracked);
+      }
       return updated;
     },
     onSuccess: async () => {
@@ -837,6 +850,9 @@ export function EditObjectTypeDialog({
       await queryClient.invalidateQueries({ queryKey: ["object-sources", workspaceId] });
       await queryClient.invalidateQueries({
         queryKey: ["object-type-versions", workspaceId, type.id],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["object-type-edit-history", workspaceId, type.id],
       });
       onClose();
     },
@@ -939,6 +955,23 @@ export function EditObjectTypeDialog({
             </div>
           </Field>
         )}
+        <Field
+          label="Edit history"
+          hint={originalTracking && editHistory.data?.since
+            ? `Tracked since ${new Date(editHistory.data.since).toLocaleString()}`
+            : "Edits made before this is switched on are not recorded"}
+        >
+          <label style={{ display: "block", padding: "3px 0" }}>
+            <input
+              type="checkbox"
+              data-testid="type-track-edit-history"
+              disabled={!editHistory.data}
+              checked={tracked}
+              onChange={(e) => setTracking(e.target.checked)}
+            />{" "}
+            Track user edit history
+          </label>
+        </Field>
         <Field label="Properties" hint="Renaming a property removes it and adds a new one">
           <PropertyRows
             properties={properties}

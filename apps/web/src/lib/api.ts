@@ -1336,6 +1336,29 @@ export const objects = {
       method: "POST",
       body: JSON.stringify({ object_type_ids: objectTypeIds }),
     }),
+  /** p.402's "Track user edit history" (§470): when it was switched on, or
+   * null when it is off. */
+  editHistorySetting: (wid: string, typeId: string) =>
+    request<{ since: string | null }>(`/workspaces/${wid}/object-types/${typeId}/edit-history`),
+  setEditHistory: (wid: string, typeId: string, enabled: boolean) =>
+    request<{ since: string | null }>(`/workspaces/${wid}/object-types/${typeId}/edit-history`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+  /** One object's edits, for p.402's Edit History widget (§470, §471). */
+  objectEdits: (
+    wid: string,
+    body: { object_type_id: string; primary_key: string; order?: string; properties?: string[] | null },
+  ) =>
+    request<{
+      edits: {
+        id: string; kind: "modify" | "create" | "delete"; property: string | null;
+        before: unknown; after: unknown; edited_at: string; edited_by: string | null;
+        editor: string; action_run_id: string | null;
+      }[];
+      truncated: boolean;
+      tracking_since: string | null;
+    }>(`/workspaces/${wid}/object-edits`, { method: "POST", body: JSON.stringify(body) }),
   /** One number over a whole set — what a Metric Card shows. Separate from
    * `evaluateObjectSet` because a number over every row and a page of rows are
    * different questions with different costs. */
