@@ -7,7 +7,7 @@
 `workshop.md` has recorded that since §80 — a Button and a Page take one or
 two characters instead, an emoji or an initial. p.47's logo takes the same,
 with the colour p.47 names. The *behaviour* is faithful; the picker is not
-built, and p.47's **Image** half stays ○ because it needs an upload.
+built. p.47's **Image** half is `test_header_image.py` (§472).
 
 What needs a browser is the pair no unit test reaches: that the logo is drawn
 from the document at all, and p.49's rule applied to it — **the title goes

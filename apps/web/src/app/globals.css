@@ -2334,6 +2334,18 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 /* Sticky on a vertical header means "stay put beside a scrolling page", so it
    pins to the top of its own column rather than spanning the viewport. */
 .canvas-header--vertical.canvas-header--sticky { align-self: flex-start; }
+/* p.47's image positions (§472). Left and top are the logo's natural place,
+   before the title; right and bottom push it to the far end; center takes it
+   out of the flow so the title and the widgets keep their places either side. */
+.canvas-header { position: relative; }
+.canvas-header--sticky { position: sticky; }
+.canvas-header-logo img { display: block; object-fit: contain; }
+.canvas-header-logo--right { order: 99; margin-left: auto; }
+.canvas-header-logo--bottom { order: 99; margin-top: auto; }
+.canvas-header-logo--center {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  pointer-events: none;
+}
 .canvas-header--collapsed { padding: 12px 6px; align-items: center; }
 .canvas-header--collapsed .canvas-tabs { flex-direction: column; border-bottom: 0; gap: 4px; }
 .canvas-header-toggle {

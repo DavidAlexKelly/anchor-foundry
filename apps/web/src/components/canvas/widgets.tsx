@@ -287,6 +287,11 @@ import {
 } from "./filter-sql";
 import { Chart, PieChart, SegmentedBarChart, toPoints } from "./charts";
 import { SEGMENT_MODES, segmentModeOf, segmentedFrom } from "./chart-segments";
+import { useAttachmentUrl } from "./use-attachment-url";
+import {
+  DEFAULT_LOGO_HEIGHT, MAX_LOGO_HEIGHT, MIN_LOGO_HEIGHT, headerMark, imageRefOf, logoHeightOf,
+  logoPositionOf, logoPositionsFor, type ImageRef,
+} from "./header-logo";
 import {
   EDIT_ORDERS, chosenProperties as chosenEditProperties, editOrderOf, editSummary,
 } from "./edit-history";
@@ -7979,39 +7984,12 @@ export function CanvasMediaPreview({
     : undefined;
   const fromVariable = textVariable ? resolved[textVariable] : undefined;
 
-  // **An attachment is fetched, not pointed at, and that is not a style
-  // choice.** Cookie authentication here requires the `X-Anchor-Session`
-  // header - the CSRF defence that makes a cookie safe to accept at all - and
-  // an `<img src>` cannot set headers, so a plain URL in an element attribute
-  // is an unauthenticated request and a 401. A *media string* needs none of
-  // this: it points at somewhere else, or carries its own bytes.
+  // An attachment is fetched rather than pointed at (`useAttachmentUrl` says
+  // why). A *media string* needs none of this: it points at somewhere else, or
+  // carries its own bytes.
   const wanted = attachmentOf((subject?.properties ?? {})[property]);
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const key = mediaSourceOf(source) === "attachment" ? wanted?.key : undefined;
-  const contentType = wanted?.contentType ?? "";
-
-  useEffect(() => {
-    if (!key) {
-      setObjectUrl(null);
-      return;
-    }
-    let stale = false;
-    let created: string | null = null;
-    objApi
-      .attachmentBlob(workspaceId, key, contentType)
-      .then((blob) => {
-        if (stale) return;
-        created = URL.createObjectURL(blob);
-        setObjectUrl(created);
-      })
-      .catch(() => setObjectUrl(null));
-    return () => {
-      stale = true;
-      // Revoked on the way out, or every re-render of a table of these leaks a
-      // blob for the lifetime of the page.
-      if (created) URL.revokeObjectURL(created);
-    };
-  }, [workspaceId, key, contentType]);
+  const objectUrl = useAttachmentUrl(workspaceId, key, wanted?.contentType ?? "");
 
   const media = resolveMedia({
     source,
@@ -14737,6 +14715,10 @@ export function CanvasHeader({
   titleColour = null,
   icon = "",
   iconColour = null,
+  logoImage = null,
+  logoHeight = DEFAULT_LOGO_HEIGHT,
+  logoPosition = null,
+  collapsedImage = null,
   children,
 }: {
   title?: string;
@@ -14774,13 +14756,23 @@ export function CanvasHeader({
    * built, and an emoji or an initial is a mark somebody recognises where an
    * empty square is not.
    *
-   * p.47's **Image** half stays ○: it needs an upload, which attachments
-   * (§39) has a shape for and this does not. */
+   * p.47's **Image** half is `logoImage` (§472). */
   icon?: string;
   /** p.47: *"Choose an icon and an icon color."* Null is the theme's ink, for
    *  `titleColour`'s reason — a default written into every document stops
    *  following the theme the moment the theme changes. */
   iconColour?: string | null;
+  /** p.47's "Image: … upload one from your computer" (§472): an attachment
+   * reference, shown in place of the icon (`header-logo.ts`). */
+  logoImage?: ImageRef | null;
+  /** p.47's "Customize the image height", in pixels. */
+  logoHeight?: number;
+  /** p.47's "left, center, or right for horizontal headers; … top or bottom
+   * for vertical headers". Null is the first of those. */
+  logoPosition?: string | null;
+  /** p.48's "custom image for the collapsed state", shown only beside a
+   * header image, as p.49 says. */
+  collapsedImage?: ImageRef | null;
   children?: React.ReactNode;
 }) {
   const {
@@ -14798,6 +14790,15 @@ export function CanvasHeader({
   // had been collapsed and then switched would otherwise stay hidden with no
   // control left to undo it.
   const isCollapsed = vertical && collapsible && collapsed;
+  // p.47-49's logo: an image over an icon, and the collapsed image when
+  // collapsed (`header-logo.ts`).
+  const { workspaceId } = useCanvasEnv();
+  const mark = headerMark({ icon, image: logoImage, collapsedImage, collapsed: !!isCollapsed });
+  const logoUrl = useAttachmentUrl(
+    workspaceId, mark?.kind === "image" ? mark.image.key : null,
+    mark?.kind === "image" ? mark.image.content_type : "",
+  );
+  const position = logoPositionOf(logoPosition, orientation);
 
   // **p.49, and it is a rule rather than a style**: "When enabling collapsed
   // headers, the Button Group and Tabs widgets will also have collapsed states
@@ -14866,13 +14867,33 @@ export function CanvasHeader({
             inconsistency: p.49 drops *labels*, and a logo is a mark rather
             than a word — a collapsed header with nothing at the top of it is
             one nobody can tell from a blank rail. */}
-        {icon.trim() && (
+        {mark?.kind === "icon" && (
           <span
-            className="canvas-header-logo"
+            className={`canvas-header-logo canvas-header-logo--${position}`}
             data-testid="header-logo"
             style={{ color: resolveBackground(iconColour, saved) ?? undefined }}
           >
-            {icon.trim().slice(0, 2)}
+            {mark.text}
+          </span>
+        )}
+        {mark?.kind === "image" && (
+          <span
+            className={`canvas-header-logo canvas-header-logo--${position}`}
+            data-testid="header-logo-image"
+            data-position={position}
+          >
+            {logoUrl && (
+              <img
+                src={logoUrl}
+                alt={title.trim() ? `${interpolate(title, resolved)} logo` : "Logo"}
+                data-filename={mark.image.filename}
+                // Collapsed, the rail is 56px wide, so the image fits it
+                // rather than holding the height it has when open.
+                style={isCollapsed
+                  ? { maxWidth: 40, maxHeight: 40 }
+                  : { height: logoHeightOf(logoHeight), maxWidth: "100%" }}
+              />
+            )}
           </span>
         )}
         {/* The title goes with the text: p.49 drops labels in the collapsed
@@ -14888,6 +14909,59 @@ export function CanvasHeader({
         {visible}
       </header>
     </CanvasHeaderCollapsedContext.Provider>
+  );
+}
+
+/** p.47's "upload one from your computer", as an attachment (§39): the same
+ * upload an object's attachment property uses, so the header holds a storage
+ * key and the download route's permission check stands between it and the
+ * bytes. */
+function HeaderImageField({ label, testId, value, onChange }: {
+  label: string;
+  testId: string;
+  value: ImageRef | null;
+  onChange: (next: ImageRef | null) => void;
+}) {
+  const { workspaceId } = useCanvasEnv();
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="field">
+      <span className="field-label">{label}</span>
+      {value ? (
+        <div className="row-actions">
+          <span className="slug" data-testid={`${testId}-name`}>{value.filename || "image"}</span>
+          <button type="button" className="btn quiet" onClick={() => onChange(null)}>
+            Remove
+          </button>
+        </div>
+      ) : (
+        <input
+          type="file"
+          accept="image/*"
+          data-testid={testId}
+          disabled={busy}
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            setBusy(true);
+            setError(null);
+            try {
+              const uploaded = imageRefOf(await objApi.uploadAttachment(workspaceId, file));
+              // Checked on the way back as well as by `accept`, which a file
+              // dialog lets anybody override.
+              if (!uploaded) setError("That is not an image.");
+              else onChange(uploaded);
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : "Couldn't upload the image.");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      )}
+      {error && <span className="field-hint" role="alert">{error}</span>}
+    </div>
   );
 }
 
@@ -14910,8 +14984,13 @@ function HeaderSettings() {
   const {
     title, sticky, orientation, height, width, collapsible, collapsedByDefault,
     titleColour, allowFavourite, icon, iconColour,
+    logoImage, logoHeight, logoPosition, collapsedImage,
     actions: { setProp },
   } = useNode((node) => ({
+    logoImage: node.data.props.logoImage,
+    logoHeight: node.data.props.logoHeight,
+    logoPosition: node.data.props.logoPosition,
+    collapsedImage: node.data.props.collapsedImage,
     title: node.data.props.title,
     sticky: node.data.props.sticky,
     orientation: node.data.props.orientation,
@@ -14997,6 +15076,55 @@ function HeaderSettings() {
               setProp((p: { iconColour: string }) => (p.iconColour = e.target.value))}
           />
         </label>
+      )}
+      {/* p.47's Image, beside the icon it replaces. */}
+      <HeaderImageField
+        label="Logo image"
+        testId="header-logo-upload"
+        value={imageRefOf(logoImage)}
+        onChange={(next) => setProp((p: { logoImage: ImageRef | null }) => (p.logoImage = next))}
+      />
+      {imageRefOf(logoImage) && (
+        <>
+          <label className="field">
+            <span className="field-label">Image height (px)</span>
+            <input
+              type="number"
+              min={MIN_LOGO_HEIGHT}
+              max={MAX_LOGO_HEIGHT}
+              data-testid="header-logo-height"
+              value={logoHeightOf(logoHeight)}
+              onChange={(e) => setProp((p: { logoHeight: number }) =>
+                (p.logoHeight = logoHeightOf(e.target.value)))}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">Image position</span>
+            <select
+              data-testid="header-logo-position"
+              value={logoPositionOf(logoPosition, orientation)}
+              onChange={(e) => setProp((p: { logoPosition: string }) =>
+                (p.logoPosition = e.target.value))}
+            >
+              {logoPositionsFor(orientation).map((where) => (
+                <option key={where} value={where}>
+                  {where.charAt(0).toUpperCase() + where.slice(1)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {/* p.48's collapsed image, and p.49's condition on it: a header
+              image first. */}
+          {vertical && collapsible && (
+            <HeaderImageField
+              label="Collapsed image"
+              testId="header-collapsed-upload"
+              value={imageRefOf(collapsedImage)}
+              onChange={(next) => setProp((p: { collapsedImage: ImageRef | null }) =>
+                (p.collapsedImage = next))}
+            />
+          )}
+        </>
       )}
       {/* p.47: "Choose a custom color for the title text." Directly under the
           title it colours rather than in a style section further down: the two
@@ -15157,6 +15285,9 @@ CanvasHeader.craft = {
     // p.47's application logo (§445). Empty is no logo, which is what a
     // header has had until now.
     icon: "", iconColour: null,
+    // p.47's image half and p.48's collapsed image (§472). Null is none, and
+    // null position is the first for the orientation - the icon's old place.
+    logoImage: null, logoHeight: DEFAULT_LOGO_HEIGHT, logoPosition: null, collapsedImage: null,
     // p.47's favourite toggle. **Written into new documents as `true` and
     // read as "not false" everywhere else** (`module-header.ts`): a default
     // in `craft.props` reaches the document somebody is editing now and no
