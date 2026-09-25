@@ -26,6 +26,7 @@ properties. The rest are refused with a sentence rather than picked - see
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, TYPE_CHECKING
@@ -1129,3 +1130,88 @@ def _text(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+# p.449's **distribution chart** (§465): how many objects fall in each of a
+# few equal ranges of one numeric property, from the set's smallest value to
+# its largest. Bounded for MAX_GROUPS's reason - a chart of three hundred bars
+# is not a chart - and because each bucket is one count on the store.
+MAX_DISTRIBUTION_BUCKETS = 20
+DEFAULT_DISTRIBUTION_BUCKETS = 10
+
+
+@dataclass(frozen=True)
+class Bucket:
+    """`[low, high)`, or `[low, high]` when `closed` - which only the last
+    bucket of a `float` distribution is, so that the largest value lands in
+    one. An `integer` bucket never needs it: its `high` is the next integer
+    past the last one it holds."""
+
+    low: float
+    high: float
+    closed: bool = False
+
+
+def distributable_type(
+    prop: str, property_types: "Mapping[str, str] | None"
+) -> str:
+    """The declared type of a property a distribution may be drawn over.
+
+    **`AGGREGATABLE_TYPES`, for the reason that list exists**: the range comes
+    from `min` and `max`, and a date's `min` is a timestamp on one store and
+    epoch milliseconds on the other. A date is what p.449's timeline is for.
+    """
+    declared = (property_types or {}).get(prop)
+    if declared not in AGGREGATABLE_TYPES:
+        raise ValueError(
+            f"a distribution is drawn over a number, and {prop!r} is declared "
+            f"{declared or 'nothing'} - declare it integer or float, or use a histogram, "
+            "which counts each value rather than ranges of them"
+        )
+    return declared
+
+
+def distribution_buckets(
+    low: float, high: float, count: int, *, integer: bool
+) -> list[Bucket]:
+    """Equal ranges from `low` to `high`, **at most** `count` of them.
+
+    Integers get whole-number widths, `ceil(span / count)` - so a bar never
+    covers "3.4 to 6.8" of a count of people - and that can take fewer bars
+    than asked: 0 to 4 in ten buckets is five buckets of one, not ten of a half.
+
+    **Every bucket's `high` is the next one's `low`, the same number**, not
+    recomputed from `low + i * width` on each side: a float that rounds two
+    ways would leave a value between two buckets and count it in neither.
+    """
+    if count < 1:
+        raise ValueError("a distribution needs at least one bucket")
+    if high < low:
+        raise ValueError("a distribution's largest value is below its smallest")
+    if integer:
+        start, stop = math.floor(low), math.floor(high) + 1
+        width = max(1, math.ceil((stop - start) / count))
+        edges = list(range(start, stop, width)) + [stop]
+        return [Bucket(float(a), float(b)) for a, b in zip(edges, edges[1:])]
+    if high == low:
+        return [Bucket(low, high, closed=True)]
+    width = (high - low) / count
+    edges = [low + i * width for i in range(count)] + [high]
+    return [
+        Bucket(a, b, closed=(i == count - 1))
+        for i, (a, b) in enumerate(zip(edges, edges[1:]))
+    ]
+
+
+def bucket_filters(prop: str, data_type: str, bucket: Bucket) -> tuple[Filter, Filter]:
+    """The two ordered comparisons that are one bucket.
+
+    Built as filters and counted by each store's own `count`, rather than by a
+    histogram aggregation per store: these are §221's comparisons, which the
+    cross-store tests already hold the two stores to, so the bars agree across
+    stores without a second implementation of "which bucket is 40 in".
+    """
+    return (
+        Filter(prop, "gte", bucket.low, data_type),
+        Filter(prop, "lte" if bucket.closed else "lt", bucket.high, data_type),
+    )

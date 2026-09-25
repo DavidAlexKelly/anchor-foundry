@@ -4478,6 +4478,92 @@ async def group_object_set(
     )
 
 
+class ObjectSetDistributionIn(BaseModel):
+    definition: dict[str, Any]
+    property: str = Field(min_length=1, max_length=200)
+    buckets: int = Field(
+        default=object_sets.DEFAULT_DISTRIBUTION_BUCKETS,
+        ge=1, le=object_sets.MAX_DISTRIBUTION_BUCKETS,
+    )
+
+
+class ObjectSetDistributionBucket(BaseModel):
+    low: float
+    high: float
+    closed: bool
+    """Whether `high` is in the bucket: only the last bucket of a `float`
+    distribution, so the largest value lands somewhere."""
+    count: int
+
+
+class ObjectSetDistributionOut(BaseModel):
+    buckets: list[ObjectSetDistributionBucket]
+    integer: bool
+    """So a bar reads "1–25" rather than "1 to 26 exclusive"."""
+    total: int
+    missing: int
+    """Members with no number for the property, which are in no bar. Said
+    rather than left for a viewer to notice the bars do not add up."""
+
+
+@router.post("/object-sets/distribution", response_model=ObjectSetDistributionOut)
+async def distribution_object_set(
+    body: ObjectSetDistributionIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ObjectSetDistributionOut:
+    """How many members fall in each range of one number - p.449's
+    **distribution chart** (§465).
+
+    The range is the set's own smallest and largest value, so the bars cover
+    what is there. **Each bar is a count under two of §221's comparisons**
+    (`object_sets.bucket_filters`) rather than a histogram aggregation on each
+    store, which makes it `buckets + 3` counts - and makes "which bar is 40 in"
+    a question the cross-store tests already answer, instead of a second one.
+    """
+    type_id = object_sets.object_type_id_of(body.definition)
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        property_types = await _declared_types(conn, type_id)
+        try:
+            definition = object_sets.parse(body.definition, property_types=property_types)
+            data_type = object_sets.distributable_type(body.property, property_types)
+            smallest, largest = (
+                object_sets.parse_aggregation(name, body.property, property_types=property_types)
+                for name in ("min", "max")
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        shared = {"search_prefix": prefix, "object_type_id": definition.object_type_id}
+        low = await store.aggregate_object_set(
+            **shared, filters=definition.filters, aggregation=smallest)
+        high = await store.aggregate_object_set(
+            **shared, filters=definition.filters, aggregation=largest)
+        total = await store.aggregate_object_set(
+            **shared, filters=definition.filters, aggregation="count", property_name=None)
+        integer = data_type == "integer"
+        # No number anywhere in the set is no bars, not one bar of nothing.
+        buckets = [] if low is None or high is None else object_sets.distribution_buckets(
+            float(low), float(high), body.buckets, integer=integer)
+        counted = []
+        for bucket in buckets:
+            n = await store.aggregate_object_set(
+                **shared,
+                filters=(*definition.filters,
+                         *object_sets.bucket_filters(body.property, data_type, bucket)),
+                aggregation="count", property_name=None,
+            )
+            counted.append(ObjectSetDistributionBucket(
+                low=bucket.low, high=bucket.high, closed=bucket.closed, count=int(n or 0)))
+    return ObjectSetDistributionOut(
+        buckets=counted, integer=integer, total=int(total or 0),
+        missing=int(total or 0) - sum(b.count for b in counted),
+    )
+
+
 class ObjectSetCrossTabIn(BaseModel):
     definition: dict[str, Any]
     row_property: str = Field(min_length=1, max_length=200)

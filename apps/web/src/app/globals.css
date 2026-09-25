@@ -2434,6 +2434,26 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   color: var(--ink-soft); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px;
 }
 .canvas-filter-add { max-width: 320px; }
+/* p.449's distribution chart: a column per range, its height the range's
+   share of the fullest one. A chosen column is the accent. */
+.canvas-filter-distribution {
+  display: flex; align-items: flex-end; gap: 2px; height: 72px; max-width: 320px;
+  /* The baseline, so an empty range reads as a range with nothing in it. */
+  border-bottom: 1px solid var(--line-strong);
+}
+.canvas-filter-column {
+  flex: 1 1 0; min-width: 0; height: 100%; padding: 0; border: 0; background: none;
+  display: flex; align-items: flex-end; cursor: pointer;
+}
+.canvas-filter-column span {
+  display: block; width: 100%; background: var(--line-strong); border-radius: 2px 2px 0 0;
+}
+.canvas-filter-column:hover span { background: var(--ink-soft); }
+.canvas-filter-column[aria-pressed="true"] span { background: var(--accent); }
+.canvas-filter-axis {
+  display: flex; justify-content: space-between; max-width: 320px;
+  font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums;
+}
 /* p.449's Pills layout: a row of pills, each opening a popover. */
 .canvas-filter-pills { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; }
 .canvas-filter-pill-wrap { position: relative; }

@@ -1369,6 +1369,18 @@ export const objects = {
       method: "POST",
       body: JSON.stringify({ definition, property, ...opts }),
     }),
+  /** p.449's distribution chart (§465): how many members fall in each range
+   * of one number, from the set's smallest to its largest. */
+  distributionObjectSet: (wid: string, definition: unknown, property: string, buckets?: number) =>
+    request<{
+      buckets: { low: number; high: number; closed: boolean; count: number }[];
+      integer: boolean;
+      total: number;
+      missing: number;
+    }>(`/workspaces/${wid}/object-sets/distribution`, {
+      method: "POST",
+      body: JSON.stringify({ definition, property, ...(buckets ? { buckets } : {}) }),
+    }),
   /** Counts by two properties at once — what a Pivot Table shows.
    *
    * The axes are the same grouped counts `groupObjectSet` returns, so a row
