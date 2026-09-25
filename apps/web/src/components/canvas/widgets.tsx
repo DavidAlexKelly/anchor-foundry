@@ -206,6 +206,9 @@ import {
 import { frameRefusal, frameTitle, safeFrameUrl, youtubeEmbedUrl } from "./frame";
 import { buttonLook, customColourOf, intentOf } from "./button-look";
 import {
+  addItem, buttonTypeOf, duplicateItem, itemsOf, removeItem, renameItem,
+} from "./button-items";
+import {
   MAX_DRAGGED_OBJECTS, OBJECT_MEDIA_TYPE, OBJECT_SET_MEDIA_TYPE, carriesPayload, collectKeys,
   droppedClauses, objectPayload, objectSetPayload,
 } from "./drag-payload";
@@ -14866,7 +14869,15 @@ export function CanvasButton({
   tag = false,
   large = false,
   fill = false,
+  buttonType = "inline",
+  items = [],
 }: {
+  /** p.483's Button type: one button, a button that opens a menu of items, or
+   * a main button with a menu beside it (§462). */
+  buttonType?: string;
+  /** The items of a Menu or Two-part button, each firing its own click
+   * events - addressed by id, see `button-items.ts`. */
+  items?: unknown;
   /** p.486's Button color: an intent, or `custom` with `customColour`. Unset
    * on a button saved before §461, which `button-look.ts` reads from `style`. */
   intent?: string | null;
@@ -14915,11 +14926,121 @@ export function CanvasButton({
   const disabled = mode === "edit" || gateFalse;
   const look = buttonLook({ intent, style, customColour, minimal, tag, large, fill });
   const text = interpolate(label ?? "", resolved);
+  // p.483's Menu and Two-part types (§462). The menu's open state and its
+  // outside-click close are hooks, so they run before the hidden check below
+  // for the hook-order reason every widget here gives.
+  const kind = buttonTypeOf(buttonType);
+  const menuItems = kind === "inline" ? [] : itemsOf(items);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const wrapRef = React.useRef<HTMLSpanElement | null>(null);
+  React.useEffect(() => {
+    if (!menuOpen) return;
+    const away = (event: MouseEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenuOpen(false); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [menuOpen]);
+  const fireItem = (item: string) => {
+    setMenuOpen(false);
+    if (mode === "edit") return;
+    const itemEvents = eventsFor(moduleEvents, nodeId, "click", item);
+    if (itemEvents.length > 0) runEvents(itemEvents, eventContext);
+  };
+  const anyItemWired = menuItems.some((i) => eventsFor(moduleEvents, nodeId, "click", i.id).length > 0);
 
   // p.486's "State if false: … disabled or hidden". Hidden only for a reader:
   // a builder who could not see the button could not select it to change the
   // setting back.
   if (hideWhenFalse && gateFalse && mode === "run") return null;
+
+  const menu = menuOpen && (
+    <div className="canvas-button-menu" role="menu" aria-label={text}>
+      {menuItems.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          role="menuitem"
+          className="canvas-button-menu-item"
+          title={item.description?.trim() || undefined}
+          onClick={() => fireItem(item.id)}
+        >
+          {item.leftIcon?.trim() && (
+            <span className="btn-icon btn-icon--left" aria-hidden="true">{item.leftIcon.trim()}</span>
+          )}
+          {interpolate(item.label, resolved)}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (kind !== "inline" && !collapsed) {
+    // A Menu button *is* its toggle; a Two-part button is its main button with
+    // a toggle beside it (p.483).
+    const toggle = (
+      <button
+        type="button"
+        className={`${look.className}${kind === "twoPart" ? " btn-split-toggle" : ""}`}
+        style={look.style}
+        disabled={disabled || menuItems.length === 0}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        aria-label={kind === "twoPart" ? `More options for ${text}` : undefined}
+        title={kind === "menu" ? description.trim() || undefined : undefined}
+        onClick={() => setMenuOpen((open) => !open)}
+      >
+        {kind === "menu" && (
+          <>
+            {leftIcon.trim() && (
+              <span className="btn-icon btn-icon--left" aria-hidden="true">{leftIcon.trim()}</span>
+            )}
+            {text}{" "}
+          </>
+        )}
+        <span aria-hidden="true">▾</span>
+      </button>
+    );
+    return (
+      <span
+        ref={(ref) => { wrapRef.current = ref; connectDragDrop(ref, connect, drag); }}
+        className={`canvas-button-wrap canvas-button-wrap--menu${fill ? " canvas-button-wrap--fill" : ""}`}
+      >
+        {kind === "twoPart" ? (
+          <span className="btn-split">
+            <button
+              type="button"
+              className={`${look.className} btn-split-main`}
+              style={look.style}
+              disabled={disabled}
+              title={description.trim() || undefined}
+              onClick={() => {
+                if (mode === "edit") return;
+                if (wired.length > 0) runEvents(wired, eventContext);
+              }}
+            >
+              {leftIcon.trim() && (
+                <span className="btn-icon btn-icon--left" aria-hidden="true">{leftIcon.trim()}</span>
+              )}
+              {text}
+            </button>
+            {toggle}
+          </span>
+        ) : toggle}
+        {menu}
+        {mode === "edit" && menuItems.length === 0 && (
+          <span className="canvas-widget-empty"> add items in Settings</span>
+        )}
+        {mode === "edit" && menuItems.length > 0 && !anyItemWired && (
+          <span className="canvas-widget-empty"> no item is wired yet</span>
+        )}
+      </span>
+    );
+  }
 
   return (
     <span
@@ -14976,8 +15097,12 @@ function ButtonSettings() {
     tag,
     large,
     fill,
+    buttonType,
+    items,
     actions: { setProp },
   } = useNode((node) => ({
+    buttonType: node.data.props.buttonType,
+    items: node.data.props.items,
     label: node.data.props.label,
     icon: node.data.props.icon,
     style: node.data.props.style,
@@ -15060,6 +15185,76 @@ function ButtonSettings() {
       )}
       </>}
       configuration={<>
+      {/* p.483's three types, first because it decides what the rest mean. */}
+      <label className="field">
+        <span className="field-label">Button type</span>
+        <select
+          value={buttonTypeOf(buttonType)}
+          data-testid="button-type"
+          onChange={(e) =>
+            setProp((p: { buttonType: string; items: unknown }) => {
+              p.buttonType = e.target.value;
+              // A menu with nothing in it is a button that opens nothing, so
+              // the first switch to one starts it with an item to rename.
+              if (e.target.value !== "inline" && itemsOf(p.items).length === 0) {
+                p.items = addItem([]);
+              }
+            })}
+        >
+          <option value="inline">Inline: a single option</option>
+          <option value="menu">Menu: multiple options</option>
+          <option value="twoPart">Two-part: a main button and a menu</option>
+        </select>
+      </label>
+      {buttonTypeOf(buttonType) !== "inline" && (
+        <fieldset className="field" data-testid="button-items">
+          <legend className="field-label">Menu items</legend>
+          {itemsOf(items).map((item) => (
+            <div key={item.id} className="row-actions">
+              <input
+                value={item.label}
+                aria-label={`Label of ${item.label || item.id}`}
+                data-testid={`button-item-${item.id}`}
+                onChange={(e) =>
+                  setProp((p: { items: unknown }) =>
+                    (p.items = renameItem(itemsOf(p.items), item.id, e.target.value)))}
+              />
+              <button
+                type="button"
+                className="btn quiet"
+                aria-label={`Duplicate ${item.label || item.id}`}
+                onClick={() =>
+                  setProp((p: { items: unknown }) =>
+                    (p.items = duplicateItem(itemsOf(p.items), item.id)))}
+              >
+                ⧉
+              </button>
+              <button
+                type="button"
+                className="btn quiet"
+                aria-label={`Remove ${item.label || item.id}`}
+                onClick={() =>
+                  setProp((p: { items: unknown }) =>
+                    (p.items = removeItem(itemsOf(p.items), item.id)))}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="button-add-item"
+            onClick={() =>
+              setProp((p: { items: unknown }) => (p.items = addItem(itemsOf(p.items))))}
+          >
+            Add item
+          </button>
+          <span className="field-hint">
+            Each item fires its own events: wire them in the Events panel
+          </span>
+        </fieldset>
+      )}
       <label className="field">
         <span className="field-label">Label</span>
         <input
@@ -15164,6 +15359,7 @@ CanvasButton.craft = {
     // button saved before §461 - an old danger button turned primary.
     intent: null, customColour: null, leftIcon: "", rightIcon: "", description: "",
     hideWhenFalse: false, minimal: false, tag: false, large: false, fill: false,
+    buttonType: "inline", items: [],
   },
   related: { settings: ButtonSettings },
 };

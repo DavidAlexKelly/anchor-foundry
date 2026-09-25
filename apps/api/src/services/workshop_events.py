@@ -205,6 +205,10 @@ class Event:
     node: str
     on: str
     effects: tuple[Effect, ...] = ()
+    #: Which item of a Menu or Two-part button fires this (p.483; §462), or
+    #: None for the widget itself - a Two-part button's main button, or any
+    #: widget that has no items.
+    item: str | None = None
 
 
 def pages(layout: Any, *, widget: str = PAGE_WIDGET) -> list[str]:
@@ -255,6 +259,45 @@ def collapsible_sections(layout: Any) -> list[str]:
         if isinstance(props, dict) and props.get("collapsible"):
             found.append(node_id)
     return found
+
+
+#: The Button widget, and p.483's three types of it. `inline` is one button;
+#: `menu` is a button that opens a list of items; `twoPart` is "a primary button
+#: alongside an additional menu of options".
+BUTTON_WIDGET = "CanvasButton"
+BUTTON_TYPES = ("inline", "menu", "twoPart")
+
+
+def button_items(layout: Any) -> dict[str, tuple[str, list[str]]]:
+    """Every button with items: its type, and its items' ids (p.483; §462).
+
+    An event names an item by id rather than by label, for the reason a
+    variable is named by id: a label is what somebody renames. So this is what
+    an event's `item` is checked against - and what a deleted item's event is
+    refused by, as an event on a deleted widget is.
+    """
+    out: dict[str, tuple[str, list[str]]] = {}
+    if not isinstance(layout, dict):
+        return out
+    # Every node, not `pages()`'s walk: that reads ROOT's own children, which
+    # is right for pages and would miss every button inside a section.
+    for node_id, node in layout.items():
+        if not isinstance(node, dict):
+            continue
+        node_type = node.get("type")
+        name = node_type.get("resolvedName") if isinstance(node_type, dict) else node_type
+        props = node.get("props")
+        if name != BUTTON_WIDGET or not isinstance(props, dict):
+            continue
+        kind = props.get("buttonType") or "inline"
+        if kind not in ("menu", "twoPart"):
+            continue
+        items = props.get("items") if isinstance(props.get("items"), list) else []
+        out[node_id] = (
+            str(kind),
+            [str(i["id"]) for i in items if isinstance(i, dict) and i.get("id")],
+        )
+    return out
 
 
 def tab_sections(layout: Any) -> dict[str, list[str]]:
@@ -347,6 +390,7 @@ def parse(
     page_ids = set(pages(layout)) | set(overlays(layout))
     collapsible = set(collapsible_sections(layout))
     tabbed = tab_sections(layout)
+    menus = button_items(layout)
     declared = variables or {}
 
     events: dict[str, Event] = {}
@@ -376,6 +420,7 @@ def parse(
             raise EventError(
                 f"event {key!r} triggers on {on!r}; expected one of {', '.join(TRIGGERS)}"
             )
+        item = _parse_item(key, trigger, node, on, menus if nodes is not None else None)
 
         raw_effects = value.get("effects") or []
         if not isinstance(raw_effects, list):
@@ -386,8 +431,50 @@ def parse(
             _parse_effect(eid, e, declared, nodes, page_ids, actions, collapsible, tabbed)
             for e in raw_effects
         )
-        events[eid] = Event(id=eid, node=node, on=on, effects=effects)
+        events[eid] = Event(id=eid, node=node, on=on, effects=effects, item=item)
     return events
+
+
+def _parse_item(
+    key: str,
+    trigger: dict[str, Any],
+    node: str,
+    on: str,
+    menus: "dict[str, tuple[str, list[str]]] | None",
+) -> str | None:
+    """Which item of a button an event fires from (p.483; §462).
+
+    `menus` is None when there is no layout to check against, the same as
+    `nodes` above: the shape is still checked, the membership is not.
+    """
+    item = trigger.get("item")
+    if item is None:
+        # A Menu button's own click opens its menu; an event on it would be a
+        # wiring that never fires. A Two-part button's is its main button.
+        if menus is not None and on == "click" and menus.get(node, ("",))[0] == "menu":
+            raise EventError(
+                f"event {key!r} fires when {node!r} is clicked, but it is a Menu button - "
+                "clicking it opens the menu. Choose which of its items fires the event"
+            )
+        return None
+    if not isinstance(item, str) or not item:
+        raise EventError(f"event {key!r}: a trigger's item must name one of the button's items")
+    if on != "click":
+        raise EventError(f"event {key!r}: only a click comes from a button's item, not {on!r}")
+    if menus is not None:
+        entry = menus.get(node)
+        if entry is None:
+            raise EventError(
+                f"event {key!r} fires from item {item!r} of {node!r}, which has no items - "
+                "only a Menu or Two-part button does"
+            )
+        if item not in entry[1]:
+            # Named against the items that are there: the usual cause is an
+            # item deleted after the event was wired to it.
+            raise EventError(
+                f"event {key!r} fires from item {item!r}, which {node!r} does not have"
+            )
+    return item
 
 
 def _check_export(eid: str, config: dict[str, Any], declared: dict[str, Any]) -> None:

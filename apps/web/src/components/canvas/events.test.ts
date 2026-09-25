@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { run } from "./event-run";
+import { eventsFor, run } from "./event-run";
 import type { EventContext, WorkshopEventDef } from "./event-run";
 
 /** Running a widget's events (Foundry `workshop` p.80, p.85).
@@ -219,5 +219,28 @@ describe("export (p.489, §459)", () => {
     expect(exportObjects).toHaveBeenCalledWith(expect.objectContaining({
       variable: "v_s", definition: null,
     }));
+  });
+});
+
+describe("eventsFor, by item (p.483, §462)", () => {
+  const events = {
+    e_main: { id: "e_main", trigger: { node: "btn", on: "click" } },
+    e_csv: { id: "e_csv", trigger: { node: "btn", on: "click", item: "i_csv" } },
+    e_copy: { id: "e_copy", trigger: { node: "btn", on: "click", item: "i_copy" } },
+    e_null: { id: "e_null", trigger: { node: "btn", on: "click", item: null } },
+  };
+
+  it("finds an item's events and nobody else's", () => {
+    expect(eventsFor(events, "btn", "click", "i_csv").map((e) => e.id)).toEqual(["e_csv"]);
+  });
+
+  it("finds the widget's own events when no item is asked for", () => {
+    // Every caller written before items passes three arguments, and must see
+    // exactly what it saw before: the events with no item.
+    expect(eventsFor(events, "btn", "click").map((e) => e.id)).toEqual(["e_main", "e_null"]);
+  });
+
+  it("finds nothing for an item nobody wired", () => {
+    expect(eventsFor(events, "btn", "click", "i_other")).toEqual([]);
   });
 });

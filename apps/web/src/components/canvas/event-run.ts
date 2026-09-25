@@ -36,7 +36,8 @@ export interface WorkshopEffect {
 
 export interface WorkshopEventDef {
   id: string;
-  trigger: { node: string; on: string };
+  /** `item`: which item of a Menu or Two-part button fires it (p.483; §462). */
+  trigger: { node: string; on: string; item?: string | null };
   effects?: WorkshopEffect[];
 }
 
@@ -169,12 +170,17 @@ export function eventsFor(
   events: Record<string, WorkshopEventDef> | undefined,
   node: string,
   on: string,
+  /** Which item of a Menu or Two-part button (§462). Omitted means the widget
+   * itself, so every caller written before items matches exactly what it did:
+   * events with no item. */
+  item: string | null = null,
 ): WorkshopEventDef[] {
   if (!events) return [];
   return Object.keys(events)
     .sort()
     .map((id) => events[id]!)
-    .filter((e) => e.trigger?.node === node && e.trigger?.on === on);
+    .filter((e) => e.trigger?.node === node && e.trigger?.on === on
+      && (e.trigger?.item ?? null) === item);
 }
 
 const TOKEN = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;

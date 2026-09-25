@@ -2518,6 +2518,24 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .btn.btn-tag { padding: 2px 10px; font-size: 12px; border-radius: 999px; }
 .btn.btn-large { padding: 11px 20px; font-size: 15px; }
 .btn.btn-fill { width: 100%; }
+/* p.483's Menu and Two-part buttons (§462). */
+.canvas-button-wrap--menu { position: relative; }
+.btn-split { display: inline-flex; }
+.btn-split .btn-split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.btn-split .btn-split-toggle {
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.35); padding-inline: 9px;
+}
+.canvas-button-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; min-width: 180px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(22, 35, 47, 0.14); padding: 4px; display: grid;
+}
+.canvas-button-menu-item {
+  font: inherit; font-size: 13px; text-align: left; background: none; border: 0;
+  border-radius: 4px; padding: 7px 10px; color: var(--ink); cursor: pointer;
+}
+.canvas-button-menu-item:hover, .canvas-button-menu-item:focus-visible { background: var(--accent-wash); }
 .btn .btn-icon--left { margin-right: 6px; }
 .btn .btn-icon--right { margin-left: 6px; }
 .canvas-button-wrap .canvas-widget-empty { margin: 0; }

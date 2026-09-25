@@ -88,6 +88,7 @@ import type {
   WorkshopEvent,
   WorkshopVariable,
 } from "@/lib/types";
+import { buttonTypeOf, itemsOf } from "@/components/canvas/button-items";
 
 /** The Versions dialog (Foundry p.191-192).
  *
@@ -1284,7 +1285,15 @@ function CanvasBody({
         props.label || props.title || props.text || node.data.displayName || name,
       ).slice(0, 40);
       if (TRIGGER_WIDGETS.includes(name)) {
-        triggers.push({ id, label: `${node.data.displayName ?? name} · ${label}`, widget: name });
+        // A Menu or Two-part button carries its items, so an event can be
+        // aimed at one of them (p.483; §462).
+        const kind = name === "CanvasButton" ? buttonTypeOf(props.buttonType) : "inline";
+        triggers.push({
+          id, label: `${node.data.displayName ?? name} · ${label}`, widget: name,
+          ...(kind !== "inline"
+            ? { buttonType: kind, items: itemsOf(props.items).map((i) => ({ id: i.id, label: i.label })) }
+            : {}),
+        });
       }
       if (name === "CanvasPage" || name === "CanvasOverlay") {
         pages.push({ id, label: `${node.data.displayName ?? name} · ${label}` });
