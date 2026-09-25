@@ -4679,6 +4679,10 @@ async def cross_tab_object_set(
 class ObjectSetTimeSeriesIn(BaseModel):
     definition: dict[str, Any]
     interval: str = object_sets.DEFAULT_TIME_INTERVAL
+    #: A declared `date` or `timestamp` property to bucket instead of
+    #: `updated_at` (§466, p.449's timeline). Absent is `updated_at`, which is
+    #: what this endpoint has always plotted.
+    property: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ObjectSetTimePoint(BaseModel):
@@ -4693,9 +4697,12 @@ class ObjectSetTimeSeriesOut(BaseModel):
     points: list[ObjectSetTimePoint]
     interval: str
     total: int
-    """The size of the set. Equal to the sum of the points here - unlike a
-    cross-tab, every object has an `updated_at` and no bucket is dropped - and
-    returned so a widget can say so rather than a viewer having to add up."""
+    """The size of the set. Equal to the sum of the points over `updated_at`,
+    which every object has - and returned so a widget can say so rather than a
+    viewer having to add up. Over a date property it can be more: `missing` is
+    the difference."""
+    missing: int = 0
+    """Members with no date for the property, which are in no point (§466)."""
 
 
 @router.post("/object-sets/time-series", response_model=ObjectSetTimeSeriesOut)
@@ -4705,14 +4712,16 @@ async def time_series_object_set(
 ) -> ObjectSetTimeSeriesOut:
     """How many objects last changed in each time bucket (roadmap 1.5).
 
-    **This plots `updated_at` - when the platform last saw each object change -
-    and not a business date.** That is a real limitation, not a stand-in for
-    one: a resync moves every object in a set to today, so this answers "what
-    has been changing" rather than "when did things happen". Both stores agree
-    about it, which a date *property* would not - properties are stored
-    untyped (`object_sets.DATE_PROPERTY_HINT`, decision 0006). The widget says
-    which of the two questions it is answering, because the difference is
-    invisible from the shape of the chart.
+    **Without a `property` this plots `updated_at`** - when the platform last
+    saw each object change - and not a business date: a resync moves every
+    object in a set to today, so it answers "what has been changing" rather
+    than "when did things happen". **With one it plots that date (§466)**,
+    which is p.449's timeline, and which a typed index is what made both stores
+    agree about (`object_sets.datable_type`).
+
+    **`auto` picks the finest interval that fits** `object_sets.MAX_AUTO_POINTS`
+    - day, then week, then month - so a timeline over a fortnight is days and
+    over a decade is months without the author having to know which.
 
     **Empty buckets are filled, and the range comes from the data.** A line
     drawn through a gap slopes gently across a week when nothing happened,
@@ -4720,16 +4729,23 @@ async def time_series_object_set(
     first and last populated bucket rather than "the last 30 days", so the same
     saved app does not draw a different picture tomorrow.
     """
-    definition = object_sets.parse(body.definition)
-    try:
-        interval = object_sets.parse_interval(body.interval)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
-
+    # **The ontology first, then the definition**, as `/aggregate` has done
+    # since §221. This parsed without the declared types, so a set narrowed by
+    # a Filter List's date range - `gte`, `lt` - was refused here while every
+    # neighbouring route took it.
+    type_id = object_sets.object_type_id_of(body.definition)
     async with user_connection(access.auth.user_id) as conn:
-        await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        property_types = await _declared_types(conn, type_id)
+        try:
+            definition = object_sets.parse(body.definition, property_types=property_types)
+            interval = object_sets.parse_interval(body.interval)
+            date_property = None if body.property is None else (
+                body.property, object_sets.datable_type(body.property, property_types))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         store = instance_store.store_for(conn)
         shared = {
@@ -4737,21 +4753,35 @@ async def time_series_object_set(
             "object_type_id": definition.object_type_id,
             "filters": definition.filters,
         }
-        buckets = await store.time_series_object_set(**shared, interval=interval)
         total = await store.aggregate_object_set(
             **shared, aggregation="count", property_name=None
         )
+        candidates = (
+            object_sets.TIME_INTERVALS if interval == object_sets.AUTO_INTERVAL else (interval,)
+        )
+        for candidate in candidates:
+            buckets = await store.time_series_object_set(
+                **shared, interval=candidate, date_property=date_property)
+            try:
+                filled = object_sets.fill_time_buckets(buckets, candidate)
+            except ValueError as exc:
+                # Too many for this interval: `auto` tries the next coarser
+                # one, and a named interval says so, naming the coarser one.
+                if candidate != candidates[-1]:
+                    continue
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                ) from exc
+            # A named interval is its own last candidate, so it always stops here.
+            if len(filled) <= object_sets.MAX_AUTO_POINTS or candidate == candidates[-1]:
+                break
 
-    try:
-        filled = object_sets.fill_time_buckets(buckets, interval)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
+    counted = sum(count for _, count in filled)
     return ObjectSetTimeSeriesOut(
         points=[ObjectSetTimePoint(start=start, count=count) for start, count in filled],
-        interval=interval,
+        interval=candidate,
         total=total,
+        missing=total - counted,
     )
 
 

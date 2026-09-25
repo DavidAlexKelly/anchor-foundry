@@ -1415,17 +1415,22 @@ export const objects = {
   /** How many objects in a set last changed in each time bucket.
    *
    * `updated_at`, not a business date — the server's docstring says why, and
-   * the widget says so on screen. Empty buckets are already filled and the
-   * range is the data's own first and last, so a client plots the points as
-   * given rather than deciding what the axis covers. */
-  timeSeriesObjectSet: (wid: string, definition: unknown, interval?: string) =>
+   * the widget says so on screen — unless `property` names a declared date
+   * (§466), which is p.449's timeline. Empty buckets are already filled and
+   * the range is the data's own first and last, so a client plots the points
+   * as given rather than deciding what the axis covers. `interval: "auto"`
+   * lets the server pick, and the answer says which it picked. */
+  timeSeriesObjectSet: (wid: string, definition: unknown, interval?: string, property?: string) =>
     request<{
       points: { start: string; count: number }[];
       interval: string;
       total: number;
+      missing: number;
     }>(`/workspaces/${wid}/object-sets/time-series`, {
       method: "POST",
-      body: JSON.stringify({ definition, ...(interval ? { interval } : {}) }),
+      body: JSON.stringify({
+        definition, ...(interval ? { interval } : {}), ...(property ? { property } : {}),
+      }),
     }),
   /** Workspace-wide instance search across every object type at once. */
   explore: (

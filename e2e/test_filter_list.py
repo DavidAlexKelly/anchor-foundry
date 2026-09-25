@@ -219,6 +219,25 @@ def test_a_single_date_is_the_whole_of_that_day(page, api, sites) -> None:
     rows_are(page, ["N4"], "the 1st of April instead")
 
 
+def test_a_timeline_filters_to_the_period_a_column_covers(page, api, sites) -> None:
+    """p.449's timeline (§466). 29 February to 5 May is 67 days, more than a
+    strip of day columns holds, so the server picks weeks. The week of 25 March
+    ends on the 31st, and N3 is the evening of the 31st: in. N4 is midnight on
+    1 April: out."""
+    mod = build(api, sites, "Filter list timeline", {"filters": [one("timeline", "at")]})
+    open_module(page, mod)
+    rows_are(page, EVERY, "every row first")
+    first = page.get_by_role("button", name="week of 2024-02-26: 2", exact=True)
+    first.click()
+    rows_are(page, ["S1", "N1"], "the week of 26 February")
+    expect(first).to_have_attribute("aria-pressed", "true")
+    last_of_march = page.get_by_role("button", name="week of 2024-03-25: 1", exact=True)
+    last_of_march.click()
+    rows_are(page, ["N3"], "the week to 31 March, its evening included")
+    last_of_march.click()
+    rows_are(page, EVERY, "every row once it is clicked off")
+
+
 def test_components_on_one_variable_keep_each_others_clauses(page, api, sites) -> None:
     """A keyword and a histogram on the same property, and a default someone
     else set: each click replaces only its own clause. The widget used to
@@ -256,7 +275,7 @@ def test_the_panel_adds_filters_and_chooses_components(page, api, sites) -> None
     add.select_option("at")
     expect(page.get_by_test_id("filter-component-f_2").locator("option")).to_have_text(
         ["Histogram", "Single-select dropdown", "Multi-select dropdown", "Keyword",
-         "Single date", "Date range"])
+         "Single date", "Date range", "Timeline"])
     page.get_by_test_id("filter-component-f_2").select_option("dateRange")
     save(page)
     assert mod.definition()["layout"]["fl"]["props"]["filters"] == [

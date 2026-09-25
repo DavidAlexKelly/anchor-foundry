@@ -964,9 +964,16 @@ async def time_series_object_set(
     object_type_id: UUID,
     filters: tuple[Any, ...],
     interval: str,
+    date_property: "tuple[str, str] | None" = None,
 ) -> list[tuple[datetime, int]]:
     """How many objects last changed in each time bucket, Postgres edition
     (roadmap 1.5, what a Time Series plots).
+
+    **Or how many have a date property in each (§466)**, when `date_property`
+    names one and its declared type. The value is `_comparable_sql`'s, the
+    cast an ordered filter compares, so "which day is this row on" and "is this
+    row before the 5th" agree - and a row whose value will not cast is in no
+    bucket rather than in a bucket of its own called NULL.
 
     **UTC is stated, not inherited.** `updated_at` is a `timestamptz`, so
     `date_trunc` on it would otherwise bucket by the session's TimeZone - and
@@ -981,10 +988,16 @@ async def time_series_object_set(
     if interval not in object_sets.TIME_INTERVALS:  # pragma: no cover - parsed upstream
         raise ValueError(f"unknown interval {interval!r}")
     predicate, params = _set_predicate(object_type_id, filters)
+    when = "i.updated_at"
+    if date_property is not None:
+        params["tsprop"] = date_property[0]
+        when = _comparable_sql(
+            "jsonb_extract_path_text(i.properties, :tsprop)", date_property[1])
+        predicate = f"({predicate}) AND {when} IS NOT NULL"
     rows = await fetch_all(
         conn,
         f"""
-        SELECT date_trunc('{interval}', i.updated_at AT TIME ZONE 'UTC') AS bucket,
+        SELECT date_trunc('{interval}', {when} AT TIME ZONE 'UTC') AS bucket,
                count(*) AS n
           FROM object_instances i
          WHERE {predicate}

@@ -271,15 +271,16 @@ class InstanceStoreGateway(Protocol):
         object_type_id: UUID,
         filters: "tuple[Any, ...]",
         interval: str,
+        date_property: "tuple[str, str] | None" = None,
     ) -> "list[tuple[datetime, int]]":
         """How many objects last changed in each time bucket - what a Time
         Series plots (roadmap 1.5).
 
-        **Over `updated_at`, in UTC, and only over `updated_at`.** It is a real
-        `timestamptz` on one store and a mapped `date` on the other, so both
-        bucket it identically without knowing any property's type. A date
-        *property* is stored untyped like every other, which is the same
-        blocker ordered operators have (`object_sets.DATE_PROPERTY_HINT`).
+        **Over `updated_at`, in UTC**, unless `date_property` names a declared
+        `date` or `timestamp` property and its type (§466, p.449's timeline).
+        `updated_at` is a real `timestamptz` on one store and a mapped `date` on
+        the other; a declared date property is the same pair since §220's typed
+        index, which is what lifted this from `updated_at` only.
 
         Only the buckets that have rows, ascending. Gaps are filled once in
         `object_sets.fill_time_buckets`, so the two stores cannot fill
@@ -1074,8 +1075,11 @@ class OpenSearchInstanceStore:
         object_type_id: UUID,
         filters: tuple[Any, ...],
         interval: str,
+        date_property: "tuple[str, str] | None" = None,
     ) -> list[tuple[datetime, int]]:
-        """Roadmap 1.5. A date histogram on `updated_at`.
+        """Roadmap 1.5. A date histogram on `updated_at`, or on a declared
+        date property's mapped field (§466) - which skips a document without
+        one, as Postgres's `IS NOT NULL` does.
 
         `calendar_interval` rather than `fixed_interval`: a month is not
         2,592,000 seconds, and Postgres's `date_trunc('month', ...)` lands on
@@ -1094,7 +1098,8 @@ class OpenSearchInstanceStore:
             "aggs": {
                 "series": {
                     "date_histogram": {
-                        "field": "updated_at",
+                        "field": (f"properties.{date_property[0]}"
+                                  if date_property is not None else "updated_at"),
                         "calendar_interval": interval,
                         "time_zone": "UTC",
                         # Only the populated buckets, matching what Postgres's
@@ -1554,6 +1559,7 @@ class PostgresInstanceStore:
         object_type_id: UUID,
         filters: tuple[Any, ...],
         interval: str,
+        date_property: "tuple[str, str] | None" = None,
     ) -> list[tuple[datetime, int]]:
         from . import instances as instances_service
 
@@ -1562,6 +1568,7 @@ class PostgresInstanceStore:
             object_type_id=object_type_id,
             filters=filters,
             interval=interval,
+            date_property=date_property,
         )
 
 

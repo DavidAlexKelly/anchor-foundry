@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  axisEnds, barWidth, bucketLabel, componentOf, isBucketChosen, numberRangeSummary, withBucket, componentsFor, defaultComponentFor, filtersOf, keywordOf, layoutOf,
+  axisEnds, barWidth, bucketLabel, componentOf, isBucketChosen, isPeriodChosen,
+  numberRangeSummary, periodLabel, periodOf, timelineIntervalOf, withBucket, componentsFor, defaultComponentFor, filtersOf, keywordOf, layoutOf,
   newFilterId, pillSummary, rangeOf, shiftDay, toggleValue, valuesOf, viewerFilterId,
   visibleFilters, withKeyword, withRange, withValues, withoutFilter,
 } from "./filter-list";
@@ -245,5 +246,43 @@ describe("the distribution chart (§465)", () => {
       .toEqual([]);
     expect(withoutFilter(withRange([], "at", { from: "2024-03-05", to: "2024-03-05" }),
       { id: "f", property: "at", component: "date" })).toEqual([]);
+  });
+});
+
+describe("the timeline (§466)", () => {
+  it("is offered on a date", () => {
+    expect(componentsFor("timestamp")).toContain("timeline");
+    expect(componentsFor("integer")).not.toContain("timeline");
+    expect(componentsFor("string")).not.toContain("timeline");
+  });
+
+  it("covers a whole day, week or month, both ends in", () => {
+    expect(periodOf("2024-03-05T00:00:00Z", "day")).toEqual({ from: "2024-03-05", to: "2024-03-05" });
+    expect(periodOf("2024-03-04T00:00:00+00:00", "week"))
+      .toEqual({ from: "2024-03-04", to: "2024-03-10" });
+    // February 2024 has 29 days, and December rolls the year.
+    expect(periodOf("2024-02-01T00:00:00Z", "month")).toEqual({ from: "2024-02-01", to: "2024-02-29" });
+    expect(periodOf("2024-12-01T00:00:00Z", "month")).toEqual({ from: "2024-12-01", to: "2024-12-31" });
+    expect(periodOf("junk", "day")).toEqual({ from: "", to: "" });
+  });
+
+  it("names a period by its day, week or month", () => {
+    expect(periodLabel("2024-03-05T00:00:00Z", "day")).toBe("2024-03-05");
+    expect(periodLabel("2024-03-04T00:00:00Z", "week")).toBe("week of 2024-03-04");
+    expect(periodLabel("2024-03-01T00:00:00Z", "month")).toBe("2024-03");
+  });
+
+  it("knows which period the clauses choose", () => {
+    const march = withRange([], "at", periodOf("2024-03-01T00:00:00Z", "month"));
+    expect(isPeriodChosen(march, "at", "2024-03-01T00:00:00Z", "month")).toBe(true);
+    expect(isPeriodChosen(march, "at", "2024-04-01T00:00:00Z", "month")).toBe(false);
+    // The same first day at a finer interval is a different period.
+    expect(isPeriodChosen(march, "at", "2024-03-01T00:00:00Z", "day")).toBe(false);
+    expect(isPeriodChosen([], "at", "junk", "day")).toBe(false);
+    expect(timelineIntervalOf("week")).toBe("week");
+    expect(timelineIntervalOf("fortnight")).toBe("day");
+    expect(pillSummary({ id: "f", property: "at", component: "timeline" }, march))
+      .toBe("2024-03-01 – 2024-03-31");
+    expect(withoutFilter(march, { id: "f", property: "at", component: "timeline" })).toEqual([]);
   });
 });
