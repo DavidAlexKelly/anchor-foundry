@@ -1,5 +1,6 @@
 "use client";
 
+import { segmentLayout, type SegmentMode, type Segmented } from "./chart-segments";
 import { arcPath, percentLabel, wedges } from "./pie-chart";
 
 /**
@@ -111,7 +112,11 @@ function scale(values: number[]) {
   };
 }
 
-function Axes({ ticks, area }: { ticks: number[]; area: ReturnType<typeof plotArea> }) {
+function Axes({ ticks, area, format = niceNumber }: {
+  ticks: number[];
+  area: ReturnType<typeof plotArea>;
+  format?: (value: number) => string;
+}) {
   const s = scale(ticks);
   return (
     <g>
@@ -124,7 +129,7 @@ function Axes({ ticks, area }: { ticks: number[]; area: ReturnType<typeof plotAr
               stroke="var(--line)" strokeWidth={1}
             />
             <text x={area.x - 6} y={y + 4} textAnchor="end" fontSize={11} fill="var(--ink-soft)">
-              {niceNumber(t)}
+              {format(t)}
             </text>
           </g>
         );
@@ -374,6 +379,97 @@ export function PieChart({
             </text>
           </g>
         ))}
+    </svg>
+  );
+}
+
+/**
+ * p.281–282's segmented bar chart (§467): each category's bar split by a
+ * second property, stacked, as percentages of the bar, or grouped side by side
+ * (`chart-segments.ts`). A segment is coloured by its position in the legend,
+ * so one segment is one colour across every bar.
+ *
+ * A click on any part of a bar drills into its *category*: the drill-down
+ * writes one clause on the X axis property, and a segment is a second property
+ * that clause does not name.
+ */
+export function SegmentedBarChart({
+  data, mode, drill, showLegend = true,
+}: {
+  data: Segmented;
+  mode: SegmentMode;
+  drill?: Drill;
+  showLegend?: boolean;
+}) {
+  // Six entries to a row, and as many rows as the segments need: the
+  // cross-tab returns up to twelve columns.
+  const legendRows = showLegend ? Math.ceil(data.segments.length / 6) : 0;
+  const legendHeight = legendRows > 0 ? legendRows * 16 + 6 : 0;
+  const area = { ...plotArea(), h: plotArea().h - legendHeight };
+  const { bars, max } = segmentLayout(data, mode);
+  const s = scale([0, max]);
+  const slot = area.w / Math.max(data.categories.length, 1);
+  const barWidth = Math.max(2, slot * 0.72);
+  const percent = mode === "percentage";
+  return (
+    <svg
+      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+      role="img"
+      aria-label="Segmented bar chart"
+      style={{ width: "100%" }}
+    >
+      <Axes
+        ticks={gridTicks([0, max])}
+        area={area}
+        format={percent ? (v) => `${Math.round(v * 100)}%` : niceNumber}
+      />
+      {bars.map((bar, i) => {
+        const category = data.categories[bar.category] ?? "";
+        const segment = data.segments[bar.segment] ?? "";
+        const top = s.toY(bar.to, area);
+        const bottom = s.toY(bar.from, area);
+        const x = area.x + slot * bar.category + (slot - barWidth) / 2 + barWidth * bar.offset;
+        return (
+          <rect
+            key={i}
+            data-testid="chart-segment"
+            data-category={category}
+            data-segment={segment}
+            x={x}
+            y={top}
+            width={Math.max(1, barWidth * bar.width - (bar.width < 1 ? 1 : 0))}
+            height={Math.max(1, bottom - top)}
+            fill={PALETTE[bar.segment % PALETTE.length]}
+            opacity={dim(drill, category)}
+            {...markProps(drill, category)}
+          >
+            <title>{`${category} · ${segment}: ${bar.value}`}</title>
+          </rect>
+        );
+      })}
+      {data.categories.map((category, i) => (
+        <text
+          key={`c${i}`}
+          x={area.x + slot * i + slot / 2}
+          y={area.y + area.h + 16}
+          textAnchor="middle"
+          fontSize={11}
+          fill="var(--ink-soft)"
+        >
+          {shortLabel(category, Math.max(4, Math.floor(slot / 7)))}
+        </text>
+      ))}
+      {showLegend && data.segments.map((segment, i) => (
+        <g
+          key={`k${i}`}
+          data-testid="chart-legend-entry"
+          transform={`translate(${area.x + (i % 6) * 96}, ${
+            HEIGHT - 6 - (legendRows - 1 - Math.floor(i / 6)) * 16})`}
+        >
+          <rect width={10} height={10} y={-9} fill={PALETTE[i % PALETTE.length]} />
+          <text x={15} fontSize={11} fill="var(--ink)">{shortLabel(segment, 12)}</text>
+        </g>
+      ))}
     </svg>
   );
 }

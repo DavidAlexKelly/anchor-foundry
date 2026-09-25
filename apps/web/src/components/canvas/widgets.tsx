@@ -285,7 +285,8 @@ import {
   type ChartKind,
   type FilterOperator,
 } from "./filter-sql";
-import { Chart, PieChart, toPoints } from "./charts";
+import { Chart, PieChart, SegmentedBarChart, toPoints } from "./charts";
+import { SEGMENT_MODES, segmentModeOf, segmentedFrom } from "./chart-segments";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { conditionalStyle, cssFor } from "@/lib/conditional-format";
@@ -11735,6 +11736,9 @@ export function CanvasChart({
   objectSetVariable = null,
   seriesVariable = null,
   drilldownVariable = null,
+  segmentBy = null,
+  segmentMode = "stacked",
+  showLegend = true,
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -11746,9 +11750,11 @@ export function CanvasChart({
   filterParameter?: string | null;
   filterOperator?: FilterOperator;
   /** An `object_set` variable to plot instead of a dataset (roadmap 1.5).
-   * Grouped counts only: a grouped *sum* has the same untyped-property problem
-   * a plain sum does, so the two stores would disagree about the bar heights.
-   * See `services/object_sets.py`. */
+   * p.281's **Series aggregation** is `aggregate` over `measure` (§467): a
+   * count, or a sum, average, minimum or maximum of a declared number, which
+   * `/object-sets/group` has answered since §227. This comment used to say
+   * grouped counts only, from before typed properties, and the chart drew a
+   * count whatever the panel's Measure said. */
   objectSetVariable?: string | null;
   /** A `time_series_set` variable to plot instead of either (p.280's third
    * "Data input" option: "The Time series set option allows a Workshop time
@@ -11776,6 +11782,15 @@ export function CanvasChart({
    * does not, and that is the untyped-property blocker (§87) that also holds
    * ordered operators, numeric aggregations and property sorts. */
   drilldownVariable?: string | null;
+  /** p.281's **Segment by**: a second property each bar is split by (§467).
+   * Counts only, because the split comes from `/object-sets/cross-tab`, which
+   * counts; a segmented sum would need a metric per cell that no endpoint
+   * returns yet. */
+  segmentBy?: string | null;
+  /** p.282's **Segment overrides**: stacked, percentage or grouped. */
+  segmentMode?: string;
+  /** p.284's **Show legend**, for the segments. */
+  showLegend?: boolean;
 }) {
   const {
     connectors: { connect, drag },
@@ -11795,6 +11810,9 @@ export function CanvasChart({
   } | null;
   const usingSeries = !!seriesVariable;
   const usingSet = !usingSeries && !!objectSetVariable;
+  // p.282: segments are a bar chart's, and they count (see `segmentBy`).
+  const segmenting = usingSet && !!segmentBy && (kind ?? "bar") === "bar"
+    && pieAggregationOf(aggregate) === "count";
 
   // Drill-down needs a set to narrow and a property to narrow it on, so it is
   // offered only where both exist. A dataset-backed chart has no set: there is
@@ -11822,13 +11840,24 @@ export function CanvasChart({
     queryFn: () => dsApi.query(workspaceId, projectId, datasetId!, sql!),
     enabled: !usingSet && !usingSeries && !!datasetId && sql !== null,
   });
+  // p.281's Series aggregation. `null` while a numeric one has no property
+  // yet, so an unfinished panel sends nothing rather than a refused request.
+  const ask = pieAggregationRequest(aggregate, measure);
   const setResult = useQuery({
     queryKey: [
       "canvas-chart-set", objectSetVariable,
       JSON.stringify(setDefinition ?? null), dimension,
+      ask?.aggregation ?? null, ask?.aggregation_property ?? null,
     ],
-    queryFn: () => objApi.groupObjectSet(workspaceId, setDefinition, dimension!),
-    enabled: usingSet && !!setDefinition && !!dimension,
+    queryFn: () => objApi.groupObjectSet(workspaceId, setDefinition, dimension!, ask ?? {}),
+    enabled: usingSet && !!setDefinition && !!dimension && !!ask && !segmenting,
+  });
+  const crossTab = useQuery({
+    queryKey: [
+      "canvas-chart-segments", JSON.stringify(setDefinition ?? null), dimension, segmentBy,
+    ],
+    queryFn: () => objApi.crossTabObjectSet(workspaceId, setDefinition, dimension!, segmentBy!),
+    enabled: segmenting && !!setDefinition && !!dimension,
   });
 
   // The variable resolves to a *question* (decision 0009: points stay in the
@@ -11852,7 +11881,8 @@ export function CanvasChart({
     (p) => p.value !== null && p.value !== "" && Number.isFinite(Number(p.value)),
   );
 
-  const result = usingSeries ? seriesResult : usingSet ? setResult : datasetResult;
+  const result = usingSeries ? seriesResult
+    : segmenting ? crossTab : usingSet ? setResult : datasetResult;
   const points = usingSeries
     ? seriesResult.data
       ? readings.map((p) => ({
@@ -11861,7 +11891,12 @@ export function CanvasChart({
         }))
       : null
     : usingSet
-    ? (setResult.data?.groups ?? []).map((g) => ({ label: g.value, value: g.count }))
+    ? (setResult.data?.groups ?? []).map((g) => ({
+        label: g.value,
+        // The metric when there is one: a bar of total capacity is its sum,
+        // not how many sites made it.
+        value: ask && ask.aggregation !== "count" ? Number(g.metric ?? 0) : g.count,
+      }))
     : datasetResult.data
       ? toPoints(datasetResult.data.rows)
       : null;
@@ -11869,7 +11904,8 @@ export function CanvasChart({
   const needs = usingSeries
     ? (!seriesRef ? "nothing picked yet" : null)
     : usingSet
-    ? (!dimension ? "pick a property to group by" : null)
+    ? (!dimension ? "pick a property to group by"
+      : !ask ? `pick a property to ${pieAggregationOf(aggregate)}` : null)
     : !datasetId ? "pick a dataset in Settings"
     : !dimension ? (kind === "scatter" ? "pick an X column" : "pick a category column")
     : (kind === "scatter" || aggregate !== "count") && !measure
@@ -11898,7 +11934,35 @@ export function CanvasChart({
       )}
       {/* Only the series path swaps an empty chart for a sentence; the other
           two are left exactly as they were. */}
-      {points && !(usingSeries && points.length === 0) && (
+      {segmenting && crossTab.data && (
+        crossTab.data.rows.length === 0
+          ? <p className="canvas-widget-empty">No rows match — nothing to chart.</p>
+          : (
+            <SegmentedBarChart
+              data={segmentedFrom(crossTab.data)}
+              mode={segmentModeOf(segmentMode)}
+              showLegend={showLegend !== false}
+              drill={canDrill ? {
+                selected: drilledLabel,
+                onSelect: (label) =>
+                  setParameter(
+                    drilldownVariable!,
+                    label === drilledLabel ? [] : [{ property: dimension, op: "eq", value: label }],
+                  ),
+              } : undefined}
+            />
+          )
+      )}
+      {/* Said, not hidden, as the grouped chart's truncation is below. */}
+      {segmenting && (crossTab.data?.rows_truncated || crossTab.data?.columns_truncated) && (
+        <p className="canvas-widget-empty" data-testid="chart-segments-truncated">
+          Showing the largest {crossTab.data.rows.length} of{" "}
+          {crossTab.data.row_distinct_total} {dimension} values and{" "}
+          {crossTab.data.columns.length} of {crossTab.data.column_distinct_total} {segmentBy}{" "}
+          values.
+        </p>
+      )}
+      {!segmenting && points && !(usingSeries && points.length === 0) && (
         <Chart
           /* p.281: "If the data input is a time series set, only the Line
              Chart option is supported." */
@@ -11973,9 +12037,12 @@ function ChartSettings() {
   const {
     datasetId, kind, dimension, measure, aggregate, title,
     filterColumn, filterParameter, filterOperator, objectSetVariable, seriesVariable,
-    drilldownVariable,
+    drilldownVariable, segmentBy, segmentMode, showLegend,
     actions: { setProp },
   } = useNode((node) => ({
+    segmentBy: node.data.props.segmentBy,
+    segmentMode: node.data.props.segmentMode,
+    showLegend: node.data.props.showLegend,
     datasetId: node.data.props.datasetId,
     kind: node.data.props.kind,
     dimension: node.data.props.dimension,
@@ -12085,7 +12152,7 @@ function ChartSettings() {
           ))}
         </select>
         {objectSetVariable && (
-          <span className="field-hint">Counts objects in each group</span>
+          <span className="field-hint">Groups objects by the Category, measured below</span>
         )}
       </label>
       <label className="field">
@@ -12151,6 +12218,7 @@ function ChartSettings() {
           <span className="field-label">Measure</span>
           <select
             value={aggregate || "count"}
+            data-testid="chart-aggregate"
             onChange={(e) => setProp((p: { aggregate: string }) => (p.aggregate = e.target.value))}
           >
             <option value="count">Count of rows</option>
@@ -12167,12 +12235,68 @@ function ChartSettings() {
           <select
             value={measure || ""}
             disabled={!columns.length}
+            data-testid="chart-measure"
             onChange={(e) => setProp((p: { measure: string | null }) => (p.measure = e.target.value || null))}
           >
             <option value="">Choose…</option>
-            {columns.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+            {/* Over a set, p.281's aggregations other than a count run over a
+                declared number: the server refuses anything else, so it is
+                not offered. */}
+            {(objectSetVariable
+              ? columns.filter((c) => c.data_type === "integer" || c.data_type === "float")
+              : columns
+            ).map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
           </select>
         </label>
+      )}
+      {objectSetVariable && (kind || "bar") === "bar" && (
+        <>
+          <label className="field">
+            <span className="field-label">Segment by</span>
+            <select
+              value={segmentBy || ""}
+              data-testid="chart-segment-by"
+              disabled={(aggregate || "count") !== "count"}
+              onChange={(e) =>
+                setProp((p: { segmentBy: string | null }) => (p.segmentBy = e.target.value || null))}
+            >
+              <option value="">No segments</option>
+              {columns.filter((c) => c.name !== dimension).map((c) => (
+                <option key={c.name} value={c.name}>{c.name}</option>
+              ))}
+            </select>
+            {(aggregate || "count") !== "count" && (
+              <span className="field-hint">Segments count objects - set Measure to a count</span>
+            )}
+          </label>
+          {segmentBy && (
+            <>
+              <label className="field">
+                <span className="field-label">Segment display</span>
+                <select
+                  value={segmentModeOf(segmentMode)}
+                  data-testid="chart-segment-mode"
+                  onChange={(e) =>
+                    setProp((p: { segmentMode: string }) => (p.segmentMode = e.target.value))}
+                >
+                  {Object.entries(SEGMENT_MODES).map(([key, name]) => (
+                    <option key={key} value={key}>{name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field canvas-toggle">
+                <input
+                  type="checkbox"
+                  data-testid="chart-show-legend"
+                  checked={showLegend !== false}
+                  onChange={(e) =>
+                    setProp((p: { showLegend: boolean }) => (p.showLegend = e.target.checked))}
+                />
+                <span className="field-label">Show legend</span>
+              </label>
+            </>
+          )}
+        </>
       )}
       <label className="field">
         <span className="field-label">Filter column</span>
@@ -12245,6 +12369,7 @@ CanvasChart.craft = {
     aggregate: "count", title: "", filterColumn: null,
     filterParameter: null, filterOperator: "equals",
     objectSetVariable: null, seriesVariable: null, drilldownVariable: null,
+    segmentBy: null, segmentMode: "stacked", showLegend: true,
   },
   related: { settings: ChartSettings },
 };
