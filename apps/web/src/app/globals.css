@@ -2444,6 +2444,11 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-freshness-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .canvas-freshness-time { color: var(--ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .canvas-freshness-time--stale { color: var(--warning); }
+/* p.402's Edit History: an edit per line, what changed above who and when. */
+.canvas-edit-history { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.canvas-edit-history li { display: grid; gap: 2px; font-size: 13px; }
+.canvas-edit-summary { overflow-wrap: anywhere; }
+.canvas-edit-meta { color: var(--ink-soft); font-size: 12px; }
 /* p.449's distribution chart: a column per range, its height the range's
    share of the fullest one. A chosen column is the accent. */
 .canvas-filter-distribution {

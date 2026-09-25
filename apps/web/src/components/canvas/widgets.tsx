@@ -288,6 +288,9 @@ import {
 import { Chart, PieChart, SegmentedBarChart, toPoints } from "./charts";
 import { SEGMENT_MODES, segmentModeOf, segmentedFrom } from "./chart-segments";
 import {
+  EDIT_ORDERS, chosenProperties as chosenEditProperties, editOrderOf, editSummary,
+} from "./edit-history";
+import {
   freshnessLabel, isStale, itemsOf as freshnessItemsOf, newItemId as newFreshnessItemId,
   type FreshnessItem,
 } from "./data-freshness";
@@ -16050,6 +16053,181 @@ CanvasUnused.craft = {
   isCanvas: true,
 };
 
+// ---- Edit History (parity workshop.md §10; Foundry p.402-403; §471) ---------
+/**
+ * p.402: "The Edit History widget displays the list of user edits made to an
+ * object's properties after Track user edit history has been enabled for the
+ * object type within Ontology Manager."
+ *
+ * **One object, the set's first** (p.403's "If the object set contains more
+ * than one object, only the first object will be displayed"), read as the
+ * Property List reads it. Its edits come from §470's log, keyed `canvas-` so
+ * an action run in this module refreshes the history it just added to.
+ *
+ * **Untracked is said, not shown as empty.** A type whose history is off has
+ * no edits because nothing records them, which is a different fact from an
+ * object nobody has changed, and only the first is something an author can
+ * act on.
+ */
+export function CanvasEditHistory({
+  objectSetVariable = null,
+  order = "newest",
+  properties = "",
+}: {
+  objectSetVariable?: string | null;
+  /** p.403's Edits sort order. */
+  order?: string;
+  /** p.403's Property configuration: comma-separated api_names, blank for all. */
+  properties?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+  const setPage = useSetPage(workspaceId, setDefinition, { pageSize: 1, variablesPending });
+  const instance = setPage.rows?.[0];
+  const type = useQuery({
+    queryKey: ["object-type", setPage.typeId],
+    queryFn: () => objApi.getType(workspaceId, setPage.typeId!),
+    enabled: !!setPage.typeId,
+  });
+  const chosen = chosenEditProperties(properties);
+  const history = useQuery({
+    queryKey: ["canvas-edit-history", setPage.typeId, instance?.primary_key ?? null,
+               editOrderOf(order), (chosen ?? []).join(",")],
+    queryFn: () => objApi.objectEdits(workspaceId, {
+      object_type_id: setPage.typeId!,
+      primary_key: String(instance!.primary_key),
+      order: editOrderOf(order),
+      properties: chosen,
+    }),
+    enabled: !!setPage.typeId && !!instance,
+  });
+  const labelOf = (property: string) =>
+    (type.data?.properties ?? []).find((p) => p.api_name === property)?.display_name || property;
+  const edits = history.data?.edits ?? [];
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!objectSetVariable ? (
+        <p className="canvas-widget-empty">Edit history - bind an object set in Settings</p>
+      ) : setPage.unresolved ? (
+        <p className="canvas-widget-empty">Resolving the object set…</p>
+      ) : !instance ? (
+        <p className="canvas-widget-empty">No object to show</p>
+      ) : history.data && !history.data.tracking_since && edits.length === 0 ? (
+        <p className="canvas-widget-empty" data-testid="edit-history-untracked">
+          Edit history is not tracked for this object type - switch on Track user edit
+          history in its settings
+        </p>
+      ) : history.data && edits.length === 0 ? (
+        <p className="canvas-widget-empty" data-testid="edit-history-empty">
+          No edits since tracking began
+        </p>
+      ) : (
+        <ol className="canvas-edit-history" data-testid="edit-history">
+          {edits.map((edit) => (
+            <li key={edit.id} data-testid="edit-history-entry" data-kind={edit.kind}>
+              <span className="canvas-edit-summary">{editSummary(edit, labelOf)}</span>
+              <span className="canvas-edit-meta">
+                {edit.editor} · {new Date(edit.edited_at).toLocaleString()}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+      {history.data?.truncated && (
+        <p className="canvas-widget-empty">Showing the {edits.length} {editOrderOf(order)} edits</p>
+      )}
+    </div>
+  );
+}
+
+function EditHistorySettings() {
+  const { workspaceId } = useCanvasEnv();
+  const {
+    objectSetVariable, order, properties,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    order: node.data.props.order,
+    properties: node.data.props.properties,
+  }));
+  const { declared, resolved } = useCanvasVariables();
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const bound = objectSetVariable ? resolved[objectSetVariable] : undefined;
+  const typeId = (bound as { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  return (
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Object set</span>
+        <select
+          value={objectSetVariable || ""}
+          data-testid="edit-history-variable"
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">Only the first object's edits are shown (p.403)</span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Edits sort order</span>
+        <select
+          value={editOrderOf(order)}
+          data-testid="edit-history-order"
+          onChange={(e) => setProp((p: { order: string }) => (p.order = e.target.value))}
+        >
+          {Object.entries(EDIT_ORDERS).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Properties</span>
+        <input
+          type="text"
+          value={properties ?? ""}
+          placeholder="every property"
+          data-testid="edit-history-properties"
+          onChange={(e) =>
+            setProp((p: { properties: string }) => (p.properties = e.target.value))}
+        />
+        <span className="field-hint">
+          {type.data
+            ? `Comma-separated. Available: ${
+              (type.data.properties ?? []).map((p) => p.api_name).join(", ")}`
+            : "Comma-separated. Blank shows edits to every property."}
+        </span>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasEditHistory.craft = {
+  displayName: "Edit history",
+  props: { objectSetVariable: null, order: "newest", properties: "" },
+  related: { settings: EditHistorySettings },
+};
+
 // ---- Data Freshness (parity workshop.md §10; Foundry p.399-401; §469) --------
 /**
  * p.399: "The Data Freshness widget enables users to track data freshness
@@ -16084,7 +16262,8 @@ export function CanvasDataFreshness({
   const configured = freshnessItemsOf(items);
   const ids = configured.map((i) => i.objectTypeId);
   const fresh = useQuery({
-    queryKey: ["data-freshness", ids.join(",")],
+    // `canvas-`, so an action run in this module refreshes it too.
+    queryKey: ["canvas-data-freshness", ids.join(",")],
     queryFn: () => objApi.objectTypeFreshness(workspaceId, ids),
     enabled: ids.length > 0,
     refetchInterval: 60_000,
@@ -16300,6 +16479,7 @@ export const CANVAS_RESOLVER = {
   CanvasMediaPreview,
   CanvasIframe,
   CanvasDataFreshness,
+  CanvasEditHistory,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
