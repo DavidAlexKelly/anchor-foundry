@@ -287,6 +287,7 @@ import {
 } from "./filter-sql";
 import { Chart, PieChart, SegmentedBarChart, toPoints } from "./charts";
 import { SEGMENT_MODES, segmentModeOf, segmentedFrom } from "./chart-segments";
+import { CHART_SORTS, chartSortOf, orientationOf, sortPoints } from "./chart-display";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { conditionalStyle, cssFor } from "@/lib/conditional-format";
@@ -11739,6 +11740,9 @@ export function CanvasChart({
   segmentBy = null,
   segmentMode = "stacked",
   showLegend = true,
+  sort = "source",
+  orientation = "vertical",
+  valueLabels = false,
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -11791,6 +11795,14 @@ export function CanvasChart({
   segmentMode?: string;
   /** p.284's **Show legend**, for the segments. */
   showLegend?: boolean;
+  /** p.283's **Sort by** (§468), `chart-display.ts`. The data's own order
+   * unless set, which is what every chart saved before it draws. */
+  sort?: string;
+  /** p.284's bar **orientation**; a line or scatter is vertical whatever this
+   * says. */
+  orientation?: string;
+  /** p.281's **Labels**: each value written on its bar or point. */
+  valueLabels?: boolean;
 }) {
   const {
     connectors: { connect, drag },
@@ -11883,7 +11895,7 @@ export function CanvasChart({
 
   const result = usingSeries ? seriesResult
     : segmenting ? crossTab : usingSet ? setResult : datasetResult;
-  const points = usingSeries
+  const unsorted = usingSeries
     ? seriesResult.data
       ? readings.map((p) => ({
           label: seriesPointLabel(p.at, seriesRef!.interval),
@@ -11900,6 +11912,9 @@ export function CanvasChart({
     : datasetResult.data
       ? toPoints(datasetResult.data.rows)
       : null;
+  // p.283's Sort by, for categories. A series is a timeline and stays in time
+  // order: a sorted one would be a line zig-zagging back through the weeks.
+  const points = unsorted && !usingSeries ? sortPoints(unsorted, chartSortOf(sort)) : unsorted;
 
   const needs = usingSeries
     ? (!seriesRef ? "nothing picked yet" : null)
@@ -11968,6 +11983,11 @@ export function CanvasChart({
              Chart option is supported." */
           kind={usingSeries ? "line" : kind}
           points={points}
+          display={{
+            horizontal: orientationOf(orientation, usingSeries ? "line" : (kind ?? "bar"))
+              === "horizontal",
+            labels: valueLabels === true,
+          }}
           drill={
             canDrill
               ? {
@@ -12037,9 +12057,12 @@ function ChartSettings() {
   const {
     datasetId, kind, dimension, measure, aggregate, title,
     filterColumn, filterParameter, filterOperator, objectSetVariable, seriesVariable,
-    drilldownVariable, segmentBy, segmentMode, showLegend,
+    drilldownVariable, segmentBy, segmentMode, showLegend, sort, orientation, valueLabels,
     actions: { setProp },
   } = useNode((node) => ({
+    sort: node.data.props.sort,
+    orientation: node.data.props.orientation,
+    valueLabels: node.data.props.valueLabels,
     segmentBy: node.data.props.segmentBy,
     segmentMode: node.data.props.segmentMode,
     showLegend: node.data.props.showLegend,
@@ -12195,6 +12218,46 @@ function ChartSettings() {
           onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
         />
       </label>
+      {(kind || "bar") !== "pie" && !scatter && (
+        <label className="field">
+          <span className="field-label">Sort by</span>
+          <select
+            data-testid="chart-sort"
+            value={chartSortOf(sort)}
+            onChange={(e) => setProp((p: { sort: string }) => (p.sort = e.target.value))}
+          >
+            {Object.entries(CHART_SORTS).map(([key, name]) => (
+              <option key={key} value={key}>{name}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {(kind || "bar") === "bar" && (
+        <label className="field">
+          <span className="field-label">Orientation</span>
+          <select
+            data-testid="chart-orientation"
+            value={orientationOf(orientation, "bar")}
+            onChange={(e) =>
+              setProp((p: { orientation: string }) => (p.orientation = e.target.value))}
+          >
+            <option value="vertical">Vertical</option>
+            <option value="horizontal">Horizontal</option>
+          </select>
+        </label>
+      )}
+      {((kind || "bar") === "bar" || kind === "line") && (
+        <label className="field canvas-toggle">
+          <input
+            type="checkbox"
+            data-testid="chart-value-labels"
+            checked={valueLabels === true}
+            onChange={(e) =>
+              setProp((p: { valueLabels: boolean }) => (p.valueLabels = e.target.checked))}
+          />
+          <span className="field-label">Value labels</span>
+        </label>
+      )}
       {/* **`columns`, not `dataset`.** These three pickers are populated from
           whichever source is bound - the set's properties or the dataset's
           columns, computed above as exactly that. Guarding them on `dataset`
@@ -12370,6 +12433,7 @@ CanvasChart.craft = {
     filterParameter: null, filterOperator: "equals",
     objectSetVariable: null, seriesVariable: null, drilldownVariable: null,
     segmentBy: null, segmentMode: "stacked", showLegend: true,
+    sort: "source", orientation: "vertical", valueLabels: false,
   },
   related: { settings: ChartSettings },
 };
