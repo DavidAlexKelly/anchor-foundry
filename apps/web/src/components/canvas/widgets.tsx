@@ -209,6 +209,11 @@ import {
   addItem, buttonTypeOf, duplicateItem, itemsOf, removeItem, renameItem,
 } from "./button-items";
 import {
+  FILTER_COMPONENT_LABELS, barWidth, componentOf, componentsFor, filtersOf,
+  keywordOf, newFilterId, rangeOf, toggleValue, valuesOf, withKeyword, withRange, withValues,
+  type Clause, type DayRange, type FilterSpec,
+} from "./filter-list";
+import {
   MAX_DRAGGED_OBJECTS, OBJECT_MEDIA_TYPE, OBJECT_SET_MEDIA_TYPE, carriesPayload, collectKeys,
   droppedClauses, objectPayload, objectSetPayload,
 } from "./drag-payload";
@@ -572,11 +577,16 @@ CanvasText.craft = {
  * against the *narrowed* set would make every count go to zero except the ones
  * you already picked, and a filter list whose other options all read "0" tells
  * you nothing about what selecting them would do.
+ *
+ * **Each filter is drawn as one of p.449's components** (§463): a histogram,
+ * a single- or multi-select dropdown, a keyword or a date range. The clauses
+ * each writes are `filter-list.ts`.
  */
 export function CanvasFilterList({
   objectSetVariable = null,
   variable = null,
   properties = "",
+  filters = null,
   title = "Filters",
 }: {
   /** The set to offer filters over. */
@@ -585,9 +595,13 @@ export function CanvasFilterList({
    * derivation reads it and the input set, and produces the filtered set
    * every other widget then points at. */
   variable?: string | null;
-  /** Property api_names to offer, comma-separated. Blank means "none yet" -
-   * a filter list over every property of a wide type would be a wall. */
+  /** How a Filter List saved before §463 named its properties:
+   * comma-separated api_names, each drawn as a histogram (`filtersOf`). */
   properties?: string;
+  /** p.449's filters, each a property and the component it is drawn as. Null
+   * rather than `[]` by default: Craft fills a missing prop from here, and an
+   * empty list would replace an older document's `properties` with nothing. */
+  filters?: FilterSpec[] | null;
   title?: string;
 }) {
   const {
@@ -602,45 +616,35 @@ export function CanvasFilterList({
   const changed = eventsFor(moduleEvents, nodeId, "change");
   const eventContext = useEventContext(undefined, useOverlayIds());
 
-  const names = String(properties || "")
-    .split(",")
-    .map((p) => p.trim())
-    .filter(Boolean);
+  const specs = filtersOf(filters, properties);
+  // Read back from the variable this widget writes, so every component shows
+  // the document's state rather than a second copy of it held here. **The
+  // resolved value until something is written**, because that is where p.449's
+  // default lives: a parameter nobody has set is undefined, and building the
+  // first write on it would drop the default the reader is looking at.
+  // Afterwards the parameter, which is current a round trip before the
+  // resolved value is, so a keyword typed quickly does not lose a letter.
+  const resolvedClauses = useCanvasVariable(variable);
+  const clauses = clausesOf(chosen !== undefined ? chosen : resolvedClauses);
+  const typeId = (setDefinition as { object_type_id?: string } | undefined)?.object_type_id
+    ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const labelOf = (property: string) =>
+    (type.data?.properties ?? []).find((p) => p.api_name === property)?.display_name || property;
 
-  // What is currently selected, per property, read back from the variable this
-  // widget writes - so the checkboxes reflect the document's state rather than
-  // a second copy of it held here.
-  const selected: Record<string, string[]> = {};
-  for (const clause of Array.isArray(chosen) ? chosen : []) {
-    const c = clause as { property?: string; op?: string; value?: unknown };
-    if (!c.property) continue;
-    selected[c.property] = Array.isArray(c.value) ? c.value.map(String) : [String(c.value)];
-  }
-
-  const toggle = (property: string, value: string) => {
-    const current = selected[property] ?? [];
-    const next = current.includes(value)
-      ? current.filter((v) => v !== value)
-      : [...current, value];
-    const merged = { ...selected, [property]: next };
-    const clauses = Object.entries(merged)
-      .filter(([, values]) => values.length > 0)
-      // One value is `eq`, several are `in`. Both mean the same thing on both
-      // stores; sending a one-element `in` would work too, but `eq` is what a
-      // reader of the saved document expects to see for a single choice.
-      .map(([prop, values]) =>
-        values.length === 1
-          ? { property: prop, op: "eq", value: values[0] }
-          : { property: prop, op: "in", value: values },
-      );
-    if (variable) set(variable, clauses);
-    // Ticking and unticking are both `change` - Foundry's select and deselect
-    // on a dropdown. One trigger with the value and whether it is now on, not
-    // two triggers every document and every panel would have to know about.
+  const write = (next: Clause[], property: string, value: string, on: boolean) => {
+    if (variable) set(variable, next);
+    // Every component's change is `change` - Foundry's select and deselect on
+    // a dropdown. One trigger with the value and whether it is now on, not a
+    // trigger per component every document and panel would have to know about.
     if (mode === "run" && changed.length > 0) {
       runEvents(changed, {
         ...eventContext,
-        payload: { value, property, selected: next.includes(value) ? "true" : "" },
+        payload: { value, property, selected: on ? "true" : "" },
       });
     }
   };
@@ -652,17 +656,18 @@ export function CanvasFilterList({
         <p className="canvas-widget-empty">
           Filter list - point it at an object set and at the variable it writes in Settings
         </p>
-      ) : names.length === 0 ? (
-        <p className="canvas-widget-empty">Choose properties to filter on in Settings</p>
+      ) : specs.length === 0 ? (
+        <p className="canvas-widget-empty">Add filters in Settings</p>
       ) : (
-        names.map((property) => (
-          <FilterListProperty
-            key={property}
+        specs.map((spec) => (
+          <FilterListFilter
+            key={spec.id}
             workspaceId={workspaceId}
             definition={setDefinition}
-            property={property}
-            selected={selected[property] ?? []}
-            onToggle={(value) => toggle(property, value)}
+            spec={spec}
+            label={labelOf(spec.property)}
+            clauses={clauses}
+            onWrite={(next, value, on) => write(next, spec.property, value, on)}
           />
         ))
       )}
@@ -670,47 +675,164 @@ export function CanvasFilterList({
   );
 }
 
-function FilterListProperty({
+/** One of p.449's filter components. The three that pick values read the
+ * property's values from `/object-sets/group` against the **unfiltered** input
+ * set: counts recomputed against the narrowed set would read 0 for every value
+ * but the ones already picked, which says nothing about picking another. */
+function FilterListFilter({
   workspaceId,
   definition,
-  property,
-  selected,
-  onToggle,
+  spec,
+  label,
+  clauses,
+  onWrite,
 }: {
   workspaceId: string;
   definition: unknown;
-  property: string;
-  selected: string[];
-  onToggle: (value: string) => void;
+  spec: FilterSpec;
+  label: string;
+  clauses: Clause[];
+  onWrite: (next: Clause[], value: string, on: boolean) => void;
 }) {
+  const { property, component } = spec;
+  const picksValues = component === "histogram" || component === "singleSelect"
+    || component === "multiSelect";
   const result = useQuery({
     queryKey: ["canvas-filter-list", property, JSON.stringify(definition ?? null)],
     queryFn: () => objApi.groupObjectSet(workspaceId, definition, property),
-    enabled: !!definition,
+    enabled: !!definition && picksValues,
   });
+  const groups = result.data?.groups ?? [];
+  const values = valuesOf(clauses, property);
+
   return (
-    <fieldset className="canvas-filter-group">
-      <legend>{property}</legend>
-      {result.isError && (
+    <fieldset className="canvas-filter-group" data-testid={`filter-${spec.id}`}>
+      <legend>{label}</legend>
+      {picksValues && result.isError && (
         <p className="canvas-widget-empty">Couldn&apos;t read this property&apos;s values.</p>
       )}
-      {result.data?.truncated && (
+      {picksValues && result.data?.truncated && (
         <p className="canvas-widget-empty">showing the most common values</p>
       )}
-      {(result.data?.groups ?? []).map((group) => (
-        <label key={group.value} className="canvas-filter-option">
-          <input
-            type="checkbox"
-            checked={selected.includes(group.value)}
-            onChange={() => onToggle(group.value)}
-          />
-          <span>{group.value}</span>
-          <span className="canvas-filter-count">{group.count}</span>
-        </label>
-      ))}
-      {result.data && result.data.groups.length === 0 && (
+      {picksValues && result.data && groups.length === 0 && (
         <p className="canvas-widget-empty">no values</p>
       )}
+
+      {component === "histogram" && (() => {
+        const max = Math.max(0, ...groups.map((g) => g.count));
+        return groups.map((group) => (
+          <label
+            key={group.value}
+            className="canvas-filter-option canvas-filter-bar"
+            // p.446's "visualize the most common property values": the bar is
+            // the row's own background, so the value, its count and its share
+            // read as one line rather than as a chart beside a list.
+            style={{ "--bar": `${barWidth(group.count, max)}%` } as React.CSSProperties}
+          >
+            <input
+              type="checkbox"
+              checked={values.includes(group.value)}
+              onChange={() => onWrite(
+                toggleValue(clauses, property, group.value), group.value,
+                !values.includes(group.value))}
+            />
+            <span>{group.value}</span>
+            <span className="canvas-filter-count">{group.count}</span>
+          </label>
+        ));
+      })()}
+
+      {component === "singleSelect" && (
+        <select
+          aria-label={label}
+          value={values[0] ?? ""}
+          onChange={(e) => {
+            const v = e.target.value;
+            onWrite(withValues(clauses, property, v ? [v] : []), v || (values[0] ?? ""), !!v);
+          }}
+        >
+          <option value="">Any</option>
+          {/* A value chosen before it fell out of the most common is still
+              shown, or the select would read "Any" while filtering on it. */}
+          {values[0] && !groups.some((g) => g.value === values[0]) && (
+            <option value={values[0]}>{values[0]}</option>
+          )}
+          {groups.map((g) => (
+            <option key={g.value} value={g.value}>{`${g.value} (${g.count})`}</option>
+          ))}
+        </select>
+      )}
+
+      {component === "multiSelect" && (
+        <>
+          {values.length > 0 && (
+            <div className="canvas-filter-chips">
+              {values.map((v) => (
+                <span key={v} className="canvas-filter-chip">
+                  {v}
+                  <button
+                    type="button"
+                    aria-label={`Remove ${v}`}
+                    onClick={() => onWrite(
+                      withValues(clauses, property, values.filter((x) => x !== v)), v, false)}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <select
+            aria-label={`Add to ${label}`}
+            value=""
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v) onWrite(withValues(clauses, property, [...values, v]), v, true);
+            }}
+          >
+            <option value="">Add a value…</option>
+            {groups.filter((g) => !values.includes(g.value)).map((g) => (
+              <option key={g.value} value={g.value}>{`${g.value} (${g.count})`}</option>
+            ))}
+          </select>
+        </>
+      )}
+
+      {component === "keyword" && (
+        <input
+          type="search"
+          aria-label={label}
+          placeholder="Starts with…"
+          value={keywordOf(clauses, property)}
+          onChange={(e) => onWrite(
+            withKeyword(clauses, property, e.target.value), e.target.value,
+            !!e.target.value.trim())}
+        />
+      )}
+
+      {component === "dateRange" && (() => {
+        const range = rangeOf(clauses, property);
+        const change = (next: DayRange) => onWrite(
+          withRange(clauses, property, next), `${next.from}..${next.to}`,
+          !!(next.from || next.to));
+        return (
+          <div className="canvas-filter-range">
+            <input
+              type="date"
+              aria-label={`${label} from`}
+              value={range.from}
+              onChange={(e) => change({ ...range, from: e.target.value })}
+            />
+            <span aria-hidden>–</span>
+            <input
+              type="date"
+              aria-label={`${label} to`}
+              value={range.to}
+              onChange={(e) => change({ ...range, to: e.target.value })}
+            />
+          </div>
+        );
+      })()}
     </fieldset>
   );
 }
@@ -720,17 +842,36 @@ function FilterListSettings() {
     objectSetVariable,
     variable,
     properties,
+    filters,
     title,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
     variable: node.data.props.variable,
     properties: node.data.props.properties,
+    filters: node.data.props.filters,
     title: node.data.props.title,
   }));
-  const { declared } = useCanvasVariables();
+  const { workspaceId } = useCanvasEnv();
+  const { declared, resolved } = useCanvasVariables();
   const sets = Object.values(declared).filter((v) => v.kind === "object_set");
   const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const bound = objectSetVariable ? resolved[objectSetVariable] : undefined;
+  const typeId = (bound as { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const typeProperties = type.data?.properties ?? [];
+  const specs = filtersOf(filters, properties);
+  // Written as a list from the first edit on, which is when an older
+  // document's `properties` stops being read.
+  const writeFilters = (next: FilterSpec[]) =>
+    setProp((p: { filters: FilterSpec[] | null }) => (p.filters = next));
+  const dataTypeOf = (property: string) =>
+    typeProperties.find((p) => p.api_name === property)?.data_type;
+
   // p.65-67's worked example, in p.65's order: the Object Set that populates
   // the widget, the filter options that set makes answerable, then the Filter
   // Output. p.66 keeps the middle one out of the way until the first is
@@ -770,17 +911,73 @@ function FilterListSettings() {
           onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
         />
       </label>
-      <label className="field">
-        <span className="field-label">Properties</span>
-        <input
-          value={properties ?? ""}
-          placeholder="region, status"
-          onChange={(e) =>
-            setProp((p: { properties: string }) => (p.properties = e.target.value))
-          }
-        />
-        <span className="field-hint">Comma-separated property names to offer</span>
-      </label>
+      <fieldset className="field" data-testid="filter-list-filters">
+        <legend className="field-label">Filters</legend>
+        {specs.map((spec) => {
+          const allowed = componentsFor(dataTypeOf(spec.property));
+          return (
+            <div key={spec.id} className="row-actions" style={{ marginBottom: 6 }}>
+              <select
+                aria-label="Property"
+                data-testid={`filter-property-${spec.id}`}
+                value={spec.property}
+                onChange={(e) => {
+                  const property = e.target.value;
+                  // A date range on a property that is not a date would write
+                  // a comparison the server refuses; fall back rather than keep it.
+                  const component = componentsFor(dataTypeOf(property)).includes(spec.component)
+                    ? spec.component : "histogram";
+                  writeFilters(specs.map((f) => f.id === spec.id ? { ...f, property, component } : f));
+                }}
+              >
+                {!typeProperties.some((p) => p.api_name === spec.property) && (
+                  <option value={spec.property}>{spec.property}</option>
+                )}
+                {typeProperties.map((p) => (
+                  <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
+                ))}
+              </select>
+              <select
+                aria-label="Filter component"
+                data-testid={`filter-component-${spec.id}`}
+                value={spec.component}
+                onChange={(e) => writeFilters(specs.map((f) => f.id === spec.id
+                  ? { ...f, component: componentOf(e.target.value) } : f))}
+              >
+                {allowed.map((c) => (
+                  <option key={c} value={c}>{FILTER_COMPONENT_LABELS[c]}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn quiet"
+                aria-label={`Remove the ${spec.property} filter`}
+                onClick={() => writeFilters(specs.filter((f) => f.id !== spec.id))}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
+        {/* p.449's Add filter: "Selecting a property here will result in that
+            property being displayed within the Filter List". */}
+        <select
+          aria-label="Add filter"
+          data-testid="filter-add"
+          value=""
+          onChange={(e) => {
+            if (!e.target.value) return;
+            writeFilters([...specs, {
+              id: newFilterId(specs), property: e.target.value, component: "histogram",
+            }]);
+          }}
+        >
+          <option value="">Add filter…</option>
+          {typeProperties.map((p) => (
+            <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
+          ))}
+        </select>
+      </fieldset>
       </>}
       outputs={<>
       <label className="field">
@@ -810,7 +1007,9 @@ function FilterListSettings() {
 
 CanvasFilterList.craft = {
   displayName: "Filter list",
-  props: { objectSetVariable: null, variable: null, properties: "", title: "Filters" },
+  props: {
+    objectSetVariable: null, variable: null, properties: "", filters: null, title: "Filters",
+  },
   related: { settings: FilterListSettings },
 };
 
@@ -3962,9 +4161,12 @@ export function CanvasObjectTable({
             {/* The set says what narrowed it. A table that showed a filtered
                 count with no sign it was filtered is the same trap as a
                 sampled preview that does not say so. */}
+            {/* Each clause in its operator's words: a date range read
+                "at = 2024-03-01" here while this printed every clause as `=`. */}
             {usingSet && setFilters.length > 0
               ? ` where ${setFilters
-                  .map((f) => `${f.property} = ${String(f.value)}`)
+                  .map((f) => describeClause(
+                    { property: f.property, op: f.op ?? "eq", value: f.value }, []))
                   .join(" and ")}`
               : ""}
             {!usingSet && useProperty ? ` where ${filterProperty} = ${String(filterValue)}` : ""}

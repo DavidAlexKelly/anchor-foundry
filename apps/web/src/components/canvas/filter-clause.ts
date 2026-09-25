@@ -181,6 +181,25 @@ export function describe(clause: Clause, properties: readonly Property[]): strin
   return value ? `${name} ${op} ${value}` : `${name} ${op}`;
 }
 
+/** "12 Sites where region is north" — the count, and what narrowed it.
+ *
+ * **Each clause in its own operator's words** (`describe`, above). This
+ * printed every clause as `=`, which was true while a Filter List wrote only
+ * `eq` and `in`; a date range (§463) then read "at = 2024-03-01" for *at least*
+ * the first of March. */
+export function describeSet(
+  total: number,
+  typeName: string | undefined,
+  filters: { property: string; op?: string; value: unknown }[],
+): string {
+  const noun = `${typeName ?? "object"}${total === 1 ? "" : "s"}`;
+  const where = filters.length
+    ? ` where ${filters.map((f) =>
+      describe({ property: f.property, op: f.op ?? "eq", value: f.value }, [])).join(" and ")}`
+    : "";
+  return `${total.toLocaleString()} ${noun}${where}`;
+}
+
 /** Whether the widget could actually remove this clause if asked.
  *
  * **The rule this widget needs and no other widget has.** Pills come from the
