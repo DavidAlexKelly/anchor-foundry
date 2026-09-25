@@ -701,7 +701,9 @@ button { font: inherit; cursor: pointer; }
   min-height: 32px;
   margin-bottom: 10px;
 }
-.canvas-frame-area .canvas-block:hover { border-color: var(--line-strong); }
+/* Builder marks: only while editing (`data-editing`, §460). A reader hovering
+   a table should not see the dashed outline an author uses to find it. */
+.canvas-shell[data-editing] .canvas-frame-area .canvas-block:hover { border-color: var(--line-strong); }
 .canvas-widget-empty { color: var(--ink-soft); font-size: 12.5px; font-style: italic; margin: 0; }
 /* Loop layout (Foundry p.129-136): one embedded module per object. */
 .canvas-loop { display: flex; flex-direction: column; gap: 10px; }
@@ -1760,7 +1762,16 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .review-actions input { flex: 1 1 200px; min-width: 0; }
 
 /* ---- variables panel (ROADMAP phase 2, 1.2) ------------------------------- */
-.canvas-panel-tabs { margin-bottom: 10px; }
+/* **The settings column is 260px and carries seven tabs** (§460): Widget,
+   Variables, Events, Profiler, Metrics, Translations, Check access. In one
+   row three and a half fit, and the rest ran past the column's edge - on a
+   laptop, off the screen, so Profiler and everything after it could not be
+   reached. They wrap instead. */
+.canvas-panel-tabs { margin-bottom: 10px; flex-wrap: wrap; }
+/* A group of settings, not a boxed form section: the browser's default border
+   and inset made one group look unlike every field around it. */
+.canvas-settings fieldset.field { border: 0; padding: 0; margin: 0; min-width: 0; }
+.canvas-settings fieldset.field > legend { padding: 0; }
 .vars-panel { display: grid; gap: 8px; }
 .vars-head { display: flex; align-items: center; justify-content: space-between; }
 .vars-head h3 { margin: 0; font-size: 13px; }
@@ -2254,11 +2265,11 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    is pages you cannot edit without a switcher in the chrome. In the running
    app exactly one renders and this styling never applies. */
 .canvas-page { display: grid; gap: 10px; }
-.canvas-shell .canvas-page {
+.canvas-shell[data-editing] .canvas-page {
   border: 1px dashed var(--line); border-radius: var(--radius);
   padding: 10px; position: relative;
 }
-.canvas-shell .canvas-page.on { border-color: var(--line-strong); }
+.canvas-shell[data-editing] .canvas-page.on { border-color: var(--line-strong); }
 .canvas-page-label {
   margin: 0; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--ink-soft);
@@ -2353,6 +2364,13 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-effect {
   border: 1px solid var(--line); border-radius: 4px; padding: 8px;
   background: var(--paper); display: grid; gap: 6px;
+  /* `minmax(0, 1fr)`, not the default track (§460). A grid item's minimum is
+     its widest descendant's, and an effect's own selects are sized by their
+     longest option - so one long set name made the effect, and the whole
+     Events editor around it, wider than the settings column. The event and
+     panel grids around it did not need the same: §460's sweep removed their
+     copies and nothing moved. */
+  grid-template-columns: minmax(0, 1fr);
 }
 .canvas-effect-head { display: flex; align-items: center; gap: 6px; }
 .canvas-effect-head select { flex: 1 1 auto; min-width: 0; }

@@ -613,6 +613,29 @@ is two rules. **A baseline must pass completely**, and the harness now refuses
 one that does not. And when a test passes under `fresh-e2e.sh` and fails on the
 dev stack, **look for a read that does not retry** before looking anywhere else.
 
+### A screenshot finds what no test was written to look for (§460)
+
+Three defects had been on screen for a long time, and the only thing that
+caught them was taking pictures of the product for a status page:
+
+- The builder's hover outline and page frame drew in **Preview**, and the hover
+  outline on the **reader's own route**. Both were scoped to a class that
+  editing and reading share. They now hang off a `data-editing` mark that only
+  the builder sets.
+- The settings column is 260px and holds **seven tabs**. The fourth onwards ran
+  past its edge, so on a laptop Profiler, Metrics, Translations and Check access
+  were unreachable. The tabs wrap now.
+- An effect card was a grid whose items take their widest descendant's minimum
+  width, so one long set name pushed the Events editor past the column.
+
+None of these fails a behaviour test: every control works, it is only drawn
+where nobody can use it. §460's tests measure positions and computed styles
+instead. The sweep also removed four CSS rules written "to be safe" that no
+test could make matter.
+
+The habit worth keeping is **look at the product after a unit**, not only at
+its tests. §460 found three defects that way in five minutes.
+
 ### What the server saves, a reader must be able to open (§458)
 
 §457's browser test named the Object View widget `CanvasObjectView`, its

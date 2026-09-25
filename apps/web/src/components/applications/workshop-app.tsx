@@ -1367,6 +1367,13 @@ function CanvasBody({
     <div
       className={showChrome ? "canvas-shell" : "canvas-shell canvas-shell--full"}
       data-redact={redacting ? "on" : undefined}
+      // **What the builder's own marks hang off** (§460): the hover outline
+      // on a widget, the dashed frame round each page and overlay. They are
+      // for arranging a module, and Preview is where an author checks what a
+      // reader sees - so they belong to editing, not to the shell. Scoped to
+      // `.canvas-shell` alone, they drew in Preview; scoped to
+      // `.canvas-frame-area`, the hover one drew on the reader's route too.
+      data-editing={enabled ? "true" : undefined}
     >
       {/* Above the profiler's, because it is the one that says something is
           being hidden - and `globals.css` exempts it from the blur, or the
