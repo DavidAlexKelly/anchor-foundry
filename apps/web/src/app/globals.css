@@ -2434,6 +2434,16 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   color: var(--ink-soft); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px;
 }
 .canvas-filter-add { max-width: 320px; }
+/* p.399's Data Freshness: a name and a time per line, sources indented
+   under their type, and a time past p.400's 24 hours marked. */
+.canvas-freshness { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.canvas-freshness-row {
+  display: flex; justify-content: space-between; gap: 12px; font-size: 13px; max-width: 420px;
+}
+.canvas-freshness-source { padding-left: 14px; color: var(--ink-soft); font-size: 12.5px; }
+.canvas-freshness-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.canvas-freshness-time { color: var(--ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.canvas-freshness-time--stale { color: var(--warning); }
 /* p.449's distribution chart: a column per range, its height the range's
    share of the fullest one. A chosen column is the accent. */
 .canvas-filter-distribution {

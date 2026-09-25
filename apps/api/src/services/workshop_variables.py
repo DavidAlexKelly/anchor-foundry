@@ -1988,7 +1988,7 @@ WIDGETS = frozenset({
     "CanvasObjectSetTitle", "CanvasPropertyList", "CanvasLinksWidget",
     "CanvasObjectViewWidget", "CanvasObjectDropdown", "CanvasObjectSelector",
     "CanvasPieChart", "CanvasStepper", "CanvasTimeline", "CanvasMediaPreview",
-    "CanvasIframe", "CanvasDatasetTable", "CanvasObjectTable", "CanvasObjectCards",
+    "CanvasIframe", "CanvasDataFreshness", "CanvasDatasetTable", "CanvasObjectTable", "CanvasObjectCards",
     "CanvasSearch", "CanvasPivotTable", "CanvasTimeSeries", "CanvasEmbeddedModule",
     "CanvasLoopSection", "CanvasChart", "CanvasMap", "CanvasMetricCard",
     "CanvasActionForm",

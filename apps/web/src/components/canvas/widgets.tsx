@@ -287,6 +287,10 @@ import {
 } from "./filter-sql";
 import { Chart, PieChart, SegmentedBarChart, toPoints } from "./charts";
 import { SEGMENT_MODES, segmentModeOf, segmentedFrom } from "./chart-segments";
+import {
+  freshnessLabel, isStale, itemsOf as freshnessItemsOf, newItemId as newFreshnessItemId,
+  type FreshnessItem,
+} from "./data-freshness";
 import { CHART_SORTS, chartSortOf, orientationOf, sortPoints } from "./chart-display";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
@@ -16046,6 +16050,224 @@ CanvasUnused.craft = {
   isCanvas: true,
 };
 
+// ---- Data Freshness (parity workshop.md §10; Foundry p.399-401; §469) --------
+/**
+ * p.399: "The Data Freshness widget enables users to track data freshness
+ * directly within their application by displaying the Last Updated timestamp
+ * corresponding to the most recent index time for configured object types and
+ * datasources."
+ *
+ * **Out of scope until the platform recorded index times, and it now does.**
+ * An object type's is §408's watermark, the newest `updated_at` among its
+ * instances; a datasource's is its last sync into the type
+ * (`object_type_sources.last_synced_at`). Both come from one call,
+ * `/object-types/freshness`, which auto-refresh already polls.
+ *
+ * p.400's format is `data-freshness.ts`: relative within a day, absolute past
+ * it, and a source that has never synced says so in words. The relative ones
+ * tick over without a reload, and the answer is re-read every minute, because
+ * a freshness widget that is itself stale reports the wrong thing about the
+ * one thing it is for.
+ */
+export function CanvasDataFreshness({
+  items = [],
+  title = "Data freshness",
+}: {
+  /** p.401's items: an object type each, with the sources shown under it. */
+  items?: FreshnessItem[];
+  title?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const configured = freshnessItemsOf(items);
+  const ids = configured.map((i) => i.objectTypeId);
+  const fresh = useQuery({
+    queryKey: ["data-freshness", ids.join(",")],
+    queryFn: () => objApi.objectTypeFreshness(workspaceId, ids),
+    enabled: ids.length > 0,
+    refetchInterval: 60_000,
+  });
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const tick = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(tick);
+  }, []);
+  const byType = new Map((fresh.data?.types ?? []).map((t) => [t.object_type_id, t]));
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {title && <p className="field-label">{title}</p>}
+      {configured.length === 0 ? (
+        <p className="canvas-widget-empty">Data freshness - add an object type in Settings</p>
+      ) : (
+        <ul className="canvas-freshness" data-testid="data-freshness">
+          {configured.map((item) => {
+            const type = byType.get(item.objectTypeId);
+            return (
+              <li key={item.id} data-testid={`freshness-${item.id}`}>
+                <div className="canvas-freshness-row">
+                  <span className="canvas-freshness-name">
+                    {type?.display_name ?? (fresh.isPending ? "…" : "An object type you cannot see")}
+                  </span>
+                  {type && (
+                    <FreshnessStamp iso={type.updated_at} now={now} />
+                  )}
+                </div>
+                {item.sources.map((source) => {
+                  const known = type?.sources.find((s) => s.dataset_id === source.datasetId);
+                  return (
+                    <div
+                      key={source.datasetId}
+                      className="canvas-freshness-row canvas-freshness-source"
+                      data-testid={`freshness-source-${source.datasetId}`}
+                    >
+                      <span className="canvas-freshness-name">
+                        {source.name ?? known?.dataset_name ?? "A datasource"}
+                      </span>
+                      {known ? (
+                        <FreshnessStamp iso={known.last_synced_at} now={now} />
+                      ) : type ? (
+                        // Configured, and no longer one of the type's sources
+                        // (or not one this reader can see): said, rather than
+                        // dated with something that is not its index time.
+                        <span className="canvas-freshness-time">Not a source of this type</span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function FreshnessStamp({ iso, now }: { iso: string | null; now: number }) {
+  const stale = isStale(iso, now);
+  return (
+    <span
+      className={`canvas-freshness-time${stale ? " canvas-freshness-time--stale" : ""}`}
+      title={iso ?? undefined}
+    >
+      {freshnessLabel(iso, now)}
+    </span>
+  );
+}
+
+function DataFreshnessSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const {
+    items,
+    title,
+    actions: { setProp },
+  } = useNode((node) => ({ items: node.data.props.items, title: node.data.props.title }));
+  const configured = freshnessItemsOf(items);
+  const write = (next: FreshnessItem[]) =>
+    setProp((p: { items: FreshnessItem[] }) => (p.items = next));
+  const ids = configured.map((i) => i.objectTypeId);
+  // The sources each chosen type has, from the same answer the widget reads,
+  // so the panel offers exactly what the widget can report on.
+  const fresh = useQuery({
+    queryKey: ["data-freshness", ids.join(",")],
+    queryFn: () => objApi.objectTypeFreshness(workspaceId, ids),
+    enabled: ids.length > 0,
+  });
+  const sourcesOf = (typeId: string) =>
+    fresh.data?.types.find((t) => t.object_type_id === typeId)?.sources ?? [];
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          value={title ?? ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      {configured.map((item) => (
+        <fieldset key={item.id} className="field" data-testid={`freshness-item-${item.id}`}>
+          <legend className="field-label">Object type</legend>
+          <TypePicker
+            workspaceId={workspaceId}
+            value={item.objectTypeId}
+            testId={`freshness-type-${item.id}`}
+            onChange={(typeId) => write(configured.map((i) => i.id === item.id
+              // A new type has other sources: the old ones would name
+              // datasets that are not this type's.
+              ? { ...i, objectTypeId: typeId, sources: [] } : i))}
+          />
+          {sourcesOf(item.objectTypeId).map((source) => {
+            const chosen = item.sources.find((s) => s.datasetId === source.dataset_id);
+            return (
+              <div key={source.dataset_id} className="row-actions" style={{ marginTop: 4 }}>
+                <label className="canvas-toggle">
+                  <input
+                    type="checkbox"
+                    data-testid={`freshness-source-toggle-${source.dataset_id}`}
+                    checked={!!chosen}
+                    onChange={(e) => write(configured.map((i) => i.id !== item.id ? i : {
+                      ...i,
+                      sources: e.target.checked
+                        ? [...i.sources, { datasetId: source.dataset_id }]
+                        : i.sources.filter((s) => s.datasetId !== source.dataset_id),
+                    }))}
+                  />
+                  {" "}{source.dataset_name}
+                </label>
+                {chosen && (
+                  // p.401's Override resource name.
+                  <input
+                    aria-label={`Name shown for ${source.dataset_name}`}
+                    data-testid={`freshness-source-name-${source.dataset_id}`}
+                    placeholder={source.dataset_name}
+                    value={chosen.name ?? ""}
+                    onChange={(e) => write(configured.map((i) => i.id !== item.id ? i : {
+                      ...i,
+                      sources: i.sources.map((s) => s.datasetId !== source.dataset_id ? s
+                        : { datasetId: s.datasetId, ...(e.target.value ? { name: e.target.value } : {}) }),
+                    }))}
+                  />
+                )}
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            className="btn quiet"
+            aria-label="Remove this object type"
+            onClick={() => write(configured.filter((i) => i.id !== item.id))}
+          >
+            Remove
+          </button>
+        </fieldset>
+      ))}
+      {/* p.401's Add item: an object type first, since its sources depend on it. */}
+      <div className="field">
+        <span className="field-label">Add item</span>
+        <TypePicker
+          workspaceId={workspaceId}
+          value={null}
+          testId="freshness-add-type"
+          placeholder="Choose an object type…"
+          onChange={(typeId) => write([
+            ...configured, { id: newFreshnessItemId(configured), objectTypeId: typeId, sources: [] },
+          ])}
+        />
+      </div>
+    </>
+  );
+}
+
+CanvasDataFreshness.craft = {
+  displayName: "Data freshness",
+  props: { items: [], title: "Data freshness" },
+  related: { settings: DataFreshnessSettings },
+};
+
 export const CANVAS_RESOLVER = {
   CanvasHeader,
   CanvasPage,
@@ -16077,6 +16299,7 @@ export const CANVAS_RESOLVER = {
   CanvasTimeline,
   CanvasMediaPreview,
   CanvasIframe,
+  CanvasDataFreshness,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,

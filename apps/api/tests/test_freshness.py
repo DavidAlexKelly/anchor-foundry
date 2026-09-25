@@ -178,7 +178,9 @@ def test_the_count_is_reported_beside_the_timestamp(
     has no route that removes a source.
     """
     got = ask(client, fx, [world["type"]])[0]
-    assert set(got) == {"object_type_id", "updated_at", "count"}, got
+    # And `sources` since §469, which the Data Freshness widget reads and the
+    # auto-refresh comparator does not.
+    assert set(got) == {"object_type_id", "updated_at", "count", "sources", "display_name"}, got
     assert isinstance(got["count"], int), got
 
 
@@ -223,3 +225,56 @@ def test_a_viewer_may_ask(client: TestClient, fx: Fixture, world: dict) -> None:
         json={"object_type_ids": [world["type"]]},
     )
     assert r.status_code == 200, r.text
+
+
+# ---- p.400's datasources (§469, the Data Freshness widget) ------------------------
+def test_each_source_says_when_it_last_synced(client: TestClient, fx: Fixture) -> None:
+    """p.400: "the most recent index time for configured object types and
+    datasources". A source's is its last sync into the type; one that has
+    never synced says so with a null rather than a date."""
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"FreshTwo{fx.tag}", "display_name": "Fresh two",
+              "properties": [{"api_name": "name", "data_type": "string"}]},
+    )
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+    datasets = {}
+    for label in ("Alpha", "Beta"):
+        r = client.post(
+            f"{dbase(fx)}/upload", headers=hdr(fx.editor_sub),
+            data={"name": f"{label}Feed{fx.tag}"},
+            files={"file": ("w.csv", io.BytesIO(ROWS), "text/csv")},
+        )
+        assert r.status_code == 201, r.text
+        datasets[label] = r.json()["id"]
+        r = client.post(
+            sbase(fx), headers=hdr(fx.editor_sub),
+            json={"object_type_id": type_id, "dataset_id": datasets[label],
+                  "primary_key_column": "widget_id", "column_mappings": {"name": "name"}},
+        )
+        assert r.status_code == 201, r.text
+        if label == "Alpha":
+            s = client.post(f"{sbase(fx)}/{r.json()['id']}/sync",
+                            headers=hdr(fx.editor_sub), json={})
+            assert s.status_code == 200, s.text
+
+    [got] = ask(client, fx, [type_id])
+    assert got["display_name"] == "Fresh two"
+    sources = got["sources"]
+    assert [s["dataset_name"] for s in sources] == [f"AlphaFeed{fx.tag}", f"BetaFeed{fx.tag}"]
+    alpha, beta = sources
+    assert alpha["dataset_id"] == datasets["Alpha"] and alpha["last_synced_at"], alpha
+    assert alpha["sync_status"] != "never_synced", alpha
+    assert beta["last_synced_at"] is None and beta["sync_status"] == "never_synced", beta
+
+
+def test_a_type_with_no_source_has_an_empty_list(client: TestClient, fx: Fixture) -> None:
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"FreshNone{fx.tag}", "display_name": "Fresh none",
+              "properties": [{"api_name": "name", "data_type": "string"}]},
+    )
+    assert r.status_code == 201, r.text
+    [got] = ask(client, fx, [r.json()["id"]])
+    assert got["sources"] == []

@@ -5001,6 +5001,15 @@ class FreshnessIn(BaseModel):
     object_type_ids: list[UUID]
 
 
+class SourceFreshness(BaseModel):
+    dataset_id: UUID
+    dataset_name: str
+    last_synced_at: datetime | None
+    """Null when the source has never synced, which the widget says in words
+    rather than as a date."""
+    sync_status: str
+
+
 class TypeFreshness(BaseModel):
     object_type_id: UUID
     """When this type last changed, as ISO text, or null when it holds nothing.
@@ -5012,6 +5021,11 @@ class TypeFreshness(BaseModel):
     module once, for nothing."""
     updated_at: str | None
     count: int
+    display_name: str = ""
+    """So the Data Freshness widget can name what it reports on (§469)."""
+    sources: list[SourceFreshness] = []
+    """Each datasource's last sync into this type (§469, p.400), in name
+    order. The Data Freshness widget reads these; auto-refresh ignores them."""
 
 
 class FreshnessOut(BaseModel):
@@ -5066,15 +5080,21 @@ async def object_type_freshness(
         out: list[TypeFreshness] = []
         for type_id in wanted:
             try:
-                await ontology_service.get_type(conn, access.workspace_id, type_id)
+                declared = await ontology_service.get_type(conn, access.workspace_id, type_id)
             except Exception:
                 continue
             newest, count = await store.freshness(
                 search_prefix=prefix, object_type_id=type_id
             )
-            out.append(
-                TypeFreshness(object_type_id=type_id, updated_at=newest, count=count)
-            )
+            sources = await ontology_service.source_freshness(conn, type_id)
+            out.append(TypeFreshness(
+                object_type_id=type_id, updated_at=newest, count=count,
+                display_name=declared["display_name"],
+                sources=[SourceFreshness(
+                    dataset_id=r["dataset_id"], dataset_name=r["dataset_name"],
+                    last_synced_at=r["last_synced_at"], sync_status=str(r["sync_status"]),
+                ) for r in sources],
+            ))
         return FreshnessOut(types=out)
 
 
