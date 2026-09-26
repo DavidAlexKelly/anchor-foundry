@@ -21,7 +21,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import eventually, open_module
+from conftest import open_builder, save, settled, eventually, open_module
 
 SENSORS = b"id,name\nS1,North sensor\nS2,South sensor\n"
 # S1 rises; S2 is flat and far higher. Two shapes, so "a line is drawn" cannot
@@ -37,7 +37,7 @@ READINGS = (
 
 
 def build(api, name: str, *, position: str = "side_by_side", show: bool = True,
-          transforms: list | None = None):
+          transforms: list | None = None, card: dict | None = None):
     mod = Module(api, name)
     sensors = mod.api.upload_csv(
         f"{mod.base}/datasets/upload", f"sensors_{mod.tag}", SENSORS,
@@ -88,7 +88,8 @@ def build(api, name: str, *, position: str = "side_by_side", show: bool = True,
                                "label": "Sensors",
                                "showVisualization": show,
                                "visualizationPosition": position,
-                               "seriesVariable": "v_series" if show else None}},
+                               "seriesVariable": "v_series" if show else None,
+                               **(card or {})}},
         }),
         "variables": {
             "v_all": {"id": "v_all", "kind": "object_set", "label": "All sensors",
@@ -232,3 +233,80 @@ def test_the_line_is_the_series_after_its_transforms(page, api):
     assert [p["value"] for p in asked.value.json()["points"]] == [10, 30, 60]
     eventually(lambda: page.get_by_test_id("metric-spark-line").count(),
                lambda n: n == 1, what="the transformed sparkline")
+
+
+
+# ---- §526: size, description, time range and baseline (p.326-330) --------------
+def spark_values(page, name: str = "North sensor") -> tuple[str, list]:
+    with page.expect_response(lambda r: "/series/readings/points" in r.url) as asked:
+        pick(page, name)
+    return asked.value.url, [p["value"] for p in asked.value.json()["points"]]
+
+
+def test_the_card_takes_its_size_and_says_its_description(page, api):
+    """p.326's size and p.328's "i tooltip", with p.592's static baseline
+    drawn beside the line."""
+    mod = build(api, "Metric display", card={
+        "size": "large", "description": "Sensors reporting now", "baseline": 25})
+    open_module(page, mod)
+    expect(page.get_by_test_id("metric-card")).to_have_attribute("data-size", "large")
+    info = page.get_by_test_id("metric-description")
+    expect(info).to_have_attribute("title", "Sensors reporting now")
+    expect(info).to_have_attribute("aria-label", "Sensors reporting now")
+    pick(page, "North sensor")
+    expect(page.get_by_test_id("metric-spark-line-baseline")).to_have_count(1)
+
+
+def test_a_card_with_no_description_has_no_marker_and_no_baseline(page, module):
+    open_module(page, module)
+    expect(page.get_by_test_id("metric-card")).to_have_attribute("data-size", "regular")
+    expect(page.get_by_test_id("metric-description")).to_have_count(0)
+    pick(page, "North sensor")
+    eventually(lambda: page.get_by_test_id("metric-spark-line").count(),
+               lambda n: n == 1, what="the sparkline")
+    expect(page.get_by_test_id("metric-spark-line-baseline")).to_have_count(0)
+
+
+def test_a_custom_range_narrows_the_line(page, api):
+    """p.330's Custom range: from the 2nd, S1's 10, 20, 30 is 20, 30."""
+    mod = build(api, "Metric range", card={"sparkRange": "custom", "sparkStart": "2026-01-02T00:00"})
+    open_module(page, mod)
+    url, values = spark_values(page)
+    assert "transforms=" in url, url
+    assert values == [20, 30]
+
+
+def test_the_last_week_of_january_readings_is_empty(page, api):
+    """p.330's Last week counts back from now, and these readings are from
+    January: the line says there are none rather than drawing January."""
+    mod = build(api, "Metric last week", card={"sparkRange": "week"})
+    open_module(page, mod)
+    _, values = spark_values(page)
+    assert values == []
+    expect(page.get_by_test_id("metric-spark-line-empty")).to_be_visible()
+
+
+def test_the_panel_sets_all_four(page, api):
+    mod = build(api, "Metric display panel")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row").filter(has_text="Metric card").first.click()
+    page.get_by_test_id("metric-description-input").fill("Readings so far")
+    page.get_by_test_id("metric-size").select_option("compact")
+    page.get_by_test_id("metric-spark-range").select_option("custom")
+    page.get_by_test_id("metric-spark-start").fill("2026-01-03T00:00")
+    page.get_by_test_id("metric-spark-end").fill("2026-01-02T00:00")
+    expect(page.get_by_test_id("metric-spark-range-problem")).to_have_text(
+        "The range starts after it ends.")
+    page.get_by_test_id("metric-spark-start").fill("2026-01-02T00:00")
+    page.get_by_test_id("metric-spark-end").fill("2026-01-03T00:00")
+    expect(page.get_by_test_id("metric-spark-range-problem")).to_have_count(0)
+    page.get_by_test_id("metric-spark-baseline").fill("15")
+    save(page)
+
+    open_module(page, mod)
+    expect(page.get_by_test_id("metric-card")).to_have_attribute("data-size", "compact")
+    expect(page.get_by_test_id("metric-description")).to_have_attribute("title", "Readings so far")
+    _, values = spark_values(page)
+    assert values == [20, 30]
+    expect(page.get_by_test_id("metric-spark-line-baseline")).to_have_count(1)

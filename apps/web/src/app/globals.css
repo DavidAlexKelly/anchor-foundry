@@ -2243,6 +2243,15 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 .metric-value { font-size: 30px; font-weight: 600; line-height: 1.1; }
 .metric-value.soft { color: var(--ink-soft); font-weight: 400; }
+/* p.326's metric sizes (§526). Regular is the size above. */
+.metric-card--compact .metric-value { font-size: 18px; }
+.metric-card--large .metric-value { font-size: 44px; }
+/* p.328's "i tooltip": the description on hover, and to a screen reader as
+   the marker's label. */
+.metric-info {
+  display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 50%;
+  font-size: 10px; text-transform: none; border: 1px solid var(--line); cursor: help;
+}
 
 /* p.329's "Show visualization?" (§403). The number and the line are one block;
    Position chooses the direction, so there is one arrangement rather than two
@@ -3448,6 +3457,9 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    rather than a bigger number. */
 .canvas-series-spark { flex: 1 1 auto; min-width: 24px; height: 18px; }
 .canvas-series-spark path { stroke: var(--accent); stroke-width: 1.5; }
+/* p.592's baseline: "rendered … in a visually distinguishing way (e.g. as a
+   dotted line)" (§526). */
+.canvas-series-spark .canvas-series-baseline { stroke: var(--ink-soft); stroke-width: 1; }
 .canvas-series-empty, .canvas-series-pending { font-size: 11px; white-space: nowrap; }
 .field-inline { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 

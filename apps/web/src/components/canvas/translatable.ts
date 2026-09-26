@@ -48,14 +48,15 @@ export type Table = Record<string, WorkshopTranslationEntry>;
  * | Tabs widget Label | `CanvasPage.title` — our Tabs widget has no props of its own; a tab *is* a page, and its label is that page's title |
  * | Button Group Text | `CanvasButton.label` |
  * | Metric Card Label | `CanvasMetricCard.label` |
+ * | Metric Card Description | `CanvasMetricCard.description` (§526) |
  * | Markdown Content | `CanvasMarkdown.text` |
  * | Pivot Table Aggregation Titles | `CanvasPivotTable.title` |
  * | Filter List Section Titles | `CanvasFilterList.title` |
  *
  * **Two of p.208's entries have nothing here to point at, and that is a fact
  * about our model rather than a gap in this list.** "Description" on Button
- * Group and Metric Card is a second static string those widgets do not have.
- * And "Object Table and Object List widget Column Titles" is not ours to
+ * Group is a second static string that widget does not have (the Metric
+ * Card's arrived with §526). And "Object Table and Object List widget Column Titles" is not ours to
  * translate: our `columns` prop holds ontology **api_names**, and a column
  * header is the property's `display_name` from the ontology — so translating
  * it is an ontology feature and doing it here would mean a module quietly
@@ -69,7 +70,7 @@ const TRANSLATABLE_PROPS: Record<string, readonly string[]> = {
   CanvasText: ["text"],
   CanvasMarkdown: ["text"],
   CanvasButton: ["label"],
-  CanvasMetricCard: ["label"],
+  CanvasMetricCard: ["label", "description"],
   CanvasPivotTable: ["title"],
   CanvasFilterList: ["title"],
   CanvasObjectSetTitle: ["titleOverride"],

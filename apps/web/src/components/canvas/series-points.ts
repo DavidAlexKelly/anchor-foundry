@@ -47,8 +47,15 @@ export interface SeriesRead {
 export function useSeriesPoints(
   workspaceId: string,
   seriesVariable: string | null | undefined,
+  /** Transforms the widget adds after the variable's own: the Metric Card's
+   * time range (§526), which is the widget's setting rather than the
+   * variable's (p.330). */
+  extra: SeriesTransform[] = [],
 ): SeriesRead {
-  const ref = useCanvasVariable(seriesVariable ?? null) as SeriesRef | null;
+  const variableRef = useCanvasVariable(seriesVariable ?? null) as SeriesRef | null;
+  const ref = variableRef && extra.length
+    ? { ...variableRef, transforms: [...(variableRef.transforms ?? []), ...extra] }
+    : variableRef;
   const bound = !!seriesVariable;
   const result = useQuery({
     // Keyed on the reference rather than the variable id: the same variable

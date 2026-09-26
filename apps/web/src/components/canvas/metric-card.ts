@@ -177,3 +177,98 @@ export function sparkEmptyReason(show: unknown, seriesVariable: unknown): string
   if (typeof seriesVariable === "string" && seriesVariable !== "") return null;
   return "Pick a time series set variable to draw";
 }
+
+// ---- §526: p.326's size, p.328's description, p.330's time range and baseline ----
+/** p.326: "Sets the display size for every metric in the widget. The options
+ * here are Compact, Regular, and Large." Foundry's words as the labels, and
+ * the stored values lower-case like the positions'. */
+export const METRIC_SIZES: Record<string, string> = {
+  compact: "Compact",
+  regular: "Regular",
+  large: "Large",
+};
+export const DEFAULT_METRIC_SIZE = "regular";
+
+export function metricSizeOf(raw: unknown): string {
+  const value = String(raw ?? "");
+  return value in METRIC_SIZES ? value : DEFAULT_METRIC_SIZE;
+}
+
+/** p.328's description: "displayed as a tooltip when a user hovers over the
+ * i tooltip". Blank is none, so an emptied box leaves no marker behind. */
+export function descriptionOf(raw: unknown): string | null {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  return text === "" ? null : text;
+}
+
+/** p.330's sparkline time range: "Preset options include All time, Last hour,
+ * Last day, and Last week, but selecting Custom range opens a detailed range
+ * selector". The exact half of the custom range is built; p.591's relative
+ * half is not. */
+export const SPARK_RANGES: Record<string, string> = {
+  all: "All time",
+  hour: "Last hour",
+  day: "Last day",
+  week: "Last week",
+  custom: "Custom range",
+};
+export const DEFAULT_SPARK_RANGE = "all";
+
+export function sparkRangeOf(raw: unknown): string {
+  const value = String(raw ?? "");
+  return value in SPARK_RANGES ? value : DEFAULT_SPARK_RANGE;
+}
+
+const RANGE_MS: Record<string, number> = { hour: 3_600_000, day: 86_400_000, week: 604_800_000 };
+
+/** A timestamp as the series stores it: UTC, to the second, no zone. */
+function utc(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19);
+}
+
+/** The time range as a `range` transform appended to the series' own, or
+ * null when it asks for everything. `now` is when the page first needed it
+ * (p.591: "the current time is computed when it is first needed … It then
+ * stays constant unless the web page is reloaded"). A custom range with
+ * neither end is everything too, rather than a transform the server refuses. */
+export function sparkRangeTransform(
+  range: unknown, start: unknown, end: unknown, now: number,
+): { kind: "range"; start: string | null; end: string | null } | null {
+  const which = sparkRangeOf(range);
+  if (which in RANGE_MS) return { kind: "range", start: utc(now - (RANGE_MS[which] ?? 0)), end: null };
+  if (which !== "custom") return null;
+  const from = typeof start === "string" && start !== "" ? start : null;
+  const to = typeof end === "string" && end !== "" ? end : null;
+  return from || to ? { kind: "range", start: from, end: to } : null;
+}
+
+/** What is wrong with a custom range, or null. */
+export function sparkRangeProblem(range: unknown, start: unknown, end: unknown): string | null {
+  if (sparkRangeOf(range) !== "custom") return null;
+  if (typeof start === "string" && typeof end === "string" && start !== "" && end !== "" && start > end) {
+    return "The range starts after it ends.";
+  }
+  return null;
+}
+
+let firstNeeded: number | null = null;
+
+/** p.591's "current time", fixed at the first ask for the life of the page, so
+ * two cards with "Last day" agree about when the day began. */
+export function pageNow(clock: () => number = Date.now): number {
+  if (firstNeeded === null) firstNeeded = clock();
+  return firstNeeded;
+}
+
+/** For tests: forget the fixed time, as a reload would. */
+export function resetPageNow(): void {
+  firstNeeded = null;
+}
+
+/** p.592's Static baseline: "the value of the baseline for every time series
+ * is a static user-specified value". A finite number, or none. */
+export function baselineOf(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const value = typeof raw === "number" ? raw : Number(raw);
+  return Number.isFinite(value) ? value : null;
+}

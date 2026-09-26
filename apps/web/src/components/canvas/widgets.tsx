@@ -117,6 +117,9 @@ import {
   sparkEmptyReason as metricSparkEmptyReason,
   sparkPositionOf as metricSparkPositionOf,
   valueLabel as metricValueLabel,
+  METRIC_SIZES, SPARK_RANGES, baselineOf as metricBaselineOf,
+  descriptionOf as metricDescriptionOf, metricSizeOf, pageNow, sparkRangeOf as metricSparkRangeOf,
+  sparkRangeProblem as metricSparkRangeProblem, sparkRangeTransform as metricSparkRangeTransform,
 } from "./metric-card";
 import { ValueFormatEditor } from "@/components/value-format-editor";
 import {
@@ -13567,8 +13570,24 @@ export function CanvasMetricCard({
   seriesVariable = null,
   valueFormat = null,
   valueRules = null,
+  size = "regular",
+  description = "",
+  sparkRange = "all",
+  sparkStart = null,
+  sparkEnd = null,
+  baseline = null,
 }: {
   objectSetVariable?: string | null;
+  /** p.326's metric size (§526). */
+  size?: string;
+  /** p.328's description, shown on the "i tooltip" (§526). */
+  description?: string;
+  /** p.330's sparkline time range, and a custom range's ends (§526). */
+  sparkRange?: string;
+  sparkStart?: string | null;
+  sparkEnd?: string | null;
+  /** p.330's baseline, p.592's Static kind (§526). */
+  baseline?: unknown;
   /** p.310's six, as `metric-card.ts` lists them. */
   aggregation?: string;
   property?: string | null;
@@ -13600,7 +13619,17 @@ export function CanvasMetricCard({
   // p.175's rules, matched against the number this card is showing. One match
   // for both marks, the same as the table's column.
   const cardRules = useMemo(() => rulesOf(valueRules), [valueRules]);
-  const spark = useSeriesPoints(workspaceId, drawsSpark ? seriesVariable : null);
+  // p.330's time range, as a range transform after the variable's own. The
+  // widget's, not the variable's: two cards can show one series over two
+  // ranges. `pageNow` is p.591's "current time … when it is first needed".
+  const rangeTransform = useMemo(
+    () => metricSparkRangeTransform(sparkRange, sparkStart, sparkEnd, pageNow()),
+    [sparkRange, sparkStart, sparkEnd],
+  );
+  const spark = useSeriesPoints(
+    workspaceId, drawsSpark ? seriesVariable : null, rangeTransform ? [rangeTransform] : [],
+  );
+  const info = metricDescriptionOf(description);
   const sparkMissing = metricSparkEmptyReason(showVisualization, seriesVariable);
 
   // `null` while the setting is unfinished - an aggregation whose property has
@@ -13658,8 +13687,17 @@ export function CanvasMetricCard({
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
-      <div className="metric-card">
-        <span className="metric-label">{label || "Metric"}</span>
+      <div className={`metric-card metric-card--${metricSizeOf(size)}`} data-testid="metric-card"
+           data-size={metricSizeOf(size)}>
+        <span className="metric-label">
+          {label || "Metric"}
+          {info && (
+            <span className="metric-info" title={info} aria-label={info} role="img"
+                  data-testid="metric-description">
+              i
+            </span>
+          )}
+        </span>
         {/* p.329's Position: "Side-by-side (alongside) or Stacked (under)
             with the metric value". The number and the line are one block
             either way - the setting chooses the direction, so there is one
@@ -13685,6 +13723,7 @@ export function CanvasMetricCard({
                   pending={spark.isPending}
                   testId="metric-spark-line"
                   colour={strokeFor(cardPaint)}
+                  baseline={metricBaselineOf(baseline)}
                 />
               )}
             </span>
@@ -13828,7 +13867,7 @@ function MetricCardSettings() {
   const {
     objectSetVariable, aggregation, property, label,
     showVisualization, visualizationPosition, seriesVariable, valueFormat,
-    valueRules,
+    valueRules, size, description, sparkRange, sparkStart, sparkEnd, baseline,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -13840,7 +13879,14 @@ function MetricCardSettings() {
     showVisualization: node.data.props.showVisualization,
     visualizationPosition: node.data.props.visualizationPosition,
     seriesVariable: node.data.props.seriesVariable,
+    size: node.data.props.size,
+    description: node.data.props.description,
+    sparkRange: node.data.props.sparkRange,
+    sparkStart: node.data.props.sparkStart,
+    sparkEnd: node.data.props.sparkEnd,
+    baseline: node.data.props.baseline,
   }));
+  const rangeProblem = metricSparkRangeProblem(sparkRange, sparkStart, sparkEnd);
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   // p.329: "Time series set: The time series that is to be visualized. This is
   // specified using a Time series set variable". Only those - offering the
@@ -13891,6 +13937,29 @@ function MetricCardSettings() {
           value={label ?? ""}
           onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
         />
+      </label>
+      {/* p.328: "Sets optional description text for the metric. This
+          description text is displayed as a tooltip". */}
+      <label className="field">
+        <span className="field-label">Description</span>
+        <input
+          value={(description as string) ?? ""}
+          data-testid="metric-description-input"
+          onChange={(e) => setProp((p: { description: string }) => (p.description = e.target.value))}
+        />
+      </label>
+      {/* p.326: "Sets the display size for every metric in the widget." */}
+      <label className="field">
+        <span className="field-label">Size</span>
+        <select
+          value={metricSizeOf(size)}
+          data-testid="metric-size"
+          onChange={(e) => setProp((p: { size: string }) => (p.size = e.target.value))}
+        >
+          {Object.entries(METRIC_SIZES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
       </label>
       <label className="field">
         <span className="field-label">Shows</span>
@@ -14008,6 +14077,61 @@ function MetricCardSettings() {
               ))}
             </select>
           </label>
+          {/* p.330: "Time range: Specifies the time range for which data should
+              be displayed." Last hour, day and week count back from when the
+              page first needed the time (p.591). */}
+          <label className="field">
+            <span className="field-label">Time range</span>
+            <select
+              value={metricSparkRangeOf(sparkRange)}
+              data-testid="metric-spark-range"
+              onChange={(e) => setProp((p: { sparkRange: string }) => (p.sparkRange = e.target.value))}
+            >
+              {Object.entries(SPARK_RANGES).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+          </label>
+          {metricSparkRangeOf(sparkRange) === "custom" && (
+            <>
+              <label className="field">
+                <span className="field-label">From (UTC)</span>
+                <input
+                  type="datetime-local"
+                  data-testid="metric-spark-start"
+                  value={(sparkStart as string) ?? ""}
+                  onChange={(e) => setProp((p: { sparkStart: string | null }) =>
+                    (p.sparkStart = e.target.value || null))}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">To (UTC)</span>
+                <input
+                  type="datetime-local"
+                  data-testid="metric-spark-end"
+                  value={(sparkEnd as string) ?? ""}
+                  onChange={(e) => setProp((p: { sparkEnd: string | null }) =>
+                    (p.sparkEnd = e.target.value || null))}
+                />
+              </label>
+              {rangeProblem && (
+                <span className="field-hint" data-testid="metric-spark-range-problem">{rangeProblem}</span>
+              )}
+            </>
+          )}
+          {/* p.330's Baseline, as p.592's Static kind: "a static
+              user-specified value". Empty draws none. */}
+          <label className="field">
+            <span className="field-label">Baseline</span>
+            <input
+              type="number"
+              data-testid="metric-spark-baseline"
+              value={baseline === null || baseline === undefined ? "" : String(baseline)}
+              onChange={(e) => setProp((p: { baseline: number | null }) =>
+                (p.baseline = e.target.value === "" ? null : Number(e.target.value)))}
+            />
+            <span className="field-hint">A dotted line at this value, beside the sparkline.</span>
+          </label>
         </>
       )}
       </>}
@@ -14022,6 +14146,8 @@ CanvasMetricCard.craft = {
     valueFormat: null, valueRules: null,
     showVisualization: false, visualizationPosition: DEFAULT_SPARK_POSITION,
     seriesVariable: null,
+    size: "regular", description: "", sparkRange: "all", sparkStart: null, sparkEnd: null,
+    baseline: null,
   },
   related: { settings: MetricCardSettings },
 };

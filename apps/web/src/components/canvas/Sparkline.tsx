@@ -7,7 +7,7 @@
  * visualization?"). One drawing, two widgets (§292) - two would be two places
  * for the stroke, the empty wording and the non-scaling trick to drift.
  */
-import { emptyReason, path, type Point } from "./sparkline";
+import { emptyReason, levelY, path, type Point } from "./sparkline";
 
 /** The drawing box, in the SVG's own units.
  *
@@ -22,6 +22,7 @@ export function Sparkline({
   pending = false,
   testId = "series-spark",
   colour,
+  baseline = null,
 }: {
   points: readonly Point[] | undefined;
   pending?: boolean;
@@ -32,6 +33,10 @@ export function Sparkline({
    * Undefined leaves the stylesheet's `var(--accent)` alone rather than
    * resolving it here, so an unpainted line still follows the theme. */
   colour?: string;
+  /** p.592's baseline: "an additional time series line, rendered in
+   * combination with a sparkline in a visually distinguishing way (e.g. as a
+   * dotted line)". Null draws none. */
+  baseline?: number | null;
 }) {
   if (pending) {
     // Distinct from "no readings", which is a fact about the data rather than
@@ -40,7 +45,8 @@ export function Sparkline({
     return <span className="soft canvas-series-pending">…</span>;
   }
   const list = points ?? [];
-  const d = path(list, BOX);
+  const d = path(list, BOX, baseline);
+  const level = levelY(list, BOX, baseline);
   if (!d) {
     // Said rather than left blank: "there are no readings" and "there is one
     // reading" are different answers, and an empty box gives neither.
@@ -69,6 +75,15 @@ export function Sparkline({
         // hex, and a stylesheet cannot enumerate those.
         style={colour ? { stroke: colour } : undefined}
       />
+      {level !== null && (
+        <line
+          x1={0} x2={BOX.width} y1={level} y2={level}
+          className="canvas-series-baseline"
+          strokeDasharray="2 2"
+          vectorEffect="non-scaling-stroke"
+          data-testid={`${testId}-baseline`}
+        />
+      )}
     </svg>
   );
 }

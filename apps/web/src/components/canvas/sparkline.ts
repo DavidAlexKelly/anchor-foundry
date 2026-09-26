@@ -75,8 +75,12 @@ export function usable(points: readonly Point[]): Point[] {
  * NaN. A line that is genuinely flat should be drawn flat - through the
  * middle - and that is what a band around the value produces.
  */
-export function range(points: readonly Point[]): { low: number; high: number } {
-  const values = points.map((p) => p.value as number);
+export function range(
+  points: readonly Point[], also: number | null = null,
+): { low: number; high: number } {
+  // `also` is a baseline (§526), which has to fit in the box beside the line
+  // or it is drawn off the edge of it.
+  const values = points.map((p) => p.value as number).concat(also === null ? [] : [also]);
   if (values.length === 0) return { low: 0, high: 1 };
   const low = Math.min(...values);
   const high = Math.max(...values);
@@ -97,7 +101,7 @@ export function range(points: readonly Point[]): { low: number; high: number } {
  * column of lines reads as a different kind of thing rather than as a shorter
  * history.
  */
-export function path(points: readonly Point[], box: Box): string {
+export function path(points: readonly Point[], box: Box, also: number | null = null): string {
   const drawn = usable(points);
   if (drawn.length < 2) return "";
   const times = drawn.map((p) => Date.parse(p.at));
@@ -105,7 +109,7 @@ export function path(points: readonly Point[], box: Box): string {
   // for the type checker rather than for a case that can happen.
   const first = times[0] ?? 0;
   const span = (times[times.length - 1] ?? first) - first;
-  const { low, high } = range(drawn);
+  const { low, high } = range(drawn, also);
   const height = high - low;
   return drawn
     .map((p, i) => {
@@ -146,4 +150,15 @@ export function emptyReason(points: readonly Point[]): string | null {
   if (drawn.length === 0) return "No readings";
   if (drawn.length === 1) return "One reading";
   return null;
+}
+
+/** Where a baseline sits in the box the line was drawn in (§526; p.592), or
+ * null when there is no line to sit it beside. The same scale as `path`, so
+ * the line crosses the baseline where its values cross the baseline's. */
+export function levelY(points: readonly Point[], box: Box, level: number | null): number | null {
+  if (level === null) return null;
+  const drawn = usable(points);
+  if (drawn.length < 2) return null;
+  const { low, high } = range(drawn, level);
+  return round(box.height - (level - low) / (high - low) * box.height);
 }
