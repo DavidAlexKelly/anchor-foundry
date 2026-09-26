@@ -32,7 +32,7 @@ import { canvas as canvasApi, objects as objectsApi } from "@/lib/api";
 import type { WorkshopTransform, WorkshopVariable, WorkshopVariableKind } from "@/lib/types";
 import { newVariableId, usagesOf } from "@/lib/workshop-module";
 import { OPERATOR_LABELS, operatorsFor } from "./filter-clause";
-import { ROUTABLE_KINDS } from "./routing";
+import { routable as isRoutable, routingHint } from "./routing";
 import { parseStructDefault } from "@/lib/struct-fields";
 import { VariableLineage } from "./VariableLineage";
 import {
@@ -604,11 +604,16 @@ export function VariablesPanel({
                           value={variable.element ?? ""}
                           disabled={readOnly}
                           onChange={(e) => {
-                            const element = e.target.value;
-                            const { element: _drop, ...rest } = variable;
+                            // `update` spreads the patch over the variable, so
+                            // "untyped" has to be said as `undefined` - leaving
+                            // the key out kept the old element. And an untyped
+                            // list cannot be in the URL (p.199, §505), so it
+                            // leaves the URL with its type rather than being
+                            // saved into a document the API refuses.
+                            const element = e.target.value || undefined;
                             update(id, (element
-                              ? { ...rest, element }
-                              : rest) as Partial<WorkshopVariable>);
+                              ? { element }
+                              : { element, url_behavior: undefined }) as Partial<WorkshopVariable>);
                           }}
                         >
                           <option value="">— untyped</option>
@@ -753,7 +758,7 @@ function InterfaceEditor({
 }) {
   const externalId = variable.external_id ?? "";
   const published = variable.interface != null;
-  const routable = ROUTABLE_KINDS.includes(variable.kind);
+  const routable = isRoutable(variable);
   // p.205's list, and wider than the URL's: a state is a document, so it can
   // hold a clause list or a set definition that a query string cannot. Mirrors
   // `SAVABLE_KINDS` in the service, which is what refuses a save.
@@ -865,12 +870,7 @@ function InterfaceEditor({
               <option value="always">Always</option>
             </select>
             <span className="field-hint">
-              {routable
-                ? "Only when it is not the default. Needs routing on, in Layout."
-                : /* p.199. Said here rather than left as a disabled control
-                     nobody can explain. */
-                  `A ${variable.kind} cannot be in the URL — nothing would read it ` +
-                  "back. Route a string and use it in this one's definition."}
+              {routingHint(variable)}
             </span>
           </label>
         </>

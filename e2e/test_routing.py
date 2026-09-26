@@ -24,7 +24,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import WEB_BASE, eventually, open_module
+from conftest import WEB_BASE, eventually, open_builder, open_module
 
 COUNTS = {"north": 3, "south": 2}
 TOTAL = sum(COUNTS.values())
@@ -251,3 +251,85 @@ def test_a_link_naming_a_page_that_is_gone_opens_the_module(page, routed):
     expect(page.get_by_label("Region", exact=True)).to_be_visible()
     eventually(lambda: query(page).get("page"), lambda v: v == ["sites"],
                what="the URL corrected to the page actually on screen")
+
+
+def listed(api, name: str) -> Module:
+    """§505: a multiple selection written to a string array, routed."""
+    mod = Module(api, name)
+    mod.define({
+        "format": 2,
+        "routing": {"enabled": True},
+        "layout": layout({
+            "sel": {"resolvedName": "CanvasStringSelector",
+                    "props": {"name": "v_picks", "label": "Regions",
+                              "selection": "multiple", "display": "checkboxes",
+                              "optionSource": "static",
+                              "options": ["North", "South", "East"],
+                              "allowClearing": True, "layout": "vertical", "columns": 3}},
+            "echo": {"resolvedName": "CanvasText",
+                     "props": {"tag": "p", "text": "picked: [{{v_picks}}]"}},
+        }),
+        "variables": {
+            "v_picks": {"id": "v_picks", "kind": "array", "element": "string",
+                        "label": "Regions", "external_id": "regions",
+                        "interface": True, "url_behavior": "always"},
+        },
+        "events": {},
+    })
+    return mod
+
+
+def test_a_list_routes_as_one_parameter_per_entry(page, api):
+    """p.199 excludes "Object set filter variables" from the URL; a list of
+    *values* is not one. Two boxes ticked are two `regions=` parameters, and
+    the link restores both - in order, ticked, and in the variable."""
+    mod = listed(api, "Routed list")
+    open_module(page, mod)
+    group = page.get_by_test_id("selector-options")
+    group.get_by_role("checkbox", name="South").check()
+    group.get_by_role("checkbox", name="North").check()
+    eventually(lambda: query(page).get("regions"), lambda v: v == ["South", "North"],
+               what="each entry as its own parameter")
+    link = page.evaluate("location.href")
+
+    page.goto(link)
+    page.get_by_role("button", name="Preview", exact=True).click()
+    echo = page.locator(".canvas-block", has_text="picked:").first
+    expect(echo).to_contain_text("picked: [South,North]", timeout=30000)
+    group = page.get_by_test_id("selector-options")
+    expect(group.get_by_role("checkbox", name="South")).to_be_checked()
+    expect(group.get_by_role("checkbox", name="North")).to_be_checked()
+    expect(group.get_by_role("checkbox", name="East")).not_to_be_checked()
+
+    # Cleared, the list leaves the link rather than lingering as an empty key.
+    group.get_by_role("checkbox", name="South").uncheck()
+    group.get_by_role("checkbox", name="North").uncheck()
+    eventually(lambda: query(page).get("regions"), lambda v: v is None,
+               what="the parameter gone once nothing is ticked")
+
+
+def test_the_builder_offers_the_url_only_to_a_typed_list(page, api):
+    """The same line from the panel (§505): a list with typed entries is
+    offered the URL setting and told how it will look, and taking the type
+    away takes the setting with it and says why - p.199's filter variables
+    are the untyped shape."""
+    mod = listed(api, "Routed list builder")
+    open_builder(page, mod)
+    page.get_by_role("button", name="Variables (1)", exact=True).click()
+    page.get_by_role("button", name="Regions array").click()
+    control = page.get_by_test_id("variable-url-behavior")
+    expect(control).to_be_enabled()
+    expect(control).to_have_value("always")
+    hint = page.locator("label", has=control).locator(".field-hint")
+    expect(hint).to_contain_text("Each entry is its own parameter (?key=a&key=b)")
+
+    page.get_by_test_id("variable-element").select_option("")
+    expect(control).to_be_disabled()
+    expect(hint).to_contain_text("An array needs a type for its entries to be in the URL")
+    # And it has left the URL: an untyped list saved as "always" is a document
+    # the API refuses, so the save below has to succeed.
+    expect(control).to_have_value("never")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.locator(".ws-actions .sub")).to_contain_text("saved", timeout=15000)
+    saved = mod.definition()["variables"]["v_picks"]
+    assert "element" not in saved and saved.get("url_behavior", "never") == "never", saved

@@ -323,6 +323,48 @@ describe("seedFromQuery", () => {
     expect(seed).toEqual({ v_o: ref });
   });
 
+  it("reads every repeat of a list's key, in order, as its element (§505)", () => {
+    const list = (element: string | undefined) => ({
+      v_l: { ...iface("v_l", "array", "ids"), element },
+    });
+    expect(seedFromQuery(list("number"), new URLSearchParams("?ids=3&ids=1&ids=2")))
+      .toEqual({ v_l: [3, 1, 2] });
+    expect(seedFromQuery(list("boolean"), new URLSearchParams("?ids=false&ids=true")))
+      .toEqual({ v_l: [false, true] });
+    expect(seedFromQuery(list("date"), new URLSearchParams("?ids=2026-01-02")))
+      .toEqual({ v_l: ["2026-01-02"] });
+    // The record form, which a caller may hand over already split.
+    expect(seedFromQuery(list("string"), { ids: ["a", "b"] })).toEqual({ v_l: ["a", "b"] });
+    expect(seedFromQuery(list("string"), { ids: "a" })).toEqual({ v_l: ["a"] });
+    expect(Object.keys(seedFromQuery(list("string"), { other: "a" }))).toEqual([]);
+    // And a scalar in the record form still reads its one value.
+    expect(seedFromQuery({ v_a: iface("v_a", "string", "status") }, { status: "open" }))
+      .toEqual({ v_a: "open" });
+  });
+
+  it("skips a whole list when one entry does not parse", () => {
+    // A list short one value is a different selection that looks like the
+    // shared one.
+    const seed = seedFromQuery(
+      { v_l: { ...iface("v_l", "array", "ids"), element: "number" } },
+      new URLSearchParams("?ids=3&ids=banana"),
+    );
+    expect(Object.keys(seed)).toEqual([]);
+  });
+
+  it("skips a list with no element, or one that is not a scalar", () => {
+    // p.199: filter clauses travel in an untyped array, and "Object set filter
+    // variables" are "unable to be used in the URL". `single_object` is a kind
+    // `coerce` accepts, but not an element.
+    for (const element of [undefined, "single_object", "struct"]) {
+      const seed = seedFromQuery(
+        { v_l: { ...iface("v_l", "array", "ids"), element } },
+        new URLSearchParams("?ids=a"),
+      );
+      expect(Object.keys(seed), String(element)).toEqual([]);
+    }
+  });
+
   it("seeds nonsense for a picked object too, and lets the server refuse it", () => {
     // Deliberately *not* validated here. A shape check on this side would be a
     // second answer to a question the server already answers better — and one
