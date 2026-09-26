@@ -17,7 +17,10 @@ import type { Model, ModelRunDay } from "@/lib/types";
 import { authoredInRepository, canAdopt, pathProblem, readOnlyReason } from "@/lib/model-authoring";
 import { canMove, chosen, defaultMessage, moveLabel } from "@/lib/bulk-adoption";
 import { attribution, emptyNote, isChangeSet, scopeLabel } from "@/lib/transform-history";
-import { runDuration, whyNoLog } from "@/lib/run-logs";
+import {
+  NO_SPECIFICATION, progressSteps, runDuration, whyNoLog, whyNoOutput, type RunDetail,
+} from "@/lib/run-logs";
+import { bytesText } from "@/lib/bytes";
 import { nothingToShow, overWindow, tallest } from "@/lib/run-summary";
 import {
   describe as describeProposal,
@@ -193,6 +196,64 @@ function RunSummaryChart({
  *  run before it. §358 gave it a reason to exist by giving runs something
  *  worth opening.
  */
+/** p.3's job view, all but the log (§507): progress, specification, files
+ * and the resulting schema, each the run's own rather than the model's today. */
+function JobDetail({ detail }: { detail: RunDetail }) {
+  const spec = detail.specification;
+  const output = detail.output;
+  return (
+    <div data-testid="job-detail" style={{ marginBottom: 12 }}>
+      <div className="slug" style={{ marginBottom: 4 }}>Progress</div>
+      <dl className="app-facts" data-testid="job-progress">
+        {progressSteps(detail.progress).map(({ step, text }) => (
+          <div key={step}>
+            <dt>{step}</dt>
+            <dd>{text}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <div className="slug" style={{ margin: "10px 0 4px" }}>Specification</div>
+      {spec ? (
+        <div data-testid="job-specification">
+          <p className="login-note" style={{ margin: "0 0 4px" }}>
+            Version {spec.version_number} · {spec.language} · reads{" "}
+            {spec.inputs.length === 0
+              ? "nothing"
+              : spec.inputs.map((i) => `${i.alias} (${i.dataset_name ?? "a deleted dataset"})`).join(", ")}
+          </p>
+          <pre data-testid="job-code" style={{ margin: 0, fontSize: 12, whiteSpace: "pre-wrap" }}>
+            {spec.code}
+          </pre>
+        </div>
+      ) : (
+        <p className="login-note" data-testid="job-no-specification">{NO_SPECIFICATION}</p>
+      )}
+
+      <div className="slug" style={{ margin: "10px 0 4px" }}>Files and schema</div>
+      {output ? (
+        <div data-testid="job-output">
+          <p className="login-note" style={{ margin: "0 0 4px" }}>
+            Wrote version {output.version_number}, {output.row_count.toLocaleString()} rows:{" "}
+            {output.files.map((f) =>
+              `${f.name} (${f.size_bytes === null ? "gone from storage" : bytesText(f.size_bytes)})`,
+            ).join(", ")}
+          </p>
+          <ul data-testid="job-schema" style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+            {output.schema.map((c) => (
+              <li key={c.name}>{c.name} <span className="soft">{c.data_type}</span></li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="login-note" data-testid="job-no-output">
+          No output: {whyNoOutput(detail.progress.status)}.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function RunsDialog({
   workspaceId,
   projectId,
@@ -214,6 +275,11 @@ function RunsDialog({
     queryFn: () => modelApi.runSummary(workspaceId, projectId, model.id),
   });
   const run = runs.data?.find((r) => r.id === selected) ?? null;
+  const detail = useQuery({
+    queryKey: ["model-run-detail", model.id, selected, run?.status],
+    queryFn: () => modelApi.runDetail(workspaceId, projectId, model.id, selected!),
+    enabled: selected !== null,
+  });
   const log = useQuery({
     queryKey: ["model-run-log", model.id, selected],
     queryFn: () => modelApi.runLog(workspaceId, projectId, model.id, selected!),
@@ -285,6 +351,7 @@ function RunsDialog({
       )}
       {run && (
         <div data-testid="run-detail" style={{ marginTop: 12 }}>
+          {detail.data && <JobDetail detail={detail.data} />}
           <div className="slug" style={{ marginBottom: 4 }}>
             Build log
           </div>
