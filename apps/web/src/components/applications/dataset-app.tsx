@@ -32,6 +32,8 @@ import {
   describeOptions,
   parseNullMarkers,
   whyNotParseable,
+  DELIMITED_ONLY,
+  isJsonFile,
   type ParseOptions,
 } from "@/lib/parse-options";
 import Link from "next/link";
@@ -280,6 +282,8 @@ function ParsePanel({
   }
 
   const willDo = describeOptions(sent());
+  // §510: a JSON file is offered only what applies to it.
+  const json = isJsonFile(filename);
 
   return (
     <div className="ds-parse" data-testid="parse-panel">
@@ -288,6 +292,7 @@ function ParsePanel({
         uploaded; this changes how it is read, not what it says.
       </p>
       <div className="ds-parse-grid">
+        {!json && (<>
         <label>
           Delimiter
           <input
@@ -321,6 +326,7 @@ function ParsePanel({
             onChange={(e) => set("skip_lines", Math.max(0, Number(e.target.value) || 0))}
           />
         </label>
+        </>)}
         <label>
           Encoding
           <select
@@ -335,6 +341,7 @@ function ParsePanel({
             ))}
           </select>
         </label>
+        {!json && (
         <label className="ds-parse-wide">
           Read as empty
           <textarea
@@ -348,6 +355,7 @@ function ParsePanel({
             }}
           />
         </label>
+        )}
       </div>
       <div className="ds-parse-switches">
         {([
@@ -356,7 +364,7 @@ function ParsePanel({
           ["add_file_path", "Add a file path column"],
           ["add_imported_at", "Add an import time column"],
           ["add_row_number", "Add a row number column"],
-        ] as const).map(([key, label]) => (
+        ] as const).filter(([key]) => !json || !DELIMITED_ONLY.includes(key)).map(([key, label]) => (
           <label key={key}>
             <input
               type="checkbox"

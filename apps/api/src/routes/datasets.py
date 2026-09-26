@@ -950,7 +950,7 @@ async def _parse_original(
                 engine.decode_to_utf8(src, decoded, options.encoding)
                 src = decoded
             dest = os.path.join(tmp, "data.parquet")
-            schema, rows = engine.parse_to_parquet(src, dest, options.to_engine())
+            schema, rows = engine.parse_to_parquet(src, dest, options.to_engine(), extension)
             preview = engine.preview(dest)
             with open(dest, "rb") as handle:
                 return preview, schema, rows, handle.read()

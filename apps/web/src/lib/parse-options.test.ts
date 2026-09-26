@@ -5,6 +5,8 @@ import {
   describeOptions,
   parseNullMarkers,
   whyNotParseable,
+  DELIMITED_ONLY,
+  isJsonFile,
 } from "./parse-options";
 
 describe("whether a dataset can be parsed again", () => {
@@ -133,5 +135,24 @@ describe("null markers, one per line", () => {
   it("keeps a marker that is a comma", () => {
     // The reason this is a textarea and not a comma-separated field.
     expect(parseNullMarkers(",")).toEqual([","]);
+  });
+});
+
+describe("JSON and Parquet files (§510)", () => {
+  it("does not offer a Parquet file a parse, whatever its case", () => {
+    for (const name of ["rows.parquet", "ROWS.PARQUET"]) {
+      expect(whyNotParseable({ origin: "upload", original_filename: name })).toBe(
+        "A Parquet file carries its own schema, so there is nothing to parse again.");
+    }
+    expect(whyNotParseable({ origin: "upload", original_filename: "parquet.csv" })).toBe("");
+  });
+
+  it("knows a JSON file by either extension, whatever its case", () => {
+    for (const name of ["a.json", "a.jsonl", "A.JSON", "B.JsonL"]) expect(isJsonFile(name), name).toBe(true);
+    for (const name of ["a.csv", "json.csv", "a.tsv", "a.json.csv"]) expect(isJsonFile(name), name).toBe(false);
+  });
+
+  it("names the switches only a delimited file has", () => {
+    expect(DELIMITED_ONLY).toEqual(["header", "drop_bad_rows"]);
   });
 });

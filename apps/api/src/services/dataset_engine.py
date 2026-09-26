@@ -175,6 +175,52 @@ def csv_reader_expr(src_path: str, options: ParseOptions) -> str:
     return f"read_csv({', '.join(args)})"
 
 
+#: The kept files a re-parse reads with `read_json` (§510). p.3's Edit schema
+#: "will infer a schema for CSV and JSON files", and `read_csv` on a JSON file
+#: does not fail: it returns **no rows**, so a re-parse through it would
+#: quietly write an empty version.
+JSON_EXTENSIONS = (".json", ".jsonl")
+
+
+def json_reader_expr(src_path: str, extension: str, options: ParseOptions) -> str:
+    """`read_json(...)`, read the way the upload read it (`_READERS`), plus the
+    one reader option that means something for JSON: the file path."""
+    args = [repr(src_path)]
+    if extension == ".jsonl":
+        args.append("format='newline_delimited'")
+    if options.add_file_path:
+        args.append("filename=true")
+    return f"read_json({', '.join(args)})"
+
+
+def refuse_for_file(extension: str, options: ParseOptions) -> None:
+    """The options this kind of file has nothing to apply them to (§510).
+
+    **Refused by name rather than ignored**, because an ignored option is a
+    control that looks like it works (§214). A Parquet file has no parse at
+    all. A JSON file has no delimiter, quote, header, preamble or null marker,
+    and DuckDB's `ignore_errors` on JSON keeps a malformed record as a row of
+    NULLs rather than dropping it, so "drop rows that do not fit" would not
+    mean what it says. Encoding and the added columns apply to both.
+    """
+    if extension == ".parquet":
+        raise DatasetEngineError(
+            "a Parquet file carries its own schema, so there is nothing to parse again")
+    if extension not in JSON_EXTENSIONS:
+        return
+    chosen = [label for label, on in (
+        ("a delimiter", options.delimiter is not None),
+        ("a quote character", options.quote is not None),
+        ("no header row", not options.header),
+        ("skipped lines", options.skip_lines > 0),
+        ("null markers", bool(options.null_values)),
+        ("dropping rows that do not fit", options.drop_bad_rows),
+    ) if on]
+    if chosen:
+        raise DatasetEngineError(
+            f"{', '.join(chosen)}: only a delimited file has these, and this one is JSON")
+
+
 def decode_to_utf8(src_path: str, dest_path: str, encoding: str) -> None:
     """Rewrite a file as UTF-8, because this DuckDB cannot be told otherwise.
 
@@ -204,7 +250,7 @@ def decode_to_utf8(src_path: str, dest_path: str, encoding: str) -> None:
 
 
 def parse_to_parquet(
-    src_path: str, dest_path: str, options: ParseOptions
+    src_path: str, dest_path: str, options: ParseOptions, extension: str
 ) -> tuple[list[ColumnSchema], int]:
     """Read a delimited file the way `options` says, and write the Parquet.
 
@@ -213,7 +259,9 @@ def parse_to_parquet(
     `filename=true` gives the path, and the import time and the row number are
     things this platform knows and DuckDB does not.
     """
-    reader = csv_reader_expr(src_path, options)
+    refuse_for_file(extension, options)
+    reader = (json_reader_expr(src_path, extension, options) if extension in JSON_EXTENSIONS
+              else csv_reader_expr(src_path, options))
     selected = ["src.*"]
     if options.add_imported_at:
         selected.append("now() AS imported_at")
