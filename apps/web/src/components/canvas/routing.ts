@@ -46,9 +46,61 @@ export const ROUTABLE_KINDS = [
   "single_object",
 ];
 
+/** p.132's scalar element types, the ones an `array` can route with (§505).
+ * Mirrors `ARRAY_ELEMENTS` in `services/workshop_variables.py`. */
+export const ROUTABLE_ELEMENTS = ["string", "number", "boolean", "date", "timestamp"];
+
+/** Whether a variable's value can travel in the URL (p.199).
+ *
+ * `ROUTABLE_KINDS`, plus **an array that declares a scalar element** (§505).
+ * That is a list of values, and it travels as one repeated query parameter per
+ * entry — `?region=EU&region=US` — which `seedFromQuery` reads back with
+ * `getAll`. An array with no element is the shape filter clauses travel in,
+ * and p.199 names those: "Object set filter variables" are "unable to be used
+ * in the URL". The server refuses the same line at save. */
+export function routable(variable: { kind: string; element?: string | null }): boolean {
+  if (variable.kind === "array") return ROUTABLE_ELEMENTS.includes(variable.element ?? "");
+  return ROUTABLE_KINDS.includes(variable.kind);
+}
+
+/** The line under the builder's "In the URL" control (p.198–199). Said
+ * rather than left as a disabled control nobody can explain. */
+export function routingHint(variable: { kind: string; element?: string | null }): string {
+  const ok = routable(variable);
+  if (ok && variable.kind === "array") {
+    // §505: what a list looks like in a link, so whoever reads one knows why
+    // the key repeats.
+    return "Only when it is not the default. Each entry is its own parameter "
+      + "(?key=a&key=b). Needs routing on, in Layout.";
+  }
+  if (ok) return "Only when it is not the default. Needs routing on, in Layout.";
+  if (variable.kind === "array") {
+    // p.199's "Object set filter variables": an array with no element type is
+    // the shape filter clauses travel in.
+    return "An array needs a type for its entries to be in the URL — a list of filter "
+      + "clauses cannot be. Choose one under Entries.";
+  }
+  return `A ${variable.kind} cannot be in the URL — nothing would read it `
+    + "back. Route a string and use it in this one's definition.";
+}
+
+/** The URL form of a list, or null when it is not a list of scalars. A list
+ * holding anything else — a clause, an object — would stringify into text that
+ * reads back as something nobody chose, so it is left out whole. */
+function listFor(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: string[] = [];
+  for (const entry of value) {
+    if (!["string", "number", "boolean"].includes(typeof entry)) return null;
+    out.push(String(entry));
+  }
+  return out;
+}
+
 export type RoutingVariable = {
   id: string;
   kind: string;
+  element?: string | null;
   default?: unknown;
   external_id?: string | null;
   interface?: unknown;
@@ -121,7 +173,10 @@ export function variablesOnPage(layout: unknown, pageNodeId: string | null): Set
  * cleared writes one and a variable that was never set holds another.
  */
 function chosen(value: unknown, fallback: unknown): boolean {
-  const empty = (v: unknown) => v === undefined || v === null || v === "";
+  // An empty list is a cleared multi-select, and it writes no parameters at
+  // all — so it is "nothing chosen" for the same reason `""` is.
+  const empty = (v: unknown) =>
+    v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
   if (empty(value)) return false;
   if (empty(fallback)) return true;
   return JSON.stringify(value) !== JSON.stringify(fallback);
@@ -147,8 +202,8 @@ export function routingParams(input: {
   pageId?: string | null;
   /** Variable ids bound by widgets on the current page — `variablesOnPage`. */
   visible?: Set<string>;
-}): Record<string, string> {
-  const out: Record<string, string> = {};
+}): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {};
   if (!input.enabled) return out;
 
   const visible = input.visible ?? new Set<string>();
@@ -159,7 +214,7 @@ export function routingParams(input: {
     // rather than assumed: a document can arrive from anywhere, and a viewer
     // is the wrong person to find out that one did.
     if (!variable.external_id || !variable.interface) continue;
-    if (!ROUTABLE_KINDS.includes(variable.kind)) continue;
+    if (!routable(variable)) continue;
     if (behavior === "when_visible" && !visible.has(variable.id)) continue;
     const value = input.values[variable.id];
     if (!chosen(value, variable.default)) continue;
@@ -171,6 +226,13 @@ export function routingParams(input: {
     if (variable.kind === "single_object") {
       const ref = refFor(value);
       if (ref) out[variable.external_id] = ref;
+      continue;
+    }
+    // A list is one parameter per entry (§505), which `useUrlState().set`
+    // writes as repeated keys.
+    if (variable.kind === "array") {
+      const list = listFor(value);
+      if (list) out[variable.external_id] = list;
       continue;
     }
     out[variable.external_id] = String(value);

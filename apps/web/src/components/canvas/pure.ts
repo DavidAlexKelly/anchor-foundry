@@ -174,18 +174,36 @@ export function formatWeights(weights: number[]): string {
  * variable leaves the variable alone rather than setting 0 — a wrong number is
  * indistinguishable from a chosen one once it is on screen, and blank is not.
  */
+/** The element types a routed list reads back as — `ROUTABLE_ELEMENTS` in
+ * `routing.ts`, repeated because this module imports nothing. A document can
+ * arrive from anywhere, and `single_object` is a kind `coerce` accepts that is
+ * not an element. */
+const LIST_ELEMENTS = ["string", "number", "boolean", "date", "timestamp"];
+
 export function seedFromQuery(
-  variables: Record<string, { id: string; kind: string; external_id?: string; interface?: unknown }>,
-  query: URLSearchParams | Record<string, string>,
+  variables: Record<string, {
+    id: string; kind: string; element?: string | null; external_id?: string; interface?: unknown;
+  }>,
+  query: URLSearchParams | Record<string, string | string[]>,
 ): Record<string, unknown> {
-  const get = (name: string) =>
-    query instanceof URLSearchParams ? query.get(name) : (query[name] ?? null);
+  const all = (name: string): string[] =>
+    query instanceof URLSearchParams ? query.getAll(name) : ([] as string[]).concat(query[name] ?? []);
   const seed: Record<string, unknown> = {};
   for (const variable of Object.values(variables)) {
     if (!variable.interface || !variable.external_id) continue;
-    const raw = get(variable.external_id);
-    if (raw === null) continue;
-    const value = coerce(raw, variable.kind);
+    const values = all(variable.external_id);
+    if (!values.length) continue;
+    // §505: an array with a scalar element reads every repeat of its key, in
+    // order, each as its element. **One entry that does not parse skips the
+    // whole list** rather than dropping the entry — a list short one value is
+    // a different selection that looks like the shared one.
+    if (variable.kind === "array") {
+      if (!LIST_ELEMENTS.includes(variable.element ?? "")) continue;
+      const list = values.map((raw) => coerce(raw, variable.element as string));
+      if (list.every((v) => v !== undefined)) seed[variable.id] = list;
+      continue;
+    }
+    const value = coerce(values[0] as string, variable.kind);
     if (value !== undefined) seed[variable.id] = value;
   }
   return seed;

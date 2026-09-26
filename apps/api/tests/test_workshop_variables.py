@@ -2386,6 +2386,29 @@ def test_one_object_is_routable_and_a_set_is_not() -> None:
     assert parsed["v_a"].url_behavior == "always"
 
 
+def test_a_list_of_values_routes_and_a_list_of_clauses_does_not() -> None:
+    """p.199: "The following variables types are unable to be used in the URL:
+    Object set filter variables". §505 draws the line at the element type:
+    an array that declares one (p.132's scalars) is a list of *values*, and
+    travels as one repeated query parameter per entry; one that declares none
+    is the shape filter clauses travel in, and stays out."""
+    for element in wv.ARRAY_ELEMENTS:
+        parsed = wv.parse({"v_a": routed(kind="array", element=element)})
+        assert parsed["v_a"].url_behavior == "always", element
+        assert parsed["v_a"].element == element
+    with pytest.raises(wv.VariableError,
+                       match="'Region' is an array with no element type and cannot be in the URL"
+                             " - that is the shape filter clauses travel in, which p.199"
+                             r" excludes. Give it an element \(string, number, boolean,"
+                             r" date, timestamp\) and each entry becomes one repeated"):
+        wv.parse({"v_a": routed(kind="array", label="Region")})
+    # The interface is still required of a list, as of any routed value.
+    with pytest.raises(wv.VariableError, match="not on the module interface"):
+        wv.parse({"v_a": var("v_a", kind="array", element="string", url_behavior="always")})
+    # And an untyped list that stays out of the URL is still a valid variable.
+    assert wv.parse({"v_a": var("v_a", kind="array", url_behavior="never")})["v_a"].element is None
+
+
 def test_every_routable_kind_is_accepted() -> None:
     """A guard on the list itself, from the other side: narrowing it by hand
     cannot quietly stop a scalar being shareable."""
