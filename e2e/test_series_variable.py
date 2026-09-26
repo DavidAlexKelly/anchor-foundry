@@ -30,7 +30,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import eventually, open_module
+from conftest import WEB_BASE, eventually, open_module, settled
 
 SENSORS = [
     {"id": "S1", "name": "North sensor"},
@@ -61,6 +61,10 @@ CHART_TITLE = "Sensor readings over time"
 
 @pytest.fixture(scope="module")
 def module(api):
+    return build_module(api, "Series variable")
+
+
+def build_module(api, name: str):
     """A sensor type with a `time_series` property, and a module reading it.
 
     Built directly rather than through `Module.object_type` for the reason
@@ -68,7 +72,7 @@ def module(api):
     the series property *as well* as being the key, and a mapping of
     `{column: same-named property}` has nowhere to say so.
     """
-    mod = Module(api, "Series variable")
+    mod = Module(api, name)
     sensors = api.upload_csv(
         f"{mod.base}/datasets/upload", f"sensors_{mod.tag}",
         b"id,name\nS1,North sensor\nS2,South sensor\nS3,Patchy sensor\n",
@@ -268,3 +272,39 @@ def test_a_missing_reading_is_a_gap_and_not_a_zero(page, module):
     text = caption(page)
     assert "1 point" in text, text
     assert "1 with no reading skipped" in text, text
+
+
+def test_a_transform_built_in_the_panel_reaches_the_chart(page, api):
+    """§524, p.583: "A time series transform performs a mathematical operation
+    on input time series data to yield a new output time series." Added in the
+    Variables panel, saved, and asked of the server by the chart: S1's daily
+    readings 10, 20, 30, 40 come back as their running sum."""
+    mod = build_module(api, "Series transforms")
+    page.goto(f"{WEB_BASE}{mod.url}")
+    expect(page.get_by_role("button", name="Preview", exact=True)).to_be_visible(timeout=30000)
+    page.get_by_role("button", name="Variables", exact=False).first.click()
+    page.get_by_text("Readings", exact=True).first.click()
+
+    transforms = page.get_by_test_id("series-transforms")
+    transforms.get_by_label("Add a transform").select_option("range")
+    expect(page.get_by_test_id("series-transforms-problem")).to_have_text(
+        "Transform 1: A time range needs a start, an end or both.")
+    transforms.get_by_label("Transform 1 kind").select_option("cumulative")
+    expect(page.get_by_test_id("series-transforms-problem")).to_have_count(0)
+    expect(transforms.get_by_label("Transform 1 aggregate")).to_have_value("sum")
+
+    with page.expect_response(
+        lambda r: "/definition" in r.url and r.request.method in ("PUT", "POST")
+    ) as saved:
+        page.get_by_role("button", name="Save", exact=True).click()
+    assert saved.value.ok, saved.value.status
+    settled(page)
+
+    open_module(page, mod)
+    with page.expect_response(lambda r: "/series/readings/points" in r.url) as asked:
+        pick(page, "North sensor")
+    assert "transforms=" in asked.value.url, asked.value.url
+    assert [p["value"] for p in asked.value.json()["points"]] == [10, 30, 60, 100]
+    eventually(lambda: caption(page), lambda t: "running sum" in t,
+               what="the caption naming the transform")
+    assert f"{S1_POINTS} points" in caption(page), caption(page)

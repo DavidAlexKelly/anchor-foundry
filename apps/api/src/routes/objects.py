@@ -4145,6 +4145,18 @@ async def clear_series(
         )
 
 
+def _series_transforms(raw: str | None) -> list[dict[str, Any]]:
+    """`workshop` p.583's time series transforms (§524), as the query string
+    carries them: a JSON list, checked before any of it becomes SQL."""
+    if raw is None or raw == "":
+        return []
+    try:
+        decoded = json.loads(raw)
+    except ValueError:
+        raise ValueError("transforms must be a JSON list") from None
+    return time_series_service.parse_transforms(decoded)
+
+
 @project_router.get(
     "/{source_id}/series/{property_api_name}/points", response_model=SeriesPoints
 )
@@ -4157,6 +4169,7 @@ async def read_series_points(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
     limit: int = Query(default=time_series_service.MAX_POINTS, ge=1),
+    transforms: str | None = Query(default=None, max_length=4000),
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> SeriesPoints:
     """The points behind one instance's `time_series` property.
@@ -4186,6 +4199,7 @@ async def read_series_points(
         start=start,
         end=end,
         limit=limit,
+        transforms=_series_transforms(transforms),
     )
     local_path = await anyio.to_thread.run_sync(
         storage.local_path, str(dataset["s3_location"])
@@ -4212,6 +4226,7 @@ async def instance_series_points(
     interval: str = Query(default="none", max_length=16),
     aggregate: str = Query(default="avg", max_length=16),
     limit: int = Query(default=time_series_service.MAX_POINTS, ge=1),
+    transforms: str | None = Query(default=None, max_length=4000),
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
 ) -> SeriesPoints:
     """One object's points, asked for the way somebody looking at the object asks.
@@ -4262,6 +4277,7 @@ async def instance_series_points(
         interval=interval,
         aggregate=aggregate,
         limit=limit,
+        transforms=_series_transforms(transforms),
     )
     local_path = await anyio.to_thread.run_sync(
         storage.local_path, str(series["s3_location"])

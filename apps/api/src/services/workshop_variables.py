@@ -1304,6 +1304,12 @@ def _check_arity(vid: str, d: Derivation) -> None:
                 f"variable {vid!r}: aggregate {aggregate!r}; expected one of "
                 f"{', '.join(time_series.AGGREGATES)}"
             )
+        # p.583's transforms (§524), on the variable for the bucket's reason:
+        # two widgets reading one series agree about what a point means.
+        try:
+            time_series.parse_transforms(d.config.get("transforms"))
+        except ValueError as exc:
+            raise VariableError(f"variable {vid!r}: {exc}") from None
     elif d.transform == "traverse_set":
         if len(d.inputs) != 1:
             raise VariableError(
@@ -1766,6 +1772,8 @@ def _object_series(
     selection. Returning `None` would render as "no readings yet", which is a
     sentence about the data when the truth is about the wiring.
     """
+    from . import time_series
+
     if obj is None or obj == "":
         return None
     if not isinstance(obj, dict):
@@ -1787,6 +1795,7 @@ def _object_series(
         "property": str(config["property"]),
         "interval": str(config.get("interval", "day")),
         "aggregate": str(config.get("aggregate", "avg")),
+        "transforms": time_series.parse_transforms(config.get("transforms")),
     }
 
 

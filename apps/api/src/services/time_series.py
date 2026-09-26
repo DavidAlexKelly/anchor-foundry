@@ -397,6 +397,137 @@ def points_for_many_sql(
     )
 
 
+# ---- transforms (§524; `workshop` p.583-586) ----------------------------------
+#: "A time series transform performs a mathematical operation on input time
+#: series data to yield a new output time series. These input time series can
+#: be time series properties or the outputs from other transforms, which allows
+#: multiple transforms to be chained together." (p.583)
+TRANSFORM_KINDS = ("cumulative", "rolling", "derivative", "shift", "range")
+#: What a cumulative or rolling window aggregates with: p.586's summarizer
+#: vocabulary, as far as a window over points can use it.
+WINDOW_AGGREGATES = ("sum", "avg", "min", "max", "count", "stddev")
+#: The units a window, a rate or a shift is measured in, in seconds.
+TIME_UNITS = {"second": 1, "minute": 60, "hour": 3600, "day": 86400, "week": 604800}
+MAX_TRANSFORMS = 10
+#: Ours: a window or shift of more than this many units is a typo.
+MAX_SPAN = 100_000
+
+
+def _span(raw: Any, what: str, *, signed: bool = False) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ValueError(f"{what} must be a whole number")
+    if signed:
+        if raw == 0 or abs(raw) > MAX_SPAN:
+            raise ValueError(f"{what} must be non-zero and at most {MAX_SPAN} either way")
+    elif not 1 <= raw <= MAX_SPAN:
+        raise ValueError(f"{what} must be from 1 to {MAX_SPAN}")
+    return raw
+
+
+def _unit(raw: Any) -> str:
+    if raw not in TIME_UNITS:
+        raise ValueError(f"the unit must be one of {', '.join(TIME_UNITS)}")
+    return str(raw)
+
+
+def _instant(raw: Any, what: str) -> str | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        return datetime.fromisoformat(str(raw)).isoformat()
+    except ValueError:
+        raise ValueError(f"the {what} {raw!r} is not a date and time") from None
+
+
+def parse_transforms(raw: Any) -> list[dict[str, Any]]:
+    """The transforms a series is read through, in order, or a ValueError
+    saying which one is wrong and why. Checked where they are saved (a
+    variable) and again where they are read, since the read builds SQL."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("transforms must be a list")
+    if len(raw) > MAX_TRANSFORMS:
+        raise ValueError(f"a series takes at most {MAX_TRANSFORMS} transforms")
+    out: list[dict[str, Any]] = []
+    for n, item in enumerate(raw, start=1):
+        try:
+            if not isinstance(item, dict):
+                raise ValueError("must be an object")
+            kind = item.get("kind")
+            if kind not in TRANSFORM_KINDS:
+                raise ValueError(f"the kind must be one of {', '.join(TRANSFORM_KINDS)}")
+            if kind in ("cumulative", "rolling"):
+                aggregate = item.get("aggregate")
+                if aggregate not in WINDOW_AGGREGATES:
+                    raise ValueError(f"the aggregate must be one of {', '.join(WINDOW_AGGREGATES)}")
+                parsed: dict[str, Any] = {"kind": kind, "aggregate": aggregate}
+                if kind == "rolling":
+                    parsed["window"] = _span(item.get("window"), "the window")
+                    parsed["unit"] = _unit(item.get("unit"))
+            elif kind == "derivative":
+                parsed = {"kind": kind, "unit": _unit(item.get("unit"))}
+            elif kind == "shift":
+                parsed = {"kind": kind, "by": _span(item.get("by"), "the shift", signed=True),
+                          "unit": _unit(item.get("unit"))}
+            else:
+                start = _instant(item.get("start"), "start")
+                end = _instant(item.get("end"), "end")
+                if start is None and end is None:
+                    raise ValueError("a time range needs a start, an end or both")
+                if start is not None and end is not None and start > end:
+                    raise ValueError("the start is after the end")
+                parsed = {"kind": kind, "start": start, "end": end}
+        except ValueError as exc:
+            raise ValueError(f"transform {n}: {exc}") from None
+        out.append(parsed)
+    return out
+
+
+def _window_call(aggregate: str) -> str:
+    # Every name in WINDOW_AGGREGATES is DuckDB's own; its `stddev` is the
+    # sample standard deviation, which one point does not have.
+    return f"{aggregate}(value)"
+
+
+def _transform_sql(transform: dict[str, Any], source: str) -> str:
+    """One transform as a query over `source`, which has `at` and `value`."""
+    kind = transform["kind"]
+    if kind == "cumulative":
+        # p.584: "aggregating over all earlier points, including the input
+        # point itself".
+        return (f"SELECT at, {_window_call(transform['aggregate'])} OVER (ORDER BY at "
+                f"ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value FROM {source}")
+    if kind == "rolling":
+        # p.584: "the points that fall in a fixed-size temporal window
+        # preceding it, including the input point itself". A window of time,
+        # not of points, so gaps in the readings do not stretch it.
+        return (f"SELECT at, {_window_call(transform['aggregate'])} OVER (ORDER BY at "
+                f"RANGE BETWEEN INTERVAL {transform['window']} {transform['unit'].upper()} "
+                f"PRECEDING AND CURRENT ROW) AS value FROM {source}")
+    if kind == "derivative":
+        # p.585: the rate of change, per the unit chosen. The first point has
+        # nothing before it to change from, and two readings at one instant
+        # have no rate, so both are left out rather than drawn as zero.
+        seconds = TIME_UNITS[transform["unit"]]
+        return (
+            "SELECT at, value FROM (SELECT at, (value - lag(value) OVER (ORDER BY at)) "
+            "/ NULLIF((epoch_ms(CAST(at AS TIMESTAMP)) "
+            "- epoch_ms(CAST(lag(at) OVER (ORDER BY at) AS TIMESTAMP))) / 1000.0, 0) "
+            f"* {seconds} AS value FROM {source}) rates WHERE value IS NOT NULL"
+        )
+    if kind == "shift":
+        # p.586: "identical to the input time series, but temporally shifted".
+        return (f"SELECT CAST(at AS TIMESTAMP) + INTERVAL ({transform['by']}) "
+                f"{transform['unit'].upper()} AS at, value FROM {source}")
+    where = []
+    if transform["start"] is not None:
+        where.append(f"CAST(at AS TIMESTAMP) >= TIMESTAMP {_literal(transform['start'])}")
+    if transform["end"] is not None:
+        where.append(f"CAST(at AS TIMESTAMP) <= TIMESTAMP {_literal(transform['end'])}")
+    return f"SELECT at, value FROM {source} WHERE {' AND '.join(where)}"
+
+
 def points_sql(
     *,
     key_column: str,
@@ -408,6 +539,7 @@ def points_sql(
     start: datetime | None = None,
     end: datetime | None = None,
     limit: int = MAX_POINTS,
+    transforms: list[dict[str, Any]] | None = None,
 ) -> str:
     """The query that reads one series out of its dataset.
 
@@ -438,14 +570,25 @@ def points_sql(
     clause = " AND ".join(where)
     capped = max(1, min(limit, MAX_POINTS))
 
+    if transforms:
+        # §524: every point goes through the transforms and the cap comes
+        # last. A cumulative sum over the first five thousand readings would
+        # be a different series, not a shorter one.
+        ctes = [f"t0 AS ({_base_sql(ts, val, clause, interval, aggregate)})"]
+        for n, transform in enumerate(transforms, start=1):
+            ctes.append(f"t{n} AS ({_transform_sql(transform, f't{n - 1}')})")
+        return (f"WITH {', '.join(ctes)} SELECT at, value FROM t{len(transforms)} "
+                f"ORDER BY at LIMIT {capped}")
+    return f"{_base_sql(ts, val, clause, interval, aggregate)} ORDER BY at LIMIT {capped}"
+
+
+def _base_sql(ts: str, val: str, clause: str, interval: str, aggregate: str) -> str:
+    """The series itself, bucketed or not, unordered and uncapped."""
     if interval == "none":
-        # The raw points. Still capped and still ordered - "no bucketing" is
-        # not "no limit", and a series with a decade of readings would
-        # otherwise decide how much memory the API uses.
-        return (
-            f"SELECT {ts} AS at, {val} AS value FROM dataset "
-            f"WHERE {clause} ORDER BY at LIMIT {capped}"
-        )
+        # The raw points. Still capped and still ordered by the caller - "no
+        # bucketing" is not "no limit", and a series with a decade of readings
+        # would otherwise decide how much memory the API uses.
+        return f"SELECT {ts} AS at, {val} AS value FROM dataset WHERE {clause}"
     # `last` is the value at the greatest timestamp in the bucket, which is not
     # an aggregate DuckDB spells `last(...)` reliably across versions - the
     # arg_max form says exactly what is meant and needs no ordering guarantee.
@@ -457,7 +600,7 @@ def points_sql(
     return (
         f"SELECT date_trunc({_literal(interval)}, {ts}) AS at, "
         f"{expression} AS value FROM dataset "
-        f"WHERE {clause} GROUP BY at ORDER BY at LIMIT {capped}"
+        f"WHERE {clause} GROUP BY at"
     )
 
 

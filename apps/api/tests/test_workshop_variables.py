@@ -2202,6 +2202,7 @@ def test_a_time_series_set_is_a_reference_to_one_objects_property() -> None:
         "property": "readings",
         "interval": "day",
         "aggregate": "avg",
+        "transforms": [],
     }
 
 
@@ -2212,7 +2213,7 @@ def test_a_time_series_set_holds_no_points() -> None:
     resolved = wv.evaluate(series_module(), {"v_object": SENSOR})
     assert "points" not in resolved["v_series"]
     assert set(resolved["v_series"]) == {
-        "object_type_id", "instance_id", "property", "interval", "aggregate",
+        "object_type_id", "instance_id", "property", "interval", "aggregate", "transforms",
     }
 
 

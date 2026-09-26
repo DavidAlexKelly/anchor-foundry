@@ -1781,12 +1781,15 @@ export const objects = {
    * not a parameter. */
   seriesPoints: (
     wid: string, typeId: string, instanceId: string, property: string,
-    opts: { interval?: string; aggregate?: string } = {},
+    opts: { interval?: string; aggregate?: string; transforms?: unknown[] } = {},
   ) =>
     request<import("./types").SeriesPoints>(
       `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}` +
         `/series/${encodeURIComponent(property)}/points` +
-        `?interval=${opts.interval ?? "none"}&aggregate=${opts.aggregate ?? "avg"}`,
+        `?interval=${opts.interval ?? "none"}&aggregate=${opts.aggregate ?? "avg"}` +
+        // §524: the transforms travel as JSON, and none is no parameter.
+        (opts.transforms?.length
+          ? `&transforms=${encodeURIComponent(JSON.stringify(opts.transforms))}` : ""),
     ),
   /** One object's track: where it was, in time order (§427;
    * `object-link-types` p.127). `seriesPoints`' counterpart, and a separate

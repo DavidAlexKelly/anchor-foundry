@@ -25,6 +25,8 @@
  * implementation rather than two that drift - see the API route's own note.
  */
 
+import { SeriesTransformsEditor } from "./SeriesTransformsEditor";
+import type { SeriesTransform } from "./series-transforms";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEditor } from "@craftjs/core";
 import { useEffect, useMemo, useState } from "react";
@@ -1178,6 +1180,18 @@ function DerivationEditor({
               ))}
             </select>
           </label>
+          {/* p.583's transforms (§524), on the variable for the bucket's
+              reason: every widget reading it agrees about what a point is. */}
+          <SeriesTransformsEditor
+            transforms={(derivation.config?.transforms as SeriesTransform[] | undefined) ?? []}
+            readOnly={readOnly}
+            onChange={(transforms) =>
+              onChange({
+                ...derivation,
+                config: { ...derivation.config, transforms },
+              })
+            }
+          />
         </>
       )}
 
