@@ -71,6 +71,11 @@ export default function WorkspacePage() {
               Advanced
             </Link>
           )}
+          {/* p.35's "Tags section": everybody may read the tags, so the link
+              is for everybody; only an admin is offered the form there. */}
+          <Link className="btn quiet" href={`/${params.workspace}/tags`} data-testid="workspace-tags">
+            Tags
+          </Link>
           <span className={`chip${workspace?.effective_role === "admin" ? " brass" : ""}`}>
             {workspace?.effective_role}
           </span>

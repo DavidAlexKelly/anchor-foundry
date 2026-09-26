@@ -1177,6 +1177,9 @@ button { font: inherit; cursor: pointer; }
 
 .ds-details { max-width: 760px; }
 .ds-h2 { font-size: 14px; margin: 26px 0 10px; }
+/* §511: a resource's tags, as chips that wrap. */
+.ds-tags { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.ds-tags .btn { padding: 0 4px; margin-left: 4px; font-size: 12px; line-height: 1; }
 .ds-health { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
 .ds-health li {
   display: flex;
