@@ -59,7 +59,15 @@ export function MetricsPanel({
   const setTracking = useMutation({
     mutationFn: (on: boolean) =>
       canvasApi.setUsageTracking(workspaceId, projectId, appId, on),
-    onSuccess: () => {
+    // **The saved value, straight into the panel**, and then a refetch for
+    // the rest. Waiting on the refetch alone left the section saying "not
+    // being recorded" under a ticked box for as long as that read took, and
+    // under load in CI that was longer than a reader (or a test) waits.
+    onSuccess: (_detail, on) => {
+      client.setQueriesData<{ tracking: boolean }>(
+        { queryKey: ["canvas-usage-metrics", appId] },
+        (old) => (old ? { ...old, tracking: on } : old),
+      );
       client.invalidateQueries({ queryKey: ["canvas-usage-metrics", appId] });
     },
   });
@@ -161,6 +169,13 @@ export function MetricsPanel({
         />
         <span>Record layout views</span>
       </label>
+      {/* Said, not swallowed: a save that failed reverts the box, and a box
+          that reverts without a word reads as a control that does nothing. */}
+      {setTracking.isError && (
+        <p className="state error" data-testid="metrics-tracking-error">
+          Couldn&apos;t change whether layout views are recorded.
+        </p>
+      )}
 
       {metrics.data && viewsEmpty && (
         <p className="soft" data-testid="views-empty">{viewsEmpty}</p>
