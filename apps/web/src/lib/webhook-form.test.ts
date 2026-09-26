@@ -3,6 +3,7 @@ import {
   BODYLESS_METHODS, INPUT_TYPES, METHODS, OUTPUT_TYPES, RESERVED_HEADERS,
   WebhookDraft, blankWebhook, bodyProblem, outcomeLabel, parsedBody, problem,
   referencesIn, stringsIn, suggestedApiName,
+  MAX_CONCURRENT, MAX_RATE, RATE_WINDOWS, limitFrom, limitsPayload, limitsText,
 } from "./webhook-form";
 
 function draft(over: Partial<WebhookDraft> = {}): WebhookDraft {
@@ -269,5 +270,58 @@ describe("outcomeLabel", () => {
     const label = outcomeLabel({ ok: false, status_code: null, system_changed: false });
     expect(label).not.toContain("(");
     expect(label).toContain("nothing was changed");
+  });
+});
+
+describe("limits (§522, p.240)", () => {
+  const draft = (over: Partial<WebhookDraft>): WebhookDraft => ({
+    ...blankWebhook("c1"), display_name: "Hook", api_name: "hook", ...over,
+  });
+
+  it("are off by default, with a minute ready for a rate", () => {
+    const blank = blankWebhook("c1");
+    expect([blank.max_concurrent, blank.rate_limit, blank.rate_window]).toEqual([null, null, "minute"]);
+  });
+
+  it("reads an empty box as no limit", () => {
+    expect(limitFrom("")).toBeNull();
+    expect(limitFrom("  ")).toBeNull();
+    expect(limitFrom("12")).toBe(12);
+    expect(limitFrom("1.5")).toBe(1.5);
+  });
+
+  it("says what is wrong with a limit, and allows the ends of the range", () => {
+    expect(problem(draft({ max_concurrent: 1, rate_limit: 1 }))).toBeNull();
+    expect(problem(draft({ max_concurrent: 100, rate_limit: 1_000_000 }))).toBeNull();
+    const concurrency = "The concurrency limit must be a whole number from 1 to 100, or empty for none.";
+    for (const bad of [0, 101, 1.5, Number.NaN]) {
+      expect(problem(draft({ max_concurrent: bad }))).toBe(concurrency);
+    }
+    const rate = "The rate limit must be a whole number from 1 to 1,000,000, or empty for none.";
+    for (const bad of [0, 1_000_001, 2.5, Number.NaN]) {
+      expect(problem(draft({ rate_limit: bad }))).toBe(rate);
+    }
+  });
+
+  it("sends no window without a rate", () => {
+    expect(limitsPayload({ max_concurrent: 3, rate_limit: null, rate_window: "hour" }))
+      .toEqual({ max_concurrent: 3, rate_limit: null, rate_window: null });
+    expect(limitsPayload({ max_concurrent: null, rate_limit: 10, rate_window: "hour" }))
+      .toEqual({ max_concurrent: null, rate_limit: 10, rate_window: "hour" });
+  });
+
+  it("says a webhook's limits in one line", () => {
+    expect(limitsText({ max_concurrent: null, rate_limit: null, rate_window: null })).toBe("No limits");
+    expect(limitsText({ max_concurrent: 2, rate_limit: null, rate_window: null }))
+      .toBe("Limits: at most 2 at a time");
+    expect(limitsText({ max_concurrent: null, rate_limit: 10, rate_window: "minute" }))
+      .toBe("Limits: at most 10 per minute");
+    expect(limitsText({ max_concurrent: 2, rate_limit: 10, rate_window: "day" }))
+      .toBe("Limits: at most 2 at a time, at most 10 per day");
+  });
+
+  it("offers p.240's four windows", () => {
+    expect([...RATE_WINDOWS]).toEqual(["second", "minute", "hour", "day"]);
+    expect([MAX_CONCURRENT, MAX_RATE]).toEqual([100, 1_000_000]);
   });
 });

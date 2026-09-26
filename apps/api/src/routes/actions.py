@@ -51,7 +51,7 @@ from ..services import object_type_usage as usage_service
 from ..services import notifications as notifications_service
 from ..services import connections as conn_service
 from ..services import egress_store
-from ..services import webhook_calls, webhook_store
+from ..services import webhook_calls, webhook_limits, webhook_store
 from ..services import webhooks as webhooks_service
 from . import connections as connection_routes
 from ..services import instances as instances_service
@@ -1706,9 +1706,13 @@ async def _run_webhooks(
                 conn, UUID(str(connection["id"]))
             )
             values = actions_service.webhook_inputs(config, bound)
-            result = await webhook_calls.perform(
-                webhook, connection, secret, values, policies
-            )
+            # p.240's limits (§522): a refused execution is a failure like
+            # any other, so a writeback refuses the action and a side
+            # effect is recorded and passed over.
+            async with webhook_limits.limited(webhook) as refused:
+                result = (webhook_calls.result(ok=False, error=refused) if refused
+                          else await webhook_calls.perform(
+                              webhook, connection, secret, values, policies))
         except webhooks_service.WebhookError as exc:
             # A request that could not be *built* — a required input the rule
             # does not supply. `_validate_definition` refuses that shape at save

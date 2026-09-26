@@ -320,3 +320,53 @@ def test_a_webhook_can_be_deleted(page, api, target):
     expect(panel(page).get_by_text("Doomed")).to_be_visible()
     panel(page).get_by_role("button", name="Delete").click()
     expect(page.get_by_test_id("webhooks-empty")).to_be_visible(timeout=15000)
+
+
+def test_limits_set_in_the_form_hold_and_say_why_a_call_was_refused(page, api, target):
+    """§522, p.240: "A rate limit restricts how many times a Webhook can be
+    executed within a time window that you specify." Set here, shown on the
+    row, reopened as saved, and the refusal said on the test call."""
+    mod = build(api, "Webhooks limits")
+    connection = rest_connection(api, mod, target)
+    api.call(
+        "POST", f"{mod.base}/webhooks",
+        {"connection_id": connection["id"], "api_name": f"hook_{uuid.uuid4().hex[:8]}",
+         "display_name": "Limited", "method": "GET", "path": "created"},
+    )
+    open_connections(page, mod)
+    expect(panel(page).get_by_test_id("webhook-limits")).to_have_text("No limits")
+
+    panel(page).get_by_role("button", name="Edit").click()
+    expect(page.get_by_test_id("webhook-rate-window")).to_be_disabled()
+    page.get_by_test_id("webhook-max-concurrent").fill("0")
+    expect(page.get_by_test_id("webhook-problem")).to_contain_text("concurrency limit")
+    expect(page.get_by_test_id("webhook-save")).to_be_disabled()
+    page.get_by_test_id("webhook-max-concurrent").fill("3")
+    page.get_by_test_id("webhook-rate-limit").fill("1")
+    page.get_by_test_id("webhook-rate-window").select_option("hour")
+    page.get_by_test_id("webhook-save").click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+    expect(panel(page).get_by_test_id("webhook-limits")).to_have_text(
+        "Limits: at most 3 at a time, at most 1 per hour")
+
+    panel(page).get_by_role("button", name="Edit").click()
+    expect(page.get_by_test_id("webhook-max-concurrent")).to_have_value("3")
+    expect(page.get_by_test_id("webhook-rate-limit")).to_have_value("1")
+    expect(page.get_by_test_id("webhook-rate-window")).to_have_value("hour")
+    page.get_by_role("dialog").get_by_role("button", name="Cancel").click()
+
+    panel(page).get_by_role("button", name="Test").click()
+    page.get_by_test_id("webhook-test-run").click()
+    result = page.get_by_test_id("webhook-test-result")
+    expect(result).to_contain_text("Succeeded", timeout=20000)
+    page.get_by_test_id("webhook-test-run").click()
+    expect(result).to_contain_text("this webhook runs at most 1 time per hour", timeout=20000)
+    expect(result).to_contain_text("nothing was changed")
+
+    # Clearing a limit is no limit, and no window is kept for it.
+    panel(page).get_by_role("button", name="Edit").click()
+    page.get_by_test_id("webhook-rate-limit").fill("")
+    page.get_by_test_id("webhook-max-concurrent").fill("")
+    page.get_by_test_id("webhook-save").click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+    expect(panel(page).get_by_test_id("webhook-limits")).to_have_text("No limits")

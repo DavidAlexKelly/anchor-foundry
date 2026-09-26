@@ -166,6 +166,7 @@ def parse(config: Any) -> dict[str, Any]:
         "store_responses": bool(config.get("store_responses", True)),
         "retry_statuses": _statuses(config.get("retry_statuses") or []),
         "timeout_seconds": _timeout(config.get("timeout_seconds", 20)),
+        **_limits(config),
     }
 
 
@@ -262,6 +263,37 @@ def _statuses(raw: Any) -> list[int]:
             raise WebhookError(f"{code} is not an HTTP status code")
         out.append(code)
     return out
+
+
+#: p.240's rate windows: "every second, minute, hour, or day".
+RATE_WINDOWS = ("second", "minute", "hour", "day")
+#: Ours, not the document's, and db 0111 holds them too.
+MAX_CONCURRENT = 100
+MAX_RATE = 1_000_000
+
+
+def _whole(raw: Any, what: str, ceiling: int) -> int | None:
+    """A limit, or None for no limit."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise WebhookError(f"{what} must be a whole number")
+    if not 1 <= raw <= ceiling:
+        raise WebhookError(f"{what} must be between 1 and {ceiling}")
+    return raw
+
+
+def _limits(config: dict[str, Any]) -> dict[str, Any]:
+    """p.240's concurrency and rate limits (§522), both off unless set."""
+    concurrent = _whole(config.get("max_concurrent"), "the concurrency limit", MAX_CONCURRENT)
+    rate = _whole(config.get("rate_limit"), "the rate limit", MAX_RATE)
+    window = config.get("rate_window")
+    if rate is None:
+        if window is not None:
+            raise WebhookError("a rate window needs a rate limit")
+    elif window not in RATE_WINDOWS:
+        raise WebhookError(f"the rate window must be one of {', '.join(RATE_WINDOWS)}")
+    return {"max_concurrent": concurrent, "rate_limit": rate, "rate_window": window}
 
 
 def _timeout(raw: Any) -> int:

@@ -93,6 +93,11 @@ export interface WebhookDraft {
   store_responses: boolean;
   retry_statuses: number[];
   timeout_seconds: number;
+  /** p.240's limits (§522). Null is no limit; the window is kept while the
+   * rate is cleared, so turning a rate back on keeps the window chosen. */
+  max_concurrent: number | null;
+  rate_limit: number | null;
+  rate_window: RateWindow;
 }
 
 export function blankWebhook(connectionId: string): WebhookDraft {
@@ -118,6 +123,10 @@ export function blankWebhook(connectionId: string): WebhookDraft {
     store_responses: true,
     retry_statuses: [],
     timeout_seconds: 20,
+    // p.240 sets neither limit by default.
+    max_concurrent: null,
+    rate_limit: null,
+    rate_window: "minute",
   };
 }
 
@@ -230,6 +239,9 @@ export function problem(draft: WebhookDraft): string | null {
     return "A HEAD request has no body to read outputs from.";
   }
 
+  const limit = limitsProblem(draft);
+  if (limit) return limit;
+
   for (const name of Object.keys(draft.headers)) {
     if (RESERVED_HEADERS.includes(name.toLowerCase())) {
       return `The ${name} header is set by the source and cannot be overridden here.`;
@@ -296,4 +308,53 @@ export function outcomeLabel(run: {
   if (run.system_changed === false) return `Failed${status} — nothing was changed`;
   if (run.system_changed === true) return `Failed${status} — after the change landed`;
   return `Failed${status} — the far end may have changed`;
+}
+
+// ---- limits (§522; p.240) ---------------------------------------------------------
+/** p.240: "every second, minute, hour, or day". */
+export const RATE_WINDOWS = ["second", "minute", "hour", "day"] as const;
+export type RateWindow = (typeof RATE_WINDOWS)[number];
+/** The server's ceilings (`webhooks.MAX_CONCURRENT`, `MAX_RATE`). */
+export const MAX_CONCURRENT = 100;
+export const MAX_RATE = 1_000_000;
+
+/** A limit as typed: empty is no limit. Anything else is kept as the number
+ * it reads as, so `limitsProblem` can say what is wrong with it. */
+export function limitFrom(text: string): number | null {
+  return text.trim() === "" ? null : Number(text);
+}
+
+export function limitsProblem(
+  draft: Pick<WebhookDraft, "max_concurrent" | "rate_limit">,
+): string | null {
+  const c = draft.max_concurrent;
+  if (c !== null && !(Number.isInteger(c) && c >= 1 && c <= MAX_CONCURRENT)) {
+    return `The concurrency limit must be a whole number from 1 to ${MAX_CONCURRENT}, or empty for none.`;
+  }
+  const r = draft.rate_limit;
+  if (r !== null && !(Number.isInteger(r) && r >= 1 && r <= MAX_RATE)) {
+    return `The rate limit must be a whole number from 1 to ${MAX_RATE.toLocaleString("en-US")}, or empty for none.`;
+  }
+  return null;
+}
+
+/** What the API takes: no window without a rate. */
+export function limitsPayload(
+  draft: Pick<WebhookDraft, "max_concurrent" | "rate_limit" | "rate_window">,
+): { max_concurrent: number | null; rate_limit: number | null; rate_window: RateWindow | null } {
+  return {
+    max_concurrent: draft.max_concurrent,
+    rate_limit: draft.rate_limit,
+    rate_window: draft.rate_limit === null ? null : draft.rate_window,
+  };
+}
+
+/** A webhook's limits in one line, for its row in the list. */
+export function limitsText(webhook: {
+  max_concurrent: number | null; rate_limit: number | null; rate_window: string | null;
+}): string {
+  const parts: string[] = [];
+  if (webhook.max_concurrent !== null) parts.push(`at most ${webhook.max_concurrent} at a time`);
+  if (webhook.rate_limit !== null) parts.push(`at most ${webhook.rate_limit} per ${webhook.rate_window}`);
+  return parts.length ? `Limits: ${parts.join(", ")}` : "No limits";
 }

@@ -109,6 +109,10 @@ export interface Webhook {
   store_responses: boolean;
   retry_statuses: number[];
   timeout_seconds: number;
+  /** p.240's concurrency and rate limits (§522); null is no limit. */
+  max_concurrent: number | null;
+  rate_limit: number | null;
+  rate_window: "second" | "minute" | "hour" | "day" | null;
   created_at: string;
   updated_at: string;
 }
