@@ -8,9 +8,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  PAGE_PARAM, ROUTABLE_KINDS, defaultPageNode, pageIdOf, pageNodeFor, routingParams,
-  variablesOnPage,
+  PAGE_PARAM, ROUTABLE_ELEMENTS, ROUTABLE_KINDS, defaultPageNode, pageIdOf, pageNodeFor,
+  routable, routingHint, routingParams, variablesOnPage,
 } from "./routing";
+import { seedFromQuery } from "./pure";
 
 /** An interface variable configured to appear in the URL. */
 function routed(id: string, extra: Record<string, unknown> = {}) {
@@ -282,5 +283,99 @@ describe("routing a picked object (p.199; §416)", () => {
       values: { v_set: { object_type_id: TYPE, filters: [] } },
     });
     expect(out).toEqual({});
+  });
+});
+
+describe("routing a list of values (p.199; §505)", () => {
+  // p.199: "The following variables types are unable to be used in the URL:
+  // Object set filter variables". An array with a scalar element is a list of
+  // values, not of clauses, and travels as one parameter per entry.
+  const list = (extra: Record<string, unknown> = {}) => ({
+    enabled: true,
+    variables: { v_regions: routed("v_regions", { kind: "array", element: "string", ...extra }) },
+    values: { v_regions: ["EU", "US"] } as Record<string, unknown>,
+  });
+
+  it("is routable exactly when it declares a scalar element", () => {
+    expect(ROUTABLE_ELEMENTS).toEqual(["string", "number", "boolean", "date", "timestamp"]);
+    for (const element of ROUTABLE_ELEMENTS) {
+      expect(routable({ kind: "array", element }), element).toBe(true);
+    }
+    for (const element of [undefined, null, "", "struct", "single_object"]) {
+      expect(routable({ kind: "array", element }), String(element)).toBe(false);
+    }
+    // The element says nothing about a kind that is not a list.
+    expect(routable({ kind: "string", element: null })).toBe(true);
+    expect(routable({ kind: "object_set", element: "string" })).toBe(false);
+  });
+
+  it("writes one entry per parameter, in order", () => {
+    expect(routingParams(list())).toEqual({ regions: ["EU", "US"] });
+    const numbers = list({ element: "number" });
+    numbers.values = { v_regions: [3, 1, 2] };
+    expect(routingParams(numbers)).toEqual({ regions: ["3", "1", "2"] });
+    const flags = list({ element: "boolean" });
+    flags.values = { v_regions: [false, true] };
+    expect(routingParams(flags)).toEqual({ regions: ["false", "true"] });
+  });
+
+  it("round-trips through a query string back into the same list", () => {
+    // What `routingParams` writes is what `seedFromQuery` reads: the two
+    // halves of one link, checked against each other.
+    for (const [element, held] of [["string", ["EU", "US"]], ["number", [3, 1, 2]],
+      ["boolean", [true, false]]] as const) {
+      const input = list({ element });
+      input.values = { v_regions: [...held] };
+      const query = new URLSearchParams();
+      for (const v of routingParams(input).regions as string[]) query.append("regions", v);
+      expect(seedFromQuery(input.variables, query), element).toEqual({ v_regions: held });
+    }
+  });
+
+  it("leaves out an empty list and one that is still the default", () => {
+    const cleared = list();
+    cleared.values = { v_regions: [] };
+    expect(routingParams(cleared)).toEqual({});
+    expect(routingParams(list({ default: ["EU", "US"] }))).toEqual({});
+    expect(routingParams(list({ default: ["US", "EU"] }))).toEqual({ regions: ["EU", "US"] });
+  });
+
+  it("leaves out a list that holds anything but scalars", () => {
+    // A clause or an object stringifies into text that reads back as
+    // something nobody chose.
+    for (const held of [[{ property: "a" }], ["EU", null], ["EU", ["US"]], "EU"]) {
+      const odd = list();
+      odd.values = { v_regions: held };
+      expect(routingParams(odd), JSON.stringify(held)).toEqual({});
+    }
+  });
+
+  it("still refuses a list with no element: the filter shape", () => {
+    expect(routingParams(list({ element: undefined }))).toEqual({});
+  });
+});
+
+describe("routingHint", () => {
+  it("says a list repeats its key", () => {
+    expect(routingHint({ kind: "array", element: "string" })).toBe(
+      "Only when it is not the default. Each entry is its own parameter "
+      + "(?key=a&key=b). Needs routing on, in Layout.");
+  });
+
+  it("says a scalar needs routing on", () => {
+    expect(routingHint({ kind: "number" }))
+      .toBe("Only when it is not the default. Needs routing on, in Layout.");
+  });
+
+  it("says an untyped list needs an element", () => {
+    expect(routingHint({ kind: "array" })).toBe(
+      "An array needs a type for its entries to be in the URL — a list of filter "
+      + "clauses cannot be. Choose one under Entries.");
+  });
+
+  it("says a kind that cannot route why, and what to do instead", () => {
+    expect(routingHint({ kind: "object_set", element: "string" })).toBe(
+      "A object_set cannot be in the URL — nothing would read it back. Route a "
+      + "string and use it in this one's definition.");
   });
 });

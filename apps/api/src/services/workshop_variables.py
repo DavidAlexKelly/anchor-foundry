@@ -199,12 +199,15 @@ URL_BEHAVIOURS = ("never", "when_visible", "always")
 # - `time_series_set` - the same one layer down: a reference to an instance and
 #   a property, derived rather than chosen, so there is no viewer selection in
 #   it to share.
-# - `array` - the shape filter clauses travel in (`workshop.md` §3.2), which is
-#   p.199's other named exclusion. A list needs a URL vocabulary (repeated
-#   parameters) that `seedFromQuery` does not read, and half of it - writing
-#   without reading - is the failure this list exists to avoid. p.199's own
-#   workaround still applies: route a **string** and use it in the filter's
-#   default.
+# - `array` **with no element type** - the shape filter clauses travel in
+#   (`workshop.md` §3.2), which is p.199's other named exclusion: "Object set
+#   filter variables". An array that declares a scalar element (p.132's
+#   `ARRAY_ELEMENTS`) is a list of values rather than of clauses, and routes
+#   as of §505 as one repeated query parameter per entry, which
+#   `seedFromQuery` reads back with `getAll`. That is `_parse_url_behavior`'s
+#   rule rather than this tuple's, because it needs the element as well as the
+#   kind. p.199's own workaround still applies to a filter: route a **string**
+#   and use it in the filter's default.
 #
 # Refused at save rather than dropped at write time, because a builder who
 # ticked "Always in URL" and got nothing would have no way to know which of the
@@ -614,8 +617,9 @@ def parse(
         external_id, interface = _parse_interface(
             label, value.get("external_id"), value.get("interface")
         )
+        element = _parse_element(label, value.get("element"), kind)
         url_behavior = _parse_url_behavior(
-            label, str(kind), value.get("url_behavior"), external_id, interface
+            label, str(kind), value.get("url_behavior"), external_id, interface, element
         )
         save_state = _parse_state_saving(
             label, str(kind), value.get("save_state"), external_id, derivation
@@ -638,7 +642,7 @@ def parse(
             url_behavior=url_behavior,
             save_state=save_state,
             recompute=recompute,
-            element=_parse_element(label, value.get("element"), kind),
+            element=element,
         )
 
     _refuse_duplicate_external_ids(variables)
@@ -722,7 +726,8 @@ def _parse_interface(
 
 
 def _parse_url_behavior(
-    label: str, kind: str, raw: Any, external_id: str | None, interface: Interface | None
+    label: str, kind: str, raw: Any, external_id: str | None, interface: Interface | None,
+    element: str | None,
 ) -> str:
     """When this variable's value is written to the URL (p.198).
 
@@ -751,7 +756,14 @@ def _parse_url_behavior(
     behavior = str(raw)
     if behavior == "never":
         return behavior
-    if kind not in ROUTABLE_KINDS:
+    if kind == "array" and element is None:
+        raise VariableError(
+            f"variable {label!r} is an array with no element type and cannot be in the "
+            "URL - that is the shape filter clauses travel in, which p.199 excludes. "
+            f"Give it an element ({', '.join(ARRAY_ELEMENTS)}) and each entry becomes "
+            "one repeated query parameter"
+        )
+    if kind not in ROUTABLE_KINDS and kind != "array":
         raise VariableError(
             f"variable {label!r} is a {kind} and cannot be in the URL - nothing would "
             f"read the value back, so the link would restore everything but this. "
