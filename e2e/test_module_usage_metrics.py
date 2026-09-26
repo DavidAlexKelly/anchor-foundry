@@ -328,3 +328,26 @@ def test_the_toggle_turns_recording_on(page, api):
     expect(toggle).to_be_checked()
     expect(page.get_by_test_id("views-empty")).to_contain_text(
         "No layouts have been viewed", timeout=30000)
+
+
+def test_the_toggle_waits_for_the_current_state(page, api):
+    """A box ticked before the first read arrives saves "on", and then that
+    read - which left before the save - says "off". So the box cannot be used
+    until the state it shows is the module's."""
+    mod = Module(api, "Toggle wait")
+    mod.define({"format": 2, "layout": layout({
+        "t": {"resolvedName": "CanvasText", "props": {"tag": "p", "text": "W"}},
+    }), "variables": {}, "events": {}})
+    held = []
+    page.route("**/metrics?days=*", lambda route: held.append(route))
+    open_metrics(page, mod)
+    toggle = page.get_by_test_id("metrics-tracking")
+    expect(toggle).to_be_disabled()
+    eventually(lambda: len(held), lambda n: n >= 1, what="the first read to be held")
+    for route in held:
+        route.continue_()
+    page.unroute("**/metrics?days=*")
+    expect(toggle).to_be_enabled()
+    toggle.click()
+    expect(page.get_by_test_id("views-empty")).to_contain_text(
+        "No layouts have been viewed", timeout=30000)

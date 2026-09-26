@@ -100,6 +100,8 @@ export const CATEGORY_OF: Record<string, CategoryId> = {
   CanvasMediaPreview: "visualization",
   // p.399 files it under Visualization widgets.
   CanvasDataFreshness: "visualization",
+  // p.402 files it under Visualization widgets too.
+  CanvasEditHistory: "visualization",
 
   CanvasButton: "events",
   CanvasTabs: "events",
