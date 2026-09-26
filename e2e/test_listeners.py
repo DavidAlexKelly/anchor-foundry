@@ -144,3 +144,34 @@ def test_rotating_an_endpoint_without_downtime(page, api) -> None:
     expect(listener.get_by_test_id("listener-url")).not_to_have_text(new_url)
     expect(listener.get_by_test_id("listener-endpoint")).to_have_count(0)
     assert post(new_url, b"{}") == 404
+
+
+def test_a_named_sender_asks_only_for_its_secret(page, api) -> None:
+    """§518, p.262: "configure a custom, basic authentication listener, or one
+    of the following listeners". GitHub fixes the scheme and the header, so
+    the form asks for the secret alone, and a signed push is taken."""
+    import hashlib
+    import hmac
+
+    mod = Module(api, "Listeners github")
+    open_connections(page, mod)
+    name = f"Pushes {mod.tag}"
+    page.get_by_test_id("listener-new").click()
+    page.get_by_test_id("listener-name").fill(name)
+    page.get_by_test_id("listener-type").select_option("github")
+    expect(page.get_by_test_id("listener-verification")).to_be_disabled()
+    expect(page.get_by_test_id("listener-verification")).to_have_value("hmac_sha256")
+    expect(page.get_by_test_id("listener-header")).to_have_count(0)
+    page.get_by_test_id("listener-secret").fill("gh-secret")
+    page.get_by_test_id("listener-create").click()
+
+    listener = card(page, name)
+    expect(listener.get_by_test_id("listener-verification-text")).to_have_text(
+        "Verification: GitHub · HMAC-SHA256 signature (X-Hub-Signature-256)", timeout=15000)
+    listener.get_by_test_id("listener-toggle").click()
+    expect(listener.get_by_test_id("listener-status")).to_contain_text("Running")
+    url = listener.get_by_test_id("listener-url").inner_text()
+    body = b'{"ref": "refs/heads/main"}'
+    sig = hmac.new(b"gh-secret", body, hashlib.sha256).hexdigest()
+    assert post(url, body, {"X-Hub-Signature-256": f"sha256={sig}"}) == 200
+    assert post(url, body) == 401

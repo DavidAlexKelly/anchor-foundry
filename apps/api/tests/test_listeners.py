@@ -217,7 +217,8 @@ def test_basic_authentication_is_a_username_and_password(client, fx) -> None:
 
 def test_a_configuration_that_cannot_verify_is_refused(client, fx) -> None:
     for body, message in (
-        ({"verification": "magic"}, "verification must be one of none, basic, header_secret, hmac_sha256, not 'magic'"),
+        ({"verification": "magic"},
+         "a Custom listener verifies with none, basic, header_secret, hmac_sha256, hmac_sha256_base64, query_token"),
         ({"verification": "none", "secret": "x"}, "a listener that verifies nothing has no header or secret"),
         ({"verification": "none", "verification_header": "X-A"}, "a listener that verifies nothing has no header or secret"),
         ({"verification": "header_secret", "verification_header": "X-A"}, "header_secret verification needs a secret"),
@@ -432,3 +433,168 @@ def test_rotation_is_an_editor_s(client, fx) -> None:
                       json={"expires_at": soon(1)}).status_code == 403
     assert client.delete(f"{base(fx)}/{listener['id']}/endpoints/{eid}",
                          headers=hdr(fx.viewer_sub)).status_code == 403
+
+
+# ---- named listener types (§518; p.262) -------------------------------------------
+
+def test_the_schemes_are_the_database_s(client, fx) -> None:
+    """Every scheme a type offers is one db 0107 allows, and the service's list
+    is the database's, so neither can drift from the other."""
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        definition = conn.execute(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint"
+            " WHERE conname = 'listeners_verification_check'").fetchone()[0]
+        types = conn.execute(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'listeners'::regclass"
+            " AND pg_get_constraintdef(oid) LIKE '%listener_type%'").fetchone()[0]
+    import re
+    assert re.findall(r"'([a-z0-9_]+)'::text", definition) == list(listener_service.VERIFICATIONS)
+    assert re.findall(r"'([a-z0-9_]+)'::text", types) == list(listener_service.LISTENER_TYPES)
+    offered = {v for t in listener_service.LISTENER_TYPES.values() for v in t["schemes"]}
+    assert offered == set(listener_service.VERIFICATIONS)
+
+
+def signed_slack(secret: str, body: bytes, stamp: int) -> dict:
+    sig = "v0=" + hmac.new(secret.encode(), f"v0:{stamp}:".encode() + body, hashlib.sha256).hexdigest()
+    return {"X-Slack-Signature": sig, "X-Slack-Request-Timestamp": str(stamp)}
+
+
+def test_a_slack_listener_checks_the_signed_timestamp(client, fx) -> None:
+    import time
+    listener = started(client, fx, listener_type="slack", secret="slack-secret")
+    assert (listener["listener_type"], listener["verification"], listener["verification_header"]) == (
+        "slack", "slack_v0", "X-Slack-Signature")
+    body = b'{"type": "event_callback", "event": {"type": "app_mention"}}'
+    now = int(time.time())
+    assert client.post(path_of(listener), content=body, headers=signed_slack("slack-secret", body, now)).status_code == 200
+    for headers in (signed_slack("wrong", body, now), signed_slack("slack-secret", body + b" ", now),
+                    signed_slack("slack-secret", body, now - 301), signed_slack("slack-secret", body, now + 301),
+                    {**signed_slack("slack-secret", body, now), "X-Slack-Request-Timestamp": "soon"}, {}):
+        assert client.post(path_of(listener), content=body, headers=headers).status_code == 401, headers
+    assert client.post(path_of(listener), content=body,
+                       headers=signed_slack("slack-secret", body, now - 299)).status_code == 200
+    [first, *_] = events(client, fx, listener)
+    assert first["headers"]["x-slack-signature"] == "[redacted]"
+
+
+def test_slack_s_set_up_handshake_is_answered_and_not_kept(client, fx) -> None:
+    """p.287: "Slack will verify that the listener is correctly set up"."""
+    import time
+    listener = started(client, fx, listener_type="slack", secret="s")
+    body = json.dumps({"type": "url_verification", "challenge": "3eZbrw1a"}).encode()
+    r = client.post(path_of(listener), content=body, headers=signed_slack("s", body, int(time.time())))
+    assert (r.status_code, r.json()) == (200, {"challenge": "3eZbrw1a"})
+    assert events(client, fx, listener) == []
+    # Unsigned, it is refused like anything else.
+    assert client.post(path_of(listener), content=body).status_code == 401
+    # A signed Slack event that happens to carry a challenge field is an event.
+    event_body = json.dumps({"type": "event_callback", "challenge": "not-a-handshake"}).encode()
+    r = client.post(path_of(listener), content=event_body,
+                    headers=signed_slack("s", event_body, int(time.time())))
+    assert r.json()["received"] is True and len(events(client, fx, listener)) == 1
+    # Any other sender posting that shape is sending an event.
+    custom = started(client, fx)
+    r = client.post(path_of(custom), content=body)
+    assert r.json()["received"] is True and len(events(client, fx, custom)) == 1
+
+
+def test_a_stripe_listener_checks_any_v1_signature_of_the_timestamped_body(client, fx) -> None:
+    import time
+    listener = started(client, fx, listener_type="stripe", secret="whsec")
+    body = b'{"type": "charge.succeeded"}'
+    now = int(time.time())
+
+    def sig(secret: str, stamp: int) -> str:
+        return hmac.new(secret.encode(), f"{stamp}.".encode() + body, hashlib.sha256).hexdigest()
+    good = sig("whsec", now)
+    for header, status in ((f"t={now},v1={good}", 200), (f"t={now},v1={sig('old', now)},v1={good}", 200),
+                           (f"t={now}, v1={good}", 200), (f"v1={good},t={now}", 200),
+                           (f"t={now},v0={good}", 401),
+                           (f"t={now - 301},v1={sig('whsec', now - 301)}", 401), (f"v1={good}", 401),
+                           (f"t={now},v1={sig('other', now)}", 401), ("", 401)):
+        r = client.post(path_of(listener), content=body, headers={"Stripe-Signature": header})
+        assert r.status_code == status, header
+
+
+def test_github_gitlab_and_shopify_read_their_own_headers(client, fx) -> None:
+    body = b'{"ref": "main"}'
+    github = started(client, fx, listener_type="github", secret="gh")
+    assert github["verification_header"] == "X-Hub-Signature-256"
+    sig = hmac.new(b"gh", body, hashlib.sha256).hexdigest()
+    assert client.post(path_of(github), content=body, headers={"X-Hub-Signature-256": f"sha256={sig}"}).status_code == 200
+    assert client.post(path_of(github), content=body, headers={"X-Signature": sig}).status_code == 401
+
+    gitlab = started(client, fx, listener_type="gitlab", secret="gl")
+    assert (gitlab["verification"], gitlab["verification_header"]) == ("header_secret", "X-Gitlab-Token")
+    assert client.post(path_of(gitlab), content=body, headers={"X-Gitlab-Token": "gl"}).status_code == 200
+
+    shopify = started(client, fx, listener_type="shopify", secret="sh")
+    digest = base64.b64encode(hmac.new(b"sh", body, hashlib.sha256).digest()).decode()
+    assert client.post(path_of(shopify), content=body,
+                       headers={"X-Shopify-Hmac-Sha256": digest}).status_code == 200
+    hexed = hmac.new(b"sh", body, hashlib.sha256).hexdigest()
+    assert client.post(path_of(shopify), content=body,
+                       headers={"X-Shopify-Hmac-Sha256": hexed}).status_code == 401
+
+
+def test_a_pubsub_listener_takes_its_token_in_the_query_string(client, fx) -> None:
+    """p.274: "enter your shared secret into the URL field as a query parameter
+    after the listener endpoint URL. Example: ?token=<YOUR_TOKEN>\""""
+    listener = started(client, fx, listener_type="pubsub", secret="pst")
+    assert (listener["verification"], listener["verification_header"]) == ("query_token", None)
+    assert client.post(path_of(listener) + "?token=pst", content=b"{}").status_code == 200
+    for query in ("", "?token=ps", "?token=pstt", "?secret=pst"):
+        assert client.post(path_of(listener) + query, content=b"{}").status_code == 401, query
+
+
+def test_jira_may_sign_or_not(client, fx) -> None:
+    """p.279: "You can also set up without a signing secret.\""""
+    signed = started(client, fx, listener_type="jira", secret="j")
+    assert (signed["verification"], signed["verification_header"]) == ("hmac_sha256", "X-Hub-Signature")
+    unsigned = started(client, fx, listener_type="jira", verification="none")
+    assert unsigned["verification"] == "none"
+    assert client.post(path_of(unsigned), content=b"{}").status_code == 200
+
+
+def test_a_named_type_refuses_what_it_does_not_take(client, fx) -> None:
+    for body, message in (
+        ({"listener_type": "zapier"},
+         "listener_type must be one of custom, slack, jira, github, gitlab, stripe, shopify, pubsub, not 'zapier'"),
+        ({"listener_type": "slack", "verification": "none"}, "a Slack listener verifies with slack_v0"),
+        ({"listener_type": "github", "secret": "x", "verification_header": "X-Other"},
+         "a GitHub listener always reads X-Hub-Signature-256"),
+        ({"listener_type": "stripe"}, "stripe_v1 verification needs a secret"),
+        ({"listener_type": "custom", "verification": "query_token", "secret": "t", "verification_header": "X-A"},
+         "query_token verification reads the endpoint's query string, so it takes no header"),
+    ):
+        r = client.post(base(fx), headers=hdr(fx.editor_sub), json={"display_name": "Typed", **body})
+        assert (r.status_code, r.json()["detail"]) == (422, message), body
+
+
+def test_reconfiguring_stays_within_the_type(client, fx) -> None:
+    listener = make(client, fx, listener_type="jira", secret="j")
+    url = f"{base(fx)}/{listener['id']}/verification"
+    r = client.put(url, headers=hdr(fx.editor_sub), json={"verification": "none"})
+    assert r.status_code == 200 and r.json()["listener_type"] == "jira"
+    r = client.put(url, headers=hdr(fx.editor_sub), json={"verification": "basic", "secret": "a:b"})
+    assert (r.status_code, r.json()["detail"]) == (422, "a Jira listener verifies with hmac_sha256, none")
+    r = client.put(url, headers=hdr(fx.editor_sub), json={"secret": "again"})
+    assert r.json()["verification"] == "hmac_sha256" and r.json()["verification_header"] == "X-Hub-Signature"
+
+
+def test_the_browser_offers_exactly_these_types() -> None:
+    """`lib/listeners.ts` mirrors `LISTENER_TYPES`, since the two languages
+    cannot share it. Each type's label, schemes and headers are read out of
+    that file and compared, so the form cannot offer a scheme the server
+    refuses, or miss one it takes."""
+    import re
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "web", "src", "lib", "listeners.ts")
+    source = open(path).read()
+    block = source[source.index("export const LISTENER_TYPES = {"):]
+    block = block[:block.index("} as const")]
+    seen = {}
+    for name, label, schemes in re.findall(r"(\w+): \{ label: \"([^\"]+)\", schemes: \{([^}]*)\}", block):
+        seen[name] = (label, {k: (None if v == "null" else v.strip('"'))
+                              for k, v in re.findall(r"(\w+): (null|\"[^\"]*\")", schemes)})
+    expected = {name: (t["label"], t["schemes"]) for name, t in listener_service.LISTENER_TYPES.items()}
+    assert seen == expected

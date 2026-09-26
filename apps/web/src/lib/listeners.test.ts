@@ -2,8 +2,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  BLANK_LISTENER, ROTATIONS, VERIFICATIONS, curlExample, draftBody, draftProblem, endpointState,
-  extendedExpiry, needsHeader, rotateBody, statusText, whyNoRotation,
+  BLANK_LISTENER, LISTENER_TYPES, ROTATIONS, VERIFICATIONS, curlExample, draftBody, draftProblem,
+  endpointState, extendedExpiry, needsHeader, rotateBody, schemesOf, statusText, whyNoRotation,
+  withType,
   verificationText,
 } from "./listeners";
 
@@ -31,17 +32,23 @@ describe("draftProblem", () => {
 
 describe("draftBody", () => {
   it("sends only what the scheme uses", () => {
+    const c = { listener_type: "custom" };
     expect(draftBody(draft({ display_name: " Hook ", secret: "left", verification_header: "X-A" })))
-      .toEqual({ display_name: "Hook", verification: "none" });
+      .toEqual({ display_name: "Hook", ...c, verification: "none" });
     expect(draftBody(draft({ verification: "basic", secret: "u:p", verification_header: "X-A" })))
-      .toEqual({ display_name: "Hook", verification: "basic", secret: "u:p" });
+      .toEqual({ display_name: "Hook", ...c, verification: "basic", secret: "u:p" });
     expect(draftBody(draft({ verification: "hmac_sha256", secret: "k", verification_header: "X-S" })))
-      .toEqual({ display_name: "Hook", verification: "hmac_sha256", secret: "k", verification_header: "X-S" });
+      .toEqual({ display_name: "Hook", ...c, verification: "hmac_sha256", secret: "k", verification_header: "X-S" });
+    // A named type's header is fixed, so none is sent.
+    expect(draftBody(draft({ listener_type: "github", verification: "hmac_sha256", secret: "k", verification_header: "X-S" })))
+      .toEqual({ display_name: "Hook", listener_type: "github", verification: "hmac_sha256", secret: "k" });
   });
 
-  it("knows which schemes name a header", () => {
-    expect((Object.keys(VERIFICATIONS) as (keyof typeof VERIFICATIONS)[]).filter(needsHeader))
-      .toEqual(["header_secret", "hmac_sha256"]);
+  it("knows which schemes name a header, per type", () => {
+    expect(schemesOf("custom").filter((v) => needsHeader("custom", v)))
+      .toEqual(["header_secret", "hmac_sha256", "hmac_sha256_base64"]);
+    expect(needsHeader("github", "hmac_sha256")).toBe(false);
+    expect(needsHeader("slack", "none")).toBe(false);
   });
 });
 
@@ -52,10 +59,13 @@ describe("the listener's lines", () => {
       .toBe("Stopped · requests are refused until it is started · 0 events received");
   });
 
-  it("names the scheme and its header", () => {
-    expect(verificationText({ verification: "none", verification_header: null })).toBe("None");
-    expect(verificationText({ verification: "hmac_sha256", verification_header: "X-Sig" }))
+  it("names the type, the scheme and its header", () => {
+    expect(verificationText({ listener_type: "custom", verification: "none", verification_header: null }))
+      .toBe("None");
+    expect(verificationText({ listener_type: "custom", verification: "hmac_sha256", verification_header: "X-Sig" }))
       .toBe("HMAC-SHA256 signature (X-Sig)");
+    expect(verificationText({ listener_type: "slack", verification: "slack_v0", verification_header: "X-Slack-Signature" }))
+      .toBe("Slack · Slack signing secret (X-Slack-Signature)");
   });
 
   it("gives a command that sends one event", () => {
@@ -99,5 +109,31 @@ describe("endpoint rotation (§517)", () => {
     expect(whyNoRotation([{ active: true }])).toBe("");
     expect(whyNoRotation([{ active: true }, { active: false }]))
       .toBe("A listener has at most two endpoints. Delete the one being retired to rotate again.");
+  });
+});
+
+describe("named listener types (§518)", () => {
+  it("offers each type's schemes, its default first", () => {
+    expect(schemesOf("jira")).toEqual(["hmac_sha256", "none"]);
+    expect(schemesOf("pubsub")).toEqual(["query_token"]);
+    expect(Object.keys(LISTENER_TYPES))
+      .toEqual(["custom", "slack", "jira", "github", "gitlab", "stripe", "shopify", "pubsub"]);
+  });
+
+  it("moves a draft onto the new type's default", () => {
+    const moved = withType(draft({ verification: "basic", secret: "u:p" }), "stripe");
+    expect([moved.listener_type, moved.verification, moved.secret]).toEqual(["stripe", "stripe_v1", "u:p"]);
+  });
+
+  it("asks a named type for its secret and nothing else", () => {
+    expect(draftProblem(draft({ listener_type: "github", verification: "hmac_sha256", secret: "" })))
+      .toBe("This verification needs a secret.");
+    expect(draftProblem(draft({ listener_type: "github", verification: "hmac_sha256", secret: "k" }))).toBe("");
+  });
+
+  it("labels every scheme a type can offer", () => {
+    for (const type of Object.keys(LISTENER_TYPES) as (keyof typeof LISTENER_TYPES)[]) {
+      for (const v of schemesOf(type)) expect(VERIFICATIONS[v].label, v).toBeTruthy();
+    }
   });
 });

@@ -22,6 +22,7 @@ export type ListenerEndpoint = {
 export type Listener = {
   id: string;
   display_name: string;
+  listener_type: ListenerType;
   verification: Verification;
   verification_header: string | null;
   running: boolean;
@@ -42,7 +43,9 @@ export type ListenerEvent = {
   headers: Record<string, string>;
 };
 
-export type Verification = "none" | "basic" | "header_secret" | "hmac_sha256";
+export type Verification =
+  | "none" | "basic" | "header_secret" | "hmac_sha256" | "hmac_sha256_base64" | "slack_v0"
+  | "stripe_v1" | "query_token";
 
 /** The schemes, with what each asks of a sender. p.265: "listeners implement
  * the security protocols laid out by those external systems". */
@@ -63,21 +66,72 @@ export const VERIFICATIONS: Record<Verification, { label: string; hint: string }
     label: "HMAC-SHA256 signature",
     hint: "The sender signs the body with a shared key and puts the hex digest in the header you name.",
   },
+  hmac_sha256_base64: {
+    label: "HMAC-SHA256 signature, base64",
+    hint: "As above, with the digest in base64 rather than hex.",
+  },
+  slack_v0: {
+    label: "Slack signing secret",
+    hint: "Slack signs each request with the app's signing secret and a timestamp; a stale one is refused.",
+  },
+  stripe_v1: {
+    label: "Stripe signing secret",
+    hint: "Stripe signs each request with the endpoint's signing secret and a timestamp; a stale one is refused.",
+  },
+  query_token: {
+    label: "Token in the address",
+    hint: "The sender adds ?token=<secret> to the endpoint address.",
+  },
 };
+
+/** p.262's named listeners (§518), mirroring `LISTENER_TYPES` in
+ * `services/listeners.py`: each fixes its schemes and the header each reads.
+ * `"*"` is a header the author names; null is a scheme with no header. */
+export const LISTENER_TYPES = {
+  custom: { label: "Custom", schemes: {
+    none: null, basic: null, header_secret: "*", hmac_sha256: "*", hmac_sha256_base64: "*",
+    query_token: null } },
+  slack: { label: "Slack", schemes: { slack_v0: "X-Slack-Signature" } },
+  jira: { label: "Jira", schemes: { hmac_sha256: "X-Hub-Signature", none: null } },
+  github: { label: "GitHub", schemes: { hmac_sha256: "X-Hub-Signature-256" } },
+  gitlab: { label: "GitLab", schemes: { header_secret: "X-Gitlab-Token" } },
+  stripe: { label: "Stripe", schemes: { stripe_v1: "Stripe-Signature" } },
+  shopify: { label: "Shopify", schemes: { hmac_sha256_base64: "X-Shopify-Hmac-Sha256" } },
+  pubsub: { label: "Google Cloud Pub/Sub", schemes: { query_token: null } },
+} as const satisfies Record<string, { label: string; schemes: Partial<Record<Verification, string | null>> }>;
+
+export type ListenerType = keyof typeof LISTENER_TYPES;
+
+/** The schemes a type offers, its default first. */
+export function schemesOf(type: ListenerType): Verification[] {
+  return Object.keys(LISTENER_TYPES[type].schemes) as Verification[];
+}
+
+/** The header a scheme reads for this type: the author's, a fixed one, or none. */
+function headerOf(type: ListenerType, v: Verification): string | null | undefined {
+  return (LISTENER_TYPES[type].schemes as Partial<Record<Verification, string | null>>)[v];
+}
 
 export type ListenerDraft = {
   display_name: string;
+  listener_type: ListenerType;
   verification: Verification;
   verification_header: string;
   secret: string;
 };
 
 export const BLANK_LISTENER: ListenerDraft = {
-  display_name: "", verification: "none", verification_header: "", secret: "",
+  display_name: "", listener_type: "custom", verification: "none", verification_header: "", secret: "",
 };
 
-export function needsHeader(v: Verification): boolean {
-  return v === "header_secret" || v === "hmac_sha256";
+/** Whether the author names the header: only a custom listener's header schemes. */
+export function needsHeader(type: ListenerType, v: Verification): boolean {
+  return headerOf(type, v) === "*";
+}
+
+/** A draft moved to another type starts on that type's default scheme. */
+export function withType(draft: ListenerDraft, type: ListenerType): ListenerDraft {
+  return { ...draft, listener_type: type, verification: schemesOf(type)[0] as Verification };
 }
 
 /** Why a draft cannot be saved, or "" when it can. The server's rules, said
@@ -86,7 +140,8 @@ export function draftProblem(draft: ListenerDraft): string {
   if (!draft.display_name.trim()) return "Name the listener.";
   if (draft.verification === "none") return "";
   if (!draft.secret) return "This verification needs a secret.";
-  if (needsHeader(draft.verification) && !/^[A-Za-z0-9-]{1,100}$/.test(draft.verification_header)) {
+  if (needsHeader(draft.listener_type, draft.verification)
+      && !/^[A-Za-z0-9-]{1,100}$/.test(draft.verification_header)) {
     return "Name the header it arrives in: letters, digits and hyphens.";
   }
   if (draft.verification === "basic" && !draft.secret.includes(":")) {
@@ -99,10 +154,13 @@ export function draftProblem(draft: ListenerDraft): string {
  * the server refuses them rather than ignoring them. */
 export function draftBody(draft: ListenerDraft): Record<string, unknown> {
   const body: Record<string, unknown> = {
-    display_name: draft.display_name.trim(), verification: draft.verification,
+    display_name: draft.display_name.trim(), listener_type: draft.listener_type,
+    verification: draft.verification,
   };
   if (draft.verification !== "none") body.secret = draft.secret;
-  if (needsHeader(draft.verification)) body.verification_header = draft.verification_header;
+  if (needsHeader(draft.listener_type, draft.verification)) {
+    body.verification_header = draft.verification_header;
+  }
   return body;
 }
 
@@ -114,10 +172,14 @@ export function statusText(listener: Pick<Listener, "running" | "events">): stri
     : `Stopped · requests are refused until it is started · ${taken}`;
 }
 
-/** The scheme, and the header it reads when it reads one. */
-export function verificationText(listener: Pick<Listener, "verification" | "verification_header">): string {
+/** The type, the scheme, and the header it reads when it reads one. */
+export function verificationText(
+  listener: Pick<Listener, "listener_type" | "verification" | "verification_header">,
+): string {
   const label = VERIFICATIONS[listener.verification].label;
-  return listener.verification_header ? `${label} (${listener.verification_header})` : label;
+  const scheme = listener.verification_header ? `${label} (${listener.verification_header})` : label;
+  return listener.listener_type === "custom"
+    ? scheme : `${LISTENER_TYPES[listener.listener_type].label} · ${scheme}`;
 }
 
 /** A command that sends the listener one test event, for whoever is setting

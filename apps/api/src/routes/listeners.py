@@ -44,6 +44,8 @@ class EndpointOut(BaseModel):
 class ListenerOut(BaseModel):
     id: UUID
     display_name: str
+    #: p.262's named listener, or `custom` (§518).
+    listener_type: str
     verification: str
     verification_header: str | None
     running: bool
@@ -56,14 +58,16 @@ class ListenerOut(BaseModel):
 
 class ListenerCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=200, pattern=r"\S")
-    verification: str = "none"
+    listener_type: str = "custom"
+    #: Null takes the type's default scheme.
+    verification: str | None = None
     verification_header: str | None = Field(default=None, max_length=100)
     #: Write-only. Kept in the secrets store and never returned.
     secret: str | None = Field(default=None, max_length=1000)
 
 
 class ListenerConfigure(BaseModel):
-    verification: str
+    verification: str | None = None
     verification_header: str | None = Field(default=None, max_length=100)
     secret: str | None = Field(default=None, max_length=1000)
 
@@ -114,7 +118,7 @@ async def create_listener(
             row = await listener_service.create(
                 conn, secrets_gateway(), workspace_id=access.workspace_id,
                 project_id=access.project_id, display_name=body.display_name,
-                verification=body.verification, header=body.verification_header,
+                listener_type=body.listener_type, verification=body.verification, header=body.verification_header,
                 secret=body.secret, by=access.auth.user_id)
         except listener_service.ListenerError as exc:
             raise _refused(exc) from exc
@@ -263,7 +267,10 @@ async def receive(token: str, request: Request) -> JSONResponse:
     headers = {k.lower(): v for k, v in request.headers.items()}
     try:
         async with get_engine().begin() as conn:
-            event = await listener_service.accept(conn, secrets_gateway(), token, headers, body)
+            taken = await listener_service.accept(conn, secrets_gateway(), token, headers, body,
+                                                  query=dict(request.query_params))
     except listener_service.Refusal as refusal:
         return JSONResponse({"detail": refusal.detail}, status_code=refusal.status)
-    return JSONResponse({"received": True, "event": event})
+    if "challenge" in taken:
+        return JSONResponse({"challenge": taken["challenge"]})
+    return JSONResponse({"received": True, "event": taken["event"]})
