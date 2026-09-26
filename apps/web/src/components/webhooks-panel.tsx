@@ -29,6 +29,8 @@ import {
   MAX_CONCURRENT, MAX_RATE, RATE_WINDOWS, limitFrom, limitsPayload, limitsText, type RateWindow,
 } from "@/lib/webhook-form";
 import type { Connection, Webhook, WebhookRun } from "@/lib/types";
+import { stepDrafts, stepsPayload } from "@/lib/webhook-steps";
+import { StepsEditor } from "@/components/webhook-steps";
 
 /** A webhook as the API takes it. The body is parsed here rather than in the
  * form, because the form has to hold half-finished JSON and the wire cannot. */
@@ -49,6 +51,7 @@ function payload(draft: WebhookDraft): Record<string, unknown> {
     retry_statuses: draft.retry_statuses,
     timeout_seconds: draft.timeout_seconds,
     ...limitsPayload(draft),
+    steps: stepsPayload(draft.steps),
   };
 }
 
@@ -76,6 +79,7 @@ function toDraft(webhook: Webhook): WebhookDraft {
     max_concurrent: webhook.max_concurrent ?? null,
     rate_limit: webhook.rate_limit ?? null,
     rate_window: webhook.rate_window ?? "minute",
+    steps: stepDrafts(webhook.steps),
   };
 }
 
@@ -214,6 +218,10 @@ function WebhookDialog({
           ))}
         </select>
       </Field>
+
+      {/* p.234's chain (§523): calls made first, whose answers the request
+          below may use. */}
+      <StepsEditor steps={draft.steps} onChange={(steps) => patch({ steps })} />
 
       <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
         <Field label="Method">

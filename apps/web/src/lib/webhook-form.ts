@@ -22,6 +22,8 @@
  * parse, and {@link bodyProblem} is what it says.
  */
 
+import { extractedNames, stepsProblem, type StepDraft } from "./webhook-steps";
+
 /** p.233's methods, in the order a request builder should offer them: the one
  * that reads first, then the ones that write, then the two that ask about a
  * resource without wanting it.
@@ -98,6 +100,8 @@ export interface WebhookDraft {
   max_concurrent: number | null;
   rate_limit: number | null;
   rate_window: RateWindow;
+  /** p.234's chain (§523): the calls before this request. */
+  steps: StepDraft[];
 }
 
 export function blankWebhook(connectionId: string): WebhookDraft {
@@ -127,6 +131,7 @@ export function blankWebhook(connectionId: string): WebhookDraft {
     max_concurrent: null,
     rate_limit: null,
     rate_window: "minute",
+    steps: [],
   };
 }
 
@@ -241,6 +246,10 @@ export function problem(draft: WebhookDraft): string | null {
 
   const limit = limitsProblem(draft);
   if (limit) return limit;
+  const chain = stepsProblem(draft.steps, [...names], draft.method);
+  if (chain) return chain;
+  // What the chain extracts, the request may reference too.
+  const known = new Set([...names, ...extractedNames(draft.steps)]);
 
   for (const name of Object.keys(draft.headers)) {
     if (RESERVED_HEADERS.includes(name.toLowerCase())) {
@@ -250,7 +259,7 @@ export function problem(draft: WebhookDraft): string | null {
 
   for (const [where, text] of templatesIn(draft, parsed)) {
     for (const reference of referencesIn(text)) {
-      if (!names.has(reference)) {
+      if (!known.has(reference)) {
         return `The ${where} references ${reference}, which is not an input of this webhook.`;
       }
     }

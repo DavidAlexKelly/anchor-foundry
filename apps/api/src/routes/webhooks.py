@@ -82,6 +82,8 @@ class WebhookDefinition(BaseModel):
     max_concurrent: Any = None
     rate_limit: Any = None
     rate_window: Any = None
+    #: p.234's chain (§523): the calls before this request. Checked by `parse`.
+    steps: Any = Field(default_factory=list)
 
 
 class WebhookCreate(WebhookDefinition):
@@ -119,6 +121,7 @@ class WebhookOut(BaseModel):
     max_concurrent: int | None = None
     rate_limit: int | None = None
     rate_window: str | None = None
+    steps: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

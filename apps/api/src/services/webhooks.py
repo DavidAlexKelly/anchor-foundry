@@ -141,11 +141,23 @@ def parse(config: Any) -> dict[str, Any]:
     if body is not None and len(json.dumps(body)) > MAX_BODY_BYTES:
         raise WebhookError(f"the body is larger than {MAX_BODY_BYTES} bytes")
 
+    # p.234's chain (§523): calls made before this one, whose extracted
+    # values the calls after them may use.
+    steps = _steps(config.get("steps") or [], declared)
+    known = declared | {e["api_name"] for step in steps for e in step["extract"]}
+    unsafe = sum(1 for step in steps if step["method"] not in SAFE_METHODS and not step["safe"])
+    if unsafe + (method not in SAFE_METHODS) > 1:
+        # p.237: "only one call is allowed to use an unsafe HTTP method".
+        raise WebhookError(
+            "a webhook may make only one call that can change the external system; "
+            "mark an earlier call as safe if it only reads"
+        )
+
     # Every template, in one place, so a reference to something undeclared is
     # the same refusal wherever it was written.
     for where, text in _templates(path, query, headers, body):
         for name in templates.references(text):
-            if name not in declared:
+            if name not in known:
                 raise WebhookError(
                     f"the {where} references {{{{{{{name}}}}}}}, which is not an "
                     "input of this webhook"
@@ -167,7 +179,79 @@ def parse(config: Any) -> dict[str, Any]:
         "retry_statuses": _statuses(config.get("retry_statuses") or []),
         "timeout_seconds": _timeout(config.get("timeout_seconds", 20)),
         **_limits(config),
+        "steps": steps,
     }
+
+
+#: p.234: "A single webhook may contain multiple requests." Ours: ten calls in
+#: all, the webhook's own request and nine before it.
+MAX_STEPS = 9
+
+
+def _steps(raw: Any, declared: set[str]) -> list[dict[str, Any]]:
+    """The calls before the webhook's own request (§523; p.234-236).
+
+    Each is a method, a path and a body, and the values it **extracts** from
+    its response (p.235: "Extracted values can be also used in subsequent calls
+    to chain calls together"). A call may reference the webhook's inputs and
+    what the calls *before* it extracted, never its own or a later one's.
+    """
+    if not isinstance(raw, list):
+        raise WebhookError("the calls before the request must be a list")
+    if len(raw) > MAX_STEPS:
+        raise WebhookError(f"a webhook may make at most {MAX_STEPS} calls before its request")
+    known = set(declared)
+    out: list[dict[str, Any]] = []
+    for n, item in enumerate(raw, start=1):
+        where = f"call {n}"
+        if not isinstance(item, dict):
+            raise WebhookError(f"{where} must be an object")
+        method = str(item.get("method") or "").upper()
+        if method not in METHODS:
+            raise WebhookError(f"{where}: method must be one of {', '.join(METHODS)}")
+        path = item.get("path") or ""
+        if not isinstance(path, str) or len(path) > 2048:
+            raise WebhookError(f"{where}: the path must be text of at most 2048 characters")
+        body = item.get("body")
+        if body is not None and method in SAFE_METHODS:
+            raise WebhookError(f"{where}: a {method} request cannot carry a body")
+        if body is not None and len(json.dumps(body)) > MAX_BODY_BYTES:
+            raise WebhookError(f"{where}: the body is larger than {MAX_BODY_BYTES} bytes")
+        for label, text in _templates(path, {}, {}, body):
+            for name in templates.references(text):
+                if name not in known:
+                    raise WebhookError(
+                        f"{where}: the {label} references {{{{{{{name}}}}}}}, which is "
+                        "neither an input nor extracted by an earlier call")
+        extract = _extracts(item.get("extract") or [], known, where)
+        known |= {e["api_name"] for e in extract}
+        out.append({"method": method, "path": path, "body": body,
+                    # p.237's isHttpMethodSafe: a call that reads, whatever
+                    # its method says.
+                    "safe": bool(item.get("safe", False)), "extract": extract})
+    return out
+
+
+def _extracts(raw: Any, taken: set[str], where: str) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        raise WebhookError(f"{where}: what it extracts must be a list")
+    if len(raw) > MAX_OUTPUTS:
+        raise WebhookError(f"{where}: a call may extract at most {MAX_OUTPUTS} values")
+    out: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise WebhookError(f"{where}: each extracted value must be an object")
+        name = str(item.get("api_name") or "")
+        if not _API_NAME.match(name):
+            raise WebhookError(f"{where}: {name!r} is not a valid name for an extracted value")
+        if name in taken or name in {e["api_name"] for e in out}:
+            raise WebhookError(f"{where}: {name!r} is already an input or an extracted value")
+        path = item.get("path")
+        if not isinstance(path, str) or not path.strip():
+            # p.235's root extract is "." here: the whole response.
+            raise WebhookError(f"{where}: {name!r} needs a path, or \".\" for the whole response")
+        out.append({"api_name": name, "path": path.strip()})
+    return out
 
 
 def _inputs(raw: Any) -> list[dict[str, Any]]:
@@ -368,6 +452,11 @@ def render(webhook: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
     change the endpoint. Query values are handed to `urlencode` by the caller,
     which does its own encoding — doing it twice is how `%20` becomes `%2520`.
     """
+    check_required(webhook, values)
+    return render_call(webhook, values)
+
+
+def check_required(webhook: dict[str, Any], values: dict[str, Any]) -> None:
     missing = [
         i["api_name"] for i in webhook.get("inputs", [])
         if i.get("required", True) and values.get(i["api_name"]) is None
@@ -375,17 +464,21 @@ def render(webhook: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
     if missing:
         raise WebhookError(f"missing required input(s): {', '.join(sorted(missing))}")
 
+
+def render_call(call: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
+    """One call of a webhook (its own request or one of its steps), with
+    `values` holding the inputs and whatever earlier calls extracted."""
     return {
-        "path": _fill(str(webhook.get("path") or ""), values, encode=True),
+        "path": _fill(str(call.get("path") or ""), values, encode=True),
         "query": {
-            k: _fill(v, values) for k, v in (webhook.get("query") or {}).items()
+            k: _fill(v, values) for k, v in (call.get("query") or {}).items()
         },
         "headers": {
-            k: _fill(v, values) for k, v in (webhook.get("headers") or {}).items()
+            k: _fill(v, values) for k, v in (call.get("headers") or {}).items()
         },
         # `_none` because the body may itself be one whole reference, and a
         # sentinel is an internal marker rather than something to send.
-        "body": _none(_fill_json(webhook.get("body"), values)),
+        "body": _none(_fill_json(call.get("body"), values)),
     }
 
 
@@ -455,6 +548,12 @@ def _text(value: Any) -> str:
 
 
 # ---- what comes back out ---------------------------------------------------------
+def extracted(extract: list[dict[str, str]], payload: Any) -> dict[str, Any]:
+    """What one call of a chain extracts (§523; p.235), as the response has
+    it: typed, since a whole reference in a later body keeps its type."""
+    return {e["api_name"]: _at(payload, e["path"]) for e in extract}
+
+
 def extract(outputs: list[dict[str, Any]], payload: Any) -> dict[str, Any]:
     """p.229's output parameters, read out of a decoded response.
 

@@ -370,3 +370,54 @@ def test_limits_set_in_the_form_hold_and_say_why_a_call_was_refused(page, api, t
     page.get_by_test_id("webhook-save").click()
     expect(page.get_by_role("dialog")).to_have_count(0)
     expect(panel(page).get_by_test_id("webhook-limits")).to_have_text("No limits")
+
+
+def test_a_chain_built_in_the_form_sends_what_the_first_call_found(page, api, target):
+    """§523, p.235: "one to a GET endpoint to retrieve some data, then one to a
+    POST endpoint using data from the previous call." Typed here, and checked
+    at the far end: the echoed body carries the value the first call read."""
+    mod = build(api, "Webhooks chain")
+    rest_connection(api, mod, target)
+    open_connections(page, mod)
+
+    page.get_by_test_id("new-webhook").click()
+    page.get_by_test_id("webhook-display-name").fill("Chained")
+    page.get_by_test_id("webhook-api-name").fill(f"hook_{uuid.uuid4().hex[:8]}")
+    page.get_by_test_id("webhook-steps-add").click()
+    page.get_by_label("Call 1 path").fill("created")
+    page.get_by_test_id("webhook-step-extract-add").click()
+    page.get_by_label("Call 1 extract 1 name").fill("unique_id")
+    page.get_by_label("Call 1 extract 1 path").fill("results.unique_id")
+    expect(page.get_by_test_id("webhook-step-summary")).to_have_text("1. GET /created → unique_id")
+    page.get_by_test_id("webhook-path").fill("echo")
+    page.get_by_test_id("webhook-body").fill('{"id": "{{{unique_id}}}"}')
+    expect(page.get_by_test_id("webhook-problem")).to_have_count(0)
+
+    # p.237: two calls that change things are refused until one only reads.
+    page.get_by_label("Call 1 method").select_option("POST")
+    expect(page.get_by_test_id("webhook-problem")).to_contain_text("Only one call may change")
+    expect(page.get_by_test_id("webhook-save")).to_be_disabled()
+    page.get_by_label("Call 1 only reads").check()
+    page.get_by_label("Call 1 body").fill('{"lookup": true}')
+    expect(page.get_by_test_id("webhook-problem")).to_have_count(0)
+    # Back to a read: the body and the mark go, rather than staying hidden
+    # behind a refusal nobody could act on.
+    page.get_by_label("Call 1 method").select_option("GET")
+    expect(page.get_by_label("Call 1 only reads")).to_have_count(0)
+    expect(page.get_by_test_id("webhook-problem")).to_have_count(0)
+
+    page.get_by_test_id("webhook-save").click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    panel(page).get_by_role("button", name="Test").click()
+    page.get_by_test_id("webhook-test-run").click()
+    result = page.get_by_test_id("webhook-test-result")
+    expect(result).to_contain_text("Succeeded", timeout=20000)
+    expect(result).to_contain_text('"id": "X1"')
+
+    panel(page).get_by_role("button", name="Edit").click()
+    expect(page.get_by_test_id("webhook-step-summary")).to_have_text("1. GET /created → unique_id")
+    expect(page.get_by_label("Call 1 extract 1 path")).to_have_value("results.unique_id")
+    page.get_by_test_id("webhook-step-remove").click()
+    expect(page.get_by_test_id("webhook-problem")).to_contain_text(
+        "The body references unique_id, which is not an input of this webhook.")
