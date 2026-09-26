@@ -1323,7 +1323,15 @@ export const objects = {
    * enough to ask on that schedule: a max and a count, no documents. */
   objectTypeFreshness: (wid: string, objectTypeIds: string[]) =>
     request<{
-      types: { object_type_id: string; updated_at: string | null; count: number }[];
+      types: {
+        object_type_id: string; updated_at: string | null; count: number;
+        /** §469, for the Data Freshness widget. */
+        display_name: string;
+        sources: {
+          dataset_id: string; dataset_name: string;
+          last_synced_at: string | null; sync_status: string;
+        }[];
+      }[];
     }>(`/workspaces/${wid}/object-types/freshness`, {
       method: "POST",
       body: JSON.stringify({ object_type_ids: objectTypeIds }),

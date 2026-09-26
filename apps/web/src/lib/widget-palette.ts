@@ -98,6 +98,8 @@ export const CATEGORY_OF: Record<string, CategoryId> = {
   CanvasStepper: "visualization",
   CanvasMarkdown: "visualization",
   CanvasMediaPreview: "visualization",
+  // p.399 files it under Visualization widgets.
+  CanvasDataFreshness: "visualization",
 
   CanvasButton: "events",
   CanvasTabs: "events",

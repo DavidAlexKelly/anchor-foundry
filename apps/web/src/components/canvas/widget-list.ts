@@ -49,6 +49,7 @@ export const PALETTE: PaletteEntry[] = [
   { key: "CanvasTimeline", label: "Timeline", hint: "Objects from any number of sets, as events in time order" },
   { key: "CanvasMediaPreview", label: "Media preview", hint: "An image, video or audio file, from a URL or an attachment" },
   { key: "CanvasIframe", label: "Iframe", hint: "Embed a web page or one of this platform's own pages" },
+  { key: "CanvasDataFreshness", label: "Data freshness", hint: "When object types and their datasources were last indexed" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },

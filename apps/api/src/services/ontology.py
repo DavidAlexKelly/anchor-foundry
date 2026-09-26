@@ -2267,6 +2267,35 @@ async def list_sources(
     return [dict(r) for r in rows]
 
 
+async def source_freshness(conn: AsyncConnection, object_type_id: UUID) -> list[dict[str, Any]]:
+    """When each of a type's datasources last synced into it (`workshop` p.400's
+    "most recent index time for … datasources"; §469).
+
+    `last_synced_at` is set by a sync, so it is the moment that source's rows
+    were last indexed as this type's instances - not when the dataset changed,
+    which a sync may not have followed yet. The difference is the point of the
+    widget: a dataset written an hour ago and synced yesterday is data a module
+    has not seen.
+
+    **Across projects**, because an object type is workspace-level and its
+    sources may come from any project; row-level security on `datasets` leaves
+    out whatever the caller cannot read, which is also what a caller who cannot
+    read a dataset should be told about its freshness: nothing.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT s.dataset_id, d.name AS dataset_name, s.last_synced_at, s.sync_status
+          FROM object_type_sources s
+          JOIN datasets d ON d.id = s.dataset_id
+         WHERE s.object_type_id = :tid
+         ORDER BY d.name
+        """,
+        {"tid": str(object_type_id)},
+    )
+    return [dict(r) for r in rows]
+
+
 async def create_source(
     conn: AsyncConnection,
     *,
