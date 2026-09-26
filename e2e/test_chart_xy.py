@@ -189,3 +189,60 @@ def test_the_panel_segments_a_count_and_only_a_count(page, api, sites) -> None:
     # And its property is a number.
     expect(page.get_by_test_id("chart-measure").locator("option")).to_have_text(
         ["Choose…", "capacity"])
+
+
+# ---- p.281's Labels, p.283's Sort by, p.284's orientation (§468) --------------
+def region_titles(page, chart: str = "Bar chart") -> list[str]:
+    return page.locator(f"svg[aria-label='{chart}'] rect title").all_text_contents()
+
+
+@pytest.mark.parametrize("sort, expected", [
+    # The data's own order: largest first, a tie by key.
+    (None, ["north: 2", "east: 1", "south: 1"]),
+    ("keyAsc", ["east: 1", "north: 2", "south: 1"]),
+    ("keyDesc", ["south: 1", "north: 2", "east: 1"]),
+    ("valueAsc", ["east: 1", "south: 1", "north: 2"]),
+])
+def test_the_bars_are_in_the_order_asked_for(page, api, sites, sort, expected) -> None:
+    mod = build(api, sites, f"Chart XY sort {sort}",
+                {"dimension": "region", **({"sort": sort} if sort else {})})
+    open_module(page, mod)
+    eventually(lambda: region_titles(page), lambda got: got == expected, what=f"sorted {sort}")
+
+
+def test_a_horizontal_bar_chart_runs_across(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY horizontal", {"dimension": "region",
+                                                    "orientation": "horizontal"})
+    open_module(page, mod)
+    bars = page.locator("svg[aria-label='Horizontal bar chart'] rect")
+    expect(bars).to_have_count(3)
+    north, east = box(bars.nth(0)), box(bars.nth(1))
+    # North is twice east, measured along the bar - its width - and the two
+    # start from the same edge.
+    assert abs(north["width"] - 2 * east["width"]) < 2, (north, east)
+    assert abs(north["x"] - east["x"]) < 1, (north, east)
+    assert north["y"] < east["y"], (north, east)
+
+
+def test_value_labels_write_each_value(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY labels", {"dimension": "region", "valueLabels": True})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-value-label")).to_have_text(["2", "1", "1"])
+    mod = build(api, sites, "Chart XY no labels", {"dimension": "region"})
+    open_module(page, mod)
+    expect(page.locator("svg[aria-label='Bar chart'] rect")).to_have_count(3)
+    expect(page.get_by_test_id("chart-value-label")).to_have_count(0)
+
+
+def test_the_panel_sets_the_display(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY display panel", {})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    page.get_by_test_id("chart-sort").select_option("keyAsc")
+    page.get_by_test_id("chart-orientation").select_option("horizontal")
+    page.get_by_test_id("chart-value-labels").check()
+    save(page)
+    props = mod.definition()["layout"]["chart"]["props"]
+    assert (props["sort"], props["orientation"], props["valueLabels"]) == (
+        "keyAsc", "horizontal", True), props

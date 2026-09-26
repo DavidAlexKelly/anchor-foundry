@@ -145,7 +145,94 @@ function gridTicks(values: number[], count = 4): number[] {
   return Array.from({ length: count + 1 }, (_, i) => min + (span * i) / count);
 }
 
-function BarChart({ points, drill }: { points: ChartPoint[]; drill?: Drill }) {
+/** p.281's Labels and p.284's orientation (§468). */
+export interface ChartDisplay {
+  horizontal?: boolean;
+  labels?: boolean;
+}
+
+/** p.284's horizontal bar chart: categories down the left, values along the
+ * bottom. The same bars and the same drill-down as the vertical one, turned. */
+function HorizontalBarChart({ points, drill, labels }: {
+  points: ChartPoint[];
+  drill?: Drill;
+  labels?: boolean;
+}) {
+  const area = { x: 110, y: PAD.top, w: WIDTH - 110 - 40, h: HEIGHT - PAD.top - 24 };
+  const values = points.map((p) => p.value);
+  const ticks = gridTicks(values);
+  const min = Math.min(0, ...values);
+  const span = Math.max(0, ...values) - min || 1;
+  const toX = (v: number) => area.x + ((v - min) / span) * area.w;
+  const slot = area.h / Math.max(points.length, 1);
+  const barHeight = Math.max(2, slot * 0.62);
+  const zeroX = toX(0);
+  return (
+    <svg
+      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+      role="img"
+      aria-label="Horizontal bar chart"
+      style={{ width: "100%" }}
+    >
+      {ticks.map((t, i) => (
+        <g key={i}>
+          <line
+            x1={toX(t)} x2={toX(t)} y1={area.y} y2={area.y + area.h}
+            stroke="var(--line)" strokeWidth={1}
+          />
+          <text x={toX(t)} y={HEIGHT - 8} textAnchor="middle" fontSize={11} fill="var(--ink-soft)">
+            {niceNumber(t)}
+          </text>
+        </g>
+      ))}
+      {points.map((p, i) => {
+        const x = toX(p.value);
+        const y = area.y + slot * i + (slot - barHeight) / 2;
+        return (
+          <g key={i}>
+            <rect
+              x={Math.min(x, zeroX)}
+              y={y}
+              width={Math.max(1, Math.abs(x - zeroX))}
+              height={barHeight}
+              fill={PALETTE[i % PALETTE.length]}
+              opacity={dim(drill, p.label)}
+              {...markProps(drill, p.label)}
+            >
+              <title>{`${p.label}: ${p.value}`}</title>
+            </rect>
+            <text
+              x={area.x - 6}
+              y={y + barHeight / 2 + 4}
+              textAnchor="end"
+              fontSize={11}
+              fill="var(--ink-soft)"
+            >
+              {shortLabel(p.label, 16)}
+            </text>
+            {labels && (
+              <text
+                data-testid="chart-value-label"
+                x={Math.max(x, zeroX) + 4}
+                y={y + barHeight / 2 + 4}
+                fontSize={11}
+                fill="var(--ink)"
+              >
+                {niceNumber(p.value)}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function BarChart({ points, drill, labels }: {
+  points: ChartPoint[];
+  drill?: Drill;
+  labels?: boolean;
+}) {
   const area = plotArea();
   const values = points.map((p) => p.value);
   const s = scale(values);
@@ -180,6 +267,18 @@ function BarChart({ points, drill }: { points: ChartPoint[]; drill?: Drill }) {
             >
               {shortLabel(p.label, Math.max(4, Math.floor(slot / 7)))}
             </text>
+            {labels && (
+              <text
+                data-testid="chart-value-label"
+                x={x + barWidth / 2}
+                y={Math.min(y, zeroY) - 4}
+                textAnchor="middle"
+                fontSize={11}
+                fill="var(--ink)"
+              >
+                {niceNumber(p.value)}
+              </text>
+            )}
           </g>
         );
       })}
@@ -187,7 +286,11 @@ function BarChart({ points, drill }: { points: ChartPoint[]; drill?: Drill }) {
   );
 }
 
-function LineChart({ points, drill }: { points: ChartPoint[]; drill?: Drill }) {
+function LineChart({ points, drill, labels }: {
+  points: ChartPoint[];
+  drill?: Drill;
+  labels?: boolean;
+}) {
   const area = plotArea();
   const values = points.map((p) => p.value);
   const s = scale(values);
@@ -215,6 +318,19 @@ function LineChart({ points, drill }: { points: ChartPoint[]; drill?: Drill }) {
         >
           <title>{`${p.label}: ${p.value}`}</title>
         </circle>
+      ))}
+      {labels && points.map((p, i) => (
+        <text
+          key={`v${i}`}
+          data-testid="chart-value-label"
+          x={area.x + step * i}
+          y={s.toY(p.value, area) - 8}
+          textAnchor="middle"
+          fontSize={11}
+          fill="var(--ink)"
+        >
+          {niceNumber(p.value)}
+        </text>
       ))}
       {points.map((p, i) =>
         i % labelEvery === 0 ? (
@@ -478,22 +594,27 @@ export function Chart({
   kind,
   points,
   drill,
+  display = {},
 }: {
   kind: string;
   points: ChartPoint[];
   drill?: Drill;
+  display?: ChartDisplay;
 }) {
   if (points.length === 0) {
     return <p className="canvas-widget-empty">No rows match — nothing to chart.</p>;
   }
-  if (kind === "line") return <LineChart points={points} drill={drill} />;
+  if (kind === "line") return <LineChart points={points} drill={drill} labels={display.labels} />;
   if (kind === "pie") return <PieChart points={points} drill={drill} />;
   // Scatter takes no drill-down: its label is an X *coordinate*, so clicking a
   // point would narrow to one exact value of a continuous axis — almost never
   // the question somebody is asking. Left out rather than wired to something
   // that technically works.
   if (kind === "scatter") return <ScatterChart points={points} />;
-  return <BarChart points={points} drill={drill} />;
+  if (display.horizontal) {
+    return <HorizontalBarChart points={points} drill={drill} labels={display.labels} />;
+  }
+  return <BarChart points={points} drill={drill} labels={display.labels} />;
 }
 
 /** Rows come back from the query endpoint as `[label, value]` pairs of
