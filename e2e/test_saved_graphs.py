@@ -162,17 +162,25 @@ def test_a_saved_graph_is_shared_with_the_project(page, graphs) -> None:
     expect(page.locator(f'[data-testid="saved-graph"][data-name="{name}"]')).to_have_count(1)
 
 
-def test_a_name_already_taken_is_refused_where_it_was_typed(page, graphs) -> None:
+def test_a_name_taken_after_the_dialog_opened_is_refused_where_it_was_typed(
+    page, graphs, api
+) -> None:
     """A Save button that appears to do nothing is worse than one that is
-    absent (§214)."""
+    absent (§214). Since §512 a name the dialog knows is taken offers Replace
+    instead (`test_saving_under_a_name_in_use_replaces_that_graph`), so the 409
+    is left for the case the dialog cannot know about: somebody else saving
+    the name while it was open."""
     open_pipeline(page, graphs)
     name = f"Twice {uuid.uuid4().hex[:6]}"
-    for attempt in (1, 2):
-        page.get_by_test_id("graph-save").click()
-        page.get_by_test_id("graph-name").fill(name)
-        page.get_by_role("button", name="Save", exact=True).click()
-        if attempt == 1:
-            expect(page.get_by_test_id("graph-name")).to_have_count(0)
+    page.get_by_test_id("graph-save").click()
+    page.get_by_test_id("graph-name").fill(name)
+    expect(page.get_by_test_id("graph-save-submit")).to_have_text("Save")
+    workspace = api.call("GET", "/workspaces")[0]
+    project = next(p for p in api.call("GET", f"/workspaces/{workspace['id']}/projects")
+                   if p["slug"] == graphs["project_slug"])
+    api.call("POST", f"/workspaces/{workspace['id']}/projects/{project['id']}/saved-graphs",
+             {"name": name, "view": {}})
+    page.get_by_test_id("graph-save-submit").click()
     expect(page.get_by_test_id("graph-save-error")).to_contain_text("already exists")
 
 
@@ -192,3 +200,34 @@ def test_a_project_with_no_saved_graphs_says_so(page, api) -> None:
     expect(page.get_by_test_id("graph-open")).to_be_visible(timeout=30000)
     page.get_by_test_id("graph-open").click()
     expect(page.get_by_test_id("no-saved-graphs")).to_contain_text("Nothing saved yet")
+
+
+def test_saving_under_a_name_in_use_replaces_that_graph(page, graphs) -> None:
+    """§512. The name is unique in the project, so a second Save under it used
+    to be a 409 and a revised view had to be deleted and saved again. The
+    dialog now notices the name is taken, says what replacing does, and the
+    button reads Replace."""
+    name = f"Revised {uuid.uuid4().hex[:6]}"
+    open_pipeline(page, graphs)
+    page.get_by_test_id("search-query").fill("alpha")
+    page.get_by_test_id("graph-save").click()
+    page.get_by_test_id("graph-name").fill(name)
+    expect(page.get_by_test_id("graph-save-submit")).to_have_text("Save")
+    expect(page.get_by_test_id("graph-replace-note")).to_have_count(0)
+    page.get_by_test_id("graph-save-submit").click()
+    expect(page.get_by_test_id("graph-name")).to_have_count(0)
+
+    page.get_by_test_id("search-query").fill("gamma")
+    page.get_by_test_id("graph-save").click()
+    page.get_by_test_id("graph-name").fill(name)
+    expect(page.get_by_test_id("graph-replace-note")).to_contain_text(f'"{name}" already exists')
+    expect(page.get_by_test_id("graph-save-submit")).to_have_text("Replace")
+    page.get_by_test_id("graph-save-submit").click()
+    expect(page.get_by_test_id("graph-name")).to_have_count(0)
+
+    open_pipeline(page, graphs)
+    page.get_by_test_id("graph-open").click()
+    saved = page.locator(f'[data-testid="saved-graph"][data-name="{name}"]')
+    expect(saved).to_have_count(1)
+    saved.get_by_test_id("open-saved-graph").click()
+    expect(page.get_by_test_id("search-query")).to_have_value("gamma")

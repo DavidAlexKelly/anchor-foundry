@@ -8,6 +8,7 @@ import { PipelineGraphView } from "@/components/pipeline-graph";
 import { Dialog, Field } from "@/components/dialog";
 import { nodePath, type GraphView } from "@/lib/pipeline-graph";
 import { fromParams, toParams } from "@/lib/graph-link";
+import { replaceNote, saveLabel, savedNamed } from "@/lib/saved-graph-save";
 import { CopyLinkButton, useUrlState } from "@/components/use-url-state";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { PipelineGraph, PipelineNode, SavedGraph } from "@/lib/types";
@@ -284,8 +285,18 @@ function SaveGraphDialog({
 }) {
   const [name, setName] = useState("");
   const queryClient = useQueryClient();
+  // The Open dialog's list, so a name already taken is noticed before a 409
+  // (§512) and the button offers to replace it.
+  const saved = useQuery({
+    queryKey: ["saved-graphs", projectId],
+    queryFn: () => modelApi.savedGraphs(workspaceId, projectId),
+  });
+  const existing = savedNamed(saved.data, name);
   const save = useMutation({
-    mutationFn: () => modelApi.saveGraph(workspaceId, projectId, { name, view }),
+    mutationFn: () =>
+      existing
+        ? modelApi.replaceGraph(workspaceId, projectId, existing.id, { view })
+        : modelApi.saveGraph(workspaceId, projectId, { name, view }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["saved-graphs", projectId] });
       onClose();
@@ -315,6 +326,9 @@ function SaveGraphDialog({
             maxLength={200}
           />
         </Field>
+        {existing && (
+          <p className="login-note" data-testid="graph-replace-note">{replaceNote(existing)}</p>
+        )}
         {save.isError && (
           <div className="form-error" data-testid="graph-save-error">
             {save.error instanceof ApiError ? save.error.message : "Couldn't save."}
@@ -324,8 +338,13 @@ function SaveGraphDialog({
           <button type="button" className="btn quiet" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn" disabled={save.isPending}>
-            Save
+          <button
+            type="submit"
+            className="btn"
+            data-testid="graph-save-submit"
+            disabled={save.isPending}
+          >
+            {saveLabel(existing)}
           </button>
         </div>
       </form>

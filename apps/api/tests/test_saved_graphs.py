@@ -490,3 +490,48 @@ def test_saving_a_graph_is_audited(client: TestClient, fx: Fixture) -> None:
     entries = client.get("/api/org/audit?limit=200", headers=hdr(fx.admin_sub))
     assert entries.status_code == 200, entries.text
     assert "graph.save" in {e["action"] for e in entries.json()}
+
+
+# ---- saving over one (§512) ----------------------------------------------------
+
+def test_saving_over_a_graph_keeps_its_name_and_takes_the_new_view(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.12's Save, a second time. Before §512 the name was taken, the POST was
+    a 409, and the only way to revise a view was to delete it and save again."""
+    saved = save(client, fx, description="first", view={"query": "orders"})
+    focus = node()
+    r = client.put(f"{base(fx)}/{saved['id']}", headers=hdr(fx.editor_sub),
+                   json={"description": "second", "view": {"focus": focus, "layout": "vertical"}})
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert (got["id"], got["name"], got["description"]) == (saved["id"], saved["name"], "second")
+    assert got["view"] == {"focus": focus, "layout": "vertical"}
+    assert got["updated_at"] > saved["updated_at"]
+    _, graphs = listed(client, fx, fx.viewer_sub)
+    assert graphs[saved["id"]]["view"] == {"focus": focus, "layout": "vertical"}
+    # The view is held to the same grammar as a first save.
+    r = client.put(f"{base(fx)}/{saved['id']}", headers=hdr(fx.editor_sub),
+                   json={"view": {"focus": "banana"}})
+    assert r.status_code == 422, r.text
+    assert listed(client, fx, fx.viewer_sub)[1][saved["id"]]["view"]["focus"] == focus
+
+
+def test_saving_over_needs_an_editor_and_a_graph_in_this_project(
+    client: TestClient, fx: Fixture
+) -> None:
+    saved = save(client, fx)
+    r = client.put(f"{base(fx)}/{saved['id']}", headers=hdr(fx.viewer_sub), json={"view": {}})
+    assert r.status_code == 403, r.text
+    r = client.put(f"{base(fx)}/{uuid.uuid4()}", headers=hdr(fx.editor_sub), json={"view": {}})
+    assert r.status_code == 404, r.text
+    other = client.post(f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.editor_sub),
+                        json={"name": f"Elsewhere {uuid.uuid4().hex[:6]}"}).json()
+    theirs = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{other['id']}/saved-graphs",
+        headers=hdr(fx.editor_sub), json={"name": "Theirs", "view": {"query": "kept"}}).json()
+    r = client.put(f"{base(fx)}/{theirs['id']}", headers=hdr(fx.editor_sub), json={"view": {}})
+    assert r.status_code == 404, r.text
+    kept = client.get(f"/api/workspaces/{fx.workspace}/projects/{other['id']}/saved-graphs",
+                      headers=hdr(fx.editor_sub)).json()
+    assert kept[0]["view"] == {"query": "kept"}
