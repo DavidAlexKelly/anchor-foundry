@@ -25,6 +25,7 @@ import { rollbackSummary, whyNotRollbackable } from "@/lib/dataset-rollback";
 import { madeByText, originHref } from "@/lib/dataset-origin";
 import { bytesText } from "@/lib/bytes";
 import { NO_SCHEDULES, scheduleName, scheduleWhen } from "@/lib/dataset-schedules";
+import { currentBytes, sizeText } from "@/lib/dataset-size";
 import {
   DEFAULT_OPTIONS,
   ENCODINGS,
@@ -1054,6 +1055,12 @@ function DetailsTab({ wid, pid, did }: { wid: string; pid: string; did: string }
     queryFn: () => datasetApi.origin(wid, pid, did),
     enabled: detail.isSuccess,
   });
+  // Shares `ds-versions` with the History tab, which already measures every
+  // version: p.3's "size of the table" is the current one's (§509).
+  const versions = useQuery({
+    queryKey: ["ds-versions", did],
+    queryFn: () => datasetApi.versions(wid, pid, did),
+  });
   const schedules = useQuery({
     queryKey: ["ds-schedules", did],
     queryFn: () => datasetApi.schedules(wid, pid, did),
@@ -1102,6 +1109,12 @@ function DetailsTab({ wid, pid, did }: { wid: string; pid: string; did: string }
         <div>
           <dt>Rows</dt>
           <dd>{d.row_count.toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt>Size</dt>
+          <dd data-testid="ds-size">
+            {sizeText(d.table_schema.length, currentBytes(versions.data, d.current_version))}
+          </dd>
         </div>
         <div>
           <dt>Current version</dt>
