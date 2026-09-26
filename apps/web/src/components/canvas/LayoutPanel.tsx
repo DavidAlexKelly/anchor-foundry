@@ -1,16 +1,16 @@
 "use client";
 
 import { useEditor } from "@craftjs/core";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MIN_SECONDS, type AutoRefresh } from "./auto-refresh";
 import { problem as columnMathProblem } from "./derived-columns";
 import type { DerivedColumn, KnownProperty } from "./derived-columns";
 
 import type { WorkshopEvent, WorkshopModule, WorkshopVariable } from "@/lib/types";
 import { newEventId, newNodeId, newVariableId } from "@/lib/workshop-module";
-import { clip, paste, pasteTarget, withoutSubtree } from "./clipboard";
+import { clip, keyboardClipboard, paste, pasteTarget, withoutSubtree } from "./clipboard";
 import { conditionsOf, markerOf, type Condition } from "./conditions";
-import { canPark, move as moveNode, park, UNUSED_NAME } from "./unused";
+import { canPark, move as moveNode, park, pasteIntoUnused, UNUSED_NAME } from "./unused";
 import type { Clipping, PasteMode } from "./clipboard";
 
 type StateSavingSettings = NonNullable<WorkshopModule["state_saving"]>;
@@ -356,13 +356,16 @@ export function LayoutPanel({
   const labelOf = (id: string) =>
     rows.find((row) => row.id === id)?.label ?? "widget";
 
-  const take = (andRemove: boolean) => {
-    if (!selectedId) return;
+  /** True when something was taken, so the keys block the browser's own
+   *  copy only when this one did something instead. */
+  const take = (andRemove: boolean): boolean => {
+    if (!selectedId) return false;
     const layout = query.getSerializedNodes() as Record<string, unknown>;
     const clipping = clip(layout, variables, events, selectedId, labelOf(selectedId));
-    if (!clipping) return;
+    if (!clipping) return false;
     onClipboardChange?.(clipping);
     if (andRemove) actions.deserialize(withoutSubtree(layout, selectedId) as never);
+    return true;
   };
 
   const drop = (mode: PasteMode) => {
@@ -407,6 +410,38 @@ export function LayoutPanel({
     if (next === layout) return;
     actions.deserialize(next as never);
   };
+
+  // p.68's Cmd+V (§514): the held clipping, parked in Unused widgets and
+  // bound to the same variables, ready for "+ Add widget". False when there
+  // was nothing to paste, so the key is left to the browser.
+  const parkClipping = (): boolean => {
+    if (!clipboard) return false;
+    const layout = query.getSerializedNodes() as Record<string, unknown>;
+    const next = pasteIntoUnused(layout, variables, events, clipboard, {
+      mintNode: newNodeId, mintVariable: newVariableId, mintEvent: newEventId,
+    });
+    if (!next) return false;
+    onVariablesChange?.(next.variables);
+    onEventsChange?.(next.events);
+    actions.deserialize(next.layout as never);
+    return true;
+  };
+
+  // p.68's keys, on the document so they work wherever the author is looking.
+  // The listener is added once and reads the latest state through a ref, since
+  // re-adding it on every render would drop a key pressed mid-render.
+  const keys = useRef({ take, parkClipping });
+  keys.current = { take, parkClipping };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const action = keyboardClipboard(event);
+      const now = keys.current;
+      if (!action) return;
+      if (action === "copy" ? now.take(false) : now.parkClipping()) event.preventDefault();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   const select = (id: string) => {
     actions.selectNode(id);
@@ -540,6 +575,10 @@ export function LayoutPanel({
               Paste as a copy
             </button>
           </div>
+          <p className="canvas-widget-empty" data-testid="clip-keys">
+            Cmd+C / Ctrl+C copies the selected widget; Cmd+V / Ctrl+V parks the
+            copy in Unused widgets.
+          </p>
           <p className="canvas-widget-empty" data-testid="clip-state">
             {clipboard
               ? `Holding ${clipboard.label}. "Paste" reuses its variables; `

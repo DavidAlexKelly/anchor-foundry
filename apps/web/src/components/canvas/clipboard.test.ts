@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  clip, paste, pasteTarget, referencedVariables, subtreeIds, withoutSubtree,
+  clip, keyboardClipboard, paste, pasteTarget, referencedVariables, subtreeIds, withoutSubtree,
 } from "./clipboard";
 import type { Clipping } from "./clipboard";
 import type { WorkshopEvent, WorkshopVariable } from "../../lib/types";
@@ -368,5 +368,36 @@ describe("paste and events", () => {
     const out = paste(layout, variables, events, clipping,
       { into: "page", mode: "same", ...minters() });
     expect(out.events.e_new1!.effects[0]!.config?.value).toBe("sec");
+  });
+});
+
+describe("keyboardClipboard (§514; p.68's Cmd+C / Cmd+V)", () => {
+  const key = (k: string, extra: Record<string, unknown> = {}) => ({
+    key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false,
+    target: { tagName: "BODY", isContentEditable: false }, ...extra,
+  });
+
+  it("takes Cmd or Ctrl with C or V, either case", () => {
+    expect(keyboardClipboard(key("c", { metaKey: true }))).toBe("copy");
+    expect(keyboardClipboard(key("C", { ctrlKey: true }))).toBe("copy");
+    expect(keyboardClipboard(key("v", { ctrlKey: true }))).toBe("paste");
+    expect(keyboardClipboard(key("V", { metaKey: true }))).toBe("paste");
+  });
+
+  it("leaves other keys and other chords alone", () => {
+    expect(keyboardClipboard(key("c"))).toBeNull();
+    expect(keyboardClipboard(key("x", { metaKey: true }))).toBeNull();
+    expect(keyboardClipboard(key("c", { metaKey: true, altKey: true }))).toBeNull();
+    expect(keyboardClipboard(key("v", { metaKey: true, shiftKey: true }))).toBeNull();
+  });
+
+  it("leaves a field's own copy and paste alone", () => {
+    for (const tagName of ["INPUT", "textarea", "SELECT"]) {
+      expect(keyboardClipboard(key("c", { metaKey: true, target: { tagName } })), tagName).toBeNull();
+    }
+    expect(keyboardClipboard(key("v", { ctrlKey: true, target: { tagName: "DIV", isContentEditable: true } })))
+      .toBeNull();
+    // A target with no tag at all (the document) is not a field.
+    expect(keyboardClipboard(key("c", { metaKey: true, target: null }))).toBe("copy");
   });
 });

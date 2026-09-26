@@ -33,6 +33,8 @@
  * point of having parked it rather than copied it.
  */
 import type { LayoutNodes } from "../../lib/workshop-module";
+import type { WorkshopEvent, WorkshopVariable } from "../../lib/types";
+import { paste, type Clipping, type PasteResult } from "./clipboard";
 
 /** The resolved name of the holding node. One constant, because the panel, the
  * transform and the widget registry must agree and a second spelling would be
@@ -227,4 +229,28 @@ export function canPark(layout: LayoutNodes, id: string): boolean {
   const name = resolvedName(nodeAt(layout, id));
   return name !== "" && name !== UNUSED_NAME
     && name !== "CanvasPage" && name !== "CanvasOverlay";
+}
+
+/** p.68's Cmd+V (§514): paste a clipping into the Unused widgets area.
+ *
+ * > "Use Cmd+V (macOS) or Ctrl+V (Windows) to paste the widget into the
+ * > Unused widgets area … Add the widget to your module by choosing + Add
+ * > widget" (p.68)
+ *
+ * **Same-variable mode**, p.55's first: the parked copy reads the variables
+ * the original read, which is what makes it the same widget waiting to be
+ * placed rather than a new one bound to nothing. The holding node is made on
+ * the way if there is none, as `park` does. */
+export function pasteIntoUnused(
+  layout: LayoutNodes,
+  variables: Record<string, WorkshopVariable>,
+  events: Record<string, WorkshopEvent>,
+  clipping: Clipping,
+  mint: { mintNode: () => string; mintVariable: () => string; mintEvent: () => string },
+): PasteResult | null {
+  const ensured = ensureUnusedNode(layout, mint.mintNode);
+  if (!ensured) return null;
+  return paste(ensured.layout, variables, events, clipping, {
+    into: ensured.id, mode: "same", ...mint,
+  });
 }
