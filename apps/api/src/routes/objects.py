@@ -39,6 +39,7 @@ from ..lib.cron import next_run_after
 from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
+from ..services import object_edits as object_edits_service
 from ..services import favourites as favourites_service
 from ..services import datasets as dataset_service
 from ..services import dataset_engine as engine
@@ -962,6 +963,123 @@ async def get_object_view(
             conn, access.workspace_id, type_id, form_factor=form_factor
         )
     return ObjectViewOut(**row) if row else None
+
+
+# ---- p.402's Track user edit history (§470) ----------------------------------
+class EditHistorySetting(BaseModel):
+    since: datetime | None
+    """When tracking was switched on, or null when it is off. A time rather
+    than a flag because p.402's "edits completed prior to enabling Edit History
+    … will not be reflected" is a statement about when."""
+
+
+class EditHistoryIn(BaseModel):
+    enabled: bool
+
+
+@router.get("/object-types/{type_id}/edit-history", response_model=EditHistorySetting)
+async def get_edit_history_setting(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> EditHistorySetting:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        return EditHistorySetting(
+            since=await object_edits_service.tracking_since(conn, type_id))
+
+
+@router.put("/object-types/{type_id}/edit-history", response_model=EditHistorySetting)
+async def set_edit_history_setting(
+    type_id: UUID,
+    body: EditHistoryIn,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> EditHistorySetting:
+    """p.402: "after Track user edit history has been enabled for the object
+    type within Ontology Manager". Its own route rather than a field on the
+    type's definition PUT, which versions the whole type: switching an audit
+    trail on is not a change to what the type *is*."""
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        since = await object_edits_service.set_tracking(
+            conn, access.workspace_id, type_id, body.enabled)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type.edit_history",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={"enabled": body.enabled},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return EditHistorySetting(since=since)
+
+
+class ObjectEditsIn(BaseModel):
+    object_type_id: UUID
+    primary_key: str = Field(min_length=1, max_length=500)
+    #: p.403's "Edits sort order".
+    order: str = Field(default="newest", pattern="^(newest|oldest)$")
+    #: p.403's "Property configuration"; absent is every property.
+    properties: list[str] | None = Field(default=None, max_length=100)
+
+
+class ObjectEdit(BaseModel):
+    id: UUID
+    kind: str
+    property: str | None
+    before: Any = None
+    after: Any = None
+    edited_at: datetime
+    edited_by: UUID | None
+    editor: str
+    """The editor's name, or their email when they have none, or "A removed
+    user" when the account is gone - the record stays either way (p.402)."""
+    action_run_id: UUID | None
+
+
+class ObjectEditsOut(BaseModel):
+    edits: list[ObjectEdit]
+    truncated: bool
+    tracking_since: datetime | None
+
+
+@router.post("/object-edits", response_model=ObjectEditsOut)
+async def object_edit_history(
+    body: ObjectEditsIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ObjectEditsOut:
+    """One object's edit history (`workshop` p.402–403; §470).
+
+    Readable by a viewer, as the object is: p.402 describes the history as
+    part of what an application shows about an object, not as an
+    administrator's view.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, body.object_type_id)
+        rows, truncated = await object_edits_service.history(
+            conn, object_type_id=body.object_type_id, primary_key=body.primary_key,
+            order=body.order, properties=body.properties,
+        )
+        since = await object_edits_service.tracking_since(conn, body.object_type_id)
+
+    def decoded(value: str | None) -> Any:
+        return None if value is None else json.loads(value)
+
+    return ObjectEditsOut(
+        edits=[ObjectEdit(
+            id=r["id"], kind=r["kind"], property=r["property"],
+            before=decoded(r["before_value"]), after=decoded(r["after_value"]),
+            edited_at=r["edited_at"], edited_by=r["edited_by"],
+            editor=(r["editor_name"] or r["editor_email"] or "A removed user"),
+            action_run_id=r["action_run_id"],
+        ) for r in rows],
+        truncated=truncated,
+        tracking_since=since,
+    )
 
 
 @router.put("/object-types/{type_id}/view", response_model=ObjectViewOut)
