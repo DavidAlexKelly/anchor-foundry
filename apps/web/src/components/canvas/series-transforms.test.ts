@@ -2,14 +2,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  KIND_LABELS, MAX_SPAN, MAX_TRANSFORMS, TIME_UNITS, TRANSFORM_KINDS, WINDOW_AGGREGATES,
+  INTEGRATION_METHODS, KIND_LABELS, MAX_SPAN, WINDOW_TYPES, MAX_TRANSFORMS, TIME_UNITS, TRANSFORM_KINDS, WINDOW_AGGREGATES,
   blankTransform, transformProblem, transformText, transformsProblem, transformsText, withKind,
   type SeriesTransform,
 } from "./series-transforms";
 
 describe("the vocabulary", () => {
   it("is p.583-586's, as the server takes it", () => {
-    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "rolling", "derivative", "shift", "range"]);
+    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range"]);
+    expect([...WINDOW_TYPES]).toEqual(["start", "end"]);
+    expect([...INTEGRATION_METHODS]).toEqual(["linear", "left", "right"]);
     expect([...WINDOW_AGGREGATES]).toEqual(["sum", "avg", "min", "max", "count", "stddev"]);
     expect([...TIME_UNITS]).toEqual(["second", "minute", "hour", "day", "week"]);
     expect([MAX_TRANSFORMS, MAX_SPAN]).toEqual([10, 100_000]);
@@ -20,6 +22,9 @@ describe("the vocabulary", () => {
     expect(blankTransform("cumulative")).toEqual({ kind: "cumulative", aggregate: "sum" });
     expect(blankTransform("rolling")).toEqual({ kind: "rolling", aggregate: "stddev", window: 3, unit: "day" });
     expect(blankTransform("derivative")).toEqual({ kind: "derivative", unit: "day" });
+    expect(blankTransform("periodic")).toEqual({
+      kind: "periodic", aggregate: "avg", window: 2, unit: "week", align: null, window_type: "start" });
+    expect(blankTransform("integral")).toEqual({ kind: "integral", unit: "hour", method: "linear" });
     expect(blankTransform("shift")).toEqual({ kind: "shift", by: 1, unit: "day" });
     expect(blankTransform("range")).toEqual({ kind: "range", start: null, end: null });
   });
@@ -40,6 +45,12 @@ describe("in words", () => {
     expect(transformText({ kind: "rolling", aggregate: "min", window: 3, unit: "day" }))
       .toBe("minimum over the last 3 days");
     expect(transformText({ kind: "derivative", unit: "hour" })).toBe("change per hour");
+    expect(transformText({ kind: "periodic", aggregate: "avg", window: 2, unit: "week", align: null, window_type: "start" }))
+      .toBe("average per 2 weeks");
+    expect(transformText({ kind: "periodic", aggregate: "sum", window: 1, unit: "day", align: "2026-01-01T06:00", window_type: "end" }))
+      .toBe("sum per 1 day, stamped at each window's end, aligned to 2026-01-01T06:00");
+    expect(transformText({ kind: "integral", unit: "hour", method: "linear" })).toBe("area in hours");
+    expect(transformText({ kind: "integral", unit: "day", method: "left" })).toBe("area in days (left-hand sum)");
     expect(transformText({ kind: "shift", by: 2, unit: "day" })).toBe("shifted 2 days later");
     expect(transformText({ kind: "shift", by: -1, unit: "minute" })).toBe("shifted 1 minute earlier");
     expect(transformText({ kind: "range", start: "2026-01-01T00:00", end: "2026-01-02T00:00" }))
@@ -72,7 +83,12 @@ describe("what is wrong with one", () => {
     const window = "The window must be a whole number from 1 to 100,000.";
     for (const bad of [0, 100_001, 1.5, Number.NaN]) {
       expect(transformProblem({ kind: "rolling", aggregate: "sum", window: bad, unit: "day" })).toBe(window);
+      expect(transformProblem({ kind: "periodic", aggregate: "sum", window: bad, unit: "day", align: null, window_type: "start" }))
+        .toBe(window);
     }
+    expect(transformProblem({ kind: "periodic", aggregate: "sum", window: 1, unit: "day", align: null, window_type: "end" }))
+      .toBeNull();
+    expect(transformProblem({ kind: "integral", unit: "day", method: "right" })).toBeNull();
     const shift = "The shift must be a whole number, not zero, and at most 100,000 either way.";
     for (const bad of [0, 100_001, -100_001, 0.5, Number.NaN]) {
       expect(transformProblem({ kind: "shift", by: bad, unit: "day" })).toBe(shift);

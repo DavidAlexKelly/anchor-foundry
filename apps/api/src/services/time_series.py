@@ -16,7 +16,7 @@ its own answer to "what did this look like last Tuesday".
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -402,13 +402,23 @@ def points_for_many_sql(
 #: series data to yield a new output time series. These input time series can
 #: be time series properties or the outputs from other transforms, which allows
 #: multiple transforms to be chained together." (p.583)
-TRANSFORM_KINDS = ("cumulative", "rolling", "derivative", "shift", "range")
+TRANSFORM_KINDS = ("cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range")
 #: What a cumulative or rolling window aggregates with: p.586's summarizer
 #: vocabulary, as far as a window over points can use it.
 WINDOW_AGGREGATES = ("sum", "avg", "min", "max", "count", "stddev")
 #: The units a window, a rate or a shift is measured in, in seconds.
 TIME_UNITS = {"second": 1, "minute": 60, "hour": 3600, "day": 86400, "week": 604800}
 MAX_TRANSFORMS = 10
+#: p.584's periodic window types: "Start means that each output point
+#: represents the beginning of a time interval … End means that each output
+#: point represents the end of a time interval".
+WINDOW_TYPES = ("start", "end")
+#: p.585's integration methods: "linear, which uses the average value between
+#: two time points; left hand sum, which uses the value at the earlier time
+#: point; and right hand sum, which uses the value at the later time point".
+INTEGRATION_METHODS = ("linear", "left", "right")
+#: Where periodic windows line up when no alignment timestamp is given.
+EPOCH = "1970-01-01T00:00:00"
 #: Ours: a window or shift of more than this many units is a typo.
 MAX_SPAN = 100_000
 
@@ -465,8 +475,25 @@ def parse_transforms(raw: Any) -> list[dict[str, Any]]:
                 if kind == "rolling":
                     parsed["window"] = _span(item.get("window"), "the window")
                     parsed["unit"] = _unit(item.get("unit"))
+            elif kind == "periodic":
+                aggregate = item.get("aggregate")
+                if aggregate not in WINDOW_AGGREGATES:
+                    raise ValueError(f"the aggregate must be one of {', '.join(WINDOW_AGGREGATES)}")
+                window_type = item.get("window_type", "start")
+                if window_type not in WINDOW_TYPES:
+                    raise ValueError(f"the window type must be one of {', '.join(WINDOW_TYPES)}")
+                parsed = {"kind": kind, "aggregate": aggregate,
+                          "window": _span(item.get("window"), "the window"),
+                          "unit": _unit(item.get("unit")),
+                          "align": _instant(item.get("align"), "alignment") or EPOCH,
+                          "window_type": window_type}
             elif kind == "derivative":
                 parsed = {"kind": kind, "unit": _unit(item.get("unit"))}
+            elif kind == "integral":
+                method = item.get("method", "linear")
+                if method not in INTEGRATION_METHODS:
+                    raise ValueError(f"the method must be one of {', '.join(INTEGRATION_METHODS)}")
+                parsed = {"kind": kind, "unit": _unit(item.get("unit")), "method": method}
             elif kind == "shift":
                 parsed = {"kind": kind, "by": _span(item.get("by"), "the shift", signed=True),
                           "unit": _unit(item.get("unit"))}
@@ -484,6 +511,15 @@ def parse_transforms(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _epoch_seconds(instant: str) -> float:
+    """An instant as seconds since 1970, read as UTC when it names no zone,
+    which is how every timestamp here is drawn."""
+    moment = datetime.fromisoformat(instant)
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(timezone.utc).replace(tzinfo=None)
+    return (moment - datetime(1970, 1, 1)).total_seconds()
+
+
 def _window_call(aggregate: str) -> str:
     # Every name in WINDOW_AGGREGATES is DuckDB's own; its `stddev` is the
     # sample standard deviation, which one point does not have.
@@ -498,6 +534,33 @@ def _transform_sql(transform: dict[str, Any], source: str) -> str:
         # point itself".
         return (f"SELECT at, {_window_call(transform['aggregate'])} OVER (ORDER BY at "
                 f"ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value FROM {source}")
+    if kind == "periodic":
+        # p.584: "equally spaced, non-overlapping time intervals … aligned
+        # with a user-specified alignment timestamp". A point exactly on a
+        # boundary starts a Start window and ends an End window.
+        align = _epoch_seconds(transform["align"])
+        size = transform["window"] * TIME_UNITS[transform["unit"]]
+        edge = "floor" if transform["window_type"] == "start" else "ceil"
+        return (
+            f"SELECT epoch_ms(CAST(({align} + {edge}((epoch_ms(CAST(at AS TIMESTAMP)) / 1000.0 "
+            f"- {align}) / {size}) * {size}) * 1000 AS BIGINT)) AS at, "
+            f"{_window_call(transform['aggregate'])} AS value FROM {source} GROUP BY 1"
+        )
+    if kind == "integral":
+        # p.585: "the cumulative area under the input time series", in the
+        # unit chosen: a power reading integrated per hour is energy in
+        # kilowatt-hours. Each gap between two points adds its width times
+        # the method's height; the first point has no area before it.
+        height = {"linear": "(lag(value) OVER (ORDER BY at) + value) / 2",
+                  "left": "lag(value) OVER (ORDER BY at)",
+                  "right": "value"}[transform["method"]]
+        seconds = TIME_UNITS[transform["unit"]]
+        return (
+            "SELECT at, coalesce(sum(area) OVER (ORDER BY at ROWS BETWEEN UNBOUNDED PRECEDING "
+            "AND CURRENT ROW), 0) AS value FROM (SELECT at, "
+            "(epoch_ms(CAST(at AS TIMESTAMP)) - epoch_ms(CAST(lag(at) OVER (ORDER BY at) "
+            f"AS TIMESTAMP))) / 1000.0 / {seconds} * {height} AS area FROM {source}) areas"
+        )
     if kind == "rolling":
         # p.584: "the points that fall in a fixed-size temporal window
         # preceding it, including the input point itself". A window of time,

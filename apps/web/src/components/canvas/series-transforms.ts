@@ -12,27 +12,39 @@
  * vocabularies are held to the server's by `test_time_series_transforms.py`.
  */
 
-export const TRANSFORM_KINDS = ["cumulative", "rolling", "derivative", "shift", "range"] as const;
+export const TRANSFORM_KINDS = ["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range"] as const;
 export type TransformKind = (typeof TRANSFORM_KINDS)[number];
 export const WINDOW_AGGREGATES = ["sum", "avg", "min", "max", "count", "stddev"] as const;
 export type WindowAggregate = (typeof WINDOW_AGGREGATES)[number];
 export const TIME_UNITS = ["second", "minute", "hour", "day", "week"] as const;
 export type TimeUnit = (typeof TIME_UNITS)[number];
 export const MAX_TRANSFORMS = 10;
+/** p.584's periodic window types. */
+export const WINDOW_TYPES = ["start", "end"] as const;
+export type WindowType = (typeof WINDOW_TYPES)[number];
+/** p.585's integration methods. */
+export const INTEGRATION_METHODS = ["linear", "left", "right"] as const;
+export type IntegrationMethod = (typeof INTEGRATION_METHODS)[number];
 export const MAX_SPAN = 100_000;
 
 export type SeriesTransform =
   | { kind: "cumulative"; aggregate: WindowAggregate }
+  | { kind: "periodic"; aggregate: WindowAggregate; window: number; unit: TimeUnit;
+      /** Null lines the windows up on 1970, as the server does. */
+      align: string | null; window_type: WindowType }
   | { kind: "rolling"; aggregate: WindowAggregate; window: number; unit: TimeUnit }
   | { kind: "derivative"; unit: TimeUnit }
+  | { kind: "integral"; unit: TimeUnit; method: IntegrationMethod }
   | { kind: "shift"; by: number; unit: TimeUnit }
   | { kind: "range"; start: string | null; end: string | null };
 
 /** What the editor offers each kind as. */
 export const KIND_LABELS: Record<TransformKind, string> = {
   cumulative: "Cumulative",
+  periodic: "Periodic",
   rolling: "Rolling window",
   derivative: "Rate of change",
+  integral: "Integral",
   shift: "Time shift",
   range: "Time range",
 };
@@ -43,10 +55,17 @@ export function blankTransform(kind: TransformKind): SeriesTransform {
   switch (kind) {
     case "cumulative":
       return { kind, aggregate: "sum" };
+    case "periodic":
+      // p.584's example: "the average input values in the sequence of two
+      // week windows".
+      return { kind, aggregate: "avg", window: 2, unit: "week", align: null, window_type: "start" };
     case "rolling":
       return { kind, aggregate: "stddev", window: 3, unit: "day" };
     case "derivative":
       return { kind, unit: "day" };
+    case "integral":
+      // p.585's example: power integrated per hour is kilowatt-hours.
+      return { kind, unit: "hour", method: "linear" };
     case "shift":
       return { kind, by: 1, unit: "day" };
     case "range":
@@ -68,10 +87,16 @@ export function transformText(t: SeriesTransform): string {
   switch (t.kind) {
     case "cumulative":
       return `running ${AGGREGATE_WORDS[t.aggregate]}`;
+    case "periodic":
+      return `${AGGREGATE_WORDS[t.aggregate]} per ${units(t.window, t.unit)}` +
+        (t.window_type === "end" ? ", stamped at each window's end" : "") +
+        (t.align ? `, aligned to ${t.align}` : "");
     case "rolling":
       return `${AGGREGATE_WORDS[t.aggregate]} over the last ${units(t.window, t.unit)}`;
     case "derivative":
       return `change per ${t.unit}`;
+    case "integral":
+      return `area in ${t.unit}s${t.method === "linear" ? "" : ` (${t.method}-hand sum)`}`;
     case "shift":
       return `shifted ${units(Math.abs(t.by), t.unit)} ${t.by > 0 ? "later" : "earlier"}`;
     case "range":
@@ -92,6 +117,7 @@ function whole(n: number): boolean {
 /** What is wrong with one transform, or null. */
 export function transformProblem(t: SeriesTransform): string | null {
   switch (t.kind) {
+    case "periodic":
     case "rolling":
       return whole(t.window) && t.window >= 1 && t.window <= MAX_SPAN
         ? null : `The window must be a whole number from 1 to ${MAX_SPAN.toLocaleString("en-US")}.`;
