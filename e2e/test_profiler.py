@@ -210,11 +210,32 @@ def test_clearing_empties_the_panel_without_leaving_profiler_mode(page, profiled
     page.get_by_test_id("profiler-enter").click()
     expect(page.get_by_test_id("profiler-banner")).to_be_visible(timeout=30000)
     expect(page.get_by_test_id("profiler-breakdown")).to_be_visible(timeout=30000)
+    # **Cleared once the module has stopped loading.** A load still in flight
+    # when Clear is pressed lands afterwards and is rightly recorded - and in
+    # CI that put the breakdown back after "Nothing has loaded" had been
+    # shown, failing a test about clearing because of a load that came later.
+    text_settled(page.get_by_test_id("profiler-total"))
 
     page.get_by_test_id("profiler-clear").click()
     expect(page.get_by_test_id("profiler-total")).to_contain_text("Nothing has loaded")
     expect(page.get_by_test_id("profiler-breakdown")).to_have_count(0)
     expect(page.get_by_test_id("profiler-banner")).to_be_visible()
+
+
+def text_settled(locator, quiet_ms: int = 1500, timeout_ms: int = 30000) -> None:
+    """Wait until a locator's text has not changed for `quiet_ms`."""
+    import time
+
+    deadline = time.monotonic() + timeout_ms / 1000
+    last, since = locator.inner_text(), time.monotonic()
+    while time.monotonic() < deadline:
+        time.sleep(0.25)
+        now = locator.inner_text()
+        if now != last:
+            last, since = now, time.monotonic()
+        elif time.monotonic() - since >= quiet_ms / 1000:
+            return
+    raise AssertionError(f"still changing after {timeout_ms} ms: {last!r}")
 
 
 def test_exiting_reloads_out_of_profiler_mode(page, profiled):
