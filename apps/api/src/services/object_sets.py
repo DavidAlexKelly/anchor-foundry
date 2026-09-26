@@ -364,12 +364,16 @@ MAX_JOIN_VALUES = 1000
 
 # ---- a set over time (roadmap 1.5, what a Time Series plots) -----------------
 #
-# **Over `updated_at`, and only over `updated_at`.** That is the same short list
-# `SORTS` is drawn from and for the same reason: it is a real `timestamptz` on
-# Postgres and a mapped `date` on OpenSearch, so both stores bucket it
-# identically without being told what any property's type is. A *date property*
-# is stored untyped like every other, so bucketing one means guessing whether
-# "03/04" is March or April - see `DATE_PROPERTY_HINT`.
+# **Over `updated_at` by default**: a real `timestamptz` on Postgres and a
+# mapped `date` on OpenSearch, so both stores bucket it identically without
+# being told what any property's type is.
+#
+# **Or over a declared date property (§466)**, which is p.449's timeline. This
+# used to be refused, because a property was stored untyped and bucketing one
+# meant guessing whether "03/04" is March or April. §220's typed index removed
+# that reason as it did for ordered operators: a `date` or `timestamp` is a
+# mapped `date` on OpenSearch and `_comparable_sql`'s cast on Postgres, and a
+# value with no offset is UTC on both (`datable_type`).
 TIME_INTERVALS = ("day", "week", "month")
 DEFAULT_TIME_INTERVAL = "day"
 
@@ -380,12 +384,26 @@ DEFAULT_TIME_INTERVAL = "day"
 # different period, and nothing on screen would say which one.
 MAX_TIME_BUCKETS = 200
 
-DATE_PROPERTY_HINT = (
-    "a time series over a date *property* needs the declared property type behind it - "
-    "instance properties are stored untyped, so the two stores would bucket the same "
-    "value differently (docs/decisions/0006-typed-instance-properties.md). This plots "
-    "when each object last changed, which both stores agree about."
-)
+# `auto` asks for the finest interval whose series fits this many points: a
+# timeline of a fortnight is days, of a year weeks, of a decade months. Fewer
+# than `MAX_TIME_BUCKETS`, because a filter's timeline is a strip of columns in
+# a side panel rather than a chart with an axis to read along.
+AUTO_INTERVAL = "auto"
+MAX_AUTO_POINTS = 60
+
+DATABLE_TYPES = ("date", "timestamp")
+
+
+def datable_type(prop: str, property_types: "Mapping[str, str] | None") -> str:
+    """The declared type of a property a time series may be drawn over."""
+    declared = (property_types or {}).get(prop)
+    if declared not in DATABLE_TYPES:
+        raise ValueError(
+            f"a timeline is drawn over a date, and {prop!r} is declared "
+            f"{declared or 'nothing'} - declare it date or timestamp, so both stores read "
+            "its values as the same instants (docs/decisions/0006-typed-instance-properties.md)"
+        )
+    return declared
 
 
 def parse_interval(interval: Any) -> str:
@@ -394,9 +412,12 @@ def parse_interval(interval: Any) -> str:
         return DEFAULT_TIME_INTERVAL
     if not isinstance(interval, str):
         raise ValueError("interval must be a string")
-    if interval not in TIME_INTERVALS:
+    # `auto` is the route's to resolve into one of the three (§466); no store
+    # is ever asked for it.
+    if interval not in (*TIME_INTERVALS, AUTO_INTERVAL):
         raise ValueError(
-            f"unknown interval {interval!r} (supported: {', '.join(TIME_INTERVALS)})"
+            f"unknown interval {interval!r} "
+            f"(supported: {', '.join((*TIME_INTERVALS, AUTO_INTERVAL))})"
         )
     return interval
 

@@ -951,7 +951,11 @@ class Handler(BaseHTTPRequestHandler):
 
         counts: dict[datetime, int] = {}
         for _, _doc_id, source in matched:
-            raw = source.get(spec["field"])
+            # A dotted path, as `properties.seen` is (§466), walked the way the
+            # terms aggregation above walks one.
+            raw = source
+            for part in spec["field"].split("."):
+                raw = raw.get(part) if isinstance(raw, dict) else None
             if raw is None:
                 continue
             when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))

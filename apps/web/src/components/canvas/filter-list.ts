@@ -25,6 +25,7 @@ export type { Clause };
 
 export const FILTER_COMPONENTS = [
   "histogram", "singleSelect", "multiSelect", "keyword", "distribution", "date", "dateRange",
+  "timeline",
 ] as const;
 export type FilterComponent = (typeof FILTER_COMPONENTS)[number];
 
@@ -36,6 +37,7 @@ export const FILTER_COMPONENT_LABELS: Record<FilterComponent, string> = {
   distribution: "Distribution chart",
   date: "Single date",
   dateRange: "Date range",
+  timeline: "Timeline",
 };
 
 /** p.449's date pickers are for dates; offering one on a string would write a
@@ -63,7 +65,7 @@ export function componentsFor(dataType: string | null | undefined): FilterCompon
   const dated = (DATE_TYPES as readonly (string | null | undefined)[]).includes(dataType);
   const numeric = (NUMBER_TYPES as readonly (string | null | undefined)[]).includes(dataType);
   return FILTER_COMPONENTS.filter((c) => {
-    if (c === "date" || c === "dateRange") return dated;
+    if (c === "date" || c === "dateRange" || c === "timeline") return dated;
     if (c === "distribution") return numeric;
     return true;
   });
@@ -218,6 +220,7 @@ export function withoutFilter(clauses: readonly Clause[], spec: FilterSpec): Cla
       return withKeyword(clauses, spec.property, "");
     case "dateRange":
     case "date":
+    case "timeline":
     case "distribution":
       // All three write ordered comparisons, and clearing a range clears them.
       return withRange(clauses, spec.property, { from: "", to: "" });
@@ -256,7 +259,7 @@ export function pillSummary(spec: FilterSpec, clauses: readonly Clause[]): strin
   }
   if (spec.component === "distribution") return numberRangeSummary(clauses, spec.property);
   if (spec.component === "date") return rangeOf(clauses, spec.property).from;
-  if (spec.component === "dateRange") {
+  if (spec.component === "dateRange" || spec.component === "timeline") {
     const { from, to } = rangeOf(clauses, spec.property);
     if (from && to) return `${from} – ${to}`;
     if (from) return `from ${from}`;
@@ -336,4 +339,50 @@ export function numberRangeSummary(clauses: readonly Clause[], property: string)
   if (low !== null && high !== null) return `≥ ${low}, ${high}`;
   if (low !== null) return `≥ ${low}`;
   return high ?? "";
+}
+
+/** One column of p.449's timeline, as `/object-sets/time-series` returns it
+ * for a date property (§466): the start of a calendar day, week or month. */
+export interface TimelinePoint {
+  start: string;
+  count: number;
+}
+
+export const TIMELINE_INTERVALS = ["day", "week", "month"] as const;
+export type TimelineInterval = (typeof TIMELINE_INTERVALS)[number];
+
+/** The whole days a column covers, as the date range's two ends - so choosing
+ * a column is choosing that range, with the same both-ends-in rule and the
+ * same clauses a date range writes (`withRange`). */
+export function periodOf(start: string, interval: TimelineInterval): DayRange {
+  const from = start.slice(0, 10);
+  if (!shiftDay(from, 0)) return { from: "", to: "" };
+  if (interval === "day") return { from, to: from };
+  if (interval === "week") return { from, to: shiftDay(from, 6)! };
+  const [y, m] = from.split("-").map(Number) as [number, number];
+  // The day before the first of the next month, whatever this month's length.
+  const next = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+  return { from, to: shiftDay(next, -1)! };
+}
+
+/** What a column is called: its day, the week it starts, or its month. */
+export function periodLabel(start: string, interval: TimelineInterval): string {
+  const from = start.slice(0, 10);
+  if (interval === "month") return from.slice(0, 7);
+  if (interval === "week") return `week of ${from}`;
+  return from;
+}
+
+/** Whether a column is the range a property's clauses select. */
+export function isPeriodChosen(
+  clauses: readonly Clause[], property: string, start: string, interval: TimelineInterval,
+): boolean {
+  const chosen = rangeOf(clauses, property);
+  const period = periodOf(start, interval);
+  return !!period.from && chosen.from === period.from && chosen.to === period.to;
+}
+
+export function timelineIntervalOf(value: unknown): TimelineInterval {
+  return (TIMELINE_INTERVALS as readonly unknown[]).includes(value)
+    ? (value as TimelineInterval) : "day";
 }

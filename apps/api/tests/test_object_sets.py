@@ -3501,3 +3501,171 @@ async def test_the_two_stores_count_a_distribution_s_bars_identically(opensearch
             assert got == expected, (bucket, got, expected)
     finally:
         await store.close()
+
+
+# ---- a timeline over a date property (§466, p.449) -------------------------------
+def seen_stamps(rows=TYPED_ROWS) -> list[datetime]:
+    """Each row's `seen` as the instant both stores read it as: UTC, with a
+    bare date at midnight (`object_sets._instant`)."""
+    return [object_sets._instant(p["seen"]).astimezone(timezone.utc)
+            for _, p in rows if p.get("seen")]
+
+
+def points(body: dict) -> list[tuple[datetime, int]]:
+    return [(datetime.fromisoformat(p["start"]).astimezone(timezone.utc), p["count"])
+            for p in body["points"] if p["count"]]
+
+
+@pytest.mark.parametrize("interval", ["week", "month"])
+def test_a_series_over_a_date_property_buckets_its_values(
+    client: TestClient, fx: Fixture, typed: str, interval: str
+) -> None:
+    """`seen`, not `updated_at`: the typed rows were all synced in one moment,
+    so a series that fell back to `updated_at` would be one bucket of eight.
+    Row 3 is noon at +02:00, which is 10:00 UTC on the 1st - a store reading
+    the offset away would still put it there, but row 7's bare date is
+    midnight UTC and a store reading it in another zone would not."""
+    r = series(client, fx, {"object_type_id": typed, "filters": []},
+               interval=interval, property="seen")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["interval"] == interval
+    assert points(body) == expected_buckets(seen_stamps(), interval)
+    assert body["total"] == len(TYPED_ROWS) and body["missing"] == 0
+
+
+def test_a_named_interval_too_fine_for_the_range_is_refused_not_coarsened(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """330 days of days is past `MAX_TIME_BUCKETS`. Asked for by name, that is
+    refused with the sentence naming a coarser one; only `auto` coarsens."""
+    r = series(client, fx, {"object_type_id": typed, "filters": []},
+               interval="day", property="seen")
+    assert r.status_code == 422 and "coarser interval" in r.text, r.text
+
+
+def test_a_series_over_a_date_takes_a_set_narrowed_by_a_date_range(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """The route parsed without the declared types, so the `gte` a Filter
+    List's date range writes was refused here and nowhere else."""
+    bound = object_sets.Filter("seen", "gte", "2026-03-01", "timestamp")
+    definition = {"object_type_id": typed, "filters": [
+        {"property": "seen", "op": "gte", "value": "2026-03-01"}]}
+    r = series(client, fx, definition, interval="month", property="seen")
+    assert r.status_code == 200, r.text
+    kept = [row for row in TYPED_ROWS if object_sets.matches(row[1], (bound,))]
+    assert points(r.json()) == expected_buckets(seen_stamps(kept), "month")
+    assert r.json()["total"] == len(kept)
+
+
+def test_auto_picks_the_finest_interval_that_fits(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """January to November is 330 days - more than a day series may be - and
+    48 weeks, which fits. Narrowed to March it is days."""
+    r = series(client, fx, {"object_type_id": typed, "filters": []},
+               interval="auto", property="seen")
+    assert r.status_code == 200, r.text
+    assert r.json()["interval"] == "week"
+    assert points(r.json()) == expected_buckets(seen_stamps(), "week")
+    march = {"object_type_id": typed, "filters": [
+        {"property": "seen", "op": "gte", "value": "2026-03-01"},
+        {"property": "seen", "op": "lt", "value": "2026-03-02"}]}
+    assert series(client, fx, march, interval="auto", property="seen").json()["interval"] == "day"
+
+
+def test_auto_takes_weeks_when_days_would_fit_a_chart_but_not_a_strip(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """5 January to 4 April is 90 days: under `MAX_TIME_BUCKETS`, so a day
+    series is answerable, and over `MAX_AUTO_POINTS`, so auto does not pick it.
+    Auto is the strip's limit, not the chart's."""
+    spring = {"object_type_id": typed, "filters": [
+        {"property": "seen", "op": "lt", "value": "2026-05-01"}]}
+    days = series(client, fx, spring, interval="day", property="seen").json()["points"]
+    assert object_sets.MAX_AUTO_POINTS < len(days) <= object_sets.MAX_TIME_BUCKETS
+    assert series(client, fx, spring, interval="auto", property="seen").json()["interval"] \
+        == "week"
+
+
+def test_a_series_over_something_that_is_not_a_date_is_refused(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    for prop in ("reading", "nothing"):
+        r = series(client, fx, {"object_type_id": typed, "filters": []},
+                   interval="day", property=prop)
+        assert r.status_code == 422 and "drawn over a date" in r.text, r.text
+    assert object_sets.datable_type("seen", TYPED_TYPES) == "timestamp"
+    assert object_sets.datable_type("d", {"d": "date"}) == "date"
+
+
+@pytest.fixture(scope="module")
+def undated(client: TestClient, fx: Fixture) -> str:
+    """Three rows with a declared `date`, one of them blank - the case `typed`
+    cannot show, since every row there has a `seen`."""
+    tag = uuid.uuid4().hex[:8]
+    csv = b"key,due\na,2026-02-03\nb,\nc,2026-02-20\n"
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.owner_sub), data={"name": f"Due {tag}"},
+        files={"file": ("due.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    dataset_id = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types", headers=hdr(fx.owner_sub),
+        json={"api_name": f"Due{tag}", "display_name": f"Due {tag}",
+              "properties": [{"api_name": "due", "data_type": "date"}]},
+    )
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.owner_sub),
+        json={"object_type_id": type_id, "dataset_id": dataset_id,
+              "primary_key_column": "key", "column_mappings": {"due": "due"}},
+    )
+    assert r.status_code == 201, r.text
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/object-type-sources/{r.json()['id']}/sync",
+        headers=hdr(fx.owner_sub),
+    )
+    assert r.status_code == 200, r.text
+    return type_id
+
+
+def test_a_member_with_no_date_is_in_no_point_and_is_counted_as_missing(
+    client: TestClient, fx: Fixture, undated: str
+) -> None:
+    body = series(client, fx, {"object_type_id": undated, "filters": []},
+                  interval="month", property="due").json()
+    assert [(p["start"][:10], p["count"]) for p in body["points"]] == [("2026-02-01", 2)]
+    assert body["total"] == 3 and body["missing"] == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("interval", object_sets.TIME_INTERVALS)
+async def test_both_stores_bucket_a_date_property_the_same_way(
+    opensearch: str, interval: str
+) -> None:
+    """Decision 0006 §6 for §466: OpenSearch's date histogram on the mapped
+    `properties.seen`, against the same rule the Postgres route is held to."""
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-seen", object_type_id=type_id, source_id=source_id,
+            rows=TYPED_ROWS, synced_at=datetime.now(timezone.utc), declared=TYPED_DECLARED,
+        )
+        got = await store.time_series_object_set(
+            search_prefix="ws-seen", object_type_id=type_id, filters=(),
+            interval=interval, date_property=("seen", "timestamp"),
+        )
+        assert got == expected_buckets(seen_stamps(), interval), interval
+    finally:
+        await store.close()

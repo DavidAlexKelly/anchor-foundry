@@ -210,7 +210,8 @@ import {
 } from "./button-items";
 import {
   FILTER_COMPONENT_LABELS, axisEnds, barWidth, bucketLabel, componentOf, componentsFor,
-  defaultComponentFor, filtersOf, isBucketChosen, withBucket,
+  defaultComponentFor, filtersOf, isBucketChosen, isPeriodChosen, periodLabel, periodOf,
+  timelineIntervalOf, withBucket,
   keywordOf, layoutOf, newFilterId, pillSummary, rangeOf, toggleValue, valuesOf, viewerFilterId,
   visibleFilters, withKeyword, withRange, withValues, withoutFilter,
   type Clause, type DayRange, type FilterSpec,
@@ -817,6 +818,13 @@ function FilterListFilter({
     queryFn: () => objApi.distributionObjectSet(workspaceId, definition, property),
     enabled: !!definition && component === "distribution",
   });
+  // p.449's timeline (§466): the property's own dates by day, week or month,
+  // whichever fits - the server picks, and says which.
+  const timeline = useQuery({
+    queryKey: ["canvas-filter-timeline", property, JSON.stringify(definition ?? null)],
+    queryFn: () => objApi.timeSeriesObjectSet(workspaceId, definition, "auto", property),
+    enabled: !!definition && component === "timeline",
+  });
 
   return (
     <fieldset className="canvas-filter-group" data-testid={`filter-${spec.id}`}>
@@ -972,6 +980,57 @@ function FilterListFilter({
             )}
             {!!distribution.data?.missing && (
               <p className="canvas-widget-empty">{distribution.data.missing} with no value</p>
+            )}
+          </>
+        );
+      })()}
+
+      {component === "timeline" && (() => {
+        const periods = timeline.data?.points ?? [];
+        const interval = timelineIntervalOf(timeline.data?.interval);
+        const max = Math.max(0, ...periods.map((p) => p.count));
+        const first = periods[0];
+        const last = periods[periods.length - 1];
+        return (
+          <>
+            {timeline.isError && (
+              <p className="canvas-widget-empty">Couldn&apos;t read this property&apos;s dates.</p>
+            )}
+            {timeline.data && periods.length === 0 && (
+              <p className="canvas-widget-empty">no dates</p>
+            )}
+            <div className="canvas-filter-distribution" role="group" aria-label={label}>
+              {periods.map((period) => {
+                const name = periodLabel(period.start, interval);
+                const chosen = isPeriodChosen(clauses, property, period.start, interval);
+                return (
+                  <button
+                    key={period.start}
+                    type="button"
+                    className="canvas-filter-column"
+                    aria-pressed={chosen}
+                    aria-label={`${name}: ${period.count}`}
+                    title={`${name}: ${period.count}`}
+                    // A period is a date range, written as one: both of its
+                    // days in, and the same clauses the range picker reads.
+                    onClick={() => onWrite(
+                      withRange(clauses, property,
+                        chosen ? { from: "", to: "" } : periodOf(period.start, interval)),
+                      name, !chosen)}
+                  >
+                    <span style={{ height: `${barWidth(period.count, max)}%` }} />
+                  </button>
+                );
+              })}
+            </div>
+            {first && last && (
+              <div className="canvas-filter-axis" aria-hidden>
+                <span>{periodLabel(first.start, interval)}</span>
+                <span>{periodLabel(last.start, interval)}</span>
+              </div>
+            )}
+            {!!timeline.data?.missing && (
+              <p className="canvas-widget-empty">{timeline.data.missing} with no date</p>
             )}
           </>
         );
