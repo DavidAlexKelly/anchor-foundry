@@ -48,7 +48,14 @@ const TRIGGERS: {
    * refusal has to know about. One trigger, worded for where it fires. */
   labels?: Record<string, string>;
 }[] = [
-  { on: "click", label: "Clicked", widgets: ["CanvasButton", "CanvasTabs"] },
+  {
+    on: "click",
+    label: "Clicked",
+    // p.330's Interactive metric: "trigger a command, action, or event upon
+    // card selection" (§527).
+    widgets: ["CanvasButton", "CanvasTabs", "CanvasMetricCard"],
+    labels: { CanvasMetricCard: "Card selected" },
+  },
   {
     on: "row_select",
     label: "Row selected",
