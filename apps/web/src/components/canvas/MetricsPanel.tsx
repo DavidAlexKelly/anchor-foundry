@@ -164,7 +164,12 @@ export function MetricsPanel({
           // hands back the variable it is sending, so the box moves at once
           // and settles on what the server says.
           checked={setTracking.isPending ? setTracking.variables : tracking}
-          disabled={readOnly || setTracking.isPending}
+          // **Not before the current state has loaded.** A box ticked while the
+          // first read is still on its way saves "on", and then that read -
+          // which left before the save - lands and says "off": the panel then
+          // shows a module not being recorded under a box that recorded it.
+          // Slow reads made this a CI failure twice before it was a bug report.
+          disabled={readOnly || setTracking.isPending || !metrics.data}
           onChange={(e) => setTracking.mutate(e.target.checked)}
         />
         <span>Record layout views</span>
