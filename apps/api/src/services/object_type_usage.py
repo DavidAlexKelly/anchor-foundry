@@ -107,7 +107,13 @@ async def record(
     }
     if uid is not None:
         params["uid"] = uid
-    await conn.execute(_UPSERT_WITH_USER if uid else _UPSERT_ANONYMOUS, params)
+    # **In a savepoint**, because the caller's `except` cannot undo what a
+    # failed statement does to a transaction: PostgreSQL refuses everything
+    # after it and rolls the whole request back. Without this, a counter row
+    # the database refused (RLS refused hundreds in CI) took the request with
+    # it - an action's edit included. Now a failure loses only the count.
+    async with conn.begin_nested():
+        await conn.execute(_UPSERT_WITH_USER if uid else _UPSERT_ANONYMOUS, params)
     return True
 
 
