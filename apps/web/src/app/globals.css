@@ -2426,6 +2426,29 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 .canvas-filter-range { display: flex; align-items: center; gap: 6px; }
 .canvas-filter-range input { min-width: 0; flex: 1 1 0; }
+/* p.449's "Add filter button within the widget", and the remove beside each
+   filter's name. */
+.canvas-filter-group { position: relative; }
+.canvas-filter-remove {
+  position: absolute; top: 0; right: 0; border: 0; background: none;
+  color: var(--ink-soft); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px;
+}
+.canvas-filter-add { max-width: 320px; }
+/* p.449's Pills layout: a row of pills, each opening a popover. */
+.canvas-filter-pills { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; }
+.canvas-filter-pill-wrap { position: relative; }
+.canvas-filter-pill {
+  font: inherit; border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--panel); color: var(--ink); font-size: 12.5px; padding: 3px 10px;
+  cursor: pointer;
+}
+.canvas-filter-pill--on { border-color: var(--accent); background: var(--accent-wash); }
+.canvas-filter-popover {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; width: 280px;
+  max-width: calc(100vw - 32px); background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 10px 10px 0;
+  box-shadow: 0 8px 24px rgba(22, 35, 47, 0.14);
+}
 
 /* A `<fieldset>` purely to carry `disabled` down to whatever control the
    parameter's type calls for (§237) - the Canvas Action Form cannot put the

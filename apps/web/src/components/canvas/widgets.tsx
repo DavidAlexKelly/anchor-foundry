@@ -209,8 +209,9 @@ import {
   addItem, buttonTypeOf, duplicateItem, itemsOf, removeItem, renameItem,
 } from "./button-items";
 import {
-  FILTER_COMPONENT_LABELS, barWidth, componentOf, componentsFor, filtersOf,
-  keywordOf, newFilterId, rangeOf, toggleValue, valuesOf, withKeyword, withRange, withValues,
+  FILTER_COMPONENT_LABELS, barWidth, componentOf, componentsFor, defaultComponentFor, filtersOf,
+  keywordOf, layoutOf, newFilterId, pillSummary, rangeOf, toggleValue, valuesOf, viewerFilterId,
+  visibleFilters, withKeyword, withRange, withValues, withoutFilter,
   type Clause, type DayRange, type FilterSpec,
 } from "./filter-list";
 import {
@@ -588,6 +589,8 @@ export function CanvasFilterList({
   properties = "",
   filters = null,
   title = "Filters",
+  userEditable = false,
+  layout = "vertical",
 }: {
   /** The set to offer filters over. */
   objectSetVariable?: string | null;
@@ -603,6 +606,10 @@ export function CanvasFilterList({
    * empty list would replace an older document's `properties` with nothing. */
   filters?: FilterSpec[] | null;
   title?: string;
+  /** p.449's Allow user to add and remove filters (§464). */
+  userEditable?: boolean;
+  /** p.449's Vertical or Pills layout (§464). */
+  layout?: string;
 }) {
   const {
     id: nodeId,
@@ -616,7 +623,35 @@ export function CanvasFilterList({
   const changed = eventsFor(moduleEvents, nodeId, "change");
   const eventContext = useEventContext(undefined, useOverlayIds());
 
-  const specs = filtersOf(filters, properties);
+  // A viewer's own filters (p.449): **held here and never saved**, because
+  // they change what this reader sees and not what the module is for the next
+  // one (decision 0002 §3).
+  const [added, setAdded] = useState<FilterSpec[]>([]);
+  const [removed, setRemoved] = useState<ReadonlySet<string>>(new Set());
+  const [openPill, setOpenPill] = useState<string | null>(null);
+  const pillsRef = useRef<HTMLDivElement | null>(null);
+  const configured = filtersOf(filters, properties);
+  const editable = userEditable === true;
+  const specs = editable ? visibleFilters(configured, added, removed) : configured;
+  const pills = layoutOf(layout) === "pills";
+
+  // A pill's popover closes as the button menu does (§462): on Escape and on
+  // a press anywhere outside the row of pills.
+  useEffect(() => {
+    if (!openPill) return;
+    const outside = (e: MouseEvent) => {
+      if (pillsRef.current && !pillsRef.current.contains(e.target as Node)) setOpenPill(null);
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpenPill(null);
+    };
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [openPill]);
   // Read back from the variable this widget writes, so every component shows
   // the document's state rather than a second copy of it held here. **The
   // resolved value until something is written**, because that is where p.449's
@@ -633,8 +668,9 @@ export function CanvasFilterList({
     queryFn: () => objApi.getType(workspaceId, typeId!),
     enabled: !!typeId,
   });
+  const typeProperties = type.data?.properties ?? [];
   const labelOf = (property: string) =>
-    (type.data?.properties ?? []).find((p) => p.api_name === property)?.display_name || property;
+    typeProperties.find((p) => p.api_name === property)?.display_name || property;
 
   const write = (next: Clause[], property: string, value: string, on: boolean) => {
     if (variable) set(variable, next);
@@ -649,6 +685,54 @@ export function CanvasFilterList({
     }
   };
 
+  // Removing a filter takes its clauses with it (`withoutFilter`): one that
+  // stayed would go on narrowing the set with nothing on screen to undo it.
+  const remove = (spec: FilterSpec) => {
+    write(withoutFilter(clauses, spec), spec.property, "", false);
+    if (added.some((f) => f.id === spec.id)) {
+      setAdded(added.filter((f) => f.id !== spec.id));
+    } else {
+      setRemoved(new Set([...removed, spec.id]));
+    }
+    if (openPill === spec.id) setOpenPill(null);
+  };
+  const shown = new Set(specs.map((f) => f.property));
+  const addable = typeProperties.filter((p) => !shown.has(p.api_name));
+  const addControl = editable ? (
+    <select
+      aria-label="Add filter"
+      className="canvas-filter-add"
+      value=""
+      onChange={(e) => {
+        const property = e.target.value;
+        if (!property) return;
+        const dataType = typeProperties.find((p) => p.api_name === property)?.data_type;
+        setAdded([...added, {
+          id: viewerFilterId([...configured, ...added]),
+          property,
+          component: defaultComponentFor(dataType),
+        }]);
+      }}
+    >
+      <option value="">+ Add filter</option>
+      {addable.map((p) => (
+        <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
+      ))}
+    </select>
+  ) : null;
+  const filterOf = (spec: FilterSpec) => (
+    <FilterListFilter
+      key={spec.id}
+      workspaceId={workspaceId}
+      definition={setDefinition}
+      spec={spec}
+      label={labelOf(spec.property)}
+      clauses={clauses}
+      onWrite={(next, value, on) => write(next, spec.property, value, on)}
+      onRemove={editable ? () => remove(spec) : undefined}
+    />
+  );
+
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       <p className="field-label">{title}</p>
@@ -656,20 +740,38 @@ export function CanvasFilterList({
         <p className="canvas-widget-empty">
           Filter list - point it at an object set and at the variable it writes in Settings
         </p>
-      ) : specs.length === 0 ? (
+      ) : specs.length === 0 && !editable ? (
         <p className="canvas-widget-empty">Add filters in Settings</p>
+      ) : pills ? (
+        // p.449's Pills layout: "all the filters horizontally within an
+        // interactive pill. Once selected, the pill opens a popover with filter
+        // configuration UI." Closed, a pill says what it applies.
+        <div className="canvas-filter-pills" ref={pillsRef}>
+          {specs.map((spec) => {
+            const label = labelOf(spec.property);
+            const summary = pillSummary(spec, clauses);
+            const open = openPill === spec.id;
+            return (
+              <div key={spec.id} className="canvas-filter-pill-wrap">
+                <button
+                  type="button"
+                  className={`canvas-filter-pill${summary ? " canvas-filter-pill--on" : ""}`}
+                  aria-expanded={open}
+                  onClick={() => setOpenPill(open ? null : spec.id)}
+                >
+                  {summary ? `${label}: ${summary}` : label}
+                </button>
+                {open && <div className="canvas-filter-popover">{filterOf(spec)}</div>}
+              </div>
+            );
+          })}
+          {addControl}
+        </div>
       ) : (
-        specs.map((spec) => (
-          <FilterListFilter
-            key={spec.id}
-            workspaceId={workspaceId}
-            definition={setDefinition}
-            spec={spec}
-            label={labelOf(spec.property)}
-            clauses={clauses}
-            onWrite={(next, value, on) => write(next, spec.property, value, on)}
-          />
-        ))
+        <>
+          {specs.map(filterOf)}
+          {addControl}
+        </>
       )}
     </div>
   );
@@ -686,6 +788,7 @@ function FilterListFilter({
   label,
   clauses,
   onWrite,
+  onRemove,
 }: {
   workspaceId: string;
   definition: unknown;
@@ -693,6 +796,8 @@ function FilterListFilter({
   label: string;
   clauses: Clause[];
   onWrite: (next: Clause[], value: string, on: boolean) => void;
+  /** Set when a viewer may remove this filter (p.449). */
+  onRemove?: () => void;
 }) {
   const { property, component } = spec;
   const picksValues = component === "histogram" || component === "singleSelect"
@@ -708,6 +813,16 @@ function FilterListFilter({
   return (
     <fieldset className="canvas-filter-group" data-testid={`filter-${spec.id}`}>
       <legend>{label}</legend>
+      {onRemove && (
+        <button
+          type="button"
+          className="canvas-filter-remove"
+          aria-label={`Remove the ${label} filter`}
+          onClick={onRemove}
+        >
+          ×
+        </button>
+      )}
       {picksValues && result.isError && (
         <p className="canvas-widget-empty">Couldn&apos;t read this property&apos;s values.</p>
       )}
@@ -844,6 +959,8 @@ function FilterListSettings() {
     properties,
     filters,
     title,
+    userEditable,
+    layout,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -851,6 +968,8 @@ function FilterListSettings() {
     properties: node.data.props.properties,
     filters: node.data.props.filters,
     title: node.data.props.title,
+    userEditable: node.data.props.userEditable,
+    layout: node.data.props.layout,
   }));
   const { workspaceId } = useCanvasEnv();
   const { declared, resolved } = useCanvasVariables();
@@ -978,6 +1097,27 @@ function FilterListSettings() {
           ))}
         </select>
       </fieldset>
+      <label className="field">
+        <span className="field-label">Layout</span>
+        <select
+          data-testid="filter-layout"
+          value={layoutOf(layout)}
+          onChange={(e) => setProp((p: { layout: string }) => (p.layout = layoutOf(e.target.value)))}
+        >
+          <option value="vertical">Vertical</option>
+          <option value="pills">Pills</option>
+        </select>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          data-testid="filter-user-editable"
+          checked={userEditable === true}
+          onChange={(e) =>
+            setProp((p: { userEditable: boolean }) => (p.userEditable = e.target.checked))}
+        />
+        <span className="field-label">Allow users to add and remove filters</span>
+      </label>
       </>}
       outputs={<>
       <label className="field">
@@ -1009,6 +1149,7 @@ CanvasFilterList.craft = {
   displayName: "Filter list",
   props: {
     objectSetVariable: null, variable: null, properties: "", filters: null, title: "Filters",
+    userEditable: false, layout: "vertical",
   },
   related: { settings: FilterListSettings },
 };

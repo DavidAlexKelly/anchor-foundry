@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  barWidth, componentOf, componentsFor, filtersOf, keywordOf, newFilterId,
-  rangeOf, shiftDay, toggleValue, valuesOf, withKeyword, withRange, withValues,
+  barWidth, componentOf, componentsFor, defaultComponentFor, filtersOf, keywordOf, layoutOf,
+  newFilterId, pillSummary, rangeOf, shiftDay, toggleValue, valuesOf, viewerFilterId,
+  visibleFilters, withKeyword, withRange, withValues, withoutFilter,
 } from "./filter-list";
 
 describe("filtersOf", () => {
@@ -123,5 +124,67 @@ describe("barWidth", () => {
     expect(barWidth(1, 1000)).toBe(2);
     expect(barWidth(0, 10)).toBe(0);
     expect(barWidth(3, 0)).toBe(0);
+  });
+});
+
+describe("layouts and a viewer's filters (§464)", () => {
+  const hist = { id: "f_1", property: "region", component: "histogram" as const };
+  const kw = { id: "f_2", property: "name", component: "keyword" as const };
+  const dates = { id: "f_3", property: "at", component: "dateRange" as const };
+
+  it("is vertical unless it is pills", () => {
+    expect(layoutOf("pills")).toBe("pills");
+    expect(layoutOf("vertical")).toBe("vertical");
+    expect(layoutOf(undefined)).toBe("vertical");
+    expect(layoutOf("grid")).toBe("vertical");
+  });
+
+  it("adds a date as a range and anything else as a histogram", () => {
+    expect(defaultComponentFor("timestamp")).toBe("dateRange");
+    expect(defaultComponentFor("date")).toBe("dateRange");
+    expect(defaultComponentFor("integer")).toBe("histogram");
+    expect(defaultComponentFor(undefined)).toBe("histogram");
+  });
+
+  it("removes a filter's own clauses and nobody else's", () => {
+    const clauses = [
+      { property: "region", op: "in", value: ["north", "south"] },
+      { property: "region", op: "starts_with", value: "no" },
+      { property: "name", op: "starts_with", value: "So" },
+      { property: "at", op: "gte", value: "2024-03-01" },
+      { property: "at", op: "lt", value: "2024-04-01" },
+    ];
+    expect(withoutFilter(clauses, hist)).toEqual(clauses.slice(1));
+    expect(withoutFilter(clauses, kw)).toEqual([...clauses.slice(0, 2), ...clauses.slice(3)]);
+    expect(withoutFilter(clauses, dates)).toEqual(clauses.slice(0, 3));
+    expect(withoutFilter(clauses, { ...hist, component: "multiSelect" }))
+      .toEqual(clauses.slice(1));
+  });
+
+  it("shows the module's filters less the removed, plus the added", () => {
+    expect(visibleFilters([hist, kw], [dates], new Set(["f_1"]))).toEqual([kw, dates]);
+    expect(visibleFilters([hist], [], new Set())).toEqual([hist]);
+  });
+
+  it("gives a viewer's filter an id no configured one has", () => {
+    expect(viewerFilterId([hist])).toBe("u_1");
+    expect(viewerFilterId([hist, { ...kw, id: "u_1" }])).toBe("u_2");
+  });
+
+  it("says what a pill applies", () => {
+    const clauses = [
+      { property: "region", op: "in", value: ["north", "south"] },
+      { property: "name", op: "starts_with", value: "So" },
+      { property: "at", op: "gte", value: "2024-03-01" },
+      { property: "at", op: "lt", value: "2024-04-01" },
+    ];
+    expect(pillSummary(hist, clauses)).toBe("north, south");
+    expect(pillSummary(kw, clauses)).toBe("starts with “So”");
+    expect(pillSummary(dates, clauses)).toBe("2024-03-01 – 2024-03-31");
+    expect(pillSummary(dates, clauses.slice(0, 3))).toBe("from 2024-03-01");
+    expect(pillSummary(dates, [clauses[3]!])).toBe("to 2024-03-31");
+    expect(pillSummary(dates, [])).toBe("");
+    expect(pillSummary(kw, [])).toBe("");
+    expect(pillSummary(hist, [])).toBe("");
   });
 });

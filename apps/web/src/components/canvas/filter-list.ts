@@ -180,3 +180,71 @@ export function barWidth(count: number, max: number): number {
   if (max <= 0 || count <= 0) return 0;
   return Math.max(2, Math.round((count / max) * 100));
 }
+
+/** p.449's two layouts. */
+export const FILTER_LAYOUTS = ["vertical", "pills"] as const;
+export type FilterLayout = (typeof FILTER_LAYOUTS)[number];
+
+export function layoutOf(value: unknown): FilterLayout {
+  return value === "pills" ? "pills" : "vertical";
+}
+
+/** What a filter a viewer adds is drawn as: a date range on a date, since a
+ * histogram of timestamps is one bar per instant, and a histogram otherwise. */
+export function defaultComponentFor(dataType: string | null | undefined): FilterComponent {
+  return componentsFor(dataType).includes("dateRange") ? "dateRange" : "histogram";
+}
+
+/**
+ * The clauses without the ones this filter wrote. **Removing a filter takes
+ * its clauses with it**: a filter a viewer removed but whose clause stayed
+ * would go on narrowing the set with nothing on screen to say so, or to undo.
+ */
+export function withoutFilter(clauses: readonly Clause[], spec: FilterSpec): Clause[] {
+  switch (spec.component) {
+    case "keyword":
+      return withKeyword(clauses, spec.property, "");
+    case "dateRange":
+      return withRange(clauses, spec.property, { from: "", to: "" });
+    default:
+      return withValues(clauses, spec.property, []);
+  }
+}
+
+/**
+ * The filters a viewer sees: the module's, less the ones they removed, plus
+ * the ones they added. **Runtime state, never saved** (decision 0002 §3): p.449
+ * lets users "add and remove filterable properties", which changes what they
+ * see and not what the module is for the next person.
+ */
+export function visibleFilters(
+  configured: readonly FilterSpec[], added: readonly FilterSpec[], removed: ReadonlySet<string>,
+): FilterSpec[] {
+  return [...configured, ...added].filter((f) => !removed.has(f.id));
+}
+
+/** An id for a filter a viewer adds, distinct from every configured one so a
+ * removal cannot hit the wrong filter. */
+export function viewerFilterId(taken: readonly FilterSpec[]): string {
+  const ids = new Set(taken.map((f) => f.id));
+  let n = 1;
+  while (ids.has(`u_${n}`)) n += 1;
+  return `u_${n}`;
+}
+
+/** What a pill says about its filter while closed (p.449's Pills layout), so
+ * a row of pills reads as the filters applied without opening each one. */
+export function pillSummary(spec: FilterSpec, clauses: readonly Clause[]): string {
+  if (spec.component === "keyword") {
+    const text = keywordOf(clauses, spec.property);
+    return text ? `starts with “${text}”` : "";
+  }
+  if (spec.component === "dateRange") {
+    const { from, to } = rangeOf(clauses, spec.property);
+    if (from && to) return `${from} – ${to}`;
+    if (from) return `from ${from}`;
+    if (to) return `to ${to}`;
+    return "";
+  }
+  return valuesOf(clauses, spec.property).join(", ");
+}
