@@ -125,3 +125,41 @@ export function verificationText(listener: Pick<Listener, "verification" | "veri
 export function curlExample(url: string): string {
   return `curl -X POST -H 'Content-Type: application/json' -d '{"hello": "listener"}' ${url}`;
 }
+
+// ---- endpoint rotation (§517; p.258-259) ---------------------------------------
+const DAY_MS = 86_400_000;
+
+/** What an endpoint is doing: p.258's active one, a retiring one with the time
+ * it has left, or an expired one that answers nothing. */
+export function endpointState(endpoint: Pick<ListenerEndpoint, "active" | "expired" | "expires_at">, now: number): string {
+  if (endpoint.active) return "Active";
+  if (endpoint.expired || !endpoint.expires_at) return "Expired: no longer answers";
+  const left = Date.parse(endpoint.expires_at) - now;
+  const hours = Math.max(1, Math.round(left / 3_600_000));
+  return hours < 48 ? `Retiring: answers for ${hours} more hour${hours === 1 ? "" : "s"}`
+    : `Retiring: answers for ${Math.round(hours / 24)} more days`;
+}
+
+/** p.258's two ways to rotate: keep the old address a day for a move with no
+ * downtime, or retire it now. */
+export const ROTATIONS = {
+  day: "Keep the old address for a day",
+  now: "Retire the old address now",
+} as const;
+
+export function rotateBody(choice: keyof typeof ROTATIONS, now: number): { expire_old_at: string | null } {
+  return { expire_old_at: choice === "day" ? new Date(now + DAY_MS).toISOString() : null };
+}
+
+/** p.259's extension: a day more than whichever is later, now or the current
+ * expiry, so extending never shortens. */
+export function extendedExpiry(expiresAt: string, now: number): string {
+  return new Date(Math.max(now, Date.parse(expiresAt)) + DAY_MS).toISOString();
+}
+
+/** Why Rotate is not offered, or "" when it is: p.258's two-endpoint limit. */
+export function whyNoRotation(endpoints: Pick<ListenerEndpoint, "active">[]): string {
+  return endpoints.length >= 2
+    ? "A listener has at most two endpoints. Delete the one being retired to rotate again."
+    : "";
+}
