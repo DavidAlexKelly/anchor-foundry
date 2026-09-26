@@ -209,7 +209,8 @@ import {
   addItem, buttonTypeOf, duplicateItem, itemsOf, removeItem, renameItem,
 } from "./button-items";
 import {
-  FILTER_COMPONENT_LABELS, barWidth, componentOf, componentsFor, defaultComponentFor, filtersOf,
+  FILTER_COMPONENT_LABELS, axisEnds, barWidth, bucketLabel, componentOf, componentsFor,
+  defaultComponentFor, filtersOf, isBucketChosen, withBucket,
   keywordOf, layoutOf, newFilterId, pillSummary, rangeOf, toggleValue, valuesOf, viewerFilterId,
   visibleFilters, withKeyword, withRange, withValues, withoutFilter,
   type Clause, type DayRange, type FilterSpec,
@@ -809,6 +810,13 @@ function FilterListFilter({
   });
   const groups = result.data?.groups ?? [];
   const values = valuesOf(clauses, property);
+  // p.449's distribution chart reads ranges rather than values (§465), over
+  // the unfiltered input set for the reason the counts above are.
+  const distribution = useQuery({
+    queryKey: ["canvas-filter-distribution", property, JSON.stringify(definition ?? null)],
+    queryFn: () => objApi.distributionObjectSet(workspaceId, definition, property),
+    enabled: !!definition && component === "distribution",
+  });
 
   return (
     <fieldset className="canvas-filter-group" data-testid={`filter-${spec.id}`}>
@@ -922,6 +930,62 @@ function FilterListFilter({
           onChange={(e) => onWrite(
             withKeyword(clauses, property, e.target.value), e.target.value,
             !!e.target.value.trim())}
+        />
+      )}
+
+      {component === "distribution" && (() => {
+        const bars = distribution.data?.buckets ?? [];
+        const integer = distribution.data?.integer ?? false;
+        const max = Math.max(0, ...bars.map((b) => b.count));
+        return (
+          <>
+            {distribution.isError && (
+              <p className="canvas-widget-empty">Couldn&apos;t read this property&apos;s range.</p>
+            )}
+            {distribution.data && bars.length === 0 && (
+              <p className="canvas-widget-empty">no numbers</p>
+            )}
+            <div className="canvas-filter-distribution" role="group" aria-label={label}>
+              {bars.map((bar) => {
+                const name = bucketLabel(bar, integer);
+                const chosen = isBucketChosen(clauses, property, bar);
+                return (
+                  <button
+                    key={`${bar.low}-${bar.high}`}
+                    type="button"
+                    className="canvas-filter-column"
+                    aria-pressed={chosen}
+                    aria-label={`${name}: ${bar.count}`}
+                    title={`${name}: ${bar.count}`}
+                    onClick={() => onWrite(
+                      withBucket(clauses, property, chosen ? null : bar), name, !chosen)}
+                  >
+                    <span style={{ height: `${barWidth(bar.count, max)}%` }} />
+                  </button>
+                );
+              })}
+            </div>
+            {bars.length > 0 && (
+              <div className="canvas-filter-axis" aria-hidden>
+                {axisEnds(bars, integer).map((end, i) => <span key={i}>{end}</span>)}
+              </div>
+            )}
+            {!!distribution.data?.missing && (
+              <p className="canvas-widget-empty">{distribution.data.missing} with no value</p>
+            )}
+          </>
+        );
+      })()}
+
+      {component === "date" && (
+        <input
+          type="date"
+          aria-label={label}
+          value={rangeOf(clauses, property).from}
+          // One day, both ends in: the range's rule with the same day twice.
+          onChange={(e) => onWrite(
+            withRange(clauses, property, { from: e.target.value, to: e.target.value }),
+            e.target.value, !!e.target.value)}
         />
       )}
 

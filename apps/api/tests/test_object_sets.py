@@ -3343,3 +3343,161 @@ async def test_the_two_stores_sort_a_page_identically(opensearch: str, sort: str
             assert keys == sorted(keys), f"{sort} did not fall back to the key tiebreak"
     finally:
         await store.close()
+
+
+# ---- p.449's distribution chart (§465) ------------------------------------------
+def test_integer_buckets_are_whole_numbers_and_cover_both_ends() -> None:
+    b = object_sets.distribution_buckets(1, 250, 10, integer=True)
+    assert [(x.low, x.high) for x in b][:2] == [(1, 26), (26, 51)]
+    assert len(b) == 10 and b[-1].high == 251 and not any(x.closed for x in b)
+    # Every bucket starts where the last one stopped.
+    assert all(a.high == z.low for a, z in zip(b, b[1:]))
+    # A span that does not divide rounds the width up, never down: 1 to 10 in
+    # three is 4 wide, where 3 wide would take a fourth bucket to reach 10.
+    assert [(x.low, x.high) for x in object_sets.distribution_buckets(1, 10, 3, integer=True)] \
+        == [(1, 5), (5, 9), (9, 11)]
+    # Fewer than asked rather than half-numbers: 0 to 4 is five buckets of one.
+    assert [(x.low, x.high) for x in object_sets.distribution_buckets(0, 4, 10, integer=True)] \
+        == [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]
+    # One value is one bucket that holds it.
+    assert [(x.low, x.high) for x in object_sets.distribution_buckets(7, 7, 10, integer=True)] \
+        == [(7, 8)]
+
+
+def test_float_buckets_close_only_the_last() -> None:
+    b = object_sets.distribution_buckets(0.0, 1.0, 4, integer=False)
+    assert [(x.low, x.high, x.closed) for x in b] == [
+        (0.0, 0.25, False), (0.25, 0.5, False), (0.5, 0.75, False), (0.75, 1.0, True)]
+    # Edges shared exactly, even where a float would round two ways.
+    thirds = object_sets.distribution_buckets(0.1, 0.7, 3, integer=False)
+    assert all(a.high == z.low for a, z in zip(thirds, thirds[1:]))
+    assert thirds[-1].high == 0.7
+    # The top edge is the largest value itself, not `low + count * width`,
+    # which here is 0.9999999999999999 and would leave 1.0 in no bucket.
+    assert object_sets.distribution_buckets(0.1, 1.0, 3, integer=False)[-1].high == 1.0
+    assert [(x.low, x.high, x.closed) for x in object_sets.distribution_buckets(
+        2.5, 2.5, 5, integer=False)] == [(2.5, 2.5, True)]
+
+
+def test_a_distribution_refuses_what_it_cannot_draw() -> None:
+    with pytest.raises(ValueError, match="at least one bucket"):
+        object_sets.distribution_buckets(0, 1, 0, integer=True)
+    with pytest.raises(ValueError, match="below its smallest"):
+        object_sets.distribution_buckets(5, 1, 3, integer=False)
+    assert object_sets.distributable_type("reading", TYPED_TYPES) == "integer"
+    for prop in ("seen", "nothing"):
+        with pytest.raises(ValueError, match="drawn over a number"):
+            object_sets.distributable_type(prop, TYPED_TYPES)
+
+
+def test_a_bucket_is_two_comparisons() -> None:
+    open_ = object_sets.Bucket(10, 20)
+    closed = object_sets.Bucket(10, 20, closed=True)
+    assert [(f.op, f.value, f.data_type) for f in object_sets.bucket_filters(
+        "reading", "integer", open_)] == [("gte", 10, "integer"), ("lt", 20, "integer")]
+    assert [f.op for f in object_sets.bucket_filters("reading", "float", closed)] \
+        == ["gte", "lte"]
+
+
+def distribution(client: TestClient, fx: Fixture, definition: dict, **kw):
+    return client.post(
+        f"/api/workspaces/{fx.workspace}/object-sets/distribution",
+        headers=hdr(fx.owner_sub),
+        json={"definition": definition, **kw},
+    )
+
+
+def test_a_distribution_counts_each_range_of_a_number(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """Readings 1, 7, 10, 40, 40, 40, 250 and one row with none. Five buckets
+    of 1..250 are 50 wide, so 1-50 holds six, 201-250 holds one, and the row
+    with no reading is in no bar and is said to be missing."""
+    r = distribution(client, fx, {"object_type_id": typed, "filters": []},
+                     property="reading", buckets=5)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["integer"] is True
+    assert [(b["low"], b["high"], b["count"]) for b in body["buckets"]] == [
+        (1, 51, 6), (51, 101, 0), (101, 151, 0), (151, 201, 0), (201, 251, 1)]
+    assert body["total"] == len(TYPED_ROWS) and body["missing"] == 1
+    # The counts are the rows the same comparisons select, one bucket at a time.
+    for b in body["buckets"]:
+        expected = sum(1 for _, p in TYPED_ROWS if object_sets.matches(p, (
+            object_sets.Filter("reading", "gte", b["low"], "integer"),
+            object_sets.Filter("reading", "lt", b["high"], "integer"))))
+        assert b["count"] == expected, b
+
+
+def test_a_distribution_honours_the_set_s_filters(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """Over the narrowed set, so the range is the narrowed set's too: 7 to 40."""
+    definition = {"object_type_id": typed,
+                  "filters": [{"property": "reading", "op": "gte", "value": 5},
+                              {"property": "reading", "op": "lte", "value": 40}]}
+    body = distribution(client, fx, definition, property="reading", buckets=20).json()
+    assert body["buckets"][0]["low"] == 7 and body["buckets"][-1]["high"] == 41
+    assert sum(b["count"] for b in body["buckets"]) == 5 and body["missing"] == 0
+
+
+def test_a_distribution_s_bars_count_only_the_set(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """A filter on *another* property. The range alone would already exclude
+    rows filtered on `reading`, so it is `seen` that shows each bar counting
+    the set rather than every row in its range: three rows read 40, and only
+    one of them was seen before March."""
+    definition = {"object_type_id": typed,
+                  "filters": [{"property": "seen", "op": "lt", "value": "2026-03-01"}]}
+    body = distribution(client, fx, definition, property="reading", buckets=2).json()
+    assert [(b["low"], b["high"], b["count"]) for b in body["buckets"]] == [
+        (10, 26, 1), (26, 41, 1)]
+
+
+def test_a_distribution_of_nothing_is_no_bars(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    definition = {"object_type_id": typed,
+                  "filters": [{"property": "reading", "op": "gt", "value": 1000}]}
+    body = distribution(client, fx, definition, property="reading").json()
+    assert body == {"buckets": [], "integer": True, "total": 0, "missing": 0}
+
+
+def test_a_distribution_over_something_that_is_not_a_number_is_refused(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    r = distribution(client, fx, {"object_type_id": typed, "filters": []}, property="seen")
+    assert r.status_code == 422 and "drawn over a number" in r.text, r.text
+    r = distribution(client, fx, {"object_type_id": typed, "filters": []},
+                     property="reading", buckets=object_sets.MAX_DISTRIBUTION_BUCKETS + 1)
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.anyio
+async def test_the_two_stores_count_a_distribution_s_bars_identically(opensearch: str) -> None:
+    """Decision 0006 §6 for §465. A bar is two ordered comparisons and a count,
+    so the bars agree across stores if those do. Asserted here as well, on
+    OpenSearch against the rule, because `bucket_filters` hands the store a
+    float bound (26.0) for an `integer` property that no other caller sends."""
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-dist", object_type_id=type_id, source_id=source_id,
+            rows=TYPED_ROWS, synced_at=datetime.now(timezone.utc),
+            declared=TYPED_DECLARED,
+        )
+        for bucket in object_sets.distribution_buckets(1, 250, 5, integer=True):
+            bounds = object_sets.bucket_filters("reading", "integer", bucket)
+            got = await store.aggregate_object_set(
+                search_prefix="ws-dist", object_type_id=type_id, filters=bounds,
+                aggregation="count", property_name=None,
+            )
+            expected = sum(1 for _, p in TYPED_ROWS if object_sets.matches(p, bounds))
+            assert got == expected, (bucket, got, expected)
+    finally:
+        await store.close()

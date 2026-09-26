@@ -26,14 +26,16 @@ from conftest import eventually, open_builder, open_module, save, settled
 
 # `at` is a timestamp so the range's last day is a real question: N3 is on the
 # evening of the 31st, which `lte 2024-03-31` (midnight) would drop.
+# `size` is an integer for §465's distribution chart: 3 to 50 is ten bars five
+# wide, the first holding S1 and N1 and the last N4 and E1.
 ROWS = [
-    {"id": "N1", "region": "north", "name": "North 1", "at": "2024-03-01T09:00:00Z"},
-    {"id": "N2", "region": "north", "name": "North 2", "at": "2024-03-15T09:00:00Z"},
-    {"id": "N3", "region": "north", "name": "North 3", "at": "2024-03-31T18:00:00Z"},
-    {"id": "N4", "region": "north", "name": "North 4", "at": "2024-04-01T00:00:00Z"},
-    {"id": "S1", "region": "south", "name": "South 1", "at": "2024-02-29T23:00:00Z"},
-    {"id": "S2", "region": "south", "name": "South 2", "at": "2024-03-10T12:00:00Z"},
-    {"id": "E1", "region": "east", "name": "East 1", "at": "2024-05-05T12:00:00Z"},
+    {"id": "N1", "region": "north", "name": "North 1", "at": "2024-03-01T09:00:00Z", "size": 5},
+    {"id": "N2", "region": "north", "name": "North 2", "at": "2024-03-15T09:00:00Z", "size": 12},
+    {"id": "N3", "region": "north", "name": "North 3", "at": "2024-03-31T18:00:00Z", "size": 30},
+    {"id": "N4", "region": "north", "name": "North 4", "at": "2024-04-01T00:00:00Z", "size": 48},
+    {"id": "S1", "region": "south", "name": "South 1", "at": "2024-02-29T23:00:00Z", "size": 3},
+    {"id": "S2", "region": "south", "name": "South 2", "at": "2024-03-10T12:00:00Z", "size": 20},
+    {"id": "E1", "region": "east", "name": "East 1", "at": "2024-05-05T12:00:00Z", "size": 50},
 ]
 
 
@@ -41,8 +43,8 @@ ROWS = [
 def sites(api):
     mod = Module(api, "Filter list")
     mod.site_type_id = mod.object_type(
-        columns=["id", "region", "name", "at"], rows=ROWS, key="id", title="name",
-        types={"at": "timestamp"},
+        columns=["id", "region", "name", "at", "size"], rows=ROWS, key="id", title="name",
+        types={"at": "timestamp", "size": "integer"},
     )
     return mod
 
@@ -182,6 +184,41 @@ def test_a_date_range_includes_both_of_its_days(page, api, sites) -> None:
         .to_be_visible()
 
 
+def test_a_distribution_chart_filters_to_the_range_a_column_covers(page, api, sites) -> None:
+    """p.449's distribution chart (§465): a column per range of a number, from
+    the set's smallest value to its largest. A click chooses that range, a
+    second column replaces it, and a second click on the same one clears it."""
+    mod = build(api, sites, "Filter list distribution", {"filters": [one("distribution", "size")]})
+    open_module(page, mod)
+    rows_are(page, EVERY, "every row first")
+    columns = page.get_by_role("group", name="Size").get_by_role("button")
+    expect(columns).to_have_count(10)
+    low = page.get_by_role("button", name="3–7: 2", exact=True)
+    high = page.get_by_role("button", name="48–50: 2", exact=True)
+    expect(page.get_by_role("button", name="13–17: 0", exact=True)).to_be_visible()
+    low.click()
+    rows_are(page, ["S1", "N1"], "sizes 3 to 7")
+    expect(low).to_have_attribute("aria-pressed", "true")
+    high.click()
+    # The last column holds its top value: 50 is E1's.
+    rows_are(page, ["N4", "E1"], "sizes 48 to 50, instead")
+    expect(low).to_have_attribute("aria-pressed", "false")
+    high.click()
+    rows_are(page, EVERY, "every row once it is clicked off")
+
+
+def test_a_single_date_is_the_whole_of_that_day(page, api, sites) -> None:
+    """p.449's single-date picker: N3 is the evening of the 31st, so a day read
+    as its midnight would miss it."""
+    mod = build(api, sites, "Filter list one day", {"filters": [one("date", "at")]})
+    open_module(page, mod)
+    rows_are(page, EVERY, "every row first")
+    page.get_by_label("At", exact=True).fill("2024-03-31")
+    rows_are(page, ["N3"], "the 31st, evening included")
+    page.get_by_label("At", exact=True).fill("2024-04-01")
+    rows_are(page, ["N4"], "the 1st of April instead")
+
+
 def test_components_on_one_variable_keep_each_others_clauses(page, api, sites) -> None:
     """A keyword and a histogram on the same property, and a default someone
     else set: each click replaces only its own clause. The widget used to
@@ -217,12 +254,18 @@ def test_the_panel_adds_filters_and_chooses_components(page, api, sites) -> None
         ["Histogram", "Single-select dropdown", "Multi-select dropdown", "Keyword"])
     component.select_option("multiSelect")
     add.select_option("at")
-    expect(page.get_by_test_id("filter-component-f_2").locator("option")).to_contain_text(
-        ["Date range"])
+    expect(page.get_by_test_id("filter-component-f_2").locator("option")).to_have_text(
+        ["Histogram", "Single-select dropdown", "Multi-select dropdown", "Keyword",
+         "Single date", "Date range"])
     page.get_by_test_id("filter-component-f_2").select_option("dateRange")
     save(page)
     assert mod.definition()["layout"]["fl"]["props"]["filters"] == [
         one("multiSelect"), one("dateRange", "at", fid="f_2")]
+    # A number is offered a distribution chart, and not a date.
+    page.get_by_test_id("filter-add").select_option("size")
+    expect(page.get_by_test_id("filter-component-f_3").locator("option")).to_have_text(
+        ["Histogram", "Single-select dropdown", "Multi-select dropdown", "Keyword",
+         "Distribution chart"])
     # A date range moved onto a property that is not a date falls back. Read
     # from the document: the select would show its first option either way,
     # since a date range is no longer among them.

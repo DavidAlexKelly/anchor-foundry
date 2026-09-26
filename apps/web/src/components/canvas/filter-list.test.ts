@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  barWidth, componentOf, componentsFor, defaultComponentFor, filtersOf, keywordOf, layoutOf,
+  axisEnds, barWidth, bucketLabel, componentOf, isBucketChosen, numberRangeSummary, withBucket, componentsFor, defaultComponentFor, filtersOf, keywordOf, layoutOf,
   newFilterId, pillSummary, rangeOf, shiftDay, toggleValue, valuesOf, viewerFilterId,
   visibleFilters, withKeyword, withRange, withValues, withoutFilter,
 } from "./filter-list";
@@ -186,5 +186,64 @@ describe("layouts and a viewer's filters (§464)", () => {
     expect(pillSummary(dates, [])).toBe("");
     expect(pillSummary(kw, [])).toBe("");
     expect(pillSummary(hist, [])).toBe("");
+  });
+});
+
+describe("the distribution chart (§465)", () => {
+  const first = { low: 1, high: 26, closed: false, count: 6 };
+  const one = { low: 7, high: 8, closed: false, count: 1 };
+  const last = { low: 0.75, high: 1, closed: true, count: 2 };
+
+  it("is offered on a number, and a single date on a date", () => {
+    expect(componentsFor("integer")).toContain("distribution");
+    expect(componentsFor("float")).toContain("distribution");
+    expect(componentsFor("string")).not.toContain("distribution");
+    expect(componentsFor("date")).toEqual(expect.arrayContaining(["date", "dateRange"]));
+    expect(componentsFor("date")).not.toContain("distribution");
+    expect(componentsFor("integer")).not.toContain("date");
+  });
+
+  it("names a bar by the values in it", () => {
+    expect(bucketLabel(first, true)).toBe("1–25");
+    expect(bucketLabel(one, true)).toBe("7");
+    expect(bucketLabel({ low: 0.1 + 0.2, high: 0.5, closed: false, count: 0 }, false)).toBe("0.3–0.5");
+    expect(axisEnds([first, { low: 26, high: 251, closed: false, count: 1 }], true)).toEqual(["1", "250"]);
+    expect(axisEnds([{ ...last, low: 0.1 + 0.2 }], false)).toEqual(["0.3", "1"]);
+    expect(axisEnds([], true)).toEqual(["", ""]);
+  });
+
+  it("chooses one bar as two comparisons, and knows which it chose", () => {
+    const other = { property: "region", op: "eq", value: "north" };
+    const chosen = withBucket([other, { property: "n", op: "gt", value: 3 }], "n", first);
+    expect(chosen).toEqual([other,
+      { property: "n", op: "gte", value: 1 }, { property: "n", op: "lt", value: 26 }]);
+    expect(isBucketChosen(chosen, "n", first)).toBe(true);
+    expect(isBucketChosen(chosen, "n", one)).toBe(false);
+    expect(isBucketChosen(chosen, "m", first)).toBe(false);
+    // The last float bar holds its high end, so it is lte.
+    const closed = withBucket([], "n", last);
+    expect(closed[1]).toEqual({ property: "n", op: "lte", value: 1 });
+    expect(isBucketChosen(closed, "n", last)).toBe(true);
+    expect(isBucketChosen(closed, "n", { ...last, closed: false })).toBe(false);
+    // Bounds read back from a document arrive as whatever JSON held.
+    expect(isBucketChosen([{ property: "n", op: "gte", value: "1" },
+      { property: "n", op: "lt", value: "26" }], "n", first)).toBe(true);
+    expect(withBucket(chosen, "n", null)).toEqual([other]);
+  });
+
+  it("says what a chosen range is in a pill", () => {
+    expect(numberRangeSummary(withBucket([], "n", first), "n")).toBe("≥ 1, < 26");
+    expect(numberRangeSummary(withBucket([], "n", last), "n")).toBe("≥ 0.75, ≤ 1");
+    expect(numberRangeSummary([{ property: "n", op: "gte", value: 5 }], "n")).toBe("≥ 5");
+    expect(numberRangeSummary([{ property: "n", op: "lt", value: 5 }], "n")).toBe("< 5");
+    expect(numberRangeSummary([], "n")).toBe("");
+    expect(pillSummary({ id: "f", property: "n", component: "distribution" },
+      withBucket([], "n", first))).toBe("≥ 1, < 26");
+    expect(pillSummary({ id: "f", property: "at", component: "date" },
+      withRange([], "at", { from: "2024-03-05", to: "2024-03-05" }))).toBe("2024-03-05");
+    expect(withoutFilter(withBucket([], "n", first), { id: "f", property: "n", component: "distribution" }))
+      .toEqual([]);
+    expect(withoutFilter(withRange([], "at", { from: "2024-03-05", to: "2024-03-05" }),
+      { id: "f", property: "at", component: "date" })).toEqual([]);
   });
 });

@@ -24,7 +24,7 @@ import { ORDERED_OPERATORS, type Clause } from "./filter-clause";
 export type { Clause };
 
 export const FILTER_COMPONENTS = [
-  "histogram", "singleSelect", "multiSelect", "keyword", "dateRange",
+  "histogram", "singleSelect", "multiSelect", "keyword", "distribution", "date", "dateRange",
 ] as const;
 export type FilterComponent = (typeof FILTER_COMPONENTS)[number];
 
@@ -33,12 +33,19 @@ export const FILTER_COMPONENT_LABELS: Record<FilterComponent, string> = {
   singleSelect: "Single-select dropdown",
   multiSelect: "Multi-select dropdown",
   keyword: "Keyword",
+  distribution: "Distribution chart",
+  date: "Single date",
   dateRange: "Date range",
 };
 
 /** p.449's date pickers are for dates; offering one on a string would write a
  * range the server refuses, because only declared dates and numbers order. */
 export const DATE_TYPES = ["date", "timestamp"] as const;
+
+/** And a distribution is for numbers: its bars are ranges between the set's
+ * smallest and largest value, which the server takes from `min` and `max`
+ * (`object_sets.distributable_type`). */
+export const NUMBER_TYPES = ["integer", "float"] as const;
 
 export interface FilterSpec {
   id: string;
@@ -54,7 +61,12 @@ export function componentOf(value: unknown): FilterComponent {
 /** The components a property of this declared type can be drawn as. */
 export function componentsFor(dataType: string | null | undefined): FilterComponent[] {
   const dated = (DATE_TYPES as readonly (string | null | undefined)[]).includes(dataType);
-  return FILTER_COMPONENTS.filter((c) => c !== "dateRange" || dated);
+  const numeric = (NUMBER_TYPES as readonly (string | null | undefined)[]).includes(dataType);
+  return FILTER_COMPONENTS.filter((c) => {
+    if (c === "date" || c === "dateRange") return dated;
+    if (c === "distribution") return numeric;
+    return true;
+  });
 }
 
 /**
@@ -205,6 +217,9 @@ export function withoutFilter(clauses: readonly Clause[], spec: FilterSpec): Cla
     case "keyword":
       return withKeyword(clauses, spec.property, "");
     case "dateRange":
+    case "date":
+    case "distribution":
+      // All three write ordered comparisons, and clearing a range clears them.
       return withRange(clauses, spec.property, { from: "", to: "" });
     default:
       return withValues(clauses, spec.property, []);
@@ -239,6 +254,8 @@ export function pillSummary(spec: FilterSpec, clauses: readonly Clause[]): strin
     const text = keywordOf(clauses, spec.property);
     return text ? `starts with “${text}”` : "";
   }
+  if (spec.component === "distribution") return numberRangeSummary(clauses, spec.property);
+  if (spec.component === "date") return rangeOf(clauses, spec.property).from;
   if (spec.component === "dateRange") {
     const { from, to } = rangeOf(clauses, spec.property);
     if (from && to) return `${from} – ${to}`;
@@ -247,4 +264,76 @@ export function pillSummary(spec: FilterSpec, clauses: readonly Clause[]): strin
     return "";
   }
   return valuesOf(clauses, spec.property).join(", ");
+}
+
+/** One bar of p.449's distribution chart, as `/object-sets/distribution`
+ * returns it: `[low, high)`, or `[low, high]` when `closed`. */
+export interface NumberBucket {
+  low: number;
+  high: number;
+  closed: boolean;
+  count: number;
+}
+
+/** What a bar is called. An integer bucket's `high` is the next integer past
+ * its last value, so 1 to 26 reads "1–25"; a float's reads as its edges. */
+export function bucketLabel(bucket: NumberBucket, integer: boolean): string {
+  if (integer) {
+    const last = bucket.high - 1;
+    return last === bucket.low ? `${bucket.low}` : `${bucket.low}–${last}`;
+  }
+  return `${edge(bucket.low)}–${edge(bucket.high)}`;
+}
+
+/** A float edge to four significant figures: 0.30000000000000004 is a
+ * rounding, not a boundary anybody chose. */
+function edge(n: number): string {
+  return Number(n.toPrecision(4)).toString();
+}
+
+/** The smallest and largest value under the chart, as its axis. */
+export function axisEnds(bars: readonly NumberBucket[], integer: boolean): [string, string] {
+  const first = bars[0];
+  const last = bars[bars.length - 1];
+  if (!first || !last) return ["", ""];
+  return integer
+    ? [`${first.low}`, `${last.high - 1}`]
+    : [edge(first.low), edge(last.high)];
+}
+
+/** Whether this bar is the range a property's clauses select. */
+export function isBucketChosen(
+  clauses: readonly Clause[], property: string, bucket: NumberBucket,
+): boolean {
+  const on = (op: string) => clauses.some((c) =>
+    c.property === property && c.op === op && Number(c.value) === (op === "gte" ? bucket.low : bucket.high));
+  return on("gte") && on(bucket.closed ? "lte" : "lt");
+}
+
+/** Choose a bar, or none: the property's ordered clauses become the bar's two.
+ * One bar at a time, which is what a click on a chart means. */
+export function withBucket(
+  clauses: readonly Clause[], property: string, bucket: NumberBucket | null,
+): Clause[] {
+  const rest = clauses.filter((c) => !(c.property === property && ORDERED_OPERATORS.includes(c.op)));
+  if (!bucket) return rest;
+  return [...rest,
+    { property, op: "gte", value: bucket.low },
+    { property, op: bucket.closed ? "lte" : "lt", value: bucket.high }];
+}
+
+/** What a chosen bar's pill says, from the clauses alone - the pill has no
+ * buckets to look the label up in until it is opened. */
+export function numberRangeSummary(clauses: readonly Clause[], property: string): string {
+  let low: string | null = null;
+  let high: string | null = null;
+  for (const c of clauses) {
+    if (c.property !== property) continue;
+    if (c.op === "gte") low = String(c.value);
+    if (c.op === "lt") high = `< ${String(c.value)}`;
+    if (c.op === "lte") high = `≤ ${String(c.value)}`;
+  }
+  if (low !== null && high !== null) return `≥ ${low}, ${high}`;
+  if (low !== null) return `≥ ${low}`;
+  return high ?? "";
 }
