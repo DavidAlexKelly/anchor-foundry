@@ -1049,6 +1049,11 @@ export const models = {
     ),
   /** What one run printed (§358; `dataset-preview` p.3). Plain text, not
    *  JSON — it is already text and it is the whole response. */
+  /** p.3's job view, all but the log (§507). */
+  runDetail: (wid: string, pid: string, mid: string, rid: string) =>
+    request<import("./run-logs").RunDetail>(
+      `/workspaces/${wid}/projects/${pid}/models/${mid}/runs/${rid}/detail`,
+    ),
   runLog: (wid: string, pid: string, mid: string, rid: string) =>
     requestText(
       `/workspaces/${wid}/projects/${pid}/models/${mid}/runs/${rid}/log`,

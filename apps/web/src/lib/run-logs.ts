@@ -58,3 +58,68 @@ export function whyNoLog(
   }
   return "this run printed nothing";
 }
+
+/** p.3's job view, all but the log (§507): what the API says about one run. */
+export type RunDetail = {
+  progress: {
+    status: ModelRun["status"];
+    queued_at: string;
+    started_at: string | null;
+    finished_at: string | null;
+    waited_ms: number | null;
+    ran_ms: number | null;
+  };
+  specification: {
+    version_number: number;
+    language: string;
+    code: string;
+    inputs: { alias: string; dataset_id: string; dataset_name: string | null }[];
+  } | null;
+  output: {
+    version_number: number;
+    row_count: number;
+    schema: { name: string; data_type: string }[];
+    files: { name: string; size_bytes: number | null }[];
+  } | null;
+};
+
+/**
+ * p.3's **progress**, as the steps a run goes through: queued, then started,
+ * then finished, each with how long it took to get there. A step not reached
+ * yet says so rather than being left out, so a run stuck in the queue reads
+ * as stuck rather than as short.
+ */
+export function progressSteps(progress: RunDetail["progress"]): { step: string; text: string }[] {
+  const pending = progress.status === "queued" || progress.status === "running";
+  return [
+    { step: "Queued", text: new Date(progress.queued_at).toLocaleString() },
+    {
+      step: "Started",
+      text: progress.waited_ms === null
+        ? "not yet"
+        : `after waiting ${durationText(progress.waited_ms / 1000)}`,
+    },
+    {
+      step: "Finished",
+      text: progress.ran_ms === null
+        ? (pending ? "not yet" : "not recorded")
+        : `${progress.status}, after running ${durationText(progress.ran_ms / 1000)}`,
+    },
+  ];
+}
+
+/** Why a run shows no specification: it is older than model versions. */
+export const NO_SPECIFICATION =
+  "This run is older than model versions, so the code it ran was not recorded.";
+
+/**
+ * Why a run shows no output, one sentence per reason (§214): still going,
+ * failed, cancelled, or it succeeded and the version it wrote has since been
+ * removed.
+ */
+export function whyNoOutput(status: ModelRun["status"]): string {
+  if (status === "queued" || status === "running") return "this run has not finished yet";
+  if (status === "failed") return "this run failed, so it wrote no version";
+  if (status === "cancelled") return "this run was cancelled before it wrote anything";
+  return "the version this run wrote has since been removed";
+}

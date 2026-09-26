@@ -1,7 +1,9 @@
 /** Reading a model run (§358; `dataset-preview` p.3). */
 import { describe, expect, it } from "vitest";
 import { durationText } from "./action-metrics";
-import { runDuration, whyNoLog } from "./run-logs";
+import {
+  NO_SPECIFICATION, progressSteps, runDuration, whyNoLog, whyNoOutput, type RunDetail,
+} from "./run-logs";
 
 const at = (iso: string) => iso;
 
@@ -131,5 +133,50 @@ describe("one duration formatter, not two (§298's shape)", () => {
       expect(runDuration({ started_at: start, finished_at: finished }))
         .toBe(durationText(seconds));
     }
+  });
+});
+
+describe("the job view (§507; p.3)", () => {
+  const progress = (extra: Partial<RunDetail["progress"]> = {}): RunDetail["progress"] => ({
+    status: "succeeded", queued_at: "2026-09-26T10:00:00Z",
+    started_at: "2026-09-26T10:00:02Z", finished_at: "2026-09-26T10:00:07.5Z",
+    waited_ms: 2000, ran_ms: 5500, ...extra,
+  });
+
+  it("walks a finished run through its three steps", () => {
+    expect(progressSteps(progress())).toEqual([
+      { step: "Queued", text: new Date("2026-09-26T10:00:00Z").toLocaleString() },
+      { step: "Started", text: "after waiting 2.0s" },
+      { step: "Finished", text: "succeeded, after running 5.5s" },
+    ]);
+    expect(progressSteps(progress({ status: "failed", ran_ms: 400 }))[2])
+      .toEqual({ step: "Finished", text: "failed, after running 400ms" });
+  });
+
+  it("says a step not reached yet, rather than leaving it out", () => {
+    const queued = progressSteps(progress({ status: "queued", waited_ms: null, ran_ms: null }));
+    expect(queued.map((s) => s.text).slice(1)).toEqual(["not yet", "not yet"]);
+    const running = progressSteps(progress({ status: "running", ran_ms: null }));
+    expect(running[2]?.text).toBe("not yet");
+    // Over, and with no timestamps to show for it: said, not guessed.
+    const odd = progressSteps(progress({ status: "cancelled", waited_ms: null, ran_ms: null }));
+    expect(odd[2]?.text).toBe("not recorded");
+  });
+
+  it("gives every missing output its own reason", () => {
+    expect(["queued", "running", "failed", "cancelled", "succeeded"].map(
+      (s) => whyNoOutput(s as RunDetail["progress"]["status"]),
+    )).toEqual([
+      "this run has not finished yet",
+      "this run has not finished yet",
+      "this run failed, so it wrote no version",
+      "this run was cancelled before it wrote anything",
+      "the version this run wrote has since been removed",
+    ]);
+  });
+
+  it("says why an old run has no specification", () => {
+    expect(NO_SPECIFICATION)
+      .toBe("This run is older than model versions, so the code it ran was not recorded.");
   });
 });

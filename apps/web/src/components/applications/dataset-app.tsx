@@ -23,6 +23,7 @@ import { Dialog, Field } from "@/components/dialog";
 import { branchName, whyNotBranchable } from "@/lib/branch-from-version";
 import { rollbackSummary, whyNotRollbackable } from "@/lib/dataset-rollback";
 import { madeByText, originHref } from "@/lib/dataset-origin";
+import { bytesText } from "@/lib/bytes";
 import {
   DEFAULT_OPTIONS,
   ENCODINGS,
@@ -482,18 +483,6 @@ function SchemaTab({
   );
 }
 
-function bytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = n / 1024;
-  let i = 0;
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024;
-    i += 1;
-  }
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
-}
-
 /** p.4's **Create branch**, taken from the transaction the reader pressed.
  *
  *  The version is not a field: it is the row. Asking again is what the
@@ -770,7 +759,7 @@ function HistoryTab({
                       // row says it is, so this version cannot be read.
                       <span className="ds-gone">not stored</span>
                     ) : (
-                      bytes(v.size_bytes)
+                      bytesText(v.size_bytes)
                     )}
                   </td>
                   <td>{new Date(v.created_at).toLocaleString()}</td>
@@ -856,7 +845,7 @@ function HistoryTab({
         <p className="ds-retention">
           Keeping {retention.data.versions} version
           {retention.data.versions === 1 ? "" : "s"} of this dataset costs{" "}
-          <strong>{bytes(retention.data.total_bytes)}</strong>. Nothing is deleted
+          <strong>{bytesText(retention.data.total_bytes)}</strong>. Nothing is deleted
           automatically — old versions are what makes the rows above readable.
           {retention.data.unmeasured > 0 &&
             ` ${retention.data.unmeasured} version${

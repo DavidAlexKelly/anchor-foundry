@@ -34,6 +34,7 @@ from ..services import datasets as ds_service
 from ..services import graph_access
 from ..services import models as model_service
 from ..services import pipeline as pipeline_service
+from ..services import run_detail as run_detail_service
 from ..services import saved_graphs
 from ..services import transform_adoption as adoption_service
 from ..services.dataset_engine import DatasetEngineError
@@ -546,6 +547,66 @@ async def run_log(
         return await model_service.run_log(
             conn, _dataset_storage(), model_id=model_id, run_id=run_id
         )
+
+
+class RunProgressOut(BaseModel):
+    status: str
+    queued_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    #: Queued to started, and started to finished; null until both ends exist.
+    waited_ms: int | None
+    ran_ms: int | None
+
+
+class RunInputOut(BaseModel):
+    alias: str
+    dataset_id: UUID
+    #: Null for an input deleted since.
+    dataset_name: str | None
+
+
+class RunSpecificationOut(BaseModel):
+    version_number: int
+    language: str
+    code: str
+    inputs: list[RunInputOut]
+
+
+class RunFileOut(BaseModel):
+    name: str
+    #: Null for a file gone from storage.
+    size_bytes: int | None
+
+
+class RunOutputOut(BaseModel):
+    version_number: int
+    row_count: int
+    schema_: list[dict[str, Any]] = Field(alias="schema", serialization_alias="schema")
+    files: list[RunFileOut]
+
+
+class RunDetailOut(BaseModel):
+    progress: RunProgressOut
+    #: Null for a run from before db 0024, which recorded no version.
+    specification: RunSpecificationOut | None
+    #: Null for a run that wrote nothing.
+    output: RunOutputOut | None
+
+
+@router.get("/{model_id}/runs/{run_id}/detail", response_model=RunDetailOut,
+            response_model_by_alias=True)
+async def run_detail(
+    model_id: UUID,
+    run_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> RunDetailOut:
+    """p.3's job view, all but the log (§507; `dataset-preview` p.3)."""
+    async with user_connection(access.auth.user_id) as conn:
+        await model_service.get(conn, access.project_id, model_id)
+        found = await run_detail_service.detail(
+            conn, _dataset_storage(), model_id=model_id, run_id=run_id)
+    return RunDetailOut(**found)
 
 
 # ---- saved graphs (§360; `data-lineage` p.12) --------------------------------
