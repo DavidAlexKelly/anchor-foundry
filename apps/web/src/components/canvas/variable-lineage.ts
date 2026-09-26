@@ -71,6 +71,8 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   outputVariable: "write",
   // p.568: the drop zone writes what was dropped on it.
   dropVariable: "write",
+  // p.444: a Date Input range writes its end beside its start (§513).
+  endVariable: "write",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",
