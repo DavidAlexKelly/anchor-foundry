@@ -44,6 +44,7 @@ from .routes import projects as project_routes
 from .routes import repositories as repository_routes
 from .routes import resources as resource_routes
 from .routes import tags as tag_routes
+from .routes import listeners as listener_routes
 from .routes import workspaces as workspace_routes
 
 
@@ -186,6 +187,8 @@ def create_app() -> FastAPI:
     app.include_router(resource_routes.favourites_router, prefix=prefix)
     app.include_router(tag_routes.router, prefix=prefix)
     app.include_router(tag_routes.resource_router, prefix=prefix)
+    app.include_router(listener_routes.router, prefix=prefix)
+    app.include_router(listener_routes.ingress_router, prefix=prefix)
     app.include_router(repository_routes.router, prefix=prefix)
     app.include_router(connection_routes.router, prefix=prefix)
     app.include_router(dataset_routes.router, prefix=prefix)

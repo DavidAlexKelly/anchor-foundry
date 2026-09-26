@@ -676,6 +676,27 @@ export const resourceTags = {
     }),
 };
 
+/** HTTPS listeners (§516; `data-connection` p.249-266), project-scoped. */
+export const listeners = {
+  list: (wid: string, pid: string) =>
+    request<import("./listeners").Listener[]>(`/workspaces/${wid}/projects/${pid}/listeners`),
+  create: (wid: string, pid: string, body: Record<string, unknown>) =>
+    request<import("./listeners").Listener>(`/workspaces/${wid}/projects/${pid}/listeners`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  start: (wid: string, pid: string, id: string) =>
+    request<import("./listeners").Listener>(
+      `/workspaces/${wid}/projects/${pid}/listeners/${id}/start`, { method: "POST" }),
+  stop: (wid: string, pid: string, id: string) =>
+    request<import("./listeners").Listener>(
+      `/workspaces/${wid}/projects/${pid}/listeners/${id}/stop`, { method: "POST" }),
+  remove: (wid: string, pid: string, id: string) =>
+    request<void>(`/workspaces/${wid}/projects/${pid}/listeners/${id}`, { method: "DELETE" }),
+  events: (wid: string, pid: string, id: string) =>
+    request<import("./listeners").ListenerEvent[]>(
+      `/workspaces/${wid}/projects/${pid}/listeners/${id}/events`),
+};
+
 export const datasets = {
   list: (wid: string, pid: string) =>
     request<import("./types").Dataset[]>(`/workspaces/${wid}/projects/${pid}/datasets`),
