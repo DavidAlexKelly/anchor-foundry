@@ -104,6 +104,7 @@ def test_a_reader_sees_listeners_and_events_with_nothing_to_press(page, viewer_p
     expect(listener.get_by_test_id("listener-toggle")).to_have_count(0)
     expect(listener.get_by_test_id("listener-delete")).to_have_count(0)
     expect(listener.get_by_test_id("listener-archive-now")).to_have_count(0)
+    expect(listener.get_by_test_id("listener-ingress-edit")).to_have_count(0)
     listener.get_by_test_id("listener-events-toggle").click()
     expect(listener.get_by_test_id("listener-event-body")).to_have_text('{"seen": true}')
 
@@ -204,3 +205,54 @@ def test_archiving_now_makes_the_backing_dataset(page, api) -> None:
     page.goto(page.url.split("?")[0] + "?tab=details")
     expect(page.get_by_test_id("ds-made-by")).to_have_text(f"Listener {name}", timeout=30000)
     expect(page.get_by_test_id("ds-size")).to_contain_text("6 columns")
+
+
+def test_an_allowlist_narrows_who_may_send(page, api) -> None:
+    """§520, p.254: "Configuring a small IP range … to allow requests to a
+    listener with only basic authorization or header secret verification
+    available." This test posts from this machine, so a range without it
+    refuses the post and one with it takes it."""
+    mod = Module(api, "Listeners ingress")
+    name = f"Narrow {mod.tag}"
+    made = mod.api.call("POST", f"{mod.base}/listeners", {"display_name": name})
+    mod.api.call("POST", f"{mod.base}/listeners/{made['id']}/start")
+    [endpoint] = made["endpoints"]
+    url = endpoint["url"]
+
+    open_connections(page, mod)
+    listener = card(page, name)
+    expect(listener.get_by_test_id("listener-ingress")).to_contain_text("inherited ingress", timeout=15000)
+    listener.get_by_test_id("listener-ingress-edit").click()
+    ranges = listener.get_by_test_id("listener-ingress-ranges")
+    ranges.fill("203.0.113.0/24\nnot-a-range")
+    listener.get_by_test_id("listener-ingress-save").click()
+    expect(listener.get_by_test_id("listener-ingress-error")).to_contain_text("'not-a-range' is not an IP")
+    # Nothing was saved, and the refusal does not outlive the edit it was about.
+    listener.get_by_test_id("listener-ingress-cancel").click()
+    expect(listener.get_by_test_id("listener-ingress")).to_contain_text("inherited ingress")
+    listener.get_by_test_id("listener-ingress-edit").click()
+    expect(ranges).to_have_value("")
+    expect(listener.get_by_test_id("listener-ingress-error")).to_have_count(0)
+    ranges.fill("203.0.113.9/24")
+    listener.get_by_test_id("listener-ingress-save").click()
+    expect(listener.get_by_test_id("listener-ingress")).to_have_text(
+        "Only 203.0.113.0/24 may send.Edit allowlist")
+    expect(listener.get_by_test_id("listener-ingress-form")).to_have_count(0)
+    assert post(url, b'{"n": 1}') == 403
+
+    # This machine's own addresses, both ways it may be reached.
+    listener.get_by_test_id("listener-ingress-edit").click()
+    expect(ranges).to_have_value("203.0.113.0/24")
+    ranges.fill("203.0.113.0/24\n127.0.0.0/8\n::1")
+    listener.get_by_test_id("listener-ingress-save").click()
+    expect(listener.get_by_test_id("listener-ingress")).to_contain_text(
+        "Only these 3 ranges may send: 203.0.113.0/24, 127.0.0.0/8, ::1/128.")
+    assert post(url, b'{"n": 2}') == 200
+    listener.get_by_test_id("listener-events-toggle").click()
+    expect(listener.get_by_test_id("listener-event-body")).to_have_text('{"n": 2}', timeout=15000)
+
+    # Emptying it is inherited ingress again.
+    listener.get_by_test_id("listener-ingress-edit").click()
+    ranges.fill("")
+    listener.get_by_test_id("listener-ingress-save").click()
+    expect(listener.get_by_test_id("listener-ingress")).to_contain_text("inherited ingress")

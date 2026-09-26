@@ -601,3 +601,115 @@ def test_the_browser_offers_exactly_these_types() -> None:
                               for k, v in re.findall(r"(\w+): (null|\"[^\"]*\")", schemes)})
     expected = {name: (t["label"], t["schemes"]) for name, t in listener_service.LISTENER_TYPES.items()}
     assert seen == expected
+
+
+# ---- §520: the ingress allowlist (p.254-255) -----------------------------------
+def ingress(client, fx, listener: dict, allowlist: list[str], sub=None):
+    return client.put(f"{base(fx)}/{listener['id']}/ingress", headers=hdr(sub or fx.editor_sub),
+                      json={"allowlist": allowlist})
+
+
+def test_an_allowlist_is_kept_normalised_and_without_repeats(client, fx) -> None:
+    listener = make(client, fx)
+    assert listener["ingress_allowlist"] == []
+    r = ingress(client, fx, listener, [" 10.1.2.3/8", "192.0.2.7", "10.0.0.0/8", "2001:db8::1/32"])
+    assert r.status_code == 200, r.text
+    assert r.json()["ingress_allowlist"] == ["10.0.0.0/8", "192.0.2.7/32", "2001:db8::/32"]
+    got = client.get(f"{base(fx)}/{listener['id']}", headers=hdr(fx.viewer_sub)).json()
+    assert got["ingress_allowlist"] == ["10.0.0.0/8", "192.0.2.7/32", "2001:db8::/32"]
+    # Emptying it is inherited ingress again.
+    assert ingress(client, fx, listener, []).json()["ingress_allowlist"] == []
+
+
+def test_an_allowlist_refuses_what_is_not_a_range_and_more_than_fifty(client, fx) -> None:
+    listener = make(client, fx)
+    r = ingress(client, fx, listener, ["10.0.0.0/8", "example.com"])
+    assert (r.status_code, r.json()["detail"]) == (422, "'example.com' is not an IP address or range")
+    r = ingress(client, fx, listener, [f"10.0.{n}.0/24" for n in range(51)])
+    assert (r.status_code, r.json()["detail"]) == (422, "an allowlist holds at most 50 ranges")
+    # Fifty is allowed, and so are fifty-one entries that are fifty ranges.
+    fifty = [f"10.0.{n}.0/24" for n in range(50)]
+    assert ingress(client, fx, listener, fifty + ["10.0.0.9/24"]).status_code == 200
+    # Nothing refused was kept.
+    got = client.get(f"{base(fx)}/{listener['id']}", headers=hdr(fx.viewer_sub)).json()
+    assert got["ingress_allowlist"] == fifty
+
+
+def test_an_allowlist_is_an_editor_s_and_its_project_s(client, fx) -> None:
+    listener = make(client, fx)
+    assert ingress(client, fx, listener, ["10.0.0.0/8"], sub=fx.viewer_sub).status_code == 403
+    other = client.post(f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.editor_sub),
+                        json={"name": f"Elsewhere {uuid.uuid4().hex[:6]}"}).json()
+    r = client.put(f"/api/workspaces/{fx.workspace}/projects/{other['id']}/listeners/{listener['id']}"
+                   "/ingress", headers=hdr(fx.editor_sub), json={"allowlist": ["10.0.0.0/8"]})
+    assert r.status_code == 404
+    got = client.get(f"{base(fx)}/{listener['id']}", headers=hdr(fx.viewer_sub)).json()
+    assert got["ingress_allowlist"] == []
+
+
+def test_a_sender_outside_the_allowlist_is_refused_before_anything_else(client, fx, monkeypatch) -> None:
+    monkeypatch.setenv("LISTENER_PROXY_HOPS", "1")
+    listener = started(client, fx)
+    ingress(client, fx, listener, ["203.0.113.0/24"])
+    inside = {"X-Forwarded-For": "198.51.100.9, 203.0.113.5"}
+    outside = {"X-Forwarded-For": "203.0.113.5, 198.51.100.9"}
+    assert client.post(path_of(listener), content=b"in", headers=inside).status_code == 200
+    r = client.post(path_of(listener), content=b"out", headers=outside)
+    assert (r.status_code, r.json()["detail"]) == (403, "this address may not send to this listener")
+    # No header at all is an address nobody vouched for.
+    assert client.post(path_of(listener), content=b"none").status_code == 403
+    assert [e["preview"] for e in events(client, fx, listener)] == ["in"]
+    # Refused before a stopped listener says it is stopped.
+    client.post(f"{base(fx)}/{listener['id']}/stop", headers=hdr(fx.editor_sub))
+    assert client.post(path_of(listener), content=b"out", headers=outside).status_code == 403
+    assert client.post(path_of(listener), content=b"in", headers=inside).status_code == 503
+    # With no proxies configured the peer itself is the sender, and the test
+    # client's peer is not an address.
+    monkeypatch.setenv("LISTENER_PROXY_HOPS", "0")
+    client.post(f"{base(fx)}/{listener['id']}/start", headers=hdr(fx.editor_sub))
+    assert client.post(path_of(listener), content=b"in", headers=inside).status_code == 403
+
+
+def test_an_empty_allowlist_takes_any_sender(client, fx, monkeypatch) -> None:
+    monkeypatch.setenv("LISTENER_PROXY_HOPS", "1")
+    listener = started(client, fx)
+    assert client.post(path_of(listener), content=b"a",
+                       headers={"X-Forwarded-For": "198.51.100.9"}).status_code == 200
+    assert client.post(path_of(listener), content=b"b").status_code == 200
+
+
+def test_which_addresses_an_allowlist_takes() -> None:
+    allowed = listener_service.address_allowed
+    assert allowed(None, []) and allowed("not an address", [])
+    assert allowed("10.9.8.7", ["10.0.0.0/8"]) and not allowed("11.0.0.1", ["10.0.0.0/8"])
+    assert allowed("11.0.0.1", ["10.0.0.0/8", "11.0.0.0/30"])
+    assert not allowed(None, ["10.0.0.0/8"]) and not allowed("testclient", ["10.0.0.0/8"])
+    # An IPv4 address written as IPv6 is the IPv4 address.
+    assert allowed("::ffff:10.0.0.1", ["10.0.0.0/8"])
+    assert not allowed("::ffff:11.0.0.1", ["10.0.0.0/8"])
+    assert allowed("2001:db8::5", ["2001:db8::/32"]) and not allowed("2001:db9::5", ["2001:db8::/32"])
+
+
+def test_the_sender_is_the_entry_the_nearest_trusted_proxy_wrote() -> None:
+    sender = listener_service.sender_address
+    assert sender("10.0.0.1", "1.1.1.1", 0) == "10.0.0.1"
+    assert sender("10.0.0.1", "1.1.1.1", -1) == "10.0.0.1"
+    assert sender("10.0.0.1", "9.9.9.9, 1.1.1.1", 1) == "1.1.1.1"
+    assert sender("10.0.0.1", "9.9.9.9 ,1.1.1.1 , 2.2.2.2", 2) == "1.1.1.1"
+    assert sender("10.0.0.1", "1.1.1.1", 1) == "1.1.1.1"
+    assert sender("10.0.0.1", "9.9.9.9, 1.1.1.1", 2) == "9.9.9.9"
+    assert sender("10.0.0.1", "1.1.1.1", 2) is None
+    assert sender("10.0.0.1", None, 1) is None
+    assert sender("10.0.0.1", " , ", 1) is None
+
+
+def test_the_proxy_count_is_read_from_the_environment(monkeypatch) -> None:
+    from src.routes import listeners as listener_routes
+    monkeypatch.delenv("LISTENER_PROXY_HOPS", raising=False)
+    assert listener_routes._proxy_hops() == 0
+    monkeypatch.setenv("LISTENER_PROXY_HOPS", "2")
+    assert listener_routes._proxy_hops() == 2
+    # A value that is not a count is no proxies, not a failed request.
+    for raw in ("", "one", "-1", "1.5"):
+        monkeypatch.setenv("LISTENER_PROXY_HOPS", raw)
+        assert listener_routes._proxy_hops() == 0, raw
