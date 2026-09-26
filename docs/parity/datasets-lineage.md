@@ -30,7 +30,7 @@ Foundry's layout is header, information panel, tab views, preview table (`datase
 |---|---|---|
 | **About** | created / updated time and user | ✅ |
 | | table size | ◑ |
-| | tools and input datasets used to create the data | ◑ via Lineage |
+| | tools and input datasets used to create the data | ✅ §506 — (p.3) the Details tab's **Made by** and **Made from**, from the `produced_by_kind` and `produced_by_id` every version already records (`services/dataset_provenance.py`). The tool is the transform, sync or action that wrote the current version, and it links to the transform or connection. The inputs are the datasets **the run that wrote this version** read, from its model version, not the transform's inputs today. When no recorded run wrote it, today's inputs stand in and the row says so. A fork names the dataset it branched from; a rollback, upload or re-parse says what it was. |
 | | tags | ○ |
 | | **Edit schema** — infer a schema for CSV and JSON | ◑ §362 — see §1.4 |
 | | parsing options: drop jagged rows, change encoding, add file path / byte offset / import timestamp / row number columns | ◑ §362 — all but the byte offset; see §1.4 |

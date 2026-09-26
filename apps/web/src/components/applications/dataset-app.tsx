@@ -22,6 +22,7 @@ import { ApiError, datasets as datasetApi, models as modelApi } from "@/lib/api"
 import { Dialog, Field } from "@/components/dialog";
 import { branchName, whyNotBranchable } from "@/lib/branch-from-version";
 import { rollbackSummary, whyNotRollbackable } from "@/lib/dataset-rollback";
+import { madeByText, originHref } from "@/lib/dataset-origin";
 import {
   DEFAULT_OPTIONS,
   ENCODINGS,
@@ -1056,6 +1057,13 @@ function DetailsTab({ wid, pid, did }: { wid: string; pid: string; did: string }
     queryKey: ["ds-health", did],
     queryFn: () => datasetApi.health(wid, pid, did),
   });
+  // p.3's "any tools and input datasets used to create the data" (§506).
+  // Keyed on the version, so a new build asks again.
+  const origin = useQuery({
+    queryKey: ["ds-origin", did, detail.data?.current_version],
+    queryFn: () => datasetApi.origin(wid, pid, did),
+    enabled: detail.isSuccess,
+  });
   if (detail.isPending) return <p className="state">Loading…</p>;
   if (detail.isError) return <p className="state error">{(detail.error as Error).message}</p>;
 
@@ -1069,6 +1077,34 @@ function DetailsTab({ wid, pid, did }: { wid: string; pid: string; did: string }
           <dt>Origin</dt>
           <dd>{d.origin}</dd>
         </div>
+        {origin.data && (
+          <div>
+            <dt>Made by</dt>
+            <dd data-testid="ds-made-by">
+              {origin.data.tool?.resource_id ? (
+                <Link href={originHref(origin.data.tool.resource_id)}>
+                  {madeByText(origin.data)}
+                </Link>
+              ) : (
+                madeByText(origin.data)
+              )}
+              {origin.data.note && <span className="soft"> — {origin.data.note}</span>}
+            </dd>
+          </div>
+        )}
+        {origin.data && origin.data.inputs.length > 0 && (
+          <div>
+            <dt>Made from</dt>
+            <dd data-testid="ds-made-from">
+              {origin.data.inputs.map((input, i) => (
+                <span key={input.resource_id}>
+                  {i > 0 && ", "}
+                  <Link href={originHref(input.resource_id)}>{input.name}</Link>
+                </span>
+              ))}
+            </dd>
+          </div>
+        )}
         <div>
           <dt>Rows</dt>
           <dd>{d.row_count.toLocaleString()}</dd>
