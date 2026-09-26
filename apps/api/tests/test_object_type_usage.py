@@ -503,6 +503,65 @@ def test_applying_an_action_counts_a_write(
     assert said["interactions"] == said["reads"] + said["writes"]
 
 
+def test_a_counter_the_database_refuses_does_not_undo_the_action(
+    client: TestClient, fx: Fixture, with_objects: str, monkeypatch
+) -> None:
+    """**A swallowed exception is not a swallowed database error.** A statement
+    that fails aborts its transaction, and PostgreSQL then refuses everything
+    after it and rolls the lot back at commit - so a counter row the database
+    refused (CI's logs had hundreds, from RLS) would silently take the
+    action's edit with it while the action reported success. The counter runs
+    in a savepoint, so only the counter is lost."""
+    from sqlalchemy import text as sql_text
+
+    from src.services import object_type_usage as service
+
+    monkeypatch.setattr(service, "_UPSERT_WITH_USER", sql_text("SELECT 1 / 0"))
+    r = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": with_objects, "api_name": f"w_{uuid.uuid4().hex[:8]}",
+              "display_name": "Set name", "editable_properties": ["name"]},
+    )
+    assert r.status_code == 201, r.text
+    action_id = r.json()["id"]
+    r = client.get(
+        f"{wbase(fx)}/object-types/{with_objects}/instances"
+        f"?application={usage.ONTOLOGY_MANAGER}",
+        headers=hdr(fx.viewer_sub),
+    )
+    instance_id = r.json()["items"][0]["id"]
+    fresh = f"kept-{uuid.uuid4().hex[:6]}"
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/actions/{action_id}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"name": fresh}},
+    )
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+    r = client.get(
+        f"{wbase(fx)}/object-types/{with_objects}/instances/{instance_id}"
+        f"?application={usage.ONTOLOGY_MANAGER}",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["properties"]["name"] == fresh
+
+
+def test_a_read_survives_a_counter_the_database_refuses(
+    client: TestClient, fx: Fixture, with_objects: str, monkeypatch
+) -> None:
+    from sqlalchemy import text as sql_text
+
+    from src.services import object_type_usage as service
+
+    monkeypatch.setattr(service, "_UPSERT_WITH_USER", sql_text("SELECT 1 / 0"))
+    r = client.get(
+        f"{wbase(fx)}/object-types/{with_objects}/instances?application=explorer",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()["items"]) == 2
+
+
 def test_an_action_that_did_not_succeed_is_not_a_write(
     client: TestClient, fx: Fixture, with_objects: str, monkeypatch
 ) -> None:
