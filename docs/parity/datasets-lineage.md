@@ -35,7 +35,7 @@ Foundry's layout is header, information panel, tab views, preview table (`datase
 | | **Edit schema** — infer a schema for CSV and JSON | ◑ §362 — see §1.4 |
 | | parsing options: drop jagged rows, change encoding, add file path / byte offset / import timestamp / row number columns | ◑ §362 — all but the byte offset; see §1.4 |
 | **Columns** | type, description, **data stats — null percentage, distributions, samples** | ✅ §8 profiling |
-| **Schedules** | configured build schedules | ◑ |
+| **Schedules** | configured build schedules | ✅ §508 — (p.3) "Information about any configured build schedules that will run to update the dataset." The Details tab's **Schedules** lists what will write the dataset on its own (`services/dataset_schedules.py`). That is the transform whose output it is, when its trigger is `cron` or `upstream`, and the sync that feeds it, when it has a schedule. A cron says its expression and next run, or "due now" when it has not fired yet, which is the worker's reading of a NULL `next_run_at` (db 0014). An upstream trigger says which inputs it waits on. A manual transform, an unscheduled sync and an export are left out, because none of them will run to update it. A dataset with none says what does change it. |
 
 ### 1.3 Tabs
 

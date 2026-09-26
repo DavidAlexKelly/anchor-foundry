@@ -666,6 +666,11 @@ export const datasets = {
     request<import("./types").DatasetReferences>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/references`,
     ),
+  /** What will run to update this dataset (§508; p.3). */
+  schedules: (wid: string, pid: string, did: string) =>
+    request<import("./dataset-schedules").DatasetSchedule[]>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/schedules`,
+    ),
   /** What made the current version, and from what (§506; p.3). */
   origin: (wid: string, pid: string, did: string) =>
     request<import("./dataset-origin").DatasetOrigin>(

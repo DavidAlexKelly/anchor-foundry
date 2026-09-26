@@ -30,6 +30,7 @@ from ..services import expectations
 from ..services import dataset_engine as engine
 from ..services import dataset_references as reference_service
 from ..services import dataset_provenance as provenance
+from ..services import dataset_schedules as schedule_service
 from ..services import datasets as ds_service
 from ..services.dataset_engine import DatasetEngineError
 from ..services.storage import LocalStorageGateway, StorageGateway
@@ -380,6 +381,33 @@ async def dataset_origin(
         await ds_service.get(conn, access.project_id, dataset_id)
         found = await provenance.current_origin(conn, dataset_id)
     return OriginOut(**found)
+
+
+class DatasetScheduleOut(BaseModel):
+    kind: str
+    name: str
+    resource_id: UUID
+    #: `cron`, or `upstream` for a transform that runs when an input updates.
+    trigger: str
+    cron: str | None
+    #: As stored. Null with a cron set means never fired yet: due now.
+    next_run_at: datetime | None
+    #: The inputs an upstream trigger waits on, by name.
+    watches: list[str]
+    #: A sync's mode (full or incremental); null for a transform.
+    mode: str | None
+
+
+@router.get("/{dataset_id}/schedules", response_model=list[DatasetScheduleOut])
+async def dataset_schedules(
+    dataset_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[DatasetScheduleOut]:
+    """What will run to update this dataset (§508; `dataset-preview` p.3)."""
+    async with user_connection(access.auth.user_id) as conn:
+        await ds_service.get(conn, access.project_id, dataset_id)
+        found = await schedule_service.for_dataset(conn, dataset_id)
+    return [DatasetScheduleOut(**s) for s in found]
 
 
 @router.get("/{dataset_id}/references", response_model=ReferencesOut)
