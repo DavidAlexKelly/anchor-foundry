@@ -713,3 +713,89 @@ def test_the_proxy_count_is_read_from_the_environment(monkeypatch) -> None:
     for raw in ("", "one", "-1", "1.5"):
         monkeypatch.setenv("LISTENER_PROXY_HOPS", raw)
         assert listener_routes._proxy_hops() == 0, raw
+
+
+# ---- §521: the rate limit (p.261) ----------------------------------------------
+class Clock:
+    """The second `admit` counts in, held still so a test's requests all
+    land in it."""
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def time(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def clock(monkeypatch) -> Clock:
+    held = Clock(2_000_000_000.25)
+    monkeypatch.setattr(listener_service, "time", held)
+    monkeypatch.setattr(listener_service, "RATE_PER_SECOND", 3)
+    return held
+
+
+def test_a_listener_takes_so_many_requests_a_second(client, fx, clock) -> None:
+    listener = started(client, fx)
+    for n in range(3):
+        assert client.post(path_of(listener), content=f"{n}".encode()).status_code == 200
+    r = client.post(path_of(listener), content=b"3")
+    assert (r.status_code, r.json()["detail"], r.headers["retry-after"]) == (
+        429, "this listener takes at most 3 requests a second", "1")
+    assert client.post(path_of(listener), content=b"4").status_code == 429
+    # The refused are not events; the screen says how many there were and when.
+    assert [e["preview"] for e in events(client, fx, listener)] == ["2", "1", "0"]
+    got = client.get(f"{base(fx)}/{listener['id']}", headers=hdr(fx.viewer_sub)).json()
+    assert got["throttled"] == 2 and got["throttled_at"]
+    first_refused = got["throttled_at"]
+    # The next second starts the count again, and a refusal is not repeated.
+    clock.now += 0.8
+    assert client.post(path_of(listener), content=b"5").status_code == 200
+    got = client.get(f"{base(fx)}/{listener['id']}", headers=hdr(fx.viewer_sub)).json()
+    assert (got["throttled"], got["throttled_at"], got["events"]) == (2, first_refused, 4)
+    # That second has its own limit, and a refusal in it is counted and dated.
+    assert [client.post(path_of(listener), content=b"6").status_code for _ in range(3)] == [200, 200, 429]
+    got = client.get(f"{base(fx)}/{listener['id']}", headers=hdr(fx.viewer_sub)).json()
+    assert got["throttled"] == 3 and got["throttled_at"] > first_refused
+
+
+def test_each_listener_has_its_own_limit(client, fx, clock) -> None:
+    first, second = started(client, fx), started(client, fx)
+    for _ in range(3):
+        client.post(path_of(first), content=b"x")
+    assert client.post(path_of(first), content=b"x").status_code == 429
+    assert client.post(path_of(second), content=b"x").status_code == 200
+    fresh = client.get(f"{base(fx)}/{second['id']}", headers=hdr(fx.viewer_sub)).json()
+    assert (fresh["throttled"], fresh["throttled_at"]) == (0, None)
+
+
+def test_a_request_that_fails_later_still_counts(client, fx, clock) -> None:
+    listener = started(client, fx, verification="header_secret", verification_header="X-Token",
+                       secret="t0ken")
+    assert client.post(path_of(listener), content=b"a").status_code == 401
+    assert client.post(path_of(listener), content=b"b" * (listener_service.MAX_BODY + 1),
+                       headers={"X-Token": "t0ken"}).status_code == 413
+    assert client.post(path_of(listener), content=b"c", headers={"X-Token": "t0ken"}).status_code == 200
+    assert client.post(path_of(listener), content=b"d", headers={"X-Token": "t0ken"}).status_code == 429
+
+
+def test_what_is_refused_before_the_count_does_not_count(client, fx, clock, monkeypatch) -> None:
+    monkeypatch.setenv("LISTENER_PROXY_HOPS", "1")
+    listener = started(client, fx)
+    ingress(client, fx, listener, ["203.0.113.0/24"])
+    inside = {"X-Forwarded-For": "203.0.113.5"}
+    for _ in range(5):
+        assert client.post(path_of(listener), content=b"x",
+                           headers={"X-Forwarded-For": "198.51.100.9"}).status_code == 403
+    client.post(f"{base(fx)}/{listener['id']}/stop", headers=hdr(fx.editor_sub))
+    for _ in range(5):
+        assert client.post(path_of(listener), content=b"x", headers=inside).status_code == 503
+    client.post(f"{base(fx)}/{listener['id']}/start", headers=hdr(fx.editor_sub))
+    assert [client.post(path_of(listener), content=b"x", headers=inside).status_code
+            for _ in range(4)] == [200, 200, 200, 429]
+
+
+def test_the_browser_says_the_server_s_limits() -> None:
+    source = open(os.path.join(os.path.dirname(__file__), "..", "..", "web", "src", "lib",
+                               "listeners.ts")).read()
+    assert f"export const RATE_PER_SECOND = {listener_service.RATE_PER_SECOND};" in source
+    assert f"export const MAX_BODY = {listener_service.MAX_BODY:_};" in source

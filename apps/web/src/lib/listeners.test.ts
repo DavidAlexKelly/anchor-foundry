@@ -7,6 +7,7 @@ import {
   withType,
   verificationText,
   allowlistDraft, ingressText, parseAllowlist,
+  MAX_BODY, RATE_PER_SECOND, limitsText, throttledText,
 } from "./listeners";
 
 const draft = (extra: Partial<typeof BLANK_LISTENER>) => ({ ...BLANK_LISTENER, display_name: "Hook", ...extra });
@@ -173,5 +174,25 @@ describe("ingress (§520)", () => {
     expect(ingressText(["10.0.0.0/8"])).toBe("Only 10.0.0.0/8 may send.");
     expect(ingressText(["10.0.0.0/8", "192.0.2.7/32"]))
       .toBe("Only these 2 ranges may send: 10.0.0.0/8, 192.0.2.7/32.");
+  });
+});
+
+describe("limits (§521)", () => {
+  it("says p.261's rate and p.262's size", () => {
+    expect(RATE_PER_SECOND).toBe(100);
+    expect(MAX_BODY).toBe(1024 * 1024);
+    expect(limitsText()).toBe(
+      "Each listener takes up to 100 requests a second, each at most 1 MB. For more than that, use a streaming sync.");
+  });
+
+  it("says how many requests were refused for rate, and when", () => {
+    const when = (iso: string) => `at ${iso}`;
+    expect(throttledText({ throttled: 0, throttled_at: null }, when)).toBe("");
+    expect(throttledText({ throttled: 1, throttled_at: "T" }, when))
+      .toBe("1 request was refused over the limit of 100 a second, most recently at T.");
+    expect(throttledText({ throttled: 12, throttled_at: "T" }, when))
+      .toBe("12 requests were refused over the limit of 100 a second, most recently at T.");
+    // A count with no time is not something the server says; nothing is shown.
+    expect(throttledText({ throttled: 2, throttled_at: null }, when)).toBe("");
   });
 });

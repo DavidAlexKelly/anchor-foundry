@@ -23,7 +23,7 @@ import { bytesText } from "@/lib/bytes";
 import {
   BLANK_LISTENER, LISTENER_TYPES, ROTATIONS, VERIFICATIONS, archivedText, notArchivedText, waitingText, curlExample, draftBody, draftProblem,
   endpointState, extendedExpiry, needsHeader, rotateBody, schemesOf, statusText, verificationText,
-  whyNoRotation, withType, allowlistDraft, ingressText, parseAllowlist,
+  whyNoRotation, withType, allowlistDraft, ingressText, parseAllowlist, limitsText, throttledText,
   type Listener, type ListenerDraft, type ListenerType, type Verification,
 } from "@/lib/listeners";
 
@@ -61,6 +61,7 @@ export function ListenersPanel({ workspaceId, projectId }: { workspaceId: string
             Addresses other systems send events to, for systems that cannot call this platform
             themselves.
           </p>
+          <p className="soft" style={{ margin: 0 }} data-testid="listener-limits">{limitsText()}</p>
         </div>
         {editor && !adding && (
           <button type="button" className="btn" data-testid="listener-new" onClick={() => setAdding(true)}>
@@ -217,6 +218,13 @@ function ListenerCard({
           <p className="soft" style={{ margin: 0 }} data-testid="listener-verification-text">
             Verification: {verificationText(listener)}
           </p>
+          {/* p.261's rate limit (§521): the remedy is to ask for more, which
+              starts with knowing it has been reached. */}
+          {throttledText(listener, (iso) => new Date(iso).toLocaleString()) && (
+            <p className="form-error" style={{ margin: "4px 0 0" }} data-testid="listener-throttled">
+              {throttledText(listener, (iso) => new Date(iso).toLocaleString())}
+            </p>
+          )}
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           {editor && (

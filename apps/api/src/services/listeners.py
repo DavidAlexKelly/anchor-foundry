@@ -35,6 +35,11 @@ from .secrets import SecretsGateway
 #: … Foundry rejects events that exceed this limit."
 MAX_BODY = 1_048_576
 
+#: p.261: "HTTPS listeners are rate-limited at approximately 100 requests per
+#: second". Per listener, counted in the database (db 0110) so it holds
+#: across API tasks.
+RATE_PER_SECOND = 100
+
 #: The generic schemes (p.265's "security protocols laid out by those external
 #: systems"). `none` is p.262's "custom, basic authentication listener" with
 #: nothing to check, for a sender that signs nothing: the endpoint's random
@@ -286,21 +291,20 @@ async def read_capped(chunks: AsyncIterator[bytes], limit: int) -> bytes:
 
 
 class Refusal(Exception):
-    def __init__(self, status: int, detail: str) -> None:
+    def __init__(self, status: int, detail: str, headers: dict[str, str] | None = None) -> None:
         super().__init__(detail)
         self.status = status
         self.detail = detail
+        self.headers = headers
 
 
-async def accept(conn: AsyncConnection, gateway: SecretsGateway, token: str,
-                 headers: Mapping[str, str], body: bytes, *,
-                 query: Mapping[str, str] | None = None, now: float | None = None,
-                 sender: str | None = None) -> dict[str, Any]:
-    """Take one request, or refuse it with the status that says why.
+async def admit(conn: AsyncConnection, token: str, *, sender: str | None = None) -> dict[str, Any]:
+    """Find the listener a request is for, refuse what costs nothing to
+    refuse, and count the rest against the listener's second (db 0110).
 
-    Returns the event's id, or for Slack's set-up handshake the challenge to
-    echo (p.287: "Slack will verify that the listener is correctly set up").
-    """
+    **Its own transaction**, committed before `accept` judges the request:
+    a request that then fails verification still counts, and one over the
+    limit stays recorded as throttled although it is refused."""
     found = await fetch_one(conn, "SELECT * FROM listener_for_token(:t)", {"t": token})
     # An expired endpoint is as gone as one that never existed (p.259: "When
     # an endpoint expires, it will no longer be able to process events").
@@ -312,6 +316,25 @@ async def accept(conn: AsyncConnection, gateway: SecretsGateway, token: str,
         raise Refusal(403, "this address may not send to this listener")
     if not found["running"]:
         raise Refusal(503, "this listener is stopped")
+    taken = await fetch_one(conn, "SELECT take_listener_request(:lid, :s, :limit) AS taken", {
+        "lid": str(found["listener_id"]), "s": int(time.time()),
+        "limit": RATE_PER_SECOND})
+    assert taken is not None
+    return {**found, "taken": int(taken["taken"])}
+
+
+async def accept(conn: AsyncConnection, gateway: SecretsGateway, found: Mapping[str, Any],
+                 headers: Mapping[str, str], body: bytes, *,
+                 query: Mapping[str, str] | None = None, now: float | None = None) -> dict[str, Any]:
+    """Take one admitted request, or refuse it with the status that says why.
+
+    Returns the event's id, or for Slack's set-up handshake the challenge to
+    echo (p.287: "Slack will verify that the listener is correctly set up").
+    """
+    if found["taken"] > RATE_PER_SECOND:
+        # p.261's limit. The count is per second, so a second is the wait.
+        raise Refusal(429, f"this listener takes at most {RATE_PER_SECOND} requests a second",
+                      headers={"Retry-After": "1"})
     if len(body) > MAX_BODY:
         raise Refusal(413, f"a request is at most {MAX_BODY} bytes")
     secret = (gateway.get_secret(found["secret_arn"])["secret"]
@@ -359,7 +382,11 @@ _COLUMNS = """l.id, l.display_name, l.listener_type, l.verification, l.verificat
                   AS pending_events,
               (SELECT count(*) FROM listener_events e WHERE e.listener_id = l.id)::int AS events,
               (SELECT max(received_at) FROM listener_events e WHERE e.listener_id = l.id)
-                  AS last_event_at"""
+                  AS last_event_at,
+              COALESCE((SELECT r.throttled FROM listener_rates r WHERE r.listener_id = l.id), 0)
+                  AS throttled,
+              (SELECT r.throttled_at FROM listener_rates r WHERE r.listener_id = l.id)
+                  AS throttled_at"""
 
 
 async def _endpoints(conn: AsyncConnection, listener_id: Any) -> list[dict[str, Any]]:
