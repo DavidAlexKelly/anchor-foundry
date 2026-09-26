@@ -12,6 +12,7 @@ from .jobs.code_preview_runs import scheduled_preview_runs
 from .jobs.code_test_runs import scheduled_test_runs
 from .jobs.export_schedules import scheduled_exports
 from .jobs.instance_syncs import scheduled_instance_syncs
+from .jobs.listener_archives import scheduled_listener_archives
 from .jobs.model_runs import scheduled_model_runs
 from .jobs.sync_configs import scheduled_connection_syncs
 from .resources import PlatformDatabase
@@ -43,6 +44,7 @@ defs = Definitions(
         scheduled_exports,
         scheduled_preview_runs,
         scheduled_test_runs,
+        scheduled_listener_archives,
     ],
     schedules=[
         ScheduleDefinition(
@@ -85,6 +87,13 @@ defs = Definitions(
             # minutes would make the feature feel broken rather than slow.
             cron_schedule="* * * * *",
             name="poll_test_runs",
+        ),
+        ScheduleDefinition(
+            job=scheduled_listener_archives,
+            # p.264: "Every few minutes, the listener event stream will
+            # archive into a backing dataset" (§519).
+            cron_schedule="*/5 * * * *",
+            name="archive_listener_events",
         ),
         ScheduleDefinition(
             job=scheduled_preview_runs,

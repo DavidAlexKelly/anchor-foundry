@@ -31,6 +31,12 @@ export type Listener = {
   endpoints: ListenerEndpoint[];
   created_at: string;
   updated_at: string;
+  /** p.264's backing dataset (§519), once the first archive has run. */
+  archive_dataset_name: string | null;
+  archive_dataset_resource_id: string | null;
+  archived_at: string | null;
+  /** Events the next archive run will write. */
+  pending_events: number;
 };
 
 export type ListenerEvent = {
@@ -224,4 +230,24 @@ export function whyNoRotation(endpoints: Pick<ListenerEndpoint, "active">[]): st
   return endpoints.length >= 2
     ? "A listener has at most two endpoints. Delete the one being retired to rotate again."
     : "";
+}
+
+// ---- the archive (§519; p.264) ---------------------------------------------------
+/** p.264: "Every few minutes, the listener event stream will archive into a
+ * backing dataset." How many events the next run will write. */
+export function waitingText(pending: number): string {
+  return pending === 0 ? "nothing waiting" : `${pending} event${pending === 1 ? "" : "s"} waiting`;
+}
+
+/** Before the first run there is no dataset to name, and the line says what
+ * will make one. */
+export function notArchivedText(pending: number): string {
+  return `Not archived yet · ${waitingText(pending)}. The first archive makes the dataset.`;
+}
+
+/** What "Archive now" did, for the line under the button. */
+export function archivedText(done: { archived: number; version: number | null }): string {
+  return done.version === null
+    ? "Nothing new to archive."
+    : `Archived ${done.archived} event${done.archived === 1 ? "" : "s"} as version ${done.version}.`;
 }

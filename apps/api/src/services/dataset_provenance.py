@@ -8,7 +8,8 @@
 "Tools and input datasets" was ◑, answered only by the Lineage tab. Every
 version already records what produced it (`produced_by_kind` and
 `produced_by_id`), and this turns that into names a reader can follow. The
-**tool** is the transform, connection or action that wrote the version, and
+**tool** is the transform, connection, listener or action that wrote the
+version, and
 the **inputs** are the datasets it read.
 
 For a transform, the inputs are the ones **the run that wrote this version**
@@ -76,6 +77,13 @@ async def current_origin(conn: AsyncConnection, dataset_id: UUID) -> dict[str, A
                                 {"id": pid})
         if found is not None:
             tool = {"kind": "sync", "name": found["name"], "resource_id": found["resource_id"]}
+    elif kind == "listener":
+        # §519: a listener's archive (p.264). A listener has no resource of
+        # its own to open, like an action.
+        found = await fetch_one(conn, "SELECT display_name FROM listeners WHERE id = :id",
+                                {"id": pid})
+        if found is not None:
+            tool = {"kind": "listener", "name": found["display_name"], "resource_id": None}
     elif kind in ("action", "action_batch"):
         column = "batch_id" if kind == "action_batch" else "id"
         found = await fetch_one(conn, f"""

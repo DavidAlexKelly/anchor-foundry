@@ -103,6 +103,7 @@ def test_a_reader_sees_listeners_and_events_with_nothing_to_press(page, viewer_p
     expect(viewer_page.get_by_test_id("listener-new")).to_have_count(0)
     expect(listener.get_by_test_id("listener-toggle")).to_have_count(0)
     expect(listener.get_by_test_id("listener-delete")).to_have_count(0)
+    expect(listener.get_by_test_id("listener-archive-now")).to_have_count(0)
     listener.get_by_test_id("listener-events-toggle").click()
     expect(listener.get_by_test_id("listener-event-body")).to_have_text('{"seen": true}')
 
@@ -175,3 +176,31 @@ def test_a_named_sender_asks_only_for_its_secret(page, api) -> None:
     sig = hmac.new(b"gh-secret", body, hashlib.sha256).hexdigest()
     assert post(url, body, {"X-Hub-Signature-256": f"sha256={sig}"}) == 200
     assert post(url, body) == 401
+
+
+
+def test_archiving_now_makes_the_backing_dataset(page, api) -> None:
+    """§519, p.264: "Every few minutes, the listener event stream will archive
+    into a backing dataset. This dataset can be used like any other dataset".
+    Archive now does the run the worker does, and the dataset it makes opens
+    like any other and says what made it."""
+    mod = Module(api, "Listeners archive")
+    name = f"Archived {mod.tag}"
+    made = mod.api.call("POST", f"{mod.base}/listeners", {"display_name": name})
+    mod.api.call("POST", f"{mod.base}/listeners/{made['id']}/start")
+    url = made["endpoints"][0]["url"]
+    assert post(url, b'{"n": 1}') == 200 and post(url, b'{"n": 2}') == 200
+    open_connections(page, mod)
+    listener = card(page, name)
+    expect(listener.get_by_test_id("listener-archive")).to_contain_text(
+        "Not archived yet · 2 events waiting. The first archive makes the dataset.")
+
+    listener.get_by_test_id("listener-archive-now").click()
+    expect(listener.get_by_test_id("listener-archived")).to_have_text("Archived 2 events as version 1.")
+    expect(listener.get_by_test_id("listener-archive")).to_contain_text(
+        f"Archived to {name} events · nothing waiting")
+    listener.get_by_test_id("listener-archive").get_by_role("link", name=f"{name} events").click()
+    page.wait_for_url("**/r/**")
+    page.goto(page.url.split("?")[0] + "?tab=details")
+    expect(page.get_by_test_id("ds-made-by")).to_have_text(f"Listener {name}", timeout=30000)
+    expect(page.get_by_test_id("ds-size")).to_contain_text("6 columns")

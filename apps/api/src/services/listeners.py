@@ -285,7 +285,11 @@ def slack_challenge(verification: str, body: bytes) -> str | None:
 
 # ---- management --------------------------------------------------------------
 _COLUMNS = """l.id, l.display_name, l.listener_type, l.verification, l.verification_header, l.running,
-              l.created_at, l.updated_at,
+              l.created_at, l.updated_at, l.archived_at,
+              d.name AS archive_dataset_name, d.resource_id AS archive_dataset_resource_id,
+              (SELECT count(*) FROM listener_events e WHERE e.listener_id = l.id
+                  AND e.id > CASE WHEN d.id IS NULL THEN 0 ELSE l.archived_through END)::int
+                  AS pending_events,
               (SELECT count(*) FROM listener_events e WHERE e.listener_id = l.id)::int AS events,
               (SELECT max(received_at) FROM listener_events e WHERE e.listener_id = l.id)
                   AS last_event_at"""
@@ -304,14 +308,17 @@ async def _endpoints(conn: AsyncConnection, listener_id: Any) -> list[dict[str, 
 
 async def list_listeners(conn: AsyncConnection, project_id: UUID) -> list[dict[str, Any]]:
     rows = await fetch_all(conn, f"""
-        SELECT {_COLUMNS} FROM listeners l WHERE l.project_id = :pid ORDER BY lower(l.display_name)
+        SELECT {_COLUMNS} FROM listeners l LEFT JOIN datasets d ON d.id = l.archive_dataset_id
+         WHERE l.project_id = :pid ORDER BY lower(l.display_name)
     """, {"pid": str(project_id)})
     return [{**r, "endpoints": await _endpoints(conn, r["id"])} for r in rows]
 
 
 async def get(conn: AsyncConnection, project_id: UUID, listener_id: UUID) -> dict[str, Any]:
     row = await fetch_one(conn, f"""
-        SELECT {_COLUMNS}, l.secret_arn FROM listeners l WHERE l.id = :id AND l.project_id = :pid
+        SELECT {_COLUMNS}, l.secret_arn FROM listeners l
+          LEFT JOIN datasets d ON d.id = l.archive_dataset_id
+         WHERE l.id = :id AND l.project_id = :pid
     """, {"id": str(listener_id), "pid": str(project_id)})
     if row is None:
         raise NotFoundError("listener")

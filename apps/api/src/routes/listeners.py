@@ -22,8 +22,10 @@ from pydantic import BaseModel, Field
 from ..lib.db import get_engine, user_connection
 from ..lib.errors import ConflictError
 from ..middleware.permissions import ProjectAccess, require_project_role
+from ..services import listener_archive as archive_service
 from ..services import listeners as listener_service
 from .connections import secrets_gateway
+from .models import _dataset_storage
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/projects/{project_id}/listeners",
                    tags=["listeners"])
@@ -52,6 +54,12 @@ class ListenerOut(BaseModel):
     events: int
     last_event_at: datetime | None
     endpoints: list[EndpointOut]
+    #: p.264's backing dataset (§519), once there is one.
+    archive_dataset_name: str | None
+    archive_dataset_resource_id: UUID | None
+    archived_at: datetime | None
+    #: Events the next archive run will write.
+    pending_events: int
     created_at: datetime
     updated_at: datetime
 
@@ -242,6 +250,29 @@ async def delete_endpoint(
         except listener_service.ListenerError as exc:
             raise ConflictError(str(exc)) from exc
     return _out(request, row)
+
+
+class ArchiveOut(BaseModel):
+    #: How many events this run wrote; zero when there was nothing new.
+    archived: int
+    #: The dataset version it made, when it made one.
+    version: int | None
+    listener: ListenerOut
+
+
+@router.post("/{listener_id}/archive", response_model=ArchiveOut)
+async def archive_listener(
+    listener_id: UUID, request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ArchiveOut:
+    """p.264's archive, now rather than at the next five-minute run (§519)."""
+    async with user_connection(access.auth.user_id) as conn:
+        await listener_service.get(conn, access.project_id, listener_id)
+        done = await archive_service.archive(conn, _dataset_storage(), listener_id,
+                                             by=access.auth.user_id)
+        row = await listener_service.get(conn, access.project_id, listener_id)
+    return ArchiveOut(archived=done["archived"] if done else 0,
+                      version=done["version"] if done else None, listener=_out(request, row))
 
 
 @router.get("/{listener_id}/events", response_model=list[EventOut])
