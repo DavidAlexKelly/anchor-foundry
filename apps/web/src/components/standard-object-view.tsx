@@ -43,6 +43,7 @@ import { MapCanvas } from "@/components/canvas/map";
 import { isGeometry } from "@/lib/geoshape";
 import { toLatLon } from "@/components/canvas/map";
 import { PropertyValue } from "@/components/property-value";
+import { PropertyInlineEdit } from "@/components/property-inline-edit";
 import { ReducedValue } from "@/components/reduced-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 import { visibleProperties } from "@/components/object-properties";
@@ -207,6 +208,7 @@ function ProminentCard({
   property,
   value,
   style,
+  editor = null,
 }: {
   workspaceId: string;
   property: ObjectTypeProperty;
@@ -214,6 +216,8 @@ function ProminentCard({
   /** Evaluated by the caller, which is the one that holds the whole instance -
    * a rule may compare against a property this card was never given. */
   style: PropertyStyle | null;
+  /** §595's edit in place, when the property has one. */
+  editor?: React.ReactNode;
 }) {
   // p.11: "Objects with prominent geohash, **geoshape**, or geotemporal series
   // reference properties will render on a Map." Two of the three now: a
@@ -251,6 +255,7 @@ function ProminentCard({
             style={style}
             value={value}
           />
+          {editor}
         </div>
       )}
     </article>
@@ -263,10 +268,15 @@ export function StandardObjectView({
   instance,
   hideHeader = false,
   dragIcon = false,
+  canEdit = false,
 }: {
   workspaceId: string;
   typeId: string;
   instance: ObjectInstance;
+  /** §595: draw p.266's edit in place beside a property with an inline
+   * action, as the Property List does (`action-types` p.135: "native Object
+   * View widgets"). */
+  canEdit?: boolean;
   /** Workshop p.262's "Hide header", threaded down rather than reimplemented.
    * The Explorer and the traversal dialog never pass it; a module embedding
    * this view under a title of its own does. */
@@ -280,6 +290,27 @@ export function StandardObjectView({
     queryKey: ["object-type", typeId],
     queryFn: () => objApi.getType(workspaceId, typeId),
   });
+  // Where an edit lands: the project whose dataset backs the type, and only
+  // when there is exactly one, which is the Explorer's rule (§324) - a type
+  // mapped twice has no single place for a write to go.
+  const editing = canEdit && (type.data?.properties ?? []).some((p) => p.inline_action_type_id);
+  const projects = useQuery({
+    queryKey: ["explorer-edit-projects", typeId],
+    queryFn: () => objApi.editingProjects(workspaceId, typeId),
+    enabled: editing,
+  });
+  const projectId = editing && projects.data?.length === 1 ? projects.data[0]!.id : null;
+  const editor = (p: ObjectTypeProperty) => projectId && p.inline_action_type_id ? (
+    <PropertyInlineEdit
+      workspaceId={workspaceId}
+      projectId={projectId}
+      property={p}
+      instanceId={instance.id}
+      value={instance.properties[p.api_name] ?? null}
+      application="object_view"
+      refreshKeys={[["instance", workspaceId, typeId, instance.id], ["object-explorer"]]}
+    />
+  ) : null;
 
   // **The marker is on the view, not on its success.** Rendering nothing
   // identifiable while the type loads means a failure to load and a failure to
@@ -367,6 +398,7 @@ export function StandardObjectView({
                 property={p}
                 value={instance.properties[p.api_name]}
                 style={conditionalStyle(p.conditional_format, instance.properties)}
+                editor={editor(p)}
               />
             ),
           )}
@@ -402,6 +434,7 @@ export function StandardObjectView({
                     instance={instance}
                     style={conditionalStyle(p.conditional_format, instance.properties)}
                   />
+                  {editor(p)}
                 </td>
               </tr>
             ))}

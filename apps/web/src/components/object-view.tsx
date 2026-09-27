@@ -240,6 +240,7 @@ export function ObjectView({
   allowToggle = true,
   hideHeader = false,
   canComment = false,
+  canEdit = false,
   dragIcon = false,
 }: {
   workspaceId: string;
@@ -250,6 +251,9 @@ export function ObjectView({
    * it — and the composer is what is absent, with a sentence in its place
    * rather than silently missing (§214). */
   canComment?: boolean;
+  /** Whether this reader may edit a property with an inline action in place
+   * (§595; `action-types` p.135's "native Object View widgets"). */
+  canEdit?: boolean;
   /** Workshop p.261's Object View Mode, as the *starting* view. A preference,
    * not a guarantee: a type with no configured view opens on the standard one
    * whichever way this is set, which is what the query below decides. */
@@ -296,12 +300,15 @@ export function ObjectView({
     queryFn: () => objApi.getType(workspaceId, typeId),
   });
   const hasDerived = (type.data?.properties ?? []).some((p) => p.derivation);
+  // §595: an object somebody can edit here is read here too, so what they
+  // saved is what the view shows after, whoever handed over the row.
+  const editable = canEdit && (type.data?.properties ?? []).some((p) => p.inline_action_type_id);
   const full = useQuery({
     queryKey: ["instance", workspaceId, typeId, instance.id],
     queryFn: () => objApi.getInstance(workspaceId, typeId, instance.id),
-    enabled: hasDerived,
+    enabled: hasDerived || editable,
   });
-  const shown = hasDerived && full.data ? full.data : instance;
+  const shown = (hasDerived || editable) && full.data ? full.data : instance;
 
   const configured = view.data ?? null;
   return (
@@ -365,6 +372,7 @@ export function ObjectView({
           instance={shown}
           hideHeader={hideHeader}
           dragIcon={dragIcon}
+          canEdit={editable}
         />
       )}
     </div>

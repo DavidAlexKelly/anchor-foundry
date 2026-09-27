@@ -861,6 +861,9 @@ export function ObjectExplorer({
           // p.137 puts commenting in the Object Explorer, and this is the
           // dialog it opens an object into (§322).
           canComment={canEdit}
+          // p.135: "Inline edits are available in both Workshop and Object
+          // Explorer" (§595).
+          canEdit={canEdit}
           onClose={() => show(null)}
         />
       )}
