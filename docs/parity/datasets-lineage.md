@@ -29,7 +29,7 @@ Foundry's layout is header, information panel, tab views, preview table (`datase
 | Section | Feature | Status |
 |---|---|---|
 | **About** | created / updated time and user | ✅ |
-| | table size | ◑ |
+| | table size | ✅ §509 — (p.3) the Details tab's **Size**: the column count and the current version's bytes in storage, next to the row count it already had. The bytes are the History tab's measurement of the same version, so the two tabs cannot disagree. A version whose file is gone says it is not measured rather than showing nothing, because "cannot be read" and "empty" send a reader to different places. |
 | | tools and input datasets used to create the data | ✅ §506 — (p.3) the Details tab's **Made by** and **Made from**, from the `produced_by_kind` and `produced_by_id` every version already records (`services/dataset_provenance.py`). The tool is the transform, sync or action that wrote the current version, and it links to the transform or connection. The inputs are the datasets **the run that wrote this version** read, from its model version, not the transform's inputs today. When no recorded run wrote it, today's inputs stand in and the row says so. A fork names the dataset it branched from; a rollback, upload or re-parse says what it was. |
 | | tags | ○ |
 | | **Edit schema** — infer a schema for CSV and JSON | ◑ §362 — see §1.4 |
