@@ -1108,6 +1108,69 @@ class S3Config(BaseModel):
     region: str = Field(default="eu-north-1", min_length=1, max_length=64)
     # Set for S3-compatible stores (MinIO, Ceph, R2). Empty means real AWS S3.
     endpoint_url: str = Field(default="", max_length=253)
+    # p.391's OpenID Connect (§599): the role this platform's token is traded
+    # for, and the audience the role's trust policy expects. Empty is the
+    # other two ways: an access key, or the platform's own role.
+    oidc_role_arn: str = Field(default="", max_length=2048,
+                               title="OpenID Connect role ARN")
+    oidc_audience: str = Field(default="", max_length=256,
+                               title="OpenID Connect audience")
+
+
+#: What AWS's own identity providers put in `aud`, and what an IAM role
+#: trusting a web identity is set up to expect unless told otherwise.
+OIDC_DEFAULT_AUDIENCE = "sts.amazonaws.com"
+_ROLE_ARN = re.compile(r"^arn:aws[a-z-]*:iam::\d{12}:role/[\w+=,.@/-]{1,512}$")
+
+
+def oidc_audience(config: dict[str, Any]) -> str | None:
+    """The audience a source configured for OpenID Connect presents its token
+    to, or None for one that is not (§599). Every connector that trades a
+    token keys off this one field, which `validate_config` fills in."""
+    audience = config.get("oidc_audience")
+    return str(audience) if audience else None
+
+
+def _web_identity_credentials(
+    cfg: S3Config, secret: dict[str, str], kwargs: dict[str, Any],
+) -> dict[str, str]:
+    """p.391's exchange (§599): "The source system is able to validate those
+    claims and provide a short-lived access token". For S3 that is STS's
+    AssumeRoleWithWebIdentity, at AWS or - for an S3-compatible store, MinIO
+    among them - at the store's own endpoint, which is where such a store
+    answers it. The call is unsigned by design: the token is the proof."""
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    from . import oidc
+
+    subject = secret.get("oidc_subject")
+    if not subject:
+        raise ConnectorOperationError(
+            "this source authenticates with OpenID Connect and was not told who it is")
+    try:
+        token = oidc.mint(subject, cfg.oidc_audience or OIDC_DEFAULT_AUDIENCE)
+    except oidc.OidcUnavailable as exc:
+        raise ConnectorOperationError(str(exc)) from None
+    sts_kwargs = {k: v for k, v in kwargs.items() if k in ("region_name", "config", "endpoint_url")}
+    try:
+        answer = boto3.client("sts", **sts_kwargs).assume_role_with_web_identity(
+            RoleArn=cfg.oidc_role_arn, RoleSessionName="anchor-foundry-source",
+            WebIdentityToken=token)
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        raise ConnectorOperationError(
+            f"the role refused this platform's OpenID Connect token ({code or 'unknown'}) - "
+            "check the role's trust policy names this issuer, audience and subject"
+        ) from None
+    except BotoCoreError as exc:
+        raise ConnectorOperationError(f"could not trade the OpenID Connect token: {exc}") from None
+    credentials = answer["Credentials"]
+    return {
+        "aws_access_key_id": credentials["AccessKeyId"],
+        "aws_secret_access_key": credentials["SecretAccessKey"],
+        "aws_session_token": credentials["SessionToken"],
+    }
 
 
 class S3Connector:
@@ -1141,6 +1204,16 @@ class S3Connector:
         if prefix and not prefix.endswith("/"):
             prefix += "/"
         cleaned["prefix"] = prefix
+        # §599: a role to assume with this platform's token, and so an
+        # audience, or neither.
+        if cleaned["oidc_role_arn"]:
+            if not _ROLE_ARN.match(cleaned["oidc_role_arn"]):
+                raise ConnectorConfigError(
+                    "oidc_role_arn: an IAM role ARN, arn:aws:iam::<account>:role/<name>")
+            cleaned["oidc_audience"] = cleaned["oidc_audience"] or OIDC_DEFAULT_AUDIENCE
+        elif cleaned["oidc_audience"]:
+            raise ConnectorConfigError(
+                "oidc_audience: OpenID Connect needs the role its token is traded for")
         return cleaned
 
     def _client(self, config: dict[str, Any], secret: dict[str, str]):
@@ -1175,7 +1248,9 @@ class S3Connector:
                 parsed.hostname or "", egress.port_for(parsed.scheme, parsed.port)
             )
             kwargs["endpoint_url"] = cfg.endpoint_url
-        if secret.get("access_key_id") and secret.get("secret_access_key"):
+        if cfg.oidc_role_arn:
+            kwargs.update(_web_identity_credentials(cfg, secret, kwargs))
+        elif secret.get("access_key_id") and secret.get("secret_access_key"):
             kwargs["aws_access_key_id"] = secret["access_key_id"]
             kwargs["aws_secret_access_key"] = secret["secret_access_key"]
         return boto3.client("s3", **kwargs)

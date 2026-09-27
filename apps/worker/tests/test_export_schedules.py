@@ -555,3 +555,36 @@ def test_an_export_that_is_not_due_yet_is_left_alone(
     assert eid not in _due_ids()
     run_due_exports(_ctx())
     assert _runs(eid) == []
+
+
+def test_an_openid_connect_source_is_told_who_it_is_not_given_a_key(
+    workspace: dict, source_database: dict, monkeypatch
+) -> None:
+    """§599: a scheduled export to a source that authenticates with OpenID
+    Connect hands its connector the source's subject, to mint the token when
+    it connects, as a scheduled sync does - never a stored secret."""
+    import anchor_worker.jobs.export_schedules as export_schedules
+
+    cid = _connection(workspace, source_database)
+    dataset = _synced_dataset(workspace, cid)
+    eid = _export(workspace, cid, dataset)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE connections SET config = config || %s::jsonb WHERE id = %s",
+            (json.dumps({"oidc_role_arn": "arn:aws:iam::123456789012:role/r",
+                         "oidc_audience": "sts.amazonaws.com"}), cid),
+        )
+        resource = conn.execute("SELECT resource_id FROM connections WHERE id = %s",
+                                (cid,)).fetchone()[0]
+    handed: list[dict] = []
+    real_perform = export_schedules.export_runs.perform
+
+    def perform(export, connection, secret, **kw):
+        handed.append(secret)
+        return real_perform(export, connection, secret, **kw)
+    monkeypatch.setattr(export_schedules.export_runs, "perform", perform)
+    monkeypatch.setattr(export_schedules, "_read_secret",
+                        lambda arn: pytest.fail("an OpenID Connect source read a secret"))
+    run_due_exports(_ctx())
+    assert handed == [{"oidc_subject": f"connection.{resource}"}]
+    assert _runs(eid)

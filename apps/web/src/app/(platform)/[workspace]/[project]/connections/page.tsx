@@ -9,6 +9,7 @@ import {
   scheduledSync as scheduledSyncApi,
   sync as syncApi,
 } from "@/lib/api";
+import { trustLines, usesOidc } from "@/lib/connection-oidc";
 import { Dialog, Field } from "@/components/dialog";
 import { EgressDialog } from "@/components/egress-panel";
 import { ExportsPanel } from "@/components/exports-panel";
@@ -296,7 +297,9 @@ function AddConnectionWizard({
         source_type: selected.type,
         scope,
         config: typedConfig,
-        secret,
+        // An OpenID Connect source stores none (§599), and the server refuses
+        // one sent anyway.
+        secret: usesOidc(config) ? {} : secret,
       });
       // Test immediately so the list shows a truthful status.
       return connApi.test(workspaceId, projectId, created.id);
@@ -438,7 +441,15 @@ function AddConnectionWizard({
                 )}
               </Field>
             ))}
-            {selected.secret_fields.map((key) => (
+            {usesOidc(config) && (
+              // p.391: "you do not need to configure credentials for a source
+              // system in Foundry" (§599).
+              <p className="login-note" data-testid="connection-oidc-note">
+                This source trades a token this platform issues for access, so it stores no
+                key. Its trust policy&apos;s details are shown once it is saved.
+              </p>
+            )}
+            {!usesOidc(config) && selected.secret_fields.map((key) => (
               <Field
                 key={key}
                 label={key}
@@ -999,6 +1010,18 @@ function ConnectionRow({
       <td>
         <strong>{connection.name}</strong>
         <div className="slug">{connection.source_type}</div>
+        {connection.oidc && (
+          // p.391: the trust relationship is configured in the source system,
+          // so this is what somebody copies into it (§599).
+          <dl className="connection-oidc" data-testid="connection-oidc">
+            {trustLines(connection.oidc).map(([label, value]) => (
+              <div key={label}>
+                <dt>{label}</dt>
+                <dd><code>{value}</code></dd>
+              </div>
+            ))}
+          </dl>
+        )}
       </td>
       <td>
         {connection.scope === "workspace" ? (

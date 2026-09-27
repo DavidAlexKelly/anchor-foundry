@@ -88,6 +88,11 @@ class ConnectionOut(BaseModel):
     #: form has to say *why* a source is not offered, and "not enabled" and
     #: "not a possible destination" are different sentences.
     exports_enabled: bool
+    #: §599: for a source configured for OpenID Connect, what its trust policy
+    #: has to name - p.391's issuer, the audience, and the subject that
+    #: identifies this source ("The source-rid should be used to filter
+    #: incoming requests"). Null for any other source.
+    oidc: dict[str, str | None] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -153,11 +158,18 @@ class PreviewOut(BaseModel):
 
 
 def _out(row: dict[str, Any]) -> ConnectionOut:
-    data = {k: v for k, v in row.items() if k != "secret_arn"}
+    from ..services import oidc as oidc_service
+    from ..services.connectors import oidc_audience
+
+    data = {k: v for k, v in row.items() if k not in ("secret_arn", "resource_id")}
     if isinstance(data.get("config"), str):
         import json
 
         data["config"] = json.loads(data["config"])
+    audience = oidc_audience(data["config"] or {})
+    if audience is not None and row.get("resource_id"):
+        data["oidc"] = {"issuer": oidc_service.issuer(), "audience": audience,
+                        "subject": oidc_service.subject_for(row["resource_id"])}
     return ConnectionOut(**data)
 
 

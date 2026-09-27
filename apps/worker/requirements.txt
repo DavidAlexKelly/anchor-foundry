@@ -23,3 +23,7 @@ croniter==2.0.5
 # pytest", which is the exact shape §292 had just finished fixing one floor
 # down. requirements-dev.txt still gets it, through `-r requirements.txt`.
 pytest==8.3.3
+# **Runtime since §599.** A scheduled sync or export from a source that
+# authenticates with OpenID Connect signs its token here (`oidc.py`), RS256 by
+# hand; the API has it through PyJWT[crypto], and this image had nothing.
+cryptography==50.0.1

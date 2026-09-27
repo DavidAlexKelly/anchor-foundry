@@ -532,10 +532,48 @@ class S3Connector:
         }
         if config.get("endpoint_url"):
             kwargs["endpoint_url"] = config["endpoint_url"]
-        if secret.get("access_key_id") and secret.get("secret_access_key"):
+        if config.get("oidc_role_arn"):
+            # §599, as the API's `_web_identity_credentials`: the platform's
+            # token traded at STS (or the store's own endpoint) for an hour's
+            # credentials.
+            kwargs.update(self._web_identity(config, secret, kwargs))
+        elif secret.get("access_key_id") and secret.get("secret_access_key"):
             kwargs["aws_access_key_id"] = secret["access_key_id"]
             kwargs["aws_secret_access_key"] = secret["secret_access_key"]
         return boto3.client("s3", **kwargs)
+
+    @staticmethod
+    def _web_identity(config: dict, secret: dict, kwargs: dict) -> dict:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+
+        from . import oidc
+
+        subject = secret.get("oidc_subject")
+        if not subject:
+            raise ConnectorError("this source authenticates with OpenID Connect and was not told who it is")
+        try:
+            token = oidc.mint(subject, str(config.get("oidc_audience") or "sts.amazonaws.com"))
+        except oidc.OidcUnavailable as exc:
+            raise ConnectorError(str(exc)) from None
+        sts_kwargs = {k: v for k, v in kwargs.items() if k in ("region_name", "config", "endpoint_url")}
+        try:
+            answer = boto3.client("sts", **sts_kwargs).assume_role_with_web_identity(
+                RoleArn=config["oidc_role_arn"], RoleSessionName="anchor-foundry-source",
+                WebIdentityToken=token)
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            raise ConnectorError(
+                f"the role refused this platform's OpenID Connect token ({code or 'unknown'})"
+            ) from None
+        except BotoCoreError as exc:
+            raise ConnectorError(f"could not trade the OpenID Connect token: {exc}") from None
+        credentials = answer["Credentials"]
+        return {
+            "aws_access_key_id": credentials["AccessKeyId"],
+            "aws_secret_access_key": credentials["SecretAccessKey"],
+            "aws_session_token": credentials["SessionToken"],
+        }
 
     @staticmethod
     def _translate(exc, what: str = "") -> ConnectorError:
