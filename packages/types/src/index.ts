@@ -466,6 +466,10 @@ export type WorkshopTransform =
    * `index` in their config. */
   | "array_compose" | "array_intersection" | "array_update_element" | "array_get_element"
   | "array_length" | "array_contains" | "array_does_not_contain" | "array_is_subset_of"
+  /** p.142's geospatial operations (§568), evaluated by
+   * `services/variable_geo.py`: a geopoint, or its "lat,lon" text, in; a
+   * geohash (to a `precision`), a coordinate or an MGRS reference out. */
+  | "geohash" | "latitude" | "longitude" | "mgrs"
 
 /** What a `time_series_set` variable resolves to: the whole question, and no
  * data. Decision 0009 keeps points in the dataset they arrived in, so a

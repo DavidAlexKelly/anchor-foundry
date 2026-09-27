@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
-from . import variable_arrays, variable_checks, variable_dates, variable_math
+from . import variable_arrays, variable_checks, variable_dates, variable_geo, variable_math
 
 KINDS = (
     "string",
@@ -108,6 +108,8 @@ TRANSFORMS = (
     *variable_checks.TRANSFORMS,
     # p.142-143's array operations and checks (§567): `variable_arrays.py`.
     *variable_arrays.TRANSFORMS,
+    # p.142's geospatial operations (§568): `variable_geo.py`.
+    *variable_geo.TRANSFORMS,
 )
 
 # Still declared and deliberately not evaluated here: an aggregate over a set
@@ -1249,7 +1251,8 @@ def _check_arity(vid: str, d: Derivation) -> None:
     """Refuse a derivation that cannot produce a value, at save rather than at
     view: an app that renders a blank card because a transform was configured
     with one input instead of three is a bug nobody can see the cause of."""
-    module = next((m for m in (variable_math, variable_dates, variable_checks, variable_arrays)
+    module = next((m for m in (variable_math, variable_dates, variable_checks, variable_arrays,
+                               variable_geo)
                    if d.transform in m.ARITY), None)
     if module is not None:
         problem = module.check(d.transform, len(d.inputs), d.config)
@@ -1675,6 +1678,11 @@ def _apply(
         try:
             return variable_arrays.apply(d.transform, list(inputs), d.config, variable.label)
         except variable_arrays.ArrayError as exc:
+            raise VariableError(str(exc)) from None
+    if d.transform in variable_geo.ARITY:
+        try:
+            return variable_geo.apply(d.transform, list(inputs), d.config, variable.label)
+        except variable_geo.GeoError as exc:
             raise VariableError(str(exc)) from None
     if d.transform == "if_else":
         condition, then, otherwise = inputs
