@@ -340,6 +340,55 @@ def object_deletions(
     return deletions
 
 
+def join_pairs(
+    bound: dict[str, Any],
+    *,
+    rules: list[dict[str, Any]],
+    object_type_id: UUID,
+    link_types: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """The links this action makes or removes in join tables (§553;
+    `action-types` p.20).
+
+        "Create link(s): Can be used to create a many-to-many link between
+         objects that are passed via object reference parameters." (p.20)
+
+    One entry per rule, in `sort_order`: which join table, whether the subject
+    is its `from` or `to` end, and the object the parameter names at the other.
+    Keys, not instances: the caller looks the named object up, because only an
+    instance says what its primary key is. **The subject is the `from` end of a
+    self-link**, whose two ends are the same type; the rule has nothing else to
+    say which it means.
+    """
+    pairs: list[dict[str, Any]] = []
+    for rule in sorted(rules, key=lambda r: (r.get("sort_order") or 0)):
+        kind = str(rule["kind"])
+        if kind not in ("create_link", "delete_link"):
+            continue
+        config = _json(rule.get("config")) or {}
+        link = (link_types or {}).get(str(config.get("link_type", "")))
+        if link is None or not link.get("join_dataset_id"):
+            continue
+        # An `object` left empty is refused before this, by
+        # `modification_targets`, which reads every rule naming one (a second
+        # refusal here survived the sweep as unreachable).
+        named = bound[str(config.get("object", ""))]
+        subject_from = str(link["from_object_type_id"]) == str(object_type_id)
+        pairs.append({
+            "kind": kind,
+            "link_type_id": str(link["id"]),
+            "dataset_id": str(link["join_dataset_id"]),
+            "from_column": str(link["join_from_column"]),
+            "to_column": str(link["join_to_column"]),
+            "subject_end": "from" if subject_from else "to",
+            "other_type_id": str(
+                link["to_object_type_id"] if subject_from else link["from_object_type_id"]
+            ),
+            "other_instance_id": str(named),
+        })
+    return pairs
+
+
 def modification_targets(
     bound: dict[str, Any],
     *,
@@ -394,6 +443,8 @@ def modification_targets(
             link = (link_types or {}).get(str(config.get("link_type", "")))
             if link is None:
                 raise ValueError("this action names a link type this workspace does not have")
+            if link.get("join_dataset_id"):
+                continue  # a pair in a join table, not a write to this object (§553)
             type_id = str(link["from_object_type_id"])
         target = {"object_type_id": type_id, "instance_id": str(named)}
         if target not in targets:
@@ -454,6 +505,8 @@ def object_modifications(
         if not parameter:
             continue
         link = (link_types or {}).get(str(config.get("link_type", "")))
+        if kind != "modify_object" and link is not None and link.get("join_dataset_id"):
+            continue  # `join_pairs` writes it (§553)
         if kind == "modify_object":
             # **No interface-reference case here** (§454, §223). A modify
             # rule naming one is refused at save time, so a lookup for the
@@ -2488,7 +2541,8 @@ async def link_types_for(
         conn,
         """
         SELECT id, display_name, from_object_type_id, to_object_type_id,
-               from_property, to_property, cardinality
+               from_property, to_property, cardinality,
+               join_dataset_id, join_from_column, join_to_column
           FROM link_types
          WHERE workspace_id = :wid
         """,
@@ -3153,6 +3207,34 @@ def _validate_definition(
                     "a link rule names a link type neither of whose ends is this action's "
                     "object type"
                 )
+            if link.get("join_from_column"):
+                # p.20: "Create link(s): Can be used to create a many-to-many
+                # link between objects that are passed via object reference
+                # parameters" (§553). A pair in the join table, from either
+                # end: this object and the one a parameter names.
+                if not link.get("join_dataset_id"):
+                    raise ValueError(
+                        "this link's join table has been deleted, so an action cannot "
+                        "set it"
+                    )
+                if not config.get("object"):
+                    raise ValueError(
+                        "a link rule on a join table links this object to another, and "
+                        "needs an `object` naming the parameter that says which"
+                    )
+                if str(config.get("object")) not in seen:
+                    raise ValueError(
+                        f"a link rule links {config.get('object')!r}, which is not a parameter"
+                    )
+                continue
+            if str(link["cardinality"]) == "many_to_many":
+                # A many-to-many link cannot be expressed by one foreign key.
+                # Its pairs live in a join table (§552), and this one has none
+                # - refusing beats writing a value that means half a link.
+                raise ValueError(
+                    "a many-to-many link is set through its join table, and this one "
+                    "has none"
+                )
             if far_side and not config.get("object"):
                 # The foreign key lives on the *from* side. Written from the
                 # **to** side there is no "this object's column" to set - the
@@ -3177,13 +3259,6 @@ def _validate_definition(
                 # Nothing on this side to point the other object at.
                 raise ValueError(
                     "this link type joins on nothing, so an action cannot set it"
-                )
-            if str(link["cardinality"]) == "many_to_many":
-                # A many-to-many link cannot be expressed by one foreign key,
-                # and this platform has no join table to put the second half
-                # in. Refusing beats writing a value that means half a link.
-                raise ValueError(
-                    "a many-to-many link cannot be set by an action in this build"
                 )
             if not link["from_property"] or str(link["from_property"]) == "$primary_key":
                 raise ValueError(

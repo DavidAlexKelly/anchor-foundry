@@ -415,6 +415,50 @@ def test_a_link_rule_from_the_far_side_asks_which_object_to_link(page, api):
     assert stored["rules"][0]["config"]["object"] == "team"
 
 
+
+def test_a_link_rule_on_a_join_table_asks_which_object_to_link(page, api):
+    """§553: p.20's "Create link(s): … a many-to-many link between objects that
+    are passed via object reference parameters". A join table's link is a pair,
+    so even from its `from` end the rule asks which object to link - there is
+    no column of this object's to point anywhere."""
+    mod = build(api, "Action editor join link")
+    team = second_type(api, mod)
+    pairs = api.upload_csv(f"{mod.base}/datasets/upload", f"pairs_{mod.tag}",
+                           b"ticket,team\n1,T1\n")
+    api.call(
+        "POST",
+        f"/workspaces/{mod.workspace_id}/link-types",
+        {
+            "api_name": f"staffs_{uuid.uuid4().hex[:8]}",
+            "display_name": "Staffs",
+            "from_type_id": mod.type_id,
+            "to_type_id": team["id"],
+            "cardinality": "many_to_many",
+            "join_dataset_id": pairs["id"],
+            "join_from_column": "ticket",
+            "join_to_column": "team",
+        },
+    )
+    open_editor(page, mod)
+
+    page.get_by_role("button", name="Add a parameter").click()
+    page.get_by_label("Parameter 2 name").fill("team")
+    page.get_by_label("Parameter 2 label").fill("Team")
+    page.get_by_label("Parameter 2 type").select_option("object")
+
+    page.get_by_label("Rule 1 kind").select_option("create_link")
+    page.get_by_label("Rule 1 link").select_option(label=f"Staffs → Team {mod.tag}")
+    expect(page.get_by_label("Rule 1 link object")).to_be_visible()
+    expect(page.get_by_label("Rule 1 target")).to_have_count(0)
+    page.get_by_label("Rule 1 link object").select_option("team")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    stored = definition(api, mod)
+    assert stored["rules"][0]["kind"] == "create_link"
+    assert stored["rules"][0]["config"]["object"] == "team"
+    assert set(stored["rules"][0]["config"]) == {"link_type", "object"}
+
 # ---- the notification rule (`action-types` p.89-101; §258) ---------------------
 def add_notify_rule(page) -> None:
     """A second rule, switched to `notify`. The first stays the property setter

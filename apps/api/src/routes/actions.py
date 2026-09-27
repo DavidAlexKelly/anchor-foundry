@@ -1401,6 +1401,44 @@ def _columns(context: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _write_pairs(
+    conn: Any, storage: Any, access: Any, run_id: UUID, dataset_id: str,
+    table: dict[str, Any], *, add: list[tuple[str, str]], remove: list[tuple[str, str]],
+) -> tuple[Any, list[dict[str, Any]]]:
+    """Stage one join table's links made and removed (§553), and say which
+    actually changed - as effects an undo can reverse. `None` staged when
+    nothing did: a version that says nothing happened is not one to record."""
+    path = await anyio.to_thread.run_sync(storage.local_path, table["s3_location"])
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = os.path.join(tmp, "out.parquet")
+        schema, rows, added, removed = await anyio.to_thread.run_sync(
+            engine.write_pairs, path, table["from_column"], table["to_column"],
+            add, remove, dest,
+        )
+        with open(dest, "rb") as handle:
+            data = handle.read()
+    changes = [
+        {"kind": "link", "made": made, "dataset_id": dataset_id,
+         "from_column": table["from_column"], "to_column": table["to_column"],
+         "from_key": f, "to_key": t}
+        for made, pairs in ((True, added), (False, removed)) for f, t in pairs
+    ]
+    if not changes:
+        return None, []
+    staged = await dataset_service.stage_version(
+        conn, storage,
+        dataset_id=UUID(dataset_id),
+        workspace_id=access.workspace_id,
+        parquet_bytes=data,
+        schema=schema,
+        row_count=rows,
+        produced_by_kind="action",
+        produced_by_id=run_id,
+        created_by=access.auth.user_id,
+    )
+    return staged, changes
+
+
 def _revert_effects(
     *,
     creations: list[dict[str, Any]],
@@ -1524,15 +1562,42 @@ async def undo_action(
         # p.156's revert of everything else the run wrote (§551): each object
         # must still be as the run left it, by the same whole-object rule the
         # subject is held to.
-        effects = action_revert.effects_of(run)
+        written = action_revert.effects_of(run)
+        effects = [e for e in written if e.get("kind") != "link"]
+        # The links it made or removed in join tables (§553), each in its
+        # table now or not, by the same rule.
+        links = [e for e in written if e.get("kind") == "link"]
         store = instance_store.store_for(conn)
         currents = [
             await _by_key(store, prefix, UUID(e["object_type_id"]), str(e["primary_key"]))
             for e in effects
         ]
+        join_tables: dict[str, dict[str, Any]] = {}
+        present = []
+        for link in links:
+            table = join_tables.get(str(link["dataset_id"]))
+            if table is None:
+                located = await fetch_one(
+                    conn, "SELECT s3_location FROM datasets WHERE id = :id",
+                    {"id": str(link["dataset_id"])},
+                )
+                if located is None:
+                    raise NotFoundError("join table")
+                table = join_tables[str(link["dataset_id"])] = {
+                    "s3_location": str(located["s3_location"]),
+                    "from_column": link["from_column"], "to_column": link["to_column"],
+                    "add": [], "remove": [],
+                }
+            path = await anyio.to_thread.run_sync(storage.local_path, table["s3_location"])
+            pair = (str(link["from_key"]), str(link["to_key"]))
+            present.append(await anyio.to_thread.run_sync(
+                engine.has_pair, path, table["from_column"], table["to_column"], pair,
+            ))
+            # The inverse: a link made is removed, one removed is made again.
+            table["remove" if link.get("made") else "add"].append(pair)
         refused = action_revert.effects_refusal(
             effects, [_parse_json(c["properties"]) if c else None for c in currents]
-        )
+        ) or action_revert.links_refusal(links, present)
         if refused:
             raise ConflictError(refused)
         removed_subject = next(
@@ -1632,6 +1697,13 @@ async def undo_action(
                     produced_by_id=undo_run_id,
                     created_by=access.auth.user_id,
                 ))
+            for dataset_key, table in join_tables.items():
+                staged, _changes = await _write_pairs(
+                    conn, storage, access, undo_run_id, dataset_key, table,
+                    add=table["add"], remove=table["remove"],
+                )
+                if staged is not None:
+                    staged_all.append(staged)
             committed = await dataset_service.commit_versions(conn, staged_all)
             dataset_version = int(
                 committed.get(str(source["dataset_id"]), {"current_version": 0})[
@@ -2705,6 +2777,47 @@ async def execute_action(
                 actor_id=access.auth.user_id,
                 prefix=prefix,
             )
+            # p.20's Create link(s) and Delete link on a join table (§553): the
+            # pair each rule makes or removes, by the two objects' keys, and
+            # the join table it goes in. Resolved here, while the action can
+            # still be refused, as every other named object is.
+            join_tables: dict[str, dict[str, Any]] = {}
+            for pair in actions_service.join_pairs(
+                bound, rules=action_type["rules"], object_type_id=object_type_id,
+                link_types=link_types,
+            ):
+                other = await instance_store.store_for(conn).get_instance(
+                    search_prefix=prefix, object_type_id=UUID(pair["other_type_id"]),
+                    instance_id=pair["other_instance_id"],
+                )
+                if other is None:
+                    raise NotFoundError("object to link")
+                here, there = str(instance["primary_key"]), str(other["primary_key"])
+                table = join_tables.get(pair["dataset_id"])
+                if table is None:
+                    located = await fetch_one(
+                        conn, "SELECT s3_location FROM datasets WHERE id = :id",
+                        {"id": pair["dataset_id"]},
+                    )
+                    if located is None:
+                        raise NotFoundError("join table")
+                    table = join_tables[pair["dataset_id"]] = {
+                        "s3_location": str(located["s3_location"]),
+                        "from_column": pair["from_column"], "to_column": pair["to_column"],
+                        "add": [], "remove": [],
+                    }
+                if (table["from_column"], table["to_column"]) != (
+                    pair["from_column"], pair["to_column"]
+                ):
+                    # Two link types over one dataset, joined on different
+                    # columns: one file cannot be written two ways at once.
+                    raise ValueError(
+                        "this action links through two link types that share a join table "
+                        "on different columns, which one write cannot express"
+                    )
+                table["add" if pair["kind"] == "create_link" else "remove"].append(
+                    (here, there) if pair["subject_end"] == "from" else (there, here)
+                )
             run_id = await actions_service.open_run(
                 conn,
                 action_type_id=action_type_id,
@@ -2716,6 +2829,8 @@ async def execute_action(
 
         ok, error = True, None
         dataset_version: int | None = None
+        # The links this run actually made or removed (§553), for its undo.
+        link_changes: list[dict[str, Any]] = []
         try:
             reverse_map = {prop: col for col, prop in column_mappings.items()}
             # The dataset copy gets the flat form - a Parquet column is a scalar
@@ -2832,6 +2947,19 @@ async def execute_action(
                             created_by=access.auth.user_id,
                         )
                     )
+                for dataset_key, table in join_tables.items():
+                    if dataset_key in plan:
+                        raise DatasetEngineError(
+                            "this action writes a join table that also backs an object "
+                            "type it changes, which one version cannot express"
+                        )
+                    staged, changes = await _write_pairs(
+                        conn, storage, access, run_id, dataset_key, table,
+                        add=table["add"], remove=table["remove"],
+                    )
+                    link_changes += changes
+                    if staged is not None:
+                        staged_all.append(staged)
                 committed = await dataset_service.commit_versions(conn, staged_all)
                 dataset_version = int(
                     committed.get(str(source["dataset_id"]), {"current_version": 0})[
@@ -2972,7 +3100,7 @@ async def execute_action(
                         creations=creations, removals=removals,
                         modifications=modifications, modification_rows=modification_rows,
                         sources_by_type=sources_by_type,
-                    ),
+                    ) + link_changes,
                 )
                 # p.402's edit history (§470): every object this run changed,
                 # after the write succeeded. The recorder skips a type whose

@@ -43,6 +43,7 @@ function labelsOf(
     (q) => [q.api_name, q.display_name || q.api_name]));
 }
 import { untypedNote } from "@/lib/action-choices";
+import { namesObject, settableLink } from "@/lib/link-rules";
 import {
   blankOptions, optionable, optionsProblem, optionsSummary,
 } from "@/lib/action-options";
@@ -715,17 +716,13 @@ export function ActionDefinitionEditor({
   // that touches it at neither, or that no single foreign key can express,
   // still is not. Narrowing the list is a convenience; the server decides.
   const settableLinks = (links.data ?? []).filter(
-    (l) =>
-      (l.from_object_type_id === action.object_type_id ||
-        (l.to_object_type_id === action.object_type_id && l.to_property)) &&
-      l.cardinality !== "many_to_many" &&
-      l.from_property &&
-      l.from_property !== "$primary_key",
+    (l) => settableLink(l, action.object_type_id),
   );
-  /** Whether a link rule writes the *other* object's row rather than this one's. */
+  /** Whether a link rule names the *other* object - a far side's row, or the
+   * other end of a join table's pair (§553). */
   const isFarSide = (linkTypeId: unknown) => {
     const link = settableLinks.find((l) => l.id === String(linkTypeId ?? ""));
-    return !!link && link.from_object_type_id !== action.object_type_id;
+    return !!link && namesObject(link, action.object_type_id);
   };
 
   const save = useMutation({
@@ -1291,7 +1288,8 @@ export function ActionDefinitionEditor({
                 settableLinks.length === 0 && (
                   <p className="field-hint">
                     No link on this object type can be set by an action — it is
-                    many-to-many, or it joins on the primary key, or on nothing.
+                    many-to-many with no join table, or it joins on the primary
+                    key, or on nothing.
                   </p>
                 )}
             </div>
