@@ -115,6 +115,27 @@ def test_the_slider_moves_the_selected_time(page, api, fleet) -> None:
     expect(pin(page, "Van one")).to_have_count(1)
 
 
+@pytest.mark.parametrize("auto_zoom, refits", [("all", True), ("default", False)])
+def test_auto_zoom_on_all_objects_follows_them_as_they_move(
+    page, api, fleet, auto_zoom, refits,
+) -> None:
+    """p.304's Viewport auto zoom, All objects (§560): zoomed in on Van one at
+    half past midnight, View latest moves both vans and the map takes them
+    in - where the default leaves the view the reader chose."""
+    open_module(page, build(api, fleet, f"Tracks zoom {auto_zoom}",
+                            selectedTimeVariable="v_time", autoZoom=auto_zoom))
+    expect(pin(page, "Van one")).to_have_count(1, timeout=20000)
+    for _ in range(5):
+        page.get_by_role("button", name="Zoom in").click()
+    page.get_by_test_id("map-timeline-latest").click()
+    expect(page.get_by_test_id("map-timeline-time")).to_have_text("Latest")
+    caption = page.locator(".canvas-map-note")
+    if refits:
+        expect(caption).not_to_contain_text("outside the view")
+    else:
+        expect(caption).to_contain_text("outside the view")
+
+
 def test_the_panel_sets_the_track_and_the_timeline(page, api, fleet) -> None:
     mod = build(api, fleet, "Tracks panel", trackProperty=None, enableTimeline=False)
     open_builder(page, mod)
