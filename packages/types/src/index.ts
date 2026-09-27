@@ -450,6 +450,13 @@ export type WorkshopTransform =
   | "round_up" | "round_down" | "round_nearest" | "max" | "min"
   | "equal_to" | "not_equal_to" | "less_than" | "less_or_equal" | "greater_than"
   | "greater_or_equal"
+  /** p.140-141's date and time math and comparisons (§565), evaluated by
+   * `services/variable_dates.py`. The four with units carry `unit` in their
+   * config, and the two that move a date or time a `direction`. */
+  | "relative_date" | "relative_time" | "between_dates" | "between_times" | "current_date"
+  | "date_is_on_or_after" | "date_is_after" | "date_is_on_or_before" | "date_is_before"
+  | "date_is_equal" | "time_is_on_or_after" | "time_is_after" | "time_is_on_or_before"
+  | "time_is_before" | "time_is_equal"
 
 /** What a `time_series_set` variable resolves to: the whole question, and no
  * data. Decision 0009 keeps points in the dataset they arrived in, so a

@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
-from . import variable_math
+from . import variable_dates, variable_math
 
 KINDS = (
     "string",
@@ -102,6 +102,8 @@ TRANSFORMS = (
     # p.140-141's math operations and numeric comparisons (§564), each its
     # own transform, as p.140 lists them: `variable_math.py`.
     *variable_math.TRANSFORMS,
+    # p.140-141's date/time math and comparisons (§565): `variable_dates.py`.
+    *variable_dates.TRANSFORMS,
 )
 
 # Still declared and deliberately not evaluated here: an aggregate over a set
@@ -1243,8 +1245,9 @@ def _check_arity(vid: str, d: Derivation) -> None:
     """Refuse a derivation that cannot produce a value, at save rather than at
     view: an app that renders a blank card because a transform was configured
     with one input instead of three is a bug nobody can see the cause of."""
-    if d.transform in variable_math.ARITY:
-        problem = variable_math.check(d.transform, len(d.inputs), d.config)
+    if d.transform in variable_math.ARITY or d.transform in variable_dates.ARITY:
+        module = variable_math if d.transform in variable_math.ARITY else variable_dates
+        problem = module.check(d.transform, len(d.inputs), d.config)
         if problem:
             raise VariableError(f"variable {vid!r}: {problem}")
     elif d.transform == "concat":
@@ -1608,7 +1611,8 @@ def evaluate(
                 timings[vid] = (perf_counter() - started) * 1000
             continue
         inputs = [resolved[i] for i in variable.derivation.inputs]
-        if variable.derivation.transform in variable_math.ARITY:
+        if (variable.derivation.transform in variable_math.ARITY
+                or variable.derivation.transform in variable_dates.ARITY):
             inputs = [
                 variable_math.of_number_variable(value) if variables[i].kind == "number" else value
                 for i, value in zip(variable.derivation.inputs, inputs)
@@ -1635,6 +1639,11 @@ def _apply(
         try:
             return variable_math.apply(d.transform, list(inputs), d.config, variable.label)
         except variable_math.MathError as exc:
+            raise VariableError(str(exc)) from None
+    if d.transform in variable_dates.ARITY:
+        try:
+            return variable_dates.apply(d.transform, list(inputs), d.config, variable.label)
+        except variable_dates.DateError as exc:
             raise VariableError(str(exc)) from None
     if d.transform == "if_else":
         condition, then, otherwise = inputs
