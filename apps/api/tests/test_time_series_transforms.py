@@ -353,6 +353,7 @@ def test_the_browser_offers_what_the_server_takes() -> None:
     assert f"export const INTEGRATION_METHODS = [{listed(ts.INTEGRATION_METHODS)}] as const;" in source
     assert f"export const FORMULA_FUNCTIONS = [{listed(ts.FORMULA_FUNCTIONS)}] as const;" in source
     assert f"export const MAX_FORMULA = {ts.MAX_FORMULA};" in source
+    assert f"export const MAX_FORMULA_INPUTS = {ts.MAX_FORMULA_INPUTS};" in source
     assert f"export const MAX_SPAN = {ts.MAX_SPAN:_};" in source
 
 

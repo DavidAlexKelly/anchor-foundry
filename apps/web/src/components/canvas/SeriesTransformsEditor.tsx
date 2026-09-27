@@ -7,18 +7,23 @@
  * it produced. The words and the checks are `series-transforms.ts`'s. */
 
 import {
-  FORMULA_FUNCTIONS, INTEGRATION_METHODS, KIND_LABELS, MAX_FORMULA, MAX_TRANSFORMS, TIME_UNITS, TRANSFORM_KINDS, WINDOW_AGGREGATES,
-  WINDOW_TYPES, blankTransform, transformsProblem, withKind,
+  FORMULA_FUNCTIONS, INTEGRATION_METHODS, KIND_LABELS, MAX_FORMULA, MAX_FORMULA_INPUTS, MAX_TRANSFORMS, TIME_UNITS,
+  TRANSFORM_KINDS, WINDOW_AGGREGATES, WINDOW_TYPES, blankTransform, transformsProblem, withInput, withKind,
+  withoutInput,
   type IntegrationMethod, type SeriesTransform, type TimeUnit, type TransformKind,
   type WindowAggregate, type WindowType,
 } from "./series-transforms";
 
 export function SeriesTransformsEditor({
-  transforms, readOnly, onChange,
+  transforms, readOnly, onChange, seriesVariables,
 }: {
   transforms: SeriesTransform[];
   readOnly: boolean;
   onChange: (next: SeriesTransform[]) => void;
+  /** The time series set variables a formula may add as inputs (§561), where
+   * there are variables to name: the Variables panel. An Object Table's
+   * column has none, and offers none. */
+  seriesVariables?: { id: string; label: string }[];
 }) {
   const set = (index: number, next: SeriesTransform) =>
     onChange(transforms.map((t, i) => (i === index ? next : t)));
@@ -115,12 +120,46 @@ export function SeriesTransformsEditor({
           {t.kind === "formula" && (
             <input
               aria-label={`Transform ${index + 1} formula`}
-              title={`x is the series; + - * / ** and ${FORMULA_FUNCTIONS.join(", ")}`}
+              title={`x is the series${seriesVariables ? ", and each input its name" : ""}; + - * / ** and ${FORMULA_FUNCTIONS.join(", ")}`}
               value={t.expression}
               readOnly={readOnly}
               maxLength={MAX_FORMULA}
               onChange={(e) => set(index, { ...t, expression: e.target.value })}
             />
+          )}
+          {/* p.586's Add input (§561): each input a series variable, named
+              in the formula. */}
+          {t.kind === "formula" && seriesVariables && (
+            <span className="row-actions" data-testid="formula-inputs" style={{ gap: 6, flexWrap: "wrap" }}>
+              {Object.entries(t.inputs ?? {}).map(([name, chosen]) => (
+                <span key={name} className="row-actions" style={{ gap: 4 }}>
+                  <code>{name}</code> =
+                  <select
+                    aria-label={`Transform ${index + 1} input ${name}`}
+                    value={typeof chosen === "string" ? chosen : ""}
+                    disabled={readOnly}
+                    onChange={(e) => set(index, { ...t, inputs: { ...t.inputs, [name]: e.target.value } })}
+                  >
+                    <option value="">Choose a series…</option>
+                    {seriesVariables.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                  </select>
+                  {!readOnly && (
+                    <button type="button" className="btn quiet"
+                            aria-label={`Remove input ${name} of transform ${index + 1}`}
+                            onClick={() => set(index, withoutInput(t, name))}>
+                      ×
+                    </button>
+                  )}
+                </span>
+              ))}
+              {!readOnly && Object.keys(t.inputs ?? {}).length < MAX_FORMULA_INPUTS && (
+                <button type="button" className="btn quiet"
+                        aria-label={`Add an input to transform ${index + 1}`}
+                        onClick={() => set(index, withInput(t))}>
+                  Add input
+                </button>
+              )}
+            </span>
           )}
           {t.kind === "range" && (
             <>

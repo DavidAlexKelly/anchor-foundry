@@ -26,7 +26,7 @@
  */
 
 import { SeriesTransformsEditor } from "./SeriesTransformsEditor";
-import type { SeriesTransform } from "./series-transforms";
+import { seriesDerivationInputs, type SeriesTransform } from "./series-transforms";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEditor } from "@craftjs/core";
 import { useEffect, useMemo, useState } from "react";
@@ -977,8 +977,17 @@ function DerivationEditor({
   function setInput(index: number, value: string) {
     const inputs = [...derivation.inputs];
     inputs[index] = value;
-    onChange({ ...derivation, inputs: inputs.filter(Boolean) });
+    onChange({
+      ...derivation,
+      // A series keeps its object first, however it is chosen: the series
+      // its formulas name follow it (§561), and the server reads them so.
+      inputs: series
+        ? seriesDerivationInputs(inputs[0] ?? "", seriesChain)
+        : inputs.filter(Boolean),
+    });
   }
+
+  const seriesChain = (derivation.config?.transforms as SeriesTransform[] | undefined) ?? [];
 
   const slots =
     arity === "many"
@@ -1183,11 +1192,15 @@ function DerivationEditor({
           {/* p.583's transforms (§524), on the variable for the bucket's
               reason: every widget reading it agrees about what a point is. */}
           <SeriesTransformsEditor
-            transforms={(derivation.config?.transforms as SeriesTransform[] | undefined) ?? []}
+            transforms={seriesChain}
             readOnly={readOnly}
+            seriesVariables={Object.values(variables)
+              .filter((v) => v.kind === "time_series_set" && v.id !== variable.id)
+              .map((v) => ({ id: v.id, label: v.label }))}
             onChange={(transforms) =>
               onChange({
                 ...derivation,
+                inputs: seriesDerivationInputs(derivation.inputs[0] ?? "", transforms),
                 config: { ...derivation.config, transforms },
               })
             }

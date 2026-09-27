@@ -15,6 +15,7 @@ its own answer to "what did this look like last Tuesday".
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
@@ -479,10 +480,18 @@ def _instant(raw: Any, what: str) -> str | None:
         raise ValueError(f"the {what} {raw!r} is not a date and time") from None
 
 
-def parse_transforms(raw: Any) -> list[dict[str, Any]]:
+def parse_transforms(
+    raw: Any, *, inputs: str = "none", _depth: int = 0,
+) -> list[dict[str, Any]]:
     """The transforms a series is read through, in order, or a ValueError
     saying which one is wrong and why. Checked where they are saved (a
-    variable) and again where they are read, since the read builds SQL."""
+    variable) and again where they are read, since the read builds SQL.
+
+    `inputs` says what a formula's other inputs (§561) may be here: `none`
+    where there is nothing to name one by (a table's series column, a read by
+    series id), `variables` in a variable's own definition, where each is a
+    time series set variable's id, and `references` in a read, where each is
+    that variable resolved - the object, the property and its own chain."""
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -533,8 +542,11 @@ def parse_transforms(raw: Any) -> list[dict[str, Any]]:
                     raise ValueError("a formula needs an expression")
                 if len(expression) > MAX_FORMULA:
                     raise ValueError(f"a formula is at most {MAX_FORMULA} characters")
-                formula_sql(expression)
+                named = _formula_inputs(item.get("inputs"), inputs, _depth)
+                formula_sql(expression, tuple(named))
                 parsed = {"kind": kind, "expression": expression.strip()}
+                if named:
+                    parsed["inputs"] = named
             else:
                 start = _instant(item.get("start"), "start")
                 end = _instant(item.get("end"), "end")
@@ -559,30 +571,105 @@ def _epoch_seconds(instant: str) -> float:
 
 
 #: p.586's formula: "build formulas using variable references to these
-#: inputs". One input here, the series itself, named `x`; p.586's example
-#: ("scales the input time series by a factor of two, and adds five") is
-#: `x * 2 + 5`.
+#: inputs". The series itself is `x`; p.586's example ("scales the input time
+#: series by a factor of two, and adds five") is `x * 2 + 5`.
 FORMULA_VARIABLE = "x"
+#: p.586's **Add input** (§561): "users can add new input time series - either
+#: time series properties or the outputs from other transforms - to the
+#: transform". Each is named in the formula; ours caps how many and how deep
+#: (an input's own chain may have a formula with inputs of its own).
+MAX_FORMULA_INPUTS = 4
+MAX_INPUT_DEPTH = 3
+_INPUT_NAME = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
+
+
+def _formula_inputs(raw: Any, mode: str, depth: int) -> dict[str, Any]:
+    """A formula's other inputs by name, checked for where they are written:
+    see `parse_transforms`."""
+    if raw is None or raw == {}:
+        return {}
+    if mode == "none":
+        raise ValueError(
+            "a formula here has only its own series - other inputs are a time "
+            "series set variable's (p.586)"
+        )
+    if not isinstance(raw, dict):
+        raise ValueError("a formula's inputs must be an object of name -> input")
+    if len(raw) > MAX_FORMULA_INPUTS:
+        raise ValueError(f"a formula takes at most {MAX_FORMULA_INPUTS} other inputs")
+    if depth >= MAX_INPUT_DEPTH:
+        raise ValueError(f"a formula's inputs nest at most {MAX_INPUT_DEPTH} deep")
+    out: dict[str, Any] = {}
+    for name, value in raw.items():
+        if (not isinstance(name, str) or not _INPUT_NAME.match(name)
+                or name == FORMULA_VARIABLE or name in FORMULA_FUNCTIONS):
+            raise ValueError(
+                f"{name!r} cannot name an input: a lower-case word of at most 16 "
+                f"letters, digits and underscores, other than {FORMULA_VARIABLE} "
+                "and the functions"
+            )
+        if mode == "variables":
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"input {name} must name a time series set variable")
+            out[name] = value
+        else:
+            out[name] = _input_reference(name, value, depth)
+    return out
+
+
+def _input_reference(name: str, raw: Any, depth: int) -> dict[str, Any]:
+    """One input as a read carries it: the time series set it was resolved
+    from, which is the same question `instance_series_points` answers."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"input {name} must name an object's time series")
+    ref: dict[str, Any] = {}
+    for field in ("object_type_id", "instance_id", "property"):
+        value = raw.get(field)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"input {name} needs its {field}")
+        if field != "property":
+            try:
+                value = str(UUID(value))
+            except ValueError:
+                raise ValueError(f"input {name}: {value!r} is not an id") from None
+        ref[field] = value
+    for field, allowed, default in (("interval", INTERVALS, "day"),
+                                    ("aggregate", AGGREGATES, "avg")):
+        value = raw.get(field, default)
+        if value not in allowed:
+            raise ValueError(f"input {name}: the {field} must be one of {', '.join(allowed)}")
+        ref[field] = value
+    try:
+        ref["transforms"] = parse_transforms(
+            raw.get("transforms"), inputs="references", _depth=depth + 1)
+    except ValueError as exc:
+        raise ValueError(f"input {name}: {exc}") from None
+    return ref
 #: The functions a formula may call, each one argument. The ones with a
 #: domain answer outside it with a gap rather than failing the whole read.
 FORMULA_FUNCTIONS = ("abs", "sqrt", "ln", "log10", "exp", "floor", "ceil", "round")
 MAX_FORMULA = 200
 
 
-def formula_sql(expression: str) -> str:
+def formula_sql(expression: str, inputs: Sequence[str] = ()) -> str:
     """A formula over `x` as SQL over `value`, or a ValueError saying what in
     it is not arithmetic. Parsed, never interpolated: only numbers, `x`, the
-    four operations, powers, brackets and FORMULA_FUNCTIONS get through."""
+    four operations, powers, brackets and FORMULA_FUNCTIONS get through.
+
+    With other inputs (§561) the series is joined to them: `x` is `x.value`
+    and each input `in_<name>.value`, as `_transform_sql` aliases them."""
     import ast
 
     try:
         tree = ast.parse(expression.strip(), mode="eval")
     except SyntaxError:
         raise ValueError(f"{expression!r} is not a formula") from None
-    return _formula_node(tree.body)
+    columns = ({FORMULA_VARIABLE: "x.value", **{n: f"in_{n}.value" for n in inputs}}
+               if inputs else {FORMULA_VARIABLE: "value"})
+    return _formula_node(tree.body, columns)
 
 
-def _formula_node(node: Any) -> str:
+def _formula_node(node: Any, columns: dict[str, str]) -> str:
     import ast
 
     if isinstance(node, ast.Constant) and type(node.value) in (int, float):
@@ -590,15 +677,15 @@ def _formula_node(node: Any) -> str:
         if number != number or number in (float("inf"), float("-inf")):
             raise ValueError(f"{node.value!r} is too large a number for a formula")
         return repr(number)
-    if isinstance(node, ast.Name) and node.id == FORMULA_VARIABLE:
-        return "CAST(value AS DOUBLE)"
+    if isinstance(node, ast.Name) and node.id in columns:
+        return f"CAST({columns[node.id]} AS DOUBLE)"
     if isinstance(node, ast.Name):
-        raise ValueError(f"a formula knows only {FORMULA_VARIABLE}, not {node.id!r}")
+        raise ValueError(f"a formula knows only {', '.join(columns)}, not {node.id!r}")
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
         sign = "-" if isinstance(node.op, ast.USub) else "+"
-        return f"({sign}{_formula_node(node.operand)})"
+        return f"({sign}{_formula_node(node.operand, columns)})"
     if isinstance(node, ast.BinOp):
-        left, right = _formula_node(node.left), _formula_node(node.right)
+        left, right = _formula_node(node.left, columns), _formula_node(node.right, columns)
         if isinstance(node.op, ast.Add):
             return f"({left} + {right})"
         if isinstance(node.op, ast.Sub):
@@ -620,7 +707,7 @@ def _formula_node(node: Any) -> str:
             raise ValueError(f"a formula may call only {', '.join(FORMULA_FUNCTIONS)}")
         if len(node.args) != 1 or node.keywords:
             raise ValueError(f"{name} takes one argument")
-        arg = _formula_node(node.args[0])
+        arg = _formula_node(node.args[0], columns)
         # sqrt and the logarithms are guarded because DuckDB *raises* outside
         # their domain, which would fail the whole series for one point.
         if name == "sqrt":
@@ -638,10 +725,14 @@ def _window_call(aggregate: str) -> str:
     return f"{aggregate}(value)"
 
 
-def _transform_sql(transform: dict[str, Any], source: str, *, per_series: bool = False) -> str:
+def _transform_sql(
+    transform: dict[str, Any], source: str, *, per_series: bool = False,
+    inputs: dict[str, str] | None = None,
+) -> str:
     """One transform as a query over `source`, which has `at` and `value` - and
     `series`, when `per_series` is set: a page of series at once (§555), each
-    transformed on its own, the windows partitioned by it."""
+    transformed on its own, the windows partitioned by it. `inputs` names the
+    query each of a formula's other inputs is read from (§561)."""
     s = "series, " if per_series else ""
     part = "PARTITION BY series " if per_series else ""
     kind = transform["kind"]
@@ -700,6 +791,22 @@ def _transform_sql(transform: dict[str, Any], source: str, *, per_series: bool =
         # p.586: "identical to the input time series, but temporally shifted".
         return (f"SELECT {s}CAST(at AS TIMESTAMP) + INTERVAL ({transform['by']}) "
                 f"{transform['unit'].upper()} AS at, value FROM {source}")
+    if kind == "formula" and inputs:
+        # §561: p.586's formula over several series. **Its points are the
+        # series' own**, and each other input is read *as of* each of them -
+        # its latest value at or before that instant - so a daily input
+        # against hourly readings holds its day's value, and an input with no
+        # reading yet leaves a gap, as a division by zero does. p.586 does not
+        # say how inputs line up; this is the rule that invents no reading.
+        joins = " ".join(
+            f"ASOF LEFT JOIN (SELECT CAST(at AS TIMESTAMP) AS at, value FROM {query}) "
+            f"in_{name} ON CAST(x.at AS TIMESTAMP) >= in_{name}.at"
+            for name, query in inputs.items()
+        )
+        expression = formula_sql(transform["expression"], tuple(inputs))
+        return (f"SELECT at, CASE WHEN isfinite(v) THEN v END AS value FROM "
+                f"(SELECT x.at AS at, CAST({expression} AS DOUBLE) AS v "
+                f"FROM {source} x {joins}) formula")
     if kind == "formula":
         # p.586's formula, over this series as `x`. A point whose formula has
         # no answer (a division by zero, a square root of a negative) is a
@@ -762,21 +869,48 @@ def points_sql(
         # §524: every point goes through the transforms and the cap comes
         # last. A cumulative sum over the first five thousand readings would
         # be a different series, not a shorter one.
-        ctes = [f"t0 AS ({_base_sql(ts, val, clause, interval, aggregate)})"]
-        for n, transform in enumerate(transforms, start=1):
-            ctes.append(f"t{n} AS ({_transform_sql(transform, f't{n - 1}')})")
-        return (f"WITH {', '.join(ctes)} SELECT at, value FROM t{len(transforms)} "
+        ctes: list[str] = []
+        last = _chain(ctes, "t", _base_sql(ts, val, clause, interval, aggregate), transforms)
+        return (f"WITH {', '.join(ctes)} SELECT at, value FROM {last} "
                 f"ORDER BY at LIMIT {capped}")
     return f"{_base_sql(ts, val, clause, interval, aggregate)} ORDER BY at LIMIT {capped}"
 
 
-def _base_sql(ts: str, val: str, clause: str, interval: str, aggregate: str) -> str:
+def _chain(ctes: list[str], prefix: str, base: str, transforms: list[dict[str, Any]]) -> str:
+    """A series and its transforms as CTEs `<prefix>0`, `<prefix>1`, …, added
+    to `ctes`, with the name of the last. A formula's other inputs (§561) are
+    chains of their own, read in full before it: an input capped or cut short
+    would be a different series, for the cap's reason."""
+    ctes.append(f"{prefix}0 AS ({base})")
+    for n, transform in enumerate(transforms, start=1):
+        joined = {
+            name: _chain(ctes, f"{prefix}{n}_{name}_", _input_sql(name, spec),
+                         spec["transforms"])
+            for name, spec in (transform.get("inputs") or {}).items()
+        }
+        ctes.append(f"{prefix}{n} AS "
+                    f"({_transform_sql(transform, f'{prefix}{n - 1}', inputs=joined)})")
+    return f"{prefix}{len(transforms)}"
+
+
+def _input_sql(name: str, spec: dict[str, Any]) -> str:
+    """A formula input's own series, from the table the read loaded its
+    dataset as (`routes/objects._resolve_formula_inputs`)."""
+    if "table" not in spec:
+        raise ValueError(f"input {name} was not resolved to a dataset")  # pragma: no cover
+    where = f"CAST({_quote(spec['key_column'])} AS VARCHAR) = {_literal(spec['series_id'])}"
+    return _base_sql(_quote(spec["timestamp_column"]), _quote(spec["value_column"]), where,
+                     spec["interval"], spec["aggregate"], table=spec["table"])
+
+
+def _base_sql(ts: str, val: str, clause: str, interval: str, aggregate: str,
+              table: str = "dataset") -> str:
     """The series itself, bucketed or not, unordered and uncapped."""
     if interval == "none":
         # The raw points. Still capped and still ordered by the caller - "no
         # bucketing" is not "no limit", and a series with a decade of readings
         # would otherwise decide how much memory the API uses.
-        return f"SELECT {ts} AS at, {val} AS value FROM dataset WHERE {clause}"
+        return f"SELECT {ts} AS at, {val} AS value FROM {table} WHERE {clause}"
     # `last` is the value at the greatest timestamp in the bucket, which is not
     # an aggregate DuckDB spells `last(...)` reliably across versions - the
     # arg_max form says exactly what is meant and needs no ordering guarantee.
@@ -787,7 +921,7 @@ def _base_sql(ts: str, val: str, clause: str, interval: str, aggregate: str) -> 
     )
     return (
         f"SELECT date_trunc({_literal(interval)}, {ts}) AS at, "
-        f"{expression} AS value FROM dataset "
+        f"{expression} AS value FROM {table} "
         f"WHERE {clause} GROUP BY at"
     )
 

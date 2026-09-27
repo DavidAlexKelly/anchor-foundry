@@ -672,8 +672,25 @@ def parse(
 
     _refuse_duplicate_external_ids(variables)
     _refuse_unknown_inputs(variables)
+    _refuse_non_series_inputs(variables)
     _refuse_cycles(variables)
     return variables
+
+
+def _refuse_non_series_inputs(variables: dict[str, Variable]) -> None:
+    """A formula's other inputs (§561) are time series sets: p.586's "time
+    series properties or the outputs from other transforms", which is what a
+    time series set variable holds."""
+    for variable in variables.values():
+        d = variable.derivation
+        if d is None or d.transform != "object_series":
+            continue
+        for ref in d.inputs[1:]:
+            if variables[ref].kind != "time_series_set":
+                raise VariableError(
+                    f"variable {variable.label!r}: a formula's input "
+                    f"{variables[ref].label!r} is not a time series set"
+                )
 
 
 def _parse_interface(
@@ -1300,9 +1317,9 @@ def _check_arity(vid: str, d: Derivation) -> None:
     elif d.transform == "object_series":
         from . import time_series
 
-        if len(d.inputs) != 1:
+        if len(d.inputs) < 1:
             raise VariableError(
-                f"variable {vid!r}: object_series needs exactly one input "
+                f"variable {vid!r}: object_series needs an input "
                 "(the variable holding the object)"
             )
         prop = d.config.get("property")
@@ -1329,9 +1346,18 @@ def _check_arity(vid: str, d: Derivation) -> None:
         # p.583's transforms (§524), on the variable for the bucket's reason:
         # two widgets reading one series agree about what a point means.
         try:
-            time_series.parse_transforms(d.config.get("transforms"))
+            chain = time_series.parse_transforms(d.config.get("transforms"), inputs="variables")
         except ValueError as exc:
             raise VariableError(f"variable {vid!r}: {exc}") from None
+        # §561: p.586's other formula inputs are variables, so they are inputs
+        # of the derivation too - after the object, each once - which is what
+        # orders them, refuses a cycle and draws them in the lineage.
+        named = series_inputs(chain)
+        if list(d.inputs[1:]) != named:
+            raise VariableError(
+                f"variable {vid!r}: object_series reads the object and then each "
+                "series its formulas name, in order and once each"
+            )
     elif d.transform == "traverse_set":
         if len(d.inputs) != 1:
             raise VariableError(
@@ -1612,7 +1638,8 @@ def _apply(
     if d.transform == "filter_value":
         return _filter_value(variable, inputs[0], str(d.config["property"]))
     if d.transform == "object_series":
-        return _object_series(variable, inputs[0], d.config)
+        return _object_series(variable, inputs[0], d.config,
+                              dict(zip(d.inputs[1:], inputs[1:])))
     if d.transform == "traverse_set":
         return _traverse_set(variable, inputs[0], d.config)
     raise VariableError(f"unknown transform {d.transform!r}")  # pragma: no cover
@@ -1758,8 +1785,20 @@ def _filter_value(variable: Variable, clauses: Any, property_name: str) -> Any:
     return None
 
 
+def series_inputs(chain: list[dict[str, Any]]) -> list[str]:
+    """The time series set variables a chain's formulas name (§561), in the
+    order they are first named."""
+    out: list[str] = []
+    for transform in chain:
+        for variable_id in (transform.get("inputs") or {}).values():
+            if variable_id not in out:
+                out.append(variable_id)
+    return out
+
+
 def _object_series(
-    variable: Variable, obj: Any, config: dict[str, Any]
+    variable: Variable, obj: Any, config: dict[str, Any],
+    series: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """A time series set: one object's `time_series` property, as a reference.
 
@@ -1811,13 +1850,24 @@ def _object_series(
             "type or no id - a series is read through the object it belongs to, "
             "so both are needed to ask for one"
         )
+    chain = time_series.parse_transforms(config.get("transforms"), inputs="variables")
+    for transform in chain:
+        if "inputs" not in transform:
+            continue
+        refs = {name: (series or {}).get(vid) for name, vid in transform["inputs"].items()}
+        if any(ref is None for ref in refs.values()):
+            # §561: a formula over a series nobody has picked yet has no
+            # answer, and the same "nothing yet" as an object not picked is
+            # the honest one - not a line drawn from half its inputs.
+            return None
+        transform["inputs"] = refs
     return {
         "object_type_id": str(type_id),
         "instance_id": str(instance_id),
         "property": str(config["property"]),
         "interval": str(config.get("interval", "day")),
         "aggregate": str(config.get("aggregate", "avg")),
-        "transforms": time_series.parse_transforms(config.get("transforms")),
+        "transforms": chain,
     }
 
 

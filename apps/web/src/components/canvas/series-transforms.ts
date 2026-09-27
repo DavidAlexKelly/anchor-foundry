@@ -29,6 +29,12 @@ export type IntegrationMethod = (typeof INTEGRATION_METHODS)[number];
  * parses it; these are what the editor says it may use. */
 export const FORMULA_FUNCTIONS = ["abs", "sqrt", "ln", "log10", "exp", "floor", "ceil", "round"] as const;
 export const MAX_FORMULA = 200;
+/** p.586's **Add input** (§561): "users can add new input time series …
+ * and then build formulas using variable references to these inputs". Each
+ * is a time series set variable, named in the formula; the server's caps. */
+export const MAX_FORMULA_INPUTS = 4;
+/** The names offered, in order: the series itself is `x`. */
+const INPUT_NAMES = "yzabcdefghijklmnopqrstuvw".split("");
 export const MAX_SPAN = 100_000;
 
 export type SeriesTransform =
@@ -41,7 +47,10 @@ export type SeriesTransform =
   | { kind: "integral"; unit: TimeUnit; method: IntegrationMethod }
   | { kind: "shift"; by: number; unit: TimeUnit }
   | { kind: "range"; start: string | null; end: string | null }
-  | { kind: "formula"; expression: string };
+  | { kind: "formula"; expression: string;
+      /** §561: the other inputs by name - a variable's id where the variable
+       * is edited, and that variable resolved where a widget reads it. */
+      inputs?: Record<string, unknown> };
 
 /** What the editor offers each kind as. */
 export const KIND_LABELS: Record<TransformKind, string> = {
@@ -113,7 +122,7 @@ export function transformText(t: SeriesTransform): string {
       if (t.start && t.end) return `from ${t.start} to ${t.end}`;
       return t.start ? `from ${t.start}` : `until ${t.end}`;
     case "formula":
-      return `x → ${t.expression.trim()}`;
+      return `${["x", ...Object.keys(t.inputs ?? {})].join(", ")} → ${t.expression.trim()}`;
   }
 }
 
@@ -140,6 +149,9 @@ export function transformProblem(t: SeriesTransform): string | null {
     case "formula":
       if (t.expression.trim() === "") return "A formula needs an expression.";
       if (t.expression.length > MAX_FORMULA) return `A formula is at most ${MAX_FORMULA} characters.`;
+      for (const [name, chosen] of Object.entries(t.inputs ?? {})) {
+        if (!chosen) return `Choose a series for ${name}.`;
+      }
       return null;
     case "range":
       if (!t.start && !t.end) return "A time range needs a start, an end or both.";
@@ -158,6 +170,45 @@ export function transformsProblem(transforms: SeriesTransform[]): string | null 
     if (problem) return `Transform ${index + 1}: ${problem}`;
   }
   return null;
+}
+
+/** A formula with one more input (§561), under the first name it does not
+ * use yet, with no series chosen. */
+export function withInput(t: Extract<SeriesTransform, { kind: "formula" }>): SeriesTransform {
+  const inputs = t.inputs ?? {};
+  const name = INPUT_NAMES.find((n) => !(n in inputs));
+  if (!name || Object.keys(inputs).length >= MAX_FORMULA_INPUTS) return t;
+  return { ...t, inputs: { ...inputs, [name]: "" } };
+}
+
+/** A formula without one of its inputs; none left is no `inputs` at all, so
+ * a one-series formula reads as it always has. */
+export function withoutInput(
+  t: Extract<SeriesTransform, { kind: "formula" }>, name: string,
+): SeriesTransform {
+  const { [name]: _dropped, ...rest } = t.inputs ?? {};
+  const { inputs: _all, ...plain } = t;
+  return Object.keys(rest).length ? { ...plain, inputs: rest } : plain;
+}
+
+/** The series variables a chain's formulas name, in the order first named -
+ * the server's `series_inputs`, which the derivation's inputs must match. */
+export function seriesInputs(transforms: SeriesTransform[]): string[] {
+  const out: string[] = [];
+  for (const t of transforms) {
+    if (t.kind !== "formula") continue;
+    for (const chosen of Object.values(t.inputs ?? {})) {
+      if (typeof chosen === "string" && chosen && !out.includes(chosen)) out.push(chosen);
+    }
+  }
+  return out;
+}
+
+/** A series variable's derivation inputs: the object, then each series its
+ * formulas name (§561). Nothing at all while there is neither. */
+export function seriesDerivationInputs(object: string, transforms: SeriesTransform[]): string[] {
+  const named = seriesInputs(transforms);
+  return object || named.length ? [object, ...named] : [];
 }
 
 /** A transform's kind changed: a fresh one of the new kind, since the fields

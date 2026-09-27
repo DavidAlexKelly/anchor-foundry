@@ -767,19 +767,28 @@ def preview(parquet_path: str, limit: int = PREVIEW_ROWS) -> TabularResult:
         con.close()
 
 
-def query(parquet_path: str, sql: str, max_rows: int = MAX_RESULT_ROWS) -> TabularResult:
-    """Run user SQL with the dataset available as the table `dataset`."""
-    size = os.path.getsize(parquet_path)
-    if size > MAX_INTERACTIVE_BYTES:
-        raise DatasetEngineError(
-            "this dataset is too large for interactive queries in this build - "
-            "use export, or a model transform"
-        )
+def query(
+    parquet_path: str, sql: str, max_rows: int = MAX_RESULT_ROWS,
+    tables: dict[str, str] | None = None,
+) -> TabularResult:
+    """Run user SQL with the dataset available as the table `dataset`, and each
+    of `tables` - name to parquet path - as its own: a time series formula's
+    other inputs (§561) live in whichever datasets their series do. The names
+    are the caller's, never a user's."""
+    extra = dict(tables or {})
+    for path in [parquet_path, *extra.values()]:
+        if os.path.getsize(path) > MAX_INTERACTIVE_BYTES:
+            raise DatasetEngineError(
+                "this dataset is too large for interactive queries in this build - "
+                "use export, or a model transform"
+            )
     max_rows = max(1, min(max_rows, MAX_RESULT_ROWS))
     con = duckdb.connect()
     try:
         con.execute(f"SET memory_limit='{QUERY_MEMORY_LIMIT}'")
         con.execute(f"CREATE TABLE dataset AS SELECT * FROM read_parquet('{parquet_path}')")
+        for name, path in extra.items():
+            con.execute(f"CREATE TABLE {name} AS SELECT * FROM read_parquet('{path}')")
         # Sandbox boundary: from here on, no filesystem or network access.
         con.execute("SET enable_external_access=false")
         try:

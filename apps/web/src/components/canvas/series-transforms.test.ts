@@ -5,6 +5,7 @@ import {
   FORMULA_FUNCTIONS, INTEGRATION_METHODS, KIND_LABELS, MAX_FORMULA, MAX_SPAN, WINDOW_TYPES, MAX_TRANSFORMS, TIME_UNITS, TRANSFORM_KINDS, WINDOW_AGGREGATES,
   blankTransform, readableTransforms, transformProblem, transformText, transformsByColumn,
   transformsProblem, transformsText, withColumnTransforms, withKind,
+  MAX_FORMULA_INPUTS, seriesDerivationInputs, seriesInputs, withInput, withoutInput,
   type SeriesTransform,
 } from "./series-transforms";
 
@@ -143,5 +144,43 @@ describe("an Object Table's transforms by column (§555)", () => {
     expect(withColumnTransforms({ a: [sum] }, "b", [sum])).toEqual({ a: [sum], b: [sum] });
     expect(withColumnTransforms({ a: [sum] }, "a", [])).toBeNull();
     expect(withColumnTransforms({ a: [sum], b: [sum] }, "a", [])).toEqual({ b: [sum] });
+  });
+});
+
+describe("a formula's other inputs (§561)", () => {
+  type Formula = Extract<SeriesTransform, { kind: "formula" }>;
+  const f = (inputs?: Record<string, unknown>): Formula =>
+    ({ kind: "formula", expression: "x - y", ...(inputs ? { inputs } : {}) });
+
+  it("adds inputs under the next free name, up to the cap", () => {
+    expect(withInput(f())).toEqual(f({ y: "" }));
+    expect(withInput(f({ y: "v_1" }))).toEqual(f({ y: "v_1", z: "" }));
+    expect(withInput(f({ z: "v_1" }))).toEqual(f({ z: "v_1", y: "" }));
+    let full: Formula = f();
+    for (let i = 0; i < MAX_FORMULA_INPUTS + 1; i++) full = withInput(full) as Formula;
+    expect(Object.keys(full.inputs!)).toEqual(["y", "z", "a", "b"]);
+  });
+
+  it("removes one, and none left is no inputs at all", () => {
+    expect(withoutInput(f({ y: "v_1", z: "v_2" }), "y")).toEqual(f({ z: "v_2" }));
+    expect(withoutInput(f({ y: "v_1" }), "y")).toEqual(f());
+  });
+
+  it("names the inputs in words, and asks for a series not chosen", () => {
+    expect(transformText(f({ y: "v_1", z: "v_2" }))).toBe("x, y, z → x - y");
+    expect(transformText(f({ y: { object_type_id: "t" } }))).toBe("x, y → x - y");
+    expect(transformProblem(f({ y: "" }))).toBe("Choose a series for y.");
+    expect(transformProblem(f({ y: "v_1" }))).toBeNull();
+  });
+
+  it("gives the derivation its object, then each series named, once, in order", () => {
+    const chain: SeriesTransform[] = [
+      f({ y: "v_2", z: "v_1" }), { kind: "cumulative", aggregate: "sum" }, f({ y: "v_1", z: "" }),
+    ];
+    expect(seriesInputs(chain)).toEqual(["v_2", "v_1"]);
+    expect(seriesDerivationInputs("v_obj", chain)).toEqual(["v_obj", "v_2", "v_1"]);
+    expect(seriesDerivationInputs("v_obj", [])).toEqual(["v_obj"]);
+    expect(seriesDerivationInputs("", chain)).toEqual(["", "v_2", "v_1"]);
+    expect(seriesDerivationInputs("", [])).toEqual([]);
   });
 });
