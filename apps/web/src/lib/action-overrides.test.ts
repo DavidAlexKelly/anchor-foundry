@@ -183,6 +183,18 @@ describe("sameAsParameter", () => {
     )).toBeNull();
   });
 
+  it("warns of a constraint the parameter already has (§584)", () => {
+    const only = { kind: "enum", values: ["P0"] } as const;
+    expect(sameAsParameter(
+      block({ set_constraint: { ...only, values: ["P0"] } }),
+      parameter({ value_constraint: { ...only, values: ["P0"] } }),
+    )).toContain("that constraint");
+    expect(sameAsParameter(
+      block({ set_constraint: { ...only, values: ["P0"] } }),
+      parameter({ value_constraint: { ...only, values: ["P1"] } }),
+    )).toBeNull();
+  });
+
   it("names every field that matches, not just the first", () => {
     const note = sameAsParameter(
       block({ set_hidden: true, set_required: true }),
@@ -209,6 +221,11 @@ describe("thenSummary", () => {
   it("shows the default it would set", () => {
     expect(thenSummary(block({ set_default: "see the ticket" })))
       .toContain("see the ticket");
+  });
+
+  it("says p.45's fourth, the constraint (§584)", () => {
+    expect(thenSummary(block({ set_constraint: { kind: "enum", values: ["P0"] } })))
+      .toBe("change its constraint");
   });
 
   it("says so when a half-written block does nothing", () => {

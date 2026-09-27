@@ -26,7 +26,7 @@ from uuid import UUID, uuid4
 
 import anyio
 from fastapi import APIRouter, Depends, Query, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
@@ -88,6 +88,8 @@ class OverrideBlockOut(BaseModel):
     set_hidden: bool | None = None
     set_required: bool | None = None
     set_default: Any | None = None
+    #: p.45's fourth: the constraint in place of the parameter's own (§584).
+    set_constraint: dict[str, Any] | None = None
 
 
 class OverrideBlockIn(BaseModel):
@@ -101,6 +103,7 @@ class OverrideBlockIn(BaseModel):
     set_hidden: bool | None = None
     set_required: bool | None = None
     set_default: Any | None = None
+    set_constraint: dict[str, Any] | None = None
 
 
 class ActionParameterOut(BaseModel):
@@ -168,6 +171,24 @@ class ActionParameterOut(BaseModel):
     #: parameter without them is one whose `required` is true only for whoever
     #: has no override (§329).
     overrides: list[OverrideBlockOut] = Field(default_factory=list)
+    #: `action-types` p.8 and p.71: what values this parameter accepts (§584;
+    #: db 0119), a value type's constraint in shape. `None` is p.8's "User
+    #: input". Not redacted: it is what the form offers, and a form cannot
+    #: offer p.8's P0, P1 and P2 without being told them.
+    value_constraint: dict[str, Any] | None = None
+    #: The constraint in one line, in the words the refusal uses, so the form
+    #: can say what is allowed without a second reading of the shape.
+    constraint_summary: str = ""
+
+    @model_validator(mode="after")
+    def _summarise(self) -> "ActionParameterOut":
+        from ..services import value_constraints
+
+        self.constraint_summary = (
+            value_constraints.describe(self.value_constraint)
+            if self.value_constraint else ""
+        )
+        return self
 
 
 class ActionRuleOut(BaseModel):
@@ -686,6 +707,9 @@ class ActionParameterIn(BaseModel):
     #: omitted list means no blocks, which is what every parameter written
     #: before §329 has.
     overrides: list[OverrideBlockIn] = Field(default_factory=list, max_length=20)
+    #: p.8 and p.71's constraint (§584): `{kind, ...}` in a value type's shape.
+    #: `None` is p.8's "User input".
+    value_constraint: dict[str, Any] | None = None
 
 
 class ActionRuleIn(BaseModel):

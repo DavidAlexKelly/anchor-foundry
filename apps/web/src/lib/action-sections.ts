@@ -39,7 +39,7 @@
  * same action did different things depending on which boxes were on screen.
  */
 
-import type { ActionFormSection } from "@platform/types";
+import type { ActionFormSection, ValueConstraint } from "@platform/types";
 
 /** The wire shape, which lives in the shared contract beside every other one
  * (`packages/types`). Re-exported under the name this module uses throughout,
@@ -70,6 +70,10 @@ export interface FormParameter {
   struct_fields?: StructField[] | null;
   /** db 0118: an array parameter's element type, for its rows (§580). */
   array_of?: string | null;
+  /** p.8's constraint and the server's reading of it, which the form draws
+   * as a dropdown or says beside the box (§584). */
+  value_constraint?: ValueConstraint | null;
+  constraint_summary?: string;
 }
 
 function side(spec: unknown): Record<string, unknown> {

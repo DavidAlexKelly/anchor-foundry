@@ -2861,6 +2861,9 @@ export interface ActionOverrideBlock {
   set_hidden: boolean | null;
   set_required: boolean | null;
   set_default: unknown;
+  /** p.45's fourth: the constraint this block puts in place of the
+   * parameter's own (§584; db 0119). `null` leaves it alone. */
+  set_constraint?: ValueConstraint | null;
 }
 
 /** Where one of p.36's filter values comes from (§331, §334).
@@ -2979,6 +2982,13 @@ export interface ActionParameter {
   /** p.43-46's override blocks, in the order the first-match rule reads them.
    * Absent on a payload that predates §329, and empty for most parameters. */
   overrides?: ActionOverrideBlock[];
+  /** `action-types` p.8 and p.71: what values this parameter accepts (§584;
+   * db 0119), in a value type's shape (p.233). `null`/absent is p.8's "User
+   * input". On an array parameter it is each item's. */
+  value_constraint?: ValueConstraint | null;
+  /** The server's one-line reading of `value_constraint`, "" when there is
+   * none, so the form says what is allowed in the words the refusal uses. */
+  constraint_summary?: string;
 }
 
 /** What the action does with them (p.75). */

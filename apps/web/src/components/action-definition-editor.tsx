@@ -82,6 +82,8 @@ import {
 } from "@/lib/action-sections";
 import type { ActionType } from "@/lib/types";
 import { DEFAULT_ELEMENT, ELEMENT_TYPES } from "@/lib/array-property";
+import { constraintBaseType } from "@/lib/parameter-constraint";
+import { ValueConstraintEditor } from "@/components/value-constraint-editor";
 
 /** `action_parameter_type` (migration 0044): the ontology's property types
  * plus `object`, which p.25 needs for a parameter that takes an object. */
@@ -630,6 +632,8 @@ export function ActionDefinitionEditor({
       // p.43-46's blocks travel with the parameter, so the dialog edits them
       // in the same document it already saves whole (§329).
       overrides: p.overrides ?? [],
+      // p.8's constraint (§584). Loaded for the reason above.
+      value_constraint: p.value_constraint ?? null,
     })),
   );
   const [rules, setRules] = useState<Rule[]>(
@@ -854,6 +858,9 @@ export function ActionDefinitionEditor({
                     // An array says what of from the moment it is one, and
                     // nothing else carries an element type (db 0118).
                     array_of: e.target.value === "array" ? (p.array_of || DEFAULT_ELEMENT) : null,
+                    // A constraint was written against the old type (§584):
+                    // P0-P2 mean nothing to a date, and the save would refuse it.
+                    value_constraint: null,
                   })}
                 >
                   {PARAMETER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -862,7 +869,9 @@ export function ActionDefinitionEditor({
                   <select
                     value={p.array_of || DEFAULT_ELEMENT}
                     aria-label={`Parameter ${i + 1} element type`}
-                    onChange={(e) => patchParameter(i, { array_of: e.target.value })}
+                    onChange={(e) => patchParameter(i, {
+                      array_of: e.target.value, value_constraint: null,
+                    })}
                   >
                     {PARAMETER_ELEMENTS.map((t) => <option key={t} value={t}>of {t}</option>)}
                   </select>
@@ -1423,6 +1432,42 @@ export function ActionDefinitionEditor({
         Add a criterion
       </button>
 
+      {/* p.8's constraints (§584): "Change the constraints from User input to
+          Multiple choice… Add P0, P1 and P2 as options", and p.71's string
+          length. A value type's constraint (p.233), so one editor and one set
+          of words serve both; the server checks it where the submission is
+          bound, after p.45's overrides. */}
+      {parameters.some((p) => constraintBaseType(p)) && (
+        <>
+          <h3 className="field-label" style={{ marginTop: 24 }}>Constraints</h3>
+          <p className="field-hint">
+            p.8: limit the values a parameter can take on. User input takes
+            whatever is typed; one of a fixed list is p.8&rsquo;s multiple
+            choice, drawn as a dropdown. On a list parameter each item is
+            checked.
+          </p>
+          <div data-testid="parameter-constraints">
+            {parameters.map((p, i) => {
+              const baseType = constraintBaseType(p);
+              if (!baseType) return null;
+              return (
+                <div key={`${i}:${p.data_type}:${p.array_of ?? ""}`}
+                     data-parameter-constraint={p.api_name} style={{ marginBottom: 8 }}>
+                  <ValueConstraintEditor
+                    baseType={baseType}
+                    value={p.value_constraint ?? null}
+                    onChange={(next) => patchParameter(i, { value_constraint: next })}
+                    label={`Constraint on ${p.display_name || p.api_name}`}
+                    noneLabel="User input"
+                    hint={p.data_type === "array" ? "Each item is checked." : ""}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
       {/* p.33's multiple choice — its *other* shape, for parameters that are
           not objects. Its own block rather than a corner of the one below,
           because "which type does this object parameter hold" and "where do
@@ -1766,6 +1811,34 @@ export function ActionDefinitionEditor({
                         })}
                       />
                     </div>
+                    {/* p.45's fourth, "the parameter's constraints" (§584):
+                        the constraint this block puts in place of the
+                        parameter's own. Null leaves it alone. */}
+                    {constraintBaseType(p) && (
+                      <div className="row-actions" data-override-constraint={bi}>
+                        <select
+                          value={b.set_constraint ? "set" : ""}
+                          aria-label={`${p.api_name} override ${bi + 1} constraint`}
+                          onChange={(e) => patch({
+                            set_constraint: e.target.value === "set"
+                              ? { kind: "enum", values: [] } : null,
+                          })}
+                        >
+                          <option value="">leave the constraint alone</option>
+                          <option value="set">constrain it instead</option>
+                        </select>
+                        {b.set_constraint && (
+                          <ValueConstraintEditor
+                            baseType={constraintBaseType(p)!}
+                            value={b.set_constraint}
+                            onChange={(next) => patch({ set_constraint: next })}
+                            label={`${p.api_name} override ${bi + 1} constraint kind`}
+                            noneLabel="User input"
+                            hint=""
+                          />
+                        )}
+                      </div>
+                    )}
                     {/* p.45: "If an override is configured to take on the same
                         value as the default already set on the parameter, a
                         warning will be shown on the override itself." A

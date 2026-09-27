@@ -45,13 +45,9 @@ function side(spec: unknown): Record<string, unknown> {
     : {};
 }
 
-/** p.45's "then": what a block may change.
- *
- * Constraints are p.45's fourth and are absent, because the thing they would
- * override is: a parameter here has a type, a default, a `required` and a
- * `hidden`, and no value constraints for a block to narrow.
- */
-export const SETTABLE = ["hidden", "required", "default"] as const;
+/** p.45's "then": what a block may change. The constraint is p.45's fourth,
+ * which arrived with parameter constraints themselves (§584). */
+export const SETTABLE = ["hidden", "required", "default", "constraint"] as const;
 
 /** Every parameter any override condition reads.
  *
@@ -132,6 +128,12 @@ export function sameAsParameter(
   ) {
     same.push("that default");
   }
+  if (
+    block?.set_constraint != null
+    && JSON.stringify(block.set_constraint) === JSON.stringify(parameter?.value_constraint)
+  ) {
+    same.push("that constraint");
+  }
   if (same.length === 0) return null;
   return `This override already matches the parameter: it is ${same.join(" and ")} `
     + "anyway. It will change nothing.";
@@ -150,6 +152,7 @@ export function thenSummary(block: OverrideBlock): string {
   if (block?.set_default != null) {
     parts.push(`default it to ${JSON.stringify(block.set_default)}`);
   }
+  if (block?.set_constraint != null) parts.push("change its constraint");
   // `replace_overrides` refuses a block that sets nothing, so this is what a
   // half-written one says while somebody is still filling it in.
   return parts.length ? parts.join(", ") : "change nothing yet";
@@ -196,6 +199,7 @@ export function blankBlock(): OverrideBlock {
     set_hidden: null,
     set_required: null,
     set_default: null,
+    set_constraint: null,
   };
 }
 
