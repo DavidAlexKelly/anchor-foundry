@@ -305,15 +305,18 @@ def viewer_token(stack: None) -> str:
     return tokens["viewer@acme.dev.local"]
 
 
-def _signed_in(browser, token: str, request, *, locale: str | None = None):
+def _signed_in(browser, token: str, request, *, locale: str | None = None,
+               timezone_id: str | None = None):
     """`locale` is handed to the browser context, which is the only honest way
     to ask this question: Chromium sets `navigator.language`, `navigator.
     languages` and the `Accept-Language` header from it together, so a test
     for p.207's "their browser's locale" is testing a browser rather than a
-    stub somebody wrote to agree with the code under it."""
+    stub somebody wrote to agree with the code under it. `timezone_id` is the
+    same argument for p.138's "the user's local timezone" (§596)."""
     context = browser.new_context(
         viewport={"width": 1500, "height": 1200},
         **({"locale": locale} if locale else {}),
+        **({"timezone_id": timezone_id} if timezone_id else {}),
     )
     opened = context.new_page()
     errors: list[str] = []

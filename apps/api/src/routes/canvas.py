@@ -193,6 +193,10 @@ class EvaluateVariablesIn(BaseModel):
     #: Whether to measure (§394). Off by default: every caller but the
     #: Performance Profiler wants the values and nothing else.
     profile: bool = False
+    #: The viewer's time zone as the browser names it (`Europe/Paris`), for a
+    #: cast set to p.138-139's "the user's local timezone" (§596). Absent or
+    #: unknown reads as UTC.
+    time_zone: str | None = Field(default=None, max_length=64)
 
 
 class EvaluateVariablesOut(BaseModel):
@@ -894,6 +898,8 @@ async def evaluate_variables(
             # second walker of it would be the copy that disagrees.
             only=_only_visible(body, document, variables),
             timings=measured,
+            # p.138-139's "the user's local timezone" (§596).
+            time_zone=body.time_zone,
         )
     except variables_service.VariableError as exc:
         # Not the same failure, and not the same fault. The document is fine;
@@ -1267,6 +1273,8 @@ async def evaluate_published_variables(
             # second walker of it would be the copy that disagrees.
             only=_only_visible(body, document, variables),
             timings=measured,
+            # p.138-139's "the user's local timezone" (§596).
+            time_zone=body.time_zone,
         )
     except variables_service.VariableError as exc:
         # The values, not the document - see the note on the project-scoped one.

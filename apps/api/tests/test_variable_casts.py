@@ -252,3 +252,79 @@ def test_only_a_date_or_timestamp_cast_takes_a_zone_variable() -> None:
         })
     assert str(caught.value) == ("variable 'x': cast needs exactly one input, and a second "
                                  "naming its time zone at most")
+
+
+# ---- §596: the viewer's local time zone ---------------------------------------------------
+def local_module(**extra_inputs):
+    return wv.parse({
+        "day": {"id": "day", "kind": "date", "label": "Day", "default": "2024-06-26"},
+        "moment": {"id": "moment", "kind": "timestamp", "label": "Moment",
+                   "default": "2024-06-26T23:30:00Z"},
+        "zone": {"id": "zone", "kind": "string", "label": "Zone"},
+        "text": {"id": "text", "kind": "string", "label": "Text"},
+        "start": {"id": "start", "kind": "timestamp", "label": "Start", "derivation": {
+            "transform": "cast", "inputs": ["day", *extra_inputs.get("zone", [])],
+            "config": {"to": "timestamp", "timezone": "local"}}},
+        "its_day": {"id": "its_day", "kind": "date", "label": "Its day", "derivation": {
+            "transform": "cast", "inputs": ["moment"],
+            "config": {"to": "date", "timezone": "local"}}},
+        "parsed": {"id": "parsed", "kind": "timestamp", "label": "Parsed", "derivation": {
+            "transform": "cast", "inputs": ["text"],
+            "config": {"to": "timestamp", "format": "yyyy-MM-dd HH:mm", "timezone": "local"}}},
+    })
+
+
+def test_p138_139_the_users_local_time_zone_is_the_viewers() -> None:
+    """p.139: "defined either using the user's local timezone, set statically
+    via options in a dropdown, or set dynamically"."""
+    got = wv.evaluate(local_module(), {"text": "2024-06-26 09:00"}, time_zone="Asia/Tokyo")
+    assert got["start"] == "2024-06-25T15:00:00Z"
+    assert got["its_day"] == "2024-06-27"
+    assert got["parsed"] == "2024-06-26T00:00:00Z"
+    got = wv.evaluate(local_module(), {"text": "2024-06-26 09:00"},
+                      time_zone="America/New_York")
+    assert (got["start"], got["its_day"]) == ("2024-06-26T04:00:00Z", "2024-06-26")
+
+
+def test_with_no_viewer_s_zone_local_is_utc() -> None:
+    """A resolve with no browser behind it, or a zone this server does not
+    know, is not refused: the viewer cannot change it."""
+    for zone in (None, "", "Moon/Base", "local", 7):
+        got = wv.evaluate(local_module(), {}, time_zone=zone)
+        assert (got["start"], got["its_day"]) == ("2024-06-26T00:00:00Z", "2024-06-26"), zone
+
+
+def test_a_zone_a_variable_names_still_wins() -> None:
+    parsed = local_module(zone=["zone"])
+    assert wv.evaluate(parsed, {"zone": "Asia/Tokyo"}, time_zone="Europe/Paris")[
+        "start"] == "2024-06-25T15:00:00Z"
+    # Unset, the cast's own "local" is the viewer's.
+    assert wv.evaluate(parsed, {}, time_zone="Europe/Paris")["start"] == "2024-06-25T22:00:00Z"
+    # And a variable may itself say "local".
+    assert wv.evaluate(parsed, {"zone": "local"}, time_zone="Asia/Tokyo")[
+        "start"] == "2024-06-25T15:00:00Z"
+
+
+def test_local_is_a_zone_a_cast_may_be_saved_with() -> None:
+    assert vc.check("timestamp", {"timezone": "local"}) is None
+    assert vc.viewer_zone("Europe/Paris") == "Europe/Paris"
+    assert vc.viewer_zone("local") is None
+
+
+def test_p140_the_current_date_is_the_viewer_s_today() -> None:
+    """p.140: "Current date: Returns the current date" - the reader's, now
+    that the server knows where the reader is (§596)."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    parsed = wv.parse({"today": {"id": "today", "kind": "date", "label": "Today", "derivation": {
+        "transform": "current_date", "inputs": [], "config": {}}}})
+    for zone in ("Pacific/Kiritimati", "Pacific/Pago_Pago"):
+        # Fourteen hours ahead and eleven behind: one of the two is not UTC's
+        # date, whatever the time of day.
+        assert wv.evaluate(parsed, {}, time_zone=zone)["today"] == \
+            datetime.now(ZoneInfo(zone)).date().isoformat()
+    assert wv.evaluate(parsed, {})["today"] == datetime.now(timezone.utc).date().isoformat()
+    assert {wv.evaluate(parsed, {}, time_zone=z)["today"]
+            for z in ("Pacific/Kiritimati", "Pacific/Pago_Pago")} != {
+        datetime.now(timezone.utc).date().isoformat()}

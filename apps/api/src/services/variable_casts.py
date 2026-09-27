@@ -21,8 +21,11 @@ match as written, and text in single quotes is matched as written too. A
 year of two digits is this century's, which is how p.138's own example reads
 "24" against `yyyy`.
 
-**A time zone is named** (`Europe/Paris`), set on the cast; the server has
-no user to ask for a local one, so UTC is the default.
+**A time zone is named** (`Europe/Paris`), set on the cast, or is `local`:
+p.138-139's "the user's local timezone" (§596), which the browser sends with
+each resolve (`workshop_variables.evaluate`'s `time_zone`). With no viewer to
+ask - or one whose zone this server does not know - `local` is UTC, as a cast
+with no zone is.
 """
 from __future__ import annotations
 
@@ -32,6 +35,9 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .property_values import PropertyValueError, _coerce_geopoint, _coerce_geoshape
+
+#: p.138-139's "the user's local timezone", as a cast's zone (§596).
+LOCAL = "local"
 
 #: The targets besides string, number and boolean, which `cast` has long taken.
 TARGETS = ("date", "timestamp", "geopoint", "geoshape")
@@ -114,10 +120,24 @@ def check(target: str, config: dict[str, Any]) -> str | None:
     return None
 
 
+def viewer_zone(name: Any) -> str | None:
+    """The viewer's zone as the browser named it, or None when it names
+    nothing this server knows - which `local` then reads as UTC rather than
+    refusing a module over a setting the viewer cannot change."""
+    if not isinstance(name, str) or not name or name == LOCAL:
+        return None
+    try:
+        _zone(name)
+    except CastError:
+        return None
+    return name
+
+
 def _zone(name: Any) -> ZoneInfo | timezone:
     # None or nothing is UTC; "UTC" by name is the database's own, which
     # answers the same (a shortcut for it survived the sweep as equivalent).
-    if name in (None, ""):
+    # `local` with no viewer's zone put in its place is UTC too.
+    if name in (None, "", LOCAL):
         return timezone.utc
     if not isinstance(name, str):
         raise CastError(f"{name!r} is not a time zone")
