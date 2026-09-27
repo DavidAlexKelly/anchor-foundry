@@ -162,6 +162,9 @@ class PropertyIn(BaseModel):
         pattern="^(promoted|active|experimental|deprecated|example)$",
     )
     deprecation: dict[str, Any] | None = None
+    # The action an edit in place submits (`workshop` p.266; §594; db 0126).
+    # Null means the property is not editable in place.
+    inline_action_type_id: UUID | None = None
 
 
 class PropertyOut(BaseModel):
@@ -197,6 +200,7 @@ class PropertyOut(BaseModel):
     value_constraint: dict[str, Any] | None = None
     status: str = "experimental"
     deprecation: dict[str, Any] | None = None
+    inline_action_type_id: UUID | None = None
 
 
 class ObjectTypeGroupRef(BaseModel):

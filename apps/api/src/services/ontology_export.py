@@ -72,6 +72,11 @@ PROPERTY_FIELDS = (
     "reducers",
     "status",
     "deprecation",
+    # §594's inline action, **by the action's api_name**, as a rule names its
+    # types (§343): an id means nothing in the workspace the file lands in.
+    # Set by the importer after its action pass, since the action is written
+    # after the property that names it.
+    "inline_action",
 )
 
 #: The same decision for the type itself. `resource_id`, `created_at` and
@@ -224,7 +229,9 @@ async def export_ontology(
                struct_fields::text AS struct_fields,
                array_of::text AS array_of, reducers::text AS reducers,
                status::text AS status,
-               deprecation::text AS deprecation, id
+               deprecation::text AS deprecation, id,
+               (SELECT at.api_name FROM action_types at
+                 WHERE at.id = inline_action_type_id) AS inline_action
           FROM object_type_properties
          WHERE object_type_id = ANY(
                    SELECT id FROM object_types WHERE workspace_id = :wid)

@@ -136,6 +136,20 @@ def check_references(document: dict[str, Any]) -> None:
             f"{', '.join(sorted(ontology_service.CARDINALITIES))}",
         )
 
+    # §594: a property's inline action is one the file defines, on the
+    # property's own type - the action is written after the property, so a
+    # name the file does not carry could not be resolved when it is.
+    # By (type, name), since an action's name is unique only on its type.
+    actions_on = {(a.get("object_type"), a.get("api_name")) for a in document["action_types"]}
+    for name, kind in types.items():
+        for prop in kind.get("properties") or []:
+            named = prop.get("inline_action")
+            _require(
+                named is None or (name, named) in actions_on,
+                f"{name}.{prop.get('api_name')}'s inline action {named!r} is not an "
+                f"action type the file defines on {name!r}",
+            )
+
     links = {l.get("api_name") for l in document["link_types"]}
     for action in document["action_types"]:
         _require(
@@ -454,6 +468,7 @@ async def apply(
     actions_added, actions_updated = await _apply_actions(
         conn, workspace_id, document, made, actor_id=actor_id
     )
+    await _apply_inline_actions(conn, workspace_id, document, made, actor_id=actor_id)
 
     return {
         "added": added,
@@ -464,6 +479,52 @@ async def apply(
         "actions_updated": actions_updated,
         "absent_from_file": made["sections"]["object_types"]["absent_from_file"],
     }
+
+
+async def _apply_inline_actions(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    document: dict[str, Any],
+    made: dict[str, Any],
+    *,
+    actor_id: UUID,
+) -> None:
+    """The fourth pass (§594): each property's inline action, now that the
+    actions it names exist. Checked as the Ontology Manager checks one, and
+    the type's version taken again so a restore of it keeps the setting."""
+    from sqlalchemy import text
+
+    from ..lib.db import fetch_one
+    from . import property_inline_actions
+    from .actions import get_action_type
+
+    for kind in document["object_types"]:
+        name = kind["api_name"]
+        if name in made["sections"]["object_types"]["unchanged"]:
+            continue
+        chosen = {p["api_name"]: p["inline_action"] for p in kind.get("properties") or []
+                  if p.get("inline_action")}
+        if not chosen:
+            continue
+        type_id = UUID(str((await _find_type(conn, workspace_id, name))["id"]))
+        for prop, action_name in chosen.items():
+            row = await fetch_one(
+                conn,
+                "SELECT id FROM action_types WHERE object_type_id = :tid AND api_name = :n",
+                {"tid": str(type_id), "n": action_name},
+            )
+            assert row is not None, action_name
+            action = await get_action_type(conn, workspace_id, row["id"])
+            try:
+                property_inline_actions.check(prop, action, type_id)
+            except ValueError as exc:
+                raise ImportRefused(f"{name}.{exc}") from exc
+            await conn.execute(
+                text("UPDATE object_type_properties SET inline_action_type_id = :aid"
+                     " WHERE object_type_id = :tid AND api_name = :p"),
+                {"aid": str(row["id"]), "tid": str(type_id), "p": prop},
+            )
+        await ontology_service._snapshot_version(conn, type_id, created_by=actor_id)
 
 
 async def _apply_links(

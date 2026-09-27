@@ -36,7 +36,8 @@ import {
 } from "@/lib/array-property";
 import { canReduce, reducerSummary } from "@/lib/property-reducer";
 import { ValueTypePicker } from "@/components/value-type-picker";
-import { ApiError, objects as objApi, type PropertyInput } from "@/lib/api";
+import { ApiError, actions as actionApi, objects as objApi, type PropertyInput } from "@/lib/api";
+import { inlineActionChoices, type InlineAction } from "@/lib/property-inline-action";
 import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
 import type {
   ObjectTypeDetail,
@@ -112,6 +113,7 @@ const CARRIED: { [K in keyof Required<PropertyInput>]: true } = {
   value_type_id: true,
   status: true,
   deprecation: true,
+  inline_action_type_id: true,
 };
 
 /** One saved property, as the shape a save sends back. */
@@ -133,6 +135,7 @@ export function PropertyRows({
   workspaceId,
   objectTypeId,
   effectiveValueTypes,
+  inlineActions,
 }: {
   properties: PropertyInput[];
   onChange: (next: PropertyInput[]) => void;
@@ -147,6 +150,9 @@ export function PropertyRows({
    * picker: it is not something a save sends back, and echoing it would turn
    * an inherited value type into a local choice. */
   effectiveValueTypes?: Record<string, string | null>;
+  /** The action types on this object type, for §594's inline action
+   * (`workshop` p.266). Absent on the create dialog, where none can exist. */
+  inlineActions?: readonly (InlineAction & { id: string; display_name?: string | null })[];
 }) {
   // Which row's formatter is open, by index. One dialog rather than one per
   // row: only one can be open, and a dialog per property is a dialog per
@@ -516,6 +522,36 @@ export function PropertyRows({
                   : ""}
             </button>
           )}
+          {/* §594's inline action (`workshop` p.266: "configure an inline
+              action for the property in the Ontology Manager"). Only actions
+              that could edit this property in place are offered; one chosen
+              earlier that has since stopped being one stays listed, and says
+              so, rather than vanishing from under the value it holds. */}
+          {inlineActions && objectTypeId && !prop.derivation && (
+            <select
+              aria-label={`Property ${index + 1} inline action`}
+              value={prop.inline_action_type_id ?? ""}
+              style={{ fontSize: 12, maxWidth: 180 }}
+              onChange={(e) => {
+                const rows = [...properties];
+                rows[index] = { ...prop, inline_action_type_id: e.target.value || null };
+                onChange(rows);
+              }}
+            >
+              <option value="">Not editable in place</option>
+              {inlineActionChoices(inlineActions, objectTypeId, prop.api_name).map((a) => (
+                <option key={a.id} value={a.id}>Edit with {a.display_name || a.api_name}</option>
+              ))}
+              {prop.inline_action_type_id
+                && !inlineActionChoices(inlineActions, objectTypeId, prop.api_name)
+                  .some((a) => a.id === prop.inline_action_type_id) && (
+                <option value={prop.inline_action_type_id}>
+                  {(inlineActions.find((a) => a.id === prop.inline_action_type_id)?.display_name
+                    ?? "An action")} (no longer edits this)
+                </option>
+              )}
+            </select>
+          )}
           {/* Conditional formatting (`object-link-types` p.102-109). Unlike
               the formatter above there is no base-type gate: `Is null` applies
               to every type, so every property has at least one rule it could
@@ -787,6 +823,11 @@ export function EditObjectTypeDialog({
   });
   const [tracking, setTracking] = useState<boolean | null>(null);
   const originalTracking = !!editHistory.data?.since;
+  // §594: the actions a property may take as its inline action (p.266).
+  const inlineActions = useQuery({
+    queryKey: ["action-types", workspaceId, type.id],
+    queryFn: () => actionApi.listTypes(workspaceId, type.id),
+  });
   const tracked = tracking ?? originalTracking;
 
   const named = properties.filter((p) => p.api_name.trim());
@@ -980,6 +1021,7 @@ export function EditObjectTypeDialog({
             effectiveValueTypes={Object.fromEntries(
               type.properties.map((p) => [p.api_name, p.effective_value_type_id]),
             )}
+            inlineActions={inlineActions.data ?? []}
             onChange={(next) => {
               setProperties(next);
               setAcknowledged(false);  // a changed proposal is not the one that was accepted

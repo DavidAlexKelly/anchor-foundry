@@ -30,7 +30,7 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # copy of them (see that module's docstring).
 from . import (
     array_properties, conditional_format, derived_properties, link_join_tables,
-    ontology_status,
+    ontology_status, property_inline_actions,
     property_reducers, shared_properties, struct_fields, value_format,
     value_types,
 )
@@ -456,7 +456,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
                p.conditional_format, p.edit_only, p.derivation,
                p.struct_fields, p.array_of, p.reducers,
                p.status, p.deprecation,
-               p.shared_property_id,
+               p.shared_property_id, p.inline_action_type_id,
                sp.api_name AS shared_property_api_name,
                sp.display_name AS sp_display_name,
                sp.description AS sp_description,
@@ -916,6 +916,9 @@ async def create_type(
     # Nothing is stored yet, so every attachment here is a fresh one.
     await _apply_shared(conn, workspace_id, properties, already_attached={})
     await _apply_value_types(conn, workspace_id, properties)
+    # §594: no action acts on a type that does not exist yet, so any inline
+    # action named here is refused, by name.
+    await property_inline_actions.apply(conn, workspace_id, None, properties)
     for prop in properties:
         if prop.get("derivation") is not None:
             # Not a limitation so much as a consequence: a derived property
@@ -985,7 +988,8 @@ async def _write_property_rows(
                                                 derivation, struct_fields, array_of,
                                                 reducers,
                                                 shared_property_id,
-                                                value_type_id, status, deprecation)
+                                                value_type_id, status, deprecation,
+                                                inline_action_type_id)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
                     :required, :descr, :sort, CAST(:vis AS property_visibility),
                     CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly,
@@ -993,7 +997,8 @@ async def _write_property_rows(
                     CAST(:arrayof AS property_data_type),
                     CAST(:reducers AS jsonb),
                     :shared, :valuetype,
-                    CAST(:status AS ontology_status), CAST(:depr AS jsonb))
+                    CAST(:status AS ontology_status), CAST(:depr AS jsonb),
+                    :inline)
             RETURNING id
             """,
             {
@@ -1056,6 +1061,8 @@ async def _write_property_rows(
                 # p.256's default, and the propagation p.256/p.258 describe has
                 # already run over these rows by the time they get here.
                 "status": str(prop.get("status") or ontology_status.DEFAULT_STATUS),
+                # §594's inline action, checked by `property_inline_actions`.
+                "inline": prop.get("inline_action_type_id") or None,
                 "depr": (
                     json.dumps(prop["deprecation"])
                     if prop.get("deprecation") is not None
@@ -1201,7 +1208,8 @@ async def _snapshot_version(
                                'shared_property_id', p.shared_property_id,
                                'value_type_id', p.value_type_id,
                                'status', p.status,
-                               'deprecation', p.deprecation)
+                               'deprecation', p.deprecation,
+                               'inline_action_type_id', p.inline_action_type_id)
                            ORDER BY p.sort_order, p.api_name)
                       FROM object_type_properties p WHERE p.object_type_id = ot.id),
                    '[]'::jsonb),
@@ -1513,6 +1521,8 @@ async def update_type(
             object_type_id=str(type_id),
             far_properties=far_properties,
         )
+    # §594, after the derivations are read: a derived property has none.
+    await property_inline_actions.apply(conn, workspace_id, type_id, properties)
     if not properties:
         raise ValueError("an object type needs at least one property")
     _check_title_property(title_property, properties)
@@ -1818,6 +1828,33 @@ async def _drop_deleted_shared_properties(
             prop["shared_property_id"] = None
 
 
+async def _drop_deleted_inline_actions(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    properties: list[dict[str, Any]],
+) -> None:
+    """Forget an inline action that no longer exists (§594), for the reason
+    above: db 0126 sets it to NULL when the action is deleted, so a version
+    naming one restores as the property that delete left, rather than a
+    delete elsewhere blocking the rollback. An action that exists and no
+    longer backs the property is refused by `update_type`, as a derivation
+    whose links have gone is."""
+    ids = [str(p["inline_action_type_id"]) for p in properties if p.get("inline_action_type_id")]
+    if not ids:
+        return
+    rows = await fetch_all(
+        conn,
+        "SELECT id::text AS id FROM action_types"
+        " WHERE workspace_id = :wid AND id::text = ANY(:ids)",
+        {"wid": str(workspace_id), "ids": ids},
+    )
+    known = {r["id"] for r in rows}
+    for prop in properties:
+        raw = prop.get("inline_action_type_id")
+        if raw and str(raw) not in known:
+            prop["inline_action_type_id"] = None
+
+
 async def restore_type_version(
     conn: AsyncConnection,
     *,
@@ -1855,6 +1892,7 @@ async def restore_type_version(
         properties = json.loads(properties)
     properties = [dict(p) for p in properties]
     await _drop_deleted_shared_properties(conn, workspace_id, properties)
+    await _drop_deleted_inline_actions(conn, workspace_id, properties)
 
     updated = await update_type(
         conn,

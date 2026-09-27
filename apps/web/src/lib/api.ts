@@ -1236,6 +1236,8 @@ export interface PropertyInput {
    * `experimental` (p.256) when a client says nothing. */
   status?: import("./types").OntologyStatus;
   deprecation?: import("./types").Deprecation | null;
+  /** §594's inline action (`workshop` p.266). Null clears it. */
+  inline_action_type_id?: string | null;
 }
 
 /** The whole shape, saved as one document — the server's `InterfaceIn` shape
