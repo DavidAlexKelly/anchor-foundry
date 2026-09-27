@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
-from . import variable_checks, variable_dates, variable_math
+from . import variable_arrays, variable_checks, variable_dates, variable_math
 
 KINDS = (
     "string",
@@ -106,6 +106,8 @@ TRANSFORMS = (
     *variable_dates.TRANSFORMS,
     # p.142's string and boolean comparisons (§566): `variable_checks.py`.
     *variable_checks.TRANSFORMS,
+    # p.142-143's array operations and checks (§567): `variable_arrays.py`.
+    *variable_arrays.TRANSFORMS,
 )
 
 # Still declared and deliberately not evaluated here: an aggregate over a set
@@ -1247,7 +1249,7 @@ def _check_arity(vid: str, d: Derivation) -> None:
     """Refuse a derivation that cannot produce a value, at save rather than at
     view: an app that renders a blank card because a transform was configured
     with one input instead of three is a bug nobody can see the cause of."""
-    module = next((m for m in (variable_math, variable_dates, variable_checks)
+    module = next((m for m in (variable_math, variable_dates, variable_checks, variable_arrays)
                    if d.transform in m.ARITY), None)
     if module is not None:
         problem = module.check(d.transform, len(d.inputs), d.config)
@@ -1629,6 +1631,13 @@ def evaluate(
                 else value
                 for i, value in zip(variable.derivation.inputs, inputs)
             ]
+        if variable.derivation.transform in variable_arrays.ARITY:
+            # An array variable's typed JSON is its list (§567).
+            inputs = [
+                variable_arrays.of_array_variable(value) if variables[i].kind == "array"
+                else value
+                for i, value in zip(variable.derivation.inputs, inputs)
+            ]
         resolved[vid] = _apply(variable, inputs, property_types)
         if timings is not None:
             timings[vid] = (perf_counter() - started) * 1000
@@ -1661,6 +1670,11 @@ def _apply(
         try:
             return variable_checks.apply(d.transform, list(inputs), d.config, variable.label)
         except variable_checks.CheckError as exc:
+            raise VariableError(str(exc)) from None
+    if d.transform in variable_arrays.ARITY:
+        try:
+            return variable_arrays.apply(d.transform, list(inputs), d.config, variable.label)
+        except variable_arrays.ArrayError as exc:
             raise VariableError(str(exc)) from None
     if d.transform == "if_else":
         condition, then, otherwise = inputs
