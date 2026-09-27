@@ -24,10 +24,24 @@ p.168's schema, and what is not here:
     Action RID, Action type RID, Action type version, Timestamp, UserId,
     Edited objects (primary keys), [Optional] Parameter values
 
-are all stored. p.168's optional Summary and the property values of object
-reference parameters are not, and nor is a parameter added after the log was
-turned on - the dataset's columns are fixed when it is made, and a column the
-source does not map would be a value written nowhere.
+are all stored, and so, as of §586, are p.168's two other optional ones:
+
+    [Optional] Summary: A customizable string to describe the action
+    [Optional] Property values of object reference parameters (this is not
+    supported for object reference parameters if allow multiple values is
+    enabled)
+
+The summary is a template in p.92's triple handlebars, the notification's own
+language, so `{{{alert.priority}}}` means the same in a log as in an inbox. It
+is rendered, and the properties are read, from the objects **as they were
+before the action's edits**: p.167's "state of the world (as represented by the
+Ontology) at the time of action submission". The summary column is always
+made, so its template can be written or changed later; the properties are
+chosen when the log is turned on, since each is a column.
+
+A parameter added after the log was turned on is still not stored - the
+dataset's columns are fixed when it is made, and a column the source does not
+map would be a value written nowhere.
 """
 from __future__ import annotations
 
@@ -64,6 +78,128 @@ SCHEMA = (
 #: `timestamp` cannot collide with p.168's own column.
 PARAMETER_PREFIX = "param_"
 
+#: p.168's "[Optional] Summary" (§586), rendered from the log's template.
+SUMMARY_COLUMN = "summary"
+#: A summary is text a person reads in a list, so it is kept to a line or two
+#: rather than refused: p.95's truncation rule for a notification's subject.
+MAX_SUMMARY = 1000
+#: p.168's "[Optional] Property values of object reference parameters", one
+#: column per (parameter, property), under this prefix and a double
+#: underscore between the two names.
+REFERENCE_PREFIX = "ref_"
+#: More than this is a copy of the object rather than a record of a decision.
+MAX_REFERENCES = 20
+
+
+def reference_column(parameter: str, prop: str) -> str:
+    return f"{REFERENCE_PREFIX}{parameter}__{prop}"
+
+
+def check_summary(
+    template: Any,
+    *,
+    parameters: list[dict[str, Any]],
+    object_types: dict[str, str],
+    properties_by_type: dict[str, dict[str, str]],
+) -> str | None:
+    """A summary template, refused when it names something the action does not
+    have - the notification's check (p.92), for the same reason: a gap in a
+    log entry is what a reader sees rather than what an author does."""
+    from . import templates
+
+    if template is None or str(template).strip() == "":
+        return None
+    if not isinstance(template, str):
+        raise ValueError("an action log summary is text")
+    if len(template) > MAX_SUMMARY:
+        raise ValueError(f"an action log summary template is at most {MAX_SUMMARY} characters")
+    names = {str(p["api_name"]) for p in parameters}
+    for ref in templates.references(template):
+        head, _, tail = ref.partition(".")
+        if head == "current_user":
+            continue
+        if head not in names:
+            raise ValueError(
+                f"the summary references {ref!r}, which is neither a parameter of "
+                "this action nor current_user"
+            )
+        declared = properties_by_type.get(str(object_types.get(head)))
+        if tail and declared is not None and tail not in declared:
+            raise ValueError(f"the summary references {ref!r}, and {head!r} has no {tail!r} property")
+    return template
+
+
+def check_references(
+    raw: Any,
+    *,
+    parameters: list[dict[str, Any]],
+    object_types: dict[str, str],
+    properties_by_type: dict[str, dict[str, str]],
+) -> dict[str, list[str]]:
+    """`{object parameter: [property]}` whose values the log keeps, refused by
+    name when it could not be kept. p.168: "not supported for object reference
+    parameters if allow multiple values is enabled" - so a list of objects is
+    refused, as is a parameter that is not an object or whose type is unknown."""
+    if not raw:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("reference properties are {object parameter: [property]}")
+    kinds = {str(p["api_name"]): str(p.get("data_type")) for p in parameters}
+    out: dict[str, list[str]] = {}
+    columns: set[str] = set()
+    for name, props in raw.items():
+        if name not in kinds:
+            raise ValueError(f"{name!r} is not a parameter of this action")
+        if kinds[name] != "object":
+            raise ValueError(
+                f"{name!r} is not a single object reference; p.168 keeps properties "
+                "of those only, and not of a parameter that allows multiple values"
+            )
+        declared = properties_by_type.get(str(object_types.get(name)))
+        if declared is None:
+            raise ValueError(f"{name!r} does not say which object type it holds")
+        if not isinstance(props, list) or not props:
+            raise ValueError(f"name at least one property of {name!r} to keep")
+        kept: list[str] = []
+        for prop in props:
+            prop = str(prop)
+            if prop not in declared:
+                raise ValueError(f"{name!r} has no {prop!r} property")
+            column = reference_column(name, prop)
+            if column in columns:
+                continue
+            columns.add(column)
+            kept.append(prop)
+        out[name] = kept
+    if len(columns) > MAX_REFERENCES:
+        raise ValueError(f"an action log keeps at most {MAX_REFERENCES} reference properties")
+    return out
+
+
+def extra_columns(
+    *,
+    summary: str | None,
+    references: dict[str, list[str]],
+    values: dict[str, Any],
+    objects: dict[str, dict[str, Any]],
+    actor: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """The summary and the reference properties for one submission, from the
+    objects as they were before its edits (p.167)."""
+    from .notifications import render, truncate
+
+    out: dict[str, Any] = {
+        SUMMARY_COLUMN: truncate(
+            render(summary, values=values, objects=objects, actor=actor), MAX_SUMMARY
+        ) if summary else None,
+    }
+    for name, props in references.items():
+        held = objects.get(name) or {}
+        for prop in props:
+            out[reference_column(name, prop)] = _text(held.get(prop))
+    return out
+
+
 #: The join table's two columns: the log object's key and an edited object's.
 EDITS_COLUMNS = (("action_rid", "VARCHAR"), ("object", "VARCHAR"))
 
@@ -92,6 +228,7 @@ def log_row(
     edited: list[str],
     bound: dict[str, Any],
     columns: set[str],
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One submission's row in the log dataset, keyed by column. A parameter
     with no column - added after the log was made - is left out rather than
@@ -108,6 +245,11 @@ def log_row(
         column = PARAMETER_PREFIX + name
         if column in columns:
             row[column] = _text(value)
+    # §586's summary and reference properties, each only where the log has
+    # its column: a log made before §586 has neither.
+    for column, value in (extra or {}).items():
+        if column in columns:
+            row[column] = value
     return row
 
 
@@ -168,9 +310,15 @@ async def enable(
     project_id: UUID,
     action_type: dict[str, Any],
     by: UUID,
+    summary: str | None = None,
+    references: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Turn an action type's log on: its dataset and `[LOG]` object type, the
     source between them, and the link to the objects it edits.
+
+    With p.168's optional Summary template and the properties of object
+    reference parameters to keep (§586), both checked here against the action
+    before anything is made.
 
     p.167: "all action log object types are prefaced with [LOG]". The link is
     to the action's own object type - p.167's "automatically linked to all
@@ -186,10 +334,28 @@ async def enable(
         # An interface action's objects are of whichever types implement it,
         # so there is no one type for the log to link to.
         raise ValueError("an action on an interface has no one object type for its log to link to")
+    from . import actions as actions_service
+
+    declared = list(action_type.get("parameters") or [])
+    object_types = actions_service.object_parameter_types(
+        list(action_type.get("rules") or []), default_object_type_id=subject_type,
+        parameters=declared,
+    )
+    properties_by_type = await actions_service.properties_by_type(conn, workspace_id)
+    summary = check_summary(
+        summary, parameters=declared, object_types=object_types,
+        properties_by_type=properties_by_type,
+    )
+    references = check_references(
+        references, parameters=declared, object_types=object_types,
+        properties_by_type=properties_by_type,
+    )
     display = str(action_type["display_name"])
-    parameters = logged_parameters(list(action_type.get("parameters") or []))
+    parameters = logged_parameters(declared)
+    kept = [reference_column(name, prop) for name, props in references.items() for prop in props]
     columns = [(KEY_COLUMN, "VARCHAR"), *((c, kind) for c, _t, kind in SCHEMA),
-               *((PARAMETER_PREFIX + p, "VARCHAR") for p in parameters)]
+               *((PARAMETER_PREFIX + p, "VARCHAR") for p in parameters),
+               (SUMMARY_COLUMN, "VARCHAR"), *((c, "VARCHAR") for c in kept)]
     log_dataset = await _empty_dataset(
         conn, storage, workspace_id=workspace_id, project_id=project_id,
         name=f"[LOG] {display}", description=f"Every submission of the action {display}",
@@ -201,6 +367,12 @@ async def enable(
     ] + [
         {"api_name": PARAMETER_PREFIX + p, "display_name": p, "data_type": "string"}
         for p in parameters
+    ] + [
+        {"api_name": SUMMARY_COLUMN, "display_name": "Summary", "data_type": "string"},
+    ] + [
+        {"api_name": reference_column(name, prop), "display_name": f"{name} {prop}",
+         "data_type": "string"}
+        for name, props in references.items() for prop in props
     ]
     log_type = await ontology_service.create_type(
         conn, workspace_id=workspace_id,
@@ -236,7 +408,36 @@ async def enable(
         join_to_column="object",
     )
     await conn.execute(text("""
-        UPDATE action_types SET log_object_type_id = :tid, log_link_type_id = :lid
+        UPDATE action_types SET log_object_type_id = :tid, log_link_type_id = :lid,
+               log_summary = :summary,
+               log_reference_properties = CAST(:refs AS jsonb)
          WHERE id = :aid
-    """), {"tid": str(log_type["id"]), "lid": str(link["id"]), "aid": str(action_type["id"])})
-    return {"log_object_type_id": log_type["id"], "log_link_type_id": link["id"]}
+    """), {"tid": str(log_type["id"]), "lid": str(link["id"]), "aid": str(action_type["id"]),
+           "summary": summary, "refs": json.dumps(references)})
+    return {"log_object_type_id": log_type["id"], "log_link_type_id": link["id"],
+            "log_summary": summary, "log_reference_properties": references}
+
+
+async def set_summary(
+    conn: AsyncConnection, *, workspace_id: UUID, action_type: dict[str, Any],
+    summary: str | None,
+) -> str | None:
+    """Write or change the log's Summary template (p.168's "customizable
+    string", §586). Every log has the column, so this changes only what later
+    submissions write; an entry already made keeps the summary it was given."""
+    from . import actions as actions_service
+
+    if not action_type.get("log_object_type_id"):
+        raise ValueError("this action type has no action log to summarise")
+    declared = list(action_type.get("parameters") or [])
+    summary = check_summary(
+        summary, parameters=declared,
+        object_types=actions_service.object_parameter_types(
+            list(action_type.get("rules") or []),
+            default_object_type_id=action_type.get("object_type_id"), parameters=declared,
+        ),
+        properties_by_type=await actions_service.properties_by_type(conn, workspace_id),
+    )
+    await conn.execute(text("UPDATE action_types SET log_summary = :s WHERE id = :aid"),
+                       {"s": summary, "aid": str(action_type["id"])})
+    return summary

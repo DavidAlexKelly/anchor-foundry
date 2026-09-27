@@ -2543,10 +2543,21 @@ export const actions = {
    * exist, and the id they guessed belongs to somebody else's action. */
   /** p.167's action log (§554): a `[LOG]` object type over a dataset in this
    * project, linked to what each submission edits. */
-  enableLog: (wid: string, pid: string, actionTypeId: string) =>
+  enableLog: (
+    wid: string, pid: string, actionTypeId: string,
+    /** p.168's optional Summary and object reference properties (§586). */
+    options: { summary?: string | null; reference_properties?: Record<string, string[]> } = {},
+  ) =>
     request<{ log_object_type_id: string; log_link_type_id: string }>(
       `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/log`,
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify(options) },
+    ),
+  /** p.168's "customizable string to describe the action" (§586), written or
+   * changed after the log is on. Later entries use it. */
+  setLogSummary: (wid: string, actionTypeId: string, summary: string | null) =>
+    request<{ summary: string | null }>(
+      `/workspaces/${wid}/action-types/${actionTypeId}/log/summary`,
+      { method: "PUT", body: JSON.stringify({ summary }) },
     ),
   undo: (wid: string, pid: string, actionTypeId: string, runId: string) =>
     request<import("./types").ActionUndoResult>(

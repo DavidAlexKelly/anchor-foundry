@@ -146,10 +146,12 @@ def test_the_log_is_a_log_object_type_named_for_its_action(client, fx, world) ->
                    headers=hdr(fx.viewer_sub))
     assert r.json()["display_name"] == "[LOG] Close alert", r.json()
     # p.168's schema, and the one parameter whose value it can hold: `also`
-    # is an object reference, whose property values are not stored.
+    # is an object reference, whose property values are kept only when asked
+    # for (§586). The summary column is always made, so a template can be
+    # written later.
     assert sorted(p["api_name"] for p in r.json()["properties"]) == sorted([
         "action_type_rid", "action_type_version", "timestamp", "user_id",
-        "edited_objects", "param_status"])
+        "edited_objects", "param_status", "summary"])
 
 
 def test_a_second_log_is_refused(client, fx, world) -> None:
