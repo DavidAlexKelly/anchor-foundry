@@ -57,7 +57,8 @@ export type ListenerEvent = {
 
 export type Verification =
   | "none" | "basic" | "header_secret" | "hmac_sha256" | "hmac_sha256_base64" | "slack_v0"
-  | "stripe_v1" | "query_token" | "pagerduty_v1" | "zendesk" | "airtable";
+  | "stripe_v1" | "query_token" | "pagerduty_v1" | "zendesk" | "airtable"
+  | "meraki" | "pandadoc" | "dialpad_jwt" | "twilio" | "sendgrid";
 
 /** The schemes, with what each asks of a sender. p.265: "listeners implement
  * the security protocols laid out by those external systems". */
@@ -107,6 +108,27 @@ export const VERIFICATIONS: Record<Verification, { label: string; hint: string }
     label: "Airtable MAC secret",
     hint: "The base64 MAC secret Airtable gave when the webhook was created.",
   },
+  // §593's five.
+  meraki: {
+    label: "Meraki shared secret",
+    hint: "The shared secret set on the Meraki webhook, which Meraki sends inside each payload. It is redacted from what is kept.",
+  },
+  pandadoc: {
+    label: "PandaDoc shared key",
+    hint: "PandaDoc adds ?signature=<HMAC-SHA256 of the body> to the address, keyed with the webhook's shared key.",
+  },
+  dialpad_jwt: {
+    label: "Dialpad signing secret",
+    hint: "Dialpad sends each event as a token signed with this secret; the event inside it is what is kept.",
+  },
+  twilio: {
+    label: "Twilio auth token",
+    hint: "Twilio signs the address it posts to, and its parameters, with the account's auth token. Give Twilio this listener's address exactly as shown.",
+  },
+  sendgrid: {
+    label: "SendGrid verification key",
+    hint: "The public key SendGrid shows when signed event webhooks are turned on; a stale timestamp is refused.",
+  },
 };
 
 /** p.262's named listeners (§518), mirroring `LISTENER_TYPES` in
@@ -130,6 +152,11 @@ export const LISTENER_TYPES = {
   pagerduty: { label: "PagerDuty", schemes: { pagerduty_v1: "X-PagerDuty-Signature" } },
   zendesk: { label: "Zendesk", schemes: { zendesk: "X-Zendesk-Webhook-Signature" } },
   airtable: { label: "Airtable", schemes: { airtable: "X-Airtable-Content-MAC" } },
+  cisco_meraki: { label: "Cisco Meraki", schemes: { meraki: null } },
+  pandadoc: { label: "PandaDoc", schemes: { pandadoc: null } },
+  dialpad: { label: "Dialpad", schemes: { dialpad_jwt: null, none: null } },
+  twilio: { label: "Twilio", schemes: { twilio: "X-Twilio-Signature" } },
+  sendgrid: { label: "Twilio SendGrid", schemes: { sendgrid: "X-Twilio-Email-Event-Webhook-Signature" } },
 } as const satisfies Record<string, { label: string; schemes: Partial<Record<Verification, string | null>> }>;
 
 export type ListenerType = keyof typeof LISTENER_TYPES;
@@ -166,6 +193,9 @@ export function withType(draft: ListenerDraft, type: ListenerType): ListenerDraf
   return { ...draft, listener_type: type, verification: schemesOf(type)[0] as Verification };
 }
 
+/** Strict, padded base64, as the server's decoder reads it. */
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
 /** Why a draft cannot be saved, or "" when it can. The server's rules, said
  * before the request rather than after it. */
 export function draftProblem(draft: ListenerDraft): string {
@@ -181,8 +211,13 @@ export function draftProblem(draft: ListenerDraft): string {
   }
   // §591: Airtable gives its MAC secret base64-encoded, and the server
   // refuses anything else.
-  if (draft.verification === "airtable" && !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(draft.secret)) {
+  if (draft.verification === "airtable" && !BASE64.test(draft.secret)) {
     return "Airtable's MAC secret is the base64 text Airtable gave.";
+  }
+  // §593: SendGrid's key is a public key, as base64; the server checks it is
+  // one, which a pattern cannot.
+  if (draft.verification === "sendgrid" && !BASE64.test(draft.secret.trim())) {
+    return "SendGrid's verification key is the base64 public key SendGrid shows.";
   }
   return "";
 }

@@ -576,7 +576,8 @@ def test_a_named_type_refuses_what_it_does_not_take(client, fx) -> None:
     for body, message in (
         ({"listener_type": "zapier"},
          "listener_type must be one of custom, slack, jira, github, gitlab, stripe, shopify, pubsub, "
-         "bitbucket, meta, azure_event_grid, jotform, pagerduty, zendesk, airtable, not 'zapier'"),
+         "bitbucket, meta, azure_event_grid, jotform, pagerduty, zendesk, airtable, cisco_meraki, "
+         "pandadoc, dialpad, twilio, sendgrid, not 'zapier'"),
         ({"listener_type": "slack", "verification": "none"}, "a Slack listener verifies with slack_v0"),
         ({"listener_type": "github", "secret": "x", "verification_header": "X-Other"},
          "a GitHub listener always reads X-Hub-Signature-256"),
@@ -713,6 +714,165 @@ def test_an_airtable_listener_keys_with_the_secret_s_bytes(client, fx) -> None:
             "display_name": "Airtable", "listener_type": "airtable", "secret": bad})
         assert (r.status_code, r.json()["detail"]) == (
             422, "an Airtable MAC secret is the base64 Airtable gave"), bad
+
+
+# ---- §593: senders whose proof travels in the body or the address ------------
+def test_a_meraki_listener_reads_the_secret_in_the_payload_and_keeps_it_hidden(client, fx) -> None:
+    listener = started(client, fx, listener_type="cisco_meraki", secret="mk")
+    assert (listener["verification"], listener["verification_header"]) == ("meraki", None)
+    body = json.dumps({"alertType": "APs went down", "sharedSecret": "mk"}).encode()
+    assert client.post(path_of(listener), content=body,
+                       headers={"Content-Type": "application/json"}).status_code == 200
+    for bad in (json.dumps({"alertType": "x", "sharedSecret": "m"}).encode(),
+                json.dumps({"alertType": "x", "sharedSecret": ["mk"]}).encode(),
+                json.dumps({"alertType": "x"}).encode(), b'["mk"]', b"not json", b"\xff"):
+        assert client.post(path_of(listener), content=bad).status_code == 401, bad
+    [event] = events(client, fx, listener)
+    assert json.loads(event["preview"]) == {"alertType": "APs went down",
+                                            "sharedSecret": "[redacted]"}
+    assert event["content_type"] == "application/json"
+
+
+def test_a_meraki_secret_is_a_string_in_the_payload() -> None:
+    """Not whatever prints as the secret: a payload with none is not one
+    whose secret is "None"."""
+    for secret, payload in (("None", {}), ("12", {"sharedSecret": 12}),
+                            ("None", {"sharedSecret": None})):
+        assert not listener_service.verify("meraki", None, secret, {},
+                                           json.dumps(payload).encode()), payload
+
+
+def test_a_pandadoc_listener_takes_its_signature_in_the_address(client, fx) -> None:
+    listener = started(client, fx, listener_type="pandadoc", secret="pd-key")
+    assert (listener["verification"], listener["verification_header"]) == ("pandadoc", None)
+    body = b'[{"event": "document_state_changed"}]'
+    good = hmac.new(b"pd-key", body, hashlib.sha256).hexdigest()
+    assert client.post(path_of(listener) + f"?signature={good}", content=body).status_code == 200
+    other = hmac.new(b"pd-key", body + b" ", hashlib.sha256).hexdigest()
+    for query in ("", f"?signature={other}", f"?signature={good.upper()}", f"?token={good}"):
+        assert client.post(path_of(listener) + query, content=body).status_code == 401, query
+
+
+def test_a_dialpad_listener_keeps_the_event_its_token_carries(client, fx) -> None:
+    import jwt
+    listener = started(client, fx, listener_type="dialpad", secret="dp")
+    assert (listener["verification"], listener["verification_header"]) == ("dialpad_jwt", None)
+    event = {"call_id": 7, "state": "hangup"}
+    token = jwt.encode(event, "dp", algorithm="HS256")
+    r = client.post(path_of(listener), content=token.encode(),
+                    headers={"Content-Type": "application/jwt"})
+    assert r.status_code == 200, r.text
+    for bad in (jwt.encode(event, "other", algorithm="HS256"),
+                jwt.encode(event, "dp", algorithm="HS384"),
+                jwt.encode({**event, "exp": 1}, "dp", algorithm="HS256"),
+                json.dumps(event), ""):
+        assert client.post(path_of(listener), content=bad.encode()).status_code == 401, bad
+    [kept] = events(client, fx, listener)
+    assert (json.loads(kept["preview"]), kept["content_type"]) == (event, "application/json")
+    # Without a secret, Dialpad signs nothing and sends plain JSON.
+    plain = started(client, fx, listener_type="dialpad", verification="none")
+    assert client.post(path_of(plain), json=event).status_code == 200
+
+
+def twilio_signature(secret: str, url: str, params: list[tuple[str, str]] = ()) -> str:
+    signed = url + "".join(f"{k}{v}" for k, v in sorted(set(params)))
+    return base64.b64encode(hmac.new(secret.encode(), signed.encode(), hashlib.sha1).digest()).decode()
+
+
+def test_a_twilio_listener_checks_the_signed_address_and_form(client, fx) -> None:
+    from urllib.parse import urlencode
+    listener = started(client, fx, listener_type="twilio", secret="auth-token")
+    assert listener["verification_header"] == "X-Twilio-Signature"
+    [endpoint] = listener["endpoints"]
+    url = endpoint["url"]
+    params = [("From", "+15550100"), ("Body", "hello"), ("To", "+15550199"), ("Body", "again")]
+    form = {"Content-Type": "application/x-www-form-urlencoded"}
+    good = twilio_signature("auth-token", url, params)
+    assert client.post(path_of(listener), content=urlencode(params),
+                       headers={**form, "X-Twilio-Signature": good}).status_code == 200
+    for sig, body in ((twilio_signature("other", url, params), urlencode(params)),
+                      (twilio_signature("auth-token", url), urlencode(params)),
+                      (good, urlencode(params[:3])), (good, ""),
+                      (twilio_signature("auth-token", url + "?x=1", params), urlencode(params))):
+        r = client.post(path_of(listener), content=body, headers={**form, "X-Twilio-Signature": sig})
+        assert r.status_code == 401, (sig, body)
+    # The address's own query string is part of what is signed.
+    assert client.post(path_of(listener) + "?x=1", content=urlencode(params), headers={
+        **form, "X-Twilio-Signature": twilio_signature("auth-token", url + "?x=1", params)
+    }).status_code == 200
+    # A JSON body is vouched for by the signed address's `bodySHA256`.
+    body = b'{"EventType": "onMessageAdded"}'
+    hashed = f"{url}?bodySHA256={hashlib.sha256(body).hexdigest()}"
+    sig = twilio_signature("auth-token", hashed)
+    json_type = {"Content-Type": "application/json", "X-Twilio-Signature": sig}
+    query = hashed[len(url):]
+    assert client.post(path_of(listener) + query, content=body, headers=json_type).status_code == 200
+    assert client.post(path_of(listener) + query, content=body + b" ",
+                       headers=json_type).status_code == 401
+    # A form that is not text cannot have been signed.
+    assert client.post(path_of(listener), content=b"\xff=1", headers={
+        **form, "X-Twilio-Signature": twilio_signature("auth-token", url)}).status_code == 401
+
+
+def sendgrid_key():
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    private = ec.generate_private_key(ec.SECP256R1())
+    public = private.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    return private, base64.b64encode(public).decode()
+
+
+def signed_sendgrid(private, body: bytes, stamp: int) -> dict:
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    sig = private.sign(f"{stamp}".encode() + body, ec.ECDSA(hashes.SHA256()))
+    return {"X-Twilio-Email-Event-Webhook-Signature": base64.b64encode(sig).decode(),
+            "X-Twilio-Email-Event-Webhook-Timestamp": str(stamp)}
+
+
+def test_a_sendgrid_listener_checks_an_ecdsa_signature_with_the_public_key(client, fx) -> None:
+    import time
+    private, public = sendgrid_key()
+    listener = started(client, fx, listener_type="sendgrid", secret=public)
+    assert (listener["verification"], listener["verification_header"]) == (
+        "sendgrid", "X-Twilio-Email-Event-Webhook-Signature")
+    body = b'[{"email": "a@example.com", "event": "delivered"}]'
+    now = int(time.time())
+    assert client.post(path_of(listener), content=body,
+                       headers=signed_sendgrid(private, body, now)).status_code == 200
+    stranger, _ = sendgrid_key()
+    for headers in (signed_sendgrid(stranger, body, now),
+                    signed_sendgrid(private, body + b" ", now),
+                    signed_sendgrid(private, body, now - 301),
+                    {**signed_sendgrid(private, body, now),
+                     "X-Twilio-Email-Event-Webhook-Timestamp": str(now + 1)},
+                    {**signed_sendgrid(private, body, now),
+                     "X-Twilio-Email-Event-Webhook-Signature": "not base64!"}, {}):
+        assert client.post(path_of(listener), content=body, headers=headers).status_code == 401
+    # PEM's armour is read past, since that is how some consoles show a key.
+    pem = f"-----BEGIN PUBLIC KEY-----\n{public}\n-----END PUBLIC KEY-----"
+    assert make(client, fx, listener_type="sendgrid", secret=pem)["verification"] == "sendgrid"
+
+
+@pytest.mark.parametrize("secret", [
+    "not base64!", base64.b64encode(b"not a key").decode(),
+    # An RSA key is a public key, and not the elliptic-curve kind SendGrid signs with.
+    "MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu"
+    "KUpRKfFLfRYC9AIKjbJTWit+CqvjWYzvQwECAwEAAQ==",
+])
+def test_a_sendgrid_key_that_is_not_one_is_refused(client, fx, secret) -> None:
+    r = client.post(base(fx), headers=hdr(fx.editor_sub), json={
+        "display_name": "SendGrid", "listener_type": "sendgrid", "secret": secret})
+    assert (r.status_code, r.json()["detail"]) == (
+        422, "a SendGrid verification key is the base64 public key SendGrid gave")
+
+
+def test_a_headerless_scheme_says_where_it_looks(client, fx) -> None:
+    for verification, said in (("meraki", "the secret inside the payload"),
+                               ("dialpad_jwt", "a body that is itself the signed token"),
+                               ("pandadoc", "the endpoint's query string")):
+        with pytest.raises(listener_service.ListenerError, match=said):
+            listener_service.check_configuration(verification, "X-A", "s")
 
 
 # ---- §520: the ingress allowlist (p.254-255) -----------------------------------
