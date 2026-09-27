@@ -82,7 +82,7 @@ import {
   LINK_MODES, MAX_DEFAULT_EXPAND,
   chosenOf as linkChosenOf, defaultExpandOf, initiallyExpanded, labelFor,
   linkKey, modeOf as linkModeOf, toggleExpanded, visibleLinks,
-  objectViewHref, previewProperties, titleOf,
+  LINK_PAGE, objectViewHref, previewProperties, sortOf as linkSortOf, sortedLinkQuery, titleOf,
   type ChosenLink,
 } from "./links-widget";
 import { linkSubsetHref } from "@/lib/link-subset";
@@ -6860,6 +6860,21 @@ export function CanvasLinksWidget({
     })),
   });
   const farType = (id: string) => farTypes[farIds.indexOf(id)]?.data;
+  // p.272's Sort linked object by (§548): a sorted link's first page, asked
+  // for again in its order (`sortedLinkQuery`).
+  // A sort is part of a *specified* link (p.272), so in "all links" mode
+  // there is none to ask for, whatever an older configuration left behind.
+  const specifying = linkModeOf(linkMode) === "specify";
+  const sortedAsks = visible.map((g) =>
+    specifying ? sortedLinkQuery(g, linkSortOf(chosen, linkKey(g))) : null);
+  const sortedPages = useQueries({
+    queries: sortedAsks.map((ask) => ({
+      queryKey: ["canvas-links-sorted", JSON.stringify(ask)],
+      queryFn: () => objApi.evaluateObjectSet(workspaceId, ask!.definition,
+        { limit: LINK_PAGE, sort: ask!.sort }),
+      enabled: !!ask,
+    })),
+  });
 
   // p.271's default expansion is a *starting* state, so it is seeded rather
   // than computed: once somebody has folded a section away, re-deriving it
@@ -6890,9 +6905,11 @@ export function CanvasLinksWidget({
         <p className="canvas-widget-empty" data-testid="links-none">No links to show</p>
       ) : (
         <ul className="canvas-links" data-testid="links">
-          {visible.map((group) => {
+          {visible.map((group, index) => {
             const key = linkKey(group);
             const isOpen = open.includes(key);
+            const sorted = sortedAsks[index] ? sortedPages[index] : null;
+            const items = sorted ? sorted.data?.instances ?? null : group.items;
             return (
               <li className="canvas-link-group" key={key} data-testid="link-group">
                 <button
@@ -6922,13 +6939,17 @@ export function CanvasLinksWidget({
                   </a>
                 )}
                 {isOpen && (
-                  group.items.length === 0 ? (
+                  items === null ? (
+                    // Not the store's page while the sorted one comes: a list
+                    // that reorders itself under the reader is worse than none.
+                    <p className="canvas-link-empty">Sorting…</p>
+                  ) : items.length === 0 ? (
                     <p className="canvas-link-empty" data-testid="link-empty">
                       Nothing on the other side of this link
                     </p>
                   ) : (
                     <ul className="canvas-link-objects">
-                      {group.items.map((i) => {
+                      {items.map((i) => {
                         const far = farType(group.far_type_id);
                         const title = titleOf(i, far?.properties
                           .find((p) => p.id === far.title_property_id)?.api_name);
@@ -6968,10 +6989,10 @@ export function CanvasLinksWidget({
                           </li>
                         );
                       })}
-                      {group.total > group.items.length && (
+                      {group.total > items.length && (
                         // The traversal returns a first page, not the far side.
                         <li className="canvas-link-more">
-                          Showing {group.items.length} of {group.total}
+                          Showing {items.length} of {group.total}
                         </li>
                       )}
                     </ul>
@@ -6983,6 +7004,51 @@ export function CanvasLinksWidget({
         </ul>
       )}
     </div>
+  );
+}
+
+/** p.272's Sort linked object by for one chosen link (§548): the linked
+ * type's properties that have an order both stores agree on, and a
+ * direction. Text is not offered, as the server would refuse it. */
+function LinkSortField({ workspaceId, farTypeId, testid, value, onChange }: {
+  workspaceId: string;
+  farTypeId: string;
+  testid: string;
+  value: string | undefined;
+  onChange: (sort: string | undefined) => void;
+}) {
+  const far = useQuery({
+    queryKey: ["object-type", farTypeId],
+    queryFn: () => objApi.getType(workspaceId, farTypeId),
+  });
+  const descending = !!value?.startsWith("-");
+  const property = value?.replace(/^-/, "") ?? "";
+  return (
+    <span className="row-actions">
+      <select
+        aria-label="Sort linked objects by"
+        data-testid={testid}
+        value={property}
+        onChange={(e) => onChange(e.target.value
+          ? `${descending ? "-" : ""}${e.target.value}` : undefined)}
+      >
+        <option value="">The store&apos;s order</option>
+        {orderableProperties(far.data?.properties ?? []).map((p) => (
+          <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
+        ))}
+      </select>
+      {property && (
+        <select
+          aria-label="Sort direction"
+          data-testid={`${testid}-direction`}
+          value={descending ? "desc" : "asc"}
+          onChange={(e) => onChange(`${e.target.value === "desc" ? "-" : ""}${property}`)}
+        >
+          <option value="asc">Ascending</option>
+          <option value="desc">Descending</option>
+        </select>
+      )}
+    </span>
   );
 }
 
@@ -7094,10 +7160,26 @@ function LinksWidgetSettings() {
                         value={picked.label ?? ""}
                         data-testid={`links-label-${key}`}
                         onChange={(e) =>
-                          write(chosen.map((c) =>
-                            c.key === key
-                              ? { key, ...(e.target.value ? { label: e.target.value } : {}) }
-                              : c))}
+                          write(chosen.map((c) => {
+                            if (c.key !== key) return c;
+                            const { label: _old, ...rest } = c;
+                            return e.target.value ? { ...rest, label: e.target.value } : rest;
+                          }))}
+                      />
+                    )}
+                    {/* p.272's Sort linked object by (§548): a property of the
+                        linked type that has an order, and a direction. */}
+                    {picked && (
+                      <LinkSortField
+                        workspaceId={workspaceId}
+                        farTypeId={link.far_type_id}
+                        testid={`links-sort-${key}`}
+                        value={picked.sort}
+                        onChange={(sort) => write(chosen.map((c) => {
+                          if (c.key !== key) return c;
+                          const { sort: _old, ...rest } = c;
+                          return sort ? { ...rest, sort } : rest;
+                        }))}
                       />
                     )}
                   </div>

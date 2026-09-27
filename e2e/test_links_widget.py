@@ -41,9 +41,11 @@ from conftest import eventually, open_builder, open_module, save, settled
 # link, not the page (the harness had to say so).
 PREVIEW_LIMIT = 10
 REPORTS = 11
-PEOPLE = [{"id": "P1", "name": "Ada", "dept": "ENG", "manager_id": ""}] + [
+# `tenure` is a number so p.272's Sort linked object by has something both
+# stores order the same way (§548): Report n has n years.
+PEOPLE = [{"id": "P1", "name": "Ada", "dept": "ENG", "manager_id": "", "tenure": 30}] + [
     {"id": f"P{n}", "name": f"Report {n}",
-     "dept": "RES" if n % 2 else "ENG", "manager_id": "P1"}
+     "dept": "RES" if n % 2 else "ENG", "manager_id": "P1", "tenure": n}
     for n in range(2, 2 + REPORTS)
 ]
 DEPARTMENTS = [
@@ -60,7 +62,8 @@ SERVER_ORDER = ["Manager", "Direct reports", "Department"]
 def seed(api):
     people = Module(api, "Links widget")
     person_type = people.object_type(
-        columns=["id", "name", "dept", "manager_id"], rows=PEOPLE, key="id", title="name",
+        columns=["id", "name", "dept", "manager_id", "tenure"], rows=PEOPLE, key="id",
+        title="name", types={"tenure": "integer"},
     )
     depts = Module(api, "Links widget departments", beside=people)
     dept_type = depts.object_type(
@@ -580,3 +583,60 @@ def test_the_panel_turns_the_options_on(page, api, seed) -> None:
     props = mod.definition()["layout"]["lw"]["props"]
     assert (props["exploreLinks"], props["openObjects"], props["previewOnHover"]) == (
         True, True, True), props
+
+
+
+# ---- p.272's Sort linked object by (§548) ------------------------------------
+
+def reports_titles(page) -> list[str]:
+    return page.get_by_test_id("link-object-title").all_text_contents()
+
+
+@pytest.mark.parametrize("sort, first, last", [
+    ("-tenure", "Report 12", "Report 3"),
+    ("tenure", "Report 2", "Report 11"),
+])
+def test_a_linked_objects_page_is_sorted_as_chosen(page, api, seed, sort, first, last) -> None:
+    """Eleven reports and a page of ten, in key order, so the store's page
+    leaves out Report 9. Sorting *that page* would end the descending list at
+    Report 2 and the ascending one at Report 12; the link's own first ten end
+    at Report 3 and Report 11."""
+    mod = build(api, seed, f"Links sorted {sort}", {
+        "linkMode": "specify", "defaultExpand": 1,
+        "links": [{"key": f"{seed.reports_to}:inbound", "sort": sort}]})
+    open_module(page, mod)
+    expect(page.get_by_test_id("link-object-title")).to_have_count(PREVIEW_LIMIT)
+    titles = reports_titles(page)
+    assert (titles[0], titles[-1]) == (first, last), titles
+    expect(page.locator(".canvas-link-more")).to_have_text(f"Showing {PREVIEW_LIMIT} of {REPORTS}")
+
+
+def test_the_panel_sorts_a_chosen_link_and_keeps_its_label(page, api, seed) -> None:
+    mod = build(api, seed, "Links sort panel", {
+        "linkMode": "specify",
+        "links": [{"key": f"{seed.reports_to}:inbound", "label": "Team"}]})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Links").first.click()
+    key = f"{seed.reports_to}:inbound"
+    field = page.get_by_test_id(f"links-sort-{key}")
+    # Only the properties with an order: tenure, and not the names.
+    expect(field.locator("option")).to_have_count(2)
+    field.select_option("tenure")
+    page.get_by_test_id(f"links-sort-{key}-direction").select_option("desc")
+    page.get_by_test_id(f"links-label-{key}").fill("My team")
+    save(page)
+    links = mod.definition()["layout"]["lw"]["props"]["links"]
+    assert links == [{"key": key, "sort": "-tenure", "label": "My team"}], links
+
+
+def test_a_sort_left_behind_by_specify_mode_is_not_applied_to_every_link(page, api, seed) -> None:
+    """p.272's sort belongs to a *specified* link; in "all links" mode the
+    store's order stands, whatever the configuration still holds."""
+    mod = build(api, seed, "Links sorted all", {
+        "linkMode": "all", "defaultExpand": 0,
+        "links": [{"key": f"{seed.reports_to}:inbound", "sort": "-tenure"}]})
+    open_module(page, mod)
+    header(page, "Direct reports").click()
+    expect(page.get_by_test_id("link-object-title")).to_have_count(PREVIEW_LIMIT)
+    assert "Report 12" not in reports_titles(page)[:1], reports_titles(page)
