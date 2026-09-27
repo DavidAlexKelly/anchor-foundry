@@ -301,6 +301,8 @@ def test_the_panel_sets_all_four(page, api):
     page.get_by_test_id("metric-spark-start").fill("2026-01-02T00:00")
     page.get_by_test_id("metric-spark-end").fill("2026-01-03T00:00")
     expect(page.get_by_test_id("metric-spark-range-problem")).to_have_count(0)
+    expect(page.get_by_test_id("metric-spark-baseline")).to_have_count(0)
+    page.get_by_test_id("metric-spark-baseline-kind").select_option("static")
     page.get_by_test_id("metric-spark-baseline").fill("15")
     save(page)
 
@@ -320,3 +322,64 @@ def test_a_tag_layout_draws_no_line(page, api):
     pick(page, "North sensor")
     expect(page.get_by_test_id("metric-value")).to_have_text("2")
     expect(page.get_by_test_id("metric-spark")).to_have_count(0)
+
+
+
+# ---- §534: p.591's relative range and p.592's series baseline --------------------
+def test_a_relative_range_counts_back_from_now(page, api):
+    """p.591: "a relative start of '2 weeks ago' specifies a window beginning
+    December 1 when the application is opened on December 15". January's
+    readings are inside a year ago and outside a week ago."""
+    year = build(api, "Metric relative year", card={
+        "sparkRange": "relative", "sparkAgo": 1000, "sparkAgoUnit": "day"})
+    open_module(page, year)
+    url, values = spark_values(page)
+    assert "transforms=" in url and values == [10, 20, 30]
+    week = build(api, "Metric relative week", card={
+        "sparkRange": "relative", "sparkAgo": 1, "sparkAgoUnit": "week"})
+    open_module(page, week)
+    _, values = spark_values(page)
+    assert values == []
+
+
+def test_a_series_baseline_is_the_line_s_own_summary(page, api):
+    """p.592: "a baseline with the value of the most recent observation in the
+    time series"."""
+    mod = build(api, "Metric series baseline", card={"baselineKind": "series", "baselineSummary": "avg"})
+    open_module(page, mod)
+    pick(page, "North sensor")
+    expect(page.get_by_test_id("metric-spark-line-baseline")).to_have_count(1)
+    # The average of 10, 20, 30 is the middle of the box the line fills.
+    expect(page.get_by_test_id("metric-spark-line-baseline")).to_have_attribute("y1", "10")
+    none = build(api, "Metric no baseline", card={"baselineKind": "none", "baseline": 25})
+    open_module(page, none)
+    pick(page, "North sensor")
+    eventually(lambda: page.get_by_test_id("metric-spark-line").count(), lambda n: n == 1,
+               what="the sparkline")
+    expect(page.get_by_test_id("metric-spark-line-baseline")).to_have_count(0)
+
+
+def test_the_panel_sets_a_relative_range_and_a_series_baseline(page, api):
+    mod = build(api, "Metric relative panel")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row").filter(has_text="Metric card").first.click()
+    page.get_by_test_id("metric-spark-range").select_option("relative")
+    page.get_by_test_id("metric-spark-ago").fill("2000")
+    page.get_by_test_id("metric-spark-ago-unit").select_option("day")
+    page.get_by_test_id("metric-spark-ahead").fill("1")
+    page.get_by_test_id("metric-spark-ahead-unit").select_option("week")
+    page.get_by_test_id("metric-spark-baseline-kind").select_option("series")
+    page.get_by_test_id("metric-spark-baseline-summary").select_option("max")
+    save(page)
+    open_module(page, mod)
+    url, values = spark_values(page)
+    assert values == [10, 20, 30]
+    # Both ends were asked for: 2000 days back and a week on.
+    from urllib.parse import parse_qs, urlparse
+    import json as _json
+    [asked] = _json.loads(parse_qs(urlparse(url).query)["transforms"][0])
+    assert asked["kind"] == "range" and asked["start"] and asked["end"], asked
+    assert asked["start"] < "2022" and asked["end"] > asked["start"]
+    # The maximum is the top of the box.
+    expect(page.get_by_test_id("metric-spark-line-baseline")).to_have_attribute("y1", "0")
