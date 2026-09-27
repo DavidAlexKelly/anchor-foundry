@@ -182,3 +182,16 @@ def test_a_malformed_derived_property_map_does_not_stop_the_walk() -> None:
         "layout": {"t": {"props": {"objectTypeId": TYPE_A}}},
     })
     assert got["object_types"] == [TYPE_A]
+
+
+def test_an_inline_actions_further_actions_count_too() -> None:
+    """p.512's "Add item" (§556): each further action in one Inline Action is
+    one the module needs, as its first is."""
+    got = ma.referenced({
+        "layout": {"form": {"type": {"resolvedName": "CanvasActionForm"}, "props": {
+            "actionTypeId": "a1",
+            "actions": [{"actionTypeId": "a2", "title": ""}, {"actionTypeId": None},
+                        {"actionTypeId": ""}, "junk"]}}},
+    })
+    assert got["action_types"] == ["a1", "a2"]
+    assert ma.further_actions({"actions": "x"}) == []

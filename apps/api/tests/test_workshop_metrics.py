@@ -406,3 +406,15 @@ def test_a_viewer_may_report_a_view_but_not_turn_tracking_on(
     r = client.put(f"{base(fx)}/{app_id}/usage-tracking",
                    headers=hdr(fx.viewer_sub), json={"on": True})
     assert r.status_code == 403, r.text
+
+
+def test_an_inline_actions_further_actions_are_used_by_it() -> None:
+    """p.512's several actions in one widget (§556): each is a use by it."""
+    document = {
+        "format": 2,
+        "layout": {"form": {"type": {"resolvedName": "CanvasActionForm"}, "props": {
+            "actionTypeId": "a1", "actions": [{"actionTypeId": "a2", "title": "Two"}]}}},
+        "events": {},
+    }
+    assert wm.module_actions(document) == {
+        "a1": [{"node": "form", "via": "widget"}], "a2": [{"node": "form", "via": "widget"}]}
