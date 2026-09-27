@@ -2255,6 +2255,26 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   opacity: 0; transition: opacity 0.12s; z-index: 1;
 }
 .chart-exportable:hover .chart-export, .chart-export:focus-within { opacity: 1; }
+/* p.325-326's groups of metrics and their layout styles (§533). */
+.metric-group { display: flex; gap: 12px; }
+.metric-group--horizontal { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+.metric-group--vertical { flex-direction: column; }
+.metric-group--card .metric-item {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px;
+}
+/* The template, "used to arrange data in every card": the label over the
+   value, or beside it. */
+.metric-group--side_by_side .metric-item {
+  grid-template-columns: auto 1fr; align-items: baseline; column-gap: 10px;
+}
+.metric-group--tag .metric-item {
+  display: inline-flex; gap: 6px; align-items: baseline; padding: 2px 10px;
+  border-radius: 999px; background: var(--accent-wash);
+}
+.metric-group--tag .metric-value { font-size: 14px; }
+.metric-group--list { gap: 0; }
+.metric-group--list .metric-item { border-bottom: 1px solid var(--line); padding: 4px 0; }
+.metric-group--list .metric-value { font-size: 16px; }
 /* p.329's secondary metric (§528): "under the primary metric", and smaller. */
 .metric-secondary { font-size: 13px; color: var(--ink-soft); }
 .metric-secondary-value { color: var(--ink); font-weight: 600; }
