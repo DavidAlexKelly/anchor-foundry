@@ -283,6 +283,9 @@ HELD_BEHAVIOURS = ("only_on_event", "on_load_and_event")
 #: Rewritten rather than left standing, because a comment saying a thing is
 #: impossible outlives the impossibility (§213).
 ARRAY_ELEMENTS = ("string", "number", "boolean", "date", "timestamp")
+#: What an array's entries may be: the scalars, which can travel in a URL,
+#: and p.132's struct (§570), which a loop hands to a struct variable.
+ELEMENTS = (*ARRAY_ELEMENTS, "struct")
 
 #: p.133's two loop sources. The object-set arm is older than this constant;
 #: naming both is what lets the builder's toggle and the server's refusals be
@@ -671,11 +674,17 @@ def parse(
             _parse_object_set(vid, kind, label, value.get("object_set"), derivation,
                               property_types),
         )
+        default = value.get("default")
+        if kind == "array":
+            # The Variables panel keeps a typed default as text, and an
+            # array's is its JSON (§570): read here, so a loop over one the
+            # panel typed has entries rather than a string.
+            default = variable_arrays.of_array_variable(default)
         variables[vid] = Variable(
             id=vid,
             kind=str(kind),
             label=label,
-            default=value.get("default"),
+            default=default,
             derivation=derivation,
             object_set=_parse_object_set(vid, kind, label, value.get("object_set"), derivation,
                               property_types),
@@ -815,6 +824,12 @@ def _parse_url_behavior(
     behavior = str(raw)
     if behavior == "never":
         return behavior
+    if kind == "array" and element == "struct":
+        raise VariableError(
+            f"variable {label!r} is an array of structs and cannot be in the URL - an "
+            "entry is one repeated query parameter, and a struct has no text form for "
+            "one"
+        )
     if kind == "array" and element is None:
         raise VariableError(
             f"variable {label!r} is an array with no element type and cannot be in the "
@@ -1052,10 +1067,10 @@ def _parse_element(label: str, raw: Any, kind: str) -> str | None:
     Only an `array` has entries, so an element on anything else is a setting
     with no effect - the shape this module refuses everywhere else.
 
-    **`struct` is refused with its own reason** rather than lumped in with a
-    typo. p.132 lists it among the array types Foundry loops over, so somebody
-    reading the spec will try it, and "expected one of string, number…" would
-    read as the spec being wrong rather than as this platform being behind.
+    **`struct` is allowed as of §570**: p.132 lists it among the array types
+    Foundry loops over, and p.134's "the struct-typed interface variable
+    renders the fields of each struct entry" is a struct variable (§247)
+    receiving one entry.
     """
     if raw is None:
         return None
@@ -1064,18 +1079,10 @@ def _parse_element(label: str, raw: Any, kind: str) -> str | None:
             f"variable {label!r} is a {kind}, which has no entries - an element "
             "type belongs on an array"
         )
-    if raw == "struct":
-        raise VariableError(
-            f"variable {label!r} is an array of structs, which p.132 lists and this "
-            "platform does not loop over them yet. The `struct` kind and p.143's "
-            "extract_struct_field arrived in §247, so the model is no longer the "
-            "gap - what is missing is the loop handing each entry to a child of "
-            "that kind. Use an array of a scalar type, or loop over an object set"
-        )
-    if not isinstance(raw, str) or raw not in ARRAY_ELEMENTS:
+    if not isinstance(raw, str) or raw not in ELEMENTS:
         raise VariableError(
             f"variable {label!r} has element {raw!r}; expected one of "
-            f"{', '.join(ARRAY_ELEMENTS)}"
+            f"{', '.join(ELEMENTS)}"
         )
     return raw
 
@@ -2570,7 +2577,7 @@ def _check_loop_sections(layout: Any, variables: dict[str, Variable]) -> None:
             raise VariableError(
                 f"loop {node_id!r} loops over {variable.label!r}, which has no element "
                 f"type - p.134 needs the child's variable to match it. Set the array's "
-                f"element to one of {', '.join(ARRAY_ELEMENTS)}"
+                f"element to one of {', '.join(ELEMENTS)}"
             )
 
 

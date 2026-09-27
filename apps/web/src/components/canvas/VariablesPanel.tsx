@@ -70,15 +70,11 @@ const KINDS: WorkshopVariableKind[] = [
   "struct",
 ];
 
-/** p.132's array element types, mirroring `ARRAY_ELEMENTS` in the service.
- *
- * `struct` is absent because the API still refuses it, and offering a choice
- * that fails on save is the thing these lists exist to avoid — but **the
- * reason changed in §247** and the sentence here changed with it (§213). It
- * used to be that no kind carried a struct at all; there is one now, and
- * `extract_struct_field` is the "variable transform" p.134 describes. What is
- * missing is the loop handing each *entry* to a child of that kind. */
-const ARRAY_ELEMENTS = ["string", "number", "boolean", "date", "timestamp"] as const;
+/** p.132's array element types, mirroring `ELEMENTS` in the service: the
+ * scalars and, as of §570, `struct`, whose entries a loop hands to a child's
+ * struct variable (p.134). An array of structs cannot be in the URL, which the
+ * server says at save. */
+const ARRAY_ELEMENTS = ["string", "number", "boolean", "date", "timestamp", "struct"] as const;
 
 /** p.72's filter options, with their labels. Derived from the module's own
  * catalogue so an option can never name a type nothing reports. */
@@ -686,9 +682,10 @@ export function VariablesPanel({
                             // the key out kept the old element. And an untyped
                             // list cannot be in the URL (p.199, §505), so it
                             // leaves the URL with its type rather than being
-                            // saved into a document the API refuses.
+                            // saved into a document the API refuses. Nor can
+                            // an array of structs (§570), for the same reason.
                             const element = e.target.value || undefined;
-                            update(id, (element
+                            update(id, (element && element !== "struct"
                               ? { element }
                               : { element, url_behavior: undefined }) as Partial<WorkshopVariable>);
                           }}
