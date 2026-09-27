@@ -470,6 +470,9 @@ export type WorkshopTransform =
    * `services/variable_geo.py`: a geopoint, or its "lat,lon" text, in; a
    * geohash (to a `precision`), a coordinate or an MGRS reference out. */
   | "geohash" | "latitude" | "longitude" | "mgrs"
+  /** p.139's Object RID (§569): the object a `single_object` variable holds,
+   * as its id. */
+  | "object_rid"
 
 /** What a `time_series_set` variable resolves to: the whole question, and no
  * data. Decision 0009 keeps points in the dataset they arrived in, so a

@@ -220,6 +220,8 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   { value: "latitude", label: "Geo: latitude from geopoint", arity: "one" },
   { value: "longitude", label: "Geo: longitude from geopoint", arity: "one" },
   { value: "mgrs", label: "Geo: MGRS from geopoint", arity: "one" },
+  // p.139's Object RID (§569).
+  { value: "object_rid", label: "Object RID", arity: "one" },
 ];
 
 /** Offered on `time_series_set` variables, and the only thing offered there -
@@ -246,7 +248,8 @@ const SET_TRANSFORMS: WorkshopTransform[] = ["filter_set", "narrow_set"];
  * "Narrowed by" list would put "follow a link" among two ways of filtering. */
 const TRAVERSE: WorkshopTransform = "traverse_set";
 
-const CAST_TARGETS = ["string", "number", "boolean"] as const;
+/** The service's `CAST_TARGETS`: p.138-139's casts, the last four §569's. */
+const CAST_TARGETS = ["string", "number", "boolean", "date", "timestamp", "geopoint", "geoshape"] as const;
 
 /** How many inputs each transform takes, so the editor can render the right
  * number of slots instead of a free-form list the server will reject. */
@@ -268,7 +271,7 @@ function slotLabels(transform: WorkshopTransform): string[] {
   if (transform === "if_else") return ["Condition", "Then", "Else"];
   if (transform === "filter_set") return ["Set to narrow", "Filter value from"];
   if (transform === "cast") return ["Value"];
-  if (transform === "object_property") return ["Object"];
+  if (transform === "object_property" || transform === "object_rid") return ["Object"];
   if (transform === "extract_struct_field") return ["Struct"];
   if (transform === "filter_value") return ["Filter clauses"];
   if (transform === "object_series") return ["Object"];
@@ -1244,6 +1247,60 @@ function DerivationEditor({
             ))}
           </select>
         </label>
+      )}
+      {/* p.138-139's Parser and time zone, for a cast to a date or a
+          timestamp (§569). Both optional: without a parser an ISO date or
+          timestamp is read, and the zone is UTC's. */}
+      {derivation.transform === "cast" &&
+        (derivation.config?.to === "date" || derivation.config?.to === "timestamp") && (
+        <>
+          <label>
+            Parser
+            <input
+              data-testid="cast-format"
+              value={String(derivation.config?.format ?? "")}
+              readOnly={readOnly}
+              placeholder="e.g. M/dd/yyyy"
+              onChange={(e) => onChange({
+                ...derivation, config: { ...derivation.config, format: e.target.value || undefined },
+              })}
+            />
+            <span className="field-hint">yyyy, MM or MMM, dd, HH or hh with a, mm, ss; empty reads ISO</span>
+          </label>
+          <label>
+            Time zone
+            <input
+              data-testid="cast-timezone"
+              value={String(derivation.config?.timezone ?? "")}
+              readOnly={readOnly}
+              placeholder="UTC"
+              onChange={(e) => onChange({
+                ...derivation, config: { ...derivation.config, timezone: e.target.value || undefined },
+              })}
+            />
+            <span className="field-hint">a named zone, such as Europe/Paris</span>
+          </label>
+          {/* p.139's time zone "set dynamically using a string reference or
+              variable": a second input, which wins over the one typed. */}
+          <label>
+            Time zone from
+            <select
+              data-testid="cast-zone-variable"
+              value={derivation.inputs[1] ?? ""}
+              disabled={readOnly}
+              onChange={(e) => onChange({
+                ...derivation,
+                inputs: e.target.value
+                  ? [derivation.inputs[0] ?? "", e.target.value] : derivation.inputs.slice(0, 1),
+              })}
+            >
+              <option value="">the zone above</option>
+              {Object.values(variables)
+                .filter((v) => v.kind === "string" && v.id !== variable.id)
+                .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+            </select>
+          </label>
+        </>
       )}
 
       {(derivation.transform === "object_property" ||

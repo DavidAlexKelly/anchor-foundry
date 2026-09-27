@@ -39,7 +39,9 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
-from . import variable_arrays, variable_checks, variable_dates, variable_geo, variable_math
+from . import (
+    variable_arrays, variable_casts, variable_checks, variable_dates, variable_geo, variable_math,
+)
 
 KINDS = (
     "string",
@@ -110,6 +112,8 @@ TRANSFORMS = (
     *variable_arrays.TRANSFORMS,
     # p.142's geospatial operations (§568): `variable_geo.py`.
     *variable_geo.TRANSFORMS,
+    # p.139's Object RID (§569): an object's own id.
+    "object_rid",
 )
 
 # Still declared and deliberately not evaluated here: an aggregate over a set
@@ -127,7 +131,7 @@ TRANSFORMS = (
 # not exist.
 STORE_TRANSFORMS = ("object_set_aggregation",)
 
-CAST_TARGETS = ("string", "number", "boolean")
+CAST_TARGETS = ("string", "number", "boolean", *variable_casts.TARGETS)
 
 # How deep one module may be embedded inside another (roadmap 1.5, priority 4).
 #
@@ -1272,14 +1276,28 @@ def _check_arity(vid: str, d: Derivation) -> None:
                 "(condition, then, else)"
             )
     elif d.transform == "cast":
-        if len(d.inputs) != 1:
-            raise VariableError(f"variable {vid!r}: cast needs exactly one input")
         target = d.config.get("to")
+        # p.139: a time zone "set dynamically using a string reference or
+        # variable" (§569) is a second input, for a date or a timestamp only.
+        zoned = target in ("date", "timestamp")
+        if len(d.inputs) != 1 and not (zoned and len(d.inputs) == 2):
+            raise VariableError(
+                f"variable {vid!r}: cast needs exactly one input"
+                + (", and a second naming its time zone at most" if zoned else "")
+            )
         if target not in CAST_TARGETS:
             raise VariableError(
                 f"variable {vid!r}: cast target {target!r}; expected one of "
                 f"{', '.join(CAST_TARGETS)}"
             )
+        # §569: a parser and a time zone, for the casts p.138-139 give them.
+        problem = variable_casts.check(str(target), d.config)
+        if problem:
+            raise VariableError(f"variable {vid!r}: {problem}")
+    elif d.transform == "object_rid":
+        if len(d.inputs) != 1:
+            raise VariableError(f"variable {vid!r}: object_rid needs exactly one input "
+                                "(the variable holding the object)")
     elif d.transform in ("is_empty", "is_not_empty"):
         if len(d.inputs) != 1:
             raise VariableError(f"variable {vid!r}: {d.transform} needs exactly one input")
@@ -1658,7 +1676,13 @@ def _apply(
         # Nothing is not the string "None". A null part contributes an empty
         # string, so a half-filled concat reads as a partial label rather than
         # as debris.
-        return separator.join("" if v is None else _text(v) for v in inputs)
+        #
+        # p.138: "If an array variable is inputted, the operation will
+        # concatenate and cast elements within the array into string", the
+        # separator between them too (§569) - rather than Python's repr of a
+        # list, which is what an array part read as before.
+        parts = [e for v in inputs for e in (v if isinstance(v, list) else [v])]
+        return separator.join("" if v is None else _text(v) for v in parts)
     if d.transform in variable_math.ARITY:
         try:
             return variable_math.apply(d.transform, list(inputs), d.config, variable.label)
@@ -1688,7 +1712,16 @@ def _apply(
         condition, then, otherwise = inputs
         return then if _truthy(condition) else otherwise
     if d.transform == "cast":
-        return _cast(inputs[0], str(d.config["to"]), variable.label)
+        config = d.config
+        if len(inputs) > 1 and inputs[1] not in (None, ""):
+            # The zone a variable names wins over one set on the cast.
+            config = {**config, "timezone": inputs[1]}
+        return _cast(inputs[0], str(d.config["to"]), variable.label, config)
+    if d.transform == "object_rid":
+        try:
+            return variable_casts.object_rid(inputs[0], variable.label)
+        except variable_casts.CastError as exc:
+            raise VariableError(str(exc)) from None
     if d.transform == "is_empty":
         return _empty(inputs[0])
     if d.transform == "is_not_empty":
@@ -2063,7 +2096,7 @@ def _empty(value: Any) -> bool:
     return False
 
 
-def _cast(value: Any, target: str, label: str) -> Any:
+def _cast(value: Any, target: str, label: str, config: dict[str, Any] | None = None) -> Any:
     """Convert, or refuse in a sentence naming the value.
 
     Refusing rather than returning None: a cast that silently produced nothing
@@ -2072,6 +2105,11 @@ def _cast(value: Any, target: str, label: str) -> Any:
     """
     if value is None:
         return None
+    if target in variable_casts.TARGETS:
+        try:
+            return variable_casts.cast(value, target, config or {}, label)
+        except variable_casts.CastError as exc:
+            raise VariableError(f"{label!r} cannot convert {value!r} to {target}: {exc}") from None
     try:
         if target == "string":
             return _text(value)
