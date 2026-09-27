@@ -49,7 +49,23 @@ def editable(api):
     # the refusal rather than about the feature.
     assert action["inline_edit_refusals"] == [], action["inline_edit_refusals"]
     mod.action_id = action["id"]
+    # p.136: "Select a property and navigate to Inline edit … select one of
+    # the available action types" (§600) - the Explorer edits a column
+    # through its property's own action.
+    set_inline_action(api, mod, {"status": action["id"]})
     return mod
+
+
+def set_inline_action(api, mod, chosen: dict) -> None:
+    got = api.call("GET", f"/workspaces/{mod.workspace_id}/object-types/{mod.object_type_id}")
+    api.call("PATCH", f"/workspaces/{mod.workspace_id}/object-types/{mod.object_type_id}", {
+        "display_name": got["display_name"],
+        "title_property": next((p["api_name"] for p in got["properties"]
+                                if p["id"] == got.get("title_property_id")), None),
+        "properties": [{"api_name": p["api_name"], "display_name": p["display_name"],
+                        "data_type": p["data_type"], "visibility": p["visibility"],
+                        "inline_action_type_id": chosen.get(p["api_name"])}
+                       for p in got["properties"]]})
 
 
 def open_results(page, module) -> None:
@@ -209,8 +225,66 @@ def test_a_type_with_no_eligible_action_says_so(page, api) -> None:
     page.goto(f"{WEB_BASE}/{mod.workspace_slug}/explore?type={mod.object_type_id}")
     why = page.get_by_test_id("explorer-edit-why")
     expect(why).to_be_visible(timeout=30000)
-    expect(why).to_contain_text("inline edit")
+    expect(why).to_contain_text("No property of")
+    expect(why).to_contain_text("inline action")
     expect(page.get_by_test_id("explorer-edit-start")).to_have_count(0)
+
+
+def test_an_eligible_action_no_property_names_edits_nothing(page, api) -> None:
+    """p.136 configures an inline edit per property (§600): an action that
+    could back one is not an editor until a property names it."""
+    mod = Module(api, "Explorer edit unnamed")
+    mod.object_type(
+        columns=["ticket_id", "status"], rows=[{"ticket_id": "u1", "status": "open"}],
+        key="ticket_id", title="ticket_id",
+    )
+    api.call("POST", f"/workspaces/{mod.workspace_id}/action-types", {
+        "object_type_id": mod.object_type_id, "api_name": f"set_{uuid.uuid4().hex[:8]}",
+        "display_name": "Set status", "editable_properties": ["status"]})
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/explore?type={mod.object_type_id}")
+    expect(page.get_by_test_id("explorer-edit-why")).to_contain_text(
+        "inline action", timeout=30000)
+
+
+def test_p136_each_property_edits_through_its_own_action(page, api) -> None:
+    """"You can use the same action type as an inline edit for multiple
+    properties, or you can have separate action types for different
+    properties" (p.136): one Save, a batch for each action."""
+    mod = Module(api, "Explorer edit two actions")
+    mod.object_type(
+        columns=["ticket_id", "status", "priority"],
+        rows=[{"ticket_id": "t1", "status": "open", "priority": "low"}],
+        key="ticket_id", title="ticket_id",
+    )
+    made = {}
+    for prop in ("status", "priority"):
+        made[prop] = api.call("POST", f"/workspaces/{mod.workspace_id}/action-types", {
+            "object_type_id": mod.object_type_id, "api_name": f"set_{prop}_{mod.tag}",
+            "display_name": f"Set {prop}", "editable_properties": [prop]})["id"]
+    # A parameter named otherwise than its property: the cell is the
+    # property's, what is submitted is the action's parameter.
+    api.call("PUT", f"/workspaces/{mod.workspace_id}/action-types/{made['status']}/definition", {
+        "parameters": [{"api_name": "new_status", "display_name": "New status",
+                        "data_type": "string"}],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "status", "parameter": "new_status"}}],
+        "criteria": []})
+    set_inline_action(api, mod, made)
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/explore?type={mod.object_type_id}")
+    page.get_by_test_id("explorer-edit-start").click(timeout=30000)
+    row = row_for(page, "t1")
+    row.get_by_label("status").fill("closed")
+    row.get_by_label("priority").fill("high")
+    page.get_by_test_id("explorer-edit-save").click()
+    expect(page.get_by_test_id("explorer-edit-saved")).to_have_text("Saved 1 object.")
+
+    def stored():
+        found = api.call("POST", f"/workspaces/{mod.workspace_id}/object-sets/evaluate",
+                         {"definition": {"object_type_id": mod.object_type_id, "filters": []},
+                          "limit": 5})["instances"]
+        return found[0]["properties"]
+    eventually(stored, lambda v: (v["status"], v["priority"]) == ("closed", "high"),
+               what="both properties, each through its own action")
 
 
 def test_the_edit_is_counted_as_the_explorer_s_write(page, api, editable) -> None:
@@ -237,3 +311,60 @@ def test_the_edit_is_counted_as_the_explorer_s_write(page, api, editable) -> Non
 
     eventually(explorer_writes, lambda n: n == before + 1,
                what="the Explorer's write count to move")
+
+
+def test_a_refused_batch_says_so_and_saves_nothing_after_it(page, api) -> None:
+    """p.138's refusal, from one of the actions a Save submits through."""
+    mod = Module(api, "Explorer edit refused")
+    mod.object_type(
+        columns=["ticket_id", "status"], rows=[{"ticket_id": "r1", "status": "open"}],
+        key="ticket_id", title="ticket_id",
+    )
+    action = api.call("POST", f"/workspaces/{mod.workspace_id}/action-types", {
+        "object_type_id": mod.object_type_id, "api_name": f"set_{mod.tag}",
+        "display_name": "Set status", "editable_properties": ["status"]})
+    api.call("PUT", f"/workspaces/{mod.workspace_id}/action-types/{action['id']}/definition", {
+        "parameters": [{"api_name": "status", "display_name": "Status", "data_type": "string"}],
+        "rules": [{"kind": "modify_object", "config": {"property": "status", "parameter": "status"}}],
+        "criteria": [{"message": "that is not a status this workspace uses", "config": {
+            "left": {"kind": "parameter", "parameter": "status"},
+            "operator": "is_included_in", "right": {"kind": "value", "value": ["allowed"]}}}]})
+    set_inline_action(api, mod, {"status": action["id"]})
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/explore?type={mod.object_type_id}")
+    page.get_by_test_id("explorer-edit-start").click(timeout=30000)
+    row_for(page, "r1").get_by_label("status").fill("nope")
+    page.get_by_test_id("explorer-edit-save").click()
+    expect(page.get_by_test_id("explorer-edit-error")).to_contain_text(
+        "that is not a status this workspace uses")
+    expect(page.get_by_test_id("explorer-edit-saved")).to_have_count(0)
+
+
+def test_a_batch_that_fails_while_writing_is_not_reported_saved(page, api) -> None:
+    """p.138: a batch that fails whole comes back as a failure, not an error -
+    the key its rows are written by is gone - and Save says so rather than
+    moving on to report the rest as saved."""
+    import psycopg
+    from conftest import ADMIN_DSN
+
+    mod = Module(api, "Explorer edit fails")
+    mod.object_type(
+        columns=["ticket_id", "status"], rows=[{"ticket_id": "f1", "status": "open"}],
+        key="ticket_id", title="ticket_id",
+    )
+    action = api.call("POST", f"/workspaces/{mod.workspace_id}/action-types", {
+        "object_type_id": mod.object_type_id, "api_name": f"set_{mod.tag}",
+        "display_name": "Set status", "editable_properties": ["status"]})
+    set_inline_action(api, mod, {"status": action["id"]})
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/explore?type={mod.object_type_id}")
+    page.get_by_test_id("explorer-edit-start").click(timeout=30000)
+    row_for(page, "f1").get_by_label("status").fill("closed")
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as db:
+        db.execute("UPDATE object_type_sources SET primary_key_column = 'gone'"
+                   " WHERE object_type_id = %s", (mod.object_type_id,))
+        try:
+            page.get_by_test_id("explorer-edit-save").click()
+            expect(page.get_by_test_id("explorer-edit-error")).to_be_visible()
+            expect(page.get_by_test_id("explorer-edit-saved")).to_have_count(0)
+        finally:
+            db.execute("UPDATE object_type_sources SET primary_key_column = 'ticket_id'"
+                       " WHERE object_type_id = %s", (mod.object_type_id,))
