@@ -18,6 +18,8 @@ from __future__ import annotations
 import os
 import sys
 
+import json
+
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -210,60 +212,66 @@ def test_already_undone_is_reported_before_whose_it_was() -> None:
     assert said is not None and "already been undone" in said
 
 
-# --- what the apply path records (§319) ---------------------------------------
+# --- the rest of what a run wrote (§551; db 0114) ------------------------------
+#
+# 0076 recorded a sentence for a run that created, deleted or changed other
+# objects, and refused it. db 0114 records those objects instead, so they can
+# be put back - under p.156's rule for each of them, not only the subject.
+
+CREATED = {"kind": "create", "object_type_id": "t", "source_id": "s", "primary_key": "k1",
+           "properties": {"name": "New"}}
+REMOVED = {"kind": "remove", "object_type_id": "t", "source_id": "s", "primary_key": "k2",
+           "properties": {"name": "Old"}, "subject": False}
+CHANGED = {"kind": "modify", "object_type_id": "t", "source_id": "s", "primary_key": "k3",
+           "instance_id": "i3", "before": {"n": 1}, "after": {"n": 2}}
 
 
-def test_an_ordinary_edit_records_no_reason() -> None:
-    assert action_revert.unsupported_reason(
-        creations=0, removals=0, other_modifications=0
+def test_a_run_s_effects_are_read_from_what_the_database_hands_back() -> None:
+    assert action_revert.effects_of(a_run(revert_effects=[CREATED])) == [CREATED]
+    assert action_revert.effects_of(a_run(revert_effects=json.dumps([CHANGED]))) == [CHANGED]
+    assert action_revert.effects_of(a_run(revert_effects=None)) == []
+    assert action_revert.effects_of(a_run()) == []
+
+
+def test_everything_as_the_run_left_it_can_be_put_back() -> None:
+    assert action_revert.effects_refusal(
+        [CREATED, REMOVED, CHANGED], [{"name": "New"}, None, {"n": 2}]
     ) is None
+    assert action_revert.effects_refusal([], []) is None
 
 
-def test_a_creating_action_says_what_would_be_left_behind() -> None:
-    said = action_revert.unsupported_reason(
-        creations=2, removals=0, other_modifications=0
-    )
-    assert said is not None and "created 2 other objects" in said
-    assert "leave them behind" in said
+def test_a_created_object_edited_or_deleted_since_is_refused() -> None:
+    for now in ({"name": "Renamed"}, None):
+        said = action_revert.effects_refusal([CREATED], [now])
+        assert said is not None and "created has been edited or deleted since" in said
 
 
-def test_a_deleting_action_says_what_would_not_come_back() -> None:
-    said = action_revert.unsupported_reason(
-        creations=0, removals=1, other_modifications=0
-    )
-    assert said is not None and "deleted another object" in said
-    assert "bring them back" in said
+def test_a_deleted_object_that_is_back_is_refused() -> None:
+    said = action_revert.effects_refusal([REMOVED], [{"name": "Someone else"}])
+    assert said is not None and "deleted has been created again" in said
 
 
-def test_an_action_that_touches_its_neighbours_says_so() -> None:
-    said = action_revert.unsupported_reason(
-        creations=0, removals=0, other_modifications=3
-    )
-    assert said is not None and "changed 3 other objects" in said
+def test_another_changed_object_edited_since_is_refused() -> None:
+    """p.156's "even if the edit is on a different property", for the objects
+    around the subject as for the subject."""
+    said = action_revert.effects_refusal([CHANGED], [{"n": 2, "other": "x"}])
+    assert said is not None and "edited since" in said
 
 
-def test_one_is_named_rather_than_counted() -> None:
-    """"1 other objects" is the kind of sentence that makes a reader distrust
-    the rest of the screen."""
-    said = action_revert.unsupported_reason(
-        creations=1, removals=0, other_modifications=0
-    )
-    assert said is not None and "another object" in said and "1 other" not in said
+def test_the_subject_s_own_deletion_is_judged_as_the_subject() -> None:
+    """The subject is `refusal`'s to judge: gone is what a run that deleted it
+    leaves, and back again is what an undo would overwrite."""
+    gone = dict(REMOVED, subject=True)
+    assert action_revert.effects_refusal([gone], [{"name": "Back"}]) is None
+    run = a_run(revert_effects=[gone])
+    assert action_revert.subject_removed(run) is True
+    assert action_revert.subject_removed(a_run(revert_effects=[REMOVED])) is False
+    assert refusal(run, current=None) is None
+    said = refusal(run, current={"name": "Back"})
+    assert said is not None and "created again since" in said
 
 
-@pytest.mark.parametrize(
-    "kinds",
-    [
-        {"creations": 1, "removals": 1, "other_modifications": 0},
-        {"creations": 1, "removals": 0, "other_modifications": 1},
-        {"creations": 0, "removals": 1, "other_modifications": 1},
-    ],
-)
-def test_a_run_that_did_several_of_them_still_gets_one_sentence(kinds: dict) -> None:
-    """Only one reason is shown, and it is the first that applies. A refusal
-    that listed three would be a paragraph where a sentence was wanted, and the
-    reader cannot act on any of them anyway."""
-    said = action_revert.unsupported_reason(**kinds)  # type: ignore[arg-type]
-    assert said is not None
-    assert said.count(".") == 1
-
+def test_a_run_recorded_before_its_effects_keeps_its_sentence() -> None:
+    """0076's runs said why they could not be undone, and it is still true."""
+    said = refusal(a_run(revert_unsupported="This action also created another object."))
+    assert said == "This action also created another object."

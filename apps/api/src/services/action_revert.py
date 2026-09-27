@@ -21,6 +21,7 @@ and the rest are not.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 #: What a run must be for an undo to be worth offering. A failed run changed
@@ -89,6 +90,16 @@ def refusal(
         # A run from before db 0076, or one that recorded nothing. Said plainly
         # rather than reported as a rule the reader has broken.
         return "There is no record of what this object looked like beforehand."
+    if subject_removed(run):
+        # p.156's "reverting a delete action" (§551): the object is meant to
+        # be gone, and the undo writes it back - unless something has put an
+        # object under its key since, which the undo would overwrite.
+        if current_properties is not None:
+            return (
+                "The object this action deleted has been created again since, so "
+                "undoing it would overwrite that one."
+            )
+        return None
     if current_properties is None:
         return "This object no longer exists, so there is nothing to undo onto."
     if current_properties != run.get("applied_properties"):
@@ -120,39 +131,52 @@ def can_revert(
     ) is None
 
 
-def unsupported_reason(
-    *, creations: int, removals: int, other_modifications: int
-) -> str | None:
-    """Why this run will never be undoable, decided while it is being applied.
-
-    **Written at apply time because nothing later knows.** A run's rows are
-    gone from this platform's point of view once the dataset version is
-    committed: the appended rows are indistinguishable from any other, so a
-    revert reading only `action_runs` could not tell that three objects were
-    created alongside the edit it was asked to undo.
-
-    Restoring the subject's properties while leaving those creations in place
-    is an undo that half-works, which §214 argues is worse than one that says
-    it cannot — so the run records the sentence, and the Undo button is absent
-    with that sentence in its place.
+def effects_of(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """What this run did besides writing its subject (db 0114; §551): the
+    objects it created, deleted and changed, each with what the undo needs to
+    put it back. Empty for a run that did nothing else, or one recorded before
+    db 0114 - which carries `revert_unsupported` instead and is refused by it.
     """
-    if creations:
-        return (
-            f"This action also created {_things(creations)}, and undoing it "
-            "would leave them behind."
-        )
-    if removals:
-        return (
-            f"This action also deleted {_things(removals)}, and undoing it "
-            "would not bring them back."
-        )
-    if other_modifications:
-        return (
-            f"This action also changed {_things(other_modifications)}, and "
-            "undoing it would only put this one back."
-        )
+    raw = run.get("revert_effects")
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    return [dict(e) for e in raw] if isinstance(raw, list) else []
+
+
+def subject_removed(run: dict[str, Any]) -> bool:
+    """Whether the run deleted the very object it was applied to."""
+    return any(e.get("kind") == "remove" and e.get("subject") for e in effects_of(run))
+
+
+def effects_refusal(
+    effects: list[dict[str, Any]], current: list[dict[str, Any] | None],
+) -> str | None:
+    """Why the objects this run touched besides its subject cannot be put back,
+    or `None` if they can. `current` is each one's properties now, in the same
+    order, or `None` where it no longer exists.
+
+    **p.156's rule, for every object and not only the subject**: "an action on
+    an object cannot be reverted once any subsequent edit has been made to the
+    object, even if the edit is on a different property". An object the run
+    created must still be exactly as created, one it deleted still gone, and
+    one it changed still as it left it - or the undo would overwrite, delete or
+    resurrect something a later edit decided.
+    """
+    for effect, now in zip(effects, current):
+        kind = effect.get("kind")
+        if kind == "create" and now != effect.get("properties"):
+            return (
+                "An object this action created has been edited or deleted since, "
+                "so undoing it would lose that change."
+            )
+        if kind == "remove" and not effect.get("subject") and now is not None:
+            return (
+                "An object this action deleted has been created again since, so "
+                "undoing it would overwrite that one."
+            )
+        if kind == "modify" and now != effect.get("after"):
+            return (
+                "Another object this action changed has been edited since, so "
+                "undoing it would overwrite the newer change."
+            )
     return None
-
-
-def _things(count: int) -> str:
-    return "another object" if count == 1 else f"{count} other objects"

@@ -2104,7 +2104,7 @@ async def record_revert_state(
     *,
     previous_properties: dict[str, Any] | None,
     applied_properties: dict[str, Any] | None,
-    unsupported: str | None,
+    effects: list[dict[str, Any]],
 ) -> None:
     """What this run would have to put back, written as it finishes.
 
@@ -2118,6 +2118,11 @@ async def record_revert_state(
     object cannot be reverted once any subsequent edit has been made to the
     object, **even if the edit is on a different property**". A record of the
     keys this run wrote cannot see a change to a key it did not.
+   
+    `effects` are the objects the run created, deleted and changed besides its
+    subject (db 0114; §551), each with what an undo needs to put it back.
+    Recorded in place of 0076's `revert_unsupported` sentence, which a run
+    that recorded them no longer needs.
     """
     await conn.execute(
         text(
@@ -2125,14 +2130,14 @@ async def record_revert_state(
             UPDATE action_runs
                SET previous_properties = CAST(:before AS jsonb),
                    applied_properties  = CAST(:after AS jsonb),
-                   revert_unsupported  = :why
+                   revert_effects      = CAST(:effects AS jsonb)
              WHERE id = :id
             """
         ),
         {
             "before": json.dumps(previous_properties) if previous_properties is not None else None,
             "after": json.dumps(applied_properties) if applied_properties is not None else None,
-            "why": unsupported,
+            "effects": json.dumps(effects),
             "id": str(run_id),
         },
     )
