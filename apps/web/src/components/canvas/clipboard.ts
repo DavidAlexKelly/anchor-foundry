@@ -379,3 +379,35 @@ function remapEffectConfig(
   }
   return next;
 }
+
+/** p.68's keys (§514): which clipboard action a keydown asks for, or null
+ * when it is not the builder's to take.
+ *
+ * > "select the widget and use Cmd+C (macOS) or Ctrl+C (Windows). Use Cmd+V
+ * > (macOS) or Ctrl+V (Windows) to paste the widget into the Unused widgets
+ * > area" (p.68)
+ *
+ * **A field keeps its own copy and paste.** With focus in a text box, a
+ * select or anything editable, Cmd+C copies its text as it does everywhere
+ * else; taking it over would make a label impossible to copy. Alt, or Shift
+ * (Cmd+Shift+V is the browser's paste-as-plain-text), means some other
+ * shortcut. */
+export function keyboardClipboard(event: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  target: unknown;
+}): "copy" | "paste" | null {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return null;
+  const target = event.target as { tagName?: unknown; isContentEditable?: unknown } | null;
+  const tag = typeof target?.tagName === "string" ? target.tagName.toUpperCase() : "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable === true) {
+    return null;
+  }
+  const key = event.key.toLowerCase();
+  if (key === "c") return "copy";
+  if (key === "v") return "paste";
+  return null;
+}

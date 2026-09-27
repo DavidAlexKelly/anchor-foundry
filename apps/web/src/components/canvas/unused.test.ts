@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  canPark, ensureUnusedNode, isParked, move, park, UNUSED_NAME, unusedIds, unusedNode,
+  canPark, ensureUnusedNode, isParked, move, park, pasteIntoUnused, UNUSED_NAME, unusedIds,
+  unusedNode,
 } from "./unused";
+import { clip } from "./clipboard";
 import type { LayoutNodes } from "../../lib/workshop-module";
 
 /** p.68's *Unused widgets* area (Foundry `workshop` p.68).
@@ -269,5 +271,43 @@ describe("park", () => {
     expect(isParked(placed, "w1")).toBe(false);
     expect(kidsOf(placed, "s1")).toEqual(["w1"]);
     expect((placed.w1 as { props: Record<string, unknown> }).props.text).toBe("one");
+  });
+});
+
+describe("pasteIntoUnused (§514; p.68's Cmd+V)", () => {
+  const clipping = (layout: LayoutNodes) => clip(layout, { v_a: { id: "v_a", kind: "string", label: "A" } as never }, {}, "w1", "one")!;
+  const mints = () => {
+    const node = minter();
+    let v = 0;
+    let e = 0;
+    return { mintNode: node, mintVariable: () => `v${++v}`, mintEvent: () => `e${++e}` };
+  };
+
+  it("parks a copy, making the holding node on the way, and leaves the original", () => {
+    const layout = doc({ w1: widget("s1", { text: "one", visibleWhen: "v_a" }) });
+    const result = pasteIntoUnused(layout, {}, {}, clipping(layout), mints())!;
+    const holder = unusedNode(result.layout)!;
+    expect(holder).toBe("u1");
+    expect(kidsOf(result.layout, holder)).toEqual([result.root]);
+    expect(kidsOf(result.layout, "s1")).toEqual(["w1"]);
+    // Same-variable mode: the copy reads what the original read.
+    const copy = result.layout[result.root] as { props: Record<string, unknown> };
+    expect(copy.props.visibleWhen).toBe("v_a");
+    expect(Object.keys(result.variables)).toEqual([]);
+  });
+
+  it("uses the holding node that is already there", () => {
+    const layout = doc({ uX: node(UNUSED_NAME, "ROOT", []) }, ["p1", "uX"]);
+    const result = pasteIntoUnused(layout, {}, {}, clipping(layout), mints())!;
+    expect(unusedIds(result.layout)).toEqual([result.root]);
+    expect(Object.values(result.layout).filter(
+      (n) => (n as { type?: { resolvedName?: string } }).type?.resolvedName === UNUSED_NAME,
+    )).toHaveLength(1);
+  });
+
+  it("is nothing for a document with no root", () => {
+    const layout = doc();
+    const { ROOT: _root, ...rootless } = layout;
+    expect(pasteIntoUnused(rootless as LayoutNodes, {}, {}, clipping(layout), mints())).toBeNull();
   });
 });

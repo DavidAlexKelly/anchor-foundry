@@ -195,3 +195,41 @@ def test_a_page_cannot_be_parked(page, api) -> None:
 
     tree_row(page, "parked-widget").click()
     expect(page.get_by_test_id("unused-park")).to_be_enabled()
+
+
+def test_cmd_c_and_cmd_v_park_a_copy(page, api) -> None:
+    """§514, p.68: "select the widget and use Cmd+C (macOS) or Ctrl+C
+    (Windows). Use Cmd+V (macOS) or Ctrl+V (Windows) to paste the widget into
+    the Unused widgets area". The original stays on its page; the copy is
+    parked, bound to the same variable, and "+ Add widget" puts it back."""
+    mod = module_with(api, "Unused keys")
+    open_builder(page, mod)
+    expect(page.get_by_test_id("clip-keys")).to_contain_text("Cmd+C / Ctrl+C")
+
+    tree_row(page, "parked-widget").click()
+    # Nothing selected on the page, and focus is not in a field.
+    page.locator("body").press("ControlOrMeta+c")
+    expect(page.get_by_test_id("clip-state")).to_contain_text("Holding")
+    page.locator("body").press("ControlOrMeta+v")
+
+    expect(page.get_by_test_id("unused-row")).to_have_count(1)
+    expect(page.get_by_test_id("unused-row")).to_contain_text("parked-widget")
+    # The original is where it was.
+    expect(page.locator(".canvas-page").get_by_text("parked-widget")).to_have_count(1)
+    tree_row(page, "Section").click()
+    page.get_by_test_id("unused-add").click()
+    expect(page.locator(".canvas-page").get_by_text("parked-widget")).to_have_count(2)
+
+
+def test_the_keys_leave_a_field_s_own_copy_and_paste_alone(page, api) -> None:
+    """Typing in a settings box, Cmd+C copies the box's text, as it does
+    everywhere else; taking it over would make a label impossible to copy."""
+    mod = module_with(api, "Unused keys field")
+    open_builder(page, mod)
+    tree_row(page, "kept-widget").click()
+    box = page.locator(".canvas-settings textarea, .canvas-settings input[type=text]").first
+    box.click()
+    box.press("ControlOrMeta+c")
+    expect(page.get_by_test_id("clip-state")).to_have_text("Select a widget or section, then Copy.")
+    box.press("ControlOrMeta+v")
+    expect(page.get_by_test_id("unused-row")).to_have_count(0)
