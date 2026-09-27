@@ -16,6 +16,7 @@ import { ExploreDialog } from "@/components/source-explorer";
 import { isSyncable, tableKey, tableLabel } from "@/lib/source-explorer";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { WebhooksPanel } from "@/components/webhooks-panel";
+import { ListenersPanel } from "@/components/listeners-panel";
 import type {
   Connection,
   DiscoveredTable,
@@ -1243,6 +1244,12 @@ export default function ConnectionsPage() {
           projectId={project.id}
           connections={list.data ?? []}
         />
+      )}
+
+      {/* p.261's "Data Connection > Listeners" (§516): the inbound half, for
+          systems that post to this platform rather than being called by it. */}
+      {workspace && project && (
+        <ListenersPanel workspaceId={workspace.id} projectId={project.id} />
       )}
 
       {/* p.203: an export is created "from the Overview page of the source to
