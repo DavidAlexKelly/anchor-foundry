@@ -330,6 +330,7 @@ def points_for_many_sql(
     interval: str,
     aggregate: str,
     per_series: int = SPARK_POINTS,
+    transforms: list[dict[str, Any]] | None = None,
 ) -> str:
     """The same read, for a page of series at once (`workshop` p.583).
 
@@ -369,6 +370,33 @@ def points_for_many_sql(
     series_key = f"CAST({key} AS VARCHAR)"
     capped = max(1, min(per_series, MAX_POINTS))
 
+    if transforms:
+        # p.583's transforms on a table's series (§555): every series through
+        # the chain on its own - the windows partitioned by it - over every
+        # point, and the allowance taken last, for §524's reason: a running
+        # total over the latest hundred readings is a different series.
+        clause = f"{series_key} IN ({wanted})"
+        if interval == "none":
+            base = f"SELECT {series_key} AS series, {ts} AS at, {val} AS value FROM dataset WHERE {clause}"
+        else:
+            expression = (
+                f"arg_max({val}, {ts})" if aggregate == "last"
+                else "count(*)" if aggregate == "count"
+                else f"{aggregate}({val})"
+            )
+            base = (
+                f"SELECT {series_key} AS series, date_trunc({_literal(interval)}, {ts}) AS at, "
+                f"{expression} AS value FROM dataset WHERE {clause} GROUP BY series, at"
+            )
+        ctes = [f"t0 AS ({base})"] + [
+            f"t{n} AS ({_transform_sql(t, f't{n - 1}', per_series=True)})"
+            for n, t in enumerate(transforms, start=1)
+        ]
+        return (
+            f"WITH {', '.join(ctes)} SELECT series, at, value FROM (SELECT series, at, value, "
+            f"row_number() OVER (PARTITION BY series ORDER BY at DESC) AS rn FROM t{len(transforms)}) "
+            f"WHERE rn <= {capped} ORDER BY series, at"
+        )
     if interval == "none":
         inner = (
             f"SELECT {series_key} AS series, {ts} AS at, {val} AS value, "
@@ -610,13 +638,17 @@ def _window_call(aggregate: str) -> str:
     return f"{aggregate}(value)"
 
 
-def _transform_sql(transform: dict[str, Any], source: str) -> str:
-    """One transform as a query over `source`, which has `at` and `value`."""
+def _transform_sql(transform: dict[str, Any], source: str, *, per_series: bool = False) -> str:
+    """One transform as a query over `source`, which has `at` and `value` - and
+    `series`, when `per_series` is set: a page of series at once (§555), each
+    transformed on its own, the windows partitioned by it."""
+    s = "series, " if per_series else ""
+    part = "PARTITION BY series " if per_series else ""
     kind = transform["kind"]
     if kind == "cumulative":
         # p.584: "aggregating over all earlier points, including the input
         # point itself".
-        return (f"SELECT at, {_window_call(transform['aggregate'])} OVER (ORDER BY at "
+        return (f"SELECT {s}at, {_window_call(transform['aggregate'])} OVER ({part}ORDER BY at "
                 f"ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value FROM {source}")
     if kind == "periodic":
         # p.584: "equally spaced, non-overlapping time intervals … aligned
@@ -626,30 +658,31 @@ def _transform_sql(transform: dict[str, Any], source: str) -> str:
         size = transform["window"] * TIME_UNITS[transform["unit"]]
         edge = "floor" if transform["window_type"] == "start" else "ceil"
         return (
-            f"SELECT epoch_ms(CAST(({align} + {edge}((epoch_ms(CAST(at AS TIMESTAMP)) / 1000.0 "
+            f"SELECT {s}epoch_ms(CAST(({align} + {edge}((epoch_ms(CAST(at AS TIMESTAMP)) / 1000.0 "
             f"- {align}) / {size}) * {size}) * 1000 AS BIGINT)) AS at, "
-            f"{_window_call(transform['aggregate'])} AS value FROM {source} GROUP BY 1"
+            f"{_window_call(transform['aggregate'])} AS value FROM {source} "
+            f"GROUP BY {'1, 2' if per_series else '1'}"
         )
     if kind == "integral":
         # p.585: "the cumulative area under the input time series", in the
         # unit chosen: a power reading integrated per hour is energy in
         # kilowatt-hours. Each gap between two points adds its width times
         # the method's height; the first point has no area before it.
-        height = {"linear": "(lag(value) OVER (ORDER BY at) + value) / 2",
-                  "left": "lag(value) OVER (ORDER BY at)",
+        height = {"linear": f"(lag(value) OVER ({part}ORDER BY at) + value) / 2",
+                  "left": f"lag(value) OVER ({part}ORDER BY at)",
                   "right": "value"}[transform["method"]]
         seconds = TIME_UNITS[transform["unit"]]
         return (
-            "SELECT at, coalesce(sum(area) OVER (ORDER BY at ROWS BETWEEN UNBOUNDED PRECEDING "
-            "AND CURRENT ROW), 0) AS value FROM (SELECT at, "
-            "(epoch_ms(CAST(at AS TIMESTAMP)) - epoch_ms(CAST(lag(at) OVER (ORDER BY at) "
+            f"SELECT {s}at, coalesce(sum(area) OVER ({part}ORDER BY at ROWS BETWEEN UNBOUNDED "
+            f"PRECEDING AND CURRENT ROW), 0) AS value FROM (SELECT {s}at, "
+            f"(epoch_ms(CAST(at AS TIMESTAMP)) - epoch_ms(CAST(lag(at) OVER ({part}ORDER BY at) "
             f"AS TIMESTAMP))) / 1000.0 / {seconds} * {height} AS area FROM {source}) areas"
         )
     if kind == "rolling":
         # p.584: "the points that fall in a fixed-size temporal window
         # preceding it, including the input point itself". A window of time,
         # not of points, so gaps in the readings do not stretch it.
-        return (f"SELECT at, {_window_call(transform['aggregate'])} OVER (ORDER BY at "
+        return (f"SELECT {s}at, {_window_call(transform['aggregate'])} OVER ({part}ORDER BY at "
                 f"RANGE BETWEEN INTERVAL {transform['window']} {transform['unit'].upper()} "
                 f"PRECEDING AND CURRENT ROW) AS value FROM {source}")
     if kind == "derivative":
@@ -658,29 +691,29 @@ def _transform_sql(transform: dict[str, Any], source: str) -> str:
         # have no rate, so both are left out rather than drawn as zero.
         seconds = TIME_UNITS[transform["unit"]]
         return (
-            "SELECT at, value FROM (SELECT at, (value - lag(value) OVER (ORDER BY at)) "
+            f"SELECT {s}at, value FROM (SELECT {s}at, (value - lag(value) OVER ({part}ORDER BY at)) "
             "/ NULLIF((epoch_ms(CAST(at AS TIMESTAMP)) "
-            "- epoch_ms(CAST(lag(at) OVER (ORDER BY at) AS TIMESTAMP))) / 1000.0, 0) "
+            f"- epoch_ms(CAST(lag(at) OVER ({part}ORDER BY at) AS TIMESTAMP))) / 1000.0, 0) "
             f"* {seconds} AS value FROM {source}) rates WHERE value IS NOT NULL"
         )
     if kind == "shift":
         # p.586: "identical to the input time series, but temporally shifted".
-        return (f"SELECT CAST(at AS TIMESTAMP) + INTERVAL ({transform['by']}) "
+        return (f"SELECT {s}CAST(at AS TIMESTAMP) + INTERVAL ({transform['by']}) "
                 f"{transform['unit'].upper()} AS at, value FROM {source}")
     if kind == "formula":
         # p.586's formula, over this series as `x`. A point whose formula has
         # no answer (a division by zero, a square root of a negative) is a
         # gap rather than an error for the whole series, and so is one that
         # overflows: infinity is not a reading.
-        return (f"SELECT at, CASE WHEN isfinite(v) THEN v END AS value FROM "
-                f"(SELECT at, CAST({formula_sql(transform['expression'])} AS DOUBLE) AS v "
+        return (f"SELECT {s}at, CASE WHEN isfinite(v) THEN v END AS value FROM "
+                f"(SELECT {s}at, CAST({formula_sql(transform['expression'])} AS DOUBLE) AS v "
                 f"FROM {source}) formula")
     where = []
     if transform["start"] is not None:
         where.append(f"CAST(at AS TIMESTAMP) >= TIMESTAMP {_literal(transform['start'])}")
     if transform["end"] is not None:
         where.append(f"CAST(at AS TIMESTAMP) <= TIMESTAMP {_literal(transform['end'])}")
-    return f"SELECT at, value FROM {source} WHERE {' AND '.join(where)}"
+    return f"SELECT {s}at, value FROM {source} WHERE {' AND '.join(where)}"
 
 
 def points_sql(

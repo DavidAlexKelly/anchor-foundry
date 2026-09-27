@@ -5170,6 +5170,10 @@ class ObjectSetSeriesIn(ObjectSetIn):
     property_api_name: str
     interval: str = "none"
     aggregate: str = "avg"
+    #: p.583's time series transforms on the column (§555), in the shape a
+    #: time series set variable holds them (§524), applied to every row's
+    #: series on its own.
+    transforms: list[Any] = []
 
 
 class SeriesForKey(BaseModel):
@@ -5331,6 +5335,9 @@ async def object_set_series_points(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"unknown aggregate {body.aggregate!r}",
         )
+    # Checked here, for the interval's reason above: refused before a read,
+    # not only when some row happens to have a series.
+    transforms = time_series_service.parse_transforms(body.transforms)
     storage = _dataset_storage()
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.get_type(conn, access.workspace_id, type_id)
@@ -5384,6 +5391,7 @@ async def object_set_series_points(
                 series_ids=list(by_series),
                 interval=body.interval,
                 aggregate=body.aggregate,
+                transforms=transforms,
             )
         except ValueError as exc:
             raise HTTPException(
