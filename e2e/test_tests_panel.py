@@ -308,3 +308,52 @@ def test_the_checks_tab_asks_about_the_branch_it_is_showing(page, api) -> None:
     expect(page.get_by_test_id("checks-tests-summary")).to_contain_text(
         "No unit tests have been run", timeout=30000
     )
+
+
+# ---- §530: the tests in the current file (p.13) -----------------------------------
+def test_the_current_files_tests_run_on_their_own(page, api) -> None:
+    """p.13: "Click the [Test] button to run all unit tests defined in the
+    current file." With a failing test in another file, the file's own run
+    passes, and says what it was over."""
+    mod = project(api, "Tests one file")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"tests/test_ok.py": PASSING_TEST, "tests/test_bad.py": FAILING_TEST})
+
+    open_tests(page, repo, "tests/test_ok.py")
+    button = page.get_by_test_id("tests-run-file")
+    expect(button).to_have_text("Run tests in test_ok.py")
+    button.click()
+    eventually(work_the_queue, lambda n: n >= 1, what="the worker to pick the run up")
+    expect(page.get_by_test_id("tests-verdict")).to_have_text("1 passed", timeout=30000)
+    expect(page.get_by_test_id("tests-scope")).to_have_text("in tests/test_ok.py")
+    expect(page.get_by_test_id("tests-list")).not_to_contain_text("test_bad")
+
+    # The whole repository's run still finds the other file's failure.
+    page.get_by_test_id("tests-run").click()
+    eventually(work_the_queue, lambda n: n >= 1, what="the worker to pick the second run up")
+    expect(page.get_by_test_id("tests-verdict")).to_contain_text("1 failed", timeout=30000)
+    expect(page.get_by_test_id("tests-scope")).to_have_text("every test")
+
+
+def test_a_file_that_is_not_python_offers_no_file_run(page, api) -> None:
+    mod = project(api, "Tests readme")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"tests/test_ok.py": PASSING_TEST, "README.md": "# Transforms\n"})
+    open_tests(page, repo, "README.md")
+    expect(page.get_by_test_id("tests-run")).to_be_visible()
+    expect(page.get_by_test_id("tests-run-file")).to_have_count(0)
+
+
+def test_an_unsaved_edit_is_what_the_file_run_runs(page, api) -> None:
+    """The working set, as for every run: the file as typed, not as committed."""
+    mod = project(api, "Tests one file edited")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"tests/test_ok.py": PASSING_TEST})
+    open_tests(page, repo, "tests/test_ok.py")
+    page.locator(".view-lines").first.click()
+    page.keyboard.press("Control+End")
+    page.keyboard.type("\n\ndef test_now_fails():\n    assert 1 == 0\n")
+    page.get_by_test_id("tests-run-file").click()
+    eventually(work_the_queue, lambda n: n >= 1, what="the worker to pick the run up")
+    expect(page.get_by_test_id("tests-verdict")).to_contain_text("1 failed", timeout=30000)
+    expect(page.get_by_test_id("tests-list")).to_contain_text("test_now_fails")

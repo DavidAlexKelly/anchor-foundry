@@ -106,6 +106,9 @@ export function verdict(run: CodeTestRun | undefined): string {
   }
   const outcomes = run.outcomes ?? [];
   if (outcomes.length === 0) {
+    // §530: a run over one file that found nothing is about that file, and
+    // pytest's naming rule does not apply to a file it was handed by name.
+    if (run.target) return `No unit tests found in ${run.target}.`;
     return (
       "No unit tests found. pytest collects files named test_*.py or *_test.py — " +
       "add one and this will run it."
@@ -188,4 +191,24 @@ export function runLabel(run: CodeTestRun | undefined): string {
  */
 export function canEditProject(role: string): boolean {
   return role === "editor" || role === "owner";
+}
+
+/**
+ * p.13's per-file run (§530): "Click the [Test] button to run all unit tests
+ * defined in the current file". Offered for a Python file, which is the only
+ * kind that defines them; the button names the file so nobody wonders which.
+ */
+export function canRunFile(path: string | null | undefined): boolean {
+  return typeof path === "string" && path.endsWith(".py");
+}
+
+export function fileRunLabel(path: string, run: CodeTestRun | undefined): string {
+  if (run !== undefined && !isSettled(run)) return "Running…";
+  return `Run tests in ${path.split("/").pop()}`;
+}
+
+/** Which tests a run was over, for the line beside its verdict. */
+export function scopeLabel(run: CodeTestRun | undefined): string {
+  if (run === undefined) return "";
+  return run.target ? `in ${run.target}` : "every test";
 }

@@ -1702,3 +1702,55 @@ def test_the_browser_reads_the_same_settings_file_the_server_does() -> None:
             f"the browser's copy of p.114's rule does not name {literal!r}; "
             "the two halves have drifted"
         )
+
+
+# ---- §530: the tests in one file (p.13) ---------------------------------------------
+def test_a_run_can_be_over_one_file_of_the_working_set(client: TestClient, fx: Fixture) -> None:
+    """p.13: "run all unit tests defined in the current file". The whole
+    working set is still stored, since the file under test imports the rest,
+    and the file is kept as the run's target."""
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {"src/daily.py": "def build(rows):\n    return rows\n"})
+    r = client.post(
+        f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.editor_sub),
+        json={"overrides": {"tests/test_daily.py": "def test_it():\n    assert 1\n"},
+              "file": "/tests//test_daily.py"},
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["target"] == "tests/test_daily.py"
+    got = client.get(f"{base(fx)}/{repo['id']}/tests/{r.json()['id']}", headers=hdr(fx.viewer_sub))
+    assert got.json()["target"] == "tests/test_daily.py"
+    listed = client.get(f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.viewer_sub)).json()
+    assert listed[0]["target"] == "tests/test_daily.py"
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        files = conn.execute(
+            "SELECT files FROM code_test_runs WHERE id = %s", (r.json()["id"],)
+        ).fetchone()[0]
+    assert set(files) == {"src/daily.py", "tests/test_daily.py"}
+
+
+def test_a_run_without_a_file_is_over_every_test(client: TestClient, fx: Fixture) -> None:
+    repo = make_repo(client, fx)
+    r = client.post(
+        f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.editor_sub),
+        json={"overrides": {"tests/test_it.py": "def test_it():\n    assert 1\n"}},
+    )
+    assert r.status_code == 202 and r.json()["target"] is None
+
+
+@pytest.mark.parametrize("file, said", [
+    ("tests/test_missing.py", "tests/test_missing.py is not a file in this working set"),
+    ("README.md", "README.md is not a Python file, so it defines no unit tests"),
+    ("../outside.py", "'../outside.py' escapes the repository"),
+])
+def test_a_file_that_is_not_one_to_run_is_refused(
+    client: TestClient, fx: Fixture, file: str, said: str
+) -> None:
+    repo = make_repo(client, fx)
+    r = client.post(
+        f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.editor_sub),
+        json={"overrides": {"tests/test_it.py": "def test_it():\n    assert 1\n",
+                            "README.md": "# hello\n"},
+              "file": file},
+    )
+    assert (r.status_code, r.json()["detail"]) == (422, said)

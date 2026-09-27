@@ -85,12 +85,13 @@ def repository():
     return {"workspace_id": wid, "project_id": pid, "repo_id": rid, "user_id": user}
 
 
-def queue(repository: dict, files: dict[str, str], branch: str = "main") -> uuid.UUID:
+def queue(repository: dict, files: dict[str, str], branch: str = "main",
+          target: str | None = None) -> uuid.UUID:
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         return conn.execute(
-            """INSERT INTO code_test_runs (repo_id, branch, files, requested_by)
-               VALUES (%s,%s,CAST(%s AS jsonb),%s) RETURNING id""",
-            (repository["repo_id"], branch, json.dumps(files), repository["user_id"]),
+            """INSERT INTO code_test_runs (repo_id, branch, files, requested_by, target)
+               VALUES (%s,%s,CAST(%s AS jsonb),%s,%s) RETURNING id""",
+            (repository["repo_id"], branch, json.dumps(files), repository["user_id"], target),
         ).fetchone()[0]
 
 
@@ -154,7 +155,7 @@ def test_a_run_that_could_not_happen_ends_errored_and_not_failed(
     is an answer about the author's code, and a status that said `failed` would
     send them looking at tests that never ran.
     """
-    def refuse(files, timeout_s=None):
+    def refuse(files, timeout_s=None, target=None):
         raise DatasetEngineError("the tests exceeded the 300s time limit")
 
     monkeypatch.setattr(code_test_runs, "run_python_tests", refuse)
@@ -251,7 +252,7 @@ def test_a_run_that_raised_something_unexpected_is_errored_not_lost(
     worse than a bad answer, because the panel polls it for ever."""
     run_id = queue(repository, PASSING)
 
-    def explode(files, timeout_s=None):
+    def explode(files, timeout_s=None, target=None):
         raise RuntimeError("something inside the run")
 
     monkeypatch.setattr(code_test_runs, "run_python_tests", explode)
@@ -260,3 +261,34 @@ def test_a_run_that_raised_something_unexpected_is_errored_not_lost(
     got = row(run_id)
     assert got["status"] == "errored"
     assert "could not run these tests" in got["error"]
+
+
+# ---- §530: the tests in one file (p.13) -----------------------------------------
+TWO_FILES = {
+    "src/daily.py": "def double(x):\n    return 2 * x\n",
+    "tests/test_daily.py": (
+        "from src.daily import double\n\n"
+        "def test_doubles():\n    assert double(2) == 4\n"
+    ),
+    "tests/test_other.py": "def test_other_fails():\n    assert 1 == 2\n",
+}
+
+
+def test_a_run_with_a_target_runs_only_that_file(repository) -> None:
+    """p.13: "run all unit tests defined in the current file". The other
+    file's failing test is not run, and the file under test still imports the
+    rest of the working set."""
+    run_id = queue(repository, TWO_FILES, target="tests/test_daily.py")
+    assert poll() >= 1
+    got = row(run_id)
+    assert got["status"] == "succeeded", got
+    assert [o["id"] for o in got["outcomes"]] == ["tests/test_daily.py::test_doubles"]
+
+
+def test_a_run_without_a_target_runs_every_file(repository) -> None:
+    run_id = queue(repository, TWO_FILES)
+    assert poll() >= 1
+    got = row(run_id)
+    assert got["status"] == "failed"
+    assert sorted(o["id"] for o in got["outcomes"]) == [
+        "tests/test_daily.py::test_doubles", "tests/test_other.py::test_other_fails"]

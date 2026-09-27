@@ -77,19 +77,20 @@ def _run_one(context, platform_db, run_id, workspace_id) -> bool:
                 UPDATE code_test_runs
                    SET status = 'running', started_at = now()
                  WHERE id = %s AND status = 'queued'
-             RETURNING files
+             RETURNING files, target
                 """,
                 (str(run_id),),
             )
             claimed = cur.fetchone()
             if claimed is None:
                 return False
-            (raw_files,) = claimed
+            raw_files, target = claimed
         conn.commit()
 
         files = _files(raw_files)
         try:
-            report = run_python_tests(files)
+            # §530: one file of it when the run names one.
+            report = run_python_tests(files, target=target)
         except DatasetEngineError as exc:
             # The run did not happen. Not the author's answer, so not `failed`.
             _finish(conn, run_id, status="errored", outcomes=None, error=str(exc)[:1000])

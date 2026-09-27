@@ -45,14 +45,22 @@ async def request(
     branch: str,
     files: dict[str, str],
     requested_by: UUID,
+    target: str | None = None,
 ) -> dict[str, Any]:
     """Queue a run over this working set. Returns the row.
+
+    `target` is one file of it (§530; p.13's "all unit tests defined in the
+    current file"), or None for every test in the repository.
 
     The files are stored rather than referenced. There is nowhere else an
     uncommitted buffer exists, and a run that re-read the branch would report on
     code that is not the code it ran — which is worse than not running, because
     it looks like an answer.
     """
+    if target is not None and target not in files:
+        raise ValueError(f"{target} is not a file in this working set")
+    if target is not None and not target.endswith(".py"):
+        raise ValueError(f"{target} is not a Python file, so it defines no unit tests")
     if not files:
         # `ValueError`, so the route answers 422: a request naming no files is
         # malformed rather than in conflict with anything. The same shape
@@ -82,13 +90,13 @@ async def request(
     row = await fetch_one(
         conn,
         """
-        INSERT INTO code_test_runs (repo_id, branch, files, requested_by)
-        VALUES (:rid, :branch, CAST(:files AS jsonb), :by)
-        RETURNING id, repo_id, branch, status, outcomes, error,
+        INSERT INTO code_test_runs (repo_id, branch, files, requested_by, target)
+        VALUES (:rid, :branch, CAST(:files AS jsonb), :by, :target)
+        RETURNING id, repo_id, branch, status, outcomes, error, target,
                   queued_at, started_at, finished_at
         """,
         {"rid": str(repo_id), "branch": branch, "files": payload,
-         "by": str(requested_by)},
+         "by": str(requested_by), "target": target},
     )
     assert row is not None
     return dict(row)
@@ -104,7 +112,7 @@ async def get(conn: AsyncConnection, *, repo_id: UUID, run_id: UUID) -> dict[str
     row = await fetch_one(
         conn,
         """
-        SELECT id, repo_id, branch, status, outcomes, error,
+        SELECT id, repo_id, branch, status, outcomes, error, target,
                queued_at, started_at, finished_at
           FROM code_test_runs
          WHERE id = :id AND repo_id = :rid
@@ -127,7 +135,7 @@ async def latest(
     rows = await fetch_all(
         conn,
         """
-        SELECT id, repo_id, branch, status, outcomes, error,
+        SELECT id, repo_id, branch, status, outcomes, error, target,
                queued_at, started_at, finished_at
           FROM code_test_runs
          WHERE repo_id = :rid

@@ -268,3 +268,38 @@ def test_discovery_follows_pytests_rule_and_not_a_second_one() -> None:
     assert not is_test_file("src/daily.py")
     assert not is_test_file("tests/test_daily.sql"), "SQL has no runner here"
     assert not is_test_file("src/testing.py"), "`test_` is a prefix, not a substring"
+
+
+# ---- §530: one file (p.13) -------------------------------------------------------
+ONE_FILE = {
+    "src/daily.py": "def double(x):\n    return 2 * x\n",
+    "tests/test_daily.py": "from src.daily import double\n\ndef test_doubles():\n    assert double(2) == 4\n",
+    "tests/test_other.py": "def test_other_fails():\n    assert 1 == 2\n",
+}
+
+
+def test_a_target_runs_only_the_tests_in_that_file() -> None:
+    report = run_python_tests(ONE_FILE, target="tests/test_daily.py")
+    assert [o.id for o in report.outcomes] == ["tests/test_daily.py::test_doubles"]
+    assert report.ok
+
+
+def test_a_target_that_is_not_in_the_working_set_is_the_platforms_problem() -> None:
+    with pytest.raises(DatasetEngineError, match="is not a file in this working set"):
+        run_python_tests(ONE_FILE, target="tests/test_missing.py")
+
+
+def test_a_target_cannot_leave_the_working_directory() -> None:
+    """The API normalises the path; this is the second guard, since the path
+    is written into pytest's command line."""
+    for escaping in ("../../etc/passwd", "/etc/passwd", "tests/../../outside.py"):
+        with pytest.raises(DatasetEngineError, match="is not a file in this working set"):
+            run_python_tests(ONE_FILE, target=escaping)
+
+
+def test_a_file_that_is_not_named_like_a_test_still_runs_its_tests() -> None:
+    """p.13 says the tests "defined in the current file": pytest collects a
+    file it is handed by name, whatever the name."""
+    files = {"checks.py": "def test_named_anything():\n    assert True\n"}
+    report = run_python_tests(files, target="checks.py")
+    assert [o.id for o in report.outcomes] == ["checks.py::test_named_anything"]
