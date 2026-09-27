@@ -313,7 +313,10 @@ import {
   freshnessLabel, isStale, itemsOf as freshnessItemsOf, newItemId as newFreshnessItemId,
   type FreshnessItem,
 } from "./data-freshness";
-import { CHART_SORTS, chartSortOf, orientationOf, sortPoints } from "./chart-display";
+import {
+  CHART_SORTS, SCALE_TYPES, axisProblem, axisTitlesOf, chartSortOf, defaultValueTitle,
+  orientationOf, sortPoints, valueAxisOf,
+} from "./chart-display";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { conditionalStyle, cssFor } from "@/lib/conditional-format";
@@ -11928,6 +11931,13 @@ export function CanvasChart({
   sort = "source",
   orientation = "vertical",
   valueLabels = false,
+  scaleType = "linear",
+  minBound = null,
+  maxBound = null,
+  showCategoryTitle = false,
+  categoryTitle = "",
+  showValueTitle = false,
+  valueTitle = "",
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -11988,6 +11998,17 @@ export function CanvasChart({
   orientation?: string;
   /** p.281's **Labels**: each value written on its bar or point. */
   valueLabels?: boolean;
+  /** p.283's value axis **Scale type** and **bounds** (§536,
+   * `chart-display.valueScale`): calculated from the values unless fixed. */
+  scaleType?: string;
+  minBound?: number | null;
+  maxBound?: number | null;
+  /** p.283's axis **titles**, each off unless shown, and its default unless
+   * overridden (`chart-display.axisTitlesOf`). */
+  showCategoryTitle?: boolean;
+  categoryTitle?: string;
+  showValueTitle?: boolean;
+  valueTitle?: string;
 }) {
   const {
     connectors: { connect, drag },
@@ -12099,6 +12120,18 @@ export function CanvasChart({
   // order: a sorted one would be a line zig-zagging back through the weeks.
   const points = unsorted && !usingSeries ? sortPoints(unsorted, chartSortOf(sort)) : unsorted;
 
+  // p.283's value axis and titles. A problem with the bounds is said and the
+  // chart drawn on calculated ones, rather than on an axis running backwards.
+  const axis = valueAxisOf({ scaleType, minBound, maxBound });
+  const axisTrouble = axisProblem(axis);
+  const titles = axisTitlesOf(
+    { showCategoryTitle, categoryTitle, showValueTitle, valueTitle },
+    usingSeries
+      // p.281: a series chart has "the time range on the X axis".
+      ? { category: "Time", value: defaultValueTitle("line", seriesRef?.aggregate, seriesRef?.property) }
+      : { category: dimension, value: defaultValueTitle(kind ?? "bar", aggregate, measure) },
+  );
+
   const needs = usingSeries
     ? (!seriesRef ? "nothing picked yet" : null)
     : usingSet
@@ -12140,6 +12173,7 @@ export function CanvasChart({
               data={segmentedFrom(crossTab.data)}
               mode={segmentModeOf(segmentMode)}
               showLegend={showLegend !== false}
+              titles={titles}
               drill={canDrill ? {
                 selected: drilledLabel,
                 onSelect: (label) =>
@@ -12170,6 +12204,8 @@ export function CanvasChart({
             horizontal: orientationOf(orientation, usingSeries ? "line" : (kind ?? "bar"))
               === "horizontal",
             labels: valueLabels === true,
+            axis,
+            titles,
           }}
           drill={
             canDrill
@@ -12190,6 +12226,11 @@ export function CanvasChart({
               : undefined
           }
         />
+      )}
+      {!segmenting && points && points.length > 0 && axisTrouble && (kind ?? "bar") !== "pie" && (
+        <p className="canvas-widget-empty" data-testid="chart-axis-problem">
+          {axisTrouble} The axis is calculated from the values instead.
+        </p>
       )}
       {canDrill && drilledLabel !== null && (
         <p className="canvas-widget-empty">
@@ -12243,8 +12284,16 @@ function ChartSettings() {
     datasetId, kind, dimension, measure, aggregate, title,
     filterColumn, filterParameter, filterOperator, objectSetVariable, seriesVariable,
     drilldownVariable, segmentBy, segmentMode, showLegend, sort, orientation, valueLabels,
+    scaleType, minBound, maxBound, showCategoryTitle, categoryTitle, showValueTitle, valueTitle,
     actions: { setProp },
   } = useNode((node) => ({
+    scaleType: node.data.props.scaleType,
+    minBound: node.data.props.minBound,
+    maxBound: node.data.props.maxBound,
+    showCategoryTitle: node.data.props.showCategoryTitle,
+    categoryTitle: node.data.props.categoryTitle,
+    showValueTitle: node.data.props.showValueTitle,
+    valueTitle: node.data.props.valueTitle,
     sort: node.data.props.sort,
     orientation: node.data.props.orientation,
     valueLabels: node.data.props.valueLabels,
@@ -12443,6 +12492,19 @@ function ChartSettings() {
           <span className="field-label">Value labels</span>
         </label>
       )}
+      {(kind || "bar") !== "pie" && (
+        <ChartAxisFields
+          segmented={!!objectSetVariable && !!segmentBy && (kind || "bar") === "bar"
+            && (aggregate || "count") === "count"}
+          axis={{ scaleType, minBound, maxBound }}
+          titles={{ showCategoryTitle, categoryTitle, showValueTitle, valueTitle }}
+          defaults={seriesVariable
+            ? { category: "Time", value: "The series' property" }
+            : { category: dimension || "The category property",
+                value: defaultValueTitle(kind || "bar", aggregate, measure) }}
+          setProp={setProp as (fn: (p: Record<string, unknown>) => void) => void}
+        />
+      )}
       {/* **`columns`, not `dataset`.** These three pickers are populated from
           whichever source is bound - the set's properties or the dataset's
           columns, computed above as exactly that. Guarding them on `dataset`
@@ -12610,6 +12672,102 @@ function ChartSettings() {
   );
 }
 
+/** p.283's value axis and axis titles in the Chart's panel (§536). */
+function ChartAxisFields({ segmented, axis, titles, defaults, setProp }: {
+  segmented: boolean;
+  axis: { scaleType?: unknown; minBound?: unknown; maxBound?: unknown };
+  titles: {
+    showCategoryTitle?: unknown; categoryTitle?: unknown;
+    showValueTitle?: unknown; valueTitle?: unknown;
+  };
+  defaults: { category: string; value: string };
+  setProp: (fn: (p: Record<string, unknown>) => void) => void;
+}) {
+  const read = valueAxisOf(axis);
+  const trouble = axisProblem(read);
+  // An emptied number box is no bound: calculated. A half-typed "-" also
+  // reads as "", and anything else that is not a number is read back as no
+  // bound by `valueAxisOf`.
+  const bound = (key: "minBound" | "maxBound") => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setProp((p) => (p[key] = e.target.value === "" ? null : Number(e.target.value)));
+  const title = (show: "showCategoryTitle" | "showValueTitle", text: "categoryTitle" | "valueTitle",
+    label: string, fallback: string, testid: string) => (
+    <>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          data-testid={`chart-show-${testid}-title`}
+          checked={titles[show] === true}
+          onChange={(e) => setProp((p) => (p[show] = e.target.checked))}
+        />
+        <span className="field-label">Show {label} axis title</span>
+      </label>
+      {titles[show] === true && (
+        <label className="field">
+          <span className="field-label">{label.charAt(0).toUpperCase() + label.slice(1)} axis title</span>
+          <input
+            type="text"
+            data-testid={`chart-${testid}-title-input`}
+            value={typeof titles[text] === "string" ? (titles[text] as string) : ""}
+            placeholder={fallback}
+            onChange={(e) => setProp((p) => (p[text] = e.target.value))}
+          />
+        </label>
+      )}
+    </>
+  );
+  return (
+    <>
+      {title("showCategoryTitle", "categoryTitle", "category", defaults.category, "category")}
+      {title("showValueTitle", "valueTitle", "value", defaults.value, "value")}
+      {segmented ? (
+        <p className="field-hint" data-testid="chart-axis-segmented">
+          A segmented chart&apos;s value axis is calculated: a stack&apos;s height is the sum of
+          its segments, which a logarithmic scale would not show.
+        </p>
+      ) : (
+        <>
+          <label className="field">
+            <span className="field-label">Value axis scale</span>
+            <select
+              data-testid="chart-scale-type"
+              value={read.scale}
+              onChange={(e) => setProp((p) => (p.scaleType = e.target.value))}
+            >
+              {Object.entries(SCALE_TYPES).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Minimum bound</span>
+            <input
+              type="number"
+              data-testid="chart-min-bound"
+              value={read.min ?? ""}
+              placeholder="Calculated from the values"
+              onChange={bound("minBound")}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">Maximum bound</span>
+            <input
+              type="number"
+              data-testid="chart-max-bound"
+              value={read.max ?? ""}
+              placeholder="Calculated from the values"
+              onChange={bound("maxBound")}
+            />
+            {trouble && (
+              <span className="field-hint" data-testid="chart-axis-problem-hint">{trouble}</span>
+            )}
+          </label>
+        </>
+      )}
+    </>
+  );
+}
+
 CanvasChart.craft = {
   displayName: "Chart",
   props: {
@@ -12619,6 +12777,8 @@ CanvasChart.craft = {
     objectSetVariable: null, seriesVariable: null, drilldownVariable: null,
     segmentBy: null, segmentMode: "stacked", showLegend: true,
     sort: "source", orientation: "vertical", valueLabels: false,
+    scaleType: "linear", minBound: null, maxBound: null,
+    showCategoryTitle: false, categoryTitle: "", showValueTitle: false, valueTitle: "",
   },
   related: { settings: ChartSettings },
 };
