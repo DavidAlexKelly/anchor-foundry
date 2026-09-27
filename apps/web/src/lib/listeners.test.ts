@@ -119,12 +119,26 @@ describe("named listener types (§518)", () => {
     expect(schemesOf("jira")).toEqual(["hmac_sha256", "none"]);
     expect(schemesOf("pubsub")).toEqual(["query_token"]);
     expect(Object.keys(LISTENER_TYPES))
-      .toEqual(["custom", "slack", "jira", "github", "gitlab", "stripe", "shopify", "pubsub"]);
+      .toEqual(["custom", "slack", "jira", "github", "gitlab", "stripe", "shopify", "pubsub",
+        "bitbucket", "meta", "azure_event_grid", "jotform", "pagerduty", "zendesk", "airtable"]);
+    // §591: Jotform signs nothing, so a token in its address is the default.
+    expect(schemesOf("jotform")).toEqual(["query_token", "none"]);
   });
 
   it("moves a draft onto the new type's default", () => {
     const moved = withType(draft({ verification: "basic", secret: "u:p" }), "stripe");
     expect([moved.listener_type, moved.verification, moved.secret]).toEqual(["stripe", "stripe_v1", "u:p"]);
+  });
+
+  it("asks for Airtable's MAC secret as base64 (§591)", () => {
+    expect(draftProblem(draft({ listener_type: "airtable", verification: "airtable", secret: "not base64!" })))
+      .toBe("Airtable's MAC secret is the base64 text Airtable gave.");
+    // Unpadded, as the server's decoder refuses it too.
+    expect(draftProblem(draft({ listener_type: "airtable", verification: "airtable", secret: "c2VjcmV" })))
+      .toBe("Airtable's MAC secret is the base64 text Airtable gave.");
+    for (const secret of ["c2VjcmV0", "c2VjcmU=", "c2VjcmV0cw=="]) {
+      expect(draftProblem(draft({ listener_type: "airtable", verification: "airtable", secret }))).toBe("");
+    }
   });
 
   it("asks a named type for its secret and nothing else", () => {

@@ -57,7 +57,7 @@ export type ListenerEvent = {
 
 export type Verification =
   | "none" | "basic" | "header_secret" | "hmac_sha256" | "hmac_sha256_base64" | "slack_v0"
-  | "stripe_v1" | "query_token";
+  | "stripe_v1" | "query_token" | "pagerduty_v1" | "zendesk" | "airtable";
 
 /** The schemes, with what each asks of a sender. p.265: "listeners implement
  * the security protocols laid out by those external systems". */
@@ -94,6 +94,19 @@ export const VERIFICATIONS: Record<Verification, { label: string; hint: string }
     label: "Token in the address",
     hint: "The sender adds ?token=<secret> to the endpoint address.",
   },
+  // §591's three, each as its sender documents it (p.265).
+  pagerduty_v1: {
+    label: "PagerDuty signing secret",
+    hint: "PagerDuty signs each body with the webhook's secret; any of its v1 signatures will do.",
+  },
+  zendesk: {
+    label: "Zendesk signing secret",
+    hint: "Zendesk signs each request with the webhook's secret and a timestamp; a stale one is refused.",
+  },
+  airtable: {
+    label: "Airtable MAC secret",
+    hint: "The base64 MAC secret Airtable gave when the webhook was created.",
+  },
 };
 
 /** p.262's named listeners (§518), mirroring `LISTENER_TYPES` in
@@ -110,6 +123,13 @@ export const LISTENER_TYPES = {
   stripe: { label: "Stripe", schemes: { stripe_v1: "Stripe-Signature" } },
   shopify: { label: "Shopify", schemes: { hmac_sha256_base64: "X-Shopify-Hmac-Sha256" } },
   pubsub: { label: "Google Cloud Pub/Sub", schemes: { query_token: null } },
+  bitbucket: { label: "Bitbucket", schemes: { hmac_sha256: "X-Hub-Signature" } },
+  meta: { label: "Meta", schemes: { hmac_sha256: "X-Hub-Signature-256" } },
+  azure_event_grid: { label: "Azure Event Grid", schemes: { header_secret: "aeg-sas-key" } },
+  jotform: { label: "Jotform", schemes: { query_token: null, none: null } },
+  pagerduty: { label: "PagerDuty", schemes: { pagerduty_v1: "X-PagerDuty-Signature" } },
+  zendesk: { label: "Zendesk", schemes: { zendesk: "X-Zendesk-Webhook-Signature" } },
+  airtable: { label: "Airtable", schemes: { airtable: "X-Airtable-Content-MAC" } },
 } as const satisfies Record<string, { label: string; schemes: Partial<Record<Verification, string | null>> }>;
 
 export type ListenerType = keyof typeof LISTENER_TYPES;
@@ -158,6 +178,11 @@ export function draftProblem(draft: ListenerDraft): string {
   }
   if (draft.verification === "basic" && !draft.secret.includes(":")) {
     return "Basic authentication's secret is username:password.";
+  }
+  // §591: Airtable gives its MAC secret base64-encoded, and the server
+  // refuses anything else.
+  if (draft.verification === "airtable" && !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(draft.secret)) {
+    return "Airtable's MAC secret is the base64 text Airtable gave.";
   }
   return "";
 }

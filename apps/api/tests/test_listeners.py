@@ -575,7 +575,8 @@ def test_jira_may_sign_or_not(client, fx) -> None:
 def test_a_named_type_refuses_what_it_does_not_take(client, fx) -> None:
     for body, message in (
         ({"listener_type": "zapier"},
-         "listener_type must be one of custom, slack, jira, github, gitlab, stripe, shopify, pubsub, not 'zapier'"),
+         "listener_type must be one of custom, slack, jira, github, gitlab, stripe, shopify, pubsub, "
+         "bitbucket, meta, azure_event_grid, jotform, pagerduty, zendesk, airtable, not 'zapier'"),
         ({"listener_type": "slack", "verification": "none"}, "a Slack listener verifies with slack_v0"),
         ({"listener_type": "github", "secret": "x", "verification_header": "X-Other"},
          "a GitHub listener always reads X-Hub-Signature-256"),
@@ -614,6 +615,104 @@ def test_the_browser_offers_exactly_these_types() -> None:
                               for k, v in re.findall(r"(\w+): (null|\"[^\"]*\")", schemes)})
     expected = {name: (t["label"], t["schemes"]) for name, t in listener_service.LISTENER_TYPES.items()}
     assert seen == expected
+
+
+# ---- §591: more of p.262's named listeners ------------------------------------
+def test_bitbucket_meta_event_grid_and_jotform_read_what_they_send(client, fx) -> None:
+    body = b'{"push": {}}'
+    sig = hmac.new(b"bb", body, hashlib.sha256).hexdigest()
+    bitbucket = started(client, fx, listener_type="bitbucket", secret="bb")
+    assert (bitbucket["verification"], bitbucket["verification_header"]) == (
+        "hmac_sha256", "X-Hub-Signature")
+    assert client.post(path_of(bitbucket), content=body,
+                       headers={"X-Hub-Signature": f"sha256={sig}"}).status_code == 200
+    meta = started(client, fx, listener_type="meta", secret="bb")
+    assert meta["verification_header"] == "X-Hub-Signature-256"
+    assert client.post(path_of(meta), content=body,
+                       headers={"X-Hub-Signature": f"sha256={sig}"}).status_code == 401
+    assert client.post(path_of(meta), content=body,
+                       headers={"X-Hub-Signature-256": f"sha256={sig}"}).status_code == 200
+    grid = started(client, fx, listener_type="azure_event_grid", secret="sas")
+    assert (grid["verification"], grid["verification_header"]) == ("header_secret", "aeg-sas-key")
+    assert client.post(path_of(grid), content=body, headers={"aeg-sas-key": "sas"}).status_code == 200
+    assert client.post(path_of(grid), content=body, headers={"aeg-sas-key": "sa"}).status_code == 401
+    # Jotform signs nothing: a token in its address, or the address alone.
+    token = started(client, fx, listener_type="jotform", secret="jt")
+    assert token["verification"] == "query_token"
+    assert client.post(path_of(token) + "?token=jt", content=body).status_code == 200
+    assert client.post(path_of(token), content=body).status_code == 401
+    bare = started(client, fx, listener_type="jotform", verification="none")
+    assert client.post(path_of(bare), content=body).status_code == 200
+
+
+def test_a_pagerduty_listener_takes_any_v1_signature_of_the_body(client, fx) -> None:
+    listener = started(client, fx, listener_type="pagerduty", secret="pd")
+    assert (listener["verification"], listener["verification_header"]) == (
+        "pagerduty_v1", "X-PagerDuty-Signature")
+    body = b'{"event": {"event_type": "incident.triggered"}}'
+
+    def sig(secret: str) -> str:
+        return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    for header, status in ((f"v1={sig('pd')}", 200), (f"v1={sig('old')},v1={sig('pd')}", 200),
+                           (f"v1={sig('old')}, v1={sig('pd')}", 200),
+                           (f"v0={sig('pd')}", 401), (sig("pd"), 401),
+                           (f"v1={sig('other')}", 401), ("", 401)):
+        r = client.post(path_of(listener), content=body,
+                        headers={"X-PagerDuty-Signature": header})
+        assert r.status_code == status, header
+    assert events(client, fx, listener)[0]["headers"]["x-pagerduty-signature"] == "[redacted]"
+
+
+def signed_zendesk(secret: str, body: bytes, stamp: str) -> dict:
+    digest = hmac.new(secret.encode(), stamp.encode() + body, hashlib.sha256).digest()
+    return {"X-Zendesk-Webhook-Signature": base64.b64encode(digest).decode(),
+            "X-Zendesk-Webhook-Signature-Timestamp": stamp}
+
+
+def test_a_zendesk_listener_checks_the_signed_iso_timestamp(client, fx) -> None:
+    from datetime import datetime, timedelta, timezone
+    listener = started(client, fx, listener_type="zendesk", secret="zd")
+    assert (listener["verification"], listener["verification_header"]) == (
+        "zendesk", "X-Zendesk-Webhook-Signature")
+    body = b'{"ticket": {"id": 1}}'
+
+    def at(seconds: int) -> str:
+        when = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+        return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert client.post(path_of(listener), content=body,
+                       headers=signed_zendesk("zd", body, at(0))).status_code == 200
+    for headers in (signed_zendesk("other", body, at(0)),
+                    signed_zendesk("zd", body + b" ", at(0)),
+                    signed_zendesk("zd", body, at(-310)), signed_zendesk("zd", body, at(310)),
+                    # No zone, even one that is now where the server is.
+                    signed_zendesk("zd", body, datetime.now().strftime("%Y-%m-%dT%H:%M:%S")),
+                    signed_zendesk("zd", body, "yesterday"),
+                    {**signed_zendesk("zd", body, at(0)),
+                     "X-Zendesk-Webhook-Signature-Timestamp": at(1)}, {}):
+        assert client.post(path_of(listener), content=body, headers=headers).status_code == 401, headers
+
+
+def test_an_airtable_listener_keys_with_the_secret_s_bytes(client, fx) -> None:
+    key = b"\x01\x02airtable-mac\xff"
+    secret = base64.b64encode(key).decode()
+    listener = started(client, fx, listener_type="airtable", secret=secret)
+    assert (listener["verification"], listener["verification_header"]) == (
+        "airtable", "X-Airtable-Content-MAC")
+    body = b'{"base": {"id": "app1"}}'
+    good = "hmac-sha256=" + hmac.new(key, body, hashlib.sha256).hexdigest()
+    assert client.post(path_of(listener), content=body,
+                       headers={"X-Airtable-Content-MAC": good}).status_code == 200
+    as_text = "hmac-sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    for header in (good[len("hmac-sha256="):], as_text, good.upper(), ""):
+        r = client.post(path_of(listener), content=body, headers={"X-Airtable-Content-MAC": header})
+        assert r.status_code == 401, header
+    # A secret that is not base64 could never verify anything, so it is refused.
+    # Strictly: a lenient decoder would drop the "!" and read another key.
+    for bad in ("not base64!", "c2Vj!cmV0", "c2VjcmV"):
+        r = client.post(base(fx), headers=hdr(fx.editor_sub), json={
+            "display_name": "Airtable", "listener_type": "airtable", "secret": bad})
+        assert (r.status_code, r.json()["detail"]) == (
+            422, "an Airtable MAC secret is the base64 Airtable gave"), bad
 
 
 # ---- §520: the ingress allowlist (p.254-255) -----------------------------------
