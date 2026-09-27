@@ -175,12 +175,15 @@ import {
   // this file could want for something else.
   MODES as PILL_MODES, OPERATOR_LABELS,
   canAdd, canEdit, canRemove, clausesOf, describe as describeClause,
+  describe as describeFilterClause,
   editableValue, isEditable, isRemovable, modeOf as pillModeOf, operatorsFor,
   parseValue, withValue, without,
 } from "./filter-clause";
 import {
-  MAX_SUGGESTED, PROPERTY_SCOPES, availableProperties, placeholderOf as searchPlaceholderOf,
-  propertyScopeOf, searchMenu, suggestionDefinition, suggestionsOf, type MenuEntry,
+  LINK_SCOPES, MAX_SUGGESTED, PROPERTY_SCOPES, availableLinks, availableProperties, describeLinked,
+  linkMenu, linkScopeOf, placeholderOf as searchPlaceholderOf, propertyScopeOf, searchMenu,
+  suggestionDefinition, suggestionsOf, withLinkedFilter, type LinkEntry, type MenuEntry,
+  type Link as SearchLink,
 } from "./search-bar";
 import { nextIndex } from "@/lib/search-keys";
 import {
@@ -2035,14 +2038,18 @@ CanvasUserSelect.craft = {
 /** The pills themselves (§233), shared by the Filter Pills and p.472's
  * Exploration Search Bar (§577): each clause described, with p.470's edit
  * and remove where the mode allows them and the widget wrote the clause. */
-function FilterPillItems({ pills, written, declared, mode, editable, commit }: {
+function FilterPillItems({ pills, written, declared, mode, editable, commit, links = [] }: {
   pills: Clause[];
   written: Clause[];
   declared: { api_name: string; display_name?: string | null; data_type?: string | null }[];
   mode: string;
   editable: boolean;
   commit: (next: Clause[]) => void;
+  /** The type's links, so a `has_link` pill names its link (§578). */
+  links?: SearchLink[];
 }) {
+  const describeClause = (clause: Clause, props: typeof declared) =>
+    describeLinked(clause, links) ?? describeFilterClause(clause, props);
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   return (
@@ -2417,6 +2424,8 @@ export function CanvasSearchBar({
   customProperties = [],
   showHelpIcon = false,
   icon = "",
+  linkScope = "all",
+  customLinks = [],
 }: {
   /** p.472's specified object set. */
   objectSetVariable?: string | null;
@@ -2439,6 +2448,9 @@ export function CanvasSearchBar({
   showHelpIcon?: boolean;
   /** p.473's Icon, as a glyph (§445's reading of p.47: no icon library). */
   icon?: string;
+  /** p.473's Link types available (§578), and for Custom list the links. */
+  linkScope?: string;
+  customLinks?: string[];
 }) {
   const {
     connectors: { connect, drag },
@@ -2455,6 +2467,14 @@ export function CanvasSearchBar({
   });
   const declared = type.data?.properties ?? [];
   const offered = availableProperties(declared, propertyScopeOf(propertyScope), customProperties ?? []);
+  // p.472's "filtering with linked object types and their properties" (§578).
+  const typeLinks = useQuery({
+    queryKey: ["type-links", typeId],
+    queryFn: () => objApi.typeLinks(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const allLinks = typeLinks.data ?? [];
+  const links = availableLinks(allLinks, linkScopeOf(linkScope), customLinks ?? []);
   const pills = clausesOf((setDefinition as { filters?: unknown })?.filters);
   const editable = runMode === "run" && !!variable;
   const adds = editable && canAdd(mode);
@@ -2468,12 +2488,25 @@ export function CanvasSearchBar({
   // Whether the reader has arrowed to a suggested value: Enter takes it then,
   // and what was typed otherwise - a typed "25" is not the first suggestion.
   const [browsed, setBrowsed] = useState(false);
-  // A property chosen from the menu, whose value is being typed.
+  // A link chosen from the menu (§578), whose objects the next filter is on.
+  const [pickedLink, setPickedLink] = useState<(typeof links)[number] | null>(null);
+  // A property chosen from the menu, whose value is being typed: the bar's
+  // own type's, or the chosen link's far type's.
   const [picked, setPicked] = useState<{ property: string; op: string } | null>(null);
   const [helping, setHelping] = useState(false);
-  const pickedProperty = declared.find((p) => p.api_name === picked?.property);
-  const menu = picked ? [] : searchMenu(text, offered, { keyword: !disableKeyword });
-  const suggestFrom = picked ? suggestionDefinition(setDefinition, picked.property, text) : null;
+  const farType = useQuery({
+    queryKey: ["object-type", pickedLink?.far_type_id],
+    queryFn: () => objApi.getType(workspaceId, pickedLink!.far_type_id),
+    enabled: !!pickedLink,
+  });
+  const farProperties = availableProperties(farType.data?.properties ?? [], "visible");
+  const pickedProperty = (pickedLink ? farProperties : declared)
+    .find((p) => p.api_name === picked?.property);
+  const menu = picked || pickedLink ? []
+    : searchMenu(text, offered, { keyword: !disableKeyword }, links);
+  const linkEntries = pickedLink && !picked ? linkMenu(text, pickedLink, farProperties) : [];
+  const suggestBase = pickedLink ? { object_type_id: pickedLink.far_type_id, filters: [] } : setDefinition;
+  const suggestFrom = picked ? suggestionDefinition(suggestBase, picked.property, text) : null;
   const suggest = useQuery({
     queryKey: ["search-bar-values", JSON.stringify(suggestFrom), picked?.property],
     queryFn: () => objApi.groupObjectSet(workspaceId, suggestFrom, picked!.property,
@@ -2488,6 +2521,7 @@ export function CanvasSearchBar({
   const reset = () => {
     setText("");
     setPicked(null);
+    setPickedLink(null);
     setActive(0);
     setBrowsed(false);
   };
@@ -2497,16 +2531,32 @@ export function CanvasSearchBar({
       reset();
       setOpen(false);
     } else {
-      setPicked({ property: entry.property, op: "eq" });
+      if (entry.kind === "link") {
+        setPickedLink(links.find((l) => l.link_type_id === entry.link) ?? null);
+      } else {
+        setPicked({ property: entry.property, op: "eq" });
+      }
       setText("");
       setActive(0);
       // Arrowing through the menu is not arrowing to a value.
       setBrowsed(false);
     }
   };
+  const chooseOnLink = (entry: LinkEntry) => {
+    if (!pickedLink) return;
+    if (entry.kind === "has_link") {
+      commit(withHasLink(written, pickedLink.link_type_id, true));
+      reset();
+    } else {
+      setPicked({ property: entry.property, op: "eq" });
+      setText("");
+      setActive(0);
+    }
+  };
   const apply = (value: string) => {
     if (!picked || !value.trim()) return;
-    commit([...written, { property: picked.property, op: picked.op, value: parseValue(picked.op, value) }]);
+    const clause = { property: picked.property, op: picked.op, value: parseValue(picked.op, value) };
+    commit(pickedLink ? withLinkedFilter(written, pickedLink.link_type_id, clause) : [...written, clause]);
     reset();
   };
 
@@ -2531,8 +2581,13 @@ export function CanvasSearchBar({
           )}
           <FilterPillItems
             pills={pills} written={written} declared={declared} mode={pillModeOf(mode)}
-            editable={editable} commit={commit}
+            editable={editable} commit={commit} links={allLinks}
           />
+          {adds && pickedLink && (
+            <span className="canvas-pill is-add" data-testid="search-bar-picked-link">
+              {pickedLink.side_name}
+            </span>
+          )}
           {adds && picked && (
             <span className="canvas-pill is-add" data-testid="search-bar-picked">
               {pickedProperty?.display_name || picked.property}
@@ -2569,7 +2624,8 @@ export function CanvasSearchBar({
                   setOpen(true);
                 }}
                 onKeyDown={(e) => {
-                  const count = picked ? suggestions.length : menu.length;
+                  const count = picked ? suggestions.length
+                    : pickedLink ? linkEntries.length : menu.length;
                   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                     e.preventDefault();
                     setActive(browsed || !picked ? nextIndex(active, count, e.key) : 0);
@@ -2577,15 +2633,20 @@ export function CanvasSearchBar({
                   } else if (e.key === "Enter") {
                     e.preventDefault();
                     if (picked) apply(browsed && suggestions[active] ? suggestions[active]!.value : text);
-                    else if (menu[active]) choose(menu[active]!);
+                    else if (pickedLink) {
+                      if (linkEntries[active]) chooseOnLink(linkEntries[active]!);
+                    } else if (menu[active]) choose(menu[active]!);
                   } else if (e.key === "Escape") {
                     reset();
                   } else if (e.key === "Backspace" && !text && picked) {
                     setPicked(null);
+                  } else if (e.key === "Backspace" && !text && pickedLink) {
+                    setPickedLink(null);
                   }
                 }}
               />
-              {open && (picked ? suggestions.length > 0 : menu.length > 0) && (
+              {open && (picked ? suggestions.length > 0
+                : pickedLink ? linkEntries.length > 0 : menu.length > 0) && (
                 <ul
                   role="listbox"
                   className="canvas-menu"
@@ -2597,8 +2658,13 @@ export function CanvasSearchBar({
                   {(picked
                     ? suggestions.map((g) => ({ key: g.value, label: `${g.value} (${g.count})`,
                         run: () => apply(g.value), kind: "value" }))
-                    : menu.map((m) => ({ key: `${m.kind}:${m.property}`, label: m.label,
-                        run: () => choose(m), kind: m.kind }))
+                    : pickedLink
+                      ? linkEntries.map((m) => ({
+                          key: m.kind === "has_link" ? m.kind : `${m.kind}:${m.property}`,
+                          label: m.label, run: () => chooseOnLink(m), kind: m.kind }))
+                      : menu.map((m) => ({
+                          key: `${m.kind}:${m.kind === "link" ? m.link : m.property}`,
+                          label: m.label, run: () => choose(m), kind: m.kind }))
                   ).map((item, n) => {
                     const on = picked ? browsed && n === active : n === active;
                     return (
@@ -2668,6 +2734,7 @@ function SearchBarSettings() {
   const {
     objectSetVariable, variable, mode, showTypePill, placeholder, showClearButton, fillWidth,
     disableAutocomplete, disableKeyword, propertyScope, customProperties, showHelpIcon, icon,
+    linkScope, customLinks,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -2683,6 +2750,8 @@ function SearchBarSettings() {
     customProperties: node.data.props.customProperties,
     showHelpIcon: node.data.props.showHelpIcon,
     icon: node.data.props.icon,
+    linkScope: node.data.props.linkScope,
+    customLinks: node.data.props.customLinks,
   }));
   const { workspaceId } = useCanvasEnv();
   const { declared, resolved } = useCanvasVariables();
@@ -2697,6 +2766,11 @@ function SearchBarSettings() {
     enabled: !!typeId,
   });
   const scope = propertyScopeOf(propertyScope);
+  const links = useQuery({
+    queryKey: ["type-links", typeId],
+    queryFn: () => objApi.typeLinks(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
   const toggles = [
     ["showClearButton", "Show clear button", showClearButton !== false],
     ["fillWidth", "Fill entire container width", fillWidth !== false],
@@ -2772,6 +2846,41 @@ function SearchBarSettings() {
         </div>
       )}
       <label className="field">
+        <span className="field-label">Link types available</span>
+        <select
+          value={linkScopeOf(linkScope)}
+          data-testid="search-bar-link-scope"
+          onChange={(e) => setProp((p: { linkScope: string }) => (p.linkScope = e.target.value))}
+        >
+          {Object.entries(LINK_SCOPES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          p.473&apos;s Prominent and Visible are not offered: a link type has no visibility here
+        </span>
+      </label>
+      {linkScopeOf(linkScope) === "custom" && (
+        <div className="field" data-testid="search-bar-custom-links">
+          {(links.data ?? []).map((l) => (
+            <label key={`${l.link_type_id}:${l.direction}`} className="field checkbox">
+              <input
+                type="checkbox"
+                data-testid={`search-bar-custom-link-${l.api_name}`}
+                checked={(customLinks ?? []).includes(l.link_type_id)}
+                onChange={(e) => setProp((props: { customLinks: string[] }) => {
+                  const now = props.customLinks ?? [];
+                  props.customLinks = e.target.checked
+                    ? [...now.filter((n) => n !== l.link_type_id), l.link_type_id]
+                    : now.filter((n) => n !== l.link_type_id);
+                })}
+              />
+              <span className="field-label">{l.side_name} ({l.far_type_display_name})</span>
+            </label>
+          ))}
+        </div>
+      )}
+      <label className="field">
         <span className="field-label">Placeholder</span>
         <input
           type="text"
@@ -2833,7 +2942,7 @@ CanvasSearchBar.craft = {
     objectSetVariable: null, variable: null, mode: "add", showTypePill: false,
     placeholder: "", showClearButton: true, fillWidth: true, disableAutocomplete: false,
     disableKeyword: false, propertyScope: "visible", customProperties: [], showHelpIcon: false,
-    icon: "",
+    icon: "", linkScope: "all", customLinks: [],
   },
   related: { settings: SearchBarSettings },
 };

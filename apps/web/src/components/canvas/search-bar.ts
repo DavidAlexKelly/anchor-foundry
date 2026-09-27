@@ -17,6 +17,12 @@
  * string properties as a keyword search. Choosing a property asks for its
  * value, with the values the set holds suggested as the reader types.
  *
+ * **A link (§578)** is offered beside the properties: choosing one offers
+ * p.451's "has any" and the linked type's own properties, and a filter on
+ * one of those becomes the link's `has_link` clause, the one the Filter List
+ * writes (§545). Several filters on one link's objects are one clause, so
+ * they must all hold of the same linked object.
+ *
  * **A keyword search is p.452's query** (`keyword_query`, §543) on one string
  * property, so `north OR south` means what it says, and one property holds
  * one search: a second replaces the first, as the Filter List's box does.
@@ -25,6 +31,8 @@
  */
 
 import type { Property as Declared } from "./property-sort";
+import { describe as describeClause, type Clause } from "./filter-clause";
+import { linkedClausesOf, withLinked } from "./filter-list";
 
 export interface Property extends Declared {
   /** `ontology` p.94's visibility; a property saved before it existed is
@@ -60,9 +68,39 @@ export function availableProperties(
   return properties.filter((p) => p.visibility !== "hidden");
 }
 
+/** A link from the bar's type, as the ontology lists a type's links. */
+export interface Link {
+  link_type_id: string;
+  side_name: string;
+  far_type_id: string;
+  far_type_display_name: string;
+}
+
+/** p.473's Link types available. Prominent and Visible are p.473's too, and
+ * are not offered: a link type here has no visibility to choose by. */
+export const LINK_SCOPES = {
+  all: "All",
+  custom: "Custom list",
+  none: "None",
+} as const;
+export type LinkScope = keyof typeof LINK_SCOPES;
+
+export function linkScopeOf(raw: unknown): LinkScope {
+  return typeof raw === "string" && Object.hasOwn(LINK_SCOPES, raw) ? raw as LinkScope : "all";
+}
+
+export function availableLinks(
+  links: readonly Link[], scope: LinkScope, custom: readonly string[] = [],
+): Link[] {
+  if (scope === "none") return [];
+  if (scope === "custom") return links.filter((l) => custom.includes(l.link_type_id));
+  return [...links];
+}
+
 export type MenuEntry =
   | { kind: "keyword"; property: string; label: string }
-  | { kind: "property"; property: string; label: string };
+  | { kind: "property"; property: string; label: string }
+  | { kind: "link"; link: string; label: string };
 
 /** The most entries the menu lists: a list longer than a screen is a list
  * nobody reads, and typing narrows it. */
@@ -75,6 +113,7 @@ const nameOf = (p: Property) => p.display_name || p.api_name;
  * bar), then the properties whose names hold it, to filter on by value. */
 export function searchMenu(
   text: string, properties: readonly Property[], options: { keyword: boolean },
+  links: readonly Link[] = [],
 ): MenuEntry[] {
   const typed = text.trim();
   const lower = typed.toLowerCase();
@@ -91,7 +130,48 @@ export function searchMenu(
       out.push({ kind: "property", property: p.api_name, label: nameOf(p) });
     }
   }
+  // Then the links, by their name from this side or the type they reach.
+  for (const l of links) {
+    if (!lower || l.side_name.toLowerCase().includes(lower)
+      || l.far_type_display_name.toLowerCase().includes(lower)) {
+      out.push({ kind: "link", link: l.link_type_id, label: `${l.side_name} (${l.far_type_display_name})` });
+    }
+  }
   return out.slice(0, MAX_MENU);
+}
+
+export type LinkEntry =
+  | { kind: "has_link"; label: string }
+  | { kind: "far_property"; property: string; label: string };
+
+/** What a chosen link offers: p.451's "has any" first, then the linked
+ * type's properties whose names hold what is typed. */
+export function linkMenu(text: string, link: Link, farProperties: readonly Property[]): LinkEntry[] {
+  const lower = text.trim().toLowerCase();
+  const out: LinkEntry[] = [{ kind: "has_link", label: `Has any ${link.side_name}` }];
+  for (const p of farProperties) {
+    if (!lower || nameOf(p).toLowerCase().includes(lower) || p.api_name.toLowerCase().includes(lower)) {
+      out.push({ kind: "far_property", property: p.api_name, label: nameOf(p) });
+    }
+  }
+  return out.slice(0, MAX_MENU);
+}
+
+/** The clauses with one more filter on a link's objects: the link's one
+ * `has_link`, holding every filter the linked object must meet. */
+export function withLinkedFilter(written: readonly Clause[], link: string, clause: Clause): Clause[] {
+  return withLinked(written, link, [...linkedClausesOf(written, link), clause]);
+}
+
+/** A `has_link` pill in the link's words, "Has Inspections where status is
+ * open", or null for a clause on a link the bar does not know. */
+export function describeLinked(clause: Clause, links: readonly Link[]): string | null {
+  if (clause.op !== "has_link") return null;
+  const link = links.find((l) => l.link_type_id === clause.property);
+  if (!link) return null;
+  const far = (clause.value as { filters?: Clause[] } | null)?.filters ?? [];
+  const where = far.map((c) => describeClause(c, [])).join(" and ");
+  return where ? `Has ${link.side_name} where ${where}` : `Has ${link.side_name}`;
 }
 
 /** The groups asked for (`object_sets.MAX_GROUPS`, the most one read gives). */
