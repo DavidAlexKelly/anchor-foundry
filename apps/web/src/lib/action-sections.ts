@@ -185,21 +185,31 @@ export interface DrawnSection {
 }
 
 export interface FormLayout {
+  /** Everything drawn, in p.124's one order (§589). */
+  blocks: FormBlock[];
   /** Parameters in no section at all, drawn in the form body. */
   loose: FormParameter[];
   /** p.124's Form Content order, filtered to what is on screen. */
   sections: DrawnSection[];
 }
 
+/** One thing the form draws, in p.124's one Form Content order (§589). */
+export type FormBlock =
+  | { kind: "parameter"; parameter: FormParameter }
+  | { kind: "section"; drawn: DrawnSection };
+
 /** p.124's form, arranged.
  *
- * **The body first, then the sections.** p.124 says "Parameters and sections
- * display in the form based on their order in this Form Content section" — one
- * order over both — and this build stores two: a section's `sort_order` and a
- * parameter's. A parameter that has never been put in a section keeps its place
- * among the parameters, and the sections follow in theirs. Interleaving them
- * needs a single ordering across both kinds, which is a change to the document
- * rather than to this function, and `docs/parity` carries it as its own row.
+ * > "Parameters and sections display in the form based on their order in this
+ * > Form Content section." (p.124)
+ *
+ * **One order over both** (§589): a section says how many of the parameters
+ * no section holds come before it (`loose_before`, counted in their declared
+ * order over all of them, hidden ones included, so a parameter being hidden
+ * does not move a section), and a section that says nothing comes after all
+ * of them, which is where every section was before db 0123. `blocks` is that
+ * order; `loose` and `sections` are its two kinds, for the callers that ask
+ * about one.
  *
  * A parameter named by a section is drawn **only** in that section: absent from
  * the body when the section is on screen, and absent from the form entirely
@@ -220,14 +230,36 @@ export function formLayout(
   const claimed = new Set(
     (sections ?? []).flatMap((s) => s.parameters ?? []),
   );
+  const unsectioned = (parameters ?? []).filter((p) => !claimed.has(p.api_name));
+  const drawn = new Set(drawnSections(sections, visible).map((s) => s.id));
+  const blocks: FormBlock[] = [];
+  let placed = 0;
+  const bodyUntil = (until: number) => {
+    for (; placed < until; placed += 1) {
+      const p = unsectioned[placed]!;
+      if (!p.hidden) blocks.push({ kind: "parameter", parameter: p });
+    }
+  };
+  for (const section of sections ?? []) {
+    const before = section.loose_before;
+    bodyUntil(before === null || before === undefined
+      ? unsectioned.length : Math.min(before, unsectioned.length));
+    if (!drawn.has(section.id)) continue;
+    blocks.push({
+      kind: "section",
+      drawn: {
+        section,
+        parameters: (section.parameters ?? [])
+          .map((name) => byName.get(name))
+          .filter((p): p is FormParameter => !!p),
+      },
+    });
+  }
+  bodyUntil(unsectioned.length);
   return {
-    loose: drawable.filter((p) => !claimed.has(p.api_name)),
-    sections: drawnSections(sections, visible).map((section) => ({
-      section,
-      parameters: (section.parameters ?? [])
-        .map((name) => byName.get(name))
-        .filter((p): p is FormParameter => !!p),
-    })),
+    blocks,
+    loose: blocks.flatMap((b) => (b.kind === "parameter" ? [b.parameter] : [])),
+    sections: blocks.flatMap((b) => (b.kind === "section" ? [b.drawn] : [])),
   };
 }
 
@@ -381,9 +413,49 @@ export function moveSection(
   const next = [...(sections ?? [])];
   const to = index + delta;
   if (index < 0 || index >= next.length || to < 0 || to >= next.length) return next;
+  // The places in the one order stay where they were and the sections swap
+  // through them (§589): a section moved up takes the place above it, so the
+  // places still run down the list as p.124's Form Content does.
+  const places = next.map((section) => section.loose_before ?? null);
   const moved = next.splice(index, 1);
   next.splice(to, 0, ...moved);
-  return next;
+  return next.map((section, i) => ({ ...section, loose_before: places[i] }));
+}
+
+export interface PlaceChoice {
+  /** `loose_before`: null is after every parameter no section holds. */
+  value: number | null;
+  label: string;
+}
+
+/** Where a section may go in p.124's one Form Content order (§589): among the
+ * parameters no section holds, no higher than the section before it and no
+ * lower than the one after, since the sections keep their order. */
+export function placeChoices(
+  parameters: FormParameter[],
+  sections: FormSection[],
+  index: number,
+): PlaceChoice[] {
+  const claimed = new Set((sections ?? []).flatMap((s) => s.parameters ?? []));
+  const loose = (parameters ?? []).filter((p) => !claimed.has(p.api_name));
+  const at = (place: number | null | undefined) =>
+    place === null || place === undefined ? loose.length : Math.min(place, loose.length);
+  const floor = index > 0 ? at(sections[index - 1]?.loose_before) : 0;
+  const ceiling = index < sections.length - 1 ? at(sections[index + 1]?.loose_before) : loose.length;
+  const out: PlaceChoice[] = [];
+  for (let n = floor; n <= Math.min(ceiling, loose.length - 1); n += 1) {
+    out.push({
+      value: n,
+      label: n === 0 ? "At the top" : `After ${labelOf(loose[n - 1]!)}`,
+    });
+  }
+  if (ceiling >= loose.length) {
+    out.push({
+      value: null,
+      label: loose.length ? "After the other parameters" : "In order",
+    });
+  }
+  return out;
 }
 
 /** A blank section, as Add section leaves it (p.123). */

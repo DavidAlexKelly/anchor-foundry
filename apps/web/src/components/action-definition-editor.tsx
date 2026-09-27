@@ -77,7 +77,7 @@ import {
 } from "@/lib/action-overrides";
 import {
   COLUMN_CHOICES, availableParameters, blankSection, collapsedInitially,
-  conditionDraft, conditionValue, forgetParameters, moveSection, placeParameter,
+  conditionDraft, conditionValue, forgetParameters, moveSection, placeChoices, placeParameter,
   removeParameter, renameParameter, sectionSummary, type FormSection,
 } from "@/lib/action-sections";
 import type { ActionType } from "@/lib/types";
@@ -2029,6 +2029,26 @@ export function ActionDefinitionEditor({
               <span className="field-hint" data-testid="section-summary">
                 {sectionSummary(s)}
               </span>
+              {/* p.124: "Parameters and sections display in the form based on
+                  their order in this Form Content section" (§589). */}
+              <label className="field-hint">
+                Place{" "}
+                <select
+                  aria-label={`Section ${i + 1} place`}
+                  value={s.loose_before === null || s.loose_before === undefined
+                    ? "" : String(s.loose_before)}
+                  onChange={(e) => patchSection(i, {
+                    loose_before: e.target.value === "" ? null : Number(e.target.value),
+                  })}
+                >
+                  {placeChoices(parameters, sections ?? [], i).map((choice) => (
+                    <option key={String(choice.value)}
+                            value={choice.value === null ? "" : String(choice.value)}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               {/* p.123: "optionally write a user-facing description… will
                   always be shown in the section itself, not in a tooltip." */}
               <Field label="Description">

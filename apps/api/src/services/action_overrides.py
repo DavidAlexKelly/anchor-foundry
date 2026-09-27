@@ -60,8 +60,8 @@ def form_order(
 ) -> list[str]:
     """p.45's "form hierarchy", flattened to the order somebody reads.
 
-    The same arrangement §328's form draws: the parameters no section claimed,
-    then each section's in turn. **A parameter inside a hidden section still
+    The same arrangement §328's form draws: the parameters no section claimed
+    and the sections, in p.124's one order (§589). **A parameter inside a hidden section still
     has a position** — p.45's rule is about what a condition may *read*, and a
     hidden section's parameters are still bound and still submitted (db 0081),
     so leaving them out would make a legal reference unsayable.
@@ -87,9 +87,25 @@ def form_order(
         for section in sections
     ]
     taken = {name for names in claimed for name in names}
-    order = [name for name in declared if name not in taken]
-    for names in claimed:
+    loose = [name for name in declared if name not in taken]
+    # p.124's one Form Content order (§589): each section after the number of
+    # loose parameters it says come before it, and after all of them when it
+    # says nothing (db 0123's NULL, which is db 0081's layout).
+    order: list[str] = []
+    placed = 0
+    for section, names in zip(sections, claimed):
+        before = section.get("loose_before")
+        # A place past the end is the end: the slice stops there, so no cap
+        # (a sweep found one changed nothing, §589).
+        until = len(loose) if before is None else int(before)
+        # Never back up the list. `replace_sections` refuses a section above one
+        # before it, but an imported file's sections reach here first (§344),
+        # and backing up would list those parameters twice.
+        if until > placed:
+            order.extend(loose[placed:until])
+            placed = until
         order.extend(names)
+    order.extend(loose[placed:])
     return order
 
 

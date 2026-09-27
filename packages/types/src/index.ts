@@ -3810,6 +3810,10 @@ export interface ActionFormSection {
   visible_when: Record<string, unknown> | null;
   /** The parameters inside it, by `api_name`, in the order they are drawn. */
   parameters: string[];
+  /** p.124's one Form Content order (§589; db 0123): how many of the
+   * parameters no section holds come before this section. Null or absent is
+   * after all of them. */
+  loose_before?: number | null;
 }
 
 /** One action's usage inside a module (§396; `workshop` p.185-188).
