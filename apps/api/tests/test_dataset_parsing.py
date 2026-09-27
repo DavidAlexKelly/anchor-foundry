@@ -480,3 +480,100 @@ def test_a_re_parse_is_audited(client: TestClient, fx: Fixture) -> None:
     assert apply(client, fx, created["id"], delimiter="^").status_code == 200
     entries = client.get("/api/org/audit?limit=200", headers=hdr(fx.admin_sub))
     assert "dataset.reparse" in {e["action"] for e in entries.json()}
+
+
+# ---- JSON and Parquet (§510; p.3: "infer a schema for CSV and JSON files") ----
+
+JSON_ARRAY = b'[{"id": 1, "name": "a"}, {"id": 2, "name": "b"}, {"id": 3, "name": "c"}]'
+JSON_LINES = b'{"id": 1, "name": "a"}\n{"id": 2, "name": "b"}\n'
+
+
+def test_a_json_file_is_read_again_as_json(client: TestClient, fx: Fixture) -> None:
+    """**The bug this fixes.** `read_csv` on a JSON file does not fail, it
+    returns no rows, so Apply used to write an empty version. Read as JSON,
+    nothing chosen is the upload again."""
+    created = upload(client, fx, JSON_ARRAY, filename="people.json")
+    assert created["row_count"] == 3
+    r = preview(client, fx, created["id"])
+    assert r.status_code == 200, r.text
+    assert columns(r.json()) == ["id", "name"] and r.json()["row_count"] == 3
+    applied = apply(client, fx, created["id"])
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["table_schema"] == created["table_schema"]
+    assert applied.json()["row_count"] == 3
+
+
+def test_json_lines_take_the_added_columns(client: TestClient, fx: Fixture) -> None:
+    created = upload(client, fx, JSON_LINES, filename="people.jsonl")
+    assert created["row_count"] == 2
+    r = preview(client, fx, created["id"],
+                add_file_path=True, add_imported_at=True, add_row_number=True)
+    assert r.status_code == 200, r.text
+    names = columns(r.json())
+    assert names[:2] == ["id", "name"] and r.json()["row_count"] == 2
+    by_name = {name: i for i, name in enumerate(names)}
+    first = r.json()["rows"][0]
+    assert str(first[by_name["filename"]]).endswith(".jsonl")
+    assert first[by_name["row_number"]] == 1 and first[by_name["imported_at"]]
+
+
+def test_a_json_file_refuses_the_delimited_options_by_name(client: TestClient, fx: Fixture) -> None:
+    created = upload(client, fx, JSON_ARRAY, filename="people.json")
+    for option, label in (
+        ({"delimiter": ";"}, "a delimiter"), ({"quote": "|"}, "a quote character"),
+        ({"header": False}, "no header row"), ({"skip_lines": 1}, "skipped lines"),
+        ({"null_values": ["NA"]}, "null markers"),
+        ({"drop_bad_rows": True}, "dropping rows that do not fit"),
+    ):
+        r = preview(client, fx, created["id"], **option)
+        assert r.status_code == 422, (option, r.text)
+        assert f"{label}: only a delimited file has these, and this one is JSON" in r.text
+    # All of them at once are named together.
+    r = preview(client, fx, created["id"], delimiter=";", skip_lines=2)
+    assert "a delimiter, skipped lines: only a delimited file" in r.text
+
+
+def test_a_json_file_can_be_re_encoded(
+    client: TestClient, fx: Fixture, storage: LocalStorageGateway
+) -> None:
+    import asyncio
+
+    from src.lib.db import user_connection
+    from src.services import datasets as ds_service
+
+    created = upload(client, fx, JSON_LINES, filename="latin.jsonl")
+
+    async def key() -> str:
+        async with user_connection(uuid.UUID(str(fx.editor))) as conn:
+            return await ds_service.original_upload_key(
+                conn, uuid.UUID(str(fx.project)), uuid.UUID(created["id"])
+            )
+
+    storage.put(asyncio.run(key()), '{"id": 1, "name": "café"}\n'.encode("latin-1"))
+    assert preview(client, fx, created["id"]).status_code == 422
+    r = preview(client, fx, created["id"], encoding="latin-1")
+    assert r.status_code == 200, r.text
+    assert r.json()["rows"][0][1] == "café"
+
+
+def test_a_parquet_file_has_nothing_to_parse(client: TestClient, fx: Fixture, tmp_path) -> None:
+    import duckdb
+
+    path = tmp_path / "rows.parquet"
+    duckdb.connect().execute(f"COPY (SELECT 1 AS id) TO '{path}' (FORMAT parquet)")
+    created = upload(client, fx, path.read_bytes(), filename="rows.parquet")
+    r = preview(client, fx, created["id"])
+    assert r.status_code == 422, r.text
+    assert "a Parquet file carries its own schema, so there is nothing to parse again" in r.text
+
+
+def test_json_lines_are_read_again_the_way_they_were_uploaded(client: TestClient, fx: Fixture) -> None:
+    """A `.jsonl` upload is read line by line, so a line holding an array is
+    one row with a list in it. DuckDB's own detection would unnest it into
+    two rows, so nothing chosen would not have reproduced the upload."""
+    created = upload(client, fx, b'[{"id": 1}, {"id": 2}]\n', filename="lists.jsonl")
+    assert created["row_count"] == 1
+    applied = apply(client, fx, created["id"])
+    assert applied.status_code == 200, applied.text
+    assert (applied.json()["row_count"], applied.json()["table_schema"]) == (
+        1, created["table_schema"])

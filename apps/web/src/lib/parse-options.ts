@@ -75,7 +75,20 @@ export function whyNotParseable(dataset: {
   if (!dataset.original_filename) {
     return "This dataset was uploaded before the original file was recorded, so it cannot be parsed again. Uploading the file again makes one that can be.";
   }
+  // §510: the server refuses this too, with the same reason.
+  if (dataset.original_filename.toLowerCase().endsWith(".parquet")) {
+    return "A Parquet file carries its own schema, so there is nothing to parse again.";
+  }
   return "";
+}
+
+/** Whether the kept file is JSON (§510). p.3's Edit schema reads "CSV and
+ * JSON files", and a JSON file has no delimiter, quote, header, preamble or
+ * null marker, so the panel shows only what applies: encoding and the added
+ * columns. The server refuses the rest by name. */
+export function isJsonFile(filename: string): boolean {
+  const lower = filename.toLowerCase();
+  return lower.endsWith(".json") || lower.endsWith(".jsonl");
 }
 
 /**
@@ -132,3 +145,8 @@ export function parseNullMarkers(text: string): string[] {
     .map((line) => line.trim())
     .filter((line) => line !== "");
 }
+
+/** The switches only a delimited file has (§510): a JSON file has no header
+ * row, and DuckDB keeps a malformed JSON record as a row of NULLs rather than
+ * dropping it, so "drop rows that do not fit" would not mean what it says. */
+export const DELIMITED_ONLY: readonly (keyof ParseOptions)[] = ["header", "drop_bad_rows"];

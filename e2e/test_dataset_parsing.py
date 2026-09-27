@@ -234,3 +234,48 @@ def test_a_dataset_nothing_uploaded_is_not_offered_the_panel(page, api) -> None:
     # §318: wait for something that *is* there before asserting an absence.
     expect(page.locator("table.ds-table thead th").first).to_be_visible(timeout=30000)
     expect(page.get_by_test_id("parse-again")).to_have_count(0)
+
+
+def uploaded(api, rows: bytes, filename: str) -> dict:
+    tag = uuid.uuid4().hex[:6]
+    workspace = api.call("GET", "/workspaces")[0]
+    project = api.call("POST", f"/workspaces/{workspace['id']}/projects",
+                       {"name": f"Files {tag}", "slug": f"files-{tag}"})
+    base = f"/workspaces/{workspace['id']}/projects/{project['id']}"
+    made = api.upload_csv(f"{base}/datasets/upload", f"File {tag}", rows, filename=filename)
+    resources = api.call("GET", f"{base}/resources")["resources"]
+    resource = next(r for r in resources if r["name"] == made["name"])
+    return {"base": base, "dataset_id": made["id"], "resource_id": resource["id"], "api": api}
+
+
+def test_a_json_file_is_offered_only_what_applies_and_reads_as_json(page, api) -> None:
+    """§510; p.3's Edit schema "will infer a schema for CSV and JSON files".
+    The delimited options are absent, the ones that apply are there, and
+    Apply keeps the rows: through `read_csv` this file read as none."""
+    fixture = uploaded(api, b'{"id": 1, "name": "a"}\n{"id": 2, "name": "b"}\n', "people.jsonl")
+    open_preview(page, fixture)
+    page.get_by_test_id("parse-again").click()
+    for absent in ("parse-delimiter", "parse-quote", "parse-skip", "parse-nulls",
+                   "parse-header", "parse-drop_bad_rows"):
+        expect(page.get_by_test_id(absent)).to_have_count(0)
+    expect(page.get_by_test_id("parse-encoding")).to_be_visible()
+
+    page.get_by_test_id("parse-add_row_number").check()
+    page.get_by_test_id("parse-preview").click()
+    expect(page.get_by_test_id("parse-result").locator("thead th")).to_have_count(3)
+    page.get_by_test_id("parse-apply").click()
+    expect(page.get_by_test_id("parse-panel")).to_have_count(0)
+    after = dataset(fixture)
+    assert [c["name"] for c in after["table_schema"]] == ["id", "name", "row_number"]
+    assert after["row_count"] == 2
+
+
+def test_a_parquet_file_is_not_offered_the_panel(page, api, tmp_path) -> None:
+    import duckdb
+
+    path = tmp_path / "rows.parquet"
+    duckdb.connect().execute(f"COPY (SELECT 1 AS id) TO '{path}' (FORMAT parquet)")
+    fixture = uploaded(api, path.read_bytes(), "rows.parquet")
+    page.goto(f"{WEB_BASE}/r/{fixture['resource_id']}?tab=preview")
+    expect(page.locator("table.ds-table thead th").first).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("parse-again")).to_have_count(0)

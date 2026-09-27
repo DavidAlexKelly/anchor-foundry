@@ -244,13 +244,14 @@ class Api:
         except urllib.error.HTTPError as exc:
             raise ApiError(f"upload {path} -> {exc.code} {exc.read().decode()[:500]}") from exc
 
-    def upload_csv(self, path: str, name: str, csv: bytes) -> dict[str, Any]:
+    def upload_csv(self, path: str, name: str, csv: bytes,
+                   filename: str = "seed.csv") -> dict[str, Any]:
         boundary = "----anchor" + uuid.uuid4().hex
         parts = [
             f'--{boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\n{name}\r\n'.encode(),
             (
                 f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
-                'filename="seed.csv"\r\nContent-Type: text/csv\r\n\r\n'
+                f'filename="{filename}"\r\nContent-Type: text/csv\r\n\r\n'
             ).encode(),
             csv,
             b"\r\n",
