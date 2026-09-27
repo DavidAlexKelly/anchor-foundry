@@ -121,11 +121,19 @@ class TestResult(BaseModel):
     connection: ConnectionOut
 
 
+class ReferenceOut(BaseModel):
+    schema_name: str
+    table: str
+    column: str
+    constraint: str
+
+
 class ColumnOut(BaseModel):
     name: str
     data_type: str
     nullable: bool
     is_primary_key: bool
+    references: ReferenceOut | None = None
 
 
 class TableOut(BaseModel):
@@ -598,7 +606,23 @@ async def discover_schema(
             schema_name=t.schema,
             name=t.name,
             kind=t.kind,
-            columns=[ColumnOut(**c.__dict__) for c in t.columns],
+            columns=[
+                ColumnOut(
+                    name=c.name,
+                    data_type=c.data_type,
+                    nullable=c.nullable,
+                    is_primary_key=c.is_primary_key,
+                    references=None
+                    if c.references is None
+                    else ReferenceOut(
+                        schema_name=c.references.schema,
+                        table=c.references.table,
+                        column=c.references.column,
+                        constraint=c.references.constraint,
+                    ),
+                )
+                for c in t.columns
+            ],
         )
         for t in tables
     ]

@@ -53,7 +53,8 @@ def source():
     preview must not merge. `shipments` carries `customer_email` and *not* the
     word "orders", so a search for a column finds a table whose name does not
     match. `orders_view` is a view, which p.143 includes in exploration and this
-    platform excludes from syncing.
+    platform excludes from syncing. `order_lines` holds a foreign key into
+    `orders`, which is what p.143's relationship graph draws (§602).
     """
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute(f"DROP DATABASE IF EXISTS {SOURCE_DB}")
@@ -71,6 +72,10 @@ def source():
         )
         conn.execute("INSERT INTO public.shipments VALUES (1, 'ada@example.com')")
         conn.execute("CREATE VIEW public.orders_view AS SELECT * FROM public.orders")
+        conn.execute(
+            "CREATE TABLE public.order_lines (id bigint PRIMARY KEY,"
+            " order_id bigint CONSTRAINT lines_order_fk REFERENCES public.orders(id))"
+        )
         conn.execute(f"GRANT ALL ON ALL TABLES IN SCHEMA public TO {SOURCE_USER}")
     yield {"host": "localhost", "port": 5432, "database": SOURCE_DB, "user": SOURCE_USER}
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
@@ -263,3 +268,102 @@ def test_the_sample_is_capped_and_says_that_it_is(page, api, source):
         "of more than", timeout=30000
     )
     expect(page.get_by_test_id("explore-sample-caveat")).to_contain_text("not the first rows")
+
+
+def test_the_graph_draws_a_foreign_key_and_syncs_from_a_right_click(page, api, source):
+    """p.143's callout 2 (§602): "Explore tables and views and the relationships
+    between them. You can also create a sync from the graph by right-clicking
+    on the table. When selecting a table with a relation, the foreign key will
+    be highlighted within the expandable column list and above the link."
+    """
+    mod = build(api, "Explore graph")
+    made = a_source(api, mod, source)
+    open_explore(page, mod, made["name"])
+
+    graph = page.get_by_test_id("explore-graph-empty")
+    expect(graph).to_be_visible(timeout=15000)
+
+    # The column list names the key's target.
+    page.get_by_test_id("explore-entry-order_lines").click()
+    expect(page.get_by_test_id("explore-fk-order_id")).to_have_text("→ orders.id")
+    expect(page.get_by_test_id("explore-fk-id")).to_have_count(0)
+
+    page.get_by_test_id("explore-add-to-graph").click()
+    expect(page.get_by_test_id("explore-node-order_lines")).to_be_visible()
+    # Once on the graph there is nothing to add.
+    expect(page.get_by_test_id("explore-add-to-graph")).to_have_count(0)
+    # One end is not enough for an edge.
+    expect(page.get_by_test_id("explore-edge-lines_order_fk")).to_have_count(0)
+
+    # The right-click menu brings in what the table points at.
+    page.get_by_test_id("explore-node-order_lines").click(button="right")
+    page.get_by_test_id("explore-menu-related").click()
+    expect(page.get_by_test_id("explore-node-orders")).to_be_visible()
+    expect(page.get_by_test_id("explore-edge-lines_order_fk")).to_have_count(1)
+    # "…above the link", because the selected table is one end of it.
+    expect(page.get_by_test_id("explore-edge-label-lines_order_fk")).to_have_text(
+        "order_id → id"
+    )
+
+    # Selecting from the graph selects in the details panel; the link is still
+    # the selected table's, so its label stays.
+    page.get_by_test_id("explore-node-orders").click()
+    expect(page.get_by_test_id("explore-selected")).to_have_text("public/orders")
+    expect(page.get_by_test_id("explore-edge-label-lines_order_fk")).to_be_visible()
+
+    # Removing an end removes the edge.
+    page.get_by_test_id("explore-node-order_lines").click(button="right")
+    page.get_by_test_id("explore-menu-remove").click()
+    expect(page.get_by_test_id("explore-node-order_lines")).to_have_count(0)
+    expect(page.get_by_test_id("explore-edge-lines_order_fk")).to_have_count(0)
+
+    # And the way out p.143 names: a sync, from a right-click on the table.
+    page.get_by_test_id("explore-node-orders").click(button="right")
+    expect(page.get_by_test_id("explore-menu-related")).to_have_text("Add related tables (1)")
+    page.get_by_test_id("explore-menu-sync").click()
+    expect(page.get_by_label("Dataset name")).to_have_value("orders", timeout=15000)
+
+
+def test_a_view_on_the_graph_is_not_offered_a_sync(page, api, source):
+    """§214 again, on the graph's menu: the reason instead of the button."""
+    mod = build(api, "Explore graph view")
+    made = a_source(api, mod, source)
+    open_explore(page, mod, made["name"])
+
+    page.get_by_test_id("explore-entry-orders_view").click()
+    page.get_by_test_id("explore-add-to-graph").click()
+    page.get_by_test_id("explore-node-orders_view").click(button="right")
+    expect(page.get_by_test_id("explore-menu-not-syncable")).to_contain_text("this is a view")
+    expect(page.get_by_test_id("explore-menu-sync")).to_have_count(0)
+    # A view holds no keys, so there is nothing related to offer.
+    expect(page.get_by_test_id("explore-menu-related")).to_have_count(0)
+
+
+def test_no_graph_for_a_source_type_without_relations(page, api, source):
+    """p.143: the graph "is not always available… a graph would not appear for
+    exploration of a table-based REST API model as there are no clear
+    relations between objects."
+
+    The screen takes that from the source type rather than from the
+    connection's name, so the catalogue is answered here as it would be for
+    such a type: the same Postgres tables, with the flag turned off, draw no
+    graph and offer nothing to add to one.
+    """
+    mod = build(api, "Explore no graph")
+    made = a_source(api, mod, source)
+
+    def without_relations(route):
+        response = route.fetch()
+        types = response.json()
+        for t in types:
+            t["reports_relations"] = False
+        route.fulfill(response=response, json=types)
+
+    page.route("**/connections/source-types", without_relations)
+    open_explore(page, mod, made["name"])
+
+    page.get_by_test_id("explore-entry-order_lines").click()
+    expect(page.get_by_test_id("explore-selected")).to_be_visible()
+    expect(page.get_by_test_id("explore-graph-empty")).to_have_count(0)
+    expect(page.get_by_test_id("explore-graph")).to_have_count(0)
+    expect(page.get_by_test_id("explore-add-to-graph")).to_have_count(0)

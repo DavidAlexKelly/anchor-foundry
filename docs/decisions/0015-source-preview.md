@@ -105,7 +105,7 @@ So the row above is a test's claim, not an argument's: a paired refused/allowed 
 
 ## 7. What this does not build, and why each one is a choice
 
-**The relationship graph (p.143).** Foundry says of its own feature that it "is not always available", and gives a source type where it does not appear. A graph needs foreign keys, and foreign keys need a catalogue query per connector that only two of our four could answer. The honest version of this is not a graph but a *column annotation* — `ColumnInfo` already carries `is_primary_key`, and a `references` field beside it would be the same shape. Left out of this unit because the preview is what p.142's own first sentence asks for; recorded here so the next person does not read the absence as an oversight.
+**The relationship graph (p.143).** Foundry says of its own feature that it "is not always available", and gives a source type where it does not appear. A graph needs foreign keys, and foreign keys need a catalogue query per connector that only two of our four could answer. The honest version of this is not a graph but a *column annotation* — `ColumnInfo` already carries `is_primary_key`, and a `references` field beside it would be the same shape. Left out of this unit because the preview is what p.142's own first sentence asks for; recorded here so the next person does not read the absence as an oversight. **Built by §602** in exactly that shape: `ColumnInfo.references` (schema, table, column and the constraint's name, which is what keeps a composite key one relation), answered by Postgres and MySQL, with `reports_relations` on the source type so the two that cannot answer draw no graph rather than an empty one.
 
 **The file-import filter (p.143 callout 2).** A filter on which files a sync takes is not a preview feature — p.160–161 defines it in terms of `SNAPSHOT`, `APPEND` and `UPDATE` transactions, and **that is the same transaction log decision 0014 §2 found `dataset_versions` does not keep.** Two chapters have now been narrowed by the same missing concept, which is worth more than either narrowing on its own: the gap is in the dataset model, and it will keep surfacing.
 
@@ -115,5 +115,5 @@ So the row above is a test's claim, not an argument's: a paired refused/allowed 
 
 ## What is owed
 
-- Foreign keys on `ColumnInfo`, if a relationship view is ever wanted (§7).
+- ~~Foreign keys on `ColumnInfo`, if a relationship view is ever wanted (§7).~~ §602.
 - The browser half: search, the preview pane, and the path from a previewed table to a configured sync.

@@ -51,7 +51,42 @@ def source_database() -> dict[str, object]:
                )"""
         )
         conn.execute("CREATE VIEW public.recent_orders AS SELECT * FROM public.orders")
+        # p.143's relationships (§602): a plain key, two keys between the same
+        # pair of tables, a composite key, and one into another schema.
+        conn.execute("CREATE TABLE public.customers (id bigint PRIMARY KEY, email text)")
+        conn.execute(
+            """CREATE TABLE public.order_lines (
+                   order_id bigint REFERENCES public.orders(id),
+                   line_no integer,
+                   billed_to bigint CONSTRAINT lines_billed_fk REFERENCES public.customers(id),
+                   shipped_to bigint CONSTRAINT lines_shipped_fk REFERENCES public.customers(id),
+                   note text,
+                   PRIMARY KEY (order_id, line_no)
+               )"""
+        )
+        conn.execute(
+            """CREATE TABLE public.shipments (
+                   id bigint PRIMARY KEY,
+                   line_order bigint,
+                   line_number integer,
+                   CONSTRAINT shipments_line_fk FOREIGN KEY (line_number, line_order)
+                       REFERENCES public.order_lines (line_no, order_id)
+               )"""
+        )
+        # One column in two keys: the first by constraint name is the one shown.
+        conn.execute(
+            "CREATE TABLE public.refunds (subject_id bigint"
+            " CONSTRAINT refunds_b_fk REFERENCES public.customers(id)"
+            " CONSTRAINT refunds_a_fk REFERENCES public.orders(id))"
+        )
+        conn.execute("CREATE SCHEMA billing")
+        conn.execute(
+            "CREATE TABLE billing.invoices (id bigint PRIMARY KEY,"
+            " order_id bigint REFERENCES public.orders(id))"
+        )
         conn.execute(f"GRANT ALL ON ALL TABLES IN SCHEMA public TO {SOURCE_USER}")
+        conn.execute(f"GRANT USAGE ON SCHEMA billing TO {SOURCE_USER}")
+        conn.execute(f"GRANT SELECT ON billing.invoices TO {SOURCE_USER}")
     # Connection details as the API's connector will use them: TCP localhost.
     return {"host": "localhost", "port": 5432, "database": SOURCE_DB, "user": SOURCE_USER}
 
@@ -92,6 +127,11 @@ def test_source_type_catalog(client: TestClient, fx: Fixture) -> None:
     assert "postgres" in types
     assert types["postgres"]["secret_fields"] == ["password"]
     assert "host" in types["postgres"]["config_schema"]["properties"]
+    # p.143: the graph "is not always available" - a REST model has "no clear
+    # relations between objects", and object storage has none either (§602).
+    assert {t: types[t]["reports_relations"] for t in ("postgres", "mysql", "s3", "rest")} == {
+        "postgres": True, "mysql": True, "s3": False, "rest": False,
+    }
 
 
 # ---- create + credential boundary ------------------------------------------
@@ -193,6 +233,48 @@ def test_discover_returns_real_tables(client: TestClient, fx: Fixture) -> None:
     assert cols["customer_email"]["nullable"] is False
     assert tables[("public", "recent_orders")]["kind"] == "view"
     assert SOURCE_PASSWORD not in r.text
+
+
+def test_discover_reports_each_columns_foreign_key(client: TestClient, fx: Fixture) -> None:
+    """p.143's relationships, as decision 0015 §7's column annotation (§602)."""
+    cid = _connection_id(client, fx)
+    r = client.post(f"{base(fx)}/{cid}/discover", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    tables = {(t["schema_name"], t["name"]): t for t in r.json()}
+
+    def refs(schema: str, name: str) -> dict[str, object]:
+        return {c["name"]: c["references"] for c in tables[(schema, name)]["columns"]}
+
+    lines = refs("public", "order_lines")
+    assert lines["order_id"] == {
+        "schema_name": "public", "table": "orders", "column": "id",
+        "constraint": "order_lines_order_id_fkey",
+    }
+    # Two keys into one table stay two, told apart by their names.
+    assert lines["billed_to"]["constraint"] == "lines_billed_fk"
+    assert lines["shipped_to"]["constraint"] == "lines_shipped_fk"
+    assert lines["billed_to"]["table"] == lines["shipped_to"]["table"] == "customers"
+    # A column in no key, and a key's *target*, carry nothing.
+    assert lines["line_no"] is None and lines["note"] is None
+    assert all(v is None for v in refs("public", "orders").values())
+
+    # A composite key pairs its columns as declared, not by name or position
+    # in the table: (line_number, line_order) -> (line_no, order_id).
+    shipments = refs("public", "shipments")
+    assert (shipments["line_number"]["column"], shipments["line_order"]["column"]) == (
+        "line_no", "order_id",
+    )
+    assert shipments["line_number"]["constraint"] == shipments["line_order"]["constraint"]
+    assert shipments["id"] is None
+
+    # A column in two keys shows the first by name, whichever came first.
+    assert refs("public", "refunds")["subject_id"]["constraint"] == "refunds_a_fk"
+
+    # Across schemas, named by the target's schema.
+    assert refs("billing", "invoices")["order_id"] == {
+        "schema_name": "public", "table": "orders", "column": "id",
+        "constraint": "invoices_order_id_fkey",
+    }
 
 
 def test_wrong_password_is_clean_error_not_500(
