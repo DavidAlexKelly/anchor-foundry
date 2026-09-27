@@ -105,3 +105,42 @@ def test_a_reader_sees_listeners_and_events_with_nothing_to_press(page, viewer_p
     expect(listener.get_by_test_id("listener-delete")).to_have_count(0)
     listener.get_by_test_id("listener-events-toggle").click()
     expect(listener.get_by_test_id("listener-event-body")).to_have_text('{"seen": true}')
+
+
+def test_rotating_an_endpoint_without_downtime(page, api) -> None:
+    """§517, p.258: "Generate a new endpoint, and add an expiration date for
+    the old endpoint. You should now have two usable endpoints. Replace any
+    usage of your old endpoint with the new endpoint. Delete the old
+    endpoint.\""""
+    mod = Module(api, "Listeners rotation")
+    made = mod.api.call("POST", f"{mod.base}/listeners", {"display_name": f"Rotating {mod.tag}"})
+    mod.api.call("POST", f"{mod.base}/listeners/{made['id']}/start")
+    old_url = made["endpoints"][0]["url"]
+    open_connections(page, mod)
+    listener = card(page, f"Rotating {mod.tag}")
+
+    listener.get_by_test_id("listener-rotate").click()
+    retiring = listener.get_by_test_id("listener-endpoint")
+    expect(retiring).to_contain_text(old_url, timeout=15000)
+    expect(retiring.get_by_test_id("listener-endpoint-state")).to_have_text(
+        "Retiring: answers for 24 more hours")
+    new_url = listener.get_by_test_id("listener-url").inner_text()
+    assert new_url != old_url
+    assert post(old_url, b"{}") == 200 and post(new_url, b"{}") == 200
+    expect(listener.get_by_test_id("listener-no-rotation")).to_contain_text("at most two endpoints")
+    expect(listener.get_by_test_id("listener-rotate")).to_have_count(0)
+
+    retiring.get_by_test_id("listener-endpoint-extend").click()
+    expect(retiring.get_by_test_id("listener-endpoint-state")).to_have_text(
+        "Retiring: answers for 2 more days")
+
+    retiring.get_by_test_id("listener-endpoint-delete").click()
+    expect(listener.get_by_test_id("listener-endpoint")).to_have_count(0)
+    assert post(old_url, b"{}") == 404
+
+    # And retiring the address at once.
+    listener.get_by_test_id("listener-rotation").select_option("now")
+    listener.get_by_test_id("listener-rotate").click()
+    expect(listener.get_by_test_id("listener-url")).not_to_have_text(new_url)
+    expect(listener.get_by_test_id("listener-endpoint")).to_have_count(0)
+    assert post(new_url, b"{}") == 404

@@ -20,8 +20,9 @@ import { ApiError, api as platformApi, listeners as api } from "@/lib/api";
 import { canEditProject } from "@/lib/test-runs";
 import { bytesText } from "@/lib/bytes";
 import {
-  BLANK_LISTENER, VERIFICATIONS, curlExample, draftBody, draftProblem, needsHeader, statusText,
-  verificationText, type Listener, type ListenerDraft, type Verification,
+  BLANK_LISTENER, ROTATIONS, VERIFICATIONS, curlExample, draftBody, draftProblem, endpointState,
+  extendedExpiry, needsHeader, rotateBody, statusText, verificationText, whyNoRotation,
+  type Listener, type ListenerDraft, type Verification,
 } from "@/lib/listeners";
 
 export function ListenersPanel({ workspaceId, projectId }: { workspaceId: string; projectId: string }) {
@@ -171,6 +172,11 @@ function ListenerCard({
     onSuccess: refresh,
   });
   const active = listener.endpoints.find((e) => e.active);
+  const [rotation, setRotation] = useState<keyof typeof ROTATIONS>("day");
+  const endpointChange = useMutation({
+    mutationFn: (call: () => Promise<Listener>) => call(),
+    onSuccess: refresh,
+  });
 
   return (
     <div className="card" data-testid="listener" data-name={listener.display_name} style={{ margin: "10px 0" }}>
@@ -207,6 +213,60 @@ function ListenerCard({
             {curlExample(active.url)}
           </pre>
         </>
+      )}
+      {/* p.258-259's rotation (§517): every endpoint with what it is doing,
+          and the way to move senders to a new address without downtime. */}
+      <ul className="link-list" data-testid="listener-endpoints" style={{ margin: "4px 0" }}>
+        {listener.endpoints.filter((e) => !e.active).map((endpoint) => (
+          <li key={endpoint.id} data-testid="listener-endpoint">
+            <code style={{ fontSize: 12 }}>{endpoint.url}</code>{" "}
+            <span className="soft" data-testid="listener-endpoint-state">
+              {endpointState(endpoint, Date.now())}
+            </span>
+            {editor && !endpoint.expired && endpoint.expires_at && (
+              <button type="button" className="btn quiet" data-testid="listener-endpoint-extend"
+                      onClick={() => endpointChange.mutate(() => api.extend(
+                        workspaceId, projectId, listener.id, endpoint.id,
+                        extendedExpiry(endpoint.expires_at as string, Date.now())))}>
+                Extend a day
+              </button>
+            )}
+            {editor && (
+              <button type="button" className="btn quiet" data-testid="listener-endpoint-delete"
+                      onClick={() => endpointChange.mutate(() => api.deleteEndpoint(
+                        workspaceId, projectId, listener.id, endpoint.id))}>
+                Delete
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {editor && (
+        whyNoRotation(listener.endpoints) ? (
+          <p className="soft" data-testid="listener-no-rotation">{whyNoRotation(listener.endpoints)}</p>
+        ) : (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <select
+              data-testid="listener-rotation"
+              value={rotation}
+              onChange={(e) => setRotation(e.target.value as keyof typeof ROTATIONS)}
+            >
+              {(Object.keys(ROTATIONS) as (keyof typeof ROTATIONS)[]).map((k) => (
+                <option key={k} value={k}>{ROTATIONS[k]}</option>
+              ))}
+            </select>
+            <button type="button" className="btn quiet" data-testid="listener-rotate"
+                    onClick={() => endpointChange.mutate(() => api.rotate(
+                      workspaceId, projectId, listener.id, rotateBody(rotation, Date.now())))}>
+              Rotate endpoint
+            </button>
+          </div>
+        )
+      )}
+      {endpointChange.isError && (
+        <div className="form-error" data-testid="listener-endpoint-error">
+          {endpointChange.error instanceof ApiError ? endpointChange.error.message : "Couldn't change the endpoint."}
+        </div>
       )}
       {showing && (
         <div data-testid="listener-events">

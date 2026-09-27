@@ -2,7 +2,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  BLANK_LISTENER, VERIFICATIONS, curlExample, draftBody, draftProblem, needsHeader, statusText,
+  BLANK_LISTENER, ROTATIONS, VERIFICATIONS, curlExample, draftBody, draftProblem, endpointState,
+  extendedExpiry, needsHeader, rotateBody, statusText, whyNoRotation,
   verificationText,
 } from "./listeners";
 
@@ -60,5 +61,43 @@ describe("the listener's lines", () => {
   it("gives a command that sends one event", () => {
     expect(curlExample("https://h/api/listen/t")).toBe(
       `curl -X POST -H 'Content-Type: application/json' -d '{"hello": "listener"}' https://h/api/listen/t`);
+  });
+});
+
+describe("endpoint rotation (§517)", () => {
+  const now = Date.parse("2026-09-26T12:00:00Z");
+  const at = (hours: number) => new Date(now + hours * 3_600_000).toISOString();
+
+  it("says what each endpoint is doing", () => {
+    expect(endpointState({ active: true, expired: false, expires_at: null }, now)).toBe("Active");
+    expect(endpointState({ active: false, expired: true, expires_at: at(-1) }, now))
+      .toBe("Expired: no longer answers");
+    expect(endpointState({ active: false, expired: false, expires_at: at(1) }, now))
+      .toBe("Retiring: answers for 1 more hour");
+    expect(endpointState({ active: false, expired: false, expires_at: at(0.1) }, now))
+      .toBe("Retiring: answers for 1 more hour");
+    expect(endpointState({ active: false, expired: false, expires_at: at(23.6) }, now))
+      .toBe("Retiring: answers for 24 more hours");
+    expect(endpointState({ active: false, expired: false, expires_at: at(47) }, now))
+      .toBe("Retiring: answers for 47 more hours");
+    expect(endpointState({ active: false, expired: false, expires_at: at(72) }, now))
+      .toBe("Retiring: answers for 3 more days");
+  });
+
+  it("rotates keeping the old address a day, or not at all", () => {
+    expect(rotateBody("day", now)).toEqual({ expire_old_at: at(24) });
+    expect(rotateBody("now", now)).toEqual({ expire_old_at: null });
+    expect(Object.keys(ROTATIONS)).toEqual(["day", "now"]);
+  });
+
+  it("extends by a day from whichever is later", () => {
+    expect(extendedExpiry(at(5), now)).toBe(at(29));
+    expect(extendedExpiry(at(-5), now)).toBe(at(24));
+  });
+
+  it("says why a third endpoint is not offered", () => {
+    expect(whyNoRotation([{ active: true }])).toBe("");
+    expect(whyNoRotation([{ active: true }, { active: false }]))
+      .toBe("A listener has at most two endpoints. Delete the one being retired to rotate again.");
   });
 });

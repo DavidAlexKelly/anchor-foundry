@@ -325,3 +325,110 @@ def test_a_body_is_read_only_until_it_is_too_big() -> None:
     pulled.clear()
     # Exactly at the limit is not past it.
     assert asyncio.run(listener_service.read_capped(chunks(), 8)) == b"x" * 12
+
+
+# ---- endpoint rotation (§517; p.258-259) ---------------------------------------
+
+def rotate(client, fx, listener: dict, expire_old_at: str | None):
+    return client.post(f"{base(fx)}/{listener['id']}/endpoints/rotate", headers=hdr(fx.editor_sub),
+                       json={"expire_old_at": expire_old_at})
+
+
+def soon(hours: float) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+
+
+def test_rotating_with_an_expiry_keeps_both_addresses_working(client, fx) -> None:
+    """p.258: "Generate a new endpoint, and add an expiration date for the old
+    endpoint. You should now have two usable endpoints.\""""
+    listener = started(client, fx)
+    old_path = path_of(listener)
+    r = rotate(client, fx, listener, soon(24))
+    assert r.status_code == 200, r.text
+    after = r.json()
+    active = [e for e in after["endpoints"] if e["active"]]
+    retiring = [e for e in after["endpoints"] if not e["active"]]
+    assert len(active) == 1 and len(retiring) == 1
+    assert retiring[0]["expires_at"] and not retiring[0]["expired"]
+    # The active one is listed first.
+    assert after["endpoints"][0]["active"] is True
+    new_path = path_of(after)
+    assert new_path != old_path
+    assert client.post(old_path, content=b"old").status_code == 200
+    assert client.post(new_path, content=b"new").status_code == 200
+    # A third is refused until the retiring one is gone.
+    r = rotate(client, fx, after, soon(1))
+    assert r.status_code == 409
+    assert r.json()["detail"] == "a listener has at most 2 endpoints; delete the one being retired first"
+
+
+def test_rotating_without_an_expiry_retires_the_old_address_now(client, fx) -> None:
+    listener = started(client, fx)
+    old_path = path_of(listener)
+    after = rotate(client, fx, listener, None).json()
+    assert len(after["endpoints"]) == 1 and after["endpoints"][0]["active"]
+    assert client.post(old_path, content=b"x").status_code == 404
+    assert client.post(path_of(after), content=b"x").status_code == 200
+
+
+def test_an_expiry_in_the_past_is_refused(client, fx) -> None:
+    listener = started(client, fx)
+    r = rotate(client, fx, listener, soon(-1))
+    assert (r.status_code, r.json()["detail"]) == (409, "the old endpoint's expiry has to be in the future")
+    assert len(client.get(f"{base(fx)}/{listener['id']}", headers=hdr(fx.viewer_sub)).json()["endpoints"]) == 1
+
+
+def test_a_retiring_endpoint_can_be_extended_until_it_expires(client, fx) -> None:
+    """p.259: "you can extend the expiration if more time is needed … Once an
+    endpoint is expired, you can no longer modify the expiration date.\""""
+    listener = started(client, fx)
+    after = rotate(client, fx, listener, soon(1)).json()
+    [active] = [e for e in after["endpoints"] if e["active"]]
+    [retiring] = [e for e in after["endpoints"] if not e["active"]]
+    url = f"{base(fx)}/{listener['id']}/endpoints"
+    r = client.put(f"{url}/{retiring['id']}", headers=hdr(fx.editor_sub), json={"expires_at": soon(48)})
+    assert r.status_code == 200, r.text
+    [extended] = [e for e in r.json()["endpoints"] if e["id"] == retiring["id"]]
+    assert extended["expires_at"] > retiring["expires_at"]
+    for endpoint_id, at, message in (
+        (active["id"], soon(5), "the active endpoint does not expire; rotate to retire it"),
+        (retiring["id"], soon(-1), "an endpoint's expiry has to be in the future"),
+    ):
+        r = client.put(f"{url}/{endpoint_id}", headers=hdr(fx.editor_sub), json={"expires_at": at})
+        assert (r.status_code, r.json()["detail"]) == (409, message)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE listener_endpoints SET expires_at = now() - interval '1 second' WHERE id = %s",
+                     (retiring["id"],))
+    r = client.put(f"{url}/{retiring['id']}", headers=hdr(fx.editor_sub), json={"expires_at": soon(5)})
+    assert (r.status_code, r.json()["detail"]) == (
+        409, "an expired endpoint cannot be extended; delete it and rotate again")
+    assert client.put(f"{url}/{uuid.uuid4()}", headers=hdr(fx.editor_sub),
+                      json={"expires_at": soon(5)}).status_code == 404
+
+
+def test_only_the_retired_endpoint_can_be_deleted(client, fx) -> None:
+    listener = started(client, fx)
+    after = rotate(client, fx, listener, soon(1)).json()
+    [active] = [e for e in after["endpoints"] if e["active"]]
+    [retiring] = [e for e in after["endpoints"] if not e["active"]]
+    url = f"{base(fx)}/{listener['id']}/endpoints"
+    r = client.delete(f"{url}/{active['id']}", headers=hdr(fx.editor_sub))
+    assert (r.status_code, r.json()["detail"]) == (409, "the active endpoint cannot be deleted; rotate to replace it")
+    r = client.delete(f"{url}/{retiring['id']}", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200 and [e["id"] for e in r.json()["endpoints"]] == [active["id"]]
+    assert client.delete(f"{url}/{uuid.uuid4()}", headers=hdr(fx.editor_sub)).status_code == 404
+    # And rotating is possible again.
+    assert rotate(client, fx, r.json(), None).status_code == 200
+
+
+def test_rotation_is_an_editor_s(client, fx) -> None:
+    listener = make(client, fx)
+    r = client.post(f"{base(fx)}/{listener['id']}/endpoints/rotate", headers=hdr(fx.viewer_sub),
+                    json={"expire_old_at": None})
+    assert r.status_code == 403
+    eid = listener["endpoints"][0]["id"]
+    assert client.put(f"{base(fx)}/{listener['id']}/endpoints/{eid}", headers=hdr(fx.viewer_sub),
+                      json={"expires_at": soon(1)}).status_code == 403
+    assert client.delete(f"{base(fx)}/{listener['id']}/endpoints/{eid}",
+                         headers=hdr(fx.viewer_sub)).status_code == 403

@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 import secrets as token_source
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Mapping
 from uuid import UUID, uuid4
 
@@ -177,8 +178,10 @@ async def _endpoints(conn: AsyncConnection, listener_id: Any) -> list[dict[str, 
         SELECT id, token, expires_at, created_at, (expires_at IS NULL) AS active,
                (expires_at IS NOT NULL AND expires_at <= now()) AS expired
           FROM listener_endpoints WHERE listener_id = :lid
-         ORDER BY expires_at IS NULL DESC, created_at DESC
+         ORDER BY created_at DESC
     """, {"lid": str(listener_id)})
+    # Newest first, which puts the active one first: only a rotation makes an
+    # endpoint, and the one it makes is the active one (§517).
 
 
 async def list_listeners(conn: AsyncConnection, project_id: UUID) -> list[dict[str, Any]]:
@@ -282,3 +285,74 @@ async def events(conn: AsyncConnection, project_id: UUID, listener_id: UUID,
         preview, truncated = _preview(r.pop("body"))
         out.append({**r, "preview": preview, "truncated": truncated})
     return out
+
+
+# ---- endpoint rotation (§517; p.258-259) -------------------------------------
+#: p.258: "you can only have a maximum of two endpoints at a time".
+MAX_ENDPOINTS = 2
+
+
+async def rotate(conn: AsyncConnection, project_id: UUID, listener_id: UUID,
+                 expire_old_at: datetime | None) -> dict[str, Any]:
+    """p.258's rotation: a new active endpoint, and the old one either kept
+    until `expire_old_at` for a zero-downtime move or deleted now.
+
+        "Generate a new endpoint, and add an expiration date for the old
+         endpoint. You should now have two usable endpoints. Replace any usage
+         of your old endpoint with the new endpoint. Delete the old endpoint."
+         (p.258)
+    """
+    current = await get(conn, project_id, listener_id)
+    if len(current["endpoints"]) >= MAX_ENDPOINTS:
+        raise ListenerError(
+            f"a listener has at most {MAX_ENDPOINTS} endpoints; delete the one being retired first")
+    if expire_old_at is not None and expire_old_at <= datetime.now(timezone.utc):
+        raise ListenerError("the old endpoint's expiry has to be in the future")
+    [active] = [e for e in current["endpoints"] if e["active"]]
+    if expire_old_at is None:
+        await conn.execute(text("DELETE FROM listener_endpoints WHERE id = :id"),
+                           {"id": str(active["id"])})
+    else:
+        await conn.execute(text("UPDATE listener_endpoints SET expires_at = :at WHERE id = :id"),
+                           {"id": str(active["id"]), "at": expire_old_at})
+    await conn.execute(text(
+        "INSERT INTO listener_endpoints (listener_id, token) VALUES (:lid, :token)"),
+        {"lid": str(listener_id), "token": new_token()})
+    return await get(conn, project_id, listener_id)
+
+
+def _endpoint(current: dict[str, Any], endpoint_id: UUID) -> dict[str, Any]:
+    for endpoint in current["endpoints"]:
+        if str(endpoint["id"]) == str(endpoint_id):
+            return endpoint
+    raise NotFoundError("endpoint")
+
+
+async def extend(conn: AsyncConnection, project_id: UUID, listener_id: UUID,
+                 endpoint_id: UUID, expires_at: datetime) -> dict[str, Any]:
+    """p.259: "you can extend the expiration if more time is needed … Once an
+    endpoint is expired, you can no longer modify the expiration date"."""
+    current = await get(conn, project_id, listener_id)
+    endpoint = _endpoint(current, endpoint_id)
+    if endpoint["active"]:
+        raise ListenerError("the active endpoint does not expire; rotate to retire it")
+    if endpoint["expired"]:
+        raise ListenerError("an expired endpoint cannot be extended; delete it and rotate again")
+    if expires_at <= datetime.now(timezone.utc):
+        raise ListenerError("an endpoint's expiry has to be in the future")
+    await conn.execute(text("UPDATE listener_endpoints SET expires_at = :at WHERE id = :id"),
+                       {"id": str(endpoint_id), "at": expires_at})
+    return await get(conn, project_id, listener_id)
+
+
+async def delete_endpoint(conn: AsyncConnection, project_id: UUID, listener_id: UUID,
+                          endpoint_id: UUID) -> dict[str, Any]:
+    """The retired one only: deleting the active endpoint would leave the
+    listener with no address at all."""
+    current = await get(conn, project_id, listener_id)
+    endpoint = _endpoint(current, endpoint_id)
+    if endpoint["active"]:
+        raise ListenerError("the active endpoint cannot be deleted; rotate to replace it")
+    await conn.execute(text("DELETE FROM listener_endpoints WHERE id = :id"),
+                       {"id": str(endpoint_id)})
+    return await get(conn, project_id, listener_id)

@@ -695,6 +695,18 @@ export const listeners = {
   events: (wid: string, pid: string, id: string) =>
     request<import("./listeners").ListenerEvent[]>(
       `/workspaces/${wid}/projects/${pid}/listeners/${id}/events`),
+  /** p.258's rotation (§517). */
+  rotate: (wid: string, pid: string, id: string, body: { expire_old_at: string | null }) =>
+    request<import("./listeners").Listener>(
+      `/workspaces/${wid}/projects/${pid}/listeners/${id}/endpoints/rotate`,
+      { method: "POST", body: JSON.stringify(body) }),
+  extend: (wid: string, pid: string, id: string, eid: string, expires_at: string) =>
+    request<import("./listeners").Listener>(
+      `/workspaces/${wid}/projects/${pid}/listeners/${id}/endpoints/${eid}`,
+      { method: "PUT", body: JSON.stringify({ expires_at }) }),
+  deleteEndpoint: (wid: string, pid: string, id: string, eid: string) =>
+    request<import("./listeners").Listener>(
+      `/workspaces/${wid}/projects/${pid}/listeners/${id}/endpoints/${eid}`, { method: "DELETE" }),
 };
 
 export const datasets = {

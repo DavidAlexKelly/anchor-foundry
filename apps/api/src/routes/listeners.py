@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ..lib.db import get_engine, user_connection
+from ..lib.errors import ConflictError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import listeners as listener_service
 from .connections import secrets_gateway
@@ -182,6 +183,61 @@ async def delete_listener(
 ) -> None:
     async with user_connection(access.auth.user_id) as conn:
         await listener_service.delete(conn, secrets_gateway(), access.project_id, listener_id)
+
+
+class RotateIn(BaseModel):
+    #: When the endpoint being replaced stops answering; null deletes it now
+    #: (p.258: "set an expiration date … for zero-downtime rotations, or …
+    #: delete it immediately").
+    expire_old_at: datetime | None = None
+
+
+class ExtendIn(BaseModel):
+    expires_at: datetime
+
+
+@router.post("/{listener_id}/endpoints/rotate", response_model=ListenerOut)
+async def rotate_endpoint(
+    listener_id: UUID, body: RotateIn, request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ListenerOut:
+    """p.258's Rotate endpoints (§517)."""
+    async with user_connection(access.auth.user_id) as conn:
+        try:
+            row = await listener_service.rotate(conn, access.project_id, listener_id,
+                                                body.expire_old_at)
+        except listener_service.ListenerError as exc:
+            raise ConflictError(str(exc)) from exc
+    return _out(request, row)
+
+
+@router.put("/{listener_id}/endpoints/{endpoint_id}", response_model=ListenerOut)
+async def extend_endpoint(
+    listener_id: UUID, endpoint_id: UUID, body: ExtendIn, request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ListenerOut:
+    """p.259's extension of a retiring endpoint (§517)."""
+    async with user_connection(access.auth.user_id) as conn:
+        try:
+            row = await listener_service.extend(conn, access.project_id, listener_id,
+                                                endpoint_id, body.expires_at)
+        except listener_service.ListenerError as exc:
+            raise ConflictError(str(exc)) from exc
+    return _out(request, row)
+
+
+@router.delete("/{listener_id}/endpoints/{endpoint_id}", response_model=ListenerOut)
+async def delete_endpoint(
+    listener_id: UUID, endpoint_id: UUID, request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ListenerOut:
+    async with user_connection(access.auth.user_id) as conn:
+        try:
+            row = await listener_service.delete_endpoint(conn, access.project_id, listener_id,
+                                                         endpoint_id)
+        except listener_service.ListenerError as exc:
+            raise ConflictError(str(exc)) from exc
+    return _out(request, row)
 
 
 @router.get("/{listener_id}/events", response_model=list[EventOut])
