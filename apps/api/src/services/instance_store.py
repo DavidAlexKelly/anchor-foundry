@@ -896,6 +896,12 @@ class OpenSearchInstanceStore:
                 must.append({"bool": {"must": [
                     {"exists": {"field": field}}, _query_clause(field, f.value),
                 ]}})
+            elif f.op == "within_polygon":
+                # §571: the mapped `geo_point` answers a polygon natively, by
+                # the even-odd rule `object_sets.in_polygon` states.
+                must.append({"geo_polygon": {field: {"points": [
+                    {"lat": lat, "lon": lon} for lat, lon in f.value.points
+                ]}}})
             elif f.op in object_sets.GEO_OPERATORS:
                 # Decision 0006 §3's whole argument, in one clause. The mapped
                 # `geo_point` field answers this natively and **handles the

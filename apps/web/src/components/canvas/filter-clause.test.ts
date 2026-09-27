@@ -54,7 +54,7 @@ describe("the operators this language has", () => {
     for (const type of ["string", "integer", "geopoint", "date"]) {
       expect(operatorsFor(type)).not.toContain("within_box");
     }
-    expect(GEO_OPERATORS).toContain("within_box");
+    expect(GEO_OPERATORS).toEqual(["within_box", "within_polygon"]);
   });
 });
 
@@ -148,6 +148,9 @@ describe("what a pill says", () => {
 
   it("says something for an object it does not recognise", () => {
     expect(valueLabel({ property: "x", op: "eq", value: { odd: true } })).toBe("…");
+    // §571: a drawn shape by its corners.
+    expect(valueLabel({ property: "site", op: "within_polygon",
+      value: { points: [{}, {}, {}, {}] } })).toBe("a shape with 4 corners");
   });
 
   it("shows an operator with no value as just its subject and words", () => {

@@ -118,7 +118,14 @@ LIST_OPERATORS = ("in",)
 # against it - `matches` below, the Postgres store's SQL, and OpenSearch's
 # `geo_bounding_box`, which handles the wrap natively and is the reason the
 # shape is a box rather than four comparisons in the first place.
-GEO_OPERATORS = ("within_box",)
+GEO_OPERATORS = ("within_box", "within_polygon")
+
+# p.301-302's polygon (§571): the shape a Map draws when a rectangle is not
+# the area somebody means. Its own operator, for the box's reason - a polygon
+# answered as its bounding box would select objects outside what was drawn.
+# Capped: a hand-drawn outline is tens of points, and every point is an edge
+# each store tests every candidate against.
+MAX_POLYGON_POINTS = 100
 
 # The type a bounding box may be drawn on. One, and not by omission: a box is a
 # pair of coordinates, and `geopoint` is the only declared type that holds one
@@ -829,8 +836,9 @@ def parse(
         if op in GEO_OPERATORS:
             # **Parsed into a `Box` here, so the stores receive one.** The
             # alternative is four numbers each store re-reads, which is three
-            # places to get the wrap rule wrong instead of one.
-            value = parse_box(value)
+            # places to get the wrap rule wrong instead of one. A polygon is
+            # parsed the same way, into a `Polygon` (§571).
+            value = parse_box(value) if op == "within_box" else parse_polygon(value)
         if op in LIST_OPERATORS:
             if not isinstance(value, list):
                 raise ValueError(f"the {op!r} operator needs a list of values")
@@ -999,6 +1007,81 @@ def parse_box(raw: Any) -> "Box":
     return Box(**edges)
 
 
+@dataclass(frozen=True)
+class Polygon:
+    """A polygon, as `parse_polygon` validated it: its corners as (lat, lon),
+    in order, not repeated at the end - the edge back to the first is implied.
+
+    **Read on the map as it is drawn**, longitude across and latitude up, with
+    straight edges between corners. That is the Map's own projection, so the
+    area selected is the area drawn. A polygon wider than half the world is
+    refused rather than guessed at: its corners alone do not say which way
+    round the world its edges go, and no store answering it could agree with
+    another by chance."""
+
+    points: tuple[tuple[float, float], ...]
+
+
+def parse_polygon(raw: Any) -> "Polygon":
+    """Validate a polygon, refusing in a sentence somebody can act on."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("points"), list):
+        raise ValueError("a within_polygon value must be an object with a list of points")
+    corners: list[tuple[float, float]] = []
+    for n, point in enumerate(raw["points"], start=1):
+        if not isinstance(point, dict):
+            raise ValueError(f"point {n} must be an object with lat and lon")
+        lat, lon = point.get("lat"), point.get("lon")
+        for name, value in (("lat", lat), ("lon", lon)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"point {n} needs a number for {name!r}, got {value!r}")
+        if not -90.0 <= lat <= 90.0:
+            raise ValueError(f"point {n}'s lat must be between -90 and 90")
+        if not -180.0 <= lon <= 180.0:
+            raise ValueError(f"point {n}'s lon must be between -180 and 180")
+        corners.append((float(lat), float(lon)))
+    if len(corners) > 1 and corners[0] == corners[-1]:
+        corners.pop()
+    if len(corners) < 3:
+        raise ValueError("a polygon needs at least three corners")
+    if len(corners) > MAX_POLYGON_POINTS:
+        raise ValueError(f"a polygon has at most {MAX_POLYGON_POINTS} corners")
+    lons = [lon for _lat, lon in corners]
+    if max(lons) - min(lons) > 180:
+        raise ValueError(
+            "a polygon wider than half the world does not say which way round it goes - "
+            "draw it as two"
+        )
+    return Polygon(points=tuple(corners))
+
+
+def polygon_edges(polygon: "Polygon") -> list[tuple[float, float, float, float]]:
+    """The polygon's edges as (lat1, lon1, lat2, lon2), the last back to the
+    first - the form the Postgres store binds."""
+    points = polygon.points
+    return [(*points[n], *points[(n + 1) % len(points)]) for n in range(len(points))]
+
+
+def in_polygon(actual: Any, polygon: "Polygon") -> bool:
+    """Whether a stored geopoint falls inside a polygon. **The one definition**,
+    for `in_box`'s reason: Postgres and OpenSearch are held to it.
+
+    Even-odd: a ray east from the point crosses the outline an odd number of
+    times when the point is inside. A point exactly on an edge may fall either
+    way, as on a map it is drawn on the line.
+    """
+    point = _point(actual)
+    if point is None:
+        return False
+    lat, lon = point
+    inside = False
+    for lat1, lon1, lat2, lon2 in polygon_edges(polygon):
+        if (lat1 > lat) != (lat2 > lat):
+            crossing = lon1 + (lat - lat1) * (lon2 - lon1) / (lat2 - lat1)
+            if lon < crossing:
+                inside = not inside
+    return inside
+
+
 def in_box(actual: Any, box: "Box") -> bool:
     """Whether a stored geopoint falls inside a box. **The one definition.**
 
@@ -1073,7 +1156,7 @@ def _matches_one(actual: Any, f: Filter) -> bool:
     if f.op in ORDERED_OPERATORS:
         return _compares(actual, f)
     if f.op in GEO_OPERATORS:
-        return in_box(actual, f.value)
+        return in_box(actual, f.value) if f.op == "within_box" else in_polygon(actual, f.value)
     # Unreachable while `parse` is the only way to build a Filter, which it is.
     raise ValueError(f"no reference semantics for operator {f.op!r}")
 

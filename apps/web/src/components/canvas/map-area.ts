@@ -11,9 +11,11 @@
  * into an array variable the way a Filter List writes its clauses, so a
  * `narrow_set` downstream reads the objects inside it.
  *
- * **A rectangle, not p.301's other shapes.** A polygon or a circle is a
- * question `within_box` cannot ask, and one drawn and then answered as its
- * bounding box would select objects outside what the reader drew.
+ * **A rectangle, and as of §571 a polygon**, each its own operator: a polygon
+ * answered as its bounding box would select objects outside what the reader
+ * drew, so it is `within_polygon`, which both stores answer by the even-odd
+ * rule `object_sets.in_polygon` states. A property holds one area of either
+ * shape. Circles and lines stay ○.
  *
  * Pure: the map's projection is `map.tsx`'s, handed in as a view and a frame.
  */
@@ -39,6 +41,23 @@ export interface View {
 export interface Frame { width: number; height: number }
 
 export const AREA_OP = "within_box";
+/** §571's shape: corners in order, the edge back to the first implied. */
+export const POLYGON_OP = "within_polygon";
+/** `object_sets.MAX_POLYGON_POINTS`: the corners a drawn shape may have. */
+export const MAX_POLYGON_POINTS = 100;
+/** A click this near the first corner closes the shape. */
+export const CLOSE_PX = 10;
+
+export interface Polygon {
+  points: { lat: number; lon: number }[];
+}
+
+/** The area a map holds: a rectangle or a drawn shape. */
+export type Area = Box | Polygon;
+
+export function isPolygon(area: Area): area is Polygon {
+  return Array.isArray((area as Polygon).points);
+}
 
 /** The longitude and latitude under a point of the map's frame. */
 export function lonLatAt(px: number, py: number, view: View, frame: Frame): {
@@ -68,9 +87,19 @@ export function isDrag(a: { x: number; y: number }, b: { x: number; y: number })
   return Math.abs(a.x - b.x) >= MIN_DRAG_PX && Math.abs(a.y - b.y) >= MIN_DRAG_PX;
 }
 
-/** The area this property is narrowed to, read back from the clauses. */
-export function areaOf(clauses: readonly Clause[], property: string): Box | null {
-  const found = clauses.find((c) => c.property === property && c.op === AREA_OP);
+const isArea = (c: Clause, property: string) =>
+  c.property === property && (c.op === AREA_OP || c.op === POLYGON_OP);
+
+/** The area this property is narrowed to, read back from the clauses: a box,
+ * a drawn shape, or nothing for a value that is neither. */
+export function areaOf(clauses: readonly Clause[], property: string): Area | null {
+  const found = clauses.find((c) => isArea(c, property));
+  if (found?.op === POLYGON_OP) {
+    const points = (found.value as Partial<Polygon> | undefined)?.points;
+    const ok = Array.isArray(points) && points.length >= 3
+      && points.every((p) => typeof p?.lat === "number" && typeof p?.lon === "number");
+    return ok ? { points: points as Polygon["points"] } : null;
+  }
   const v = found?.value as Partial<Box> | undefined;
   if (!v || !["north", "south", "east", "west"].every((k) => typeof v[k as keyof Box] === "number")) {
     return null;
@@ -78,10 +107,28 @@ export function areaOf(clauses: readonly Clause[], property: string): Box | null
   return v as Box;
 }
 
-/** The clauses with this property's area replaced, or removed for `null`. */
-export function withArea(clauses: readonly Clause[], property: string, box: Box | null): Clause[] {
-  const rest = clauses.filter((c) => !(c.property === property && c.op === AREA_OP));
-  return box ? [...rest, { property, op: AREA_OP, value: box }] : rest;
+/** The clauses with this property's area replaced by a box or a shape, or
+ * removed for `null`: one area to a property, of either kind. */
+export function withArea(clauses: readonly Clause[], property: string, area: Area | null): Clause[] {
+  const rest = clauses.filter((c) => !isArea(c, property));
+  if (!area) return rest;
+  return [...rest, { property, op: isPolygon(area) ? POLYGON_OP : AREA_OP, value: area }];
+}
+
+/** Where a shape's corners sit on the map's frame, as an SVG `points` list. */
+export function polygonPoints(polygon: Polygon, view: View, frame: Frame): string {
+  const h = view.w * (frame.height / frame.width);
+  return polygon.points
+    .map((p) => `${((p.lon - view.x) / view.w) * frame.width},${((-p.lat - view.y) / h) * frame.height}`)
+    .join(" ");
+}
+
+/** Whether a click closes the shape being drawn: near its first corner, with
+ * three corners already there to close. */
+export function closes(corners: readonly { x: number; y: number }[], at: { x: number; y: number }): boolean {
+  const first = corners[0];
+  return corners.length >= 3 && !!first
+    && Math.hypot(first.x - at.x, first.y - at.y) <= CLOSE_PX;
 }
 
 /** Where a box sits on the map's frame, for drawing it. */

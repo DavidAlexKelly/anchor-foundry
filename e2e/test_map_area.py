@@ -98,6 +98,31 @@ def test_a_dragged_area_selects_the_objects_inside_it(page, api, sites) -> None:
     expect(page.get_by_test_id("map-area")).to_have_count(0)
 
 
+def test_a_drawn_shape_selects_the_objects_inside_it(page, api, sites) -> None:
+    """p.301's polygon (§571): a click a corner, round London and Paris, and a
+    click back on the first closes it into a `within_polygon`."""
+    mod = build(api, sites, "Map area shape")
+    open_module(page, mod)
+    rows_are(page, ["LON", "PAR", "MAD", "NYC"], "every site before a shape")
+    expect(pin(page, "London")).to_be_visible()
+    boxes = [pin(page, n).bounding_box() for n in ("London", "Paris")]
+    left = min(b["x"] for b in boxes) - 12
+    top = min(b["y"] for b in boxes) - 12
+    right = max(b["x"] + b["width"] for b in boxes) + 12
+    bottom = max(b["y"] + b["height"] for b in boxes) + 12
+    page.get_by_test_id("map-draw-shape").click()
+    expect(page.get_by_test_id("map-draw-shape")).to_have_attribute("aria-pressed", "true")
+    for x, y in ((left, top), (right, top), (right, bottom), (left, bottom)):
+        page.mouse.click(x, y)
+    expect(page.get_by_test_id("map-outline-sketch")).to_be_visible()
+    page.mouse.click(left + 2, top + 2)
+    rows_are(page, ["LON", "PAR"], "London and Paris, inside the shape")
+    expect(page.get_by_test_id("map-area")).to_have_attribute("data-shape", "polygon")
+    expect(page.get_by_test_id("map-draw-shape")).to_have_attribute("aria-pressed", "false")
+    page.get_by_test_id("map-clear-area").click()
+    rows_are(page, ["LON", "PAR", "MAD", "NYC"], "every site once cleared")
+
+
 def test_a_click_is_not_an_area(page, api, sites) -> None:
     open_module(page, build(api, sites, "Map area click"))
     expect(pin(page, "London")).to_be_visible()
