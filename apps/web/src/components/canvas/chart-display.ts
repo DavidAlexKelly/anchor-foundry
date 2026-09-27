@@ -38,6 +38,12 @@ export function chartSortOf(raw: unknown): ChartSort {
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
+/** A missing value (§537) has no size to order by, so it goes last either
+ * way; NaN in a comparison would leave the order to the engine. */
+function missingLast(a: ChartPoint, b: ChartPoint): number {
+  return Number(Number.isNaN(a.value)) - Number(Number.isNaN(b.value));
+}
+
 /** The points in the chosen order. Keys compare as a person reads them, so
  * "Site 2" comes before "Site 10"; a tie on value falls back to the key, so a
  * chosen order never depends on what order the server happened to return. */
@@ -50,9 +56,9 @@ export function sortPoints(points: readonly ChartPoint[], sort: ChartSort): Char
     case "keyDesc":
       return out.sort((a, b) => byKey(b, a));
     case "valueAsc":
-      return out.sort((a, b) => a.value - b.value || byKey(a, b));
+      return out.sort((a, b) => missingLast(a, b) || a.value - b.value || byKey(a, b));
     case "valueDesc":
-      return out.sort((a, b) => b.value - a.value || byKey(a, b));
+      return out.sort((a, b) => missingLast(a, b) || b.value - a.value || byKey(a, b));
     default:
       return out;
   }
@@ -138,7 +144,10 @@ const LOG_TICKS = 6;
  * A logarithmic one runs between whole powers of ten around the positive
  * values, with a tick at each power, thinned to six.
  */
-export function valueScale(values: readonly number[], axis: ValueAxis): ValueScale {
+export function valueScale(given: readonly number[], axis: ValueAxis): ValueScale {
+  // A missing value (§537's NaN) has no place on any axis and says nothing
+  // about where the axis should run.
+  const values = given.filter(Number.isFinite);
   const { min, max } = axisProblem(axis) === null ? axis : { min: null, max: null };
   if (axis.scale === "log") {
     const positive = values.filter((v) => v > 0);
@@ -177,12 +186,12 @@ export function valueScale(values: readonly number[], axis: ValueAxis): ValueSca
     else hi = lo + 1;
   }
   const span = hi - lo;
-  const at = (v: number) => (v - lo) / span;
+  const at = (v: number) => (Number.isFinite(v) ? (v - lo) / span : null);
   return {
     lo, hi,
     ticks: Array.from({ length: 5 }, (_, i) => lo + (span * i) / 4),
     at,
-    base: at(Math.min(Math.max(0, lo), hi)),
+    base: (Math.min(Math.max(0, lo), hi) - lo) / span,
     undrawn: 0,
   };
 }
@@ -239,4 +248,65 @@ export function axisTitlesOf(
     category: pick(props.showCategoryTitle, props.categoryTitle, defaults.category),
     value: pick(props.showValueTitle, props.valueTitle, defaults.value),
   };
+}
+
+/**
+ * p.281's Area options and p.282's null display, for a line chart (§537).
+ *
+ * > "Area options: Provides three visualization options for line charts:
+ * > "Line" (which display a simple line chart), "Area" (which plots a line
+ * > chart and shades the area beneath each line), and "Stacked" …" (p.281)
+ * >
+ * > "Display of null/missing values: Only available for Line chart. … "Gap"
+ * > (where a missing value is displayed as an empty gap in a plotted line),
+ * > "Ignored" (where a missing value is ignored and a plotted line instead
+ * > connects the previous and next available values), or "Zeroes" (where a
+ * > missing value is treated as equivalent to value of "0)." (p.282)
+ *
+ * A missing value travels as NaN: a point whose category is known and whose
+ * value is not, so a gap can stand where it was.
+ */
+export const AREA_OPTIONS = { line: "Line", area: "Area" } as const;
+export type AreaOption = keyof typeof AREA_OPTIONS;
+
+export function areaOf(raw: unknown): AreaOption {
+  return raw === "area" ? "area" : "line";
+}
+
+export const NULL_DISPLAYS = { ignored: "Ignored", gap: "Gap", zeroes: "Zeroes" } as const;
+export type NullDisplay = keyof typeof NULL_DISPLAYS;
+
+/** Ignored unless set: it is what every line chart drew before p.282 was
+ * read, a dataset's row and a series' reading with no value both dropped. */
+export function nullDisplayOf(raw: unknown): NullDisplay {
+  return typeof raw === "string" && Object.hasOwn(NULL_DISPLAYS, raw)
+    ? (raw as NullDisplay) : "ignored";
+}
+
+/** The points to draw. p.282's choice is a line chart's alone; any other
+ * chart leaves a missing value out, since a zero bar is a claim about the
+ * data and "this could not be measured" is not that claim. */
+export function withMissing(
+  points: readonly ChartPoint[], kind: string, display: NullDisplay,
+): ChartPoint[] {
+  if (kind === "line" && display === "gap") return [...points];
+  if (kind === "line" && display === "zeroes") {
+    return points.map((p) => (Number.isNaN(p.value) ? { ...p, value: 0 } : p));
+  }
+  return points.filter((p) => !Number.isNaN(p.value));
+}
+
+/** How many points have no value, for the chart to say what it did with them. */
+export function missingCount(points: readonly ChartPoint[]): number {
+  return points.filter((p) => Number.isNaN(p.value)).length;
+}
+
+/** What became of the missing values, in the chart's words, or null when
+ * there were none. */
+export function missingText(count: number, kind: string, display: NullDisplay): string | null {
+  if (count === 0) return null;
+  const what = count === 1 ? "1 value is missing" : `${count} values are missing`;
+  if (kind === "line" && display === "gap") return `${what}, left as a gap in the line.`;
+  if (kind === "line" && display === "zeroes") return `${what}, drawn as zero.`;
+  return `${what} and not drawn.`;
 }

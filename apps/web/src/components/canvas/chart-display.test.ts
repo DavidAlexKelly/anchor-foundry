@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  axisProblem, axisTitlesOf, chartSortOf, defaultValueTitle, orientationOf, sortPoints,
-  valueAxisOf, valueScale, type ValueAxis,
+  areaOf, axisProblem, axisTitlesOf, chartSortOf, defaultValueTitle, missingCount, missingText,
+  nullDisplayOf, orientationOf, sortPoints, valueAxisOf, valueScale, withMissing,
+  type ValueAxis,
 } from "./chart-display";
 
 const points = [
@@ -167,5 +168,62 @@ describe("axis titles (p.283's Show title)", () => {
     expect(axisTitlesOf({ showValueTitle: true, valueTitle: "   " }, defaults).value).toBe("Count");
     expect(axisTitlesOf({ showCategoryTitle: true }, { category: null, value: null }).category)
       .toBeNull();
+  });
+});
+
+describe("missing values (p.282's null display)", () => {
+  const series = [
+    { label: "Mon", value: 4 },
+    { label: "Tue", value: NaN },
+    { label: "Wed", value: 6 },
+  ];
+
+  it("is Ignored unless set, and a line's Area is a Line", () => {
+    expect(nullDisplayOf(undefined)).toBe("ignored");
+    expect(nullDisplayOf("toString")).toBe("ignored");
+    expect(nullDisplayOf("gap")).toBe("gap");
+    expect(nullDisplayOf("zeroes")).toBe("zeroes");
+    expect(areaOf(undefined)).toBe("line");
+    expect(areaOf("stacked")).toBe("line");
+    expect(areaOf("area")).toBe("area");
+  });
+
+  it("leaves a gap, draws a zero, or joins across, on a line", () => {
+    expect(withMissing(series, "line", "gap").map((p) => p.value)).toEqual([4, NaN, 6]);
+    expect(withMissing(series, "line", "zeroes").map((p) => p.value)).toEqual([4, 0, 6]);
+    expect(withMissing(series, "line", "ignored").map((p) => p.label)).toEqual(["Mon", "Wed"]);
+  });
+
+  it("leaves a missing value out of any other chart, whatever is set", () => {
+    for (const kind of ["bar", "pie", "scatter"]) {
+      expect(withMissing(series, kind, "zeroes").map((p) => p.label)).toEqual(["Mon", "Wed"]);
+      expect(withMissing(series, kind, "gap").map((p) => p.label)).toEqual(["Mon", "Wed"]);
+    }
+  });
+
+  it("counts and says what became of them", () => {
+    expect(missingCount(series)).toBe(1);
+    expect(missingCount([{ label: "a", value: 0 }])).toBe(0);
+    expect(missingText(0, "line", "gap")).toBeNull();
+    expect(missingText(1, "line", "gap")).toBe("1 value is missing, left as a gap in the line.");
+    expect(missingText(2, "line", "zeroes")).toBe("2 values are missing, drawn as zero.");
+    expect(missingText(2, "line", "ignored")).toBe("2 values are missing and not drawn.");
+    expect(missingText(1, "bar", "zeroes")).toBe("1 value is missing and not drawn.");
+    expect(missingText(1, "bar", "gap")).toBe("1 value is missing and not drawn.");
+  });
+
+  it("has no place on the axis", () => {
+    const s = valueScale([4, NaN, 6], linear);
+    expect([s.lo, s.hi]).toEqual([0, 6]);
+    expect(s.at(NaN)).toBeNull();
+    const logged = valueScale([4, NaN, 60], log);
+    expect(logged.undrawn).toBe(0);
+    expect(logged.at(NaN)).toBeNull();
+  });
+
+  it("sorts last whichever way the values run", () => {
+    const mixed = [{ label: "b", value: NaN }, { label: "a", value: 1 }, { label: "c", value: 5 }];
+    expect(sortPoints(mixed, "valueDesc").map((p) => p.label)).toEqual(["c", "a", "b"]);
+    expect(sortPoints(mixed, "valueAsc").map((p) => p.label)).toEqual(["a", "c", "b"]);
   });
 });
