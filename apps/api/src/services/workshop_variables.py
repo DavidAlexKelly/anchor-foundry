@@ -322,7 +322,89 @@ def _filter_default(label: str, raw: Any) -> list[dict[str, Any]] | None:
                 f"variable {label!r}: each default filter names a property to filter on "
                 "(p.146's property type / property value pairs)"
             )
+        ref = clause.get("value")
+        if isinstance(ref, dict) and "variable" in ref and not (
+                set(ref) == {"variable"} and isinstance(ref["variable"], str)):
+            raise VariableError(
+                f"variable {label!r}: a default filter value read from a variable is "
+                '{"variable": "<id>"} and nothing else'
+            )
     return value
+
+
+#: What a filter default's value may read (§592; p.146: "The values can be
+#: specified inline, or as variables"): a plain value somebody can set. A
+#: derived one could be computed from this very filter, and an object set or a
+#: filter is not a property value.
+FILTER_REF_KINDS = ("string", "number", "boolean", "date", "timestamp", "array")
+
+
+def filter_refs(default: Any) -> list[str]:
+    """The variables a filter default's values read, in clause order."""
+    if not isinstance(default, list):
+        return []
+    return [str(c["value"]["variable"]) for c in default
+            if isinstance(c, dict) and isinstance(c.get("value"), dict)
+            and "variable" in c["value"]]
+
+
+def _refuse_bad_filter_refs(variables: dict[str, Variable]) -> None:
+    for variable in variables.values():
+        refs = filter_refs(variable.default) if variable.kind == "object_set_filter" else []
+        for ref in refs:
+            read = variables.get(ref)
+            if read is None:
+                raise VariableError(
+                    f"variable {variable.label!r}'s default filter reads {ref!r}, which "
+                    "this module does not declare"
+                )
+            if read.kind not in FILTER_REF_KINDS or read.derived:
+                raise VariableError(
+                    f"variable {variable.label!r}'s default filter reads {read.label!r}; a "
+                    "filter value is read from a variable somebody sets - a string, "
+                    "number, boolean, date, timestamp or array that is not derived"
+                )
+        if variable.update_used and not refs:
+            raise VariableError(
+                f"variable {variable.label!r} updates the variables its default filter "
+                "uses, and it uses none (p.148: specify a default filter state using "
+                "variables for property values)"
+            )
+
+
+def _read_ref(variables: dict[str, Variable], values: dict[str, Any],
+              bound: frozenset[str], ref: str) -> Any:
+    """A referenced variable's value as `evaluate` would resolve it: the
+    host's if bound, else what was set, else its default, each read as its
+    kind (the panel keeps typed defaults as text)."""
+    read = variables[ref]
+    value = values.get(ref) if ref in bound else values.get(ref, read.default)
+    if read.kind == "number":
+        return variable_math.of_number_variable(value)
+    if read.kind == "boolean":
+        return variable_checks.of_boolean_variable(value)
+    if read.kind == "array":
+        return variable_arrays.of_array_variable(value)
+    return value
+
+
+def filled_default(variable: Variable, variables: dict[str, Variable],
+                   values: dict[str, Any], bound: frozenset[str] = frozenset()) -> Any:
+    """A filter default with each value read from its variable (§592). A
+    clause whose variable holds nothing is left out, as a Filter List with
+    nothing chosen writes no clause: an unset value is no filter, not a
+    filter to nothing."""
+    if not filter_refs(variable.default):
+        return variable.default
+    out: list[dict[str, Any]] = []
+    for clause in variable.default:
+        value = clause.get("value")
+        if isinstance(value, dict) and "variable" in value:
+            value = _read_ref(variables, values, bound, str(value["variable"]))
+            if value is None or value == "" or value == []:
+                continue
+        out.append({**clause, "value": value})
+    return out
 
 
 #: p.133's two loop sources. The object-set arm is older than this constant;
@@ -652,6 +734,11 @@ class Variable:
     #: looped over, because p.134 requires the child's variable to match a type
     #: an untyped array does not have.
     element: str | None = None
+    #: p.148's "Update used variables on filter value changes" (§592): an
+    #: object set filter whose default reads variables writes the values a
+    #: matching filter holds back into them. The browser does the writing,
+    #: since it is the viewer's filter that changed; this is the setting.
+    update_used: bool = False
 
     @property
     def derived(self) -> bool:
@@ -727,6 +814,14 @@ def parse(
             # array's are. Each is a property/value pair, so anything else is
             # refused here rather than when a set is narrowed by it.
             default = _filter_default(label, default)
+        update_used = value.get("update_used_variables", False)
+        if not isinstance(update_used, bool):
+            raise VariableError(f"variable {label!r}: update_used_variables is true or false")
+        if update_used and kind != "object_set_filter":
+            raise VariableError(
+                f"variable {label!r} is not an object set filter, so it has no default "
+                "filter whose variables to update"
+            )
         variables[vid] = Variable(
             id=vid,
             kind=str(kind),
@@ -741,10 +836,12 @@ def parse(
             save_state=save_state,
             recompute=recompute,
             element=element,
+            update_used=update_used,
         )
 
     _refuse_duplicate_external_ids(variables)
     _refuse_unknown_inputs(variables)
+    _refuse_bad_filter_refs(variables)
     _refuse_non_series_inputs(variables)
     _refuse_cycles(variables)
     return variables
@@ -1691,7 +1788,12 @@ def evaluate(
             resolved[vid] = (
                 dict(variable.object_set)
                 if variable.object_set is not None
-                else values.get(vid, variable.default)
+                else values[vid] if vid in values
+                # p.146's default filter reading variables (§592), filled in
+                # from them as they are now.
+                else filled_default(variable, variables, values, bound)
+                if variable.kind == "object_set_filter"
+                else variable.default
             )
             if timings is not None:
                 timings[vid] = (perf_counter() - started) * 1000
@@ -2427,6 +2529,14 @@ def usages(layout: Any, variables: dict[str, Variable]) -> dict[str, list[dict[s
         for ref in variable.derivation.inputs:
             if ref in found:
                 found[ref].append({"node": variable.id, "prop": "derivation"})
+    # So is a filter default reading one (§592): deleting it would leave the
+    # default naming nothing.
+    for variable in variables.values():
+        if variable.kind != "object_set_filter":
+            continue
+        for ref in dict.fromkeys(filter_refs(variable.default)):
+            if ref in found:
+                found[ref].append({"node": variable.id, "prop": "default"})
     return found
 
 

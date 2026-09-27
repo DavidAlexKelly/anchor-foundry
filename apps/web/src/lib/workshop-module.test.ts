@@ -134,6 +134,19 @@ describe("usagesOf", () => {
       .toEqual([{ node: "w1", prop: "visibleWhen" }]);
   });
 
+  it("counts a filter default reading it (§592)", () => {
+    const def = {
+      format: 2, layout: {}, events: {},
+      variables: {
+        f: { id: "f", kind: "object_set_filter", label: "F",
+             default: '[{"property": "p", "op": "eq", "value": {"variable": "v_d"}}]' },
+        a: { id: "a", kind: "array", label: "A",
+             default: '[{"property": "p", "op": "eq", "value": {"variable": "v_d"}}]' },
+      },
+    };
+    expect(usagesOf(def, "v_d")).toEqual([{ node: "f", prop: "default" }]);
+  });
+
   it("finds nothing for a variable nothing binds", () => {
     expect(usagesOf(definition({ w1: { props: { steps: [{ completedVariable: "v_x" }] } } }), "v_d"))
       .toEqual([]);

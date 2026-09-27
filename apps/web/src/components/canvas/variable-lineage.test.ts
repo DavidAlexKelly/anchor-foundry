@@ -498,3 +498,16 @@ describe("layers", () => {
     expect(layers(graph, new Set(["nope"])).size).toBe(0);
   });
 });
+
+describe("a filter default reading a variable (§592)", () => {
+  it("is an edge from the variable to the filter", () => {
+    const graph = buildGraph({
+      v_r: v("v_r"),
+      f: v("f", { kind: "object_set_filter",
+        default: '[{"property": "p", "op": "eq", "value": {"variable": "v_r"}}]' }),
+      a: v("a", { kind: "array",
+        default: '[{"property": "p", "op": "eq", "value": {"variable": "v_r"}}]' }),
+    }, {});
+    expect(graph.edges).toEqual([{ from: "v_r", to: "f", via: "default" }]);
+  });
+});

@@ -42,6 +42,7 @@ import type { CollapseOverride } from "./collapse";
 import type { TabOverride } from "./tab-selection";
 import { asPageId, pageState, type PageOverride } from "./page-selection";
 import { heldFor, remember, request, requested, settled } from "./recompute";
+import { usedUpdates } from "./filter-default";
 import { defaultPageNode, pageNodeFor } from "./routing";
 import { visibleNodes } from "./visible-nodes";
 import { useProfiler } from "./ProfilerRecorder";
@@ -140,7 +141,16 @@ export function VariableBridge({
   children: React.ReactNode;
 }) {
   const enabled = Object.keys(declared).length > 0;
-  const { values } = useCanvasParameters();
+  const { values, setMany } = useCanvasParameters();
+  // p.148's "Update used variables on filter value changes" (§592): a filter
+  // a widget has just set writes what it holds back into the variables its
+  // default reads. Here, where every value the viewer sets passes, rather
+  // than in each of the widgets that can set a filter.
+  const seenFilters = useRef<Record<string, string>>({});
+  useEffect(() => {
+    const updates = usedUpdates(declared, values, seenFilters.current);
+    if (Object.keys(updates).length > 0) setMany(updates);
+  }, [declared, values, setMany]);
   const [resolved, setResolved] = useState<Record<string, unknown>>({});
   const [pending, setPending] = useState(enabled);
   // The latest of both, for a capability that has to wait on them from inside

@@ -37,6 +37,7 @@
  */
 import { REFERENCE_PROPS, referencesOf } from "../../lib/workshop-module";
 import type { WorkshopVariable } from "../../lib/types";
+import { usedVariables } from "./filter-default";
 
 /** Which direction a widget prop points.
  *
@@ -204,6 +205,12 @@ export function buildGraph(
     for (const input of variable.derivation?.inputs ?? []) {
       if (nodes.has(input)) {
         edges.push({ from: input, to: variable.id, via: "derivation" });
+      }
+    }
+    // A filter default reading a variable (§592) is read from it, too.
+    if (variable.kind === "object_set_filter") {
+      for (const input of usedVariables(variable.default)) {
+        if (nodes.has(input)) edges.push({ from: input, to: variable.id, via: "default" });
       }
     }
   }
