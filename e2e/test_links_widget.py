@@ -29,7 +29,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import eventually, open_builder, open_module, settled
+from conftest import eventually, open_builder, open_module, save, settled
 
 # Ada manages everybody and reports to nobody, so her two ends of the self-link
 # have *different counts* - 0 one way, eleven the other. A widget that drew one
@@ -199,8 +199,9 @@ def test_a_section_opens_and_closes(page, api, seed) -> None:
     header(page, "Direct reports").click()
     expect(header(page, "Direct reports")).to_have_attribute("aria-expanded", "true")
     expect(page.get_by_test_id("link-object")).to_have_count(PREVIEW_LIMIT)
-    expect(section(page, "Direct reports")).to_contain_text("P2")
-    expect(section(page, "Direct reports")).to_contain_text("P3")
+    # Each by its title since §547 (p.271's "the title of a linked object").
+    expect(section(page, "Direct reports")).to_contain_text("Report 2")
+    expect(section(page, "Direct reports")).to_contain_text("Report 3")
 
     header(page, "Direct reports").click()
     expect(page.get_by_test_id("link-object")).to_have_count(0)
@@ -492,3 +493,90 @@ def test_changing_the_selection_re_expands_what_is_now_shown(page, api, seed) ->
 
     expect_labels(page, ["Direct reports"])
     expect(header(page, "Direct reports")).to_have_attribute("aria-expanded", "true")
+
+
+# ---- p.271's linked objects configuration (§547) ----------------------------
+
+def open_department(page) -> None:
+    header(page, "Department").click()
+    expect(page.get_by_test_id("link-object")).to_have_count(1)
+
+
+def test_a_linked_object_is_shown_by_its_title(page, api, seed) -> None:
+    open_module(page, build(api, seed, "Links titles"))
+    open_department(page)
+    expect(page.get_by_test_id("link-object-title")).to_have_text("Engineering")
+
+
+def test_the_options_are_off_until_asked_for(page, api, seed) -> None:
+    open_module(page, build(api, seed, "Links plain"))
+    open_department(page)
+    expect(page.locator("[data-testid^='link-explore-']")).to_have_count(0)
+    expect(page.get_by_test_id("link-object-open")).to_have_count(0)
+    page.get_by_test_id("link-object-title").hover()
+    expect(page.get_by_test_id("link-object-preview")).to_have_count(0)
+
+
+def test_a_link_can_be_explored_in_the_object_explorer(page, api, seed) -> None:
+    mod = build(api, seed, "Links explore", {"exploreLinks": True})
+    open_module(page, mod)
+    explore = section(page, "Department").locator("[data-testid^='link-explore-']")
+    href = explore.get_attribute("href") or ""
+    assert href.startswith(f"/{mod.workspace_slug}/explore?"), href
+    assert f"type={seed.dept_type}" in href and "value=ENG" in href, href
+    # And the Explorer shows the linked objects it names.
+    page.goto(f"{page.url.split('/r/')[0]}{href}")
+    expect(page.get_by_text("Engineering").first).to_be_visible()
+
+
+def test_a_linked_object_opens_its_object_view(page, api, seed) -> None:
+    mod = build(api, seed, "Links open", {"openObjects": True})
+    open_module(page, mod)
+    open_department(page)
+    link = page.get_by_test_id("link-object-open")
+    expect(link).to_have_attribute("aria-label", "Open Engineering")
+    href = link.get_attribute("href") or ""
+    assert href.startswith(f"/{mod.workspace_slug}/explore?object={seed.dept_type}%3A"), href
+    page.goto(f"{page.url.split('/r/')[0]}{href}")
+    # The Explorer with that object open: its view, titled by it.
+    expect(page.get_by_role("heading", name="Engineering")).to_be_visible()
+
+
+def test_hovering_a_linked_object_previews_its_prominent_properties(page, api) -> None:
+    people = Module(api, "Links preview")
+    person_type = people.object_type(
+        columns=["id", "name", "dept"], rows=[{"id": "P1", "name": "Ada", "dept": "ENG"}],
+        key="id", title="name")
+    depts = Module(api, "Links preview departments", beside=people)
+    dept_type = depts.object_type(
+        columns=["code", "label", "floor", "budget"],
+        rows=[{"code": "ENG", "label": "Engineering", "floor": "3", "budget": "secret"}],
+        key="code", title="label", visibility={"floor": "prominent", "budget": "hidden"})
+    api.call("POST", f"/workspaces/{people.workspace_id}/link-types", {
+        "api_name": f"works_in_{people.tag}", "display_name": "Works in",
+        "from_type_id": person_type, "to_type_id": dept_type, "cardinality": "one_to_many",
+        "from_property": "dept", "to_property": "$primary_key",
+        "from_side_name": "Employees", "to_side_name": "Department"})
+    seedish = SimpleNamespace(module=people, person_type=person_type)
+    open_module(page, build(api, seedish, "Links preview widget", {"previewOnHover": True}))
+    open_department(page)
+    page.get_by_test_id("link-object-title").hover()
+    preview = page.get_by_test_id("link-object-preview")
+    # The prominent property, and not the hidden or the ordinary ones.
+    expect(preview.locator("dt")).to_have_text(["Floor"])
+    expect(preview.locator("dd")).to_have_text(["3"])
+    page.mouse.move(0, 0)
+    expect(preview).to_have_count(0)
+
+
+def test_the_panel_turns_the_options_on(page, api, seed) -> None:
+    mod = build(api, seed, "Links options panel")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Links").first.click()
+    for testid in ("links-explore", "links-open", "links-preview"):
+        page.get_by_test_id(testid).check()
+    save(page)
+    props = mod.definition()["layout"]["lw"]["props"]
+    assert (props["exploreLinks"], props["openObjects"], props["previewOnHover"]) == (
+        True, True, True), props

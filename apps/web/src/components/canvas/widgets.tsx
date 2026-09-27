@@ -82,8 +82,11 @@ import {
   LINK_MODES, MAX_DEFAULT_EXPAND,
   chosenOf as linkChosenOf, defaultExpandOf, initiallyExpanded, labelFor,
   linkKey, modeOf as linkModeOf, toggleExpanded, visibleLinks,
+  objectViewHref, previewProperties, titleOf,
   type ChosenLink,
 } from "./links-widget";
+import { linkSubsetHref } from "@/lib/link-subset";
+import { useWorkspaceById } from "@/components/use-workspace";
 import {
   // Aliased for §211's reason, and this time the compiler said so rather than
   // letting it through: `emptyMessageOf` already means the Object Table's,
@@ -6802,6 +6805,9 @@ export function CanvasLinksWidget({
   linkMode = "all",
   links = [],
   defaultExpand = 0,
+  exploreLinks = false,
+  openObjects = false,
+  previewOnHover = false,
 }: {
   objectSetVariable?: string | null;
   /** p.270's "Link types to display": all of them, or the configured list. */
@@ -6810,11 +6816,20 @@ export function CanvasLinksWidget({
   links?: ChosenLink[];
   /** p.271's "Default link expand". */
   defaultExpand?: number;
+  /** p.271's linked objects configuration (§547): a button to view a link's
+   * objects in the Object Explorer, one to open a linked object's Object
+   * View there, and a preview of its prominent properties on hover. */
+  exploreLinks?: boolean;
+  openObjects?: boolean;
+  previewOnHover?: boolean;
 }) {
   const {
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId } = useCanvasEnv();
+  // The Explorer's address is by slug, and a module is addressed by id.
+  const slug = useWorkspaceById(workspaceId).workspace?.slug ?? null;
+  const [previewing, setPreviewing] = useState<string | null>(null);
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending } = useCanvasVariables();
 
@@ -6835,6 +6850,16 @@ export function CanvasLinksWidget({
   const chosen = linkChosenOf(links);
   const visible = visibleLinks(linkQuery.data ?? [], linkMode, chosen);
   const expand = defaultExpandOf(defaultExpand);
+  // The linked types, for each object's title and p.271's prominent
+  // properties.
+  const farIds = [...new Set(visible.map((g) => g.far_type_id))];
+  const farTypes = useQueries({
+    queries: farIds.map((id) => ({
+      queryKey: ["object-type", id],
+      queryFn: () => objApi.getType(workspaceId, id),
+    })),
+  });
+  const farType = (id: string) => farTypes[farIds.indexOf(id)]?.data;
 
   // p.271's default expansion is a *starting* state, so it is seeded rather
   // than computed: once somebody has folded a section away, re-deriving it
@@ -6885,6 +6910,17 @@ export function CanvasLinksWidget({
                     {group.total} {group.far_type_display_name}
                   </span>
                 </button>
+                {exploreLinks === true && slug && linkSubsetHref(slug, group) && (
+                  <a
+                    className="canvas-link-explore"
+                    data-testid={`link-explore-${key}`}
+                    href={linkSubsetHref(slug, group)!}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Explore
+                  </a>
+                )}
                 {isOpen && (
                   group.items.length === 0 ? (
                     <p className="canvas-link-empty" data-testid="link-empty">
@@ -6892,9 +6928,46 @@ export function CanvasLinksWidget({
                     </p>
                   ) : (
                     <ul className="canvas-link-objects">
-                      {group.items.map((i) => (
-                        <li key={i.id} data-testid="link-object">{i.primary_key}</li>
-                      ))}
+                      {group.items.map((i) => {
+                        const far = farType(group.far_type_id);
+                        const title = titleOf(i, far?.properties
+                          .find((p) => p.id === far.title_property_id)?.api_name);
+                        // Only ever set by the hover handlers, which exist only
+                        // when the preview is on.
+                        const shown = previewing === `${key}/${i.id}`;
+                        return (
+                          <li key={i.id} data-testid="link-object"
+                            onMouseEnter={previewOnHover === true
+                              ? () => setPreviewing(`${key}/${i.id}`) : undefined}
+                            onMouseLeave={previewOnHover === true
+                              ? () => setPreviewing(null) : undefined}
+                          >
+                            <span data-testid="link-object-title">{title}</span>
+                            {openObjects === true && slug && (
+                              <a
+                                className="canvas-link-open"
+                                data-testid="link-object-open"
+                                href={objectViewHref(slug, group.far_type_id, i.id)}
+                                target="_blank"
+                                rel="noreferrer"
+                                aria-label={`Open ${title}`}
+                              >
+                                Open
+                              </a>
+                            )}
+                            {shown && far && (
+                              <dl className="canvas-link-preview" data-testid="link-object-preview">
+                                {previewProperties(far.properties).map((p) => (
+                                  <Fragment key={p.api_name}>
+                                    <dt>{p.display_name || p.api_name}</dt>
+                                    <dd>{String(i.properties[p.api_name] ?? "—")}</dd>
+                                  </Fragment>
+                                ))}
+                              </dl>
+                            )}
+                          </li>
+                        );
+                      })}
                       {group.total > group.items.length && (
                         // The traversal returns a first page, not the far side.
                         <li className="canvas-link-more">
@@ -6916,9 +6989,12 @@ export function CanvasLinksWidget({
 function LinksWidgetSettings() {
   const { workspaceId } = useCanvasEnv();
   const {
-    objectSetVariable, linkMode, links, defaultExpand,
+    objectSetVariable, linkMode, links, defaultExpand, exploreLinks, openObjects, previewOnHover,
     actions: { setProp },
   } = useNode((node) => ({
+    exploreLinks: node.data.props.exploreLinks,
+    openObjects: node.data.props.openObjects,
+    previewOnHover: node.data.props.previewOnHover,
     objectSetVariable: node.data.props.objectSetVariable,
     linkMode: node.data.props.linkMode,
     links: node.data.props.links,
@@ -7051,6 +7127,27 @@ function LinksWidgetSettings() {
           How many of the sections shown open on load (p.271)
         </span>
       </label>
+      {/* p.271's linked objects configuration (§547). */}
+      {([
+        ["exploreLinks", "links-explore", "Enable exploration on link types",
+          "A button on each link to see its objects in the Object Explorer"],
+        ["openObjects", "links-open", "Enable open object view on linked objects",
+          "A button on each object to open its Object View in the Object Explorer"],
+        ["previewOnHover", "links-preview", "Enable object preview on hover",
+          "Hovering an object shows its type's prominent properties"],
+      ] as const).map(([prop, testid, label, hint]) => (
+        <label className="field canvas-toggle" key={prop}>
+          <input
+            type="checkbox"
+            data-testid={testid}
+            checked={{ exploreLinks, openObjects, previewOnHover }[prop] === true}
+            onChange={(e) =>
+              setProp((p: Record<string, boolean>) => (p[prop] = e.target.checked))}
+          />
+          <span className="field-label">{label}</span>
+          <span className="field-hint">{hint}</span>
+        </label>
+      ))}
       </>}
     />
   );
@@ -7060,6 +7157,7 @@ CanvasLinksWidget.craft = {
   displayName: "Links",
   props: {
     objectSetVariable: null, linkMode: "all", links: [], defaultExpand: 0,
+    exploreLinks: false, openObjects: false, previewOnHover: false,
   },
   related: { settings: LinksWidgetSettings },
 };
