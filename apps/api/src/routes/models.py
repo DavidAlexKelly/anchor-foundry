@@ -682,6 +682,43 @@ async def save_graph(
     return SavedGraphOut(**row)
 
 
+class SavedGraphReplace(BaseModel):
+    description: str = Field(default="", max_length=2000)
+    view: dict[str, Any] = Field(default_factory=dict)
+
+
+@project_router.put("/saved-graphs/{graph_id}", response_model=SavedGraphOut)
+async def replace_saved_graph(
+    graph_id: UUID,
+    body: SavedGraphReplace,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> SavedGraphOut:
+    """Save over a saved graph (§512). Before this, revising a saved view
+    meant deleting it and saving again, because the name is unique and a
+    second Save was a 409."""
+    async with user_connection(access.auth.user_id) as conn:
+        try:
+            row = await saved_graphs.replace(
+                conn, access.project_id, graph_id, description=body.description, view=body.view)
+        except saved_graphs.GraphViewError as exc:
+            raise ValueError(str(exc)) from exc
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="graph.replace",
+            resource_type="saved_graph",
+            resource_id=row["id"],
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"name": row["name"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return SavedGraphOut(**row)
+
+
 @project_router.delete("/saved-graphs/{graph_id}", status_code=status.HTTP_204_NO_CONTENT,
                        response_model=None)
 async def delete_saved_graph(

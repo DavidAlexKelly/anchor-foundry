@@ -1064,6 +1064,15 @@ export const models = {
       `/workspaces/${wid}/projects/${pid}/saved-graphs`,
       { method: "POST", body: JSON.stringify(input) },
     ),
+  /** Save over a saved graph, keeping its name (§512). */
+  replaceGraph: (
+    wid: string, pid: string, id: string,
+    input: { description?: string; view: import("./types").GraphViewInput },
+  ) =>
+    request<import("./types").SavedGraph>(
+      `/workspaces/${wid}/projects/${pid}/saved-graphs/${id}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
   deleteSavedGraph: (wid: string, pid: string, id: string) =>
     request<void>(
       `/workspaces/${wid}/projects/${pid}/saved-graphs/${id}`,

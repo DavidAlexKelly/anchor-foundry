@@ -237,6 +237,32 @@ async def create(
     return _out(row)
 
 
+async def replace(
+    conn: AsyncConnection, project_id: UUID, graph_id: UUID, *, description: str, view: Any,
+) -> dict[str, Any]:
+    """Save over a saved graph (§512; p.12's Save, a second time).
+
+    The name stays: it is how the graph was found to be replaced, and a
+    rename would be a different action. The view and description are the new
+    ones, and `updated_at` moves (db 0089's trigger), so the Open list shows
+    it was revised.
+    """
+    parsed = parse(view)
+    row = await fetch_one(
+        conn,
+        f"""
+        UPDATE saved_graphs SET view = CAST(:view AS jsonb), description = :descr
+         WHERE id = :gid AND project_id = :pid
+        RETURNING {_COLUMNS}
+        """,
+        {"gid": str(graph_id), "pid": str(project_id), "view": json.dumps(parsed),
+         "descr": description},
+    )
+    if row is None:
+        raise NotFoundError("saved graph")
+    return _out(row)
+
+
 async def remove(conn: AsyncConnection, project_id: UUID, graph_id: UUID) -> None:
     row = await fetch_one(
         conn,
