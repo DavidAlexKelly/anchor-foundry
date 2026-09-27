@@ -14,13 +14,14 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useState } from "react";
 import { Field } from "@/components/dialog";
 import { ApiError, api as platformApi, listeners as api } from "@/lib/api";
 import { canEditProject } from "@/lib/test-runs";
 import { bytesText } from "@/lib/bytes";
 import {
-  BLANK_LISTENER, LISTENER_TYPES, ROTATIONS, VERIFICATIONS, curlExample, draftBody, draftProblem,
+  BLANK_LISTENER, LISTENER_TYPES, ROTATIONS, VERIFICATIONS, archivedText, notArchivedText, waitingText, curlExample, draftBody, draftProblem,
   endpointState, extendedExpiry, needsHeader, rotateBody, schemesOf, statusText, verificationText,
   whyNoRotation, withType,
   type Listener, type ListenerDraft, type ListenerType, type Verification,
@@ -189,6 +190,10 @@ function ListenerCard({
   });
   const active = listener.endpoints.find((e) => e.active);
   const [rotation, setRotation] = useState<keyof typeof ROTATIONS>("day");
+  const archive = useMutation({
+    mutationFn: () => api.archive(workspaceId, projectId, listener.id),
+    onSuccess: refresh,
+  });
   const endpointChange = useMutation({
     mutationFn: (call: () => Promise<Listener>) => call(),
     onSuccess: refresh,
@@ -283,6 +288,25 @@ function ListenerCard({
         <div className="form-error" data-testid="listener-endpoint-error">
           {endpointChange.error instanceof ApiError ? endpointChange.error.message : "Couldn't change the endpoint."}
         </div>
+      )}
+      {/* p.264's backing dataset (§519): archived every five minutes, or now. */}
+      <p className="soft" style={{ margin: "6px 0 0" }} data-testid="listener-archive">
+        {listener.archive_dataset_resource_id ? (
+          <>
+            Archived to{" "}
+            <Link href={`/r/${listener.archive_dataset_resource_id}`}>{listener.archive_dataset_name}</Link>
+            {" · "}{waitingText(listener.pending_events)}
+          </>
+        ) : notArchivedText(listener.pending_events)}
+        {editor && (
+          <button type="button" className="btn quiet" data-testid="listener-archive-now"
+                  style={{ marginLeft: 8 }} onClick={() => archive.mutate()}>
+            Archive now
+          </button>
+        )}
+      </p>
+      {archive.data && (
+        <p className="soft" style={{ margin: 0 }} data-testid="listener-archived">{archivedText(archive.data)}</p>
       )}
       {showing && (
         <div data-testid="listener-events">

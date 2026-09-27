@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  BLANK_LISTENER, LISTENER_TYPES, ROTATIONS, VERIFICATIONS, curlExample, draftBody, draftProblem,
+  BLANK_LISTENER, LISTENER_TYPES, ROTATIONS, archivedText, notArchivedText, waitingText, VERIFICATIONS, curlExample, draftBody, draftProblem,
   endpointState, extendedExpiry, needsHeader, rotateBody, schemesOf, statusText, whyNoRotation,
   withType,
   verificationText,
@@ -135,5 +135,19 @@ describe("named listener types (§518)", () => {
     for (const type of Object.keys(LISTENER_TYPES) as (keyof typeof LISTENER_TYPES)[]) {
       for (const v of schemesOf(type)) expect(VERIFICATIONS[v].label, v).toBeTruthy();
     }
+  });
+});
+
+describe("the archive (§519)", () => {
+  it("says how many events are waiting, and what makes the dataset", () => {
+    expect([0, 1, 3].map(waitingText)).toEqual(["nothing waiting", "1 event waiting", "3 events waiting"]);
+    expect(notArchivedText(2))
+      .toBe("Not archived yet · 2 events waiting. The first archive makes the dataset.");
+  });
+
+  it("says what Archive now did", () => {
+    expect(archivedText({ archived: 0, version: null })).toBe("Nothing new to archive.");
+    expect(archivedText({ archived: 1, version: 4 })).toBe("Archived 1 event as version 4.");
+    expect(archivedText({ archived: 2, version: 1 })).toBe("Archived 2 events as version 1.");
   });
 });

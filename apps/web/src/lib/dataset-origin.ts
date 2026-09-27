@@ -23,6 +23,7 @@ export const TOOL_LABELS: Record<string, string> = {
   transform: "Transform",
   sync: "Sync",
   action: "Action",
+  listener: "Listener",
 };
 
 /** What wrote the version, when no tool can be named: the producer is gone,
@@ -32,6 +33,7 @@ export function kindText(kind: string): string {
     case "model": return "A transform";
     case "sync": return "A sync";
     case "action": return "An action";
+    case "listener": return "A listener";
     case "action_batch": return "A batch of actions";
     case "fork": return "A branch";
     case "rollback": return "A rollback";

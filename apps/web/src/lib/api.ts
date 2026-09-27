@@ -695,6 +695,10 @@ export const listeners = {
   events: (wid: string, pid: string, id: string) =>
     request<import("./listeners").ListenerEvent[]>(
       `/workspaces/${wid}/projects/${pid}/listeners/${id}/events`),
+  /** p.264's archive, now (§519). */
+  archive: (wid: string, pid: string, id: string) =>
+    request<{ archived: number; version: number | null; listener: import("./listeners").Listener }>(
+      `/workspaces/${wid}/projects/${pid}/listeners/${id}/archive`, { method: "POST" }),
   /** p.258's rotation (§517). */
   rotate: (wid: string, pid: string, id: string, body: { expire_old_at: string | null }) =>
     request<import("./listeners").Listener>(

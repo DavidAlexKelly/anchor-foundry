@@ -32,17 +32,19 @@ describe("madeByText", () => {
 describe("kindText", () => {
   it("has a phrase for every producer the API writes", () => {
     expect(Object.fromEntries(
-      ["model", "sync", "action", "action_batch", "fork", "rollback", "reparse", "upload", "other"]
+      ["model", "sync", "action", "listener", "action_batch", "fork", "rollback", "reparse", "upload", "other"]
         .map((k) => [k, kindText(k)]),
     )).toEqual({
-      model: "A transform", sync: "A sync", action: "An action",
+      model: "A transform", sync: "A sync", action: "An action", listener: "A listener",
       action_batch: "A batch of actions", fork: "A branch", rollback: "A rollback",
       reparse: "A re-parse", upload: "An upload", other: "other",
     });
   });
 
   it("labels the three tools", () => {
-    expect(TOOL_LABELS).toEqual({ transform: "Transform", sync: "Sync", action: "Action" });
+    expect(TOOL_LABELS).toEqual({
+      transform: "Transform", sync: "Sync", action: "Action", listener: "Listener",
+    });
   });
 });
 
