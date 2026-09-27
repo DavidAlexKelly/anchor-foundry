@@ -766,8 +766,12 @@ class GraphNode(BaseModel):
     out_of_date: bool = False
     # Which of p.51's reasons: `input_is_newer` names the dataset to rebuild,
     # `upstream_is_out_of_date` says to look further up. Two values rather than
-    # one flag, because they send a reader to different places.
+    # one flag, because they send a reader to different places. And
+    # `source_is_behind` (§583), p.51's third: the source has not delivered.
     out_of_date_reason: str | None = None
+    # How the source is behind, for `source_is_behind`: `failed` (the latest
+    # sync into it failed) or `overdue` (a scheduled sync has not run).
+    source_behind: str | None = None
 
 
 class GraphEdge(BaseModel):

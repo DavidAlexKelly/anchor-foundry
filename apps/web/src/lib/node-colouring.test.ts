@@ -81,6 +81,20 @@ describe("swatchFor: out-of-date", () => {
       "out_of_date")!.key).toBe("ancestor");
   });
 
+  it("names a source that has not delivered, most urgent first (§583)", () => {
+    const source = swatchFor(dataset({ out_of_date: true, out_of_date_reason: "source_is_behind" }),
+      "out_of_date")!;
+    expect(source.key).toBe("source");
+    expect(source.label).toBe("Out of date with its source");
+    const parent = swatchFor(dataset({ out_of_date: true, out_of_date_reason: "input_is_newer" }), "out_of_date")!;
+    expect(source.token).toBe(parent.token);
+    const legend = legendFor([
+      dataset({ out_of_date: true, out_of_date_reason: "upstream_is_out_of_date" }),
+      dataset({ out_of_date: true, out_of_date_reason: "source_is_behind" }),
+    ], "out_of_date").map((entry) => entry.key);
+    expect(legend).toEqual(["source", "ancestor"]);
+  });
+
   it("colours the two reasons differently", () => {
     const parent = swatchFor(dataset({ out_of_date: true, out_of_date_reason: "input_is_newer" }), "out_of_date")!;
     const ancestor = swatchFor(dataset({ out_of_date: true, out_of_date_reason: "upstream_is_out_of_date" }), "out_of_date")!;

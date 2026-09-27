@@ -1549,6 +1549,8 @@ export interface PipelineNode {
    * rebuild, `"upstream_is_out_of_date"` says to look further up. Two values
    * rather than one flag, because they send a reader to different places. */
   out_of_date_reason: string | null;
+  /** §583's `source_is_behind`: `failed` or `overdue`. */
+  source_behind?: string | null;
 }
 
 /** One person's access to one node, under p.82's *View as* (§422). */

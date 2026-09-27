@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -201,7 +202,10 @@ async def project_graph(
         conn,
         """
         SELECT sr.dataset_id, c.id, c.name, c.source_type,
-               sr.status AS run_status, sr.started_at, sr.finished_at
+               sr.status AS run_status, sr.started_at, sr.finished_at,
+               -- p.51's third question (§583): what the source is expected to
+               -- deliver, which only a scheduled sync says.
+               c.sync_schedule, c.sync_next_run_at, c.sync_dataset_id
           FROM sync_runs sr
           JOIN connections c ON c.id = sr.connection_id
           JOIN datasets d ON d.id = sr.dataset_id
@@ -233,6 +237,7 @@ async def project_graph(
             # Filled in below, once every node and edge is known.
             "out_of_date": False,
             "out_of_date_reason": None,
+            "source_behind": None,
             "language": None,
             "trigger_mode": None,
             "last_run_status": None,
@@ -260,6 +265,7 @@ async def project_graph(
             # shape stays one shape rather than two.
             "out_of_date": False,
             "out_of_date_reason": None,
+            "source_behind": None,
             "language": m["language"],
             "trigger_mode": m["trigger_mode"],
             "last_run_status": m["last_run_status"],
@@ -301,6 +307,7 @@ async def project_graph(
                 "health_status": None,
                 "out_of_date": False,
                 "out_of_date_reason": None,
+                "source_behind": None,
                 "language": None,
                 "trigger_mode": None,
                 "last_run_status": status,
@@ -365,6 +372,7 @@ async def project_graph(
                 # anything. Present so the node shape stays one shape.
                 "out_of_date": False,
                 "out_of_date_reason": None,
+                "source_behind": None,
                 "language": None,
                 "trigger_mode": None,
                 "last_run_status": status,
@@ -471,7 +479,7 @@ async def project_graph(
         {str(d["id"]): d["table_schema"] for d in datasets},
     )
 
-    _mark_out_of_date(nodes, edges)
+    _mark_out_of_date(nodes, edges, behind=_sources_behind(sources))
 
     layers, cycles = _layer(known, edges)
     for node in nodes:
@@ -565,10 +573,60 @@ def _frequent_columns(
 #: is out of date" only says to look further up.
 INPUT_IS_NEWER = "input_is_newer"
 UPSTREAM_IS_OUT_OF_DATE = "upstream_is_out_of_date"
+#: p.51's third, "Have we received up-to-date data from the source?" (§583),
+#: for a dataset a sync writes. `source_behind` says which of two ways.
+SOURCE_IS_BEHIND = "source_is_behind"
+
+#: How long past its time a scheduled sync may be before it is overdue. The
+#: worker looks for due syncs every minute, so this is not queueing: a sync
+#: half an hour late has not run.
+OVERDUE_GRACE = timedelta(minutes=30)
+
+
+def source_behind(
+    runs: list[tuple[str, Any]], *, schedule: Any, next_run_at: Any, now: datetime,
+) -> str | None:
+    """Whether a synced dataset has had up-to-date data from its source
+    (p.51's third question), and if not, why: `failed` when the latest run
+    into it failed, `overdue` when a scheduled sync is past due and has not
+    run. None when nothing says it is behind - including a sync that is only
+    ever run by hand, which has no time to be late for.
+
+    `runs` is `(status, started_at)` for the runs into this dataset. No
+    filter for a run with no start: `sync_runs.started_at` is NOT NULL with a
+    default (db 0011), and a sweep found the guard unreachable (§583).
+    """
+    if runs and max(runs, key=lambda r: r[1])[0] == "failed":
+        return "failed"
+    if schedule and next_run_at is not None and next_run_at < now - OVERDUE_GRACE:
+        return "overdue"
+    return None
+
+
+def _sources_behind(sources: list[dict[str, Any]]) -> dict[str, str]:
+    """`{dataset node id: how its source is behind}` from the sync runs the
+    graph already read. A connection's schedule speaks for the one dataset it
+    is the managed sync of (db 0014's `sync_dataset_id`)."""
+    now = datetime.now(timezone.utc)
+    runs: dict[str, list[tuple[str, Any]]] = defaultdict(list)
+    schedules: dict[str, tuple[Any, Any]] = {}
+    for row in sources:
+        dataset = str(row["dataset_id"])
+        runs[dataset].append((str(row["run_status"]), row["started_at"]))
+        if str(row.get("sync_dataset_id") or "") == dataset:
+            schedules[dataset] = (row.get("sync_schedule"), row.get("sync_next_run_at"))
+    out: dict[str, str] = {}
+    for dataset, held in runs.items():
+        schedule, next_run_at = schedules.get(dataset, (None, None))
+        reason = source_behind(held, schedule=schedule, next_run_at=next_run_at, now=now)
+        if reason:
+            out[f"dataset:{dataset}"] = reason
+    return out
 
 
 def _mark_out_of_date(
-    nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
+    nodes: list[dict[str, Any]], edges: list[dict[str, Any]],
+    behind: dict[str, str] | None = None,
 ) -> None:
     """Which datasets are out of date, and which of p.51's reasons it is.
 
@@ -576,12 +634,13 @@ def _mark_out_of_date(
     >  built and isn't up to date**? Have we received up-to-date data from the
     >  source?" (`data-lineage` p.51)
 
-    **Two of those three, and the third is named rather than guessed at.** The
-    first is already on the graph — a model's `last_run_status` is red when its
-    build failed. The second is this function. The third asks whether the
-    *source* is current, which needs an expectation about how often data
-    arrives that this platform has nowhere to record; inventing one would put a
-    number on the screen that nothing stands behind.
+    **All three, the third where something says what to expect.** The first is
+    already on the graph — a model's `last_run_status` is red when its build
+    failed. The second is this function. The third asks whether the *source* is
+    current, and §583 answers it for a dataset a sync writes, from the sync:
+    its latest run failed, or its schedule says it should have run and it has
+    not (`behind`). A dataset nothing syncs has no expectation to fall behind,
+    and inventing one would put a number on the screen nothing stands behind.
 
     **Times are compared, not version numbers.** Two datasets' version numbers
     are independent counters, so "input is at v7 and output at v3" says nothing
@@ -622,6 +681,20 @@ def _mark_out_of_date(
                     into[output].append(source)
 
     stale: set[str] = set()
+    # p.51's third question first (§583): a dataset whose source is behind is
+    # out of date for a reason no rebuild fixes, and saying "rebuild it" of a
+    # dataset nothing builds would be advice with nothing to act on.
+    for node_id, how in (behind or {}).items():
+        node = by_id.get(node_id)
+        if node is None:
+            continue
+        node["out_of_date"] = True
+        node["out_of_date_reason"] = SOURCE_IS_BEHIND
+        node["source_behind"] = how
+        stale.add(node_id)
+    # No need to skip an output already marked: a dataset a sync writes has no
+    # producing model, so it is never in `into` (a sweep found the skip
+    # unreachable, §583).
     for output, sources in into.items():
         built = by_id.get(output, {}).get("built_at")
         if built is None:

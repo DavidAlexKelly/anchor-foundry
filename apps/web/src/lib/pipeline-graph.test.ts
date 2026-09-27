@@ -55,6 +55,16 @@ describe("what an out-of-date node says (p.51, §352)", () => {
       .toBe("an upstream is out of date");
   });
 
+  it("says how the source is behind, p.51's third question (§583)", () => {
+    expect(outOfDateNote(node({ out_of_date_reason: "source_is_behind", source_behind: "failed" })))
+      .toBe("its latest sync from its source failed");
+    expect(outOfDateNote(node({ out_of_date_reason: "source_is_behind", source_behind: "overdue" })))
+      .toBe("a scheduled sync from its source has not run");
+    // Only "overdue" is the schedule's wording; anything else is the failure.
+    expect(outOfDateNote(node({ out_of_date_reason: "source_is_behind", source_behind: null })))
+      .toBe("its latest sync from its source failed");
+  });
+
   it("says nothing at all about a current node", () => {
     // The negative control: a note that fired on everything would satisfy
     // both assertions above.
