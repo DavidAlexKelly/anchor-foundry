@@ -2249,7 +2249,7 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 /* p.330's Interactive metric (§527): a card something is wired to. */
 .metric-card--interactive { cursor: pointer; border-radius: 6px; }
 .metric-card--interactive:hover, .metric-card--interactive:focus-visible {
-  background: var(--hover, rgba(0, 0, 0, 0.04)); outline: none;
+  background: var(--accent-wash); outline: none;
 }
 /* p.328's "i tooltip": the description on hover, and to a screen reader as
    the marker's label. */
