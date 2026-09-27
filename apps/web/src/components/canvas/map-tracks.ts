@@ -106,6 +106,18 @@ export function timelineSpan(
 
 /** Playback crosses a span in this many steps: about twenty seconds at one a
  * tenth of a second, whatever the span. */
+/** p.303's two user controls on the timeline (§576): "Allow user to change
+ * selected time: Enable user control of the selected time cursor … Enable
+ * user facing live mode toggle: Enable the View latest option". The second
+ * sits under the first on p.303, so without the cursor there is no View
+ * latest either. Both are on unless turned off. */
+export function timelineControls(allowChange: unknown, liveToggle: unknown): {
+  cursor: boolean; latest: boolean;
+} {
+  const cursor = allowChange !== false;
+  return { cursor, latest: cursor && liveToggle !== false };
+}
+
 export const PLAYBACK_STEPS = 200;
 
 /** The next playback time, and whether it has reached the end. From no time

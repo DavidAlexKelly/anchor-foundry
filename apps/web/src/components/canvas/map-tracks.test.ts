@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   extentOf, instantOf, nextPlayback, pauseCrossed, pausesOf, positionAt, selectedTimeOf,
-  selectedTimeText, timeLabel, timelineSpan, trackShape, windowOf, withinWindow,
+  selectedTimeText, timeLabel, timelineControls, timelineSpan, trackShape, windowOf, withinWindow,
 } from "./map-tracks";
 
 const track = [
@@ -95,5 +95,18 @@ describe("the rest of p.303's time configuration (§558)", () => {
     expect(timeLabel(hour(1), "local", "24")).not.toMatch(/AM|PM/);
     expect(timeLabel(hour(1) + 12 * 3_600_000, "local", "12")).toMatch(/AM|PM/);
     expect(timeLabel(hour(1), "local", "local")).not.toBe("2026-01-01T01:00:00Z");
+  });
+});
+
+describe("p.303's user controls on the timeline (§576)", () => {
+  it("offers the cursor and View latest unless turned off", () => {
+    expect(timelineControls(undefined, undefined)).toEqual({ cursor: true, latest: true });
+    expect(timelineControls(true, true)).toEqual({ cursor: true, latest: true });
+    expect(timelineControls(true, false)).toEqual({ cursor: true, latest: false });
+  });
+
+  it("offers no View latest without the cursor, which p.303 nests it under", () => {
+    expect(timelineControls(false, true)).toEqual({ cursor: false, latest: false });
+    expect(timelineControls(false, undefined)).toEqual({ cursor: false, latest: false });
   });
 });

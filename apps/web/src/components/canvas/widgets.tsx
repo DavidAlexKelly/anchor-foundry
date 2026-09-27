@@ -346,11 +346,11 @@ import {
 import { MapCanvas, toLatLon, type MapPoint, type MapShape } from "./map";
 import {
   extentOf, nextPlayback, pauseCrossed, pausesOf, positionAt, selectedTimeOf, selectedTimeText,
-  timeLabel, timelineSpan, trackShape, windowOf, withinWindow, type TimeFormat,
+  timeLabel, timelineControls, timelineSpan, trackShape, windowOf, withinWindow, type TimeFormat,
 } from "./map-tracks";
-// Aliased on §211's rule: `areaOf` is also §537's chart area option.
 import { shapeOutputOf, shapesText, syncShapes } from "./map-drawn";
 import { perimeterModeOf } from "./map-measure";
+// Aliased on §211's rule: `areaOf` is also §537's chart area option.
 import {
   DRAWN_OPACITY, DRAW_TOOLS, DRAW_TOOL_LABELS, areaOf as mapAreaOf, drawToolsOf, drawnOpacityOf,
   withArea as withMapArea, withDrawTool,
@@ -12081,6 +12081,9 @@ export function CanvasMap({
   windowEndVariable = null,
   timeZone = "utc",
   timeFormat = "local",
+  allowTimeChange = true,
+  liveModeToggle = true,
+  openTimelineByDefault = true,
   playingVariable = null,
   playbackPositionVariable = null,
   autoPauseVariable = null,
@@ -12166,6 +12169,11 @@ export function CanvasMap({
   /** p.303's Time zone, and for Local its Time format. */
   timeZone?: string;
   timeFormat?: string;
+  /** p.303's Allow user to change selected time, Enable user facing live
+   * mode toggle and Open timeline by default (§576). */
+  allowTimeChange?: boolean;
+  liveModeToggle?: boolean;
+  openTimelineByDefault?: boolean;
   /** p.303's Playback state (a boolean variable), Playback position (a
    * number variable written with the time in milliseconds) and Auto pause at
    * (a timestamp array variable). */
@@ -12285,6 +12293,8 @@ export function CanvasMap({
   const playingWritten = useCanvasParameter(playingVariable);
   const playingResolved = useCanvasVariable(playingVariable);
   const [ownPlaying, setOwnPlaying] = useState(false);
+  // p.303's timeline open button (§576): open to start unless the map says.
+  const [timelineOpen, setTimelineOpen] = useState(openTimelineByDefault !== false);
   const playing = playingVariable
     ? (playingWritten !== undefined ? playingWritten : playingResolved) === true
     : ownPlaying;
@@ -12625,7 +12635,20 @@ export function CanvasMap({
         );
       })()}
       {!needs && query.data && tracking && enableTimeline && timeSpan && (
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="map-timeline-toggle"
+          aria-expanded={timelineOpen}
+          onClick={() => setTimelineOpen(!timelineOpen)}
+          style={{ marginTop: 6 }}
+        >
+          {timelineOpen ? "Hide timeline" : "Timeline"}
+        </button>
+      )}
+      {!needs && query.data && tracking && enableTimeline && timeSpan && timelineOpen && (
         <MapTimeline
+          controls={timelineControls(allowTimeChange, liveModeToggle)}
           start={timeSpan.start}
           end={timeSpan.end}
           selected={selectedTime}
@@ -12642,7 +12665,8 @@ export function CanvasMap({
 
 /** p.303's timeline panel under the map (§557): a cursor over the tracks'
  * span, and p.303's "View latest" to let it go. */
-function MapTimeline({ start, end, selected, onSelect, playing, onPlaying, label }: {
+function MapTimeline({ controls, start, end, selected, onSelect, playing, onPlaying, label }: {
+  controls: { cursor: boolean; latest: boolean };
   start: number; end: number; selected: number | null; onSelect: (ms: number | null) => void;
   playing: boolean; onPlaying: (next: boolean) => void; label: (ms: number) => string;
 }) {
@@ -12665,21 +12689,24 @@ function MapTimeline({ start, end, selected, onSelect, playing, onPlaying, label
         max={end}
         step={1000}
         value={selected ?? end}
+        disabled={!controls.cursor}
         onChange={(e) => onSelect(Number(e.target.value))}
         style={{ flex: 1 }}
       />
       <span className="slug" data-testid="map-timeline-time">
         {selected === null ? "Latest" : label(selected)}
       </span>
-      <button
-        type="button"
-        className="btn quiet"
-        data-testid="map-timeline-latest"
-        disabled={selected === null}
-        onClick={() => onSelect(null)}
-      >
-        View latest
-      </button>
+      {controls.latest && (
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="map-timeline-latest"
+          disabled={selected === null}
+          onClick={() => onSelect(null)}
+        >
+          View latest
+        </button>
+      )}
     </div>
   );
 }
@@ -12692,6 +12719,7 @@ function MapSettings() {
     filterProperty, filterColumn, filterOperator, filterParameter, searchParameter,
     objectSetVariable, areaVariable, trackProperty, enableTimeline, selectedTimeVariable,
     windowStartVariable, windowEndVariable, timeZone, timeFormat, playingVariable,
+    allowTimeChange, liveModeToggle, openTimelineByDefault,
     playbackPositionVariable, autoPauseVariable, layerLabel, selectedVariable, layerVisible,
     layerVisibleVariable, lockLayer, layerColor, layerOpacity,
     drawOptions, drawnShapeColor, drawnShapeOpacity, drawnShapesVariable, shapeOutputType,
@@ -12729,6 +12757,9 @@ function MapSettings() {
     windowEndVariable: node.data.props.windowEndVariable,
     timeZone: node.data.props.timeZone,
     timeFormat: node.data.props.timeFormat,
+    allowTimeChange: node.data.props.allowTimeChange,
+    liveModeToggle: node.data.props.liveModeToggle,
+    openTimelineByDefault: node.data.props.openTimelineByDefault,
     playingVariable: node.data.props.playingVariable,
     playbackPositionVariable: node.data.props.playbackPositionVariable,
     autoPauseVariable: node.data.props.autoPauseVariable,
@@ -13262,6 +13293,24 @@ function MapSettings() {
                         .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
                     </select>
                   </label>
+                  {/* p.303's user controls and the open button (§576). */}
+                  {([
+                    ["allowTimeChange", "Allow user to change selected time", allowTimeChange],
+                    ["liveModeToggle", "View latest option", liveModeToggle],
+                    ["openTimelineByDefault", "Open timeline by default", openTimelineByDefault],
+                  ] as const).map(([key, label, value]) => (
+                    <label key={key} className="field canvas-toggle">
+                      <input
+                        type="checkbox"
+                        data-testid={`map-${key}`}
+                        checked={value !== false}
+                        disabled={key === "liveModeToggle" && allowTimeChange === false}
+                        onChange={(e) => setProp((p: Record<string, boolean>) =>
+                          (p[key] = e.target.checked))}
+                      />
+                      <span className="field-label">{label}</span>
+                    </label>
+                  ))}
                   {/* The rest of p.303's time configuration (§558). */}
                   {([
                     ["windowStartVariable", "Time window from", windowStartVariable, ["timestamp", "date"]],
@@ -13437,6 +13486,7 @@ CanvasMap.craft = {
     filterParameter: null, searchParameter: null, limit: 500, areaVariable: null,
     trackProperty: null, enableTimeline: false, selectedTimeVariable: null,
     windowStartVariable: null, windowEndVariable: null, timeZone: "utc", timeFormat: "local",
+    allowTimeChange: true, liveModeToggle: true, openTimelineByDefault: true,
     playingVariable: null, playbackPositionVariable: null, autoPauseVariable: null,
     layerLabel: "", selectedVariable: null, layerVisible: true, layerVisibleVariable: null,
     lockLayer: false, layerColor: null, layerOpacity: 1,
