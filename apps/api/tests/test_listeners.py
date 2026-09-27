@@ -471,6 +471,9 @@ def test_a_slack_listener_checks_the_signed_timestamp(client, fx) -> None:
                     signed_slack("slack-secret", body, now - 301), signed_slack("slack-secret", body, now + 301),
                     {**signed_slack("slack-secret", body, now), "X-Slack-Request-Timestamp": "soon"}, {}):
         assert client.post(path_of(listener), content=body, headers=headers).status_code == 401, headers
+    # The clock read again: the six refusals above can take a second, and a
+    # stamp 299 seconds before a `now` taken before them is then 300 old.
+    now = int(time.time())
     assert client.post(path_of(listener), content=body,
                        headers=signed_slack("slack-secret", body, now - 299)).status_code == 200
     [first, *_] = events(client, fx, listener)
