@@ -402,7 +402,9 @@ def points_for_many_sql(
 #: series data to yield a new output time series. These input time series can
 #: be time series properties or the outputs from other transforms, which allows
 #: multiple transforms to be chained together." (p.583)
-TRANSFORM_KINDS = ("cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range")
+TRANSFORM_KINDS = (
+    "cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula",
+)
 #: What a cumulative or rolling window aggregates with: p.586's summarizer
 #: vocabulary, as far as a window over points can use it.
 WINDOW_AGGREGATES = ("sum", "avg", "min", "max", "count", "stddev")
@@ -497,6 +499,14 @@ def parse_transforms(raw: Any) -> list[dict[str, Any]]:
             elif kind == "shift":
                 parsed = {"kind": kind, "by": _span(item.get("by"), "the shift", signed=True),
                           "unit": _unit(item.get("unit"))}
+            elif kind == "formula":
+                expression = item.get("expression")
+                if not isinstance(expression, str) or not expression.strip():
+                    raise ValueError("a formula needs an expression")
+                if len(expression) > MAX_FORMULA:
+                    raise ValueError(f"a formula is at most {MAX_FORMULA} characters")
+                formula_sql(expression)
+                parsed = {"kind": kind, "expression": expression.strip()}
             else:
                 start = _instant(item.get("start"), "start")
                 end = _instant(item.get("end"), "end")
@@ -518,6 +528,80 @@ def _epoch_seconds(instant: str) -> float:
     if moment.tzinfo is not None:
         moment = moment.astimezone(timezone.utc).replace(tzinfo=None)
     return (moment - datetime(1970, 1, 1)).total_seconds()
+
+
+#: p.586's formula: "build formulas using variable references to these
+#: inputs". One input here, the series itself, named `x`; p.586's example
+#: ("scales the input time series by a factor of two, and adds five") is
+#: `x * 2 + 5`.
+FORMULA_VARIABLE = "x"
+#: The functions a formula may call, each one argument. The ones with a
+#: domain answer outside it with a gap rather than failing the whole read.
+FORMULA_FUNCTIONS = ("abs", "sqrt", "ln", "log10", "exp", "floor", "ceil", "round")
+MAX_FORMULA = 200
+
+
+def formula_sql(expression: str) -> str:
+    """A formula over `x` as SQL over `value`, or a ValueError saying what in
+    it is not arithmetic. Parsed, never interpolated: only numbers, `x`, the
+    four operations, powers, brackets and FORMULA_FUNCTIONS get through."""
+    import ast
+
+    try:
+        tree = ast.parse(expression.strip(), mode="eval")
+    except SyntaxError:
+        raise ValueError(f"{expression!r} is not a formula") from None
+    return _formula_node(tree.body)
+
+
+def _formula_node(node: Any) -> str:
+    import ast
+
+    if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+        number = float(node.value)
+        if number != number or number in (float("inf"), float("-inf")):
+            raise ValueError(f"{node.value!r} is too large a number for a formula")
+        return repr(number)
+    if isinstance(node, ast.Name) and node.id == FORMULA_VARIABLE:
+        return "CAST(value AS DOUBLE)"
+    if isinstance(node, ast.Name):
+        raise ValueError(f"a formula knows only {FORMULA_VARIABLE}, not {node.id!r}")
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        sign = "-" if isinstance(node.op, ast.USub) else "+"
+        return f"({sign}{_formula_node(node.operand)})"
+    if isinstance(node, ast.BinOp):
+        left, right = _formula_node(node.left), _formula_node(node.right)
+        if isinstance(node.op, ast.Add):
+            return f"({left} + {right})"
+        if isinstance(node.op, ast.Sub):
+            return f"({left} - {right})"
+        if isinstance(node.op, ast.Mult):
+            return f"({left} * {right})"
+        # A division by zero and a fractional power of a negative are left to
+        # DuckDB, which answers infinity or NaN rather than failing; the
+        # transform's `isfinite` turns either into a gap. A guard here would
+        # be a second copy of that rule.
+        if isinstance(node.op, ast.Div):
+            return f"({left} / {right})"
+        if isinstance(node.op, ast.Pow):
+            return f"power({left}, {right})"
+        raise ValueError("a formula uses only + - * / and **")
+    if isinstance(node, ast.Call):
+        name = node.func.id if isinstance(node.func, ast.Name) else None
+        if name not in FORMULA_FUNCTIONS:
+            raise ValueError(f"a formula may call only {', '.join(FORMULA_FUNCTIONS)}")
+        if len(node.args) != 1 or node.keywords:
+            raise ValueError(f"{name} takes one argument")
+        arg = _formula_node(node.args[0])
+        # sqrt and the logarithms are guarded because DuckDB *raises* outside
+        # their domain, which would fail the whole series for one point.
+        if name == "sqrt":
+            return f"(CASE WHEN {arg} < 0 THEN NULL ELSE sqrt({arg}) END)"
+        if name in ("ln", "log10"):
+            return f"(CASE WHEN {arg} <= 0 THEN NULL ELSE {name}({arg}) END)"
+        return f"{name}({arg})"
+    raise ValueError("a formula is numbers, x, + - * / **, brackets and "
+                     f"{', '.join(FORMULA_FUNCTIONS)}")
 
 
 def _window_call(aggregate: str) -> str:
@@ -583,6 +667,14 @@ def _transform_sql(transform: dict[str, Any], source: str) -> str:
         # p.586: "identical to the input time series, but temporally shifted".
         return (f"SELECT CAST(at AS TIMESTAMP) + INTERVAL ({transform['by']}) "
                 f"{transform['unit'].upper()} AS at, value FROM {source}")
+    if kind == "formula":
+        # p.586's formula, over this series as `x`. A point whose formula has
+        # no answer (a division by zero, a square root of a negative) is a
+        # gap rather than an error for the whole series, and so is one that
+        # overflows: infinity is not a reading.
+        return (f"SELECT at, CASE WHEN isfinite(v) THEN v END AS value FROM "
+                f"(SELECT at, CAST({formula_sql(transform['expression'])} AS DOUBLE) AS v "
+                f"FROM {source}) formula")
     where = []
     if transform["start"] is not None:
         where.append(f"CAST(at AS TIMESTAMP) >= TIMESTAMP {_literal(transform['start'])}")

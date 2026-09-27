@@ -218,7 +218,7 @@ def test_the_cap_comes_after_the_transforms() -> None:
     ([{"kind": "cumulative", "aggregate": "sum"}] * 11, "a series takes at most 10 transforms"),
     (["cumulative"], "transform 1: must be an object"),
     ([{"kind": "smooth"}],
-     "transform 1: the kind must be one of cumulative, periodic, rolling, derivative, integral, shift, range"),
+     "transform 1: the kind must be one of cumulative, periodic, rolling, derivative, integral, shift, range, formula"),
     ([{"kind": "cumulative", "aggregate": "median"}],
      "transform 1: the aggregate must be one of sum, avg, min, max, count, stddev"),
     ([{"kind": "rolling", "aggregate": "sum", "window": 0, "unit": "day"}],
@@ -306,7 +306,7 @@ def test_a_series_variable_refuses_a_transform_that_could_not_run() -> None:
                                                    "transforms": [{"kind": "smooth"}]}}},
         })
     assert str(caught.value) == ("variable 'v_series': transform 1: the kind must be one of "
-                                 "cumulative, periodic, rolling, derivative, integral, shift, range")
+                                 "cumulative, periodic, rolling, derivative, integral, shift, range, formula")
 
 
 def test_the_points_endpoints_apply_transforms(client, fx, ontology, instance) -> None:
@@ -351,4 +351,84 @@ def test_the_browser_offers_what_the_server_takes() -> None:
     assert f"export const MAX_TRANSFORMS = {ts.MAX_TRANSFORMS};" in source
     assert f"export const WINDOW_TYPES = [{listed(ts.WINDOW_TYPES)}] as const;" in source
     assert f"export const INTEGRATION_METHODS = [{listed(ts.INTEGRATION_METHODS)}] as const;" in source
+    assert f"export const FORMULA_FUNCTIONS = [{listed(ts.FORMULA_FUNCTIONS)}] as const;" in source
+    assert f"export const MAX_FORMULA = {ts.MAX_FORMULA};" in source
     assert f"export const MAX_SPAN = {ts.MAX_SPAN:_};" in source
+
+
+# ---- §532: p.586's formula ---------------------------------------------------------
+def formula(expression: str) -> dict:
+    return {"kind": "formula", "expression": expression}
+
+
+def test_a_formula_is_p586s_arithmetic_on_the_series() -> None:
+    """p.586: "The example below scales the input time series by a factor of
+    two, and adds five to the result." S1 reads 1, 3, 6, 10."""
+    assert values([formula("x * 2 + 5")]) == [7, 11, 17, 25]
+    assert values([formula("(x + 1) / 2")]) == [1, 2, 3.5, 5.5]
+    assert values([formula("-x ** 2")]) == [-1, -9, -36, -100]
+    assert values([formula("x - 3")]) == [-2, 0, 3, 7]
+    assert values([formula("+x")]) == [1, 3, 6, 10]
+
+
+def test_a_formula_calls_its_functions() -> None:
+    assert values([formula("sqrt(x)")]) == pytest.approx([1, math.sqrt(3), math.sqrt(6), math.sqrt(10)])
+    assert values([formula("round(ln(x) * 100)")]) == [0, 110, 179, 230]
+    assert values([formula("log10(x * 10)")]) == pytest.approx([1, math.log10(30), math.log10(60), 2])
+    assert values([formula("abs(x - 5)")]) == [4, 2, 1, 5]
+    assert values([formula("floor(x / 4)")]) == [0, 0, 1, 2]
+    assert values([formula("ceil(x / 4)")]) == [1, 1, 2, 3]
+    assert values([formula("exp(x - x)")]) == [1, 1, 1, 1]
+
+
+def test_where_a_formula_has_no_answer_is_a_gap() -> None:
+    """A division by zero, a square root of a negative, a logarithm of
+    nothing and a fractional power of a negative are gaps, not a failed read;
+    and so is an overflow, since infinity is not a reading."""
+    assert values([formula("1 / (x - 3)")]) == [-0.5, None, pytest.approx(1 / 3), pytest.approx(1 / 7)]
+    assert values([formula("sqrt(x - 3)")]) == [None, 0, pytest.approx(math.sqrt(3)), pytest.approx(math.sqrt(7))]
+    assert values([formula("ln(x - 3)")]) == [None, None, pytest.approx(math.log(3)), pytest.approx(math.log(7))]
+    assert values([formula("log10(x - 3)")])[:2] == [None, None]
+    assert values([formula("(x - 3) ** 0.5")]) == [None, 0, pytest.approx(math.sqrt(3)), pytest.approx(math.sqrt(7))]
+    assert values([formula("(x - 3) ** 2")]) == [4, 0, 9, 49]
+    assert values([formula("exp(x * 1000)")]) == [None, None, None, None]
+
+
+def test_an_undefined_point_does_not_poison_the_rest_of_the_formula() -> None:
+    """Infinity and NaN pass through a later function without failing it,
+    and the point is a gap at the end."""
+    assert values([formula("sqrt(1 / (x - 3)) + ln(0 - 1 / (x - 3))")])[1] is None
+    assert values([formula("floor(1 / (x - 3))")]) == [-1, None, 0, 0]
+
+
+def test_a_formula_chains_like_any_transform() -> None:
+    assert values([{"kind": "cumulative", "aggregate": "sum"}, formula("x / 10")]) == [0.1, 0.4, 1, 2]
+
+
+@pytest.mark.parametrize("expression, said", [
+    ("y + 1", "transform 1: a formula knows only x, not 'y'"),
+    ("__import__('os')", "transform 1: a formula may call only abs, sqrt, ln, log10, exp, floor, ceil, round"),
+    ("x.real", "transform 1: a formula is numbers, x, + - * / **, brackets and abs, sqrt, ln, log10, exp, floor, ceil, round"),
+    ("'text'", "transform 1: a formula is numbers, x, + - * / **, brackets and abs, sqrt, ln, log10, exp, floor, ceil, round"),
+    ("x < 2", "transform 1: a formula is numbers, x, + - * / **, brackets and abs, sqrt, ln, log10, exp, floor, ceil, round"),
+    ("True + x", "transform 1: a formula is numbers, x, + - * / **, brackets and abs, sqrt, ln, log10, exp, floor, ceil, round"),
+    ("x % 2", "transform 1: a formula uses only + - * / and **"),
+    ("abs(x, 2)", "transform 1: abs takes one argument"),
+    ("abs(x=1)", "transform 1: abs takes one argument"),
+    ("abs(x, key=1)", "transform 1: abs takes one argument"),
+    ("x.__class__(1)", "transform 1: a formula may call only abs, sqrt, ln, log10, exp, floor, ceil, round"),
+    ("1e400 * x", "transform 1: inf is too large a number for a formula"),
+    ("x +", "transform 1: 'x +' is not a formula"),
+    ("   ", "transform 1: a formula needs an expression"),
+    ("x" + " + x" * 60, "transform 1: a formula is at most 200 characters"),
+])
+def test_a_formula_that_is_not_arithmetic_is_refused(expression, said) -> None:
+    with pytest.raises(ValueError) as caught:
+        ts.parse_transforms([formula(expression)])
+    assert str(caught.value) == said
+
+
+def test_a_formula_without_an_expression_is_refused() -> None:
+    with pytest.raises(ValueError, match="transform 1: a formula needs an expression"):
+        ts.parse_transforms([{"kind": "formula"}])
+    assert ts.parse_transforms([formula("  x * 2  ")]) == [formula("x * 2")]

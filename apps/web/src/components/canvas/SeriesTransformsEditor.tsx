@@ -7,7 +7,7 @@
  * it produced. The words and the checks are `series-transforms.ts`'s. */
 
 import {
-  INTEGRATION_METHODS, KIND_LABELS, MAX_TRANSFORMS, TIME_UNITS, TRANSFORM_KINDS, WINDOW_AGGREGATES,
+  FORMULA_FUNCTIONS, INTEGRATION_METHODS, KIND_LABELS, MAX_FORMULA, MAX_TRANSFORMS, TIME_UNITS, TRANSFORM_KINDS, WINDOW_AGGREGATES,
   WINDOW_TYPES, blankTransform, transformsProblem, withKind,
   type IntegrationMethod, type SeriesTransform, type TimeUnit, type TransformKind,
   type WindowAggregate, type WindowType,
@@ -66,7 +66,7 @@ export function SeriesTransformsEditor({
               onChange={(e) => set(index, { ...t, by: Number(e.target.value) })}
             />
           )}
-          {t.kind !== "cumulative" && t.kind !== "range" && (
+          {t.kind !== "cumulative" && t.kind !== "range" && t.kind !== "formula" && (
             <select
               aria-label={`Transform ${index + 1} unit`}
               value={t.unit}
@@ -111,6 +111,16 @@ export function SeriesTransformsEditor({
                 <option key={m} value={m}>{m === "linear" ? "linear" : `${m}-hand sum`}</option>
               ))}
             </select>
+          )}
+          {t.kind === "formula" && (
+            <input
+              aria-label={`Transform ${index + 1} formula`}
+              title={`x is the series; + - * / ** and ${FORMULA_FUNCTIONS.join(", ")}`}
+              value={t.expression}
+              readOnly={readOnly}
+              maxLength={MAX_FORMULA}
+              onChange={(e) => set(index, { ...t, expression: e.target.value })}
+            />
           )}
           {t.kind === "range" && (
             <>
