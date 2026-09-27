@@ -347,3 +347,10 @@ export function hasValue(value: unknown): boolean {
   if (typeof value === "string") return value.trim() !== "";
   return true;
 }
+
+/** Whether a variable can hold filter clauses (§590): p.75's object set
+ * filter, or an array, which is how filter state travelled before the kind
+ * existed. The server's `CLAUSE_KINDS`. */
+export function holdsClauses(variable: { kind: string }): boolean {
+  return variable.kind === "object_set_filter" || variable.kind === "array";
+}

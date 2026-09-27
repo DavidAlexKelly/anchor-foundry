@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { MIN_SHARE, formatWeights, hasValue, inputTypeFor, parseWeights, pivotClauses, resizeWeights, roundWeight, seedActionForm, seedFromQuery, seriesLabel, seriesPointLabel } from "./pure";
+import { MIN_SHARE, formatWeights, hasValue, holdsClauses, inputTypeFor, parseWeights, pivotClauses, resizeWeights, roundWeight, seedActionForm, seedFromQuery, seriesLabel, seriesPointLabel } from "./pure";
 
 describe("pivotClauses", () => {
   it("writes one clause per axis that is picked", () => {
@@ -520,5 +520,14 @@ describe("inputTypeFor", () => {
     expect(inputTypeFor("json")).toBe("text");
     expect(inputTypeFor("attachment")).toBe("text");
     expect(inputTypeFor("")).toBe("text");
+  });
+});
+
+describe("which variables hold filter clauses (§590)", () => {
+  it("is p.75's object set filter, or an array as before", () => {
+    expect(holdsClauses({ kind: "object_set_filter" })).toBe(true);
+    expect(holdsClauses({ kind: "array" })).toBe(true);
+    expect(holdsClauses({ kind: "object_set" })).toBe(false);
+    expect(holdsClauses({ kind: "string" })).toBe(false);
   });
 });
