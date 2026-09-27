@@ -39,6 +39,8 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
+from . import variable_math
+
 KINDS = (
     "string",
     "number",
@@ -97,6 +99,9 @@ TRANSFORMS = (
     # use". So this transform is not a convenience on top of the kind - it is
     # what makes the kind usable at all, and the two are one unit.
     "extract_struct_field",
+    # p.140-141's math operations and numeric comparisons (§564), each its
+    # own transform, as p.140 lists them: `variable_math.py`.
+    *variable_math.TRANSFORMS,
 )
 
 # Still declared and deliberately not evaluated here: an aggregate over a set
@@ -1238,7 +1243,11 @@ def _check_arity(vid: str, d: Derivation) -> None:
     """Refuse a derivation that cannot produce a value, at save rather than at
     view: an app that renders a blank card because a transform was configured
     with one input instead of three is a bug nobody can see the cause of."""
-    if d.transform == "concat":
+    if d.transform in variable_math.ARITY:
+        problem = variable_math.check(d.transform, len(d.inputs), d.config)
+        if problem:
+            raise VariableError(f"variable {vid!r}: {problem}")
+    elif d.transform == "concat":
         if not d.inputs:
             raise VariableError(f"variable {vid!r}: concat needs at least one input")
         if len(d.inputs) > MAX_CONCAT_PARTS:
@@ -1598,9 +1607,13 @@ def evaluate(
             if timings is not None:
                 timings[vid] = (perf_counter() - started) * 1000
             continue
-        resolved[vid] = _apply(
-            variable, [resolved[i] for i in variable.derivation.inputs], property_types
-        )
+        inputs = [resolved[i] for i in variable.derivation.inputs]
+        if variable.derivation.transform in variable_math.ARITY:
+            inputs = [
+                variable_math.of_number_variable(value) if variables[i].kind == "number" else value
+                for i, value in zip(variable.derivation.inputs, inputs)
+            ]
+        resolved[vid] = _apply(variable, inputs, property_types)
         if timings is not None:
             timings[vid] = (perf_counter() - started) * 1000
     return resolved
@@ -1618,6 +1631,11 @@ def _apply(
         # string, so a half-filled concat reads as a partial label rather than
         # as debris.
         return separator.join("" if v is None else _text(v) for v in inputs)
+    if d.transform in variable_math.ARITY:
+        try:
+            return variable_math.apply(d.transform, list(inputs), d.config, variable.label)
+        except variable_math.MathError as exc:
+            raise VariableError(str(exc)) from None
     if d.transform == "if_else":
         condition, then, otherwise = inputs
         return then if _truthy(condition) else otherwise
