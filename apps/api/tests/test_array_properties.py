@@ -526,12 +526,13 @@ def test_a_sync_reads_an_array_column_against_its_element_type(
     assert held["counts"] == [1, 2]
 
 
-def test_an_action_cannot_declare_an_array_parameter(
+def test_an_action_cannot_declare_an_array_parameter_of_nothing(
     client: TestClient, fx: Fixture
 ) -> None:
-    """Storable so the schema and the editor agree, refused at save time where
-    the person who typed it is still looking (§245's shape exactly). p.36's
-    ObjectReference-list parameter is the ○ that will lift this."""
+    """Refused at save time where the person who typed it is still looking
+    (§245's shape). Until §580 every array parameter was refused here; now one
+    that says what it holds is kept (`test_action_array_parameters.py`), and
+    this is the one that does not."""
     tag = uuid.uuid4().hex[:6]
     made = client.post(
         f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
@@ -556,14 +557,12 @@ def test_an_action_cannot_declare_an_array_parameter(
     assert "array parameter" in refused.text
 
 
-def test_an_action_cannot_make_an_array_property_editable(
+def test_an_action_can_make_an_array_property_editable(
     client: TestClient, fx: Fixture
 ) -> None:
-    """The other path into the same refusal (§245): p.30's create screen writes
-    one parameter per editable property, so an array property chosen there
-    would insert a parameter the definition PUT refuses a moment later — two
-    answers to one question, and the one a person meets first would be
-    silence."""
+    """p.30's create screen writes one parameter per editable property, and
+    since §580 an array property's is an array parameter of what the property
+    holds. This refused until then, and said so here."""
     tag = uuid.uuid4().hex[:6]
     made = client.post(
         f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
@@ -572,10 +571,11 @@ def test_an_action_cannot_make_an_array_property_editable(
                               "array_of": "string"}]},
     )
     assert made.status_code == 201, made.text
-    refused = client.post(
+    action = client.post(
         f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
         json={"object_type_id": made.json()["id"], "api_name": f"act_{tag}",
               "display_name": "Act", "editable_properties": ["tags"]},
     )
-    assert refused.status_code == 422, refused.text
-    assert "array parameter" in refused.text
+    assert action.status_code == 201, action.text
+    [parameter] = action.json()["parameters"]
+    assert (parameter["data_type"], parameter["array_of"]) == ("array", "string")

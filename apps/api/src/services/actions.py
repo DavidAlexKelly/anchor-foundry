@@ -99,6 +99,15 @@ def bind_parameters(
         bound[name] = value
     for name, parameter in declared.items():
         if name in bound:
+            # p.116's rule for an array property, said of the parameter: "Setting
+            # an array property to required ensures the presence of at least
+            # one item", so an empty list does not answer a required array.
+            if (parameter.get("required") and parameter.get("data_type") == "array"
+                    and bound[name] == []):
+                raise ValueError(
+                    f"{name!r} is required by this action, and an empty list is "
+                    "not an answer (object-link-types p.116)"
+                )
             continue
         default = parameter.get("default_value")
         if default is not None:
@@ -120,6 +129,7 @@ def _write_value(
     struct_fields: dict[str, Any] | None,
     prop: str,
     value: Any,
+    array_of: dict[str, str] | None = None,
 ) -> Any:
     """One value, coerced against what its property declares (§450).
 
@@ -134,6 +144,10 @@ def _write_value(
         property_types.get(prop, "string"),
         value,
         struct_fields=(struct_fields or {}).get(prop),
+        # The array's element type (db 0087), without which an array property
+        # could not be written by an action at all: coercion refuses an array
+        # it cannot read (§580 found every such write refused).
+        array_of=(array_of or {}).get(prop),
     )
 
 
@@ -156,6 +170,9 @@ def apply_rules(
     #: a different question. Two write paths with one shape beats two write
     #: paths with two.
     struct_fields: dict[str, Any] | None = None,
+    #: `{property: element type}` for the array properties (db 0087), beside
+    #: `struct_fields` for its reason (§580).
+    array_of: dict[str, str] | None = None,
     mapped_properties: set[str],
     edit_only: set[str] = frozenset(),
     link_types: dict[str, dict[str, Any]] | None = None,
@@ -252,7 +269,7 @@ def apply_rules(
             if parameter not in bound:
                 continue  # nothing supplied, so nothing to link to
             writes[prop] = _write_value(
-                property_types, struct_fields, prop, bound[parameter]
+                property_types, struct_fields, prop, bound[parameter], array_of
             )
             continue
         if kind != "modify_object":
@@ -282,7 +299,7 @@ def apply_rules(
                 f"{prop!r} has no dataset column mapped on this instance's source"
             )
         writes[prop] = _write_value(
-            property_types, struct_fields, prop, bound[parameter]
+            property_types, struct_fields, prop, bound[parameter], array_of
         )
     if not writes and not writes_elsewhere and not any(
         str(r["kind"]) in ("create_object", "delete_object") for r in rules
@@ -558,7 +575,8 @@ def object_modifications(
         merged.setdefault(key, {})[prop] = (
             None if value is None
             else _write_value(
-                context["property_types"], context.get("struct_fields"), prop, value
+                context["property_types"], context.get("struct_fields"), prop, value,
+                context.get("array_of"),
             )
         )
     return [
@@ -830,6 +848,7 @@ def object_creations(
             )
         property_types = context["property_types"]
         struct_fields = context.get("struct_fields")
+        array_of = context.get("array_of")
         mapped_properties = context["mapped_properties"]
         key_parameter = str(config.get("primary_key", ""))
         key = bound.get(key_parameter)
@@ -853,8 +872,12 @@ def object_creations(
                 raise ValueError(
                     f"{prop!r} has no dataset column mapped on the source for its object type"
                 )
-            row[prop] = ontology_service.coerce_property_value(
-                property_types.get(prop, "string"), bound[parameter]
+            # Through `_write_value`, as every other write is: this called the
+            # coercion with the type alone, so a created object's struct or
+            # array property was refused for want of the declaration the
+            # context already held (§580).
+            row[prop] = _write_value(
+                property_types, struct_fields, prop, bound[parameter], array_of
             )
         creations.append(
             {"object_type_id": target, "primary_key": str(key), "properties": row}
@@ -1314,7 +1337,7 @@ def seed_from_instance(
 
 # ---- parameters and rules ----------------------------------------------------
 _PARAMETER_COLUMNS = (
-    "id, action_type_id, api_name, display_name, data_type, required, "
+    "id, action_type_id, api_name, display_name, data_type, array_of, required, "
     "default_value, hidden, sort_order, object_type_id, interface_id, "
     "dropdown_filters, dropdown_search_around, options_from"
 )
@@ -1694,6 +1717,7 @@ async def create_action_type(
     action_type_id = UUID(str(row["id"]))
     property_types = declared_types
     display_names = {p["api_name"]: p["display_name"] for p in declared}
+    element_types = {p["api_name"]: p.get("array_of") for p in declared}
     # **The same conversion migration 0044 ran**, in Python, and deliberately
     # so: one property per parameter, named after it, plus one `modify_object`
     # rule writing it back. Keeping the two in step is what makes
@@ -1706,14 +1730,20 @@ async def create_action_type(
             text(
                 """
                 INSERT INTO action_parameters
-                    (action_type_id, api_name, display_name, data_type, required, sort_order)
-                VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type), false, :ord)
+                    (action_type_id, api_name, display_name, data_type, array_of, required,
+                     sort_order)
+                VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type),
+                        CAST(:array_of AS action_parameter_type), false, :ord)
                 """
             ),
             {
                 "aid": str(action_type_id), "api": prop,
                 "name": display_names.get(prop) or prop,
-                "dtype": property_types.get(prop, "string"), "ord": order,
+                "dtype": property_types.get(prop, "string"),
+                # An array property's parameter holds what the property holds
+                # (db 0118), so the pair is an array parameter writing an array.
+                "array_of": element_types.get(prop),
+                "ord": order,
             },
         )
         await conn.execute(
@@ -2324,20 +2354,11 @@ _PARAMETER_TYPES = frozenset(_ONTOLOGY_PROPERTY_TYPES | {"object", "object_type"
 # on this side would be a second answer to one question (§292).
 #
 # What is still refused is in `_validate_definition`: p.73's limitations.
-_UNSUPPORTED_PARAMETER_TYPES = {
-    # p.36's "The starting set could also be set to an `ObjectReference` list
-    # parameter" is the first thing that will want one, and it is a named ○ on
-    # the Search Arounds row. Until then an array parameter would render as
-    # `pure.inputTypeFor`'s fallback text box — one value typed into a control
-    # that claims to hold a list — which is §214's control that cannot work.
-    # The label is storable (db 0087) so the schema and the editor agree; this
-    # is what refuses it at save time, where the person who typed it is looking.
-    "array": (
-        "an array parameter needs a control that collects several values and a "
-        "starting-set kind that reads one, neither of which this build has yet "
-        "(action-types p.36)"
-    ),
-}
+#: **Empty as of §580**, and kept as the place a refusal goes. `array` stood
+#: here until a parameter could say what it is an array of (db 0118) and the
+#: form had a control that collects several values; both exist now, and the
+#: element type is checked in `_validate_definition`.
+_UNSUPPORTED_PARAMETER_TYPES: dict[str, str] = {}
 #: p.75's five, plus p.89's side effect.
 #:
 #: **`notify` is a rule and not a resource of its own**, because p.89 puts it
@@ -2947,6 +2968,31 @@ def _check_struct_rules(
                 from_struct[f"{target}.{prop}"] = parameter
 
 
+def _check_array_of(name: str, data_type: str, array_of: Any) -> None:
+    """db 0118's pairing, in both directions (`array_properties.parse`'s rule
+    for properties, said about a parameter)."""
+    from .array_properties import INNER_TYPES
+
+    named = str(array_of or "").strip()
+    if data_type != "array":
+        if named:
+            raise ValueError(
+                f"parameter {name!r} is a {data_type}, so it cannot say what it is "
+                "an array of; only an `array` parameter has an element type"
+            )
+        return
+    if not named:
+        raise ValueError(
+            f"parameter {name!r} is an array and does not say what of; an array "
+            "parameter needs an element type"
+        )
+    if named not in INNER_TYPES:
+        raise ValueError(
+            f"parameter {name!r} cannot be an array of {named!r}; an array holds "
+            "one of " + ", ".join(sorted(INNER_TYPES))
+        )
+
+
 def _validate_definition(
     *,
     parameters: list[dict[str, Any]],
@@ -3017,6 +3063,7 @@ def _validate_definition(
                     "(action-types p.62)"
                 )
             interface_parameters.add(name)
+        _check_array_of(name, data_type, parameter.get("array_of"))
         if data_type in _UNSUPPORTED_PARAMETER_TYPES:
             raise ValueError(
                 f"parameter {name!r} cannot be a {data_type}: "
@@ -3686,11 +3733,12 @@ async def set_definition(
             text(
                 """
                 INSERT INTO action_parameters
-                    (action_type_id, api_name, display_name, data_type, required,
+                    (action_type_id, api_name, display_name, data_type, array_of, required,
                      default_value, hidden, sort_order, section_id, object_type_id,
                      interface_id,
                      dropdown_filters, dropdown_search_around, options_from)
-                VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type), :required,
+                VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type),
+                        CAST(:array_of AS action_parameter_type), :required,
                         CAST(:default AS jsonb), :hidden, :ord, :section,
                         CAST(:otype AS uuid), CAST(:iface AS uuid), CAST(:filters AS jsonb),
                         CAST(:around AS jsonb), CAST(:options AS jsonb))
@@ -3701,6 +3749,8 @@ async def set_definition(
                 "api": parameter["api_name"],
                 "name": parameter["display_name"],
                 "dtype": parameter["data_type"],
+                # db 0118: what an `array` parameter holds, NULL otherwise.
+                "array_of": parameter.get("array_of") or None,
                 "required": bool(parameter.get("required", False)),
                 "default": (
                     None if parameter.get("default_value") is None

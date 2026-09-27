@@ -110,6 +110,8 @@ class ActionParameterOut(BaseModel):
     api_name: str
     display_name: str
     data_type: str
+    #: db 0118: an `array` parameter's element type, null on every other.
+    array_of: str | None = None
     #: `action-types` p.66's struct parameter fields, **derived from the
     #: property the parameter writes** rather than stored on it (§450): p.73
     #: allows one struct parameter per struct property, so the property's
@@ -655,6 +657,9 @@ class ActionParameterIn(BaseModel):
     api_name: str = Field(min_length=1, max_length=100, pattern="^[a-z][a-z0-9_]{0,99}$")
     display_name: str = Field(min_length=1, max_length=200)
     data_type: str = Field(min_length=1, max_length=40)
+    #: db 0118: what an `array` parameter holds, one of
+    #: `array_properties.INNER_TYPES`. Refused on any other type.
+    array_of: str | None = Field(default=None, max_length=40)
     required: bool = False
     default_value: Any | None = None
     hidden: bool = False
@@ -2324,6 +2329,7 @@ async def execute_action(
             # carry (§450). Built in the same loop as the types, the way
             # `coerce_rows` builds it on the sync path.
             struct_fields = ontology_service.struct_fields_of(properties)
+            array_of = ontology_service.array_of_of(properties)
             # The subject's properties with no dataset column (p.113). Only the
             # subject's: a rule writing another object's property is checked
             # against *that* type's source, and edit-only there is not built.
@@ -2577,6 +2583,7 @@ async def execute_action(
                         p["api_name"]: p["data_type"] for p in named_declared
                     },
                     "struct_fields": ontology_service.struct_fields_of(named_declared),
+                    "array_of": ontology_service.array_of_of(named_declared),
                     "mapped_properties": set(named_mappings.values()),
                 }
                 modification_rows[key] = {
@@ -2618,6 +2625,11 @@ async def execute_action(
             contexts: dict[str, dict[str, Any]] = {
                 str(object_type_id): {
                     "property_types": property_types,
+                    # The declarations the other contexts carry, which this one
+                    # lacked: a create of the subject's own type coerced a
+                    # struct or an array with its label alone (§580).
+                    "struct_fields": struct_fields,
+                    "array_of": array_of,
                     "mapped_properties": set(column_mappings.values()),
                 }
             }
@@ -2657,6 +2669,7 @@ async def execute_action(
                         p["api_name"]: p["data_type"] for p in target_declared
                     },
                     "struct_fields": ontology_service.struct_fields_of(target_declared),
+                    "array_of": ontology_service.array_of_of(target_declared),
                     "mapped_properties": set(target_mappings.values()),
                 }
 
@@ -2706,6 +2719,7 @@ async def execute_action(
                 rules=action_type["rules"],
                 property_types=property_types,
                 struct_fields=struct_fields,
+                array_of=array_of,
                 mapped_properties=set(column_mappings.values()),
                 edit_only=edit_only,
                 link_types=link_types,
@@ -3479,6 +3493,7 @@ async def execute_batch(
         properties = await ontology_service.list_properties(conn, object_type_id)
         property_types = {p["api_name"]: p["data_type"] for p in properties}
         struct_fields = ontology_service.struct_fields_of(properties)
+        array_of = ontology_service.array_of_of(properties)
         edit_only = ontology_service.edit_only_properties(properties)
         required = ontology_service.required_properties(properties)
         constrained = ontology_service.constrained_properties(properties)
@@ -3538,6 +3553,7 @@ async def execute_batch(
                 rules=rules,
                 property_types=property_types,
                 struct_fields=struct_fields,
+                array_of=array_of,
                 mapped_properties=set(mappings.values()),
                 edit_only=edit_only,
                 link_types=link_types,

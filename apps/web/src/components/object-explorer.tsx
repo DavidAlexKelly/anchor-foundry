@@ -761,6 +761,11 @@ export function ObjectExplorer({
                                     (p) => p.api_name === parameter,
                                   )?.data_type as never
                                 }
+                                arrayOf={
+                                  editAction?.parameters?.find(
+                                    (p) => p.api_name === parameter,
+                                  )?.array_of
+                                }
                                 value={
                                   (typed !== undefined
                                     ? typed
