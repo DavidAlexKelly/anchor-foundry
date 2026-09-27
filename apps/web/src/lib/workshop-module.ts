@@ -260,6 +260,9 @@ export const REFERENCE_PROPS = [
   "outputVariable",
   // p.568's Output object set on a Section drop zone (§457).
   "dropVariable",
+  // p.444's Date Input range: the end date, written with `name` as the start
+  // (§513). A write. See the API's copy.
+  "endVariable",
   "name",
 ] as const;
 

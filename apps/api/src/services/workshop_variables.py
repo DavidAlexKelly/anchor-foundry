@@ -368,6 +368,9 @@ REFERENCE_PROPS = (
     # write, in the same currency as p.224's outputs and p.513's - a clause
     # list a `narrow_set` reads - led by `OBJECT_TYPE_CLAUSE` (§457).
     "dropVariable",
+    # p.444's Date Input range: the end date, written together with `name` as
+    # the start so the two cannot disagree (§513). A write.
+    "endVariable",
     "name",
 )
 
@@ -1996,7 +1999,7 @@ WIDGETS = frozenset({
     "CanvasTabs", "CanvasButton", "CanvasContainer", "CanvasText", "CanvasFilterList",
     "CanvasFilterPills", "CanvasUserSelect", "CanvasProminentTerms",
     "CanvasParameterControl", "CanvasNumericInput", "CanvasTextInput",
-    "CanvasStringSelector", "CanvasDateTimePicker", "CanvasMarkdown",
+    "CanvasStringSelector", "CanvasDateTimePicker", "CanvasDateInput", "CanvasMarkdown",
     "CanvasObjectSetTitle", "CanvasPropertyList", "CanvasLinksWidget",
     "CanvasObjectViewWidget", "CanvasObjectDropdown", "CanvasObjectSelector",
     "CanvasPieChart", "CanvasStepper", "CanvasTimeline", "CanvasMediaPreview",

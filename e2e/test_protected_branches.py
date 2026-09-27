@@ -140,8 +140,12 @@ def test_typing_on_a_protected_branch_is_kept_and_offered_a_branch_to_go_to(
     # A branch appeared, it holds the commit, and `main` did not move.
     eventually(lambda: branches(mod, repo), lambda b: "sandbox-1" in b,
                what="the sandbox branch to be created")
+    # The branch is made first and committed to second, so for a moment it
+    # exists at main's head - a read in that moment is not the commit
+    # missing (CI, #346).
+    eventually(lambda: head_of(mod, repo, "sandbox-1"), lambda head: head != before,
+               what="the commit to land on the sandbox branch")
     assert head_of(mod, repo, "main") == before
-    assert head_of(mod, repo, "sandbox-1") != before
 
     files = mod.api.call(
         "GET", f"{mod.base}/repositories/{repo['id']}/tree?branch=sandbox-1"

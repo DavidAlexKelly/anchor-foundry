@@ -79,6 +79,7 @@ export const CATEGORY_OF: Record<string, CategoryId> = {
   CanvasNumericInput: "filtering",
   CanvasTextInput: "filtering",
   CanvasDateTimePicker: "filtering",
+  CanvasDateInput: "filtering",
 
   CanvasObjectTable: "display",
   CanvasObjectCards: "display",

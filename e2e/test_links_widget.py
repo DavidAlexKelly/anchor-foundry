@@ -29,7 +29,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import open_builder, open_module, settled
+from conftest import eventually, open_builder, open_module, settled
 
 # Ada manages everybody and reports to nobody, so her two ends of the self-link
 # have *different counts* - 0 one way, eleven the other. A widget that drew one
@@ -144,7 +144,11 @@ def expect_labels(page, expected: list[str]) -> None:
     with the labels (§202).
     """
     expect(label_locator(page)).to_have_count(len(expected))
-    assert labels(page) == expected, labels(page)
+    # **And the reading through a wait too.** The count can be right a
+    # moment before a re-render swaps the rows, so a single read after it
+    # still caught the page between two renders, and read `[]` (CI, #346).
+    eventually(lambda: labels(page), lambda got: got == expected,
+               what=f"the link labels {expected}")
 
 
 def section(page, label: str):

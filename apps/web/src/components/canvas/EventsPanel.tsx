@@ -75,7 +75,7 @@ const TRIGGERS: {
     widgets: [
       "CanvasParameterControl", "CanvasFilterList",
       "CanvasNumericInput", "CanvasTextInput", "CanvasStringSelector",
-      "CanvasDateTimePicker",
+      "CanvasDateTimePicker", "CanvasDateInput",
     ],
   },
   {

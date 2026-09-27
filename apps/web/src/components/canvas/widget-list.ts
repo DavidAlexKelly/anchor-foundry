@@ -37,6 +37,7 @@ export const PALETTE: PaletteEntry[] = [
   { key: "CanvasTextInput", label: "Text input", hint: "A line or a paragraph the viewer types" },
   { key: "CanvasStringSelector", label: "String selector", hint: "Pick one or many from a list of strings" },
   { key: "CanvasDateTimePicker", label: "Date and time", hint: "A single date and time, in a chosen timezone" },
+  { key: "CanvasDateInput", label: "Date input", hint: "A single date, or a range from one date to another" },
   { key: "CanvasMarkdown", label: "Markdown", hint: "Formatted text, typed or read from a string variable" },
   { key: "CanvasObjectSetTitle", label: "Object set title", hint: "One object's title, or an object type and how many there are" },
   { key: "CanvasPropertyList", label: "Property list", hint: "The properties of one object, in a grid" },

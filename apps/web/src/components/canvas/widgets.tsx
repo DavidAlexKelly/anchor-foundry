@@ -46,6 +46,7 @@ import {
   PRECISIONS, TIME_FORMATS, ZONE_MODES, formatDisplay, fromLocalInput, isZone,
   toLocalInput, zoneLabel, zoneOf, type Precision,
 } from "./date-time";
+import { DATE_INPUT_MODES, orderedRange, rangeText, shownDay } from "./date-input";
 import {
   ALIGNMENTS, alignmentOf, blockAlignment, columnAlignment, parse as parseMarkdown,
   sourceOf as markdownSourceOf, textOf as markdownTextOf,
@@ -3621,6 +3622,186 @@ CanvasDateTimePicker.craft = {
     timezoneVariable: "", zoneEditable: false,
   },
   related: { settings: DateTimePickerSettings },
+};
+
+// ---- Date Input (p.444) --------------------------------------------------------
+/** p.444's Date Input: "Allow the user to enter a single data or date range."
+ *
+ * A single date writes `name`. A range writes `name` as its start and
+ * `endVariable` as its end, **both on every change**, in order (`date-input.ts`),
+ * so the pair cannot disagree the way two separate pickers could. */
+export function CanvasDateInput({
+  name = "",
+  endVariable = "",
+  label = "",
+  mode = "single",
+}: {
+  name?: string;
+  endVariable?: string;
+  label?: string;
+  mode?: string;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode: env } = useCanvasEnv();
+  const { values, set } = useCanvasParameters();
+  const { events: moduleEvents } = useCanvasVariables();
+  const range = mode === "range";
+  const start = name ? values[name] : undefined;
+  const end = endVariable ? values[endVariable] : undefined;
+
+  const changed = eventsFor(moduleEvents, nodeId, "change");
+  const overlayIds = useOverlayIds();
+  const eventContext = useEventContext(undefined, overlayIds);
+
+  function announce(value: string) {
+    if (env === "run" && changed.length > 0) {
+      runEvents(changed, { ...eventContext, payload: { value } });
+    }
+  }
+
+  function writeSingle(text: string) {
+    // A date input gives a whole day or "" for cleared; cleared is unset.
+    set(name, text || null);
+    announce(text);
+  }
+
+  function writeRange(nextStart: string, nextEnd: string) {
+    const [s, e] = orderedRange(nextStart, nextEnd);
+    set(name, s);
+    set(endVariable, e);
+    announce(`${s ?? ""}/${e ?? ""}`);
+  }
+
+  const unbound = !name || (range && !endVariable);
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {unbound ? (
+        <p className="canvas-widget-empty">
+          {range
+            ? "Date range - bind a start and an end date variable in Settings"
+            : "Date input - bind a date variable in Settings"}
+        </p>
+      ) : range ? (
+        <div className="field canvas-date-range" style={{ maxWidth: 420 }}>
+          {label && <span className="field-label">{label}</span>}
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              type="date"
+              aria-label={`${label || "Date range"} from`}
+              data-testid="date-range-start"
+              value={shownDay(start)}
+              onChange={(e) => writeRange(e.target.value, shownDay(end))}
+            />
+            <input
+              type="date"
+              aria-label={`${label || "Date range"} to`}
+              data-testid="date-range-end"
+              value={shownDay(end)}
+              onChange={(e) => writeRange(shownDay(start), e.target.value)}
+            />
+          </div>
+          {rangeText(start, end) && (
+            <span className="field-hint" data-testid="date-range-text">{rangeText(start, end)}</span>
+          )}
+        </div>
+      ) : (
+        <div className="field" style={{ maxWidth: 240 }}>
+          {label && <span className="field-label">{label}</span>}
+          <input
+            type="date"
+            aria-label={label || "Date"}
+            data-testid="date-input"
+            value={shownDay(start)}
+            onChange={(e) => writeSingle(e.target.value)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DateInputSettings() {
+  const {
+    name, endVariable, label, mode,
+    actions: { setProp },
+  } = useNode((node) => ({
+    name: node.data.props.name,
+    endVariable: node.data.props.endVariable,
+    label: node.data.props.label,
+    mode: node.data.props.mode,
+  }));
+  const { declared } = useCanvasVariables();
+  const dates = Object.values(declared).filter((v) => v.kind === "date");
+  const range = mode === "range";
+  const hint = dates.length === 0 ? "Declare a date variable in the Variables panel first" : "";
+
+  return (
+    <WidgetSetup
+      outputs={<>
+      <label className="field">
+        <span className="field-label">{range ? "Start date" : "Selected date"}</span>
+        <select
+          value={name || ""}
+          data-testid="date-input-variable"
+          onChange={(e) => setProp((p: { name: string }) => (p.name = e.target.value))}
+        >
+          <option value="">Choose…</option>
+          {dates.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        {hint && <span className="field-hint">{hint}</span>}
+      </label>
+      {range && (
+        <label className="field">
+          <span className="field-label">End date</span>
+          <select
+            value={endVariable || ""}
+            data-testid="date-input-end-variable"
+            onChange={(e) => setProp((p: { endVariable: string }) => (p.endVariable = e.target.value))}
+          >
+            <option value="">Choose…</option>
+            {dates.map((v) => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+          <span className="field-hint">Written with the start, so the end is never before it</span>
+        </label>
+      )}
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          type="text"
+          value={label || ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Selection</span>
+        <select
+          value={mode || "single"}
+          data-testid="date-input-mode"
+          onChange={(e) => setProp((p: { mode: string }) => (p.mode = e.target.value))}
+        >
+          {Object.entries(DATE_INPUT_MODES).map(([key, l]) => (
+            <option key={key} value={key}>{l}</option>
+          ))}
+        </select>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasDateInput.craft = {
+  displayName: "Date input",
+  props: { name: "", endVariable: "", label: "", mode: "single" },
+  related: { settings: DateInputSettings },
 };
 
 // ---- Markdown -------------------------------------------------------------------
@@ -16708,6 +16889,7 @@ export const CANVAS_RESOLVER = {
   CanvasTextInput,
   CanvasStringSelector,
   CanvasDateTimePicker,
+  CanvasDateInput,
   CanvasMarkdown,
   CanvasObjectSetTitle,
   CanvasPropertyList,
