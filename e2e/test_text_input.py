@@ -179,7 +179,8 @@ def test_an_unknown_format_still_renders_a_field(page, api) -> None:
     authored against a later version, or one whose Markdown format arrives
     before its editor. A field the viewer can type into is the failure worth
     having; a widget that draws nothing leaves a hole where a field was."""
-    mod = module_with(api, "Text unknown format", {"format": "markdown"})
+    # "markdown" was this test's unknown format until §582 built it.
+    mod = module_with(api, "Text unknown format", {"format": "rich"})
     open_module(page, mod)
     settled(page)
 
@@ -257,8 +258,9 @@ def test_the_height_setting_appears_only_for_a_text_area(page, api) -> None:
 
 
 def test_the_format_dropdown_offers_only_formats_that_are_built(page, api) -> None:
-    """Markdown is p.466's editor and is not built. Offering it as an option
-    that drew a plain textarea is what these catalogues exist to prevent."""
+    """p.465's three. Markdown was left out until its editor existed (§582),
+    because an option that drew a plain textarea is what these catalogues
+    exist to prevent."""
     mod = module_with(api, "Text formats")
     open_builder(page, mod)
     settled(page)
@@ -266,7 +268,7 @@ def test_the_format_dropdown_offers_only_formats_that_are_built(page, api) -> No
     page.locator(".canvas-tree-row").filter(has_text="Text input").first.click()
     options = page.get_by_test_id("text-format").locator("option")
     labels = sorted(options.nth(i).inner_text() for i in range(options.count()))
-    assert labels == ["Single line", "Text area"], labels
+    assert labels == ["Markdown", "Single line", "Text area"], labels
 
 
 def test_the_events_panel_offers_submitted_on_a_text_input(page, api) -> None:

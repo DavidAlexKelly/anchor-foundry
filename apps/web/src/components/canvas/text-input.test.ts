@@ -12,17 +12,20 @@ import {
  * test agrees with whatever the catalogue says. p.465 puts "event on enter"
  * under Single line and "initial height" under Text area, and this is the
  * second opinion that notices if either moves. */
-const EXPECTED: Record<string, { submitsOnEnter: boolean; hasHeight: boolean; multiline: boolean }> = {
-  line: { submitsOnEnter: true, hasHeight: false, multiline: false },
-  area: { submitsOnEnter: false, hasHeight: true, multiline: true },
+const EXPECTED: Record<string, {
+  submitsOnEnter: boolean; hasHeight: boolean; multiline: boolean; markdown: boolean;
+}> = {
+  line: { submitsOnEnter: true, hasHeight: false, multiline: false, markdown: false },
+  area: { submitsOnEnter: false, hasHeight: true, multiline: true, markdown: false },
+  // p.466's editor (§582): several lines, no enter-to-submit, and Auto-sizing
+  // rather than p.465's Initial height, which is Text area's alone.
+  markdown: { submitsOnEnter: false, hasHeight: false, multiline: true, markdown: true },
 };
 
 describe("TEXT_FORMATS", () => {
   it("has exactly the formats this build renders", () => {
-    // Markdown is absent on purpose (p.466 describes an editor, not a format
-    // flag). Offering it as a third option that drew a plain textarea is the
-    // thing every catalogue in this codebase exists to avoid.
-    expect(Object.keys(TEXT_FORMATS).sort()).toEqual(["area", "line"]);
+    // p.465's three. Markdown arrived with its editor (§582), not before it.
+    expect(Object.keys(TEXT_FORMATS).sort()).toEqual(["area", "line", "markdown"]);
   });
 
   it("has a hand-written expectation for every format", () => {
@@ -34,6 +37,7 @@ describe("TEXT_FORMATS", () => {
     expect(got.submitsOnEnter).toBe(want.submitsOnEnter);
     expect(got.hasHeight).toBe(want.hasHeight);
     expect(got.multiline).toBe(want.multiline);
+    expect(got.markdown).toBe(want.markdown);
   });
 
   it("gives every format a label", () => {
@@ -58,6 +62,7 @@ describe("formatOf", () => {
   it("passes a known format through", () => {
     expect(formatOf("line")).toBe("line");
     expect(formatOf("area")).toBe("area");
+    expect(formatOf("markdown")).toBe("markdown");
   });
 
   it("falls back to the single line specifically", () => {
@@ -68,7 +73,7 @@ describe("formatOf", () => {
     // narrower of the two, so a module does not silently acquire paragraph
     // fields where it had one-line ones.
     expect(DEFAULT_FORMAT).toBe("line");
-    expect(formatOf("markdown")).toBe("line");
+    expect(formatOf("rich")).toBe("line");
   });
 
   it("falls back for anything it does not know", () => {
@@ -97,7 +102,7 @@ describe("settingsOf and submitsOnEnter", () => {
   });
 
   it("answers for an unknown format the way the fallback does", () => {
-    expect(submitsOnEnter("markdown")).toBe(TEXT_FORMATS[DEFAULT_FORMAT]!.submitsOnEnter);
+    expect(submitsOnEnter("rich")).toBe(TEXT_FORMATS[DEFAULT_FORMAT]!.submitsOnEnter);
   });
 
   it("says enter submits on a single line and not in a text area", () => {
