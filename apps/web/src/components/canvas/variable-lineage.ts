@@ -73,6 +73,8 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   dropVariable: "write",
   // p.444: a Date Input range writes its end beside its start (§513).
   endVariable: "write",
+  // p.302: the Map writes the area drawn on it (§550).
+  areaVariable: "write",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",

@@ -371,6 +371,10 @@ REFERENCE_PROPS = (
     # p.444's Date Input range: the end date, written together with `name` as
     # the start so the two cannot disagree (§513). A write.
     "endVariable",
+    # p.302's shape-based selection on the Map: the drawn area, written as a
+    # `within_box` clause a `narrow_set` reads (§550). A write, and the
+    # guard caught it after the unit rather than on the way in.
+    "areaVariable",
     "name",
 )
 

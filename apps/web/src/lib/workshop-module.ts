@@ -263,6 +263,9 @@ export const REFERENCE_PROPS = [
   // p.444's Date Input range: the end date, written with `name` as the start
   // (§513). A write. See the API's copy.
   "endVariable",
+  // p.302's area drawn on the Map, as a `within_box` clause (§550). A write.
+  // See the API's copy.
+  "areaVariable",
   "name",
 ] as const;
 
