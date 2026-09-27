@@ -595,3 +595,30 @@ def test_typing_in_a_cell_does_not_change_the_active_row(page, api) -> None:
     stays(lambda: rows.nth(0).get_attribute("aria-current"),
           lambda v: v == "true",
           what="the active row unchanged by typing in another row's cell")
+
+
+ENUM_STATUS = {
+    "parameters": [
+        {"api_name": "status", "display_name": "Status", "data_type": "string",
+         "value_constraint": {"kind": "enum", "values": ["open", "blocked", "closed"]}},
+    ],
+    "rules": [{"kind": "modify_object", "config": {"property": "status", "parameter": "status"}}],
+    "criteria": [],
+}
+
+
+def test_p241_an_enumerated_parameter_is_an_in_cell_dropdown(page, api) -> None:
+    """p.241: "If a parameter has defined enumerated values from which a user
+    can select, those options will be respected and displayed within an
+    in-cell dropdown when a user modifies that parameter." (§597)"""
+    mod = build(api, "Inline dropdown", extra=ENUM_STATUS)
+    open_module(page, mod)
+    settled(page)
+    page.get_by_test_id("inline-edit-toggle").click()
+    choice = page.get_by_test_id("edit-T1-status").locator("select")
+    expect(choice.locator("option")).to_contain_text(["open", "blocked", "closed"])
+    choice.select_option("blocked")
+    page.get_by_test_id("inline-edit-submit").click()
+    page.get_by_test_id("inline-edit-confirm-submit").click()
+    eventually(lambda: mirror_values(page), lambda v: "blocked" in v,
+               what="the chosen option on the object")

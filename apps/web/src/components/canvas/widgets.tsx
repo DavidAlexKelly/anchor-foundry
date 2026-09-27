@@ -6013,6 +6013,15 @@ export function CanvasObjectTable({
                                     // rather than derived from a rule (§450).
                                     structFields={p.struct_fields}
                                     arrayOf={p.array_of}
+                                    // p.241: "If a parameter has defined
+                                    // enumerated values … those options will
+                                    // be … displayed within an in-cell
+                                    // dropdown" (§597).
+                                    choices={multipleChoice(
+                                      liveAction?.parameters?.find(
+                                        (a) => a.api_name === parameter,
+                                      ) ?? { data_type: "" },
+                                    )}
                                     label={p.display_name || p.api_name}
                                     value={cellValue(
                                       staged, instance.id, parameter,

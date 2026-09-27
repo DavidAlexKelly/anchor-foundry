@@ -21,6 +21,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { PropertyInput } from "@/components/property-value";
 import { actions as actionApi } from "@/lib/api";
+import { multipleChoice } from "@/lib/parameter-constraint";
 import { liveInlineParameter } from "@/lib/property-inline-action";
 import type { ObjectTypeProperty } from "@/lib/types";
 
@@ -94,6 +95,10 @@ export function PropertyInlineEdit({
         dataType={property.data_type as never}
         structFields={property.struct_fields}
         arrayOf={property.array_of}
+        // The parameter's multiple choice, as p.241 draws it in a cell (§597).
+        choices={multipleChoice(
+          action.data?.parameters?.find((a) => a.api_name === parameter) ?? { data_type: "" },
+        )}
         label={name}
         value={draft.value as never}
         onChange={(next) => setDraft({ value: next })}
