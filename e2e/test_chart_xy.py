@@ -546,3 +546,93 @@ def test_the_panel_sets_a_line_s_area_and_missing_values(page, api, days) -> Non
     expect(page.get_by_test_id("chart-scale-type")).to_be_visible()
     expect(page.get_by_test_id("chart-null-display")).to_have_count(0)
     expect(page.get_by_test_id("chart-line-area")).to_have_count(0)
+
+
+# ---- p.283's numerical formatting (§538) ------------------------------------
+
+MONEY = {"kind": "number", "style": "currency", "currency": "USD",
+         "maximum_fraction_digits": 0}
+ONE_PLACE = {"kind": "number", "style": "plain", "minimum_fraction_digits": 1}
+
+
+def chart_texts(page, chart: str = "Bar chart") -> list[str]:
+    return page.locator(f"svg[aria-label='{chart}'] text").all_text_contents()
+
+
+def test_the_value_axis_and_its_labels_take_the_format(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY value format", {
+        "aggregate": "sum", "measure": "capacity", "valueLabels": True, "valueFormat": MONEY})
+    open_module(page, mod)
+    eventually(lambda: value_ticks(page), lambda got: got[-1:] == ["$90"], what="money ticks")
+    assert value_ticks(page)[0] == "$0", value_ticks(page)
+    expect(page.get_by_test_id("chart-value-label")).to_have_text(["$90", "$30"])
+    # A tooltip is the number itself.
+    assert bar_titles(page) == ["closed: 90", "open: 30"], bar_titles(page)
+    mod = build(api, sites, "Chart XY value format across", {
+        "aggregate": "sum", "measure": "capacity", "orientation": "horizontal",
+        "valueFormat": MONEY})
+    open_module(page, mod)
+    eventually(lambda: value_ticks(page), lambda got: got[-1:] == ["$90"], what="turned ticks")
+    mod = build(api, sites, "Chart XY value format line", {
+        "kind": "line", "aggregate": "sum", "measure": "capacity", "valueLabels": True,
+        "valueFormat": MONEY})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-value-label")).to_have_text(["$90", "$30"])
+
+
+def test_the_category_axis_writes_its_numeric_keys(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY category format", {
+        "dimension": "capacity", "categoryFormat": ONE_PLACE})
+    open_module(page, mod)
+    eventually(lambda: chart_texts(page), lambda got: {"10.0", "90.0"} <= set(got),
+               what="formatted keys")
+    assert bar_titles(page) == ["10: 3", "90: 1"], bar_titles(page)
+    mod = build(api, sites, "Chart XY category format words", {
+        "dimension": "region", "categoryFormat": ONE_PLACE})
+    open_module(page, mod)
+    eventually(lambda: chart_texts(page), lambda got: {"north", "east", "south"} <= set(got),
+               what="unformatted words")
+    mod = build(api, sites, "Chart XY category format across", {
+        "dimension": "capacity", "categoryFormat": ONE_PLACE, "orientation": "horizontal"})
+    open_module(page, mod)
+    eventually(lambda: chart_texts(page, "Horizontal bar chart"),
+               lambda got: {"10.0", "90.0"} <= set(got), what="turned keys")
+    mod = build(api, sites, "Chart XY category format line", {
+        "kind": "line", "dimension": "capacity", "categoryFormat": ONE_PLACE})
+    open_module(page, mod)
+    eventually(lambda: chart_texts(page, "Line chart"), lambda got: "90.0" in got,
+               what="formatted line keys")
+
+
+def test_a_segmented_chart_takes_the_formats_but_keeps_its_percentages(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY segmented format", {
+        "dimension": "capacity", "segmentBy": "region", "valueFormat": ONE_PLACE,
+        "categoryFormat": ONE_PLACE})
+    open_module(page, mod)
+    eventually(lambda: value_ticks(page), lambda got: got[-1:] == ["3.0"], what="stacked ticks")
+    assert {"10.0", "90.0"} <= set(chart_texts(page, "Segmented bar chart")), chart_texts(
+        page, "Segmented bar chart")
+    mod = build(api, sites, "Chart XY segmented percent format", {
+        "segmentBy": "region", "segmentMode": "percentage", "valueFormat": ONE_PLACE})
+    open_module(page, mod)
+    eventually(lambda: value_ticks(page), lambda got: got[-1:] == ["100%"], what="percent ticks")
+
+
+def test_the_panel_sets_an_axis_format(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY format panel", {})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    expect(page.get_by_test_id("chart-value-format")).to_have_text("Not formatted")
+    page.get_by_test_id("chart-value-format").click()
+    page.get_by_test_id("format-on").select_option("on")
+    page.get_by_test_id("format-notation").select_option("compact")
+    page.get_by_test_id("format-save").click()
+    expect(page.get_by_test_id("chart-value-format")).not_to_have_text("Not formatted")
+    page.get_by_test_id("chart-category-format").click()
+    page.get_by_test_id("format-on").select_option("on")
+    page.get_by_test_id("format-save").click()
+    save(page)
+    props = mod.definition()["layout"]["chart"]["props"]
+    assert props["valueFormat"]["notation"] == "compact", props
+    assert props["categoryFormat"]["kind"] == "number", props

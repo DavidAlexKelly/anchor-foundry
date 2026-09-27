@@ -237,6 +237,9 @@ export interface ChartDisplay {
   titles?: AxisTitles;
   /** p.281's Area, on a line chart (§537). */
   shaded?: boolean;
+  /** p.283's numerical formatting of each axis (§538), when enabled. */
+  valueText?: (value: number) => string;
+  categoryText?: (label: string) => string;
 }
 
 interface Drawn {
@@ -245,16 +248,21 @@ interface Drawn {
   labels?: boolean;
   axis: ValueAxis;
   titles?: AxisTitles;
+  /** How a value axis tick, a value label and a category key are written. */
+  tickText: (value: number) => string;
+  labelText: (value: number) => string;
+  keyText: (label: string) => string;
 }
 
 /** p.284's horizontal bar chart: categories down the left, values along the
  * bottom. The same bars and the same drill-down as the vertical one, turned. */
-function HorizontalBarChart({ points, drill, labels, axis, titles }: Drawn) {
+function HorizontalBarChart({
+  points, drill, labels, axis, titles, tickText, labelText, keyText,
+}: Drawn) {
   const left = 110 + (titles?.category ? 14 : 0);
   const below = titles?.value ? 16 : 0;
   const area = { x: left, y: PAD.top, w: WIDTH - left - 40, h: HEIGHT - PAD.top - 24 - below };
   const s = valueScale(points.map((p) => p.value), axis);
-  const format = tickFormat(axis);
   const toX = (v: number) => {
     const at = s.at(v);
     return at === null ? null : area.x + at * area.w;
@@ -282,7 +290,7 @@ function HorizontalBarChart({ points, drill, labels, axis, titles }: Drawn) {
               x={x} y={HEIGHT - 8 - below} textAnchor="middle" fontSize={11}
               fill="var(--ink-soft)"
             >
-              {format(t)}
+              {tickText(t)}
             </text>
           </g>
         );
@@ -315,7 +323,7 @@ function HorizontalBarChart({ points, drill, labels, axis, titles }: Drawn) {
               fontSize={11}
               fill="var(--ink-soft)"
             >
-              {shortLabel(p.label, 16)}
+              {shortLabel(keyText(p.label), 16)}
             </text>
             {labels && x !== null && shown(s, p.value) && (
               <text
@@ -325,7 +333,7 @@ function HorizontalBarChart({ points, drill, labels, axis, titles }: Drawn) {
                 fontSize={11}
                 fill="var(--ink)"
               >
-                {niceNumber(p.value)}
+                {labelText(p.value)}
               </text>
             )}
           </g>
@@ -335,7 +343,9 @@ function HorizontalBarChart({ points, drill, labels, axis, titles }: Drawn) {
   );
 }
 
-function BarChart({ points, drill, labels, axis, titles }: Drawn) {
+function BarChart({
+  points, drill, labels, axis, titles, tickText, labelText, keyText,
+}: Drawn) {
   const area = plotArea(titles);
   const s = valueScale(points.map((p) => p.value), axis);
   const slot = area.w / Math.max(points.length, 1);
@@ -344,7 +354,7 @@ function BarChart({ points, drill, labels, axis, titles }: Drawn) {
   const labelY = HEIGHT - 12 - (titles?.category ? 16 : 0);
   return (
     <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="Bar chart" style={{ width: "100%" }}>
-      <Axes scale={s} area={area} format={tickFormat(axis)} />
+      <Axes scale={s} area={area} format={tickText} />
       <AxisTitleMarks titles={titles} area={area} />
       {points.map((p, i) => {
         const y = yOf(s, p.value, area);
@@ -373,7 +383,7 @@ function BarChart({ points, drill, labels, axis, titles }: Drawn) {
               fontSize={11}
               fill="var(--ink-soft)"
             >
-              {shortLabel(p.label, Math.max(4, Math.floor(slot / 7)))}
+              {shortLabel(keyText(p.label), Math.max(4, Math.floor(slot / 7)))}
             </text>
             {labels && y !== null && shown(s, p.value) && (
               <text
@@ -384,7 +394,7 @@ function BarChart({ points, drill, labels, axis, titles }: Drawn) {
                 fontSize={11}
                 fill="var(--ink)"
               >
-                {niceNumber(p.value)}
+                {labelText(p.value)}
               </text>
             )}
           </g>
@@ -394,7 +404,9 @@ function BarChart({ points, drill, labels, axis, titles }: Drawn) {
   );
 }
 
-function LineChart({ points, drill, labels, axis, titles, shaded = false }: Drawn & {
+function LineChart({
+  points, drill, labels, axis, titles, tickText, labelText, keyText, shaded = false,
+}: Drawn & {
   shaded?: boolean;
 }) {
   const area = plotArea(titles);
@@ -433,7 +445,7 @@ function LineChart({ points, drill, labels, axis, titles, shaded = false }: Draw
   const labelEvery = Math.max(1, Math.ceil(points.length / 8));
   return (
     <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="Line chart" style={{ width: "100%" }}>
-      <Axes scale={s} area={area} format={tickFormat(axis)} />
+      <Axes scale={s} area={area} format={tickText} />
       <AxisTitleMarks titles={titles} area={area} />
       <Plot area={area} axis={axis}>
         {shaded && (
@@ -471,7 +483,7 @@ function LineChart({ points, drill, labels, axis, titles, shaded = false }: Draw
             fontSize={11}
             fill="var(--ink)"
           >
-            {niceNumber(p.value)}
+            {labelText(p.value)}
           </text>
         );
       })}
@@ -485,7 +497,7 @@ function LineChart({ points, drill, labels, axis, titles, shaded = false }: Draw
             fontSize={11}
             fill="var(--ink-soft)"
           >
-            {shortLabel(p.label, 10)}
+            {shortLabel(keyText(p.label), 10)}
           </text>
         ) : null,
       )}
@@ -493,7 +505,7 @@ function LineChart({ points, drill, labels, axis, titles, shaded = false }: Draw
   );
 }
 
-function ScatterChart({ points, axis, titles }: Drawn) {
+function ScatterChart({ points, axis, titles, tickText }: Drawn) {
   const area = plotArea(titles);
   const s = valueScale(points.map((p) => p.value), axis);
   // The dimension is the x axis. It is numeric when it can be and ordinal
@@ -506,7 +518,7 @@ function ScatterChart({ points, axis, titles }: Drawn) {
   const xSpan = xMax - xMin || 1;
   return (
     <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="Scatter chart" style={{ width: "100%" }}>
-      <Axes scale={s} area={area} format={tickFormat(axis)} />
+      <Axes scale={s} area={area} format={tickText} />
       <AxisTitleMarks titles={titles} area={area} />
       <Plot area={area} axis={axis}>
         {points.map((p, i) => {
@@ -656,13 +668,16 @@ export function PieChart({
  * that clause does not name.
  */
 export function SegmentedBarChart({
-  data, mode, drill, showLegend = true, titles,
+  data, mode, drill, showLegend = true, titles, valueText, categoryText,
 }: {
   data: Segmented;
   mode: SegmentMode;
   drill?: Drill;
   showLegend?: boolean;
   titles?: AxisTitles;
+  /** p.283's numerical formatting (§538). A percentage axis keeps its own. */
+  valueText?: (value: number) => string;
+  categoryText?: (label: string) => string;
 }) {
   // Six entries to a row, and as many rows as the segments need: the
   // cross-tab returns up to twelve columns.
@@ -687,7 +702,7 @@ export function SegmentedBarChart({
       <Axes
         scale={s}
         area={area}
-        format={percent ? (v) => `${Math.round(v * 100)}%` : niceNumber}
+        format={percent ? (v) => `${Math.round(v * 100)}%` : valueText ?? niceNumber}
       />
       <AxisTitleMarks titles={titles} area={area} belowY={area.y + area.h + 30} />
       {bars.map((bar, i) => {
@@ -723,7 +738,8 @@ export function SegmentedBarChart({
           fontSize={11}
           fill="var(--ink-soft)"
         >
-          {shortLabel(category, Math.max(4, Math.floor(slot / 7)))}
+          {shortLabel(categoryText ? categoryText(category) : category,
+            Math.max(4, Math.floor(slot / 7)))}
         </text>
       ))}
       {showLegend && data.segments.map((segment, i) => (
@@ -756,7 +772,12 @@ export function Chart({
     return <p className="canvas-widget-empty">No rows match — nothing to chart.</p>;
   }
   const axis = display.axis ?? CALCULATED;
-  const drawn = { points, drill, labels: display.labels, axis, titles: display.titles };
+  const drawn = {
+    points, drill, labels: display.labels, axis, titles: display.titles,
+    tickText: display.valueText ?? tickFormat(axis),
+    labelText: display.valueText ?? niceNumber,
+    keyText: display.categoryText ?? ((label: string) => label),
+  };
   const s = valueScale(points.map((p) => p.value), axis);
   let chart: React.ReactNode;
   if (kind === "line") chart = <LineChart {...drawn} shaded={display.shaded === true} />;

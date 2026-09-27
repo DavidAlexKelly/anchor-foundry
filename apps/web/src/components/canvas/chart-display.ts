@@ -13,7 +13,10 @@
  * > "Labels: Toggles the display of value labels on the chart." (p.281)
  */
 
+import { formatValue } from "../../lib/value-format";
+
 import type { ChartPoint } from "./charts";
+import { numberFormatOf } from "./value-formats";
 
 export const CHART_SORTS = {
   source: "As the data comes",
@@ -309,4 +312,31 @@ export function missingText(count: number, kind: string, display: NullDisplay): 
   if (kind === "line" && display === "gap") return `${what}, left as a gap in the line.`;
   if (kind === "line" && display === "zeroes") return `${what}, drawn as zero.`;
   return `${what} and not drawn.`;
+}
+
+/**
+ * p.283's **Enable numerical formatting**, on either axis (§538), with the
+ * property formatter's own options (`object-link-types` p.97–98, §157).
+ *
+ * > "Enable numerical formatting: If enabled, provides configuration options
+ * > for numerical values displayed in the values axis. Configuration options
+ * > include numerical grouping, min / max decimals shown, scientific
+ * > notation, and others." (p.283)
+ *
+ * The value axis's formatter writes its ticks and the value labels on the
+ * bars and points, which are numbers on the same axis: an axis reading "1.2M"
+ * over a bar labelled 1234567 would be two formats for one number. A tooltip
+ * keeps the raw value, which is the number itself rather than a display of it.
+ */
+export function valueText(raw: unknown): ((value: number) => string) | null {
+  const format = numberFormatOf(raw);
+  return format ? (value) => formatValue(value, format) ?? String(value) : null;
+}
+
+/** The categorical axis's formatter writes its keys that are numbers, "the
+ * numerical values displayed in the categorical axis keys" (p.283); a key
+ * that is not a number is shown as it is. */
+export function categoryText(raw: unknown): ((label: string) => string) | null {
+  const format = numberFormatOf(raw);
+  return format ? (label) => formatValue(label, format) ?? label : null;
 }
