@@ -272,3 +272,18 @@ export function baselineOf(raw: unknown): number | null {
   const value = typeof raw === "number" ? raw : Number(raw);
   return Number.isFinite(value) ? value : null;
 }
+
+// ---- §528: p.329's secondary metric ------------------------------------------------
+/** p.329: "Show secondary metric? An optional configuration to display a
+ * second metric within the same metric display, under the primary metric.
+ * Setting this toggle to Yes opens a value type configuration for the
+ * secondary metric, which mimics the configuration for the primary metric."
+ *
+ * The same set, a second aggregation of it: what the primary's configuration
+ * is here (an aggregation, its property, its label and its formatting). Its
+ * label defaults to what it computes, since a bare second number beside the
+ * first says nothing about which is which. */
+export function secondaryLabelOf(label: unknown, aggregation: unknown): string {
+  const text = typeof label === "string" ? label.trim() : "";
+  return text !== "" ? text : (AGGREGATIONS[aggregationOf(aggregation)] ?? "");
+}

@@ -27,7 +27,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import open_builder, open_module, option_labels, settled
+from conftest import open_builder, open_module, option_labels, save, settled
 
 # `capacity` is what the numeric aggregations run over; `region` is what a
 # distinct count counts. The numbers are chosen so the six answers are six
@@ -223,3 +223,70 @@ def test_the_property_picker_narrows_for_arithmetic(page, api, sites) -> None:
     assert option_labels(page.get_by_test_id("metric-property"), count=2) == [
         "Choose…", "capacity",
     ]
+
+
+# ---- §528: p.329's secondary metric ------------------------------------------
+def secondary(page):
+    return page.get_by_test_id("metric-secondary")
+
+
+def test_a_secondary_metric_sits_under_the_primary(page, api, sites) -> None:
+    """p.329: "a second metric within the same metric display, under the
+    primary metric", configured as the primary is. Its label is what it
+    computes until it is given one."""
+    mod = build(api, sites, "Metric secondary", {
+        "showSecondary": True, "secondaryAggregation": "avg", "secondaryProperty": "capacity"})
+    open_module(page, mod)
+    settled(page)
+    expect(value(page)).to_have_text("3")
+    expect(secondary(page)).to_have_text("Average of 30")
+
+
+def test_a_secondary_metric_takes_its_own_label_and_format(page, api, sites) -> None:
+    mod = build(api, sites, "Metric secondary labelled", {
+        "showSecondary": True, "secondaryAggregation": "sum", "secondaryProperty": "capacity",
+        "secondaryLabel": "Total", "secondaryFormat": {"kind": "number", "style": "percent"}})
+    open_module(page, mod)
+    settled(page)
+    # p.174's percent style: 90 is nine thousand per cent.
+    expect(secondary(page)).to_have_text("Total 9,000%")
+
+
+def test_a_secondary_metric_off_or_unfinished_shows_no_number(page, api, sites) -> None:
+    """Off is not asked at all, and unfinished is not a number. Both are
+    checked after the primary has its number, since before that everything
+    on the card is still "…"."""
+    asked: list[str] = []
+    page.on("request", lambda r: asked.append(r.post_data or "")
+            if "/object-sets/aggregate" in r.url else None)
+    off = build(api, sites, "Metric secondary off", {
+        "showSecondary": False, "secondaryAggregation": "avg", "secondaryProperty": "capacity"})
+    open_module(page, off)
+    settled(page)
+    expect(value(page)).to_have_text("3")
+    expect(secondary(page)).to_have_count(0)
+    assert asked and not any('"avg"' in body for body in asked), asked
+    unfinished = build(api, sites, "Metric secondary unfinished", {
+        "showSecondary": True, "secondaryAggregation": "sum"})
+    open_module(page, unfinished)
+    settled(page)
+    expect(value(page)).to_have_text("3")
+    expect(page.get_by_test_id("metric-secondary-value")).to_have_text("…")
+
+
+def test_the_panel_builds_a_secondary_metric(page, api, sites) -> None:
+    mod = build(api, sites, "Metric secondary panel")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row").filter(has_text="Metric card").first.click()
+    expect(page.get_by_test_id("metric-secondary-aggregation")).to_have_count(0)
+    page.get_by_test_id("metric-show-secondary").check()
+    page.get_by_test_id("metric-secondary-aggregation").select_option("max")
+    assert option_labels(page.get_by_test_id("metric-secondary-property"), count=2) == [
+        "Choose…", "capacity"]
+    page.get_by_test_id("metric-secondary-property").select_option("capacity")
+    page.get_by_test_id("metric-secondary-label").fill("Largest")
+    save(page)
+    open_module(page, mod)
+    settled(page)
+    expect(secondary(page)).to_have_text("Largest 60")

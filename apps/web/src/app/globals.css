@@ -2246,6 +2246,9 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 /* p.326's metric sizes (§526). Regular is the size above. */
 .metric-card--compact .metric-value { font-size: 18px; }
 .metric-card--large .metric-value { font-size: 44px; }
+/* p.329's secondary metric (§528): "under the primary metric", and smaller. */
+.metric-secondary { font-size: 13px; color: var(--ink-soft); }
+.metric-secondary-value { color: var(--ink); font-weight: 600; }
 /* p.330's Interactive metric (§527): a card something is wired to. */
 .metric-card--interactive { cursor: pointer; border-radius: 6px; }
 .metric-card--interactive:hover, .metric-card--interactive:focus-visible {

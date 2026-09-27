@@ -116,3 +116,15 @@ describe("the baseline", () => {
     expect(levelY(points.slice(0, 1), box, 15)).toBeNull();
   });
 });
+
+describe("the secondary metric (§528)", () => {
+  it("is labelled by what it computes unless it is given a label", async () => {
+    const { secondaryLabelOf } = await import("./metric-card");
+    expect(secondaryLabelOf("", "avg")).toBe("Average of");
+    expect(secondaryLabelOf("   ", "count")).toBe("How many");
+    expect(secondaryLabelOf(undefined, "max")).toBe("Maximum of");
+    expect(secondaryLabelOf("  Largest site ", "max")).toBe("Largest site");
+    // An aggregation this platform has not got is a count, as the primary's is.
+    expect(secondaryLabelOf("", "median")).toBe("How many");
+  });
+});
