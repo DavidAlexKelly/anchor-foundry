@@ -18,7 +18,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ApiError, datasets as datasetApi, models as modelApi } from "@/lib/api";
+import {
+  ApiError, api as platformApi, datasets as datasetApi, models as modelApi, resourceTags,
+} from "@/lib/api";
+import { addable, tagLabel } from "@/lib/resource-tags";
+import { canEditProject } from "@/lib/test-runs";
 import { Dialog, Field } from "@/components/dialog";
 import { branchName, whyNotBranchable } from "@/lib/branch-from-version";
 import { rollbackSummary, whyNotRollbackable } from "@/lib/dataset-rollback";
@@ -117,7 +121,7 @@ export function DatasetApplication({ resource }: { resource: ResolvedResource })
           />
         )}
         {tab === "lineage" && <LineageTab resource={resource} />}
-        {tab === "details" && <DetailsTab wid={wid} pid={pid} did={did} />}
+        {tab === "details" && <DetailsTab wid={wid} pid={pid} did={did} rid={resource.id} />}
       </div>
     </div>
   );
@@ -1047,7 +1051,76 @@ function RenameDataset({
   );
 }
 
-function DetailsTab({ wid, pid, did }: { wid: string; pid: string; did: string }) {
+/** p.3's "tags" (§511): the ones this resource carries, and, for an editor
+ *  of its project, a way to add and remove them. The workspace's tags are
+ *  made on its Tags page (`app-building` p.35). */
+function ResourceTags({ wid, pid, rid }: { wid: string; pid: string; rid: string }) {
+  const queryClient = useQueryClient();
+  const on = useQuery({ queryKey: ["tags-on", rid], queryFn: () => resourceTags.on(wid, rid) });
+  const all = useQuery({ queryKey: ["resource-tags", wid], queryFn: () => resourceTags.list(wid) });
+  const project = useQuery({
+    queryKey: ["project", wid, pid],
+    queryFn: () => platformApi.project(wid, pid),
+  });
+  const editor = canEditProject(project.data?.effective_role ?? "viewer");
+  const change = useMutation({
+    mutationFn: ({ tid, add }: { tid: string; add: boolean }) =>
+      add ? resourceTags.add(wid, rid, tid) : resourceTags.takeOff(wid, rid, tid),
+    onSuccess: async (tags) => {
+      queryClient.setQueryData(["tags-on", rid], tags);
+      await queryClient.invalidateQueries({ queryKey: ["resource-tags", wid] });
+    },
+  });
+  const offer = all.data && on.data ? addable(all.data, on.data) : [];
+
+  return (
+    <>
+      <h2 className="ds-h2">Tags</h2>
+      {on.data && on.data.length === 0 && (
+        <p className="soft" data-testid="ds-no-tags">No tags.</p>
+      )}
+      {on.data && on.data.length > 0 && (
+        <ul className="ds-tags" data-testid="ds-tags">
+          {on.data.map((tag) => (
+            <li key={tag.id} className="chip" data-testid="ds-tag">
+              {tagLabel(tag)}
+              {editor && (
+                <button
+                  type="button"
+                  className="btn quiet"
+                  aria-label={`Remove ${tagLabel(tag)}`}
+                  data-testid="ds-tag-remove"
+                  onClick={() => change.mutate({ tid: tag.id, add: false })}
+                >
+                  ×
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {editor && offer.length > 0 && (
+        <select
+          data-testid="ds-tag-add"
+          value=""
+          onChange={(e) => e.target.value && change.mutate({ tid: e.target.value, add: true })}
+        >
+          <option value="">Add a tag…</option>
+          {offer.map((tag) => (
+            <option key={tag.id} value={tag.id}>{tagLabel(tag)}</option>
+          ))}
+        </select>
+      )}
+      {change.isError && (
+        <div className="form-error" data-testid="ds-tag-error">
+          {change.error instanceof ApiError ? change.error.message : "Couldn't change the tags."}
+        </div>
+      )}
+    </>
+  );
+}
+
+function DetailsTab({ wid, pid, did, rid }: { wid: string; pid: string; did: string; rid: string }) {
   const detail = useQuery({
     queryKey: ["ds-detail", did],
     queryFn: () => datasetApi.get(wid, pid, did),
@@ -1147,6 +1220,8 @@ function DetailsTab({ wid, pid, did }: { wid: string; pid: string; did: string }
 
       {/* p.3's "any configured build schedules that will run to update the
           dataset" (§508). */}
+      <ResourceTags wid={wid} pid={pid} rid={rid} />
+
       <h2 className="ds-h2">Schedules</h2>
       {schedules.isError && <p className="soft">No schedule information available.</p>}
       {schedules.data && schedules.data.length === 0 && (

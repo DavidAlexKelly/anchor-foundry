@@ -654,6 +654,28 @@ export const resourceFavourites = {
     }),
 };
 
+/** Tags (§511): made for the workspace by an admin, applied to a resource by
+ *  its editors (`app-building` p.35). */
+export const resourceTags = {
+  list: (wid: string) => request<import("./resource-tags").TagUsage[]>(`/workspaces/${wid}/tags`),
+  create: (wid: string, body: { category: string; name: string }) =>
+    request<import("./resource-tags").TagUsage>(`/workspaces/${wid}/tags`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  remove: (wid: string, tid: string) =>
+    request<void>(`/workspaces/${wid}/tags/${tid}`, { method: "DELETE" }),
+  on: (wid: string, rid: string) =>
+    request<import("./resource-tags").Tag[]>(`/workspaces/${wid}/resource-tags/${rid}`),
+  add: (wid: string, rid: string, tid: string) =>
+    request<import("./resource-tags").Tag[]>(`/workspaces/${wid}/resource-tags/${rid}/${tid}`, {
+      method: "PUT",
+    }),
+  takeOff: (wid: string, rid: string, tid: string) =>
+    request<import("./resource-tags").Tag[]>(`/workspaces/${wid}/resource-tags/${rid}/${tid}`, {
+      method: "DELETE",
+    }),
+};
+
 export const datasets = {
   list: (wid: string, pid: string) =>
     request<import("./types").Dataset[]>(`/workspaces/${wid}/projects/${pid}/datasets`),
