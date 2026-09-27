@@ -24,6 +24,7 @@ import { branchName, whyNotBranchable } from "@/lib/branch-from-version";
 import { rollbackSummary, whyNotRollbackable } from "@/lib/dataset-rollback";
 import { madeByText, originHref } from "@/lib/dataset-origin";
 import { bytesText } from "@/lib/bytes";
+import { NO_SCHEDULES, scheduleName, scheduleWhen } from "@/lib/dataset-schedules";
 import {
   DEFAULT_OPTIONS,
   ENCODINGS,
@@ -1053,6 +1054,10 @@ function DetailsTab({ wid, pid, did }: { wid: string; pid: string; did: string }
     queryFn: () => datasetApi.origin(wid, pid, did),
     enabled: detail.isSuccess,
   });
+  const schedules = useQuery({
+    queryKey: ["ds-schedules", did],
+    queryFn: () => datasetApi.schedules(wid, pid, did),
+  });
   if (detail.isPending) return <p className="state">Loading…</p>;
   if (detail.isError) return <p className="state error">{(detail.error as Error).message}</p>;
 
@@ -1118,6 +1123,24 @@ function DetailsTab({ wid, pid, did }: { wid: string; pid: string; did: string }
           <dd className="ds-slug">{d.slug}</dd>
         </div>
       </dl>
+
+      {/* p.3's "any configured build schedules that will run to update the
+          dataset" (§508). */}
+      <h2 className="ds-h2">Schedules</h2>
+      {schedules.isError && <p className="soft">No schedule information available.</p>}
+      {schedules.data && schedules.data.length === 0 && (
+        <p className="soft" data-testid="ds-no-schedules">{NO_SCHEDULES}</p>
+      )}
+      {schedules.data && schedules.data.length > 0 && (
+        <ul className="ds-health" data-testid="ds-schedules">
+          {schedules.data.map((s) => (
+            <li key={`${s.kind}-${s.name}`} data-testid="ds-schedule">
+              <Link href={`/r/${s.resource_id}`}>{scheduleName(s)}</Link>{" "}
+              <span className="soft">{scheduleWhen(s)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <h2 className="ds-h2">Data health</h2>
       {health.isPending && <p className="state">Checking…</p>}
