@@ -74,6 +74,9 @@ export interface FormParameter {
    * as a dropdown or says beside the box (§584). */
   value_constraint?: ValueConstraint | null;
   constraint_summary?: string;
+  /** p.71-72's per-field constraints, for a struct parameter (§585). */
+  field_constraints?: Record<string, ValueConstraint>;
+  field_constraint_summaries?: Record<string, string>;
 }
 
 function side(spec: unknown): Record<string, unknown> {

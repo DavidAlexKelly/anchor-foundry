@@ -327,3 +327,189 @@ def test_an_ontology_export_carries_both(client, fx, ticket):
     assert "value_constraint" not in urgent
     assert priority["value_constraint"]["values"] == ["P0", "P1", "P2"]
     assert priority["overrides"][0]["set_constraint"]["values"] == ["P0"]
+
+
+# ---- p.71-72's struct fields (§585) -----------------------------------------------
+RESOLUTION = [{"api_name": "summary", "data_type": "string"},
+              {"api_name": "hours", "data_type": "integer"}]
+
+
+@pytest.fixture(scope="module")
+def resolved(client: TestClient, fx: Fixture) -> dict:
+    """A type with a struct property, which is what p.66's parameter writes."""
+    tag = uuid.uuid4().hex[:6]
+    dataset = client.post(
+        f"{wbase(fx)}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub), data={"name": f"Resolved {tag}"},
+        files={"file": ("resolved.csv", io.BytesIO(
+            b'key,title,resolution\nR1,First,"{""summary"": ""seeded summary"", ""hours"": 1}"\n'),
+            "text/csv")},
+    )
+    assert dataset.status_code == 201, dataset.text
+    made = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"resolved_{tag}", "display_name": f"Resolved {tag}",
+              "properties": [
+                  {"api_name": "key", "data_type": "string"},
+                  {"api_name": "title", "data_type": "string"},
+                  {"api_name": "resolution", "data_type": "struct",
+                   "struct_fields": RESOLUTION},
+              ],
+              "title_property": "title"},
+    )
+    assert made.status_code == 201, made.text
+    type_id = made.json()["id"]
+    source = client.post(
+        f"{wbase(fx)}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={"object_type_id": type_id, "dataset_id": dataset.json()["id"],
+              "primary_key_column": "key",
+              "column_mappings": {"key": "key", "title": "title",
+                                  "resolution": "resolution"}},
+    )
+    assert source.status_code == 201, source.text
+    synced = client.post(
+        f"{wbase(fx)}/projects/{fx.project}/object-type-sources/{source.json()['id']}/sync",
+        headers=hdr(fx.editor_sub))
+    assert synced.status_code == 200, synced.text
+    items = client.get(f"{wbase(fx)}/object-types/{type_id}/instances",
+                       headers=hdr(fx.viewer_sub)).json()["items"]
+    return {"type_id": type_id, "instance_id": items[0]["id"]}
+
+
+def struct_action(client, fx, resolved, **extra) -> tuple[str, object]:
+    made = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": resolved["type_id"],
+              "api_name": f"res_{uuid.uuid4().hex[:6]}", "display_name": "Resolve",
+              "editable_properties": ["title"]},
+    )
+    assert made.status_code == 201, made.text
+    action = made.json()["id"]
+    saved = define(client, fx, action,
+                   [param("resolution", "struct", **extra)],
+                   [writes("resolution", "resolution")])
+    return action, saved
+
+
+SUMMARY_LENGTH = {"summary": SUMMARY}
+
+
+def test_p71s_field_constraint_is_kept_and_described(client, fx, resolved):
+    action, saved = struct_action(client, fx, resolved, field_constraints=SUMMARY_LENGTH)
+    assert saved.status_code == 200, saved.text
+    [p] = client.get(f"{wbase(fx)}/action-types/{action}",
+                     headers=hdr(fx.viewer_sub)).json()["parameters"]
+    assert p["field_constraints"] == {"summary": {"kind": "range", "minimum": 10,
+                                                  "maximum": 500}}
+    assert p["field_constraint_summaries"] == {"summary": "between 10 and 500"}
+
+
+def test_p72_a_struct_is_valid_only_when_every_field_is(client, fx, resolved):
+    action, saved = struct_action(client, fx, resolved, field_constraints={
+        **SUMMARY_LENGTH, "hours": {"kind": "range", "maximum": 40}})
+    assert saved.status_code == 200, saved.text
+    short = execute(client, fx, action, resolved["instance_id"],
+                    {"resolution": {"summary": "too short", "hours": 2}})
+    assert short.status_code == 422, short.text
+    assert "'resolution': field 'summary': 9 characters is below the minimum of 10" in short.text
+    # The field is read as its type first, as a parameter is.
+    long_hours = execute(client, fx, action, resolved["instance_id"],
+                         {"resolution": {"summary": "a proper summary", "hours": "41"}})
+    assert long_hours.status_code == 422, long_hours.text
+    assert "field 'hours': 41 is above the maximum of 40" in long_hours.text
+    done = execute(client, fx, action, resolved["instance_id"],
+                   {"resolution": {"summary": "a proper summary", "hours": 3}})
+    assert done.status_code == 200, done.text
+    assert done.json()["instance"]["properties"]["resolution"] == {
+        "summary": "a proper summary", "hours": 3}
+
+
+def test_an_empty_field_meets_its_constraint(client, fx, resolved):
+    """p.116's `required` answers "is there a value"; a field left empty is
+    not one the constraint judges."""
+    action, _ = struct_action(client, fx, resolved, field_constraints=SUMMARY_LENGTH)
+    done = execute(client, fx, action, resolved["instance_id"],
+                   {"resolution": {"hours": 1}})
+    assert done.status_code == 200, done.text
+
+
+def test_check_answers_for_a_field_too(client, fx, resolved):
+    action, _ = struct_action(client, fx, resolved, field_constraints=SUMMARY_LENGTH)
+    checked = client.post(f"{abase(fx)}/{action}/check", headers=hdr(fx.editor_sub),
+                          json={"values": {"resolution": {"summary": "short"}}})
+    assert checked.json() == {
+        "ok": False,
+        "error": "'resolution': field 'summary': 5 characters is below the minimum of 10"}
+
+
+@pytest.mark.parametrize("extra, said", [
+    ({"field_constraints": {"notes": SUMMARY}}, "'resolution' has no field 'notes'"),
+    ({"field_constraints": {"hours": {"kind": "regex", "pattern": "x"}}},
+     "'resolution' field 'hours': a regex constraint does not apply to a integer"),
+    ({"field_constraints": {"summary": {"kind": "enum", "values": []}}},
+     "'resolution' field 'summary': an enum constraint needs at least one value"),
+])
+def test_a_field_constraint_that_could_not_hold_is_refused(client, fx, resolved, extra, said):
+    _, saved = struct_action(client, fx, resolved, **extra)
+    assert saved.status_code == 422, saved.text
+    assert said in saved.text
+
+
+def test_only_a_struct_has_fields_to_constrain(client, fx, ticket):
+    action = make_action(client, fx, ticket)
+    refused = define(client, fx, action, [param("title", field_constraints=SUMMARY_LENGTH)],
+                     [writes("title", "title")])
+    assert refused.status_code == 422, refused.text
+    assert "'title' is a string, which has no fields to constrain" in refused.text
+
+
+def test_a_struct_nothing_writes_has_no_fields(client, fx, resolved):
+    """A struct parameter's fields are the property's its rule writes (p.73),
+    so one no rule writes has none to constrain."""
+    made = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": resolved["type_id"],
+              "api_name": f"res_{uuid.uuid4().hex[:6]}", "display_name": "Resolve",
+              "editable_properties": ["title"]},
+    )
+    refused = define(client, fx, made.json()["id"],
+                     [param("resolution", "struct", field_constraints=SUMMARY_LENGTH)])
+    assert refused.status_code == 422, refused.text
+    assert "no rule writes it to a struct property" in refused.text
+
+
+def test_field_constraints_are_exported(client, fx, resolved):
+    action, _ = struct_action(client, fx, resolved, field_constraints=SUMMARY_LENGTH)
+    name = client.get(f"{wbase(fx)}/action-types/{action}",
+                      headers=hdr(fx.viewer_sub)).json()["api_name"]
+    document = client.get(f"{wbase(fx)}/ontology-export", headers=hdr(fx.editor_sub)).json()
+    [exported] = [a for a in document["action_types"] if a["api_name"] == name]
+    assert exported["parameters"][0]["field_constraints"] == {
+        "summary": {"kind": "range", "minimum": 10, "maximum": 500}}
+
+
+def test_a_field_constraint_is_stored_normalised_and_null_is_user_input(client, fx, resolved):
+    """The stored document is the parsed one (an enum on a string says it is
+    case sensitive), and a field set to null is p.8's User input, so it is
+    not stored at all."""
+    action, saved = struct_action(client, fx, resolved, field_constraints={
+        "summary": None, "hours": {"kind": "enum", "values": [1, 2]}})
+    assert saved.status_code == 200, saved.text
+    [p] = client.get(f"{wbase(fx)}/action-types/{action}",
+                     headers=hdr(fx.viewer_sub)).json()["parameters"]
+    assert p["field_constraints"] == {"hours": {"kind": "enum", "values": [1, 2]}}
+    action, _ = struct_action(client, fx, resolved, field_constraints={
+        "summary": {"kind": "enum", "values": ["done"]}})
+    [p] = client.get(f"{wbase(fx)}/action-types/{action}",
+                     headers=hdr(fx.viewer_sub)).json()["parameters"]
+    assert p["field_constraints"]["summary"]["case_sensitive"] is True
+
+
+def test_a_value_that_is_not_a_struct_is_left_to_the_coercer() -> None:
+    """The fields of something that has none are not this check's to read:
+    the rule's coercion refuses a struct that is not one, by name."""
+    p = param("resolution", "struct", field_constraints=SUMMARY_LENGTH)
+    assert action_constraints.field_violation(p, "not a struct", RESOLUTION) is None
+    assert action_constraints.field_violation(p, {"summary": "short"}, RESOLUTION) == (
+        "field 'summary': 5 characters is below the minimum of 10")

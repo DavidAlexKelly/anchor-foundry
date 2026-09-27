@@ -2989,6 +2989,10 @@ export interface ActionParameter {
   /** The server's one-line reading of `value_constraint`, "" when there is
    * none, so the form says what is allowed in the words the refusal uses. */
   constraint_summary?: string;
+  /** p.71-72: a struct parameter's per-field constraints (§585; db 0120),
+   * `{field: constraint}`, and each in one line. */
+  field_constraints?: Record<string, ValueConstraint>;
+  field_constraint_summaries?: Record<string, string>;
 }
 
 /** What the action does with them (p.75). */

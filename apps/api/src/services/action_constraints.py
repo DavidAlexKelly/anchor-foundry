@@ -97,7 +97,10 @@ def violation(parameter: dict[str, Any], value: Any) -> str | None:
     return None
 
 
-def check_parameters(parameters: list[dict[str, Any]]) -> None:
+def check_parameters(
+    parameters: list[dict[str, Any]],
+    struct_fields: dict[str, list[dict[str, Any]]] | None = None,
+) -> None:
     """Refuse a constraint that could not hold, and normalise the rest in
     place — the parameter's own and each override block's (p.45).
 
@@ -124,7 +127,88 @@ def check_parameters(parameters: list[dict[str, Any]]) -> None:
             why = violation(parameter, default)
             if why:
                 raise ValueError(f"{name!r}: its default {why}")
+        # p.71's per-field constraints (§585), against the fields the rule
+        # writing this parameter gives it.
+        parameter["field_constraints"] = parse_fields(
+            parameter.get("field_constraints"), parameter,
+            (struct_fields or {}).get(name),
+        )
         for index, block in enumerate(parameter.get("overrides") or [], start=1):
             block["set_constraint"] = parse(
                 block.get("set_constraint"), parameter, where=f" (override {index})"
             )
+
+
+# ---- p.71-72's struct fields (§585) ----------------------------------------------
+def _is_struct(parameter: dict[str, Any]) -> bool:
+    data_type = str(parameter.get("data_type") or "")
+    return data_type == "struct" or (
+        data_type == "array" and str(parameter.get("array_of") or "") == "struct"
+    )
+
+
+def parse_fields(
+    raw: Any, parameter: dict[str, Any], fields: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """p.71's per-field constraints, normalised against the fields the
+    parameter writes, or a refusal naming the parameter and the field.
+
+    `fields` are the struct property's (§450), since p.73 makes the property's
+    schema the parameter's; None when no rule writes one, and then there is
+    nothing to constrain a field *of*.
+    """
+    if not raw:
+        return {}
+    name = str(parameter.get("api_name", ""))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{name!r}: field constraints must be an object of fields")
+    if not _is_struct(parameter):
+        raise ValueError(
+            f"{name!r} is a {parameter.get('data_type')}, which has no fields to "
+            "constrain; p.71's field constraints are for struct parameters"
+        )
+    if not fields:
+        raise ValueError(
+            f"{name!r} constrains fields, but no rule writes it to a struct "
+            "property, so it has no fields (p.73)"
+        )
+    types = {str(f.get("api_name")): str(f.get("data_type")) for f in fields}
+    out: dict[str, Any] = {}
+    for field, constraint in raw.items():
+        if field not in types:
+            raise ValueError(f"{name!r} has no field {field!r}")
+        parsed = parse(
+            constraint, {"api_name": name, "data_type": types[field]},
+            where=f" field {field!r}",
+        )
+        if parsed:
+            out[field] = parsed
+    return out
+
+
+def field_violation(
+    parameter: dict[str, Any], value: Any, fields: list[dict[str, Any]] | None
+) -> str | None:
+    """Why a struct value fails one of its fields' constraints, or None.
+
+    p.72: "A struct parameter value is only valid if all fields meet the
+    defined constraint." A field left empty meets it, as an empty parameter
+    does (p.116's `required` is the other rule).
+    """
+    constraints = parameter.get("field_constraints") or {}
+    if not constraints or not fields:
+        return None
+    types = {str(f.get("api_name")): str(f.get("data_type")) for f in fields}
+    for item in _items(parameter, value):
+        if not isinstance(item, dict):
+            continue
+        for field, constraint in constraints.items():
+            if field not in types:
+                continue
+            why = violation(
+                {"data_type": types[field], "value_constraint": constraint},
+                item.get(field),
+            )
+            if why:
+                return f"field {field!r}: {why}"
+    return None

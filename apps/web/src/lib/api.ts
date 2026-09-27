@@ -2277,6 +2277,8 @@ export interface ActionDefinitionInput {
     /** p.8 and p.71: what values the parameter accepts (§584). Null is p.8's
      * "User input". */
     value_constraint?: import("./types").ValueConstraint | null;
+    /** p.71-72: a struct parameter's per-field constraints (§585). */
+    field_constraints?: Record<string, import("./types").ValueConstraint>;
   }[];
   rules: { kind: string; config: Record<string, unknown> }[];
   criteria: { message: string; config: Record<string, unknown> }[];
