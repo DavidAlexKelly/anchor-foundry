@@ -1344,6 +1344,10 @@ export interface LinkTypeCreateInput {
    * ontology-only link type that is not traversable yet. */
   from_property?: string | null;
   to_property?: string | null;
+  /** p.197's join table, for a many-to-many link in place of the pair (§552). */
+  join_dataset_id?: string | null;
+  join_from_column?: string | null;
+  join_to_column?: string | null;
 }
 
 export interface SourceCreateInput {
@@ -2080,7 +2084,13 @@ export const objects = {
   setLinkJoin: (
     wid: string,
     linkId: string,
-    join: { from_property: string | null; to_property: string | null },
+    join: {
+      from_property: string | null;
+      to_property: string | null;
+      join_dataset_id?: string | null;
+      join_from_column?: string | null;
+      join_to_column?: string | null;
+    },
   ) =>
     request<import("./types").LinkType>(`/workspaces/${wid}/link-types/${linkId}`, {
       method: "PATCH",

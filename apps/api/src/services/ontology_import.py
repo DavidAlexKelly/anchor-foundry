@@ -543,6 +543,9 @@ async def _apply_links(
             from_side_name=link.get("from_side_name"),
             to_side_name=link.get("to_side_name"),
             status=link.get("status"),
+            # The file names no join table (it would be a dataset id), so a
+            # link joined on one keeps it (§552).
+            keep_join_table=True,
         )
     return added, updated
 

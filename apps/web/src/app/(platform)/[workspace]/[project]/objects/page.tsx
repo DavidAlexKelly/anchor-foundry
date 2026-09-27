@@ -35,6 +35,10 @@ import { Dialog, Field } from "@/components/dialog";
 import { TypePicker } from "@/components/type-picker";
 import { TYPE_PAGE } from "@/lib/type-picker";
 import {
+  NO_JOIN_TABLE, draftOf, joinDescription, joinTablePayload, joinTableProblem,
+  type JoinTableDraft,
+} from "@/lib/link-join-table";
+import {
   EditObjectTypeDialog,
   PROPERTY_VISIBILITIES,
   PropertyRows,
@@ -336,14 +340,96 @@ function joinLabel(property: string): string {
   return property === PRIMARY_KEY_REF ? "primary key" : property;
 }
 
+/** p.197's two ways of joining a many-to-many link (§552): a pair of
+ * properties that hold a shared key, or a join table dataset whose rows are
+ * the pairs. Offered only for many-to-many, which is the only cardinality
+ * p.197 backs with a join table. */
+function JoinByField({ value, onChange }: {
+  value: "properties" | "join_table";
+  onChange: (next: "properties" | "join_table") => void;
+}) {
+  return (
+    <Field label="Joined by">
+      <select
+        data-testid="link-joined-by"
+        value={value}
+        onChange={(e) => onChange(e.target.value as "properties" | "join_table")}
+      >
+        <option value="properties">Properties holding a shared key</option>
+        <option value="join_table">A join table dataset</option>
+      </select>
+    </Field>
+  );
+}
+
+/** p.35's join table: a dataset of this project, and the column holding each
+ * end's primary key, read from the dataset's own schema. */
+function JoinTableFields({
+  workspaceId,
+  projectId,
+  draft,
+  onChange,
+  fromLabel,
+  toLabel,
+}: {
+  workspaceId: string;
+  projectId: string;
+  draft: JoinTableDraft;
+  onChange: (next: JoinTableDraft) => void;
+  fromLabel: string;
+  toLabel: string;
+}) {
+  const datasets = useQuery({
+    queryKey: ["datasets", projectId],
+    queryFn: () => dsApi.list(workspaceId, projectId),
+  });
+  const chosen = datasets.data?.find((d: Dataset) => d.id === draft.dataset);
+  // A join table in another project is not in this list; its columns are
+  // still the ones the link names, so they stay selectable as they are.
+  const columns = chosen
+    ? chosen.table_schema.map((c) => c.name)
+    : [draft.from, draft.to].filter(Boolean);
+  const column = (label: string, testId: string, value: string, set: (v: string) => void) => (
+    <Field label={label}>
+      <select data-testid={testId} value={value} onChange={(e) => set(e.target.value)} disabled={!draft.dataset}>
+        <option value="">Choose a column…</option>
+        {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+    </Field>
+  );
+  return (
+    <>
+      <Field label="Join table dataset" hint="A dataset whose rows pair the two types' primary keys - one row per link.">
+        <select
+          data-testid="link-join-dataset"
+          value={draft.dataset}
+          onChange={(e) => onChange({ dataset: e.target.value, from: "", to: "" })}
+        >
+          <option value="">Choose a dataset…</option>
+          {draft.dataset && !chosen && <option value={draft.dataset}>The current join table</option>}
+          {datasets.data?.map((d: Dataset) => (
+            <option key={d.id} value={d.id}>{d.name}</option>
+          ))}
+        </select>
+      </Field>
+      {column(`Column holding ${fromLabel || "the from type"}'s key`, "link-join-from-column",
+        draft.from, (from) => onChange({ ...draft, from }))}
+      {column(`Column holding ${toLabel || "the to type"}'s key`, "link-join-to-column",
+        draft.to, (to) => onChange({ ...draft, to }))}
+    </>
+  );
+}
+
 const JOIN_HINT =
   "Instances are linked by matching these two values - a foreign key, in the data the objects were synced from. Leave unset to define the relationship without making it traversable yet.";
 
 function LinkTypeDialog({
   workspaceId,
+  projectId,
   onClose,
 }: {
   workspaceId: string;
+  projectId: string;
   onClose: () => void;
 }) {
   const [displayName, setDisplayName] = useState("");
@@ -352,7 +438,10 @@ function LinkTypeDialog({
   const [cardinality, setCardinality] = useState<LinkCardinality>("one_to_many");
   const [fromProperty, setFromProperty] = useState("");
   const [toProperty, setToProperty] = useState("");
+  const [joinBy, setJoinBy] = useState<"properties" | "join_table">("properties");
+  const [joinTable, setJoinTable] = useState<JoinTableDraft>(NO_JOIN_TABLE);
   const queryClient = useQueryClient();
+  const throughTable = cardinality === "many_to_many" && joinBy === "join_table";
 
   const create = useMutation({
     mutationFn: () =>
@@ -362,8 +451,9 @@ function LinkTypeDialog({
         from_type_id: fromId,
         to_type_id: toId,
         cardinality,
-        from_property: fromProperty || null,
-        to_property: toProperty || null,
+        from_property: throughTable ? null : fromProperty || null,
+        to_property: throughTable ? null : toProperty || null,
+        ...joinTablePayload(throughTable ? joinTable : NO_JOIN_TABLE),
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["link-types", workspaceId] });
@@ -373,7 +463,8 @@ function LinkTypeDialog({
 
   // Both ends or neither: half a join cannot answer a question, and the API
   // refuses it, so the form does too rather than sending it to be rejected.
-  const halfJoin = !fromProperty !== !toProperty;
+  const halfJoin = !throughTable && !fromProperty !== !toProperty;
+  const tableProblem = throughTable ? joinTableProblem(joinTable, cardinality) : null;
 
   return (
     <Dialog open title="New link type" onClose={onClose}>
@@ -408,24 +499,39 @@ function LinkTypeDialog({
             {CARDINALITIES.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </Field>
-        <JoinPropertyField
-          label="Join on (from)"
-          workspaceId={workspaceId}
-          typeId={fromId}
-          value={fromProperty}
-          onChange={setFromProperty}
-        />
-        <JoinPropertyField
-          label="Join on (to)"
-          workspaceId={workspaceId}
-          typeId={toId}
-          value={toProperty}
-          onChange={setToProperty}
-        />
-        <p className="login-note" style={{ marginTop: 0 }}>{JOIN_HINT}</p>
+        {cardinality === "many_to_many" && <JoinByField value={joinBy} onChange={setJoinBy} />}
+        {throughTable ? (
+          <JoinTableFields
+            workspaceId={workspaceId}
+            projectId={projectId}
+            draft={joinTable}
+            onChange={setJoinTable}
+            fromLabel="the from type"
+            toLabel="the to type"
+          />
+        ) : (
+          <>
+            <JoinPropertyField
+              label="Join on (from)"
+              workspaceId={workspaceId}
+              typeId={fromId}
+              value={fromProperty}
+              onChange={setFromProperty}
+            />
+            <JoinPropertyField
+              label="Join on (to)"
+              workspaceId={workspaceId}
+              typeId={toId}
+              value={toProperty}
+              onChange={setToProperty}
+            />
+            <p className="login-note" style={{ marginTop: 0 }}>{JOIN_HINT}</p>
+          </>
+        )}
         {halfJoin && (
           <div className="form-error">Set the property on both ends, or on neither.</div>
         )}
+        {tableProblem && <div className="form-error">{tableProblem}</div>}
         {create.isError && (
           <div className="form-error">
             {create.error instanceof ApiError ? create.error.message : "Couldn't create the link type."}
@@ -433,7 +539,7 @@ function LinkTypeDialog({
         )}
         <div className="form-actions">
           <button type="button" className="btn quiet" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn" disabled={create.isPending || !displayName.trim() || !fromId || !toId || halfJoin}>
+          <button type="submit" className="btn" disabled={create.isPending || !displayName.trim() || !fromId || !toId || halfJoin || !!tableProblem}>
             {create.isPending ? "Creating…" : "Create link type"}
           </button>
         </div>
@@ -446,22 +552,29 @@ function LinkTypeDialog({
  * path for every link defined before joins existed. */
 function LinkJoinDialog({
   workspaceId,
+  projectId,
   link,
   onClose,
 }: {
   workspaceId: string;
+  projectId: string;
   link: LinkType;
   onClose: () => void;
 }) {
   const [fromProperty, setFromProperty] = useState(link.from_property ?? "");
   const [toProperty, setToProperty] = useState(link.to_property ?? "");
+  const [joinBy, setJoinBy] = useState<"properties" | "join_table">(
+    link.join_from_column ? "join_table" : "properties");
+  const [joinTable, setJoinTable] = useState<JoinTableDraft>(draftOf(link));
   const queryClient = useQueryClient();
+  const throughTable = link.cardinality === "many_to_many" && joinBy === "join_table";
 
   const save = useMutation({
     mutationFn: () =>
       objApi.setLinkJoin(workspaceId, link.id, {
-        from_property: fromProperty || null,
-        to_property: toProperty || null,
+        from_property: throughTable ? null : fromProperty || null,
+        to_property: throughTable ? null : toProperty || null,
+        ...joinTablePayload(throughTable ? joinTable : NO_JOIN_TABLE),
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["link-types", workspaceId] });
@@ -470,31 +583,47 @@ function LinkJoinDialog({
     },
   });
 
-  const halfJoin = !fromProperty !== !toProperty;
+  const halfJoin = !throughTable && !fromProperty !== !toProperty;
+  const tableProblem = throughTable ? joinTableProblem(joinTable, link.cardinality) : null;
 
   return (
     <Dialog open title={`Join - ${link.display_name}`} onClose={onClose}>
       <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
         <p className="login-note" style={{ marginTop: 0 }}>
-          {link.from_display_name} → {link.to_display_name}. {JOIN_HINT}
+          {link.from_display_name} → {link.to_display_name}. {throughTable ? "" : JOIN_HINT}
         </p>
-        <JoinPropertyField
-          label={`Join on (${link.from_display_name})`}
-          workspaceId={workspaceId}
-          typeId={link.from_object_type_id}
-          value={fromProperty}
-          onChange={setFromProperty}
-        />
-        <JoinPropertyField
-          label={`Join on (${link.to_display_name})`}
-          workspaceId={workspaceId}
-          typeId={link.to_object_type_id}
-          value={toProperty}
-          onChange={setToProperty}
-        />
+        {link.cardinality === "many_to_many" && <JoinByField value={joinBy} onChange={setJoinBy} />}
+        {throughTable ? (
+          <JoinTableFields
+            workspaceId={workspaceId}
+            projectId={projectId}
+            draft={joinTable}
+            onChange={setJoinTable}
+            fromLabel={link.from_display_name}
+            toLabel={link.to_display_name}
+          />
+        ) : (
+          <>
+            <JoinPropertyField
+              label={`Join on (${link.from_display_name})`}
+              workspaceId={workspaceId}
+              typeId={link.from_object_type_id}
+              value={fromProperty}
+              onChange={setFromProperty}
+            />
+            <JoinPropertyField
+              label={`Join on (${link.to_display_name})`}
+              workspaceId={workspaceId}
+              typeId={link.to_object_type_id}
+              value={toProperty}
+              onChange={setToProperty}
+            />
+          </>
+        )}
         {halfJoin && (
           <div className="form-error">Set the property on both ends, or on neither.</div>
         )}
+        {tableProblem && <div className="form-error">{tableProblem}</div>}
         {save.isError && (
           <div className="form-error">
             {save.error instanceof ApiError ? save.error.message : "Couldn't save the join."}
@@ -502,7 +631,7 @@ function LinkJoinDialog({
         )}
         <div className="form-actions">
           <button type="button" className="btn quiet" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn" disabled={save.isPending || halfJoin}>
+          <button type="submit" className="btn" disabled={save.isPending || halfJoin || !!tableProblem}>
             {save.isPending ? "Saving…" : "Save join"}
           </button>
         </div>
@@ -1531,9 +1660,7 @@ export default function ObjectsPage() {
                     <td>{lt.from_display_name} → {lt.to_display_name}</td>
                     <td className="count">{lt.cardinality}</td>
                     <td className="slug">
-                      {lt.from_property
-                        ? `${joinLabel(lt.from_property)} = ${joinLabel(lt.to_property!)}`
-                        : "not traversable"}
+                      {joinDescription(lt, joinLabel)}
                     </td>
                     <td>
                       <div className="row-actions">
@@ -1543,7 +1670,7 @@ export default function ObjectsPage() {
                             style={{ padding: "3px 9px", fontSize: 12 }}
                             onClick={() => setJoining(lt)}
                           >
-                            {lt.from_property ? "Edit join" : "Set join"}
+                            {lt.from_property || lt.join_dataset_id ? "Edit join" : "Set join"}
                           </button>
                         )}
                         {canEditOntology && (
@@ -1688,11 +1815,11 @@ export default function ObjectsPage() {
       {suggesting && workspace && project && (
         <SuggestDialog workspaceId={workspace.id} projectId={project.id} onClose={() => setSuggesting(false)} />
       )}
-      {creatingLink && workspace && (
-        <LinkTypeDialog workspaceId={workspace.id} onClose={() => setCreatingLink(false)} />
+      {creatingLink && workspace && project && (
+        <LinkTypeDialog workspaceId={workspace.id} projectId={project.id} onClose={() => setCreatingLink(false)} />
       )}
-      {joining && workspace && (
-        <LinkJoinDialog workspaceId={workspace.id} link={joining} onClose={() => setJoining(null)} />
+      {joining && workspace && project && (
+        <LinkJoinDialog workspaceId={workspace.id} projectId={project.id} link={joining} onClose={() => setJoining(null)} />
       )}
       {editingType && workspace && editingDetail.data && (
         <EditObjectTypeDialog

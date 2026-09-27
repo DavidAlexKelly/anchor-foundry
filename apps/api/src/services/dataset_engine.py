@@ -870,6 +870,50 @@ def _quote_column(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def join_keys(
+    parquet_path: str, near_column: str, far_column: str, keys: list[str], limit: int,
+) -> list[str]:
+    """The far keys a join table pairs with these near keys (§552;
+    `object-link-types` p.35), distinct, at most `limit`.
+
+    Compared as text, as a primary key is everywhere else here: a join table
+    whose key column the upload inferred as an integer still pairs with the
+    key "7". A pair with a null on either side links nothing.
+    """
+    con = duckdb.connect()
+    try:
+        try:
+            names = {
+                str(d[0]) for d in con.execute(
+                    f"SELECT * FROM read_parquet('{parquet_path}') LIMIT 0"
+                ).description
+            }
+            for column in (near_column, far_column):
+                if column not in names:
+                    raise DatasetEngineError(
+                        f"the join table has no column {column!r} any more, so this "
+                        "link cannot be followed until it is joined on one that exists"
+                    )
+            rows = con.execute(
+                f"SELECT DISTINCT CAST({_quote_column(far_column)} AS VARCHAR) AS k "
+                f"FROM read_parquet('{parquet_path}') "
+                f"WHERE CAST({_quote_column(near_column)} AS VARCHAR) IN "
+                "(SELECT unnest(CAST(? AS VARCHAR[])))"
+                # No ORDER BY: under the limit `join_filter` sorts the keys,
+                # and at it the traversal is refused whichever came back.
+                # DISTINCT is not the same kind of redundancy - a duplicate
+                # pair counted against the limit would let a traversal past
+                # the cap return a prefix instead of refusing.
+                f" AND {_quote_column(far_column)} IS NOT NULL LIMIT ?",
+                [list(keys), limit],
+            ).fetchall()
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+        return [str(r[0]) for r in rows]
+    finally:
+        con.close()
+
+
 def write_rows(
     parquet_path: str,
     primary_key_column: str,

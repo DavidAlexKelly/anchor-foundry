@@ -151,7 +151,12 @@ function LinkGroup({
         <h3 style={{ fontSize: 13.5, margin: 0 }}>
           {label} {arrow} {group.far_type_display_name}
           <span className="slug" style={{ marginLeft: 8, fontWeight: 400 }}>
-            {propertyLabel(group.near_property)} = {propertyLabel(group.far_property)}
+            {/* p.197's join table (§552): both ends are keys, paired by the
+                rows of a dataset, so "key = key" would describe a join that
+                is not the one being followed. */}
+            {group.join_table
+              ? "through a join table"
+              : `${propertyLabel(group.near_property)} = ${propertyLabel(group.far_property)}`}
           </span>
         </h3>
         <span className="count">
@@ -175,11 +180,17 @@ function LinkGroup({
         </span>
       </div>
 
-      {group.total === 0 && (
+      {group.problem ? (
+        <p className="form-error" style={{ margin: "4px 0 0" }} data-testid={`link-problem-${group.link_type_id}`}>
+          {group.problem}
+        </p>
+      ) : group.total === 0 && (
         <p className="login-note" style={{ margin: "4px 0 0" }}>
-          {group.matched_value === null || group.matched_value === undefined
-            ? `No ${propertyLabel(group.near_property)} on this object, so this link points at nothing.`
-            : `Nothing matches ${String(group.matched_value)}.`}
+          {group.join_table
+            ? "The join table pairs this object with nothing."
+            : group.matched_value === null || group.matched_value === undefined
+              ? `No ${propertyLabel(group.near_property)} on this object, so this link points at nothing.`
+              : `Nothing matches ${String(group.matched_value)}.`}
         </p>
       )}
 

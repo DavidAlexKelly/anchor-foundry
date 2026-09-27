@@ -33,6 +33,7 @@ from ..services import dataset_provenance as provenance
 from ..services import dataset_schedules as schedule_service
 from ..services import datasets as ds_service
 from ..services.dataset_engine import DatasetEngineError
+from ..services import storage as storage_gateway
 from ..services.storage import LocalStorageGateway, StorageGateway
 
 router = APIRouter(
@@ -47,9 +48,16 @@ _storage: StorageGateway = LocalStorageGateway(
 )
 
 
+storage_gateway.use(_storage)
+
+
 def configure_storage_gateway(gateway: StorageGateway) -> None:
     global _storage
     _storage = gateway
+    # The same gateway for a service that reads a dataset's bytes without a
+    # route in hand (§552's join tables) - set by this one knob, so there is
+    # still only one thing to wire.
+    storage_gateway.use(gateway)
 
 
 def storage() -> StorageGateway:

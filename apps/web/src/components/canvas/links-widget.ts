@@ -25,6 +25,7 @@
  */
 
 import { OBJECT_PARAM, encodeObject } from "../../lib/object-links";
+import { PRIMARY_KEY } from "./object-table-selection";
 
 export interface LinkGroup {
   link_type_id: string;
@@ -209,17 +210,42 @@ export function objectViewHref(workspaceSlug: string, typeId: string, instanceId
  * (`linkSubsetHref`). The server orders by the property's declared type, and
  * refuses text, whose order the two stores do not agree on.
  *
+ * **A link through p.197's join table is a hop, not a match** (§552): the far
+ * objects do not hold this object's key, the join table's rows do, so the set
+ * is the far type reached from this one object by the link.
+ *
  * Null when the link names nothing to match, as it then has no objects.
  */
 export function sortedLinkQuery(
-  group: { far_type_id: string; far_property: string; matched_value: unknown },
+  group: {
+    link_type_id: string; far_type_id: string; far_property: string; matched_value: unknown;
+    join_table?: boolean;
+  },
   sort: string | undefined,
+  nearTypeId?: string,
 ): { definition: unknown; sort: string } | null {
   if (!sort || group.matched_value === null || group.matched_value === undefined) return null;
+  const value = String(group.matched_value);
+  if (group.join_table) {
+    if (!nearTypeId) return null;
+    return {
+      definition: {
+        object_type_id: group.far_type_id,
+        via: {
+          link_type_id: group.link_type_id,
+          base: {
+            object_type_id: nearTypeId,
+            filters: [{ property: PRIMARY_KEY, op: "eq", value }],
+          },
+        },
+      },
+      sort,
+    };
+  }
   return {
     definition: {
       object_type_id: group.far_type_id,
-      filters: [{ property: group.far_property, op: "eq", value: String(group.matched_value) }],
+      filters: [{ property: group.far_property, op: "eq", value }],
     },
     sort,
   };

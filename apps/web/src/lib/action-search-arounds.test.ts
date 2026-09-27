@@ -64,6 +64,10 @@ describe("traversable", () => {
     expect(traversable(unjoined)).toBe(false);
     expect(traversable(raisedBy)).toBe(true);
   });
+
+  it("follows a link through p.197's join table, which has no pair (§552)", () => {
+    expect(traversable({ ...unjoined, join_dataset_id: "d1" })).toBe(true);
+  });
 });
 
 describe("landsOn", () => {

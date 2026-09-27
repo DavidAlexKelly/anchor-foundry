@@ -29,7 +29,8 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # definitions live in their own module because the worker needs a verbatim
 # copy of them (see that module's docstring).
 from . import (
-    array_properties, conditional_format, derived_properties, ontology_status,
+    array_properties, conditional_format, derived_properties, link_join_tables,
+    ontology_status,
     property_reducers, shared_properties, struct_fields, value_format,
     value_types,
 )
@@ -1916,9 +1917,72 @@ def _normalise_join(
     return a, b
 
 
+async def _normalise_join_table(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    *,
+    cardinality: str,
+    from_property: str | None,
+    dataset_id: UUID | None,
+    from_column: str | None,
+    to_column: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """p.197's join table dataset, checked (§552; db 0115): the dataset, and
+    the column holding each end's primary key. `(None, None, None)` for a link
+    with none.
+
+    p.35: "select a dataset that contains columns matching the primary keys for
+    both selected object types. A column can only be mapped to one primary
+    key." The columns are checked against the dataset's schema now, so a typo
+    is a refusal at definition rather than a link that follows to nothing.
+    """
+    a = (from_column or "").strip() or None
+    b = (to_column or "").strip() or None
+    if dataset_id is None and a is None and b is None:
+        return None, None, None
+    if dataset_id is None or a is None or b is None:
+        raise ValueError(
+            "a join table needs the dataset and the column holding each end's "
+            "primary key - one column cannot pair anything"
+        )
+    if cardinality != "many_to_many":
+        # p.197: "Join table dataset: For "many-to-many" cardinality link types."
+        raise ValueError(
+            "a join table backs a many-to-many link - a one-to-one or one-to-many "
+            "link is a foreign key, joined on a pair of properties"
+        )
+    if from_property is not None:
+        raise ValueError(
+            "a link is joined on a pair of properties or on a join table, not both - "
+            "each is a whole answer to which objects are linked"
+        )
+    if a == b:
+        # p.35: "A column can only be mapped to one primary key."
+        raise ValueError("each end's primary key needs its own column of the join table")
+    dataset = await fetch_one(
+        conn,
+        "SELECT table_schema FROM datasets WHERE id = :id AND workspace_id = :wid",
+        {"id": str(dataset_id), "wid": str(workspace_id)},
+    )
+    if dataset is None:
+        raise NotFoundError("dataset")
+    schema = dataset["table_schema"]
+    if isinstance(schema, str):
+        schema = json.loads(schema)
+    names = [str(c.get("name")) for c in schema or []]
+    for column in (a, b):
+        if column not in names:
+            raise ValueError(
+                f"the join table has no column {column!r} "
+                f"(its columns: {', '.join(names) or 'none'})"
+            )
+    return str(dataset_id), a, b
+
+
 _LINK_SELECT = """
         SELECT lt.id, lt.api_name, lt.display_name, lt.cardinality, lt.created_at,
                lt.from_property, lt.to_property,
+               lt.join_dataset_id, lt.join_from_column, lt.join_to_column,
                lt.from_side_name, lt.to_side_name, lt.status, lt.deprecation,
                lt.from_object_type_id, f.display_name AS from_display_name,
                lt.to_object_type_id, t.display_name AS to_display_name
@@ -2014,7 +2078,7 @@ async def links_for_type(
         _LINK_SELECT
         + """
          WHERE lt.workspace_id = :wid
-           AND lt.from_property IS NOT NULL
+           AND (lt.from_property IS NOT NULL OR lt.join_dataset_id IS NOT NULL)
            AND (lt.from_object_type_id = :tid OR lt.to_object_type_id = :tid)
          ORDER BY lt.display_name
         """,
@@ -2023,12 +2087,17 @@ async def links_for_type(
     out: list[dict[str, Any]] = []
     for row in rows:
         link = dict(row)
+        # A join table's pairs are of primary keys (p.35), so from either end
+        # the key in hand is the near value and the key arrived at the far one;
+        # `join` says which of the table's columns is which (§552).
+        through = link["join_dataset_id"] is not None
         if str(link["from_object_type_id"]) == str(type_id):
             out.append({
                 **link,
                 "direction": "outbound",
-                "near_property": link["from_property"],
-                "far_property": link["to_property"],
+                "join": link_join_tables.oriented(link, outbound=True),
+                "near_property": PRIMARY_KEY_REF if through else link["from_property"],
+                "far_property": PRIMARY_KEY_REF if through else link["to_property"],
                 "far_type_id": link["to_object_type_id"],
                 "far_type_display_name": link["to_display_name"],
                 # The name of the side you arrive at (Foundry p.192). Going
@@ -2041,8 +2110,9 @@ async def links_for_type(
             out.append({
                 **link,
                 "direction": "inbound",
-                "near_property": link["to_property"],
-                "far_property": link["from_property"],
+                "join": link_join_tables.oriented(link, outbound=False),
+                "near_property": PRIMARY_KEY_REF if through else link["to_property"],
+                "far_property": PRIMARY_KEY_REF if through else link["from_property"],
                 "far_type_id": link["from_object_type_id"],
                 "far_type_display_name": link["from_display_name"],
                 "side_name": link["from_side_name"] or link["display_name"],
@@ -2064,6 +2134,9 @@ async def create_link_type(
     to_property: str | None = None,
     from_side_name: str | None = None,
     to_side_name: str | None = None,
+    join_dataset_id: UUID | None = None,
+    join_from_column: str | None = None,
+    join_to_column: str | None = None,
 ) -> dict[str, Any]:
     if not _PROP_API_RE.match(api_name):
         raise ValueError(f"invalid link api_name {api_name!r}")
@@ -2077,6 +2150,10 @@ async def create_link_type(
         await _validate_join_property(conn, from_type_id, from_property, end="from")
         assert to_property is not None
         await _validate_join_property(conn, to_type_id, to_property, end="to")
+    join_dataset, join_from, join_to = await _normalise_join_table(
+        conn, workspace_id, cardinality=cardinality, from_property=from_property,
+        dataset_id=join_dataset_id, from_column=join_from_column, to_column=join_to_column,
+    )
     existing = await fetch_one(
         conn,
         "SELECT 1 AS x FROM link_types WHERE workspace_id=:wid AND api_name=:api",
@@ -2090,12 +2167,14 @@ async def create_link_type(
         INSERT INTO link_types (workspace_id, api_name, display_name,
                                 from_object_type_id, to_object_type_id,
                                 cardinality, created_by, from_property, to_property,
-                                from_side_name, to_side_name)
+                                from_side_name, to_side_name,
+                                join_dataset_id, join_from_column, join_to_column)
         VALUES (:wid, :api, :name, :from, :to, CAST(:card AS link_cardinality), :by,
-                :fprop, :tprop, :fside, :tside)
+                :fprop, :tprop, :fside, :tside, :jds, :jfrom, :jto)
         RETURNING id, api_name, display_name, from_object_type_id,
                   to_object_type_id, cardinality, created_at,
                   from_property, to_property, from_side_name, to_side_name,
+                  join_dataset_id, join_from_column, join_to_column,
                   status, deprecation
         """,
         {
@@ -2110,6 +2189,9 @@ async def create_link_type(
             "tprop": to_property,
             "fside": (from_side_name or "").strip() or None,
             "tside": (to_side_name or "").strip() or None,
+            "jds": join_dataset,
+            "jfrom": join_from,
+            "jto": join_to,
         },
     )
     assert row is not None
@@ -2126,9 +2208,18 @@ async def set_link_join(
     from_side_name: str | None = None,
     to_side_name: str | None = None,
     status: str | None = None,
+    join_dataset_id: UUID | None = None,
+    join_from_column: str | None = None,
+    join_to_column: str | None = None,
+    keep_join_table: bool = False,
 ) -> dict[str, Any]:
-    """Map (or unmap) the properties a link joins on, name its two sides, and
-    set its status.
+    """Map (or unmap) the properties a link joins on - or p.197's join table
+    (§552), which replaces them - name its two sides, and set its status.
+
+    `keep_join_table` is for a caller that does not speak of join tables at
+    all - an imported ontology file, which carries no dataset because a
+    portable document carries no ids (§326) - so re-applying a link's pair of
+    nothing leaves the join table it has alone rather than clearing it.
 
     Only the join is mutable. Changing an endpoint or the cardinality would
     make it a different relationship wearing the same name - delete and
@@ -2148,6 +2239,16 @@ async def set_link_join(
         assert to_property is not None
         await _validate_join_property(
             conn, UUID(str(link["to_object_type_id"])), to_property, end="to"
+        )
+    if keep_join_table and from_property is None:
+        join_dataset, join_from, join_to = (
+            link["join_dataset_id"], link["join_from_column"], link["join_to_column"]
+        )
+    else:
+        join_dataset, join_from, join_to = await _normalise_join_table(
+            conn, workspace_id, cardinality=str(link["cardinality"]),
+            from_property=from_property, dataset_id=join_dataset_id,
+            from_column=join_from_column, to_column=join_to_column,
         )
 
     # p.257: a link type may be no more production-ready than the object types
@@ -2181,6 +2282,8 @@ async def set_link_join(
     await conn.execute(
         text(
             "UPDATE link_types SET from_property = :fprop, to_property = :tprop, "
+            "       join_dataset_id = :jds, join_from_column = :jfrom, "
+            "       join_to_column = :jto, "
             # p.257 caps a link's status by its ends and its foreign keys, so
             # what is stored is the capped value rather than what was asked
             # for - a link cannot be more production-ready than the things it
@@ -2195,6 +2298,8 @@ async def set_link_join(
             "WHERE id = :lid AND workspace_id = :wid"
         ),
         {"fprop": from_property, "tprop": to_property, "status": capped,
+         "jds": None if join_dataset is None else str(join_dataset),
+         "jfrom": join_from, "jto": join_to,
          "fside": (from_side_name or "").strip() or None,
          "tside": (to_side_name or "").strip() or None,
          "lid": str(link_id), "wid": str(workspace_id)},

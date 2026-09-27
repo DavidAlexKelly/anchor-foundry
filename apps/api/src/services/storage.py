@@ -158,3 +158,22 @@ class S3StorageGateway:
             keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
             if keys:
                 self._client.delete_objects(Bucket=self._bucket, Delete={"Objects": keys})
+
+
+# The gateway this process was configured with, for a service that reads a
+# dataset's bytes and has no route to hand it one (§552: a link's join table,
+# read while an object set is evaluated, several calls below any route). Set
+# only by `routes.datasets.configure_storage_gateway`, so wiring it is still
+# one knob rather than two.
+_current: "StorageGateway | None" = None
+
+
+def use(gateway: "StorageGateway") -> None:
+    global _current
+    _current = gateway
+
+
+def current() -> "StorageGateway":
+    if _current is None:
+        raise RuntimeError("no storage gateway has been configured")
+    return _current
