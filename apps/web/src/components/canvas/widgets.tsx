@@ -300,7 +300,7 @@ import {
 } from "./filter-sql";
 import { Chart, MultiLineChart, PieChart, SegmentedBarChart, toPoints } from "./charts";
 import {
-  MAX_SERIES, mergeSeries, seriesName as seriesNameOf, seriesOf, seriesRequests,
+  MAX_SERIES, axisSides, mergeSeries, seriesName as seriesNameOf, seriesOf, seriesRequests,
 } from "./chart-series";
 import {
   SEGMENT_LEGEND_POSITIONS, SEGMENT_MODES, segmentLegendPositionOf, segmentModeOf, segmentedFrom,
@@ -11953,6 +11953,7 @@ export function CanvasChart({
   segmentNames = {},
   series = [],
   seriesName = "",
+  multipleAxes = false,
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -12047,6 +12048,9 @@ export function CanvasChart({
   /** p.282's display override for the Measure's own series, in the legend a
    * chart with several series draws. */
   seriesName?: string;
+  /** p.283's **Use multiple value axes** (§542): a second axis on the right
+   * for the series that say so (`chart-series.axisSides`). */
+  multipleAxes?: boolean;
 }) {
   const {
     connectors: { connect, drag },
@@ -12202,6 +12206,7 @@ export function CanvasChart({
     const request = extraAsks[i];
     if (!request || !data) return [];
     return [{
+      spec,
       name: seriesNameOf(spec),
       points: data.groups.map((g) => ({
         label: g.value,
@@ -12216,6 +12221,7 @@ export function CanvasChart({
       [firstName, ...drawnExtras.map((e) => e.name)])
     : null;
   const extrasPending = extraResults.some((r, i) => !!extraAsks[i] && r.isPending);
+  const sides = axisSides(drawnExtras.map((e) => e.spec), multipleAxes === true);
 
   // p.283's value axis and titles. A problem with the bounds is said and the
   // chart drawn on calculated ones, rather than on an axis running backwards.
@@ -12298,6 +12304,7 @@ export function CanvasChart({
           data={{ ...multi, values: multi.values.map((row) =>
             row.map((v) => (Number.isNaN(v) ? 0 : v))) }}
           mode="grouped"
+          sides={sides}
           showLegend={showLegend !== false}
           titles={titles}
           legend={segmentLegendPositionOf(legendPosition)}
@@ -12309,6 +12316,7 @@ export function CanvasChart({
       {multi && drawnKind === "line" && (
         <MultiLineChart
           data={multi}
+          sides={sides}
           axis={axis}
           nulls={nulls}
           showLegend={showLegend !== false}
@@ -12403,9 +12411,10 @@ function ChartSettings() {
     drilldownVariable, segmentBy, segmentMode, showLegend, sort, orientation, valueLabels,
     scaleType, minBound, maxBound, showCategoryTitle, categoryTitle, showValueTitle, valueTitle,
     lineArea, nullDisplay, valueFormat, categoryFormat, legendPosition, segmentNames,
-    series, seriesName,
+    series, seriesName, multipleAxes,
     actions: { setProp },
   } = useNode((node) => ({
+    multipleAxes: node.data.props.multipleAxes,
     series: node.data.props.series,
     seriesName: node.data.props.seriesName,
     legendPosition: node.data.props.legendPosition,
@@ -12731,6 +12740,7 @@ function ChartSettings() {
             .map((c) => c.name)}
           showLegend={showLegend !== false}
           legend={legendPosition}
+          twoAxes={multipleAxes === true}
           setProp={setProp as (fn: (p: Record<string, unknown>) => void) => void}
         />
       )}
@@ -12862,8 +12872,10 @@ function ChartSettings() {
 /** p.281's multiple series and p.282's name for each (§541), in the Chart's
  * panel. The Measure above is the first series; these are the rest. */
 function ChartSeriesFields({
-  segmented, series, firstName, firstDefault, numbers, showLegend, legend, setProp,
+  segmented, series, firstName, firstDefault, numbers, showLegend, legend, twoAxes, setProp,
 }: {
+  /** p.283's Use multiple value axes (§542). */
+  twoAxes: boolean;
   segmented: boolean;
   series: unknown;
   firstName: string;
@@ -12910,6 +12922,18 @@ function ChartSeriesFields({
               {numbers.map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           )}
+          {twoAxes && (
+            <select
+              aria-label={`Series ${i + 2} axis`}
+              data-testid="chart-series-axis"
+              value={spec.axis}
+              onChange={(e) => write(specs.map((s, j) =>
+                (j === i ? { ...s, axis: e.target.value === "left" ? "left" : "right" } : s)))}
+            >
+              <option value="left">Left axis</option>
+              <option value="right">Right axis</option>
+            </select>
+          )}
           <input
             type="text"
             aria-label={`Series ${i + 2} name`}
@@ -12935,7 +12959,8 @@ function ChartSeriesFields({
         className="btn"
         data-testid="chart-add-series"
         disabled={specs.length >= MAX_SERIES - 1}
-        onClick={() => write([...specs, { aggregate: "count", measure: null, name: "" }])}
+        onClick={() =>
+          write([...specs, { aggregate: "count", measure: null, name: "", axis: "right" }])}
       >
         Add a series
       </button>
@@ -12950,6 +12975,15 @@ function ChartSeriesFields({
               value={firstName}
               onChange={(e) => setProp((p) => (p.seriesName = e.target.value))}
             />
+          </label>
+          <label className="field canvas-toggle">
+            <input
+              type="checkbox"
+              data-testid="chart-multiple-axes"
+              checked={twoAxes}
+              onChange={(e) => setProp((p) => (p.multipleAxes = e.target.checked))}
+            />
+            <span className="field-label">Use multiple value axes</span>
           </label>
           <label className="field canvas-toggle">
             <input
@@ -13166,6 +13200,7 @@ CanvasChart.craft = {
     showCategoryTitle: false, categoryTitle: "", showValueTitle: false, valueTitle: "",
     lineArea: "line", nullDisplay: "ignored", valueFormat: null, categoryFormat: null,
     legendPosition: "bottom", segmentNames: {}, series: [], seriesName: "",
+    multipleAxes: false,
   },
   related: { settings: ChartSettings },
 };

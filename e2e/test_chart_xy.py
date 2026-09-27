@@ -865,8 +865,8 @@ def test_the_panel_adds_and_names_a_series(page, api, sites) -> None:
     expect(page.get_by_test_id("chart-segment-by")).to_be_disabled()
     save(page)
     props = mod.definition()["layout"]["chart"]["props"]
-    assert props["series"] == [{"aggregate": "sum", "measure": "capacity", "name": "Capacity"}], \
-        props
+    assert props["series"] == [{"aggregate": "sum", "measure": "capacity", "name": "Capacity",
+                                "axis": "right"}], props
     assert (props["seriesName"], props["legendPosition"]) == ("Sites", "top"), props
     page.get_by_test_id("chart-series-remove").click()
     page.get_by_role("button", name="Save", exact=True).click()
@@ -881,3 +881,70 @@ def test_a_segmented_chart_is_offered_no_more_series(page, api, sites) -> None:
     page.locator(".canvas-tree-row", has_text="Chart").first.click()
     expect(page.get_by_test_id("chart-series-segmented")).to_be_visible()
     expect(page.get_by_test_id("chart-add-series")).to_have_count(0)
+
+
+# ---- p.283's Use multiple value axes (§542) --------------------------------
+
+def right_ticks(page) -> list[str]:
+    return page.get_by_test_id("chart-right-tick").all_text_contents()
+
+
+def assert_inside(page, chart: str) -> None:
+    frame = box(page.locator(f"svg[aria-label='{chart}']"))
+    tick = box(page.get_by_test_id("chart-right-tick").last)
+    assert tick["x"] + tick["width"] <= frame["x"] + frame["width"] + 0.5, (tick, frame)
+
+
+def test_a_series_on_the_right_is_read_against_its_own_axis(page, api, sites) -> None:
+    # Counts of 3 and 1 beside totals of 30 and 90: on one axis the counts are
+    # slivers; on two, the tallest of each fills the plot.
+    mod = build(api, sites, "Chart XY two axes", {"series": SUM_SERIES, "multipleAxes": True})
+    open_module(page, mod)
+    eventually(lambda: right_ticks(page), lambda got: got[-1:] == ["90"], what="the right axis")
+    assert value_ticks(page)[-1] == "3", value_ticks(page)
+    most = box(segment(page, "open", "Count"))
+    total = box(segment(page, "closed", "Sum of capacity"))
+    assert abs(most["height"] - total["height"]) < 1, (most, total)
+    expect(page.locator("[data-testid='chart-legend-entry'] title")).to_have_text(
+        ["Count", "Sum of capacity (right)"])
+    # The right axis's numbers are inside the chart, not cut off at its edge.
+    assert_inside(page, "Segmented bar chart")
+    # Lines, the same way.
+    mod = build(api, sites, "Chart XY two axes line", {
+        "kind": "line", "series": SUM_SERIES, "multipleAxes": True})
+    open_module(page, mod)
+    eventually(lambda: right_ticks(page), lambda got: got[-1:] == ["90"], what="the line's right")
+
+    def dot(series: str, category: str):
+        return page.locator(f"[data-testid='chart-series-line'][data-series='{series}'] circle",
+                            has=page.locator("title", has_text=f"{category} ·"))
+
+    assert abs(box(dot("Count", "open"))["y"] - box(dot("Sum of capacity", "closed"))["y"]) < 1
+    assert_inside(page, "Multi-series line chart")
+
+
+def test_one_axis_unless_asked_and_unless_a_series_is_on_the_right(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY one axis", {"series": SUM_SERIES})
+    open_module(page, mod)
+    eventually(lambda: value_ticks(page), lambda got: got[-1:] == ["90"], what="one axis")
+    expect(page.get_by_test_id("chart-right-tick")).to_have_count(0)
+    mod = build(api, sites, "Chart XY all left", {
+        "series": [{**SUM_SERIES[0], "axis": "left"}], "multipleAxes": True})
+    open_module(page, mod)
+    eventually(lambda: value_ticks(page), lambda got: got[-1:] == ["90"], what="all on the left")
+    expect(page.get_by_test_id("chart-right-tick")).to_have_count(0)
+
+
+def test_the_panel_puts_a_series_on_an_axis(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY axes panel", {"series": SUM_SERIES})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    expect(page.get_by_test_id("chart-series-axis")).to_have_count(0)
+    page.get_by_test_id("chart-multiple-axes").check()
+    expect(page.get_by_test_id("chart-series-axis")).to_have_value("right")
+    page.get_by_test_id("chart-series-axis").select_option("left")
+    save(page)
+    props = mod.definition()["layout"]["chart"]["props"]
+    assert props["multipleAxes"] is True, props
+    assert props["series"][0]["axis"] == "left", props
