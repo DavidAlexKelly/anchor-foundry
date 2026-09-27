@@ -269,6 +269,12 @@ export const REFERENCE_PROPS = [
   // p.303's Selected time on the Map (§557), read and written. See the API's
   // copy.
   "selectedTimeVariable",
+  // The rest of p.303's time configuration (§558). See the API's copy.
+  "windowStartVariable",
+  "windowEndVariable",
+  "playingVariable",
+  "playbackPositionVariable",
+  "autoPauseVariable",
   "name",
 ] as const;
 

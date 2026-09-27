@@ -77,6 +77,12 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   areaVariable: "write",
   // p.303: the Map's timeline writes the selected time, as a picker does.
   selectedTimeVariable: "write",
+  // p.303 (§558): the window and pause times are read; playback is written.
+  windowStartVariable: "read",
+  windowEndVariable: "read",
+  playingVariable: "write",
+  playbackPositionVariable: "write",
+  autoPauseVariable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",
