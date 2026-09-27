@@ -175,3 +175,64 @@ def test_an_interface_hit_opens_the_interface(page, api):
     expect(page.get_by_role("dialog")).to_contain_text(
         f"if_{word} objects", timeout=30000
     )
+
+
+def test_the_arrows_move_the_selection_and_enter_opens_it(page, api):
+    """§515, p.28: "You can use the up-arrow and down-arrow keys on your
+    keyboard to move through search results and see previews for the selected
+    results. You can select Open or use the Enter key to open the selected
+    result." Two interfaces, because an interface hit opens a dialog named
+    after it, which says *which* one was opened."""
+    mod = Module(api, "Search keys")
+    word = f"zarquon{uuid.uuid4().hex[:6]}"
+    for letter in ("a", "b"):
+        api.call("POST", f"/workspaces/{mod.workspace_id}/interfaces",
+                 {"api_name": f"if_{letter}_{word}", "display_name": f"Shape {letter} {word}",
+                  "properties": [{"api_name": "code", "display_name": "Code",
+                                  "data_type": "string", "required": True}]})
+    open_manager(page, mod)
+    box = page.get_by_label("Search the ontology")
+    box.fill(word)
+    hits = page.get_by_test_id("ontology-search-hit")
+    expect(hits).to_have_count(2, timeout=30000)
+    names = [hits.nth(i).inner_text() for i in range(2)]
+    second = next(f"if_{c}_{word}" for c in "ab" if f"Shape {c} {word}" in names[1])
+    first = next(f"if_{c}_{word}" for c in "ab" if f"Shape {c} {word}" in names[0])
+    preview = page.get_by_test_id("search-preview")
+
+    expect(hits.nth(0)).to_have_attribute("aria-selected", "true")
+    expect(preview).to_contain_text(first)
+    box.press("ArrowDown")
+    expect(hits.nth(1)).to_have_attribute("aria-selected", "true")
+    expect(hits.nth(0)).to_have_attribute("aria-selected", "false")
+    expect(preview).to_contain_text(second)
+    box.press("ArrowDown")  # stops at the end
+    expect(hits.nth(1)).to_have_attribute("aria-selected", "true")
+    box.press("ArrowUp")
+    expect(preview).to_contain_text(first)
+
+    # A new query starts again from the top.
+    box.press("ArrowDown")
+    box.press("Backspace")
+    box.type(word[-1])
+    expect(hits.nth(0)).to_have_attribute("aria-selected", "true")
+
+    box.press("ArrowDown")
+    box.press("Enter")
+    expect(page.get_by_role("dialog")).to_contain_text(f"{second} objects", timeout=30000)
+
+
+def test_the_preview_s_open_button_opens_the_selected_result(page, api):
+    mod = Module(api, "Search preview open")
+    word = f"zarquon{uuid.uuid4().hex[:6]}"
+    api.call("POST", f"/workspaces/{mod.workspace_id}/interfaces",
+             {"api_name": f"if_{word}", "display_name": f"Shape {word}",
+              "properties": [{"api_name": "code", "display_name": "Code",
+                              "data_type": "string", "required": True}]})
+    open_manager(page, mod)
+    page.get_by_label("Search the ontology").fill(word)
+    preview = page.get_by_test_id("search-preview")
+    expect(preview).to_contain_text("Interface", timeout=30000)
+    expect(preview).to_contain_text(f"if_{word}")
+    preview.get_by_test_id("search-preview-open").click()
+    expect(page.get_by_role("dialog")).to_contain_text(f"if_{word} objects", timeout=30000)

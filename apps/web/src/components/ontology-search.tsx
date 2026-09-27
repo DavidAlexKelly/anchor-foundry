@@ -32,6 +32,8 @@ import {
   destinationFor,
   implementationSummary,
 } from "@/lib/search-destination";
+import { nextIndex, previewRows } from "@/lib/search-keys";
+import type { OntologySearchHit } from "@/lib/types";
 
 export function OntologySearch({
   workspaceId,
@@ -96,6 +98,20 @@ export function OntologySearch({
     enabled: query.trim().length > 0,
   });
   const hits = results.data ?? [];
+  // p.28's selected result (§515), moved by the arrows and opened by Enter.
+  // Reset to the first hit when the query changes, since the old index names
+  // a row of a different list.
+  const [selected, setSelected] = useState(0);
+  const chosen = hits.length > 0 ? hits[nextIndex(selected, hits.length, "")] : undefined;
+
+  const open = (hit: OntologySearchHit) => {
+    const to = destinationFor(hit);
+    if (!to) return;
+    if (to.open === "object_type") onOpenType(to.id);
+    else if (to.open === "group") onOpenGroup(to.id);
+    else if (to.open === "interface") onOpenInterface(to.id);
+    else onOpenSharedProperty(to.id);
+  };
 
   // **p.30's quick links, in the shape this product has for them** (§317).
   //
@@ -128,7 +144,19 @@ export function OntologySearch({
         value={query}
         aria-label="Search the ontology"
         placeholder="Search object types, properties, links, actions… (⌘K)"
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setSelected(0);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            setSelected((i) => nextIndex(i, hits.length, e.key));
+          } else if (e.key === "Enter" && chosen) {
+            e.preventDefault();
+            open(chosen);
+          }
+        }}
         onFocus={() => setFocused(true)}
         // **On a timer, and the timer is the point.** A `blur` that closed the
         // panel immediately would fire before the click that caused it landed
@@ -211,6 +239,8 @@ export function OntologySearch({
                     style={{ padding: "4px 10px", fontSize: 12.5, textAlign: "left" }}
                     data-kind={hit.kind}
                     data-matched-field={hit.matched_field}
+                    data-testid="ontology-search-hit"
+                    aria-selected={hit === chosen}
                     /* **The dispatch is a decision, not a chain of
                        ternaries** (§316). The chain that stood here fell
                        through to the last branch for any kind it did not
@@ -219,14 +249,7 @@ export function OntologySearch({
                        kind and no default, so the next kind added to the union
                        is a compile error rather than a click that does
                        nothing. */
-                    onClick={() => {
-                      const to = destinationFor(hit);
-                      if (!to) return;
-                      if (to.open === "object_type") onOpenType(to.id);
-                      else if (to.open === "group") onOpenGroup(to.id);
-                      else if (to.open === "interface") onOpenInterface(to.id);
-                      else onOpenSharedProperty(to.id);
-                    }}
+                    onClick={() => open(hit)}
                   >
                     <span className="slug" style={{ marginRight: 8 }}>
                       {KIND_LABELS[hit.kind]}
@@ -283,6 +306,27 @@ export function OntologySearch({
                 </li>
               ))}
             </ul>
+          )}
+          {/* p.28's "see previews for the selected results", with its Open. */}
+          {chosen && (
+            <div className="ontology-search-preview" data-testid="search-preview">
+              <dl className="app-facts">
+                {previewRows(chosen).map(([k, v]) => (
+                  <div key={k}>
+                    <dt>{k}</dt>
+                    <dd>{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              <button
+                type="button"
+                className="btn"
+                data-testid="search-preview-open"
+                onClick={() => open(chosen)}
+              >
+                Open
+              </button>
+            </div>
           )}
         </div>
       )}
