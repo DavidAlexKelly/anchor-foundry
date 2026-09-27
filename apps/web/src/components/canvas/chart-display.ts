@@ -269,11 +269,14 @@ export function axisTitlesOf(
  * A missing value travels as NaN: a point whose category is known and whose
  * value is not, so a gap can stand where it was.
  */
-export const AREA_OPTIONS = { line: "Line", area: "Area" } as const;
+export const AREA_OPTIONS = { line: "Line", area: "Area", stacked: "Stacked" } as const;
 export type AreaOption = keyof typeof AREA_OPTIONS;
 
+/** §601 adds Stacked, which "stacks segmented chart values on top of each
+ * other" (p.281) - so it needs segments (a line per segment value); a line
+ * chart with one series has nothing to stack and shades as Area does. */
 export function areaOf(raw: unknown): AreaOption {
-  return raw === "area" ? "area" : "line";
+  return raw === "area" || raw === "stacked" ? raw : "line";
 }
 
 export const NULL_DISPLAYS = { ignored: "Ignored", gap: "Gap", zeroes: "Zeroes" } as const;

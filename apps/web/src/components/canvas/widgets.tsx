@@ -14503,8 +14503,11 @@ export function CanvasChart({
   const seriesRef = useCanvasVariable(seriesVariable) as SeriesRef | null;
   const usingSeries = !!seriesVariable;
   const usingSet = !usingSeries && !!objectSetVariable;
-  // p.282: segments are a bar chart's, and they count (see `segmentBy`).
-  const segmenting = usingSet && !!segmentBy && (kind ?? "bar") === "bar"
+  // p.282: segments are a bar chart's and, since §601, a line chart's -
+  // p.281's Stacked area "stacks segmented chart values" - and they count
+  // (see `segmentBy`).
+  const segmenting = usingSet && !!segmentBy
+    && ((kind ?? "bar") === "bar" || kind === "line")
     && pieAggregationOf(aggregate) === "count";
 
   // Drill-down needs a set to narrow and a property to narrow it on, so it is
@@ -14710,7 +14713,21 @@ export function CanvasChart({
       {segmenting && crossTab.data && (
         crossTab.data.rows.length === 0
           ? <p className="canvas-widget-empty">No rows match — nothing to chart.</p>
-          : (
+          : kind === "line" ? (
+            // A line per segment value (§601), shaded or stacked as p.281's
+            // Area options say.
+            <MultiLineChart
+              data={sortSegmented(segmentedFrom(crossTab.data), chartSortOf(sort))}
+              fill={areaOf(lineArea)}
+              axis={axis}
+              showLegend={showLegend !== false}
+              titles={titles}
+              legend={segmentLegendPositionOf(legendPosition)}
+              valueText={valueText(valueFormat) ?? undefined}
+              categoryText={categoryText(categoryFormat) ?? undefined}
+              drill={chartDrill}
+            />
+          ) : (
             <SegmentedBarChart
               data={sortSegmented(segmentedFrom(crossTab.data), chartSortOf(sort))}
               mode={segmentModeOf(segmentMode)}
@@ -14776,7 +14793,8 @@ export function CanvasChart({
             labels: valueLabels === true,
             axis,
             titles,
-            shaded: drawnKind === "line" && areaOf(lineArea) === "area",
+            // One line has nothing to stack, so Stacked shades it as Area does.
+            shaded: drawnKind === "line" && areaOf(lineArea) !== "line",
             valueText: valueText(valueFormat) ?? undefined,
             categoryText: categoryText(categoryFormat) ?? undefined,
           }}
@@ -15077,6 +15095,11 @@ function ChartSettings() {
                 <option key={key} value={key}>{name}</option>
               ))}
             </select>
+            {areaOf(lineArea) === "stacked" && !segmentBy && (
+              <span className="field-hint" data-testid="chart-stacked-hint">
+                Stacked piles segments on each other - choose Segment by
+              </span>
+            )}
           </label>
           <label className="field">
             <span className="field-label">Missing values</span>
@@ -15168,7 +15191,7 @@ function ChartSettings() {
       )}
       {objectSetVariable && !seriesVariable && ((kind || "bar") === "bar" || kind === "line") && (
         <ChartSeriesFields
-          segmented={!!segmentBy && (kind || "bar") === "bar"}
+          segmented={!!segmentBy && ((kind || "bar") === "bar" || kind === "line")}
           series={series}
           firstName={typeof seriesName === "string" ? seriesName : ""}
           firstDefault={defaultValueTitle(kind || "bar", aggregate, measure)}
@@ -15180,7 +15203,7 @@ function ChartSettings() {
           setProp={setProp as (fn: (p: Record<string, unknown>) => void) => void}
         />
       )}
-      {objectSetVariable && (kind || "bar") === "bar" && (
+      {objectSetVariable && ((kind || "bar") === "bar" || kind === "line") && (
         <>
           <label className="field">
             <span className="field-label">Segment by</span>
@@ -15205,6 +15228,7 @@ function ChartSettings() {
           </label>
           {segmentBy && (
             <>
+              {(kind || "bar") === "bar" && (
               <label className="field">
                 <span className="field-label">Segment display</span>
                 <select
@@ -15218,6 +15242,7 @@ function ChartSettings() {
                   ))}
                 </select>
               </label>
+              )}
               <label className="field canvas-toggle">
                 <input
                   type="checkbox"

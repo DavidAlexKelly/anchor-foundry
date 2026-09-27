@@ -948,3 +948,65 @@ def test_the_panel_puts_a_series_on_an_axis(page, api, sites) -> None:
     props = mod.definition()["layout"]["chart"]["props"]
     assert props["multipleAxes"] is True, props
     assert props["series"][0]["axis"] == "left", props
+
+
+# ---- §601: a segmented line chart, and p.281's Stacked area ------------------
+def series_dots(page, series: str) -> dict[str, float]:
+    """Each category's dot on one series' line, by its height on the page."""
+    line = page.locator(f"[data-testid='chart-series-line'][data-series='{series}']")
+    out = {}
+    for dot in line.locator("circle").all():
+        category = (dot.locator("title").text_content() or "").split(" · ")[0]
+        out[category] = float(dot.get_attribute("cy") or 0)
+    return out
+
+
+def test_a_line_chart_draws_a_line_per_segment(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY segmented line", {"kind": "line", "segmentBy": "region"})
+    open_module(page, mod)
+    lines = page.locator("[data-testid='chart-series-line']")
+    expect(lines).to_have_count(3)
+    expect(page.locator("[data-testid='chart-legend-entry']")).to_have_count(3)
+    # Line, the default, shades nothing.
+    expect(page.locator("[data-testid='chart-series-area']")).to_have_count(0)
+    titles = page.locator("[data-testid='chart-series-line'] circle title").all_text_contents()
+    assert "open · north: 2" in titles, titles
+
+
+def test_p281_stacked_piles_each_segment_on_the_ones_below(page, api, sites) -> None:
+    """"Stacked (which is similar to the "Area" option but stacks segmented
+    chart values on top of each other)" (p.281)."""
+    mod = build(api, sites, "Chart XY stacked line",
+                {"kind": "line", "segmentBy": "region", "lineArea": "stacked"})
+    open_module(page, mod)
+    expect(page.locator("[data-testid='chart-series-area']")).to_have_count(3)
+    order = page.locator("[data-testid='chart-series-line']").evaluate_all(
+        "els => els.map(e => e.getAttribute('data-series'))")
+    heights = [series_dots(page, series)["open"] for series in order]
+    # Each line at or above the one before it: a pile, never a crossing.
+    assert all(later <= earlier for earlier, later in zip(heights, heights[1:])), heights
+    assert heights[-1] < heights[0], heights
+    # The dots still say each segment's own count, not the running total.
+    titles = page.locator("[data-testid='chart-series-line'] circle title").all_text_contents()
+    assert "open · south: 1" in titles, titles
+
+
+def test_area_shades_beneath_each_segment_s_line(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY area line",
+                {"kind": "line", "segmentBy": "region", "lineArea": "area"})
+    open_module(page, mod)
+    expect(page.locator("[data-testid='chart-series-area']")).to_have_count(3)
+
+
+def test_the_panel_segments_a_line_chart_with_no_bar_display(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY line panel", {"kind": "line"})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    page.get_by_test_id("chart-line-area").select_option("stacked")
+    expect(page.get_by_test_id("chart-stacked-hint")).to_be_visible()
+    page.get_by_test_id("chart-segment-by").select_option("region")
+    expect(page.get_by_test_id("chart-stacked-hint")).to_have_count(0)
+    # Stacked, percentage and grouped are a bar's.
+    expect(page.get_by_test_id("chart-segment-mode")).to_have_count(0)
+    expect(page.locator("[data-testid='chart-series-area']")).to_have_count(3)

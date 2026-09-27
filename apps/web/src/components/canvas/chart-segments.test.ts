@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   legendEntryAt, legendInset, segmentLayout, segmentLegendPositionOf, segmentModeOf, segmentName,
   segmentedFrom, sortSegmented,
+  stackSegments,
 } from "./chart-segments";
 
 const data = segmentedFrom({
@@ -125,5 +126,13 @@ describe("sortSegmented (p.283's Sort by, on a segmented chart)", () => {
   it("orders by key as a person reads it", () => {
     expect(sortSegmented(grid, "keyAsc").categories).toEqual(["Site 1", "site 2", "Site 10"]);
     expect(sortSegmented(grid, "keyDesc").values).toEqual([[1, 1], [5, 0], [0, 3]]);
+  });
+});
+
+describe("p.281's Stacked area (§601)", () => {
+  it("draws each segment at the running total, a missing value adding nothing", () => {
+    expect(stackSegments({ categories: ["a", "b"], segments: ["x", "y", "z"],
+      values: [[1, 2, 3], [4, NaN, 1]] })).toEqual({
+      categories: ["a", "b"], segments: ["x", "y", "z"], values: [[1, 3, 6], [4, 4, 5]] });
   });
 });

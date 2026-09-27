@@ -184,7 +184,9 @@ describe("missing values (p.282's null display)", () => {
     expect(nullDisplayOf("gap")).toBe("gap");
     expect(nullDisplayOf("zeroes")).toBe("zeroes");
     expect(areaOf(undefined)).toBe("line");
-    expect(areaOf("stacked")).toBe("line");
+    // §601: p.281's third option.
+    expect(areaOf("stacked")).toBe("stacked");
+    expect(areaOf("Stacked")).toBe("line");
     expect(areaOf("area")).toBe("area");
   });
 

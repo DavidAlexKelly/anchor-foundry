@@ -54,6 +54,20 @@ export function segmentedFrom(crossTab: {
   };
 }
 
+/** p.281's Stacked area (§601): each segment's line drawn at the running
+ * total of the segments before it and itself, so the bands between lines are
+ * each segment's own values. A missing value stacks as nothing - a band can
+ * be empty, and a stack cannot have a hole in it. */
+export function stackSegments(data: Segmented): Segmented {
+  return {
+    ...data,
+    values: data.values.map((row) => {
+      let total = 0;
+      return row.map((value) => (total += Number.isNaN(value) ? 0 : value));
+    }),
+  };
+}
+
 /** One rectangle, in value space: from `from` to `to` on the value axis, and
  * across `offset`..`offset + width` of its category's slot (0..1). */
 export interface SegmentBar {
