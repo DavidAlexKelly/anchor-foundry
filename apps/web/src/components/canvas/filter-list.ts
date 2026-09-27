@@ -471,3 +471,47 @@ export function withLinked(clauses: readonly Clause[], link: string, far: Clause
     && linkedFiltersOf(c).length > 0));
   return far.length ? [...rest, { property: link, op: HAS_LINK, value: { filters: far } }] : rest;
 }
+
+/**
+ * p.451's display options for linked filters (§546).
+ *
+ * > "Inline: The inline display option will display the linked filters
+ * > alongside non-linked filters (in the same grouping). Grouped: The grouped
+ * > option will visually group linked filters into a section, adding an object
+ * > icon and linked object count … Collapse by default: When enabled, this
+ * > option will display the linked filter group as collapsed by default when
+ * > the module is loaded." (p.451)
+ */
+export const LINK_DISPLAYS = { inline: "Inline", grouped: "Grouped" } as const;
+export type LinkDisplay = keyof typeof LINK_DISPLAYS;
+
+export function linkDisplayOf(raw: unknown): LinkDisplay {
+  return raw === "grouped" ? "grouped" : "inline";
+}
+
+export interface FilterGroup {
+  /** The link a section is for, or null for the filters on the set itself. */
+  link: string | null;
+  linkTo: string | null;
+  specs: FilterSpec[];
+}
+
+/** The filters in the order they are drawn. Inline, one run in the order they
+ * were added. Grouped, the set's own filters first and then a section per
+ * link, in the order each link first appears - one per end, since a link
+ * followed either way reaches a different type. */
+export function groupFilters(specs: readonly FilterSpec[], display: LinkDisplay): FilterGroup[] {
+  if (display === "inline") return [{ link: null, linkTo: null, specs: [...specs] }];
+  const own: FilterSpec[] = [];
+  const sections: FilterGroup[] = [];
+  for (const spec of specs) {
+    if (!spec.link) {
+      own.push(spec);
+      continue;
+    }
+    const section = sections.find((g) => g.link === spec.link && g.linkTo === spec.linkTo);
+    if (section) section.specs.push(spec);
+    else sections.push({ link: spec.link, linkTo: spec.linkTo ?? null, specs: [spec] });
+  }
+  return [{ link: null, linkTo: null, specs: own }, ...sections];
+}

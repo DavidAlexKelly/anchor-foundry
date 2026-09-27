@@ -225,10 +225,12 @@ import {
   timelineIntervalOf, withBucket,
   keywordOf, layoutOf, newFilterId, pillSummary, rangeOf, toggleValue, valuesOf, viewerFilterId,
   visibleFilters, withKeyword, withRange, withValues, withoutFilter,
-  hasLinkOf, linkedClausesOf, withHasLink, withLinked,
+  hasLinkOf, linkedClausesOf, withHasLink, withLinked, groupFilters, linkDisplayOf,
+  LINK_DISPLAYS,
   type Clause, type DayRange, type FilterSpec,
 } from "./filter-list";
 import { keywordQueryProblem } from "./keyword-query";
+import { glyph, swatch } from "@/lib/object-type-icon";
 import {
   MAX_DRAGGED_OBJECTS, OBJECT_MEDIA_TYPE, OBJECT_SET_MEDIA_TYPE, carriesPayload, collectKeys,
   droppedClauses, objectPayload, objectSetPayload,
@@ -633,6 +635,8 @@ export function CanvasFilterList({
   title = "Filters",
   userEditable = false,
   layout = "vertical",
+  linkDisplay = "inline",
+  collapseLinked = false,
 }: {
   /** The set to offer filters over. */
   objectSetVariable?: string | null;
@@ -652,6 +656,11 @@ export function CanvasFilterList({
   userEditable?: boolean;
   /** p.449's Vertical or Pills layout (§464). */
   layout?: string;
+  /** p.451's display options for linked filters (§546): Inline or Grouped,
+   * and whether a group starts collapsed. A Pills layout has a pill per
+   * filter, grouped or not. */
+  linkDisplay?: string;
+  collapseLinked?: boolean;
 }) {
   const {
     id: nodeId,
@@ -821,7 +830,20 @@ export function CanvasFilterList({
         </div>
       ) : (
         <>
-          {specs.map(filterOf)}
+          {groupFilters(specs, linkDisplayOf(linkDisplay)).map((group) => group.link === null
+            ? group.specs.map(filterOf)
+            : (
+              <LinkedFilterGroup
+                key={`${group.link}:${group.linkTo}`}
+                workspaceId={workspaceId}
+                link={group.link}
+                linkTo={group.linkTo}
+                base={setDefinition}
+                collapsed={collapseLinked === true}
+              >
+                {group.specs.map(filterOf)}
+              </LinkedFilterGroup>
+            ))}
           {addControl}
         </>
       )}
@@ -871,6 +893,54 @@ function AdvancedKeyword({ label, applied, onApply }: {
         </p>
       )}
     </>
+  );
+}
+
+/**
+ * p.451's Grouped display (§546): a link's filters in one section, headed by
+ * the linked type's icon and name and how many of its objects are linked to
+ * the set - the traversal §544 made every count honour. p.451's Collapse by
+ * default starts it closed.
+ */
+function LinkedFilterGroup({ workspaceId, link, linkTo, base, collapsed, children }: {
+  workspaceId: string;
+  link: string;
+  linkTo: string | null;
+  base: unknown;
+  collapsed: boolean;
+  children: React.ReactNode;
+}) {
+  const far = useQuery({
+    queryKey: ["object-type", linkTo],
+    queryFn: () => objApi.getType(workspaceId, linkTo!),
+    enabled: !!linkTo,
+  });
+  const reached = base && linkTo
+    ? { object_type_id: linkTo, filters: [], via: { link_type_id: link, base } }
+    : null;
+  const count = useQuery({
+    queryKey: ["canvas-filter-link-count", JSON.stringify(reached)],
+    queryFn: () => objApi.aggregateObjectSet(workspaceId, reached, { aggregation: "count" }),
+    enabled: !!reached,
+  });
+  return (
+    <details className="canvas-filter-link-group" data-testid="filter-link-group"
+      open={!collapsed}>
+      <summary>
+        {far.data && (
+          <span className="ot-mark" style={{ background: swatch(far.data) }} aria-hidden>
+            {glyph(far.data)}
+          </span>
+        )}
+        {" "}{far.data?.display_name ?? "Linked objects"}
+        {count.data?.value != null && (
+          <span className="canvas-filter-count" data-testid="filter-link-count">
+            {count.data.value}
+          </span>
+        )}
+      </summary>
+      {children}
+    </details>
   );
 }
 
@@ -1247,8 +1317,12 @@ function FilterListSettings() {
     title,
     userEditable,
     layout,
+    linkDisplay,
+    collapseLinked,
     actions: { setProp },
   } = useNode((node) => ({
+    linkDisplay: node.data.props.linkDisplay,
+    collapseLinked: node.data.props.collapseLinked,
     objectSetVariable: node.data.props.objectSetVariable,
     variable: node.data.props.variable,
     properties: node.data.props.properties,
@@ -1504,6 +1578,36 @@ function FilterListSettings() {
           <option value="pills">Pills</option>
         </select>
       </label>
+      {/* p.451's display options, once there is a linked filter to display. */}
+      {specs.some((f) => f.link) && layoutOf(layout) !== "pills" && (
+        <>
+          <label className="field">
+            <span className="field-label">Linked filters</span>
+            <select
+              data-testid="filter-link-display"
+              value={linkDisplayOf(linkDisplay)}
+              onChange={(e) =>
+                setProp((p: { linkDisplay: string }) => (p.linkDisplay = e.target.value))}
+            >
+              {Object.entries(LINK_DISPLAYS).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+          </label>
+          {linkDisplayOf(linkDisplay) === "grouped" && (
+            <label className="field canvas-toggle">
+              <input
+                type="checkbox"
+                data-testid="filter-collapse-linked"
+                checked={collapseLinked === true}
+                onChange={(e) => setProp((p: { collapseLinked: boolean }) =>
+                  (p.collapseLinked = e.target.checked))}
+              />
+              <span className="field-label">Collapse by default</span>
+            </label>
+          )}
+        </>
+      )}
       <label className="field canvas-toggle">
         <input
           type="checkbox"
@@ -1545,7 +1649,7 @@ CanvasFilterList.craft = {
   displayName: "Filter list",
   props: {
     objectSetVariable: null, variable: null, properties: "", filters: null, title: "Filters",
-    userEditable: false, layout: "vertical",
+    userEditable: false, layout: "vertical", linkDisplay: "inline", collapseLinked: false,
   },
   related: { settings: FilterListSettings },
 };

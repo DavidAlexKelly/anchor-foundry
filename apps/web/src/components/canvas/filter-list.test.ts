@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   axisEnds, barWidth, bucketLabel, componentOf, componentsFor, defaultComponentFor, filtersOf,
-  hasLinkOf, isBucketChosen, isPeriodChosen, keywordOf, layoutOf, linkedClausesOf, newFilterId,
-  numberRangeSummary, periodLabel, periodOf, pillSummary, rangeOf, shiftDay, timelineIntervalOf,
-  toggleValue, valuesOf, viewerFilterId, visibleFilters, withBucket, withHasLink, withKeyword,
-  withLinked, withRange, withValues, withoutFilter,
+  groupFilters, hasLinkOf, isBucketChosen, isPeriodChosen, keywordOf, layoutOf, linkDisplayOf,
+  linkedClausesOf, newFilterId, numberRangeSummary, periodLabel, periodOf, pillSummary, rangeOf,
+  shiftDay, timelineIntervalOf, toggleValue, valuesOf, viewerFilterId, visibleFilters,
+  withBucket, withHasLink, withKeyword, withLinked, withRange, withValues, withoutFilter,
 } from "./filter-list";
 
 describe("filtersOf", () => {
@@ -377,6 +377,35 @@ describe("filters on linked objects (p.451, §545)", () => {
     ]);
     expect(withoutFilter(clauses, has)).toEqual([
       kept, { property: LINK, op: "has_link", value: { filters: far } },
+    ]);
+  });
+});
+
+describe("p.451's display options for linked filters (§546)", () => {
+  const own = { id: "f_1", property: "name", component: "keyword" as const };
+  const a1 = { id: "f_2", property: "", component: "histogram" as const, link: "a", linkTo: "t" };
+  const b = { id: "f_3", property: "x", component: "histogram" as const, link: "b", linkTo: "u" };
+  const a2 = { id: "f_4", property: "y", component: "keyword" as const, link: "a", linkTo: "t" };
+  const aOther = { id: "f_5", property: "", component: "histogram" as const, link: "a",
+    linkTo: "s" };
+
+  it("is inline unless grouped", () => {
+    expect(linkDisplayOf(undefined)).toBe("inline");
+    expect(linkDisplayOf("sideways")).toBe("inline");
+    expect(linkDisplayOf("grouped")).toBe("grouped");
+  });
+
+  it("draws inline filters in the order they were added", () => {
+    expect(groupFilters([own, a1, b, a2], "inline"))
+      .toEqual([{ link: null, linkTo: null, specs: [own, a1, b, a2] }]);
+  });
+
+  it("groups a link's filters after the set's own, a section per link and end", () => {
+    expect(groupFilters([a1, own, b, a2, aOther], "grouped")).toEqual([
+      { link: null, linkTo: null, specs: [own] },
+      { link: "a", linkTo: "t", specs: [a1, a2] },
+      { link: "b", linkTo: "u", specs: [b] },
+      { link: "a", linkTo: "s", specs: [aOther] },
     ]);
   });
 });
