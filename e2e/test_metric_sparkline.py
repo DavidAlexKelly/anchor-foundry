@@ -36,7 +36,8 @@ READINGS = (
 )
 
 
-def build(api, name: str, *, position: str = "side_by_side", show: bool = True):
+def build(api, name: str, *, position: str = "side_by_side", show: bool = True,
+          transforms: list | None = None):
     mod = Module(api, name)
     sensors = mod.api.upload_csv(
         f"{mod.base}/datasets/upload", f"sensors_{mod.tag}", SENSORS,
@@ -103,7 +104,8 @@ def build(api, name: str, *, position: str = "side_by_side", show: bool = True):
                 "derivation": {
                     "transform": "object_series", "inputs": ["v_picked"],
                     "config": {"property": "readings",
-                               "interval": "none", "aggregate": "avg"},
+                               "interval": "none", "aggregate": "avg",
+                               "transforms": transforms or []},
                 },
             },
         },
@@ -215,3 +217,18 @@ def test_a_card_without_the_toggle_draws_no_line(page, api):
     open_module(page, mod)
     expect(page.get_by_test_id("metric-value")).to_be_visible()
     expect(page.get_by_test_id("metric-spark")).to_have_count(0)
+
+
+def test_the_line_is_the_series_after_its_transforms(page, api):
+    """§524: a transform is on the variable, so the sparkline reads the
+    transformed series as the chart does, rather than the raw one."""
+    mod = build(api, "Metric sparkline transformed",
+                transforms=[{"kind": "cumulative", "aggregate": "sum"}])
+    open_module(page, mod)
+    with page.expect_response(lambda r: "/series/readings/points" in r.url) as asked:
+        pick(page, "North sensor")
+    assert "transforms=" in asked.value.url, asked.value.url
+    # S1 reads 10, 20, 30: its running sum, not the readings themselves.
+    assert [p["value"] for p in asked.value.json()["points"]] == [10, 30, 60]
+    eventually(lambda: page.get_by_test_id("metric-spark-line").count(),
+               lambda n: n == 1, what="the transformed sparkline")

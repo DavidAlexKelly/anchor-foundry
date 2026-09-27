@@ -240,7 +240,8 @@ import { PALETTE as WIDGET_LIST } from "./widget-list";
 import { MarkdownView } from "../markdown-view";
 import { SeriesCell } from "./SeriesCell";
 import { Sparkline } from "./Sparkline";
-import { useSeriesPoints } from "./series-points";
+import { useSeriesPoints, type SeriesRef } from "./series-points";
+import { transformsText } from "./series-transforms";
 import { outputClauses } from "./action-output";
 import {
   collapsedInitially, columnsOf as sectionColumnsOf, conditionKey, formLayout,
@@ -11983,10 +11984,7 @@ export function CanvasChart({
   // A time series set beats an object set beats a dataset. One order, stated
   // once, rather than three sources that can all be half-configured and a
   // reader left to guess which won.
-  const seriesRef = useCanvasVariable(seriesVariable) as {
-    object_type_id: string; instance_id: string;
-    property: string; interval: string; aggregate: string;
-  } | null;
+  const seriesRef = useCanvasVariable(seriesVariable) as SeriesRef | null;
   const usingSeries = !!seriesVariable;
   const usingSet = !usingSeries && !!objectSetVariable;
   // p.282: segments are a bar chart's, and they count (see `segmentBy`).
@@ -12048,7 +12046,8 @@ export function CanvasChart({
       objApi.seriesPoints(
         workspaceId, seriesRef!.object_type_id, seriesRef!.instance_id,
         seriesRef!.property,
-        { interval: seriesRef!.interval, aggregate: seriesRef!.aggregate },
+        { interval: seriesRef!.interval, aggregate: seriesRef!.aggregate,
+          transforms: seriesRef!.transforms },
       ),
     enabled: usingSeries && !!seriesRef,
   });
@@ -12193,6 +12192,8 @@ export function CanvasChart({
           {seriesRef!.property}, {seriesRef!.interval === "none"
             ? "every reading"
             : `by ${seriesRef!.interval} (${seriesRef!.aggregate})`}
+          {/* §524: what the server did to it, in order. */}
+          {transformsText(seriesRef!.transforms) && `, ${transformsText(seriesRef!.transforms)}`}
           , in UTC. {points.length} point{points.length === 1 ? "" : "s"}
           {/* Said, not hidden - the same rule as the truncation notice below.
               A gap dropped in silence is a chart that looks complete. */}

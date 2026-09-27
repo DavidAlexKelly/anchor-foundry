@@ -17,6 +17,7 @@ import { useQuery } from "@tanstack/react-query";
 import { objects as objApi } from "@/lib/api";
 import { useCanvasVariable } from "./context";
 import { toPoints, type Point } from "./sparkline";
+import type { SeriesTransform } from "./series-transforms";
 
 /** What a `time_series_set` variable holds: where to look, not what was found. */
 export interface SeriesRef {
@@ -25,6 +26,8 @@ export interface SeriesRef {
   property: string;
   interval: string;
   aggregate: string;
+  /** p.583's transforms (§524), applied by the server in order. */
+  transforms?: SeriesTransform[];
 }
 
 export interface SeriesRead {
@@ -55,7 +58,7 @@ export function useSeriesPoints(
     queryFn: () =>
       objApi.seriesPoints(
         workspaceId, ref!.object_type_id, ref!.instance_id, ref!.property,
-        { interval: ref!.interval, aggregate: ref!.aggregate },
+        { interval: ref!.interval, aggregate: ref!.aggregate, transforms: ref!.transforms },
       ),
     enabled: bound && !!ref,
   });
