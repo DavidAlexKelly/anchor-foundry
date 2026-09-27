@@ -774,9 +774,133 @@ export function SegmentedBarChart({
             data-segment={segment}
             transform={`translate(${at.x}, ${at.y})`}
           >
+            <title>{segmentName(segment, names)}</title>
             <rect width={10} height={10} y={-9} fill={PALETTE[i % PALETTE.length]} />
             <text x={15} fontSize={11} fill="var(--ink)">
               {shortLabel(segmentName(segment, names), beside ? 15 : 12)}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/**
+ * p.281's multiple series as lines (§541): one line per series over the same
+ * categories, in the legend's colours, against one value axis. A series with
+ * no value for a category follows p.282's null display, as a single line does.
+ */
+export function MultiLineChart({
+  data, drill, axis = CALCULATED, nulls = "ignored", showLegend = true,
+  legend = "bottom", titles, valueText, categoryText,
+}: {
+  data: Segmented;
+  drill?: Drill;
+  axis?: ValueAxis;
+  nulls?: "ignored" | "gap" | "zeroes";
+  showLegend?: boolean;
+  legend?: SegmentLegendPosition;
+  titles?: AxisTitles;
+  valueText?: (value: number) => string;
+  categoryText?: (label: string) => string;
+}) {
+  const inset = legendInset(showLegend ? data.segments.length : 0, legend);
+  const frame = plotArea(titles);
+  const area = {
+    x: frame.x + inset.left,
+    y: frame.y + inset.top,
+    w: frame.w - inset.left - inset.right,
+    h: frame.h - inset.top - inset.bottom,
+  };
+  const valueOf = (v: number) => (Number.isNaN(v) && nulls === "zeroes" ? 0 : v);
+  const s = valueScale(data.values.flat().map(valueOf), axis);
+  const step = data.categories.length > 1 ? area.w / (data.categories.length - 1) : 0;
+  const labelEvery = Math.max(1, Math.ceil(data.categories.length / 8));
+  const lines = data.segments.map((_, series) => {
+    // Ignored joins across a missing value; a gap breaks the line there.
+    let path = "";
+    let open = false;
+    const dots: { x: number; y: number; category: string; value: number }[] = [];
+    data.categories.forEach((category, i) => {
+      const value = valueOf(data.values[i]?.[series] ?? NaN);
+      const y = yOf(s, value, area);
+      if (y === null) {
+        if (nulls === "gap") open = false;
+        return;
+      }
+      const x = area.x + step * i;
+      path += `${path ? " " : ""}${open ? "L" : "M"} ${x} ${y}`;
+      open = true;
+      dots.push({ x, y, category, value });
+    });
+    return { path, dots };
+  });
+  return (
+    <svg
+      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+      role="img"
+      aria-label="Multi-series line chart"
+      style={{ width: "100%" }}
+    >
+      <Axes scale={s} area={area} format={valueText ?? tickFormat(axis)} />
+      <AxisTitleMarks
+        titles={titles}
+        area={area}
+        belowY={area.y + area.h + 30}
+        leftX={12 + inset.left}
+      />
+      <Plot area={area} axis={axis}>
+        {lines.map((line, series) => (
+          <g key={series} data-testid="chart-series-line" data-series={data.segments[series]}>
+            <path
+              d={line.path} fill="none" stroke={PALETTE[series % PALETTE.length]} strokeWidth={2}
+            />
+            {line.dots.map((dot) => (
+              <circle
+                key={dot.category}
+                cx={dot.x}
+                cy={dot.y}
+                r={drill ? 5 : 2.5}
+                fill={PALETTE[series % PALETTE.length]}
+                opacity={dim(drill, dot.category)}
+                {...markProps(drill, dot.category)}
+              >
+                <title>{`${dot.category} · ${data.segments[series]}: ${dot.value}`}</title>
+              </circle>
+            ))}
+          </g>
+        ))}
+      </Plot>
+      {data.categories.map((category, i) =>
+        i % labelEvery === 0 ? (
+          <text
+            key={`l${i}`}
+            x={area.x + step * i}
+            y={area.y + area.h + 16}
+            textAnchor="middle"
+            fontSize={11}
+            fill="var(--ink-soft)"
+          >
+            {shortLabel(categoryText ? categoryText(category) : category, 10)}
+          </text>
+        ) : null,
+      )}
+      {showLegend && data.segments.map((name, i) => {
+        const at = legendEntryAt(i, data.segments.length, legend, area,
+          { width: WIDTH, height: HEIGHT });
+        return (
+          <g
+            key={`k${i}`}
+            data-testid="chart-legend-entry"
+            data-segment={name}
+            transform={`translate(${at.x}, ${at.y})`}
+          >
+            {/* The whole name, where the entry had to shorten it. */}
+            <title>{name}</title>
+            <rect width={10} height={10} y={-9} fill={PALETTE[i % PALETTE.length]} />
+            <text x={15} fontSize={11} fill="var(--ink)">
+              {shortLabel(name, legend === "left" || legend === "right" ? 15 : 12)}
             </text>
           </g>
         );

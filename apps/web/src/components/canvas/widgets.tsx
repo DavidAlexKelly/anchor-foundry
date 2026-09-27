@@ -298,7 +298,10 @@ import {
   type ChartKind,
   type FilterOperator,
 } from "./filter-sql";
-import { Chart, PieChart, SegmentedBarChart, toPoints } from "./charts";
+import { Chart, MultiLineChart, PieChart, SegmentedBarChart, toPoints } from "./charts";
+import {
+  MAX_SERIES, mergeSeries, seriesName as seriesNameOf, seriesOf, seriesRequests,
+} from "./chart-series";
 import {
   SEGMENT_LEGEND_POSITIONS, SEGMENT_MODES, segmentLegendPositionOf, segmentModeOf, segmentedFrom,
   sortSegmented,
@@ -11948,6 +11951,8 @@ export function CanvasChart({
   categoryFormat = null,
   legendPosition = "bottom",
   segmentNames = {},
+  series = [],
+  seriesName = "",
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -12034,6 +12039,14 @@ export function CanvasChart({
   /** p.282's **Display override**: a segment's name in the legend, by its
    * value (`chart-segments.segmentName`). */
   segmentNames?: unknown;
+  /** p.281's **multiple series** (§541): the series after the Measure's, each
+   * an aggregation over the set grouped by the same X axis property
+   * (`chart-series.ts`). A set-backed bar or line chart's, and not a
+   * segmented one's. */
+  series?: unknown;
+  /** p.282's display override for the Measure's own series, in the legend a
+   * chart with several series draws. */
+  seriesName?: string;
 }) {
   const {
     connectors: { connect, drag },
@@ -12152,6 +12165,58 @@ export function CanvasChart({
   const missing = sorted ? missingCount(sorted) : 0;
   const points = sorted ? withMissing(sorted, drawnKind, nulls) : sorted;
 
+  // One drill-down for every way the chart can be drawn: a click on a
+  // category narrows to it, whichever series or segment it was on.
+  const chartDrill = canDrill
+    ? {
+        selected: drilledLabel,
+        // Clicking what is already drilled into clears it. Without that there
+        // is no way back out from inside the chart, and a filter you cannot
+        // remove is a filter you have to remember you applied.
+        onSelect: (label: string) =>
+          setParameter(
+            drilldownVariable!,
+            label === drilledLabel ? [] : [{ property: dimension, op: "eq", value: label }],
+          ),
+      }
+    : undefined;
+
+  // p.281's multiple series: the rest of the chart's series, asked the same
+  // question of the same set as the Measure's, each with its own aggregation.
+  // A series still being filled in asks nothing and is left out.
+  const extras = usingSet && !segmenting && (drawnKind === "bar" || drawnKind === "line")
+    ? seriesOf(series) : [];
+  const extraAsks = seriesRequests(extras);
+  const extraResults = useQueries({
+    queries: extras.map((spec, i) => ({
+      queryKey: [
+        "canvas-chart-set", objectSetVariable, JSON.stringify(setDefinition ?? null), dimension,
+        extraAsks[i]?.aggregation ?? null, extraAsks[i]?.aggregation_property ?? null,
+      ],
+      queryFn: () => objApi.groupObjectSet(workspaceId, setDefinition, dimension!, extraAsks[i]!),
+      enabled: !!setDefinition && !!dimension && !!extraAsks[i],
+    })),
+  });
+  const drawnExtras = extras.flatMap((spec, i) => {
+    const data = extraResults[i]?.data;
+    const request = extraAsks[i];
+    if (!request || !data) return [];
+    return [{
+      name: seriesNameOf(spec),
+      points: data.groups.map((g) => ({
+        label: g.value,
+        value: request.aggregation !== "count" ? Number(g.metric ?? 0) : g.count,
+      })),
+    }];
+  });
+  const firstName = (typeof seriesName === "string" ? seriesName.trim() : "")
+    || defaultValueTitle(kind ?? "bar", aggregate, measure);
+  const multi = drawnExtras.length > 0 && points !== null
+    ? mergeSeries(points, drawnExtras.map((e) => e.points),
+      [firstName, ...drawnExtras.map((e) => e.name)])
+    : null;
+  const extrasPending = extraResults.some((r, i) => !!extraAsks[i] && r.isPending);
+
   // p.283's value axis and titles. A problem with the bounds is said and the
   // chart drawn on calculated ones, rather than on an axis running backwards.
   const axis = valueAxisOf({ scaleType, minBound, maxBound });
@@ -12161,7 +12226,10 @@ export function CanvasChart({
     usingSeries
       // p.281: a series chart has "the time range on the X axis".
       ? { category: "Time", value: defaultValueTitle("line", seriesRef?.aggregate, seriesRef?.property) }
-      : { category: dimension, value: defaultValueTitle(kind ?? "bar", aggregate, measure) },
+      // p.283: "the aggregation type(s) used within the chart's series".
+      : { category: dimension,
+          value: multi ? multi.segments.join(", ")
+            : defaultValueTitle(kind ?? "bar", aggregate, measure) },
   );
 
   const needs = usingSeries
@@ -12210,14 +12278,7 @@ export function CanvasChart({
               names={segmentNames}
               valueText={valueText(valueFormat) ?? undefined}
               categoryText={categoryText(categoryFormat) ?? undefined}
-              drill={canDrill ? {
-                selected: drilledLabel,
-                onSelect: (label) =>
-                  setParameter(
-                    drilldownVariable!,
-                    label === drilledLabel ? [] : [{ property: dimension, op: "eq", value: label }],
-                  ),
-              } : undefined}
+              drill={chartDrill}
             />
           )
       )}
@@ -12230,7 +12291,36 @@ export function CanvasChart({
           values.
         </p>
       )}
-      {!segmenting && points && !(usingSeries && points.length === 0) && (
+      {multi && drawnKind === "bar" && (
+        <SegmentedBarChart
+          // Side by side, a colour per series. A series with no value for a
+          // category has no bar there, which a zero draws as.
+          data={{ ...multi, values: multi.values.map((row) =>
+            row.map((v) => (Number.isNaN(v) ? 0 : v))) }}
+          mode="grouped"
+          showLegend={showLegend !== false}
+          titles={titles}
+          legend={segmentLegendPositionOf(legendPosition)}
+          valueText={valueText(valueFormat) ?? undefined}
+          categoryText={categoryText(categoryFormat) ?? undefined}
+          drill={chartDrill}
+        />
+      )}
+      {multi && drawnKind === "line" && (
+        <MultiLineChart
+          data={multi}
+          axis={axis}
+          nulls={nulls}
+          showLegend={showLegend !== false}
+          titles={titles}
+          legend={segmentLegendPositionOf(legendPosition)}
+          valueText={valueText(valueFormat) ?? undefined}
+          categoryText={categoryText(categoryFormat) ?? undefined}
+          drill={chartDrill}
+        />
+      )}
+      {extrasPending && <p className="canvas-widget-empty">Loading the other series…</p>}
+      {!multi && !segmenting && points && !(usingSeries && points.length === 0) && (
         <Chart
           /* p.281: "If the data input is a time series set, only the Line
              Chart option is supported." */
@@ -12246,24 +12336,7 @@ export function CanvasChart({
             valueText: valueText(valueFormat) ?? undefined,
             categoryText: categoryText(categoryFormat) ?? undefined,
           }}
-          drill={
-            canDrill
-              ? {
-                  selected: drilledLabel,
-                  // Clicking what is already drilled into clears it. Without
-                  // that there is no way back out from inside the chart, and
-                  // a filter you cannot remove is a filter you have to
-                  // remember you applied.
-                  onSelect: (label) =>
-                    setParameter(
-                      drilldownVariable!,
-                      label === drilledLabel
-                        ? []
-                        : [{ property: dimension, op: "eq", value: label }],
-                    ),
-                }
-              : undefined
-          }
+          drill={chartDrill}
         />
       )}
       {!segmenting && !usingSeries && missingText(missing, drawnKind, nulls) && (
@@ -12330,8 +12403,11 @@ function ChartSettings() {
     drilldownVariable, segmentBy, segmentMode, showLegend, sort, orientation, valueLabels,
     scaleType, minBound, maxBound, showCategoryTitle, categoryTitle, showValueTitle, valueTitle,
     lineArea, nullDisplay, valueFormat, categoryFormat, legendPosition, segmentNames,
+    series, seriesName,
     actions: { setProp },
   } = useNode((node) => ({
+    series: node.data.props.series,
+    seriesName: node.data.props.seriesName,
     legendPosition: node.data.props.legendPosition,
     segmentNames: node.data.props.segmentNames,
     valueFormat: node.data.props.valueFormat,
@@ -12645,6 +12721,19 @@ function ChartSettings() {
           </select>
         </label>
       )}
+      {objectSetVariable && !seriesVariable && ((kind || "bar") === "bar" || kind === "line") && (
+        <ChartSeriesFields
+          segmented={!!segmentBy && (kind || "bar") === "bar"}
+          series={series}
+          firstName={typeof seriesName === "string" ? seriesName : ""}
+          firstDefault={defaultValueTitle(kind || "bar", aggregate, measure)}
+          numbers={columns.filter((c) => c.data_type === "integer" || c.data_type === "float")
+            .map((c) => c.name)}
+          showLegend={showLegend !== false}
+          legend={legendPosition}
+          setProp={setProp as (fn: (p: Record<string, unknown>) => void) => void}
+        />
+      )}
       {objectSetVariable && (kind || "bar") === "bar" && (
         <>
           <label className="field">
@@ -12652,7 +12741,7 @@ function ChartSettings() {
             <select
               value={segmentBy || ""}
               data-testid="chart-segment-by"
-              disabled={(aggregate || "count") !== "count"}
+              disabled={(aggregate || "count") !== "count" || seriesOf(series).length > 0}
               onChange={(e) =>
                 setProp((p: { segmentBy: string | null }) => (p.segmentBy = e.target.value || null))}
             >
@@ -12663,6 +12752,9 @@ function ChartSettings() {
             </select>
             {(aggregate || "count") !== "count" && (
               <span className="field-hint">Segments count objects - set Measure to a count</span>
+            )}
+            {seriesOf(series).length > 0 && (
+              <span className="field-hint">A chart with several series is not segmented</span>
             )}
           </label>
           {segmentBy && (
@@ -12764,6 +12856,127 @@ function ChartSettings() {
         </label>
       ) : undefined}
     />
+  );
+}
+
+/** p.281's multiple series and p.282's name for each (§541), in the Chart's
+ * panel. The Measure above is the first series; these are the rest. */
+function ChartSeriesFields({
+  segmented, series, firstName, firstDefault, numbers, showLegend, legend, setProp,
+}: {
+  segmented: boolean;
+  series: unknown;
+  firstName: string;
+  firstDefault: string;
+  numbers: string[];
+  showLegend: boolean;
+  legend: unknown;
+  setProp: (fn: (p: Record<string, unknown>) => void) => void;
+}) {
+  const specs = seriesOf(series);
+  const write = (next: typeof specs) => setProp((p) => (p.series = next));
+  if (segmented) {
+    return (
+      <p className="field-hint" data-testid="chart-series-segmented">
+        A segmented chart has one series: its segments are what the legend names.
+      </p>
+    );
+  }
+  return (
+    <div className="field" data-testid="chart-series">
+      <span className="field-label">More series</span>
+      {specs.map((spec, i) => (
+        <div key={i} className="field-inline" data-testid="chart-series-row">
+          <select
+            aria-label={`Series ${i + 2} aggregation`}
+            data-testid="chart-series-aggregate"
+            value={spec.aggregate}
+            onChange={(e) => write(specs.map((s, j) =>
+              (j === i ? { ...s, aggregate: e.target.value } : s)))}
+          >
+            {Object.entries(PIE_AGGREGATIONS).map(([key, name]) => (
+              <option key={key} value={key}>{name}</option>
+            ))}
+          </select>
+          {spec.aggregate !== "count" && (
+            <select
+              aria-label={`Series ${i + 2} property`}
+              data-testid="chart-series-measure"
+              value={spec.measure ?? ""}
+              onChange={(e) => write(specs.map((s, j) =>
+                (j === i ? { ...s, measure: e.target.value || null } : s)))}
+            >
+              <option value="">Choose…</option>
+              {numbers.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          )}
+          <input
+            type="text"
+            aria-label={`Series ${i + 2} name`}
+            data-testid="chart-series-name"
+            placeholder={seriesNameOf({ ...spec, name: "" })}
+            value={spec.name}
+            onChange={(e) => write(specs.map((s, j) =>
+              (j === i ? { ...s, name: e.target.value } : s)))}
+          />
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="chart-series-remove"
+            aria-label={`Remove series ${i + 2}`}
+            onClick={() => write(specs.filter((_, j) => j !== i))}
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="btn"
+        data-testid="chart-add-series"
+        disabled={specs.length >= MAX_SERIES - 1}
+        onClick={() => write([...specs, { aggregate: "count", measure: null, name: "" }])}
+      >
+        Add a series
+      </button>
+      {specs.length > 0 && (
+        <>
+          <label className="field">
+            <span className="field-label">First series name</span>
+            <input
+              type="text"
+              data-testid="chart-series-first-name"
+              placeholder={firstDefault}
+              value={firstName}
+              onChange={(e) => setProp((p) => (p.seriesName = e.target.value))}
+            />
+          </label>
+          <label className="field canvas-toggle">
+            <input
+              type="checkbox"
+              data-testid="chart-series-legend"
+              checked={showLegend}
+              onChange={(e) => setProp((p) => (p.showLegend = e.target.checked))}
+            />
+            <span className="field-label">Show legend</span>
+          </label>
+          {showLegend && (
+            <label className="field">
+              <span className="field-label">Legend position</span>
+              <select
+                data-testid="chart-series-legend-position"
+                value={segmentLegendPositionOf(legend)}
+                onChange={(e) => setProp((p) => (p.legendPosition = e.target.value))}
+              >
+                {Object.entries(SEGMENT_LEGEND_POSITIONS).map(([key, name]) => (
+                  <option key={key} value={key}>{name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -12952,7 +13165,7 @@ CanvasChart.craft = {
     scaleType: "linear", minBound: null, maxBound: null,
     showCategoryTitle: false, categoryTitle: "", showValueTitle: false, valueTitle: "",
     lineArea: "line", nullDisplay: "ignored", valueFormat: null, categoryFormat: null,
-    legendPosition: "bottom", segmentNames: {},
+    legendPosition: "bottom", segmentNames: {}, series: [], seriesName: "",
   },
   related: { settings: ChartSettings },
 };

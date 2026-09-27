@@ -116,7 +116,8 @@ def test_stacked_segments_split_each_bar_by_the_second_property(page, api, sites
     assert abs(north["height"] - 2 * south["height"]) < 2, (north, south)
     assert abs(east["height"] - south["height"]) < 2, (east, south)
     # One colour per segment, whichever bar it is in; three in the legend.
-    expect(page.get_by_test_id("chart-legend-entry")).to_have_text(["north", "east", "south"])
+    expect(page.locator("[data-testid='chart-legend-entry'] text")).to_have_text(
+        ["north", "east", "south"])
 
 
 def test_percentage_segments_make_every_bar_the_same_height(page, api, sites) -> None:
@@ -692,10 +693,11 @@ def test_a_segment_is_named_by_its_override(page, api, sites) -> None:
     mod = build(api, sites, "Chart XY segment names", {
         "segmentBy": "region", "segmentNames": {"north": "Northern", "south": "  "}})
     open_module(page, mod)
-    expect(page.locator("[data-testid='chart-legend-entry'][data-segment='north']")).to_have_text(
-        "Northern")
-    expect(page.locator("[data-testid='chart-legend-entry'][data-segment='south']")).to_have_text(
-        "south")
+    def entry(name: str):
+        return page.locator(f"[data-testid='chart-legend-entry'][data-segment='{name}'] text")
+
+    expect(entry("north")).to_have_text("Northern")
+    expect(entry("south")).to_have_text("south")
     expect(segment(page, "open", "north").locator("title")).to_have_text("open · Northern: 2")
 
 
@@ -741,3 +743,141 @@ def test_a_segmented_chart_s_bars_are_in_the_order_asked_for(
         category = marks.nth(i).get_attribute("data-category") or ""
         lefts[category] = min(lefts.get(category, 1e9), box(marks.nth(i))["x"])
     assert sorted(lefts, key=lefts.__getitem__) == expected, lefts
+
+
+# ---- p.281's multiple series and p.282's names for them (§541) --------------
+
+SUM_SERIES = [{"aggregate": "sum", "measure": "capacity", "name": ""}]
+
+
+def test_several_series_stand_side_by_side(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY series", {
+        "series": SUM_SERIES, "showValueTitle": True})
+    open_module(page, mod)
+    # Count and total for each status: open 3 and 30, closed 1 and 90.
+    expect(page.get_by_test_id("chart-segment")).to_have_count(4)
+    expect(segment(page, "open", "Count").locator("title")).to_have_text("open · Count: 3")
+    expect(segment(page, "closed", "Sum of capacity").locator("title")).to_have_text(
+        "closed · Sum of capacity: 90")
+    expect(page.locator("[data-testid='chart-legend-entry'] title")).to_have_text(
+        ["Count", "Sum of capacity"])
+    # p.283: the value title is the aggregations the series use.
+    expect(page.get_by_test_id("chart-value-title")).to_have_text("Count, Sum of capacity")
+    # Side by side on one axis: the sum's bar is the taller, beside the count.
+    count, total = box(segment(page, "closed", "Count")), box(
+        segment(page, "closed", "Sum of capacity"))
+    assert total["height"] > 10 * count["height"], (count, total)
+    assert total["x"] > count["x"], (count, total)
+
+
+def test_a_series_is_named_by_its_override(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY series names", {
+        "seriesName": "Sites", "series": [{**SUM_SERIES[0], "name": "Capacity"}]})
+    open_module(page, mod)
+    expect(page.locator("[data-testid='chart-legend-entry'] text")).to_have_text(
+        ["Sites", "Capacity"])
+    expect(segment(page, "open", "Capacity").locator("title")).to_have_text("open · Capacity: 30")
+
+
+def test_several_series_on_a_line_are_a_line_each(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY series lines", {
+        "kind": "line", "series": SUM_SERIES, "legendPosition": "right"})
+    open_module(page, mod)
+    lines = page.get_by_test_id("chart-series-line")
+    expect(lines).to_have_count(2)
+    titles = page.locator("[data-testid='chart-series-line'] circle title").all_text_contents()
+    assert sorted(titles) == sorted([
+        "open · Count: 3", "closed · Count: 1",
+        "open · Sum of capacity: 30", "closed · Sum of capacity: 90"]), titles
+    key = box(page.get_by_test_id("chart-legend-entry").first)
+    line = box(lines.nth(1))
+    assert key["x"] > line["x"] + line["width"], (key, line)
+
+
+def test_a_series_drills_into_its_category(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY series drill", {
+        "series": SUM_SERIES, "drilldownVariable": "v_clauses"}, with_table=True)
+    open_module(page, mod)
+    cells = page.locator(".data-grid tbody tr td:first-child")
+    eventually(lambda: len(cells.all_text_contents()), lambda n: n == 4, what="every site")
+    segment(page, "closed", "Sum of capacity").click()
+    eventually(lambda: sorted(c.strip() for c in cells.all_text_contents()),
+               lambda got: got == ["S4"], what="the closed site")
+
+
+def test_a_series_with_no_value_for_a_category_follows_the_null_display(page, api) -> None:
+    # Day 2's weight is empty: the count has it, and the average leaves it out
+    # (`instances.group_by` groups only objects with a value for the metric).
+    mod = Module(api, "Chart XY series gaps")
+    type_id = mod.object_type(
+        columns=["id", "day", "weight"], key="id", title="id", types={"weight": "integer"},
+        rows=[{"id": "A", "day": "1", "weight": 4}, {"id": "B", "day": "2", "weight": ""},
+              {"id": "C", "day": "3", "weight": 6}])
+
+    def chart(nulls: str, kind: str = "line") -> Module:
+        built = Module(api, f"Chart XY series gaps {nulls} {kind}", beside=mod)
+        built.define({
+            "format": 2,
+            "layout": layout({"chart": {"resolvedName": "CanvasChart", "props": {
+                "objectSetVariable": "v_set", "kind": kind, "dimension": "day",
+                "sort": "keyAsc", "nullDisplay": nulls,
+                "series": [{"aggregate": "avg", "measure": "weight", "name": "Weight"}]}}}),
+            "variables": {"v_set": {"id": "v_set", "kind": "object_set", "label": "Days",
+                                    "object_set": object_set(type_id)}},
+            "events": {},
+        })
+        return built
+
+    def weight_path() -> str:
+        line = page.locator("[data-testid='chart-series-line'][data-series='Weight'] path")
+        return line.get_attribute("d") or ""
+
+    open_module(page, chart("gap"))
+    expect(page.locator("[data-testid='chart-series-line'][data-series='Weight'] circle")) \
+        .to_have_count(2)
+    assert weight_path().count("M") == 2, weight_path()
+    open_module(page, chart("ignored"))
+    expect(page.get_by_test_id("chart-series-line")).to_have_count(2)
+    assert (weight_path().count("M"), weight_path().count("L")) == (1, 1), weight_path()
+    open_module(page, chart("zeroes"))
+    expect(page.locator("[data-testid='chart-series-line'][data-series='Weight'] circle")) \
+        .to_have_count(3)
+    # Bars have no gap to leave: day 2 has its count's bar and no weight's.
+    open_module(page, chart("gap", "bar"))
+    expect(page.get_by_test_id("chart-segment")).to_have_count(5)
+    expect(page.locator("[data-testid='chart-segment'][data-segment='Weight']")).to_have_count(2)
+
+
+def test_the_panel_adds_and_names_a_series(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY series panel", {})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    page.get_by_test_id("chart-add-series").click()
+    page.get_by_test_id("chart-series-aggregate").select_option("sum")
+    page.get_by_test_id("chart-series-measure").select_option("capacity")
+    expect(page.get_by_test_id("chart-series-name")).to_have_attribute(
+        "placeholder", "Sum of capacity")
+    page.get_by_test_id("chart-series-name").fill("Capacity")
+    page.get_by_test_id("chart-series-first-name").fill("Sites")
+    page.get_by_test_id("chart-series-legend-position").select_option("top")
+    # Several series or segments, not both.
+    expect(page.get_by_test_id("chart-segment-by")).to_be_disabled()
+    save(page)
+    props = mod.definition()["layout"]["chart"]["props"]
+    assert props["series"] == [{"aggregate": "sum", "measure": "capacity", "name": "Capacity"}], \
+        props
+    assert (props["seriesName"], props["legendPosition"]) == ("Sites", "top"), props
+    page.get_by_test_id("chart-series-remove").click()
+    page.get_by_role("button", name="Save", exact=True).click()
+    eventually(lambda: mod.definition()["layout"]["chart"]["props"]["series"],
+               lambda got: got == [], what="the series removed")
+
+
+def test_a_segmented_chart_is_offered_no_more_series(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY segmented series panel", {"segmentBy": "region"})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    expect(page.get_by_test_id("chart-series-segmented")).to_be_visible()
+    expect(page.get_by_test_id("chart-add-series")).to_have_count(0)
