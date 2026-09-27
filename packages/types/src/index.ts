@@ -2995,6 +2995,13 @@ export interface ActionType {
    * "even if action reverts have been toggled on again"), which is a property
    * of this field nothing about its type can express. */
   allow_revert: boolean;
+  /** p.168's "Action type version", bumped with the definition (§554). */
+  version?: number;
+  /** p.167's action log (§554; db 0116): the `[LOG]` object type each
+   * submission becomes an object of, and its link to what it edited. Null
+   * until a log is turned on. */
+  log_object_type_id?: string | null;
+  log_link_type_id?: string | null;
   /** Developmental state (`object-link-types` p.253, which names actions among
    * the kinds that have one). `promoted` is excluded by p.255. **Not capped by
    * the object type** — p.257's cap is about link types and says nothing about

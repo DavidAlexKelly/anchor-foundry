@@ -1442,6 +1442,7 @@ async def list_action_types(
                COALESCE(ot.display_name, i.display_name) AS subject_name,
                at.api_name, at.display_name, at.description,
                at.status, at.deprecation, at.allow_revert,
+               at.version, at.log_object_type_id, at.log_link_type_id,
                at.created_at, at.updated_at
           FROM action_types at
           -- **LEFT, and that is db 0101's whole consequence for the reads.**
@@ -1474,6 +1475,7 @@ async def get_action_type(
                COALESCE(ot.display_name, i.display_name) AS subject_name,
                at.api_name, at.display_name, at.description,
                at.status, at.deprecation, at.allow_revert,
+               at.version, at.log_object_type_id, at.log_link_type_id,
                at.created_at, at.updated_at
           FROM action_types at
           -- **LEFT, and that is db 0101's whole consequence for the reads.**
@@ -3790,4 +3792,11 @@ async def set_definition(
                 "config": json.dumps(criterion.get("config") or {}), "ord": order,
             },
         )
+    # p.168's "Action type version: Version number that auto-increments each
+    # time an action type is updated" (§554) - with the definition, which is
+    # what the action does and what a log entry is a record of.
+    await conn.execute(
+        text("UPDATE action_types SET version = version + 1 WHERE id = :aid"),
+        {"aid": str(action_type_id)},
+    )
     return await get_action_type(conn, workspace_id, action_type_id)

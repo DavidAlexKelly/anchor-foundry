@@ -1205,6 +1205,19 @@ export default function ObjectsPage() {
       queryClient.invalidateQueries({ queryKey: ["action-types", workspace?.id] }),
   });
 
+  // p.167's action log (§554). Everything it makes is listed on this page, so
+  // all of it is re-read.
+  const enableLog = useMutation({
+    mutationFn: (id: string) => actionApi.enableLog(workspace!.id, project!.id, id),
+    onSuccess: async () => {
+      for (const key of ["action-types", "object-types", "link-types"]) {
+        await queryClient.invalidateQueries({ queryKey: [key, workspace?.id] });
+      }
+      await queryClient.invalidateQueries({ queryKey: ["object-sources", project?.id] });
+      await queryClient.invalidateQueries({ queryKey: ["datasets", project?.id] });
+    },
+  });
+
   const canEditOntology = workspace ? workspace.effective_role !== "viewer" : false;
   const canEditSources = project ? project.effective_role !== "viewer" : false;
 
@@ -1756,6 +1769,30 @@ export default function ObjectsPage() {
                           >
                             Parameters
                           </button>
+                          {/* p.167's action log (§554): each submission as an
+                              object of a [LOG] type, once turned on. An
+                              interface action has no one type to link it to. */}
+                          {a.log_object_type_id ? (
+                            <Link
+                              className="btn quiet"
+                              style={{ padding: "3px 9px", fontSize: 12, marginRight: 6 }}
+                              data-testid={`action-log-${a.api_name}`}
+                              href={`/${params.workspace}/${params.project}/objects/${a.log_object_type_id}`}
+                            >
+                              Action log
+                            </Link>
+                          ) : a.object_type_id && canEditSources && (
+                            <button
+                              className="btn quiet"
+                              style={{ padding: "3px 9px", fontSize: 12, marginRight: 6 }}
+                              data-testid={`action-log-on-${a.api_name}`}
+                              disabled={enableLog.isPending}
+                              title="Record every submission as an object of a [LOG] object type"
+                              onClick={() => enableLog.mutate(a.id)}
+                            >
+                              Turn on log
+                            </button>
+                          )}
                           <button
                             className="btn danger"
                             style={{ padding: "3px 9px", fontSize: 12 }}
@@ -1775,6 +1812,13 @@ export default function ObjectsPage() {
                 ))}
               </tbody>
             </table>
+          )}
+
+          {enableLog.isError && (
+            <div className="form-error" data-testid="action-log-error">
+              {enableLog.error instanceof ApiError
+                ? enableLog.error.message : "Couldn't turn on the action log."}
+            </div>
           )}
 
           <div className="page-head" style={{ marginTop: 32 }}>
