@@ -37,6 +37,9 @@ export type Listener = {
   archived_at: string | null;
   /** Events the next archive run will write. */
   pending_events: number;
+  /** p.254's custom ingress (§520): the ranges that may send. Empty is
+   * inherited ingress, no restriction of the listener's own. */
+  ingress_allowlist: string[];
 };
 
 export type ListenerEvent = {
@@ -250,4 +253,26 @@ export function archivedText(done: { archived: number; version: number | null })
   return done.version === null
     ? "Nothing new to archive."
     : `Archived ${done.archived} event${done.archived === 1 ? "" : "s"} as version ${done.version}.`;
+}
+
+// ---- ingress (§520; p.254-255) ---------------------------------------------------
+/** The ranges typed into the editor: one per line, or separated by commas or
+ * spaces, blanks dropped. The server says which are not ranges, and
+ * normalises the rest. */
+export function parseAllowlist(text: string): string[] {
+  return text.split(/[\s,]+/).filter((entry) => entry !== "");
+}
+
+/** What the editor opens with: the saved ranges, one per line. */
+export function allowlistDraft(ranges: string[]): string {
+  return ranges.join("\n");
+}
+
+/** Who may send, in one line. p.255: inherited ingress is the platform's own
+ * allowlist; custom ingress is "a small IP range" or wider. */
+export function ingressText(ranges: string[]): string {
+  if (ranges.length === 0) return "Any address the platform accepts may send (inherited ingress).";
+  return ranges.length === 1
+    ? `Only ${ranges[0]} may send.`
+    : `Only these ${ranges.length} ranges may send: ${ranges.join(", ")}.`;
 }

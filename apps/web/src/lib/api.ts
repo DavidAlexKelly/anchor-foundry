@@ -711,6 +711,11 @@ export const listeners = {
   deleteEndpoint: (wid: string, pid: string, id: string, eid: string) =>
     request<import("./listeners").Listener>(
       `/workspaces/${wid}/projects/${pid}/listeners/${id}/endpoints/${eid}`, { method: "DELETE" }),
+  /** p.254-255's ingress allowlist (§520). */
+  ingress: (wid: string, pid: string, id: string, allowlist: string[]) =>
+    request<import("./listeners").Listener>(
+      `/workspaces/${wid}/projects/${pid}/listeners/${id}/ingress`,
+      { method: "PUT", body: JSON.stringify({ allowlist }) }),
 };
 
 export const datasets = {

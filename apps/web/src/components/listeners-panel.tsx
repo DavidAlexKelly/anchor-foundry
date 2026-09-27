@@ -23,7 +23,7 @@ import { bytesText } from "@/lib/bytes";
 import {
   BLANK_LISTENER, LISTENER_TYPES, ROTATIONS, VERIFICATIONS, archivedText, notArchivedText, waitingText, curlExample, draftBody, draftProblem,
   endpointState, extendedExpiry, needsHeader, rotateBody, schemesOf, statusText, verificationText,
-  whyNoRotation, withType,
+  whyNoRotation, withType, allowlistDraft, ingressText, parseAllowlist,
   type Listener, type ListenerDraft, type ListenerType, type Verification,
 } from "@/lib/listeners";
 
@@ -198,6 +198,15 @@ function ListenerCard({
     mutationFn: (call: () => Promise<Listener>) => call(),
     onSuccess: refresh,
   });
+  // The allowlist being edited, or null when it is not.
+  const [ranges, setRanges] = useState<string | null>(null);
+  const ingress = useMutation({
+    mutationFn: (text: string) => api.ingress(workspaceId, projectId, listener.id, parseAllowlist(text)),
+    onSuccess: async () => {
+      setRanges(null);
+      await refresh();
+    },
+  });
 
   return (
     <div className="card" data-testid="listener" data-name={listener.display_name} style={{ margin: "10px 0" }}>
@@ -288,6 +297,46 @@ function ListenerCard({
         <div className="form-error" data-testid="listener-endpoint-error">
           {endpointChange.error instanceof ApiError ? endpointChange.error.message : "Couldn't change the endpoint."}
         </div>
+      )}
+      {/* p.254-255's ingress allowlist (§520): who may send, and for an
+          editor the ranges to narrow it to. */}
+      <p className="soft" style={{ margin: "6px 0 0" }} data-testid="listener-ingress">
+        {ingressText(listener.ingress_allowlist)}
+        {editor && ranges === null && (
+          <button type="button" className="btn quiet" data-testid="listener-ingress-edit"
+                  style={{ marginLeft: 8 }}
+                  onClick={() => { ingress.reset(); setRanges(allowlistDraft(listener.ingress_allowlist)); }}>
+            Edit allowlist
+          </button>
+        )}
+      </p>
+      {ranges !== null && (
+        <form data-testid="listener-ingress-form"
+              onSubmit={(e) => { e.preventDefault(); ingress.mutate(ranges); }}>
+          <Field label="Addresses that may send">
+            <textarea
+              data-testid="listener-ingress-ranges"
+              value={ranges}
+              rows={4}
+              placeholder={"203.0.113.0/24\n198.51.100.7"}
+              onChange={(e) => setRanges(e.target.value)}
+            />
+            <span className="field-hint">
+              One IP address or range per line, at most 50. Empty lets any address the platform
+              accepts send.
+            </span>
+          </Field>
+          {ingress.isError && (
+            <div className="form-error" data-testid="listener-ingress-error">
+              {ingress.error instanceof ApiError ? ingress.error.message : "Couldn't save the allowlist."}
+            </div>
+          )}
+          <div className="form-actions">
+            <button type="button" className="btn quiet" data-testid="listener-ingress-cancel"
+                    onClick={() => setRanges(null)}>Cancel</button>
+            <button type="submit" className="btn" data-testid="listener-ingress-save">Save allowlist</button>
+          </div>
+        </form>
       )}
       {/* p.264's backing dataset (§519): archived every five minutes, or now. */}
       <p className="soft" style={{ margin: "6px 0 0" }} data-testid="listener-archive">

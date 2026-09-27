@@ -371,6 +371,12 @@ export class ServicesConstruct extends Construct {
       cpu: 512,
       memory: 1024,
       port: 8000,
+      // A listener's ingress allowlist (§520) checks the sender's address,
+      // which the ALB appends as the last X-Forwarded-For entry. One hop: the
+      // ALB is the only thing that can reach this service. uvicorn's own
+      // forwarded-allow-ips is left alone, because trusting "*" there takes
+      // the *first* entry, which the sender writes.
+      extraEnv: { LISTENER_PROXY_HOPS: "1" },
     });
     // Everything anchor_worker/transform_dispatch.py needs to find the runner.
     // Passed as configuration rather than discovered at run time: a worker that

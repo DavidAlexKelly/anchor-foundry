@@ -6,6 +6,7 @@ import {
   endpointState, extendedExpiry, needsHeader, rotateBody, schemesOf, statusText, whyNoRotation,
   withType,
   verificationText,
+  allowlistDraft, ingressText, parseAllowlist,
 } from "./listeners";
 
 const draft = (extra: Partial<typeof BLANK_LISTENER>) => ({ ...BLANK_LISTENER, display_name: "Hook", ...extra });
@@ -149,5 +150,28 @@ describe("the archive (§519)", () => {
     expect(archivedText({ archived: 0, version: null })).toBe("Nothing new to archive.");
     expect(archivedText({ archived: 1, version: 4 })).toBe("Archived 1 event as version 4.");
     expect(archivedText({ archived: 2, version: 1 })).toBe("Archived 2 events as version 1.");
+  });
+});
+
+describe("ingress (§520)", () => {
+  it("reads ranges one per line, or by commas or spaces, blanks dropped", () => {
+    expect(parseAllowlist("10.0.0.0/8\n\n  192.0.2.7 ,2001:db8::/32\t203.0.113.0/24\n"))
+      .toEqual(["10.0.0.0/8", "192.0.2.7", "2001:db8::/32", "203.0.113.0/24"]);
+    expect(parseAllowlist("")).toEqual([]);
+    expect(parseAllowlist(" \n, ")).toEqual([]);
+  });
+
+  it("opens the editor with the saved ranges, and reads them back unchanged", () => {
+    const ranges = ["10.0.0.0/8", "192.0.2.7/32"];
+    expect(allowlistDraft(ranges)).toBe("10.0.0.0/8\n192.0.2.7/32");
+    expect(parseAllowlist(allowlistDraft(ranges))).toEqual(ranges);
+    expect(allowlistDraft([])).toBe("");
+  });
+
+  it("says who may send", () => {
+    expect(ingressText([])).toBe("Any address the platform accepts may send (inherited ingress).");
+    expect(ingressText(["10.0.0.0/8"])).toBe("Only 10.0.0.0/8 may send.");
+    expect(ingressText(["10.0.0.0/8", "192.0.2.7/32"]))
+      .toBe("Only these 2 ranges may send: 10.0.0.0/8, 192.0.2.7/32.");
   });
 });

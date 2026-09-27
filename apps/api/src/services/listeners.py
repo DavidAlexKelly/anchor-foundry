@@ -16,6 +16,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets as token_source
 import time
@@ -206,6 +207,67 @@ def stored_headers(headers: Mapping[str, str], verification_header: str | None) 
     return {k.lower(): ("[redacted]" if k.lower() in hidden else v) for k, v in headers.items()}
 
 
+# ---- ingress (§520; p.254-255) ------------------------------------------------
+#: db 0109's ceiling.
+MAX_RANGES = 50
+
+
+def check_allowlist(entries: list[str]) -> list[str]:
+    """Ranges as the database will hold them: normalised (`10.1.2.3/8` is
+    `10.0.0.0/8`), a bare address as its own /32 or /128, in the order given
+    with repeats dropped."""
+    out: list[str] = []
+    for entry in entries:
+        try:
+            network = str(ipaddress.ip_network(entry.strip(), strict=False))
+        except ValueError as exc:
+            raise ListenerError(f"{entry!r} is not an IP address or range") from exc
+        if network not in out:
+            out.append(network)
+    if len(out) > MAX_RANGES:
+        raise ListenerError(f"an allowlist holds at most {MAX_RANGES} ranges")
+    return out
+
+
+def address_allowed(address: str | None, allowlist: list[str]) -> bool:
+    """Whether a sender may reach a listener. An empty list is p.255's
+    inherited ingress: no restriction of its own. An IPv4 address that
+    arrives written as IPv6 (`::ffff:10.0.0.1`) is read as the IPv4 it is."""
+    if not allowlist:
+        return True
+    try:
+        ip = ipaddress.ip_address(address or "")
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip in ipaddress.ip_network(entry) for entry in allowlist)
+
+
+def sender_address(peer: str | None, forwarded_for: str | None, hops: int) -> str | None:
+    """The address that sent the request, behind `hops` proxies.
+
+    Each proxy appends the address it heard from to X-Forwarded-For, so the
+    entry `hops` from the right is the one the nearest trusted proxy wrote;
+    everything to its left came from the sender and proves nothing. With no
+    proxies it is the peer itself. Fewer entries than hops is an address
+    nobody vouched for."""
+    if hops <= 0:
+        return peer
+    entries = [e.strip() for e in (forwarded_for or "").split(",") if e.strip()]
+    return entries[-hops] if len(entries) >= hops else None
+
+
+async def set_allowlist(conn: AsyncConnection, project_id: UUID, listener_id: UUID,
+                        entries: list[str]) -> dict[str, Any]:
+    ranges = check_allowlist(entries)
+    await conn.execute(text("UPDATE listeners SET ingress_allowlist = CAST(:r AS cidr[]) WHERE id = :id"),
+                       {"id": str(listener_id), "r": ranges})
+    # The update may reach a listener in another project this user can see;
+    # `get` refuses that with a 404, and the refusal rolls the update back.
+    return await get(conn, project_id, listener_id)
+
+
 # ---- the request path --------------------------------------------------------
 async def read_capped(chunks: AsyncIterator[bytes], limit: int) -> bytes:
     """A request body, read only until it is past `limit`.
@@ -233,7 +295,7 @@ class Refusal(Exception):
 async def accept(conn: AsyncConnection, gateway: SecretsGateway, token: str,
                  headers: Mapping[str, str], body: bytes, *,
                  query: Mapping[str, str] | None = None, now: float | None = None,
-                 ) -> dict[str, Any]:
+                 sender: str | None = None) -> dict[str, Any]:
     """Take one request, or refuse it with the status that says why.
 
     Returns the event's id, or for Slack's set-up handshake the challenge to
@@ -244,6 +306,10 @@ async def accept(conn: AsyncConnection, gateway: SecretsGateway, token: str,
     # an endpoint expires, it will no longer be able to process events").
     if found is None or found["expired"]:
         raise Refusal(404, "no listener answers here")
+    # Before anything else is said about the listener: an address outside the
+    # allowlist learns only that it may not send (p.255).
+    if not address_allowed(sender, found["ingress_allowlist"]):
+        raise Refusal(403, "this address may not send to this listener")
     if not found["running"]:
         raise Refusal(503, "this listener is stopped")
     if len(body) > MAX_BODY:
@@ -286,6 +352,7 @@ def slack_challenge(verification: str, body: bytes) -> str | None:
 # ---- management --------------------------------------------------------------
 _COLUMNS = """l.id, l.display_name, l.listener_type, l.verification, l.verification_header, l.running,
               l.created_at, l.updated_at, l.archived_at,
+              l.ingress_allowlist::text[] AS ingress_allowlist,
               d.name AS archive_dataset_name, d.resource_id AS archive_dataset_resource_id,
               (SELECT count(*) FROM listener_events e WHERE e.listener_id = l.id
                   AND e.id > CASE WHEN d.id IS NULL THEN 0 ELSE l.archived_through END)::int

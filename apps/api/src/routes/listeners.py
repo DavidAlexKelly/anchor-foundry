@@ -11,6 +11,7 @@ Two routers:
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -60,6 +61,8 @@ class ListenerOut(BaseModel):
     archived_at: datetime | None
     #: Events the next archive run will write.
     pending_events: int
+    #: p.254's custom ingress (§520); empty is inherited, no restriction.
+    ingress_allowlist: list[str]
     created_at: datetime
     updated_at: datetime
 
@@ -197,6 +200,25 @@ async def delete_listener(
         await listener_service.delete(conn, secrets_gateway(), access.project_id, listener_id)
 
 
+class IngressIn(BaseModel):
+    allowlist: list[str] = Field(default_factory=list, max_length=200)
+
+
+@router.put("/{listener_id}/ingress", response_model=ListenerOut)
+async def set_ingress(
+    listener_id: UUID, body: IngressIn, request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ListenerOut:
+    """p.254-255's ingress allowlist for one listener (§520)."""
+    async with user_connection(access.auth.user_id) as conn:
+        try:
+            row = await listener_service.set_allowlist(conn, access.project_id, listener_id,
+                                                       body.allowlist)
+        except listener_service.ListenerError as exc:
+            raise _refused(exc) from exc
+    return _out(request, row)
+
+
 class RotateIn(BaseModel):
     #: When the endpoint being replaced stops answering; null deletes it now
     #: (p.258: "set an expiration date … for zero-downtime rotations, or …
@@ -286,6 +308,14 @@ async def listener_events(
     return [EventOut(**r) for r in rows]
 
 
+def _proxy_hops() -> int:
+    """How many proxies stand between a sender and this process, from
+    LISTENER_PROXY_HOPS (one behind the ALB, set in the CDK services
+    construct; none in development)."""
+    raw = os.environ.get("LISTENER_PROXY_HOPS", "0")
+    return int(raw) if raw.isdigit() else 0
+
+
 @ingress_router.post("/listen/{token}")
 async def receive(token: str, request: Request) -> JSONResponse:
     """p.261's endpoint. **No user**: what a request proves is its listener's
@@ -298,8 +328,11 @@ async def receive(token: str, request: Request) -> JSONResponse:
     headers = {k.lower(): v for k, v in request.headers.items()}
     try:
         async with get_engine().begin() as conn:
-            taken = await listener_service.accept(conn, secrets_gateway(), token, headers, body,
-                                                  query=dict(request.query_params))
+            taken = await listener_service.accept(
+                conn, secrets_gateway(), token, headers, body, query=dict(request.query_params),
+                sender=listener_service.sender_address(
+                    request.client.host if request.client else None,
+                    request.headers.get("x-forwarded-for"), _proxy_hops()))
     except listener_service.Refusal as refusal:
         return JSONResponse({"detail": refusal.detail}, status_code=refusal.status)
     if "challenge" in taken:
