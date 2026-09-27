@@ -19,6 +19,9 @@
  * answer as `object_sets.in_circle`'s great-circle distance. A property holds
  * one area of any of the three. Lines stay ○.
  *
+ * **p.301's Draw options and drawn shape style (§573)**: which of the three
+ * tools the toolbar offers, and the colour and fill opacity of what is drawn.
+ *
  * Pure: the map's projection is `map.tsx`'s, handed in as a view and a frame.
  */
 
@@ -147,6 +150,40 @@ export function circlePath(circle: Circle, view: View, frame: Frame): string {
       .map((p) => `${((p.lon - view.x) / view.w) * frame.width},${((-p.lat - view.y) / h) * frame.height}`)
       .join("L") + "Z")
     .join("");
+}
+
+/** p.301's Draw options (§573): the tools a map's toolbar may offer, in its
+ * order. */
+export const DRAW_TOOLS = ["rectangle", "polygon", "circle"] as const;
+export type DrawTool = (typeof DRAW_TOOLS)[number];
+export const DRAW_TOOL_LABELS: Record<DrawTool, string> = {
+  rectangle: "Rectangle",
+  polygon: "Shape",
+  circle: "Circle",
+};
+
+/** The tools a map offers: those named, in the toolbar's order, or all
+ * three for a map saved before there was a choice. None is a choice too: a
+ * map whose area is set only by what writes its variable. */
+export function drawToolsOf(raw: unknown): DrawTool[] {
+  if (!Array.isArray(raw)) return [...DRAW_TOOLS];
+  return DRAW_TOOLS.filter((t) => raw.includes(t));
+}
+
+/** The tools with one turned on or off. */
+export function withDrawTool(raw: unknown, tool: DrawTool, on: boolean): DrawTool[] {
+  const tools = drawToolsOf(raw);
+  return DRAW_TOOLS.filter((t) => (t === tool ? on : tools.includes(t)));
+}
+
+/** p.301's Drawn shape opacity, of the fill: the outline stays, so a shape
+ * at 0 is still there to see. */
+export const DRAWN_OPACITY = 0.35;
+
+export function drawnOpacityOf(raw: unknown): number {
+  const n = typeof raw === "number" ? raw
+    : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : Number.NaN;
+  return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : DRAWN_OPACITY;
 }
 
 /** The longitude and latitude under a point of the map's frame. */
