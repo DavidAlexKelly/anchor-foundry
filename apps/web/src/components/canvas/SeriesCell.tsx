@@ -41,11 +41,14 @@ export function SeriesCell({
    * disagree about a threshold they are both reporting. */
   paint = null,
   pending = false,
+  baseline = null,
 }: {
   points: readonly Point[] | undefined;
   format?: NumberFormat | null;
   paint?: PropertyStyle | null;
   pending?: boolean;
+  /** p.592's baseline for this row (§563), drawn by the line. */
+  baseline?: number | null;
 }) {
   const list = points ?? [];
   const value = latest(list);
@@ -61,7 +64,7 @@ export function SeriesCell({
       {/* The line itself is `Sparkline`'s, shared with the Metric Card
           (p.329) so the stroke, the empty wording and the non-scaling trick
           have one home. */}
-      <Sparkline points={points} pending={pending} colour={strokeFor(paint)} />
+      <Sparkline points={points} pending={pending} colour={strokeFor(paint)} baseline={baseline} />
     </span>
   );
 }
