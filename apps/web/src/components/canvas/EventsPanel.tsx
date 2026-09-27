@@ -82,8 +82,11 @@ const TRIGGERS: {
     widgets: [
       "CanvasParameterControl", "CanvasFilterList",
       "CanvasNumericInput", "CanvasTextInput", "CanvasStringSelector",
-      "CanvasDateTimePicker", "CanvasDateInput",
+      "CanvasDateTimePicker", "CanvasDateInput", "CanvasMap",
     ],
+    // p.301's "On drawn shape" (§574): the map's drawn shape is its value,
+    // and `{{value}}` is its GeoJSON.
+    labels: { CanvasMap: "Shape drawn" },
   },
   {
     // p.465's "Event on enter". Separate from `Changed` because that fires per

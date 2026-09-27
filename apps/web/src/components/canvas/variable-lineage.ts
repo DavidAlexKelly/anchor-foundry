@@ -89,6 +89,9 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   autoZoomSetVariable: "read",
   followSetVariable: "read",
   boundsVariable: "write",
+  // p.301 (§574): the drawn shape is written as GeoJSON when one is drawn,
+  // and read back from it; a write, as the bounds are.
+  drawnShapesVariable: "write",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",

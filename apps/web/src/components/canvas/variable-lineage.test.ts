@@ -55,6 +55,7 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   autoZoomSetVariable: "read",
   followSetVariable: "read",
   boundsVariable: "write",
+  drawnShapesVariable: "write",
   variable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",
