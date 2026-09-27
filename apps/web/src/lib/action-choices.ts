@@ -165,10 +165,17 @@ export function declaredTypes(
  */
 export function untypedNote(parameter: {
   data_type: string;
+  array_of?: string | null;
   object_type_id?: string | null;
 }): string | null {
-  if (parameter?.data_type !== "object") return null;
   if (parameter?.object_type_id) return null;
+  // p.36's ObjectReference list (§581) is refused without a type, so it is
+  // said before Save rather than after.
+  if (parameter?.data_type === "array" && parameter.array_of === "object") {
+    return "A list of objects has to say of which type: its choices are that "
+      + "type's objects, and it cannot be saved without one.";
+  }
+  if (parameter?.data_type !== "object") return null;
   return "This parameter takes an object but does not say of which type, so "
     + "the form asks for an id. Choose a type to give it a dropdown — and to "
     + "have the value checked before the action runs.";

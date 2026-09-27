@@ -874,7 +874,7 @@ async def action_parameter_choices(
             conn, access.workspace_id, action_type_id
         )
         wanted: list[tuple[str, str]] = []
-        for parameter in choices_service.object_parameters(action_type["parameters"]):
+        for parameter in choices_service.choice_parameters(action_type["parameters"]):
             type_id = choices_service.type_of(parameter)
             if type_id is not None:
                 wanted.append((str(parameter["api_name"]), type_id))

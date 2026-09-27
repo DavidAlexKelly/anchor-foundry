@@ -16022,6 +16022,30 @@ export function CanvasActionForm({
               </option>
             ))}
           </select>
+        ) : offer && parameter.data_type === "array" ? (
+          /* p.36's ObjectReference list (§581): several of the offered objects
+             at once. A native `<select multiple>`, for the String Selector's
+             reason - the control a browser already gives keyboard and screen
+             reader support for. */
+          <select
+            multiple
+            aria-label={parameterLabel(parameter)}
+            data-testid="object-list-parameter"
+            size={Math.min(6, Math.max(2, offer.items.length))}
+            value={Array.isArray(values[parameter.api_name])
+              ? (values[parameter.api_name] as unknown[]).map(String) : []}
+            onChange={(e) => {
+              setTyped((was) => ({ ...was, [parameter.api_name]: true }));
+              setValues({
+                ...values,
+                [parameter.api_name]: [...e.target.selectedOptions].map((o) => o.value),
+              });
+            }}
+          >
+            {offer.items.map((choice) => (
+              <option key={choice.id} value={choice.id}>{choiceLabel(choice)}</option>
+            ))}
+          </select>
         ) : offer ? (
           <select
             aria-label={parameterLabel(parameter)}

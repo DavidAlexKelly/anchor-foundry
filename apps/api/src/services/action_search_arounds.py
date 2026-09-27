@@ -114,7 +114,7 @@ def build(
     *,
     object_type_id: UUID,
     filters: tuple[object_sets.Filter, ...],
-    start_key: str | None = None,
+    start_key: str | list[str] | None = None,
 ) -> object_sets.ObjectSet:
     """p.36's start and p.37's hops as one `ObjectSet`, with 0084's filters on
     the outermost.
@@ -155,9 +155,13 @@ def build(
         # `PRIMARY_KEY_FILTER` for precisely this — a derived property is a
         # chain rooted at one object — and p.37's "of Current Employee" is the
         # same root with a value from the form instead of the row being read.
+        # p.36's ObjectReference list (§581) is the same root at several keys.
         set_so_far = object_sets.ObjectSet(
             object_type_id=UUID(str(start["object_type_id"])),
             filters=(object_sets.Filter(
+                property=object_sets.PRIMARY_KEY_FILTER, op="in",
+                value=[str(k) for k in start_key],
+            ) if isinstance(start_key, list) else object_sets.Filter(
                 property=object_sets.PRIMARY_KEY_FILTER, op="eq",
                 value=str(start_key),
             ),),
@@ -260,7 +264,9 @@ def check_source(
                 f"{name!r}: its starting set reads {read!r}, which is not a "
                 "parameter of this action"
             )
-        if str(other.get("data_type")) != "object":
+        from .actions import is_object_list
+
+        if str(other.get("data_type")) != "object" and not is_object_list(other):
             # p.36 says an *ObjectReference* parameter. Starting from a string
             # would mean treating whatever somebody typed as an object's key,
             # and the dropdown would be empty for every value but one.
