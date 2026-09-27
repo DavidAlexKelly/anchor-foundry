@@ -7,6 +7,7 @@ import {
   between, buildPlan, buildSummary, cascadeCount, type PlannedModel,
 } from "@/lib/graph-builds";
 import { clearSummary, looksLikeCron, scheduleSummary } from "@/lib/graph-schedules";
+import { copiedNames, histogram, litByValue } from "@/lib/graph-histogram";
 import {
   GRAPH_KINDS, columnsIn, foundByColumn, inverted, isDrag, kindsIn, outOfDateNote, relatives, search, toggleSelected, type GraphView, viewOf,
 } from "@/lib/pipeline-graph";
@@ -433,6 +434,12 @@ export function PipelineGraphView({
   // question it answers is "where else is *this* column" — two highlighted at
   // once would light up a union nobody asked about.
   const [column, setColumn] = useState<string | null>(initialView?.column ?? null);
+  // p.8's histogram (§531): "By clicking on the values, the matching nodes
+  // are highlighted." One value at a time, for the column's reason above, and
+  // a value and a column are never both chosen: two highlights at once would
+  // light a union nobody asked about.
+  const [valueChosen, setValueChosen] = useState<{ property: string; value: string } | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
   // p.38's "several built-in options for coloring graph nodes" (§419).
   // `colouringIn` rather than the raw field: a stored view naming a colouring
   // this build does not offer opens on the default, so the picker and the
@@ -527,9 +534,21 @@ export function PipelineGraphView({
     () => columnsIn(graph.columns, selected),
     [graph.columns, selected],
   );
+  // p.8's histogram over a selection of two or more (§531). One node's
+  // properties are the detail bar's, which p.8 gives the single-node case.
+  const selectedNodes = useMemo(
+    () => selected.map((id) => byId.get(id)).filter((n): n is PipelineNode => n !== undefined),
+    [selected, byId],
+  );
+  const valueRows = useMemo(
+    () => (selectedNodes.length >= 2 ? histogram(selectedNodes) : []),
+    [selectedNodes],
+  );
   const lit = useMemo(
-    () => new Set(columns.find((c) => c.name === column)?.datasets ?? []),
-    [columns, column],
+    () => new Set(valueChosen !== null
+      ? litByValue(valueRows, valueChosen)
+      : columns.find((c) => c.name === column)?.datasets ?? []),
+    [columns, column, valueRows, valueChosen],
   );
   // p.10's Gantt (§418). **Over the selection, which is what p.10 says**:
   // "actual build time for the selected datasets". Nothing selected is no
@@ -713,7 +732,10 @@ export function PipelineGraphView({
                 // component over).
                 data-column={c.name}
                 aria-pressed={column === c.name}
-                onClick={() => setColumn(column === c.name ? null : c.name)}
+                onClick={() => {
+                  setValueChosen(null);
+                  setColumn(column === c.name ? null : c.name);
+                }}
               >
                 {c.name}
                 <span className="slug" style={{ marginLeft: 5 }}>
@@ -737,6 +759,71 @@ export function PipelineGraphView({
               className="btn quiet"
               data-testid="update-selection"
               style={{ marginTop: 6 }}
+              onClick={() => setSelected([...lit])}
+            >
+              Update selection
+            </button>
+          )}
+        </div>
+      )}
+      {valueRows.length > 0 && (
+        /* p.8's histogram helper (§531): "common properties and their values
+           alongside the number of appearances of each value", for a selection
+           of two or more. */
+        <div style={{ marginBottom: 8 }} data-testid="graph-histogram">
+          <div className="slug" style={{ marginBottom: 4 }}>
+            Histogram · {selectedNodes.length} selected
+            <button
+              type="button"
+              className="btn quiet"
+              data-testid="histogram-copy-names"
+              style={{ marginLeft: 8 }}
+              onClick={() => {
+                const names = copiedNames(selectedNodes);
+                navigator.clipboard.writeText(names).then(
+                  () => setCopied(`Copied ${selectedNodes.length} names`),
+                  () => setCopied("Couldn't copy the names"),
+                );
+              }}
+            >
+              Copy names
+            </button>
+            {copied && <span className="soft" role="status" data-testid="histogram-copied"> {copied}</span>}
+          </div>
+          {valueRows.map((row) => (
+            <div key={row.property} data-testid={`histogram-${row.property}`}
+                 style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", marginBottom: 3 }}>
+              <span className="slug" style={{ minWidth: 80 }}>{row.label}</span>
+              {row.values.map((v) => {
+                const on = valueChosen?.property === row.property && valueChosen.value === v.value;
+                return (
+                  <button
+                    key={v.value}
+                    type="button"
+                    className={on ? "chip on" : "chip"}
+                    aria-pressed={on}
+                    data-value={v.value}
+                    onClick={() => {
+                      setColumn(null);
+                      setValueChosen(on ? null : { property: row.property, value: v.value });
+                    }}
+                  >
+                    {v.value}
+                    <span className="slug" style={{ marginLeft: 5 }}>{v.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+          {valueChosen !== null && (
+            /* p.8: "If you want to drill down to just those resources, click
+               on Update selection." */
+            <button
+              className="btn quiet"
+              data-testid="histogram-update-selection"
+              style={{ marginTop: 4 }}
+              // The value stays chosen, as the column does above: every
+              // remaining node is lit because they all have it.
               onClick={() => setSelected([...lit])}
             >
               Update selection
