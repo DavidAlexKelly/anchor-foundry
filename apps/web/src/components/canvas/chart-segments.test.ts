@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  legendEntryAt, legendInset, segmentLayout, segmentLegendPositionOf, segmentModeOf, segmentName, segmentedFrom,
+  legendEntryAt, legendInset, segmentLayout, segmentLegendPositionOf, segmentModeOf, segmentName,
+  segmentedFrom, sortSegmented,
 } from "./chart-segments";
 
 const data = segmentedFrom({
@@ -99,5 +100,30 @@ describe("the segmented legend (p.284's positions, p.282's display override)", (
     // An array is not a set of names, even where a value reads as its index.
     expect(segmentName("0", ["Zero"])).toBe("0");
     expect(segmentName("north", { north: " Up north " })).toBe("Up north");
+  });
+});
+
+describe("sortSegmented (p.283's Sort by, on a segmented chart)", () => {
+  const grid = {
+    categories: ["Site 10", "site 2", "Site 1"],
+    segments: ["a", "b"],
+    values: [[1, 1], [5, 0], [0, 3]],
+  };
+
+  it("keeps the cross-tab's order unless told otherwise", () => {
+    expect(sortSegmented(grid, "source")).toEqual(grid);
+  });
+
+  it("orders by each bar's whole height, its rows with it", () => {
+    const tallest = sortSegmented(grid, "valueDesc");
+    expect(tallest.categories).toEqual(["site 2", "Site 1", "Site 10"]);
+    expect(tallest.values).toEqual([[5, 0], [0, 3], [1, 1]]);
+    expect(tallest.segments).toEqual(["a", "b"]);
+    expect(sortSegmented(grid, "valueAsc").categories).toEqual(["Site 10", "Site 1", "site 2"]);
+  });
+
+  it("orders by key as a person reads it", () => {
+    expect(sortSegmented(grid, "keyAsc").categories).toEqual(["Site 1", "site 2", "Site 10"]);
+    expect(sortSegmented(grid, "keyDesc").values).toEqual([[1, 1], [5, 0], [0, 3]]);
   });
 });

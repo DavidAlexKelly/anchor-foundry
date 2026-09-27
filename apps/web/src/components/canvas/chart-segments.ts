@@ -16,6 +16,8 @@
  * and a pivot cell over the same two properties are one number.
  */
 
+import { sortPoints, type ChartSort } from "./chart-display";
+
 export const SEGMENT_MODES = {
   stacked: "Stacked",
   percentage: "Percentage",
@@ -179,4 +181,25 @@ export function segmentName(value: string, names: unknown): string {
   // type check is all the own-property check there needs to be.
   const own = (names as Record<string, unknown>)[value];
   return typeof own === "string" && own.trim() !== "" ? own.trim() : value;
+}
+
+/**
+ * p.283's **Sort by** on a segmented chart (§540), which the panel offered and
+ * the chart ignored: §468 sorted a plain chart's points, and a segmented one
+ * is drawn from the cross-tab's grid instead.
+ *
+ * A category is ordered by its bar's whole height, the total of its segments,
+ * which is the "charted value" p.283 sorts; by key, it is ordered as a plain
+ * chart's keys are. Each row of the grid travels with its category.
+ */
+export function sortSegmented(data: Segmented, sort: ChartSort): Segmented {
+  const totals = data.categories.map((label, i) => ({
+    label, value: (data.values[i] ?? []).reduce((sum, v) => sum + v, 0), index: i,
+  }));
+  const order = sortPoints(totals, sort) as typeof totals;
+  return {
+    categories: order.map((c) => c.label),
+    segments: data.segments,
+    values: order.map((c) => data.values[c.index] ?? []),
+  };
 }
