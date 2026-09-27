@@ -20,9 +20,10 @@ import { ApiError, api as platformApi, listeners as api } from "@/lib/api";
 import { canEditProject } from "@/lib/test-runs";
 import { bytesText } from "@/lib/bytes";
 import {
-  BLANK_LISTENER, ROTATIONS, VERIFICATIONS, curlExample, draftBody, draftProblem, endpointState,
-  extendedExpiry, needsHeader, rotateBody, statusText, verificationText, whyNoRotation,
-  type Listener, type ListenerDraft, type Verification,
+  BLANK_LISTENER, LISTENER_TYPES, ROTATIONS, VERIFICATIONS, curlExample, draftBody, draftProblem,
+  endpointState, extendedExpiry, needsHeader, rotateBody, schemesOf, statusText, verificationText,
+  whyNoRotation, withType,
+  type Listener, type ListenerDraft, type ListenerType, type Verification,
 } from "@/lib/listeners";
 
 export function ListenersPanel({ workspaceId, projectId }: { workspaceId: string; projectId: string }) {
@@ -85,19 +86,34 @@ export function ListenersPanel({ workspaceId, projectId }: { workspaceId: string
               onChange={(e) => set("display_name", e.target.value)}
             />
           </Field>
+          {/* p.262: "configure a custom, basic authentication listener, or one
+              of the following listeners" (§518). A named type fixes the
+              scheme and header, so only its secret is asked for. */}
+          <Field label="Sender">
+            <select
+              data-testid="listener-type"
+              value={draft.listener_type}
+              onChange={(e) => setDraft((d) => withType(d, e.target.value as ListenerType))}
+            >
+              {(Object.keys(LISTENER_TYPES) as ListenerType[]).map((t) => (
+                <option key={t} value={t}>{LISTENER_TYPES[t].label}</option>
+              ))}
+            </select>
+          </Field>
           <Field label="Verification">
             <select
               data-testid="listener-verification"
               value={draft.verification}
+              disabled={schemesOf(draft.listener_type).length === 1}
               onChange={(e) => set("verification", e.target.value as Verification)}
             >
-              {(Object.keys(VERIFICATIONS) as Verification[]).map((v) => (
+              {schemesOf(draft.listener_type).map((v) => (
                 <option key={v} value={v}>{VERIFICATIONS[v].label}</option>
               ))}
             </select>
             <span className="field-hint">{VERIFICATIONS[draft.verification].hint}</span>
           </Field>
-          {needsHeader(draft.verification) && (
+          {needsHeader(draft.listener_type, draft.verification) && (
             <Field label="Header">
               <input
                 data-testid="listener-header"

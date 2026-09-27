@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 import secrets as token_source
+import time
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Mapping
 from uuid import UUID, uuid4
@@ -37,7 +38,35 @@ MAX_BODY = 1_048_576
 #: systems"). `none` is p.262's "custom, basic authentication listener" with
 #: nothing to check, for a sender that signs nothing: the endpoint's random
 #: path is then the only secret, and the screen says so.
-VERIFICATIONS = ("none", "basic", "header_secret", "hmac_sha256")
+VERIFICATIONS = ("none", "basic", "header_secret", "hmac_sha256", "hmac_sha256_base64",
+                 "slack_v0", "stripe_v1", "query_token")
+
+#: The schemes that read a named header, which is then stored and redacted.
+HEADER_SCHEMES = ("header_secret", "hmac_sha256", "hmac_sha256_base64", "slack_v0", "stripe_v1")
+
+#: How stale a signed timestamp may be (Slack and Stripe both sign one, and
+#: both say five minutes), so a captured request cannot be replayed later.
+TOLERANCE_SECONDS = 300
+
+#: p.262's named listeners (§518): each fixes its scheme and the header it
+#: reads, so its author gives only the secret. `"*"` is a header the author
+#: names; None is a scheme with no header. The first scheme is the default.
+LISTENER_TYPES: dict[str, dict[str, Any]] = {
+    "custom": {"label": "Custom", "schemes": {
+        "none": None, "basic": None, "header_secret": "*", "hmac_sha256": "*",
+        "hmac_sha256_base64": "*", "query_token": None}},
+    # p.285: "In the field for Message Signing Secret, enter the Signing Secret".
+    "slack": {"label": "Slack", "schemes": {"slack_v0": "X-Slack-Signature"}},
+    # p.279: "You can also set up without a signing secret."
+    "jira": {"label": "Jira", "schemes": {"hmac_sha256": "X-Hub-Signature", "none": None}},
+    "github": {"label": "GitHub", "schemes": {"hmac_sha256": "X-Hub-Signature-256"}},
+    "gitlab": {"label": "GitLab", "schemes": {"header_secret": "X-Gitlab-Token"}},
+    "stripe": {"label": "Stripe", "schemes": {"stripe_v1": "Stripe-Signature"}},
+    "shopify": {"label": "Shopify", "schemes": {"hmac_sha256_base64": "X-Shopify-Hmac-Sha256"}},
+    # p.274: "enter your shared secret into the URL field as a query parameter
+    # after the listener endpoint URL. Example: ?token=<YOUR_TOKEN>".
+    "pubsub": {"label": "Google Cloud Pub/Sub", "schemes": {"query_token": None}},
+}
 
 #: Headers never stored, because they are how a sender authenticates. p.265:
 #: "A minimal set of redactions is sometimes performed on incoming data".
@@ -57,26 +86,60 @@ def new_token() -> str:
 
 
 def check_configuration(verification: str, header: str | None, secret: str | None) -> None:
-    if verification not in VERIFICATIONS:
-        raise ListenerError(
-            f"verification must be one of {', '.join(VERIFICATIONS)}, not {verification!r}")
+    # Which schemes exist is `resolve`'s question, answered per type before
+    # this is asked.
     if verification == "none":
         if header or secret:
             raise ListenerError("a listener that verifies nothing has no header or secret")
         return
     if not secret:
         raise ListenerError(f"{verification} verification needs a secret")
-    needs_header = verification in ("header_secret", "hmac_sha256")
+    needs_header = verification in HEADER_SCHEMES
     if needs_header and not header:
         raise ListenerError(f"{verification} verification needs the header it arrives in")
     if not needs_header and header:
-        raise ListenerError("basic verification reads the Authorization header, so it takes no other")
+        raise ListenerError(
+            "basic verification reads the Authorization header, so it takes no other"
+            if verification == "basic"
+            else f"{verification} verification reads the endpoint's query string, so it takes no header")
     if verification == "basic" and ":" not in secret:
         raise ListenerError("basic verification's secret is username:password")
 
 
+def resolve(listener_type: str, verification: str | None, header: str | None,
+            secret: str | None) -> tuple[str, str | None]:
+    """A type's scheme and header, from what its author chose (§518).
+
+    A named type fixes the header, so one given for it is refused rather
+    than ignored (§214), and a scheme the type does not use is refused by
+    naming the ones it does.
+    """
+    kind = LISTENER_TYPES.get(listener_type)
+    if kind is None:
+        raise ListenerError(
+            f"listener_type must be one of {', '.join(LISTENER_TYPES)}, not {listener_type!r}")
+    schemes: dict[str, str | None] = kind["schemes"]
+    chosen = verification or next(iter(schemes))
+    if chosen not in schemes:
+        raise ListenerError(f"a {kind['label']} listener verifies with {', '.join(schemes)}")
+    fixed = schemes[chosen]
+    if fixed not in (None, "*"):
+        if header:
+            raise ListenerError(f"a {kind['label']} listener always reads {fixed}")
+        header = fixed
+    check_configuration(chosen, header, secret)
+    return chosen, header
+
+
+def _signed_at(stamp: str, now: float) -> bool:
+    """Whether a signed timestamp is a whole number of seconds within the
+    tolerance of now, either side."""
+    return stamp.isdigit() and abs(now - int(stamp)) <= TOLERANCE_SECONDS
+
+
 def verify(verification: str, header: str | None, secret: str | None,
-           headers: Mapping[str, str], body: bytes) -> bool:
+           headers: Mapping[str, str], body: bytes, *,
+           query: Mapping[str, str] | None = None, now: float = 0.0) -> bool:
     """Whether a request passes its listener's scheme.
 
     Every comparison is `hmac.compare_digest`, so how long a refusal takes says
@@ -85,6 +148,8 @@ def verify(verification: str, header: str | None, secret: str | None,
     if verification == "none":
         return True
     assert secret is not None
+    if verification == "query_token":
+        return hmac.compare_digest((query or {}).get("token", "").encode(), secret.encode())
     if verification == "basic":
         given = headers.get("authorization", "")
         if not given.lower().startswith("basic "):
@@ -98,6 +163,31 @@ def verify(verification: str, header: str | None, secret: str | None,
     given = headers.get(header.lower(), "")
     if verification == "header_secret":
         return hmac.compare_digest(given.encode(), secret.encode())
+    if verification == "hmac_sha256_base64":
+        digest = hmac.new(secret.encode(), body, hashlib.sha256).digest()
+        return hmac.compare_digest(given.encode(), base64.b64encode(digest))
+    if verification == "slack_v0":
+        # Slack signs `v0:{timestamp}:{body}` and sends the timestamp beside
+        # the signature, so a stale one is a replay.
+        stamp = headers.get("x-slack-request-timestamp", "")
+        if not _signed_at(stamp, now):
+            return False
+        expected = "v0=" + hmac.new(secret.encode(), f"v0:{stamp}:".encode() + body,
+                                    hashlib.sha256).hexdigest()
+        return hmac.compare_digest(given.encode(), expected.encode())
+    if verification == "stripe_v1":
+        # `t=1492774577,v1=5257a…,v1=…`: the time and one or more signatures of
+        # `{t}.{body}` in one header. Any v1 that matches will do, since Stripe
+        # sends two while a secret is being rolled.
+        parts = [item.split("=", 1) for item in given.split(",") if "=" in item]
+        # No `t` is "", which `_signed_at` refuses like a stale one.
+        stamp = next((v for k, v in parts if k.strip() == "t"), "")
+        if not _signed_at(stamp, now):
+            return False
+        expected = hmac.new(secret.encode(), f"{stamp}.".encode() + body,
+                            hashlib.sha256).hexdigest()
+        return any(hmac.compare_digest(v.encode(), expected.encode())
+                   for k, v in parts if k.strip() == "v1")
     # hmac_sha256: a hex digest of the body, with or without GitHub's
     # `sha256=` prefix.
     if given.lower().startswith("sha256="):
@@ -141,8 +231,14 @@ class Refusal(Exception):
 
 
 async def accept(conn: AsyncConnection, gateway: SecretsGateway, token: str,
-                 headers: Mapping[str, str], body: bytes) -> int:
-    """Take one request, or refuse it with the status that says why."""
+                 headers: Mapping[str, str], body: bytes, *,
+                 query: Mapping[str, str] | None = None, now: float | None = None,
+                 ) -> dict[str, Any]:
+    """Take one request, or refuse it with the status that says why.
+
+    Returns the event's id, or for Slack's set-up handshake the challenge to
+    echo (p.287: "Slack will verify that the listener is correctly set up").
+    """
     found = await fetch_one(conn, "SELECT * FROM listener_for_token(:t)", {"t": token})
     # An expired endpoint is as gone as one that never existed (p.259: "When
     # an endpoint expires, it will no longer be able to process events").
@@ -154,19 +250,41 @@ async def accept(conn: AsyncConnection, gateway: SecretsGateway, token: str,
         raise Refusal(413, f"a request is at most {MAX_BODY} bytes")
     secret = (gateway.get_secret(found["secret_arn"])["secret"]
               if found["secret_arn"] else None)
-    if not verify(found["verification"], found["verification_header"], secret, headers, body):
+    if not verify(found["verification"], found["verification_header"], secret, headers, body,
+                  query=query, now=time.time() if now is None else now):
         raise Refusal(401, "the request did not verify")
+    challenge = slack_challenge(found["verification"], body)
+    if challenge is not None:
+        # The handshake is not an event: Slack sends it once, to see the
+        # address answer, and nothing downstream is waiting for it.
+        return {"challenge": challenge}
     row = await fetch_one(conn, """
         SELECT record_listener_event(:lid, :eid, :ct, :body, CAST(:headers AS jsonb)) AS id
     """, {"lid": str(found["listener_id"]), "eid": str(found["endpoint_id"]),
           "ct": headers.get("content-type"), "body": body,
           "headers": json.dumps(stored_headers(headers, found["verification_header"]))})
     assert row is not None
-    return int(row["id"])
+    return {"event": int(row["id"])}
+
+
+def slack_challenge(verification: str, body: bytes) -> str | None:
+    """Slack's URL verification: a signed `{"type": "url_verification",
+    "challenge": …}` answered with the challenge. Only for a Slack-signed
+    listener, since any other sender posting that shape is sending an event."""
+    if verification != "slack_v0":
+        return None
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return None
+    if isinstance(payload, dict) and payload.get("type") == "url_verification":
+        challenge = payload.get("challenge")
+        return challenge if isinstance(challenge, str) else None
+    return None
 
 
 # ---- management --------------------------------------------------------------
-_COLUMNS = """l.id, l.display_name, l.verification, l.verification_header, l.running,
+_COLUMNS = """l.id, l.display_name, l.listener_type, l.verification, l.verification_header, l.running,
               l.created_at, l.updated_at,
               (SELECT count(*) FROM listener_events e WHERE e.listener_id = l.id)::int AS events,
               (SELECT max(received_at) FROM listener_events e WHERE e.listener_id = l.id)
@@ -201,18 +319,19 @@ async def get(conn: AsyncConnection, project_id: UUID, listener_id: UUID) -> dic
 
 
 async def create(conn: AsyncConnection, gateway: SecretsGateway, *, workspace_id: UUID,
-                 project_id: UUID, display_name: str, verification: str,
-                 header: str | None, secret: str | None, by: UUID) -> dict[str, Any]:
+                 project_id: UUID, display_name: str, listener_type: str,
+                 verification: str | None, header: str | None, secret: str | None,
+                 by: UUID) -> dict[str, Any]:
     """A listener with its first endpoint, stopped (db 0106: one that took
     traffic from the moment it existed would take it before it was set up)."""
-    check_configuration(verification, header, secret)
+    verification, header = resolve(listener_type, verification, header, secret)
     lid = uuid4()
     arn = gateway.put_secret(f"listener-{lid}", {"secret": secret}) if secret else None
     await conn.execute(text("""
-        INSERT INTO listeners (id, workspace_id, project_id, display_name, verification,
-                               verification_header, secret_arn, created_by)
-        VALUES (:id, :wid, :pid, :name, :v, :h, :arn, :by)
-    """), {"id": str(lid), "wid": str(workspace_id), "pid": str(project_id),
+        INSERT INTO listeners (id, workspace_id, project_id, display_name, listener_type,
+                               verification, verification_header, secret_arn, created_by)
+        VALUES (:id, :wid, :pid, :name, :type, :v, :h, :arn, :by)
+    """), {"id": str(lid), "wid": str(workspace_id), "pid": str(project_id), "type": listener_type,
            "name": display_name.strip(), "v": verification, "h": header, "arn": arn,
            "by": str(by)})
     await conn.execute(text(
@@ -222,12 +341,12 @@ async def create(conn: AsyncConnection, gateway: SecretsGateway, *, workspace_id
 
 
 async def configure(conn: AsyncConnection, gateway: SecretsGateway, project_id: UUID,
-                    listener_id: UUID, *, verification: str, header: str | None,
+                    listener_id: UUID, *, verification: str | None, header: str | None,
                     secret: str | None) -> dict[str, Any]:
-    """Change how requests are verified. The secret is replaced whole, and a
-    listener moved to `none` forgets it."""
-    check_configuration(verification, header, secret)
+    """Change how requests are verified, within the listener's type. The
+    secret is replaced whole, and a listener moved to `none` forgets it."""
     current = await get(conn, project_id, listener_id)
+    verification, header = resolve(current["listener_type"], verification, header, secret)
     arn = (gateway.put_secret(f"listener-{listener_id}", {"secret": secret})
            if secret else None)
     await conn.execute(text("""
