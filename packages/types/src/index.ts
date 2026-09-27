@@ -113,6 +113,14 @@ export interface Webhook {
   max_concurrent: number | null;
   rate_limit: number | null;
   rate_window: "second" | "minute" | "hour" | "day" | null;
+  /** p.234's chain (§523): the calls before this request. */
+  steps: {
+    method: string;
+    path: string;
+    body: unknown | null;
+    safe: boolean;
+    extract: { api_name: string; path: string }[];
+  }[];
   created_at: string;
   updated_at: string;
 }

@@ -41,7 +41,7 @@ _COLUMNS = """
     w.id, w.workspace_id, w.project_id, w.connection_id, w.api_name,
     w.display_name, w.description, w.method, w.path, w.query, w.headers,
     w.body, w.inputs, w.outputs, w.store_responses, w.retry_statuses,
-    w.timeout_seconds, w.max_concurrent, w.rate_limit, w.rate_window,
+    w.timeout_seconds, w.max_concurrent, w.rate_limit, w.rate_window, w.steps,
     w.created_by, w.created_at, w.updated_at,
     c.name AS connection_name, c.source_type AS connection_source_type
 """
@@ -173,12 +173,12 @@ async def create(
                               display_name, description, method, path, query,
                               headers, body, inputs, outputs, store_responses,
                               retry_statuses, timeout_seconds, max_concurrent,
-                              rate_limit, rate_window, created_by)
+                              rate_limit, rate_window, steps, created_by)
         VALUES (:wid, :pid, :cid, :name, :label, :descr, :method, :path,
                 CAST(:query AS jsonb), CAST(:headers AS jsonb),
                 CAST(:body AS jsonb), CAST(:inputs AS jsonb),
                 CAST(:outputs AS jsonb), :store, :retries, :timeout,
-                :concurrent, :rate, :window, :by)
+                :concurrent, :rate, :window, CAST(:steps AS jsonb), :by)
         RETURNING id
         """,
         {
@@ -220,7 +220,8 @@ async def update(
                body = CAST(:body AS jsonb), inputs = CAST(:inputs AS jsonb),
                outputs = CAST(:outputs AS jsonb), store_responses = :store,
                retry_statuses = :retries, timeout_seconds = :timeout,
-               max_concurrent = :concurrent, rate_limit = :rate, rate_window = :window
+               max_concurrent = :concurrent, rate_limit = :rate, rate_window = :window,
+               steps = CAST(:steps AS jsonb)
          WHERE id = :wid
         RETURNING id
         """,
@@ -265,6 +266,7 @@ def _definition_params(definition: dict[str, Any]) -> dict[str, Any]:
         "concurrent": definition["max_concurrent"],
         "rate": definition["rate_limit"],
         "window": definition["rate_window"],
+        "steps": json.dumps(definition["steps"]),
     }
 
 
