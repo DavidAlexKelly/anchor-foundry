@@ -26,6 +26,7 @@ import { ApiError, webhooks as api } from "@/lib/api";
 import {
   INPUT_TYPES, METHODS, OUTPUT_TYPES, WebhookDraft, blankWebhook, bodyProblem,
   outcomeLabel, parsedBody, problem, suggestedApiName,
+  MAX_CONCURRENT, MAX_RATE, RATE_WINDOWS, limitFrom, limitsPayload, limitsText, type RateWindow,
 } from "@/lib/webhook-form";
 import type { Connection, Webhook, WebhookRun } from "@/lib/types";
 
@@ -47,6 +48,7 @@ function payload(draft: WebhookDraft): Record<string, unknown> {
     store_responses: draft.store_responses,
     retry_statuses: draft.retry_statuses,
     timeout_seconds: draft.timeout_seconds,
+    ...limitsPayload(draft),
   };
 }
 
@@ -71,6 +73,9 @@ function toDraft(webhook: Webhook): WebhookDraft {
     store_responses: webhook.store_responses,
     retry_statuses: webhook.retry_statuses ?? [],
     timeout_seconds: webhook.timeout_seconds,
+    max_concurrent: webhook.max_concurrent ?? null,
+    rate_limit: webhook.rate_limit ?? null,
+    rate_window: webhook.rate_window ?? "minute",
   };
 }
 
@@ -323,6 +328,37 @@ function WebhookDialog({
             checked={draft.store_responses}
             onChange={(e) => patch({ store_responses: e.target.checked })}
           />
+        </Field>
+      </div>
+
+      {/* p.240's concurrency and rate limits (§522). The time limit is the
+          timeout above. */}
+      <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
+        <Field label="At most at once" hint="Empty for no limit.">
+          <input
+            type="number" min={1} max={MAX_CONCURRENT}
+            data-testid="webhook-max-concurrent"
+            value={draft.max_concurrent ?? ""}
+            onChange={(e) => patch({ max_concurrent: limitFrom(e.target.value) })}
+          />
+        </Field>
+        <Field label="At most" hint="Empty for no limit.">
+          <input
+            type="number" min={1} max={MAX_RATE}
+            data-testid="webhook-rate-limit"
+            value={draft.rate_limit ?? ""}
+            onChange={(e) => patch({ rate_limit: limitFrom(e.target.value) })}
+          />
+        </Field>
+        <Field label="Per">
+          <select
+            data-testid="webhook-rate-window"
+            value={draft.rate_window}
+            disabled={draft.rate_limit === null}
+            onChange={(e) => patch({ rate_window: e.target.value as RateWindow })}
+          >
+            {RATE_WINDOWS.map((w) => <option key={w} value={w}>{w}</option>)}
+          </select>
         </Field>
       </div>
 
@@ -579,6 +615,7 @@ export function WebhooksPanel({
               </td>
               <td className="slug">
                 {webhook.method} /{webhook.path}
+                <div data-testid="webhook-limits">{limitsText(webhook)}</div>
               </td>
               <td>{webhook.connection_name}</td>
               <td className="row-actions">

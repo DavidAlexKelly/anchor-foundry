@@ -35,7 +35,7 @@ from ..middleware.permissions import (
 )
 from ..services import audit
 from ..services import connections as conn_service
-from ..services import egress_store, webhook_calls, webhook_store
+from ..services import egress_store, webhook_calls, webhook_limits, webhook_store
 from ..services import webhooks as webhooks_service
 from . import connections as connection_routes
 
@@ -78,6 +78,10 @@ class WebhookDefinition(BaseModel):
     store_responses: bool = True
     retry_statuses: list[int] = Field(default_factory=list)
     timeout_seconds: int = 20
+    #: p.240's limits (§522); null is no limit. Checked by `parse`.
+    max_concurrent: Any = None
+    rate_limit: Any = None
+    rate_window: Any = None
 
 
 class WebhookCreate(WebhookDefinition):
@@ -112,6 +116,9 @@ class WebhookOut(BaseModel):
     store_responses: bool
     retry_statuses: list[int]
     timeout_seconds: int
+    max_concurrent: int | None = None
+    rate_limit: int | None = None
+    rate_window: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -318,9 +325,11 @@ async def test_webhook(
         )
 
     try:
-        outcome = await webhook_calls.perform(
-            webhook, connection, secret, body.values, policies
-        )
+        # §522: a test call is an execution, so p.240's limits apply to it.
+        async with webhook_limits.limited(webhook) as refused:
+            outcome = (webhook_calls.result(ok=False, error=refused) if refused
+                       else await webhook_calls.perform(
+                           webhook, connection, secret, body.values, policies))
     except webhooks_service.WebhookError as exc:
         # A request that could not be *built* — a missing required input — is a
         # fault in the call rather than in the response, so it is a 4xx here
