@@ -54,7 +54,7 @@ describe("the operators this language has", () => {
     for (const type of ["string", "integer", "geopoint", "date"]) {
       expect(operatorsFor(type)).not.toContain("within_box");
     }
-    expect(GEO_OPERATORS).toEqual(["within_box", "within_polygon"]);
+    expect(GEO_OPERATORS).toEqual(["within_box", "within_polygon", "within_distance"]);
   });
 });
 
@@ -151,6 +151,16 @@ describe("what a pill says", () => {
     // §571: a drawn shape by its corners.
     expect(valueLabel({ property: "site", op: "within_polygon",
       value: { points: [{}, {}, {}, {}] } })).toBe("a shape with 4 corners");
+    // §572: a circle by its radius and its centre.
+    const circle = (radius: number) => valueLabel({ property: "site", op: "within_distance",
+      value: { lat: 52.123456, lon: -5, radius } });
+    expect(circle(469_509.7)).toBe("within 469.5 km of 52.1235, -5");
+    expect(circle(1000)).toBe("within 1 km of 52.1235, -5");
+    expect(circle(999.6)).toBe("within 1 km of 52.1235, -5");
+    expect(circle(999.4)).toBe("within 999 m of 52.1235, -5");
+    expect(circle(250.2)).toBe("within 250 m of 52.1235, -5");
+    expect(valueLabel({ property: "site", op: "within_distance", value: { lat: 1, lon: 2 } }))
+      .toBe("…");
   });
 
   it("shows an operator with no value as just its subject and words", () => {

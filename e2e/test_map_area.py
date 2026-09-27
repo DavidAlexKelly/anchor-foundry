@@ -123,11 +123,39 @@ def test_a_drawn_shape_selects_the_objects_inside_it(page, api, sites) -> None:
     rows_are(page, ["LON", "PAR", "MAD", "NYC"], "every site once cleared")
 
 
+def test_a_drawn_circle_selects_the_objects_within_it(page, api, sites) -> None:
+    """p.301's circle (§572): a drag from London out past Paris is a
+    `within_distance` of that far on the ground, which Madrid is not."""
+    mod = build(api, sites, "Map area circle")
+    open_module(page, mod)
+    rows_are(page, ["LON", "PAR", "MAD", "NYC"], "every site before a circle")
+    expect(pin(page, "London")).to_be_visible()
+    london, paris = (pin(page, n).bounding_box() for n in ("London", "Paris"))
+    centre = (london["x"] + london["width"] / 2, london["y"] + london["height"] / 2)
+    edge = (paris["x"] + paris["width"] / 2 + 10, paris["y"] + paris["height"] / 2 + 10)
+    page.get_by_test_id("map-draw-circle").click()
+    expect(page.get_by_test_id("map-draw-circle")).to_have_attribute("aria-pressed", "true")
+    page.mouse.move(*centre)
+    page.mouse.down()
+    page.mouse.move(*edge, steps=5)
+    expect(page.get_by_test_id("map-area-sketch")).to_have_attribute("data-shape", "circle")
+    page.mouse.up()
+    rows_are(page, ["LON", "PAR"], "London and Paris, within the circle")
+    expect(page.get_by_test_id("map-area")).to_have_attribute("data-shape", "circle")
+    expect(page.get_by_test_id("map-draw-circle")).to_have_attribute("aria-pressed", "false")
+    page.get_by_test_id("map-clear-area").click()
+    rows_are(page, ["LON", "PAR", "MAD", "NYC"], "every site once cleared")
+
+
 def test_a_click_is_not_an_area(page, api, sites) -> None:
     open_module(page, build(api, sites, "Map area click"))
     expect(pin(page, "London")).to_be_visible()
     page.get_by_test_id("map-select-area").click()
     box = page.locator("svg[aria-label='Map']").bounding_box()
+    page.mouse.click(box["x"] + 20, box["y"] + 20)
+    expect(page.get_by_test_id("map-area")).to_have_count(0)
+    # Nor is it a circle (§572): a circle needs a drag out to its edge.
+    page.get_by_test_id("map-draw-circle").click()
     page.mouse.click(box["x"] + 20, box["y"] + 20)
     expect(page.get_by_test_id("map-area")).to_have_count(0)
     rows_are(page, ["LON", "PAR", "MAD", "NYC"], "every site still")
@@ -137,6 +165,7 @@ def test_a_map_with_nowhere_to_write_offers_no_area_tool(page, api, sites) -> No
     open_module(page, build(api, sites, "Map area none", areaVariable=None))
     expect(pin(page, "London")).to_be_visible()
     expect(page.get_by_test_id("map-select-area")).to_have_count(0)
+    expect(page.get_by_test_id("map-draw-circle")).to_have_count(0)
 
 
 def test_the_panel_names_where_the_area_goes(page, api, sites) -> None:

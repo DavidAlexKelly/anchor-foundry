@@ -24,8 +24,8 @@ import { WORLD_OUTLINE } from "./basemap";
 import { boundsOf, onScreen, pathsFor } from "./map-shapes";
 import { allInside, boundsText, sameView, viewOfBounds } from "./map-view";
 import {
-  MAX_POLYGON_POINTS, boxBetween, boxRect, closes, isDrag, isPolygon, lonLatAt, polygonPoints,
-  type Area,
+  MAX_POLYGON_POINTS, MIN_DRAG_PX, boxBetween, boxRect, circleBetween, circlePath, closes, isCircle,
+  isDrag, isPolygon, lonLatAt, polygonPoints, type Area,
 } from "./map-area";
 
 export interface MapPoint {
@@ -266,8 +266,10 @@ export function MapCanvas({
   // Select area is a mode, as a drawing tool in a toolbar is: a drag pans the
   // map until it is chosen, and draws a rectangle once.
   const [selecting, setSelecting] = useState(false);
-  const [sketch, setSketch] = useState<{ a: { x: number; y: number }; b: { x: number; y: number } }
-    | null>(null);
+  // §572's Draw circle: a drag from the centre out to the edge.
+  const [circling, setCircling] = useState(false);
+  const [sketch, setSketch] = useState<{ a: { x: number; y: number }; b: { x: number; y: number };
+    circle?: boolean } | null>(null);
   // §571's Draw shape: a click a corner, and a click back on the first (or a
   // double-click) closes it. Null when the tool is not in hand.
   const [outline, setOutline] = useState<{ x: number; y: number }[] | null>(null);
@@ -410,8 +412,15 @@ export function MapCanvas({
       const b = at(e) ?? done?.b;
       setSketch(null);
       setSelecting(false);
-      if (!done || !b || !isDrag(done.a, b)) return;
+      setCircling(false);
       const frame = { width: WIDTH, height: HEIGHT };
+      if (done?.circle && b) {
+        if (Math.hypot(done.a.x - b.x, done.a.y - b.y) < MIN_DRAG_PX) return;
+        onArea?.(circleBetween(
+          lonLatAt(done.a.x, done.a.y, current, frame), lonLatAt(b.x, b.y, current, frame)));
+        return;
+      }
+      if (!done || !b || !isDrag(done.a, b)) return;
       onArea?.(boxBetween(
         lonLatAt(done.a.x, done.a.y, current, frame), lonLatAt(b.x, b.y, current, frame)));
     };
@@ -453,7 +462,7 @@ export function MapCanvas({
         role="img"
         aria-label="Map"
         style={{ width: "100%", touchAction: "none",
-          cursor: selecting || outline ? "crosshair" : panning ? "grabbing" : "grab" }}
+          cursor: selecting || circling || outline ? "crosshair" : panning ? "grabbing" : "grab" }}
         onMouseDown={(e) => {
           // The widget's own Craft.js drag connector sits on the block around
           // this SVG, and in the editor it would otherwise pick the map up and
@@ -469,9 +478,9 @@ export function MapCanvas({
             }
             return;
           }
-          if (selecting) {
+          if (selecting || circling) {
             const a = svgPoint(e);
-            setSketch({ a, b: a });
+            setSketch({ a, b: a, circle: circling });
             return;
           }
           drag.current = { px: e.clientX, py: e.clientY, view: current };
@@ -537,7 +546,13 @@ export function MapCanvas({
             fill="var(--accent-wash)" fillOpacity={0.35} stroke="var(--accent)"
             strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
         )}
-        {area && !isPolygon(area) && (() => {
+        {area && isCircle(area) && (
+          <path data-testid="map-area" data-shape="circle" fillRule="evenodd"
+            d={circlePath(area, current, { width: WIDTH, height: HEIGHT })}
+            fill="var(--accent-wash)" fillOpacity={0.35} stroke="var(--accent)"
+            strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
+        )}
+        {area && !isPolygon(area) && !isCircle(area) && (() => {
           const r = boxRect(area, current, { width: WIDTH, height: HEIGHT });
           return (
             <rect data-testid="map-area" x={r.x} y={r.y} width={r.width} height={r.height}
@@ -551,7 +566,16 @@ export function MapCanvas({
             fill="none" stroke="var(--accent)" strokeDasharray="4 3"
             style={{ pointerEvents: "none" }} />
         )}
-        {sketch && (
+        {sketch?.circle && (
+          <path data-testid="map-area-sketch" data-shape="circle" fillRule="evenodd"
+            d={circlePath(circleBetween(
+              lonLatAt(sketch.a.x, sketch.a.y, current, { width: WIDTH, height: HEIGHT }),
+              lonLatAt(sketch.b.x, sketch.b.y, current, { width: WIDTH, height: HEIGHT })),
+            current, { width: WIDTH, height: HEIGHT })}
+            fill="none" stroke="var(--accent)" strokeDasharray="4 3"
+            style={{ pointerEvents: "none" }} />
+        )}
+        {sketch && !sketch.circle && (
           <rect data-testid="map-area-sketch"
             x={Math.min(sketch.a.x, sketch.b.x)} y={Math.min(sketch.a.y, sketch.b.y)}
             width={Math.abs(sketch.a.x - sketch.b.x)} height={Math.abs(sketch.a.y - sketch.b.y)}
@@ -644,7 +668,7 @@ export function MapCanvas({
             type="button"
             data-testid="map-select-area"
             aria-pressed={selecting}
-            onClick={() => { setOutline(null); setSelecting(!selecting); }}
+            onClick={() => { setOutline(null); setCircling(false); setSelecting(!selecting); }}
           >
             Select area
           </button>
@@ -655,9 +679,20 @@ export function MapCanvas({
             data-testid="map-draw-shape"
             aria-pressed={outline !== null}
             title="Click each corner, then the first again (or double-click) to close the shape"
-            onClick={() => { setSelecting(false); setOutline(outline ? null : []); }}
+            onClick={() => { setSelecting(false); setCircling(false); setOutline(outline ? null : []); }}
           >
             Draw shape
+          </button>
+        )}
+        {onArea && (
+          <button
+            type="button"
+            data-testid="map-draw-circle"
+            aria-pressed={circling}
+            title="Drag from the centre out to the edge"
+            onClick={() => { setSelecting(false); setOutline(null); setCircling(!circling); }}
+          >
+            Draw circle
           </button>
         )}
         {onArea && area && (

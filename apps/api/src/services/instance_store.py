@@ -896,6 +896,13 @@ class OpenSearchInstanceStore:
                 must.append({"bool": {"must": [
                     {"exists": {"field": field}}, _query_clause(field, f.value),
                 ]}})
+            elif f.op == "within_distance":
+                # §572: OpenSearch measures `geo_distance` as an arc on the
+                # mean Earth, the radius `object_sets.in_circle` uses.
+                must.append({"geo_distance": {
+                    "distance": f"{f.value.radius}m",
+                    field: {"lat": f.value.lat, "lon": f.value.lon},
+                }})
             elif f.op == "within_polygon":
                 # §571: the mapped `geo_point` answers a polygon natively, by
                 # the even-odd rule `object_sets.in_polygon` states.

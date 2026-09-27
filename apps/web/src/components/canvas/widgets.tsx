@@ -12118,8 +12118,9 @@ export function CanvasMap({
   searchParameter?: string | null;
   limit?: number;
   /** p.302's shape-based selection (§550): the array a drawn area is written
-   * into as a `within_box` on the location property, for a `narrow_set` to
-   * read (`map-area.ts`). */
+   * into as a `within_box` on the location property (a `within_polygon` or a
+   * `within_distance` for §571's shape and §572's circle), for a `narrow_set`
+   * to read (`map-area.ts`). */
   areaVariable?: string | null;
   /** A `geotemporal_series` property (§557): each object's track drawn as a
    * line, and the object at its position at the selected time. */
@@ -12886,7 +12887,8 @@ function MapSettings() {
                   .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
               </select>
               <span className="field-hint">
-                An array a narrowed set reads: dragging an area selects the objects in it
+                An array a narrowed set reads: an area, shape or circle drawn on the map
+                selects the objects in it
               </span>
             </label>
           )}

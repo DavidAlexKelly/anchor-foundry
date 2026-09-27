@@ -593,6 +593,25 @@ def _within_polygon_sql(
     )
 
 
+def _within_distance_sql(
+    prop: str, val: str, circle: "Any", params: dict[str, Any]
+) -> str:
+    """§572's circle, as SQL: `object_sets.distance_m`'s haversine, on the
+    same Earth radius, with the centre and radius bound. A row with no
+    coordinate compares as NULL, which is not true, so it needs no guard (one
+    survived the sweep as equivalent)."""
+    lat = _comparable_sql(f"jsonb_extract_path_text(i.properties, :{prop}, 'lat')", "float")
+    lon = _comparable_sql(f"jsonb_extract_path_text(i.properties, :{prop}, 'lon')", "float")
+    params[f"{val}lat"], params[f"{val}lon"] = circle.lat, circle.lon
+    params[f"{val}radius"] = circle.radius
+    params[f"{val}earth"] = object_sets.EARTH_RADIUS_M
+    clat, clon = f"CAST(:{val}lat AS double precision)", f"CAST(:{val}lon AS double precision)"
+    h = (f"power(sin(radians({lat} - {clat}) / 2), 2) + cos(radians({clat})) * "
+         f"cos(radians({lat})) * power(sin(radians({lon} - {clon}) / 2), 2)")
+    return (f"(2 * CAST(:{val}earth AS double precision) * asin(least(1.0, sqrt({h}))) "
+            f"<= CAST(:{val}radius AS double precision))")
+
+
 def _comparable_sql(extract: str, data_type: str | None) -> str:
     """A stored property, as a value its declared type can be ordered by.
 
@@ -767,6 +786,8 @@ def _set_predicate(
             params[val] = bound.isoformat() if hasattr(bound, "isoformat") else bound
         elif f.op == "within_polygon":
             where.append(_within_polygon_sql(prop, val, f.value, params))
+        elif f.op == "within_distance":
+            where.append(_within_distance_sql(prop, val, f.value, params))
         elif f.op in object_sets.GEO_OPERATORS:
             where.append(_within_box_sql(prop, val, f.value, params))
         elif f.op in object_sets.QUERY_OPERATORS:
