@@ -2279,6 +2279,8 @@ export interface ActionDefinitionInput {
     value_constraint?: import("./types").ValueConstraint | null;
     /** p.71-72: a struct parameter's per-field constraints (§585). */
     field_constraints?: Record<string, import("./types").ValueConstraint>;
+    /** p.29's default from an object (§588). */
+    default_from?: import("./types").ParameterDefaultFrom | null;
   }[];
   rules: { kind: string; config: Record<string, unknown> }[];
   criteria: { message: string; config: Record<string, unknown> }[];

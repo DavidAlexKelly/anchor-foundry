@@ -2993,6 +2993,16 @@ export interface ActionParameter {
    * `{field: constraint}`, and each in one line. */
   field_constraints?: Record<string, ValueConstraint>;
   field_constraint_summaries?: Record<string, string>;
+  /** p.27 and p.29's default from an object (§588; db 0122): an object
+   * reference parameter above this one and a property of its object, with
+   * `fields` mapping a struct's fields (p.69-70). */
+  default_from?: ParameterDefaultFrom | null;
+}
+
+export interface ParameterDefaultFrom {
+  parameter: string;
+  property: string;
+  fields?: Record<string, string>;
 }
 
 /** What the action does with them (p.75). */

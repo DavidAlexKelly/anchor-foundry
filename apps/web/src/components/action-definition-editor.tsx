@@ -636,6 +636,8 @@ export function ActionDefinitionEditor({
       value_constraint: p.value_constraint ?? null,
       // p.71's per-field constraints (§585). Loaded for the same reason.
       field_constraints: p.field_constraints ?? {},
+      // p.29's default from an object (§588). Loaded for the same reason.
+      default_from: p.default_from ?? null,
     })),
   );
   const [rules, setRules] = useState<Rule[]>(
@@ -887,6 +889,9 @@ export function ActionDefinitionEditor({
                 <input
                   value={p.default_value === null || p.default_value === undefined ? "" : String(p.default_value)}
                   aria-label={`Parameter ${i + 1} default`}
+                  // p.27: a fixed value *or* an object's (§588), not both.
+                  disabled={!!p.default_from}
+                  placeholder={p.default_from ? `from ${p.default_from.parameter}` : undefined}
                   onChange={(e) =>
                     patchParameter(i, { default_value: e.target.value === "" ? null : e.target.value })
                   }
@@ -1503,6 +1508,63 @@ export function ActionDefinitionEditor({
                     noneLabel="User input"
                     hint={p.data_type === "array" ? "Each item is checked." : ""}
                   />
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {/* p.27 and p.29's other default (§588): "a property of the selected
+          object", from an object reference parameter placed above this one.
+          For a struct, p.69-70's fields are matched by name. */}
+      {parameters.some((p) => p.data_type === "object") && (
+        <>
+          <h3 className="field-label" style={{ marginTop: 24 }}>Defaults from an object</h3>
+          <p className="field-hint">
+            p.29: start a parameter at a property of the object chosen in an
+            object parameter above it, so somebody can change one value and
+            keep the rest. A struct takes each field from the struct
+            property&rsquo;s field of the same name.
+          </p>
+          <div data-testid="parameter-default-from">
+            {parameters.map((p, i) => {
+              if (p.data_type === "object") return null;
+              const above = readableBefore(formOrder(parameters, sections ?? []), p.api_name)
+                .filter((name) => parameters.find((q) => q.api_name === name)?.data_type === "object");
+              const source = parameters.find((q) => q.api_name === p.default_from?.parameter);
+              return (
+                <div key={i} className="row-actions" data-default-from={p.api_name}>
+                  <span className="field-label">{p.display_name || p.api_name}</span>
+                  <select
+                    aria-label={`Default for ${p.api_name} from`}
+                    value={p.default_from?.parameter ?? ""}
+                    onChange={(e) => patchParameter(i, e.target.value
+                      ? { default_from: { parameter: e.target.value, property: "" }, default_value: null }
+                      : { default_from: null })}
+                  >
+                    <option value="">a fixed value, or none</option>
+                    {above.map((name) => (
+                      <option key={name} value={name}>the object in {name}</option>
+                    ))}
+                  </select>
+                  {p.default_from && source?.object_type_id && (
+                    <PropertySelect
+                      workspaceId={workspaceId}
+                      typeId={source.object_type_id}
+                      value={p.default_from.property}
+                      label={`Default for ${p.api_name} property`}
+                      onChange={(next) => patchParameter(i, {
+                        default_from: { parameter: p.default_from!.parameter, property: next },
+                      })}
+                    />
+                  )}
+                  {p.default_from && !source?.object_type_id && (
+                    <span className="field-hint" data-testid="default-from-untyped">
+                      {p.default_from.parameter} does not say which object type it
+                      holds, so there are no properties to offer.
+                    </span>
+                  )}
                 </div>
               );
             })}

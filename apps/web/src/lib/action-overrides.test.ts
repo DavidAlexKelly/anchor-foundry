@@ -367,3 +367,19 @@ describe("moveBlock", () => {
     expect(three.map((b) => b.id)).toEqual(["a", "b", "c"]);
   });
 });
+
+describe("p.29's defaults from an object ask the server too (§588)", () => {
+  const withDefault = [
+    parameter({ api_name: "plane", data_type: "object" }),
+    parameter({ api_name: "model", default_from: { parameter: "plane", property: "model" } }),
+  ];
+
+  it("counts as something to resolve", () => {
+    expect(hasOverrides(withDefault)).toBe(true);
+    expect(hasOverrides([parameter({ api_name: "model" })])).toBe(false);
+  });
+
+  it("watches the object parameter it reads", () => {
+    expect(conditionParameters(withDefault)).toEqual(["plane"]);
+  });
+});
