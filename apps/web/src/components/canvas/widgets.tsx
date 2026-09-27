@@ -299,7 +299,9 @@ import {
   type FilterOperator,
 } from "./filter-sql";
 import { Chart, PieChart, SegmentedBarChart, toPoints } from "./charts";
-import { SEGMENT_MODES, segmentModeOf, segmentedFrom } from "./chart-segments";
+import {
+  SEGMENT_LEGEND_POSITIONS, SEGMENT_MODES, segmentLegendPositionOf, segmentModeOf, segmentedFrom,
+} from "./chart-segments";
 import { useAttachmentUrl } from "./use-attachment-url";
 import { HEADER_STYLES, headerStyleOf, paddingTarget, styleTarget } from "./section-header";
 import {
@@ -11943,6 +11945,8 @@ export function CanvasChart({
   nullDisplay = "ignored",
   valueFormat = null,
   categoryFormat = null,
+  legendPosition = "bottom",
+  segmentNames = {},
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -12024,6 +12028,11 @@ export function CanvasChart({
    * (§538): a property formatter (p.97–98), or null for none. */
   valueFormat?: unknown;
   categoryFormat?: unknown;
+  /** p.284's legend **Positioning options** for the segments (§539). */
+  legendPosition?: string;
+  /** p.282's **Display override**: a segment's name in the legend, by its
+   * value (`chart-segments.segmentName`). */
+  segmentNames?: unknown;
 }) {
   const {
     connectors: { connect, drag },
@@ -12196,6 +12205,8 @@ export function CanvasChart({
               mode={segmentModeOf(segmentMode)}
               showLegend={showLegend !== false}
               titles={titles}
+              legend={segmentLegendPositionOf(legendPosition)}
+              names={segmentNames}
               valueText={valueText(valueFormat) ?? undefined}
               categoryText={categoryText(categoryFormat) ?? undefined}
               drill={canDrill ? {
@@ -12317,9 +12328,11 @@ function ChartSettings() {
     filterColumn, filterParameter, filterOperator, objectSetVariable, seriesVariable,
     drilldownVariable, segmentBy, segmentMode, showLegend, sort, orientation, valueLabels,
     scaleType, minBound, maxBound, showCategoryTitle, categoryTitle, showValueTitle, valueTitle,
-    lineArea, nullDisplay, valueFormat, categoryFormat,
+    lineArea, nullDisplay, valueFormat, categoryFormat, legendPosition, segmentNames,
     actions: { setProp },
   } = useNode((node) => ({
+    legendPosition: node.data.props.legendPosition,
+    segmentNames: node.data.props.segmentNames,
     valueFormat: node.data.props.valueFormat,
     categoryFormat: node.data.props.categoryFormat,
     lineArea: node.data.props.lineArea,
@@ -12676,6 +12689,15 @@ function ChartSettings() {
                 />
                 <span className="field-label">Show legend</span>
               </label>
+              {showLegend !== false && (
+                <SegmentLegendFields
+                  set={resolved[objectSetVariable as string]}
+                  segmentBy={segmentBy}
+                  legend={legendPosition}
+                  names={segmentNames}
+                  setProp={setProp as (fn: (p: Record<string, unknown>) => void) => void}
+                />
+              )}
             </>
           )}
         </>
@@ -12741,6 +12763,64 @@ function ChartSettings() {
         </label>
       ) : undefined}
     />
+  );
+}
+
+/** p.284's legend position and p.282's display overrides for a segmented
+ * chart (§539). The segments offered are the set's own values of the Segment
+ * by property, most common first, as the cross-tab keeps them: a name typed
+ * for a value that is not there would rename nothing. */
+function SegmentLegendFields({ set, segmentBy, legend, names, setProp }: {
+  set: unknown;
+  segmentBy: string;
+  legend: unknown;
+  names: unknown;
+  setProp: (fn: (p: Record<string, unknown>) => void) => void;
+}) {
+  const { workspaceId } = useCanvasEnv();
+  const values = useQuery({
+    queryKey: ["chart-segment-values", JSON.stringify(set ?? null), segmentBy],
+    queryFn: () => objApi.groupObjectSet(workspaceId, set, segmentBy, {}),
+    enabled: !!set,
+  });
+  const own = typeof names === "object" && names !== null && !Array.isArray(names)
+    ? (names as Record<string, unknown>) : {};
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Legend position</span>
+        <select
+          data-testid="chart-legend-position"
+          value={segmentLegendPositionOf(legend)}
+          onChange={(e) => setProp((p) => (p.legendPosition = e.target.value))}
+        >
+          {Object.entries(SEGMENT_LEGEND_POSITIONS).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      <div className="field">
+        <span className="field-label">Segment names</span>
+        {(values.data?.groups ?? []).slice(0, 12).map((g) => (
+          <input
+            key={g.value}
+            type="text"
+            data-testid="chart-segment-name"
+            data-segment={g.value}
+            aria-label={`Legend name for ${g.value}`}
+            placeholder={g.value}
+            value={typeof own[g.value] === "string" ? (own[g.value] as string) : ""}
+            onChange={(e) => {
+              const next = { ...own };
+              if (e.target.value === "") delete next[g.value];
+              else next[g.value] = e.target.value;
+              setProp((p) => (p.segmentNames = next));
+            }}
+          />
+        ))}
+        <span className="field-hint">Blank keeps the value as its name</span>
+      </div>
+    </>
   );
 }
 
@@ -12871,6 +12951,7 @@ CanvasChart.craft = {
     scaleType: "linear", minBound: null, maxBound: null,
     showCategoryTitle: false, categoryTitle: "", showValueTitle: false, valueTitle: "",
     lineArea: "line", nullDisplay: "ignored", valueFormat: null, categoryFormat: null,
+    legendPosition: "bottom", segmentNames: {},
   },
   related: { settings: ChartSettings },
 };
