@@ -51,6 +51,7 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   playingVariable: "write",
   playbackPositionVariable: "write",
   autoPauseVariable: "read",
+  layerVisibleVariable: "read",
   variable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",

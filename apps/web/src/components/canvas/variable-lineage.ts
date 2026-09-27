@@ -83,6 +83,8 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   playingVariable: "write",
   playbackPositionVariable: "write",
   autoPauseVariable: "read",
+  // p.300: the Map's layer shows as this variable says (§559).
+  layerVisibleVariable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",
