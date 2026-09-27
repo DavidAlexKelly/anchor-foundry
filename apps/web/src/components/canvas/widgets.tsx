@@ -339,7 +339,10 @@ import {
   categoryText, chartSortOf, defaultValueTitle, missingCount, missingText, nullDisplayOf,
   orientationOf, sortPoints, valueAxisOf, valueText, withMissing,
 } from "./chart-display";
-import { MapCanvas, toLatLon, type MapPoint } from "./map";
+import { MapCanvas, toLatLon, type MapPoint, type MapShape } from "./map";
+import {
+  extentOf, positionAt, selectedTimeOf, selectedTimeText, trackShape,
+} from "./map-tracks";
 // Aliased on §211's rule: `areaOf` is also §537's chart area option.
 import { areaOf as mapAreaOf, withArea as withMapArea } from "./map-area";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
@@ -11982,6 +11985,9 @@ export function CanvasMap({
   searchParameter = null,
   limit = 500,
   areaVariable = null,
+  trackProperty = null,
+  enableTimeline = false,
+  selectedTimeVariable = null,
 }: {
   source?: "objects" | "dataset";
   /** An `object_set` variable to plot (roadmap 1.5). When set, this map reads
@@ -12008,6 +12014,13 @@ export function CanvasMap({
    * into as a `within_box` on the location property, for a `narrow_set` to
    * read (`map-area.ts`). */
   areaVariable?: string | null;
+  /** A `geotemporal_series` property (§557): each object's track drawn as a
+   * line, and the object at its position at the selected time. */
+  trackProperty?: string | null;
+  /** p.303's Enable timeline. */
+  enableTimeline?: boolean;
+  /** p.303's Selected time: a timestamp or date variable, read and written. */
+  selectedTimeVariable?: string | null;
 }) {
   const {
     id: nodeId,
@@ -12035,6 +12048,29 @@ export function CanvasMap({
       objApi.evaluateObjectSet(workspaceId, setDefinition, { limit: Math.min(limit, 200) }),
     enabled: usingSet && !!setDefinition,
   });
+  // p.303's timeline over tracks (§557): the same page of objects' tracks in
+  // one read, and the time they are shown at - a variable's when one is
+  // bound, the viewer's own otherwise, and none ("View latest") to start.
+  const tracking = usingSet && !!trackProperty;
+  const tracksPage = useQuery({
+    queryKey: ["canvas-map-tracks", JSON.stringify(setDefinition ?? null), trackProperty, limit],
+    queryFn: () => objApi.objectSetTracks(workspaceId, setDefinition, trackProperty!,
+      { limit: Math.min(limit, 200) }),
+    enabled: tracking && !!setDefinition,
+  });
+  const tracksByKey = React.useMemo(() => new Map(
+    (tracksPage.data?.rows ?? []).map((row) => [row.primary_key, row.points])),
+  [tracksPage.data]);
+  const writtenTime = useCanvasParameter(selectedTimeVariable);
+  const resolvedTime = useCanvasVariable(selectedTimeVariable);
+  const [ownTime, setOwnTime] = useState<number | null>(null);
+  const selectedTime = selectedTimeVariable
+    ? selectedTimeOf(writtenTime !== undefined ? writtenTime : resolvedTime)
+    : ownTime;
+  const selectTime = (ms: number | null) => {
+    if (selectedTimeVariable) setParameter(selectedTimeVariable, ms === null ? null : selectedTimeText(ms));
+    else setOwnTime(ms);
+  };
 
   const usesProperty = !!filterProperty && filterValue !== undefined && filterValue !== null
     && filterValue !== "";
@@ -12071,12 +12107,22 @@ export function CanvasMap({
     enabled: source === "dataset" && !!datasetId && sql !== null,
   });
 
-  const { points, unplaceable } = React.useMemo(() => {
+  const { points, unplaceable, notYet } = React.useMemo(() => {
     const collected: MapPoint[] = [];
     let bad = 0;
+    let later = 0;
     if (source === "objects") {
       for (const instance of (usingSet ? setPage.data?.instances : objectPage.data?.items) ?? []) {
-        const at = toLatLon(instance.properties[locationProperty!]);
+        // A tracked object stands where its track puts it at the selected
+        // time; one with no fix by then is not on the map yet (§557).
+        const track = tracking ? tracksByKey.get(String(instance.primary_key)) : undefined;
+        const fix = track ? positionAt(track, selectedTime) : null;
+        if (track && !fix) {
+          later += 1;
+          continue;
+        }
+        const at = fix ? { lat: fix.lat, lon: fix.lon }
+          : locationProperty ? toLatLon(instance.properties[locationProperty]) : null;
         if (!at) {
           bad += 1;
           continue;
@@ -12109,14 +12155,27 @@ export function CanvasMap({
         });
       });
     }
-    return { points: collected, unplaceable: bad };
+    return { points: collected, unplaceable: bad, notYet: later };
   }, [source, usingSet, setPage.data, objectPage.data, datasetRows.data,
-      locationProperty, labelProperty]);
+      locationProperty, labelProperty, tracking, tracksByKey, selectedTime]);
+  // p.302's "map breadcrumbs": each track as a line under the pins.
+  const trackShapes: MapShape[] = tracking
+    ? (setPage.data?.instances ?? []).flatMap((instance) => {
+        const line = trackShape(tracksByKey.get(String(instance.primary_key)) ?? []);
+        const label = labelProperty ? instance.properties[labelProperty] : null;
+        return line ? [{
+          id: `track-${instance.id}`,
+          label: label === null || label === undefined ? String(instance.primary_key) : String(label),
+          value: line,
+        }] : [];
+      })
+    : [];
+  const timeExtent = tracking ? extentOf([...tracksByKey.values()]) : null;
 
   const needs =
     source === "objects"
       ? usingSet
-        ? !locationProperty ? "pick the geopoint property to plot" : null
+        ? !locationProperty && !trackProperty ? "pick the geopoint property to plot" : null
         : !objectTypeId ? "pick an object type in Settings"
         : !locationProperty ? "pick the geopoint property to plot"
         : null
@@ -12144,11 +12203,13 @@ export function CanvasMap({
       {!needs && query.data && (
         <MapCanvas
           points={points}
+          shapes={trackShapes}
           area={selectsArea ? mapAreaOf(areaClauses, locationProperty!) : null}
           onArea={selectsArea
             ? (box) => setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, box))
             : undefined}
           unplaceable={unplaceable}
+          notYet={notYet}
           total={
             source === "objects"
               ? (usingSet ? setPage.data?.total : objectPage.data?.total)
@@ -12181,6 +12242,48 @@ export function CanvasMap({
           }
         />
       )}
+      {!needs && query.data && tracking && enableTimeline && timeExtent && (
+        <MapTimeline
+          start={timeExtent.start}
+          end={timeExtent.end}
+          selected={selectedTime}
+          onSelect={selectTime}
+        />
+      )}
+    </div>
+  );
+}
+
+/** p.303's timeline panel under the map (§557): a cursor over the tracks'
+ * span, and p.303's "View latest" to let it go. */
+function MapTimeline({ start, end, selected, onSelect }: {
+  start: number; end: number; selected: number | null; onSelect: (ms: number | null) => void;
+}) {
+  return (
+    <div className="row-actions" data-testid="map-timeline" style={{ gap: 8, marginTop: 6 }}>
+      <input
+        type="range"
+        aria-label="Selected time"
+        data-testid="map-timeline-slider"
+        min={start}
+        max={end}
+        step={1000}
+        value={selected ?? end}
+        onChange={(e) => onSelect(Number(e.target.value))}
+        style={{ flex: 1 }}
+      />
+      <span className="slug" data-testid="map-timeline-time">
+        {selected === null ? "Latest" : new Date(selected).toISOString().replace(".000Z", "Z")}
+      </span>
+      <button
+        type="button"
+        className="btn quiet"
+        data-testid="map-timeline-latest"
+        disabled={selected === null}
+        onClick={() => onSelect(null)}
+      >
+        View latest
+      </button>
     </div>
   );
 }
@@ -12191,10 +12294,13 @@ function MapSettings() {
     source, objectTypeId, locationProperty, labelProperty, datasetId,
     locationColumn, latColumn, lonColumn, labelColumn,
     filterProperty, filterColumn, filterOperator, filterParameter, searchParameter,
-    objectSetVariable, areaVariable,
+    objectSetVariable, areaVariable, trackProperty, enableTimeline, selectedTimeVariable,
     actions: { setProp },
   } = useNode((node) => ({
     areaVariable: node.data.props.areaVariable,
+    trackProperty: node.data.props.trackProperty,
+    enableTimeline: node.data.props.enableTimeline,
+    selectedTimeVariable: node.data.props.selectedTimeVariable,
     source: node.data.props.source,
     objectTypeId: node.data.props.objectTypeId,
     locationProperty: node.data.props.locationProperty,
@@ -12430,6 +12536,58 @@ function MapSettings() {
               </span>
             </label>
           )}
+          {/* §557: tracks and p.303's timeline, over an object set. */}
+          {objectSetVariable && (
+            <>
+              <label className="field">
+                <span className="field-label">Track</span>
+                <select
+                  data-testid="map-track-property"
+                  value={trackProperty || ""}
+                  onChange={(e) => setProp((p: { trackProperty: string | null }) =>
+                    (p.trackProperty = e.target.value || null))}
+                >
+                  <option value="">No tracks</option>
+                  {(detail.data?.properties ?? [])
+                    .filter((p) => p.data_type === "geotemporal_series")
+                    .map((p) => (
+                      <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
+                    ))}
+                </select>
+                <span className="field-hint">
+                  A geotemporal series: each object&apos;s path, and where it was at the selected time
+                </span>
+              </label>
+              {trackProperty && (
+                <>
+                  <label className="field canvas-toggle">
+                    <input
+                      type="checkbox"
+                      data-testid="map-enable-timeline"
+                      checked={!!enableTimeline}
+                      onChange={(e) => setProp((p: { enableTimeline: boolean }) =>
+                        (p.enableTimeline = e.target.checked))}
+                    />
+                    <span className="field-label">Enable timeline</span>
+                  </label>
+                  <label className="field">
+                    <span className="field-label">Selected time</span>
+                    <select
+                      data-testid="map-selected-time"
+                      value={selectedTimeVariable || ""}
+                      onChange={(e) => setProp((p: { selectedTimeVariable: string | null }) =>
+                        (p.selectedTimeVariable = e.target.value || null))}
+                    >
+                      <option value="">The viewer&apos;s own</option>
+                      {Object.values(declared)
+                        .filter((v) => (v.kind === "timestamp" || v.kind === "date") && !v.derivation)
+                        .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                    </select>
+                  </label>
+                </>
+              )}
+            </>
+          )}
         </>
       ) : (
         <>
@@ -12550,6 +12708,7 @@ CanvasMap.craft = {
     datasetId: null, locationColumn: null, latColumn: null, lonColumn: null, labelColumn: null,
     filterProperty: null, filterColumn: null, filterOperator: "equals",
     filterParameter: null, searchParameter: null, limit: 500, areaVariable: null,
+    trackProperty: null, enableTimeline: false, selectedTimeVariable: null,
   },
   related: { settings: MapSettings },
 };

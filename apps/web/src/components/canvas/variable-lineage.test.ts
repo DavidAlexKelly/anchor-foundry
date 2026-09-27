@@ -45,6 +45,7 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   dropVariable: "write",
   endVariable: "write",
   areaVariable: "write",
+  selectedTimeVariable: "write",
   variable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",

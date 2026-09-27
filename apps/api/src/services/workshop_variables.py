@@ -375,6 +375,9 @@ REFERENCE_PROPS = (
     # `within_box` clause a `narrow_set` reads (§550). A write, and the
     # guard caught it after the unit rather than on the way in.
     "areaVariable",
+    # p.303's Selected time on the Map (§557): a timestamp or date variable
+    # the timeline reads and writes, as a picker does its `name`.
+    "selectedTimeVariable",
     "name",
 )
 
