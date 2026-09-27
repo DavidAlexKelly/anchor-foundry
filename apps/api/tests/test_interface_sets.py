@@ -697,3 +697,16 @@ def test_an_interface_from_another_workspace_is_not_readable(
         headers=hdr(fx.viewer_sub), json={},
     )
     assert r.status_code == 404, r.text
+
+
+def test_the_browser_offers_ordered_filters_on_the_orderable_types() -> None:
+    """§535's copy of `object_sets.ORDERABLE_TYPES`, held to it: an ordered
+    comparison the dialog offers on a type the server refuses to order would
+    be a control that cannot work."""
+    import os as _os
+    from src.services import object_sets as _object_sets
+
+    source = open(_os.path.join(_os.path.dirname(__file__), "..", "..", "web", "src", "lib",
+                                "interface-filters.ts")).read()
+    listed = ", ".join(f'"{t}"' for t in _object_sets.ORDERABLE_TYPES)
+    assert f"export const ORDERABLE_TYPES = [{listed}] as const;" in source

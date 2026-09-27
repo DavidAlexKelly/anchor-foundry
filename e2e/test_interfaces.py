@@ -526,3 +526,40 @@ def test_an_array_answers_an_interface_property_only_once_it_reduces(page, modul
     expect(page.get_by_test_id(f"iface-impls-{api_name}")).to_have_text(
         "1 object type", timeout=15000
     )
+
+
+def test_the_objects_dialog_filters_in_the_interface_s_own_terms(page, module):
+    """§535: §254's read takes filters in the interface's vocabulary, and now
+    the dialog offers them. The filter names `last_inspection_date`, and the
+    type answers it from `checked_on`."""
+    name = f"Checkable {uuid.uuid4().hex[:4]}"
+    api_name = declare(page, module, name=name, properties=[
+        ("Last inspection date", "date", True),
+    ])
+    page.get_by_role("button", name=f"Implement {api_name}").click()
+    pick_type(page, "impl-type", {"id": module.object_type_id, "api_name": f"seed_{module.tag}"})
+    page.get_by_role("combobox", name="Answered by for last_inspection_date").select_option("checked_on")
+    page.get_by_test_id("impl-save").click()
+    expect(page.get_by_test_id(f"iface-impls-{api_name}")).to_contain_text("1 object type", timeout=15000)
+
+    page.get_by_role("button", name=f"Objects of {api_name}").click()
+    rows = page.get_by_test_id("objects-rows")
+    expect(rows.locator("tbody tr")).to_have_count(len(VEHICLES), timeout=20000)
+
+    page.get_by_test_id("objects-add-filter").click()
+    page.get_by_label("Filter 1 property").select_option("last_inspection_date")
+    operators = page.get_by_label("Filter 1 operator").locator("option")
+    expect(operators).to_have_text(["is", "is not", "is more than", "is at least", "is less than", "is at most"])
+    page.get_by_label("Filter 1 operator").select_option("gt")
+    page.get_by_label("Filter 1 value").fill("2026-02-01")
+    expect(rows.locator("tbody tr")).to_have_count(1)
+    expect(rows).to_contain_text("2026-02-11")
+    expect(rows).not_to_contain_text("2026-01-04")
+
+    page.get_by_label("Filter 1 operator").select_option("eq")
+    page.get_by_label("Filter 1 value").fill("2026-01-04")
+    expect(rows.locator("tbody tr")).to_have_count(1)
+    expect(rows).to_contain_text("2026-01-04")
+
+    page.get_by_label("Remove filter 1").click()
+    expect(rows.locator("tbody tr")).to_have_count(len(VEHICLES))
