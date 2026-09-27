@@ -131,9 +131,20 @@ export const NESTED_PROP_DIRECTION: Record<string, "read" | "write"> = {
   "layers.objectSetVariable": "read",
 };
 
+/** The mapping props' directions (§598). p.241's variables passed as action
+ * parameters are read into the submission. An embed's interface mapping has
+ * none here: it is both, and which way a value flows is the child's to say. */
+const MAPPING_PROP_DIRECTION: Record<string, "read" | "write"> = {
+  inlineEditVariables: "read",
+};
+
 /** The direction of a reference `referencesOf` reported, nested or not. */
 export function directionOf(prop: string): "read" | "write" | undefined {
   if (prop in PROP_DIRECTION) return PROP_DIRECTION[prop as keyof typeof PROP_DIRECTION];
+  const mapped = prop.match(/^([A-Za-z_]+)\.[^.[]+$/);
+  if (mapped && Object.hasOwn(MAPPING_PROP_DIRECTION, mapped[1]!)) {
+    return MAPPING_PROP_DIRECTION[mapped[1]!];
+  }
   const nested = prop.match(/^([A-Za-z_]+)\[\d+\]\.([A-Za-z_]+)$/);
   return nested ? NESTED_PROP_DIRECTION[`${nested[1]}.${nested[2]}`] : undefined;
 }

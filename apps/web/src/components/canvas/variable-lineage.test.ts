@@ -511,3 +511,12 @@ describe("a filter default reading a variable (§592)", () => {
     expect(graph.edges).toEqual([{ from: "v_r", to: "f", via: "default" }]);
   });
 });
+
+describe("a variable passed as an action parameter (§598)", () => {
+  it("is read into the table's submission", () => {
+    expect(directionOf("inlineEditVariables.note")).toBe("read");
+    expect(directionOf("interface.ext")).toBeUndefined();
+    expect(directionOf("inlineEditVariables")).toBeUndefined();
+    expect(directionOf("inlineEditVariables.a.b")).toBeUndefined();
+  });
+});

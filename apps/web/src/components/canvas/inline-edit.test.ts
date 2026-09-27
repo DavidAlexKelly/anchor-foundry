@@ -24,6 +24,8 @@ import {
   toEdits,
   undoRow,
   type EditAction,
+  variableFeedsOf,
+  withVariables,
 } from "./inline-edit";
 
 const action = (over: Partial<EditAction> = {}): EditAction => ({
@@ -371,5 +373,37 @@ describe("the cap's notice", () => {
   it("says nothing while the cap is unknown", () => {
     // Zero staged against an unknown cap is not "full", it is "not loaded".
     expect(limitNotice({}, UNKNOWN_ROW_LIMIT)).toBeNull();
+  });
+});
+
+describe("p.241's variables passed as action parameters (§598)", () => {
+  const action = {
+    id: "a",
+    parameters: [{ api_name: "status" }, { api_name: "reviewer" }, { api_name: "reason" }],
+    inline_edit_hidden_parameters: ["reason"],
+  };
+
+  it("keeps a declared variable for a parameter no column edits", () => {
+    expect(variableFeedsOf(
+      { reviewer: "v_me", reason: "v_why", status: "v_status", nothing: "v_me", note: 3 },
+      action, ["v_me", "v_why", "v_status"], { status: "status" },
+    )).toEqual({ reviewer: "v_me", reason: "v_why" });
+    expect(variableFeedsOf({ reviewer: "v_gone" }, action, ["v_me"], {})).toEqual({});
+    expect(variableFeedsOf(null, action, ["v_me"], {})).toEqual({});
+    expect(variableFeedsOf("v_me", action, ["v_me"], {})).toEqual({});
+    expect(variableFeedsOf({ reviewer: "v_me" }, null, ["v_me"], {})).toEqual({});
+  });
+
+  it("adds what each variable holds to every edit", () => {
+    const edits = [{ instance_id: "i1", values: { status: "closed" } },
+      { instance_id: "i2", values: { status: "open" } }];
+    expect(withVariables(edits, { reviewer: "v_me", reason: "v_why", extra: "v_none" },
+      { v_me: "ana", v_why: 0, v_none: null })).toEqual([
+      { instance_id: "i1", values: { status: "closed", reviewer: "ana", reason: 0 } },
+      { instance_id: "i2", values: { status: "open", reviewer: "ana", reason: 0 } },
+    ]);
+    // Nothing held adds nothing, so the object's value stands.
+    expect(withVariables(edits, { reviewer: "v_me" }, {})).toEqual(edits);
+    expect(edits[0]!.values).toEqual({ status: "closed" });
   });
 });

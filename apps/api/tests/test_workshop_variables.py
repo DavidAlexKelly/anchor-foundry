@@ -4135,3 +4135,35 @@ def test_the_builder_offers_every_array_element_the_server_takes() -> None:
     line = re.search(r"const ARRAY_ELEMENTS = \[(.*?)\] as const;", source)
     assert line, "ARRAY_ELEMENTS not found in VariablesPanel.tsx"
     assert re.findall(r'"([^"]+)"', line.group(1)) == list(wv.ELEMENTS)
+
+
+def test_the_mapping_reference_catalogue_agrees_with_the_browser_s_copy() -> None:
+    """§598's catalogue, mirrored like the other two."""
+    import re
+
+    web = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "web", "src", "lib", "workshop-module.ts",
+    )
+    block = re.search(r"export const MAPPING_REFERENCE_PROPS: readonly string\[\] = \[(.*?)\];",
+                      open(web).read(), re.S)
+    assert block, "MAPPING_REFERENCE_PROPS not found in workshop-module.ts - renamed?"
+    assert tuple(re.findall(r'"([^"]+)"', block.group(1))) == wv.MAPPING_REFERENCE_PROPS
+
+
+def test_a_variable_passed_as_an_action_parameter_is_a_usage() -> None:
+    """p.241's variables passed as action parameters (§598): deleting one would
+    leave the table submitting nothing in its place, and a lazy resolve must
+    compute it though no widget shows it."""
+    props = {"objectSetVariable": "v_all", "inlineEditVariables": {"note": "v_note", "x": 3}}
+    assert ("inlineEditVariables.note", "v_note") in wv.references(props)
+    assert all(ref != 3 for _, ref in wv.references(props))
+    variables = wv.parse({
+        "v_all": {"id": "v_all", "kind": "object_set", "label": "All",
+                  "object_set": {"object_type_id": TYPE_ID, "filters": []}},
+        "v_note": var("v_note", label="Note"),
+    })
+    layout = {"tbl": node(props)}
+    assert wv.usages(layout, variables)["v_note"] == [
+        {"node": "tbl", "prop": "inlineEditVariables.note"}]
+    assert "v_note" in wv.displayed(layout, variables, {"tbl"})

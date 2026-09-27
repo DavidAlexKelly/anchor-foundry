@@ -261,7 +261,7 @@ import {
   DEFAULT_BUTTON_TEXT, automaticMapping, buttonTextOf, canStage, canSubmit,
   cellValue, editByDefaultOf, editing, eligibleActions, isStaged, limitNotice,
   mappingOf, oneClickOf, parameterForColumn, rowLimitOf, stage, stagedCount,
-  toEdits, undoRow, type Staged,
+  toEdits, undoRow, type Staged, variableFeedsOf, withVariables,
 } from "./inline-edit";
 import { readerLayout } from "./reader-layout";
 import { PALETTE as WIDGET_LIST } from "./widget-list";
@@ -5366,6 +5366,7 @@ export function CanvasObjectTable({
   formatFillsCell = false,
   inlineEditAction = null,
   inlineEditMapping = null,
+  inlineEditVariables = null,
   inlineEditButtonText = "",
   inlineEditByDefault = false,
   inlineEditOneClick = false,
@@ -5454,6 +5455,9 @@ export function CanvasObjectTable({
   inlineEditAction?: string | null;
   /** p.241's parameter-to-column mapping, `{parameter: column}`. */
   inlineEditMapping?: Record<string, string> | null;
+  /** p.241's variables passed as action parameters (§598),
+   * `{parameter: variable id}`. */
+  inlineEditVariables?: Record<string, string> | null;
   /** p.242's Custom button text, and its two toggles; p.243's One-click. */
   inlineEditButtonText?: string;
   inlineEditByDefault?: boolean;
@@ -5468,7 +5472,10 @@ export function CanvasObjectTable({
   const filterValue = useCanvasParameter(filterParameter);
   const searchValue = useCanvasParameter(searchParameter);
   const setDefinition = useCanvasVariable(objectSetVariable);
-  const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
+  const {
+    pending: variablesPending, events: moduleEvents, declared: moduleVariables,
+    resolved: variableValues,
+  } = useCanvasVariables();
   const usingSet = !!objectSetVariable;
 
   // p.224's two outputs. **The variables are the source of truth**, not a copy
@@ -5689,6 +5696,9 @@ export function CanvasObjectTable({
   const liveAction = eligibleActions(editAction.data ? [editAction.data] : [])[0] ?? null;
   const shownNames = properties.map((p) => p.api_name);
   const editMapping = mappingOf(inlineEditMapping, liveAction, shownNames);
+  const editFeeds = variableFeedsOf(
+    inlineEditVariables, liveAction, Object.keys(moduleVariables), editMapping,
+  );
   const rowLimit = rowLimitOf(liveAction);
   // `null` until somebody presses the button, so p.242's toggle decides the
   // starting state and the button can still close a table configured to open
@@ -5703,7 +5713,10 @@ export function CanvasObjectTable({
   const queryClient = useQueryClient();
   const submit = useMutation({
     mutationFn: () =>
-      actionApi.executeBatch(workspaceId, projectId, liveAction!.id, toEdits(staged)),
+      actionApi.executeBatch(
+        workspaceId, projectId, liveAction!.id,
+        withVariables(toEdits(staged), editFeeds, variableValues),
+      ),
     onSuccess: () => {
       setStaged({});
       setConfirming(false);
@@ -6469,18 +6482,29 @@ function TableSortsField({ sort, properties, setProp }: {
  * why for the nearest miss, because "no actions" and "none that can do this"
  * send a builder to two different places.
  */
-function InlineEditField({ actions, columns, inlineEdit, mapping, setProp }: {
+/** Variable kinds that hold no value a parameter could take (§598). */
+const FEEDLESS_KINDS: readonly string[] = [
+  "object_set", "object_set_filter", "time_series_set",
+];
+
+function InlineEditField({ actions, columns, inlineEdit, mapping, feeds, variables, setProp }: {
   actions: readonly import("@/lib/types").ActionType[] | undefined;
   /** The columns the table is currently displaying, which p.241 makes the
    * only things a parameter may be mapped onto. */
   columns: readonly string[];
   inlineEdit: unknown;
   mapping: unknown;
+  /** p.241's variables passed as action parameters (§598). */
+  feeds: unknown;
+  variables: readonly import("@/lib/types").WorkshopVariable[];
   setProp: (cb: (props: Record<string, unknown>) => void) => void;
 }) {
   const eligible = eligibleActions(actions);
   const chosen = eligible.find((a) => a.id === inlineEdit) ?? null;
   const current = mappingOf(mapping, chosen, columns);
+  const fed = variableFeedsOf(feeds, chosen, variables.map((v) => v.id), current);
+  // A value a parameter can take: not a set, a filter or a series.
+  const feedable = variables.filter((v) => !FEEDLESS_KINDS.includes(v.kind));
   const refusedExample = (actions ?? []).find(
     (a) => (a.inline_edit_refusals?.length ?? 0) > 0,
   );
@@ -6534,6 +6558,11 @@ function InlineEditField({ actions, columns, inlineEdit, mapping, setProp }: {
                     if (e.target.value) next[parameter.api_name] = e.target.value;
                     else delete next[parameter.api_name];
                     p.inlineEditMapping = next;
+                    // A column and a variable are one or the other (§598).
+                    if (e.target.value) {
+                      const { [parameter.api_name]: _dropped, ...rest } = fed;
+                      p.inlineEditVariables = rest;
+                    }
                   })
                 }
               >
@@ -6542,13 +6571,39 @@ function InlineEditField({ actions, columns, inlineEdit, mapping, setProp }: {
                   <option key={column} value={column}>{column}</option>
                 ))}
               </select>
+              {/* p.241: "You can also pass variables as action parameters
+                  that will get passed into the action automatically without
+                  the user needing to edit the field in the table" (§598). */}
+              <select
+                value={fed[parameter.api_name] ?? ""}
+                aria-label={`${parameter.display_name || parameter.api_name} from a variable`}
+                data-testid={`inline-edit-variable-${parameter.api_name}`}
+                onChange={(e) =>
+                  setProp((p) => {
+                    const next = { ...fed };
+                    if (e.target.value) next[parameter.api_name] = e.target.value;
+                    else delete next[parameter.api_name];
+                    p.inlineEditVariables = next;
+                    if (e.target.value) {
+                      const { [parameter.api_name]: _dropped, ...rest } = current;
+                      p.inlineEditMapping = rest;
+                    }
+                  })
+                }
+              >
+                <option value="">Or from a variable…</option>
+                {feedable.map((v) => (
+                  <option key={v.id} value={v.id}>{v.label}</option>
+                ))}
+              </select>
             </label>
           ))}
           <span className="field-hint">
             {/* p.135: an unmapped parameter is not a gap. The batch seeds every
                 untouched parameter from the object, so a parameter left "Not
                 editable" keeps its value rather than clearing it. */}
-            A parameter left unmapped keeps whatever the object already holds.
+            A parameter left unmapped keeps whatever the object already holds. One
+            from a variable takes the variable&apos;s value, for every row submitted.
           </span>
         </div>
       )}
@@ -6565,7 +6620,7 @@ function ObjectTableSettings() {
     activeVariable, autoSelect, multiSelect, selectedVariable,
     lines, valueWrap, frozenColumns, emptyMode, emptyMessage,
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
-    inlineEditAction, inlineEditMapping, inlineEditButtonText,
+    inlineEditAction, inlineEditMapping, inlineEditVariables, inlineEditButtonText,
     inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules, seriesTransforms, seriesBaselines,
     actions: { setProp },
   } = useNode((node) => ({
@@ -6593,6 +6648,7 @@ function ObjectTableSettings() {
     formatFillsCell: node.data.props.formatFillsCell,
     inlineEditAction: node.data.props.inlineEditAction,
     inlineEditMapping: node.data.props.inlineEditMapping,
+    inlineEditVariables: node.data.props.inlineEditVariables,
     inlineEditButtonText: node.data.props.inlineEditButtonText,
     inlineEditByDefault: node.data.props.inlineEditByDefault,
     inlineEditOneClick: node.data.props.inlineEditOneClick,
@@ -6910,6 +6966,8 @@ function ObjectTableSettings() {
         columns={shownColumns}
         inlineEdit={inlineEditAction}
         mapping={inlineEditMapping}
+        feeds={inlineEditVariables}
+        variables={Object.values(declared)}
         setProp={setProp}
       />
       {inlineEditAction && (
@@ -7163,7 +7221,8 @@ CanvasObjectTable.craft = {
     frozenColumns: 0, emptyMode: "default", emptyMessage: "",
     customNoValue: false, noValueText: "", fitColumns: true,
     narrowHeaders: false, formatFillsCell: false,
-    inlineEditAction: null, inlineEditMapping: null, inlineEditButtonText: "",
+    inlineEditAction: null, inlineEditMapping: null, inlineEditVariables: null,
+    inlineEditButtonText: "",
     inlineEditByDefault: false, inlineEditOneClick: false,
     seriesFormats: null, seriesRules: null, seriesTransforms: null, seriesBaselines: null,
   },
