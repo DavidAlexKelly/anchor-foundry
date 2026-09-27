@@ -82,7 +82,8 @@ import {
   LINK_MODES, MAX_DEFAULT_EXPAND,
   chosenOf as linkChosenOf, defaultExpandOf, initiallyExpanded, labelFor,
   linkKey, modeOf as linkModeOf, toggleExpanded, visibleLinks,
-  LINK_PAGE, objectViewHref, previewProperties, sortOf as linkSortOf, sortedLinkQuery, titleOf,
+  LINK_PAGE, objectViewHref, previewOf as linkPreviewOf, previewProperties,
+  sortOf as linkSortOf, sortedLinkQuery, titleOf,
   type ChosenLink,
 } from "./links-widget";
 import { linkSubsetHref } from "@/lib/link-subset";
@@ -6978,7 +6979,8 @@ export function CanvasLinksWidget({
                             )}
                             {shown && far && (
                               <dl className="canvas-link-preview" data-testid="link-object-preview">
-                                {previewProperties(far.properties).map((p) => (
+                                {previewProperties(far.properties,
+                                  specifying ? linkPreviewOf(chosen, key) : undefined).map((p) => (
                                   <Fragment key={p.api_name}>
                                     <dt>{p.display_name || p.api_name}</dt>
                                     <dd>{String(i.properties[p.api_name] ?? "—")}</dd>
@@ -7004,6 +7006,39 @@ export function CanvasLinksWidget({
         </ul>
       )}
     </div>
+  );
+}
+
+/** p.272's Display properties in object preview for one chosen link
+ * (§549): none ticked is the prominent ones, as p.271 has it. */
+function LinkPreviewField({ workspaceId, farTypeId, testid, value, onChange }: {
+  workspaceId: string;
+  farTypeId: string;
+  testid: string;
+  value: string[];
+  onChange: (preview: string[]) => void;
+}) {
+  const far = useQuery({
+    queryKey: ["object-type", farTypeId],
+    queryFn: () => objApi.getType(workspaceId, farTypeId),
+  });
+  return (
+    <fieldset className="field" data-testid={testid}>
+      <legend className="field-label">Preview shows</legend>
+      {(far.data?.properties ?? []).map((p) => (
+        <label className="canvas-toggle" key={p.api_name}>
+          <input
+            type="checkbox"
+            data-testid={`${testid}-${p.api_name}`}
+            checked={value.includes(p.api_name)}
+            onChange={(e) => onChange(e.target.checked
+              ? [...value, p.api_name] : value.filter((x) => x !== p.api_name))}
+          />
+          <span>{p.display_name || p.api_name}</span>
+        </label>
+      ))}
+      <span className="field-hint">None ticked shows the prominent properties</span>
+    </fieldset>
   );
 }
 
@@ -7179,6 +7214,22 @@ function LinksWidgetSettings() {
                           if (c.key !== key) return c;
                           const { sort: _old, ...rest } = c;
                           return sort ? { ...rest, sort } : rest;
+                        }))}
+                      />
+                    )}
+                    {/* p.272: "If "Enable object preview on hover" is enabled,
+                        the specified link type's linked objects can be
+                        configured to show … specified properties" (§549). */}
+                    {picked && previewOnHover === true && (
+                      <LinkPreviewField
+                        workspaceId={workspaceId}
+                        farTypeId={link.far_type_id}
+                        testid={`links-preview-${key}`}
+                        value={picked.preview ?? []}
+                        onChange={(preview) => write(chosen.map((c) => {
+                          if (c.key !== key) return c;
+                          const { preview: _old, ...rest } = c;
+                          return preview.length ? { ...rest, preview } : rest;
                         }))}
                       />
                     )}

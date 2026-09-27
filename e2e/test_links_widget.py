@@ -545,23 +545,27 @@ def test_a_linked_object_opens_its_object_view(page, api, seed) -> None:
     expect(page.get_by_role("heading", name="Engineering")).to_be_visible()
 
 
-def test_hovering_a_linked_object_previews_its_prominent_properties(page, api) -> None:
-    people = Module(api, "Links preview")
+def preview_world(api, name: str):
+    people = Module(api, name)
     person_type = people.object_type(
         columns=["id", "name", "dept"], rows=[{"id": "P1", "name": "Ada", "dept": "ENG"}],
         key="id", title="name")
-    depts = Module(api, "Links preview departments", beside=people)
+    depts = Module(api, f"{name} departments", beside=people)
     dept_type = depts.object_type(
         columns=["code", "label", "floor", "budget"],
         rows=[{"code": "ENG", "label": "Engineering", "floor": "3", "budget": "secret"}],
         key="code", title="label", visibility={"floor": "prominent", "budget": "hidden"})
-    api.call("POST", f"/workspaces/{people.workspace_id}/link-types", {
+    link = api.call("POST", f"/workspaces/{people.workspace_id}/link-types", {
         "api_name": f"works_in_{people.tag}", "display_name": "Works in",
         "from_type_id": person_type, "to_type_id": dept_type, "cardinality": "one_to_many",
         "from_property": "dept", "to_property": "$primary_key",
         "from_side_name": "Employees", "to_side_name": "Department"})
-    seedish = SimpleNamespace(module=people, person_type=person_type)
-    open_module(page, build(api, seedish, "Links preview widget", {"previewOnHover": True}))
+    return SimpleNamespace(module=people, person_type=person_type, link=link["id"])
+
+
+def test_hovering_a_linked_object_previews_its_prominent_properties(page, api) -> None:
+    world = preview_world(api, "Links preview")
+    open_module(page, build(api, world, "Links preview widget", {"previewOnHover": True}))
     open_department(page)
     page.get_by_test_id("link-object-title").hover()
     preview = page.get_by_test_id("link-object-preview")
@@ -570,6 +574,41 @@ def test_hovering_a_linked_object_previews_its_prominent_properties(page, api) -
     expect(preview.locator("dd")).to_have_text(["3"])
     page.mouse.move(0, 0)
     expect(preview).to_have_count(0)
+
+
+def test_a_specified_link_previews_the_properties_it_names(page, api) -> None:
+    """p.272's Display properties in object preview (§549): in place of the
+    prominent ones, in the order named - a hidden one included, since the
+    builder named it."""
+    world = preview_world(api, "Links named preview")
+    open_module(page, build(api, world, "Links named preview widget", {
+        "previewOnHover": True, "linkMode": "specify",
+        "links": [{"key": f"{world.link}:outbound", "preview": ["budget", "label"]}]}))
+    open_department(page)
+    page.get_by_test_id("link-object-title").hover()
+    preview = page.get_by_test_id("link-object-preview")
+    expect(preview.locator("dt")).to_have_text(["Budget", "Label"])
+    expect(preview.locator("dd")).to_have_text(["secret", "Engineering"])
+
+
+def test_the_panel_names_a_links_preview_properties(page, api) -> None:
+    world = preview_world(api, "Links preview panel")
+    key = f"{world.link}:outbound"
+    mod = build(api, world, "Links preview panel widget",
+                {"linkMode": "specify", "links": [{"key": key}]})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Links").first.click()
+    # Offered once the preview is on, as p.272 says - asked after the link's
+    # row is drawn, or "not there" would be the panel still loading.
+    expect(page.get_by_test_id(f"links-pick-{key}")).to_be_checked()
+    expect(page.get_by_test_id(f"links-preview-{key}")).to_have_count(0)
+    page.get_by_test_id("links-preview").check()
+    page.get_by_test_id(f"links-preview-{key}-label").check()
+    page.get_by_test_id(f"links-preview-{key}-code").check()
+    save(page)
+    links = mod.definition()["layout"]["lw"]["props"]["links"]
+    assert links == [{"key": key, "preview": ["label", "code"]}], links
 
 
 def test_the_panel_turns_the_options_on(page, api, seed) -> None:
