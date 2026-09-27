@@ -40,6 +40,9 @@ export type Listener = {
   /** p.254's custom ingress (§520): the ranges that may send. Empty is
    * inherited ingress, no restriction of the listener's own. */
   ingress_allowlist: string[];
+  /** Requests refused over p.261's rate limit (§521), and the latest. */
+  throttled: number;
+  throttled_at: string | null;
 };
 
 export type ListenerEvent = {
@@ -275,4 +278,28 @@ export function ingressText(ranges: string[]): string {
   return ranges.length === 1
     ? `Only ${ranges[0]} may send.`
     : `Only these ${ranges.length} ranges may send: ${ranges.join(", ")}.`;
+}
+
+// ---- limits (§521; p.261-262) ----------------------------------------------------
+/** p.261: "rate-limited at approximately 100 requests per second"; per
+ * listener. The server's, held to it by `test_listeners.py`. */
+export const RATE_PER_SECOND = 100;
+/** p.262: "Individual event and request payloads are limited to 1 MB". */
+export const MAX_BODY = 1_048_576;
+
+/** What every listener takes, for the panel's heading. */
+export function limitsText(): string {
+  return `Each listener takes up to ${RATE_PER_SECOND} requests a second, each at most 1 MB. ` +
+    "For more than that, use a streaming sync.";
+}
+
+/** When requests have been refused for rate, how many and the latest; ""
+ * when none have. db 0110 sets the time with the first refusal, so no time
+ * is none. */
+export function throttledText(listener: Pick<Listener, "throttled" | "throttled_at">,
+                              when: (iso: string) => string): string {
+  if (!listener.throttled_at) return "";
+  const n = listener.throttled;
+  return `${n} request${n === 1 ? " was" : "s were"} refused over the limit of ` +
+    `${RATE_PER_SECOND} a second, most recently ${when(listener.throttled_at)}.`;
 }

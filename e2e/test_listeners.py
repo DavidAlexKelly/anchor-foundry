@@ -256,3 +256,37 @@ def test_an_allowlist_narrows_who_may_send(page, api) -> None:
     ranges.fill("")
     listener.get_by_test_id("listener-ingress-save").click()
     expect(listener.get_by_test_id("listener-ingress")).to_contain_text("inherited ingress")
+
+
+def test_requests_over_the_rate_limit_are_refused_and_said(page, viewer_page, api) -> None:
+    """§521, p.261: "HTTPS listeners are rate-limited at approximately 100
+    requests per second". Twenty senders at once reach that in a second or
+    two; the first refusal is enough."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    mod = Module(api, "Listeners rate")
+    name = f"Busy {mod.tag}"
+    made = mod.api.call("POST", f"{mod.base}/listeners", {"display_name": name})
+    mod.api.call("POST", f"{mod.base}/listeners/{made['id']}/start")
+    [endpoint] = made["endpoints"]
+
+    open_connections(viewer_page, mod)
+    expect(viewer_page.get_by_test_id("listener-limits")).to_have_text(
+        "Each listener takes up to 100 requests a second, each at most 1 MB. "
+        "For more than that, use a streaming sync.")
+    expect(card(viewer_page, name).get_by_test_id("listener-status")).to_be_visible()
+    expect(card(viewer_page, name).get_by_test_id("listener-throttled")).to_have_count(0)
+
+    refused = False
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        for _ in range(20):
+            statuses = list(pool.map(lambda _n: post(endpoint["url"], b"{}"), range(200)))
+            assert set(statuses) <= {200, 429}, set(statuses)
+            if 429 in statuses:
+                refused = True
+                break
+    assert refused, "never reached the limit"
+
+    open_connections(page, mod)
+    expect(card(page, name).get_by_test_id("listener-throttled")).to_contain_text(
+        "refused over the limit of 100 a second, most recently", timeout=15000)

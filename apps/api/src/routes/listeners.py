@@ -63,6 +63,9 @@ class ListenerOut(BaseModel):
     pending_events: int
     #: p.254's custom ingress (§520); empty is inherited, no restriction.
     ingress_allowlist: list[str]
+    #: Requests refused over p.261's rate limit (§521), and the latest.
+    throttled: int
+    throttled_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -319,8 +322,9 @@ def _proxy_hops() -> int:
 @ingress_router.post("/listen/{token}")
 async def receive(token: str, request: Request) -> JSONResponse:
     """p.261's endpoint. **No user**: what a request proves is its listener's
-    scheme, checked in `listener_service.accept`, which is also the only thing
-    this route can make happen.
+    scheme, checked in `listener_service.accept`. Counting the request
+    (`admit`) and appending the event are the only things this route can
+    make happen.
 
     The body is read only to one byte past the limit (`read_capped`), so an
     oversized request is refused without holding all of it."""
@@ -328,13 +332,18 @@ async def receive(token: str, request: Request) -> JSONResponse:
     headers = {k.lower(): v for k, v in request.headers.items()}
     try:
         async with get_engine().begin() as conn:
-            taken = await listener_service.accept(
-                conn, secrets_gateway(), token, headers, body, query=dict(request.query_params),
-                sender=listener_service.sender_address(
+            found = await listener_service.admit(
+                conn, token, sender=listener_service.sender_address(
                     request.client.host if request.client else None,
                     request.headers.get("x-forwarded-for"), _proxy_hops()))
+        # A second transaction, so the count above stands whatever is
+        # decided here (db 0110).
+        async with get_engine().begin() as conn:
+            taken = await listener_service.accept(
+                conn, secrets_gateway(), found, headers, body, query=dict(request.query_params))
     except listener_service.Refusal as refusal:
-        return JSONResponse({"detail": refusal.detail}, status_code=refusal.status)
+        return JSONResponse({"detail": refusal.detail}, status_code=refusal.status,
+                            headers=refusal.headers)
     if "challenge" in taken:
         return JSONResponse({"challenge": taken["challenge"]})
     return JSONResponse({"received": True, "event": taken["event"]})
