@@ -179,6 +179,11 @@ import {
   parseValue, withValue, without,
 } from "./filter-clause";
 import {
+  MAX_SUGGESTED, PROPERTY_SCOPES, availableProperties, placeholderOf as searchPlaceholderOf,
+  propertyScopeOf, searchMenu, suggestionDefinition, suggestionsOf, type MenuEntry,
+} from "./search-bar";
+import { nextIndex } from "@/lib/search-keys";
+import {
   // §211's aliasing rule: `labelOf` is a name half the widgets here could want,
   // and `MAX_TERMS` says nothing about which list it caps once it is in this
   // file rather than beside p.475's Terms.
@@ -2027,6 +2032,93 @@ CanvasUserSelect.craft = {
  * nobody can make would be a control with no question behind it, so the panel
  * says so where the toggle would be.
  */
+/** The pills themselves (§233), shared by the Filter Pills and p.472's
+ * Exploration Search Bar (§577): each clause described, with p.470's edit
+ * and remove where the mode allows them and the widget wrote the clause. */
+function FilterPillItems({ pills, written, declared, mode, editable, commit }: {
+  pills: Clause[];
+  written: Clause[];
+  declared: { api_name: string; display_name?: string | null; data_type?: string | null }[];
+  mode: string;
+  editable: boolean;
+  commit: (next: Clause[]) => void;
+}) {
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  return (
+    <>
+      {pills.map((clause, index) => {
+        const removable = isRemovable(clause, written);
+        const beingEdited = editing === index;
+        return (
+          <span
+            className={`canvas-pill${removable ? "" : " is-fixed"}`}
+            key={`${clause.property}:${clause.op}:${index}`}
+            data-testid="filter-pill"
+            data-removable={removable ? "true" : "false"}
+          >
+            {beingEdited ? (
+              <>
+                <span className="canvas-pill-text">
+                  {describeClause({ ...clause, value: null }, declared)}
+                </span>
+                <input
+                  type="text"
+                  className="canvas-pill-input"
+                  value={draft}
+                  autoFocus
+                  data-testid="filter-pill-input"
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" && e.key !== "Escape") return;
+                    if (e.key === "Enter") {
+                      commit(withValue(written, clause, parseValue(clause.op, draft)));
+                    }
+                    setEditing(null);
+                  }}
+                  onBlur={() => setEditing(null)}
+                />
+              </>
+            ) : (
+              <span className="canvas-pill-text" data-testid="filter-pill-text">
+                {describeClause(clause, declared)}
+              </span>
+            )}
+            {/* p.470's Update mode. A pill the widget did not write cannot
+                be edited either — the edit goes into the same list the
+                removal would. */}
+            {canEdit(mode) && editable && removable && isEditable(clause)
+              && !beingEdited && (
+              <button
+                type="button"
+                className="canvas-pill-btn"
+                data-testid="filter-pill-edit"
+                onClick={() => {
+                  setDraft(editableValue(clause));
+                  setEditing(index);
+                }}
+              >
+                edit
+              </button>
+            )}
+            {canRemove(mode) && editable && removable && (
+              <button
+                type="button"
+                className="canvas-pill-btn"
+                aria-label={`Remove ${describeClause(clause, declared)}`}
+                data-testid="filter-pill-remove"
+                onClick={() => commit(without(written, clause))}
+              >
+                ✕
+              </button>
+            )}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 export function CanvasFilterPills({
   objectSetVariable = null,
   variable = null,
@@ -2059,8 +2151,6 @@ export function CanvasFilterPills({
   // value is what `narrow_set` actually consumed, which is the list these pills
   // are describing.
   const written = clausesOf(useCanvasVariable(variable));
-  const [editing, setEditing] = useState<number | null>(null);
-  const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState<{ property: string; op: string; value: string }>(
     { property: "", op: "eq", value: "" },
   );
@@ -2102,74 +2192,10 @@ export function CanvasFilterPills({
               No filters applied
             </span>
           )}
-          {pills.map((clause, index) => {
-            const removable = isRemovable(clause, written);
-            const beingEdited = editing === index;
-            return (
-              <span
-                className={`canvas-pill${removable ? "" : " is-fixed"}`}
-                key={`${clause.property}:${clause.op}:${index}`}
-                data-testid="filter-pill"
-                data-removable={removable ? "true" : "false"}
-              >
-                {beingEdited ? (
-                  <>
-                    <span className="canvas-pill-text">
-                      {describeClause({ ...clause, value: null }, declared)}
-                    </span>
-                    <input
-                      type="text"
-                      className="canvas-pill-input"
-                      value={draft}
-                      autoFocus
-                      data-testid="filter-pill-input"
-                      onChange={(e) => setDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key !== "Enter" && e.key !== "Escape") return;
-                        if (e.key === "Enter") {
-                          commit(withValue(written, clause, parseValue(clause.op, draft)));
-                        }
-                        setEditing(null);
-                      }}
-                      onBlur={() => setEditing(null)}
-                    />
-                  </>
-                ) : (
-                  <span className="canvas-pill-text" data-testid="filter-pill-text">
-                    {describeClause(clause, declared)}
-                  </span>
-                )}
-                {/* p.470's Update mode. A pill the widget did not write cannot
-                    be edited either — the edit goes into the same list the
-                    removal would. */}
-                {canEdit(mode) && editable && removable && isEditable(clause)
-                  && !beingEdited && (
-                  <button
-                    type="button"
-                    className="canvas-pill-btn"
-                    data-testid="filter-pill-edit"
-                    onClick={() => {
-                      setDraft(editableValue(clause));
-                      setEditing(index);
-                    }}
-                  >
-                    edit
-                  </button>
-                )}
-                {canRemove(mode) && editable && removable && (
-                  <button
-                    type="button"
-                    className="canvas-pill-btn"
-                    aria-label={`Remove ${describeClause(clause, declared)}`}
-                    data-testid="filter-pill-remove"
-                    onClick={() => commit(without(written, clause))}
-                  >
-                    ✕
-                  </button>
-                )}
-              </span>
-            );
-          })}
+          <FilterPillItems
+            pills={pills} written={written} declared={declared} mode={mode}
+            editable={editable} commit={commit}
+          />
           {canAdd(mode) && editable && (
             <span className="canvas-pill is-add" data-testid="filter-pill-add">
               <select
@@ -2365,6 +2391,451 @@ CanvasFilterPills.craft = {
     mode: "read_only", showTypePill: false, title: "",
   },
   related: { settings: FilterPillsSettings },
+};
+
+// ---- Exploration Search Bar (parity workshop.md §10; Foundry p.472-473) -----
+/**
+ * p.472-473's Exploration Search Bar (§577): the Filter Pills (§233) with a
+ * field in front of them. What is typed is offered back as a keyword search
+ * in each string property and as the properties whose names hold it
+ * (`search-bar.ts`); a property chosen asks for its value, with the values
+ * the set holds suggested as the reader types. Every filter goes into the
+ * same clause list the pills read, so p.472's four modes mean what they mean
+ * there.
+ */
+export function CanvasSearchBar({
+  objectSetVariable = null,
+  variable = null,
+  mode = "add",
+  showTypePill = false,
+  placeholder = "",
+  showClearButton = true,
+  fillWidth = true,
+  disableAutocomplete = false,
+  disableKeyword = false,
+  propertyScope = "visible",
+  customProperties = [],
+  showHelpIcon = false,
+  icon = "",
+}: {
+  /** p.472's specified object set. */
+  objectSetVariable?: string | null;
+  /** p.472's optional output: the filter variable the bar writes. */
+  variable?: string | null;
+  mode?: string;
+  /** p.473's Display object type pill. */
+  showTypePill?: boolean;
+  placeholder?: string;
+  showClearButton?: boolean;
+  /** p.473's Fill entire container width. */
+  fillWidth?: boolean;
+  disableAutocomplete?: boolean;
+  disableKeyword?: boolean;
+  /** p.473's Property types available, and for Custom the list. */
+  propertyScope?: string;
+  customProperties?: string[];
+  /** p.473's Show search help icon: the query syntax, said in place, since
+   * there is no documentation site here to link to. */
+  showHelpIcon?: boolean;
+  /** p.473's Icon, as a glyph (§445's reading of p.47: no icon library). */
+  icon?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId, mode: runMode } = useCanvasEnv();
+  const { set } = useCanvasParameters();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const written = clausesOf(useCanvasVariable(variable));
+  const typeId = (setDefinition as { object_type_id?: string } | null)?.object_type_id ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const declared = type.data?.properties ?? [];
+  const offered = availableProperties(declared, propertyScopeOf(propertyScope), customProperties ?? []);
+  const pills = clausesOf((setDefinition as { filters?: unknown })?.filters);
+  const editable = runMode === "run" && !!variable;
+  const adds = editable && canAdd(mode);
+  const commit = (next: Clause[]) => {
+    if (variable) set(variable, next);
+  };
+
+  const [text, setText] = useState("");
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  // Whether the reader has arrowed to a suggested value: Enter takes it then,
+  // and what was typed otherwise - a typed "25" is not the first suggestion.
+  const [browsed, setBrowsed] = useState(false);
+  // A property chosen from the menu, whose value is being typed.
+  const [picked, setPicked] = useState<{ property: string; op: string } | null>(null);
+  const [helping, setHelping] = useState(false);
+  const pickedProperty = declared.find((p) => p.api_name === picked?.property);
+  const menu = picked ? [] : searchMenu(text, offered, { keyword: !disableKeyword });
+  const suggestFrom = picked ? suggestionDefinition(setDefinition, picked.property, text) : null;
+  const suggest = useQuery({
+    queryKey: ["search-bar-values", JSON.stringify(suggestFrom), picked?.property],
+    queryFn: () => objApi.groupObjectSet(workspaceId, suggestFrom, picked!.property,
+      { limit: MAX_SUGGESTED }),
+    enabled: !!picked && !disableAutocomplete && !!setDefinition,
+    placeholderData: (previous) => previous,
+  });
+  // With autocomplete off the query never runs, so there is nothing to
+  // suggest (a second check here survived the sweep as equivalent).
+  const suggestions = picked ? suggestionsOf(suggest.data?.groups ?? [], text) : [];
+
+  const reset = () => {
+    setText("");
+    setPicked(null);
+    setActive(0);
+    setBrowsed(false);
+  };
+  const choose = (entry: MenuEntry) => {
+    if (entry.kind === "keyword") {
+      commit(withKeyword(written, entry.property, text.trim(), true));
+      reset();
+      setOpen(false);
+    } else {
+      setPicked({ property: entry.property, op: "eq" });
+      setText("");
+      setActive(0);
+      // Arrowing through the menu is not arrowing to a value.
+      setBrowsed(false);
+    }
+  };
+  const apply = (value: string) => {
+    if (!picked || !value.trim()) return;
+    commit([...written, { property: picked.property, op: picked.op, value: parseValue(picked.op, value) }]);
+    reset();
+  };
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!objectSetVariable ? (
+        <p className="canvas-widget-empty">
+          Search bar — choose the object set to search and filter, in Settings
+        </p>
+      ) : (
+        <div
+          className="canvas-search-bar"
+          data-testid="search-bar"
+          style={{ display: fillWidth ? "flex" : "inline-flex", flexWrap: "wrap", gap: 6,
+            alignItems: "center", width: fillWidth ? "100%" : undefined }}
+        >
+          {icon ? <span aria-hidden="true" data-testid="search-bar-icon">{icon.slice(0, 2)}</span> : null}
+          {showTypePill && (
+            <span className="canvas-pill is-type" data-testid="filter-pill-type">
+              {type.data?.display_name || type.data?.api_name || "Object type"}
+            </span>
+          )}
+          <FilterPillItems
+            pills={pills} written={written} declared={declared} mode={pillModeOf(mode)}
+            editable={editable} commit={commit}
+          />
+          {adds && picked && (
+            <span className="canvas-pill is-add" data-testid="search-bar-picked">
+              {pickedProperty?.display_name || picked.property}
+              <select
+                value={picked.op}
+                aria-label="Operator"
+                data-testid="search-bar-op"
+                onChange={(e) => setPicked({ ...picked, op: e.target.value })}
+              >
+                {operatorsFor(pickedProperty?.data_type).map((op) => (
+                  <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>
+                ))}
+              </select>
+            </span>
+          )}
+          {adds && (
+            <span style={{ position: "relative", flex: fillWidth ? 1 : undefined, minWidth: 160 }}>
+              <input
+                type="text"
+                className="canvas-pill-input"
+                role="combobox"
+                aria-expanded={open && (menu.length > 0 || suggestions.length > 0)}
+                aria-label="Search"
+                data-testid="search-bar-input"
+                value={text}
+                placeholder={picked ? "value" : searchPlaceholderOf(placeholder, !disableKeyword)}
+                style={{ width: "100%" }}
+                onFocus={() => setOpen(true)}
+                onBlur={() => setOpen(false)}
+                onChange={(e) => {
+                  setText(e.target.value);
+                  setActive(0);
+                  setBrowsed(false);
+                  setOpen(true);
+                }}
+                onKeyDown={(e) => {
+                  const count = picked ? suggestions.length : menu.length;
+                  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setActive(browsed || !picked ? nextIndex(active, count, e.key) : 0);
+                    setBrowsed(true);
+                  } else if (e.key === "Enter") {
+                    e.preventDefault();
+                    if (picked) apply(browsed && suggestions[active] ? suggestions[active]!.value : text);
+                    else if (menu[active]) choose(menu[active]!);
+                  } else if (e.key === "Escape") {
+                    reset();
+                  } else if (e.key === "Backspace" && !text && picked) {
+                    setPicked(null);
+                  }
+                }}
+              />
+              {open && (picked ? suggestions.length > 0 : menu.length > 0) && (
+                <ul
+                  role="listbox"
+                  className="canvas-menu"
+                  data-testid="search-bar-menu"
+                  style={{ position: "absolute", zIndex: 5, left: 0, right: 0, margin: 0,
+                    padding: 4, listStyle: "none", background: "var(--bg, #fff)",
+                    border: "1px solid var(--line, #d0d7de)" }}
+                >
+                  {(picked
+                    ? suggestions.map((g) => ({ key: g.value, label: `${g.value} (${g.count})`,
+                        run: () => apply(g.value), kind: "value" }))
+                    : menu.map((m) => ({ key: `${m.kind}:${m.property}`, label: m.label,
+                        run: () => choose(m), kind: m.kind }))
+                  ).map((item, n) => {
+                    const on = picked ? browsed && n === active : n === active;
+                    return (
+                      <li
+                        key={item.key}
+                        role="option"
+                        aria-selected={on}
+                        data-testid="search-bar-option"
+                        data-kind={item.kind}
+                        style={{ padding: "2px 6px", cursor: "pointer",
+                          background: on ? "var(--accent-wash)" : undefined }}
+                        // Before the input's blur closes the menu.
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          item.run();
+                        }}
+                      >
+                        {item.label}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </span>
+          )}
+          {!adds && pills.length === 0 && (
+            <span className="canvas-widget-empty" data-testid="filter-pills-none">
+              No filters applied
+            </span>
+          )}
+          {showClearButton && editable && canRemove(mode) && written.length > 0 && (
+            <button
+              type="button"
+              className="btn quiet"
+              data-testid="search-bar-clear"
+              onClick={() => commit([])}
+            >
+              Clear
+            </button>
+          )}
+          {showHelpIcon && (
+            <button
+              type="button"
+              className="btn quiet"
+              aria-label="Search help"
+              aria-expanded={helping}
+              data-testid="search-bar-help"
+              onClick={() => setHelping(!helping)}
+            >
+              ?
+            </button>
+          )}
+          {showHelpIcon && helping && (
+            <p className="field-hint" data-testid="search-bar-help-text" style={{ flexBasis: "100%" }}>
+              Type to search a text property, or pick a property to filter on its value.
+              A search matches words that start with what you type; join words with
+              AND, OR and NOT, group them with brackets, and quote a phrase.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SearchBarSettings() {
+  const {
+    objectSetVariable, variable, mode, showTypePill, placeholder, showClearButton, fillWidth,
+    disableAutocomplete, disableKeyword, propertyScope, customProperties, showHelpIcon, icon,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    variable: node.data.props.variable,
+    mode: node.data.props.mode,
+    showTypePill: node.data.props.showTypePill,
+    placeholder: node.data.props.placeholder,
+    showClearButton: node.data.props.showClearButton,
+    fillWidth: node.data.props.fillWidth,
+    disableAutocomplete: node.data.props.disableAutocomplete,
+    disableKeyword: node.data.props.disableKeyword,
+    propertyScope: node.data.props.propertyScope,
+    customProperties: node.data.props.customProperties,
+    showHelpIcon: node.data.props.showHelpIcon,
+    icon: node.data.props.icon,
+  }));
+  const { workspaceId } = useCanvasEnv();
+  const { declared, resolved } = useCanvasVariables();
+  const sets = Object.values(declared).filter((v) => v.kind === "object_set");
+  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const typeId = (objectSetVariable
+    ? (resolved[objectSetVariable] as { object_type_id?: string } | undefined)?.object_type_id
+    : undefined) ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const scope = propertyScopeOf(propertyScope);
+  const toggles = [
+    ["showClearButton", "Show clear button", showClearButton !== false],
+    ["fillWidth", "Fill entire container width", fillWidth !== false],
+    ["showTypePill", "Display object type pill", showTypePill === true],
+    ["disableAutocomplete", "Disable property value autocomplete", disableAutocomplete === true],
+    ["disableKeyword", "Disable keyword filtering", disableKeyword === true],
+    ["showHelpIcon", "Show search help icon", showHelpIcon === true],
+  ] as const;
+
+  return (
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Object set</span>
+        <select
+          value={objectSetVariable ?? ""}
+          data-testid="search-bar-set"
+          onChange={(e) => setProp((p: { objectSetVariable: string | null }) =>
+            (p.objectSetVariable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {sets.map((v) => <option key={v.id} value={v.id}>{v.label || v.id}</option>)}
+        </select>
+        <span className="field-hint">The set whose filters the bar shows and adds to</span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Mode</span>
+        <select
+          value={pillModeOf(mode ?? "add")}
+          data-testid="search-bar-mode"
+          onChange={(e) => setProp((p: { mode: string }) => (p.mode = e.target.value))}
+        >
+          {Object.entries(PILL_MODES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Property types available</span>
+        <select
+          value={scope}
+          data-testid="search-bar-scope"
+          onChange={(e) => setProp((p: { propertyScope: string }) => (p.propertyScope = e.target.value))}
+        >
+          {Object.entries(PROPERTY_SCOPES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      {scope === "custom" && (
+        <div className="field" data-testid="search-bar-custom">
+          {(type.data?.properties ?? []).map((p) => (
+            <label key={p.api_name} className="field checkbox">
+              <input
+                type="checkbox"
+                data-testid={`search-bar-custom-${p.api_name}`}
+                checked={(customProperties ?? []).includes(p.api_name)}
+                onChange={(e) => setProp((props: { customProperties: string[] }) => {
+                  const now = props.customProperties ?? [];
+                  props.customProperties = e.target.checked
+                    ? [...now.filter((n) => n !== p.api_name), p.api_name]
+                    : now.filter((n) => n !== p.api_name);
+                })}
+              />
+              <span className="field-label">{p.display_name || p.api_name}</span>
+            </label>
+          ))}
+        </div>
+      )}
+      <label className="field">
+        <span className="field-label">Placeholder</span>
+        <input
+          type="text"
+          value={placeholder ?? ""}
+          data-testid="search-bar-placeholder"
+          onChange={(e) => setProp((p: { placeholder: string }) => (p.placeholder = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Icon</span>
+        <input
+          type="text"
+          maxLength={2}
+          value={icon ?? ""}
+          data-testid="search-bar-icon-input"
+          onChange={(e) => setProp((p: { icon: string }) => (p.icon = e.target.value))}
+        />
+      </label>
+      {toggles.map(([key, label, checked]) => (
+        <label key={key} className="field checkbox">
+          <input
+            type="checkbox"
+            checked={checked}
+            data-testid={`search-bar-${key}`}
+            onChange={(e) => setProp((p: Record<string, boolean>) => (p[key] = e.target.checked))}
+          />
+          <span className="field-label">{label}</span>
+        </label>
+      ))}
+      <p className="field-hint">
+        p.473&apos;s &ldquo;Prevent users from changing operators&rdquo; is not offered, for the
+        Filter Pills&apos; reason: every clause an object set takes is an <code>and</code>.
+      </p>
+      </>}
+      outputs={<>
+      <label className="field">
+        <span className="field-label">Filter variable</span>
+        <select
+          value={variable ?? ""}
+          data-testid="search-bar-variable"
+          onChange={(e) => setProp((p: { variable: string | null }) =>
+            (p.variable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {arrays.map((v) => <option key={v.id} value={v.id}>{v.label || v.id}</option>)}
+        </select>
+        <span className="field-hint">
+          The array a narrow_set reads to make the set the bar filters
+        </span>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasSearchBar.craft = {
+  displayName: "Exploration search bar",
+  props: {
+    objectSetVariable: null, variable: null, mode: "add", showTypePill: false,
+    placeholder: "", showClearButton: true, fillWidth: true, disableAutocomplete: false,
+    disableKeyword: false, propertyScope: "visible", customProperties: [], showHelpIcon: false,
+    icon: "",
+  },
+  related: { settings: SearchBarSettings },
 };
 
 // ---- Prominent Terms (parity workshop.md §10; Foundry p.475) ---------------
@@ -19731,6 +20202,7 @@ export const CANVAS_RESOLVER = {
   CanvasText,
   CanvasFilterList,
   CanvasFilterPills,
+  CanvasSearchBar,
   CanvasUserSelect,
   CanvasProminentTerms,
   CanvasParameterControl,
