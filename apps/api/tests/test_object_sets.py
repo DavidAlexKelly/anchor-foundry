@@ -313,6 +313,7 @@ def test_the_browsers_copy_of_the_orderable_types_has_not_drifted() -> None:
         ("ORDERED_OPERATORS", "ORDERED_OPERATORS"),
         ("GEO_OPERATORS", "GEO_OPERATORS"),
         ("QUERY_OPERATORS", "QUERY_OPERATORS"),
+        ("LINK_OPERATORS", "LINK_OPERATORS"),
     ],
 )
 def test_the_browsers_copy_of_the_operators_has_not_drifted(

@@ -42,7 +42,8 @@ if TYPE_CHECKING:  # this module imports nothing at runtime, on purpose
 # until somebody compares two environments.
 OPERATORS = ("eq", "neq", "in", "starts_with")
 # p.452's advanced keyword syntax, whose value is a query over `starts_with`
-# terms, is `QUERY_OPERATORS` at the end of this module (§543).
+# terms, is `QUERY_OPERATORS` at the end of this module (§543), and p.451's
+# filters on linked objects are `LINK_OPERATORS` there (§545).
 
 # A filter may address the instance's **primary key** as well as a property,
 # under this name. It is `ontology.PRIMARY_KEY_REF`, restated here so this
@@ -813,12 +814,18 @@ def parse(
             data_type = _orderable_type(prop, op, property_types)
         elif op in GEO_OPERATORS:
             data_type = _boxable_type(prop, op, property_types)
-        elif op not in OPERATORS and op not in QUERY_OPERATORS:
-            supported = (*OPERATORS, *QUERY_OPERATORS, *ORDERED_OPERATORS, *GEO_OPERATORS)
+        elif op not in OPERATORS and op not in QUERY_OPERATORS and op not in LINK_OPERATORS:
+            supported = (*OPERATORS, *QUERY_OPERATORS, *LINK_OPERATORS, *ORDERED_OPERATORS,
+                         *GEO_OPERATORS)
             raise ValueError(
                 f"unknown filter operator {op!r} (supported: {', '.join(supported)})"
             )
         value = entry.get("value")
+        if op in LINK_OPERATORS:
+            # Parsed apart: its value is an object, which every other operator
+            # refuses, and its property is the link it follows.
+            filters.append(Filter(property=prop, op=op, value=parse_linked(prop, value)))
+            continue
         if op in GEO_OPERATORS:
             # **Parsed into a `Box` here, so the stores receive one.** The
             # alternative is four numbers each store re-reads, which is three
@@ -1059,6 +1066,10 @@ def _matches_one(actual: Any, f: Filter) -> bool:
         return actual is not None and _text(actual).lower().startswith(_text(f.value).lower())
     if f.op in QUERY_OPERATORS:
         return actual is not None and query_matches(f.value, _text(actual))
+    if f.op in LINK_OPERATORS:
+        # Another type's objects decide this one, so there is nothing on
+        # `properties` to read: the evaluator resolves it to an `in` first.
+        raise ValueError("a filter on linked objects is resolved before it is matched")
     if f.op in ORDERED_OPERATORS:
         return _compares(actual, f)
     if f.op in GEO_OPERATORS:
@@ -1432,3 +1443,52 @@ def query_matches(node: QueryNode, value: str) -> bool:
     if isinstance(node, QueryAnd):
         return all(query_matches(part, value) for part in node.operands)
     return any(query_matches(part, value) for part in node.operands)
+
+
+# ---- filters on linked objects (`workshop` p.451; §545) ---------------------
+#
+# > "To filter on linked object properties, select a link within the Filter on
+# > a link section … The Has Link filter is unique to linked object filters and
+# > filters on the presence of a link. For example: "Filter for all Tasks that
+# > have a link to Person."" (p.451)
+#
+# **One operator for both**: `has_link` keeps the objects with at least one
+# linked object matching the filters it carries, and with no filters that is
+# p.451's Has link. Its property is the link type's id - the link *is* what is
+# being filtered on - and its value `{"filters": [...]}` is in the far type's
+# own vocabulary.
+#
+# **Resolved, never stored**, the way a `via` is (`object_set_eval`): the far
+# set is evaluated, its join values read, and the filter becomes an `in` on
+# this side's join property. So neither store learns an operator, and the two
+# cannot disagree about one.
+LINK_OPERATORS = ("has_link",)
+
+
+@dataclass(frozen=True)
+class Linked:
+    link_type_id: UUID
+    # The far type's filters as written, parsed at resolution against the far
+    # type's declared types - which this module, given one type's, cannot know.
+    filters: tuple[dict[str, Any], ...]
+
+
+def parse_linked(prop: str, value: Any) -> Linked:
+    try:
+        link_type_id = UUID(prop)
+    except ValueError as exc:
+        raise ValueError(
+            f"a filter on linked objects names its link type by id, not {prop!r}"
+        ) from exc
+    if not isinstance(value, dict):
+        raise ValueError("a filter on linked objects needs {\"filters\": [...]}")
+    raw = value.get("filters") or []
+    if not isinstance(raw, list) or not all(isinstance(f, dict) for f in raw):
+        raise ValueError("a filter on linked objects carries a list of filters")
+    if len(raw) > MAX_FILTERS:
+        raise ValueError(f"a filter on linked objects may carry at most {MAX_FILTERS} filters")
+    if any(f.get("op") in LINK_OPERATORS for f in raw):
+        # One link deep, as p.451 draws it: a link config holds filters on the
+        # linked type, not links of its own.
+        raise ValueError("a filter on linked objects cannot itself follow a link")
+    return Linked(link_type_id=link_type_id, filters=tuple(dict(f) for f in raw))

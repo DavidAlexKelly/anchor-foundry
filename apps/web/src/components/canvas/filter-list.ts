@@ -56,6 +56,11 @@ export interface FilterSpec {
   /** p.452's search type for a keyword filter (§543): absent is the plain
    * prefix search, "advanced" the syntax with AND, OR, NOT and brackets. */
   syntax?: "advanced";
+  /** p.451's filter on a link (§545): the link type followed, and the type
+   * it reaches from the set's own, whose `property` this filter reads. An
+   * empty `property` is p.451's Has link. */
+  link?: string;
+  linkTo?: string;
 }
 
 export function componentOf(value: unknown): FilterComponent {
@@ -86,10 +91,16 @@ export function filtersOf(filters: unknown, legacy: unknown): FilterSpec[] {
       .filter((f): f is Record<string, unknown> =>
         !!f && typeof f === "object"
         && typeof (f as FilterSpec).id === "string" && !!(f as FilterSpec).id
-        && typeof (f as FilterSpec).property === "string" && !!(f as FilterSpec).property)
+        // A linked filter's empty property is its Has link (§545), and a
+        // link is only one with the type it reaches.
+        && typeof (f as FilterSpec).property === "string"
+        && (!!(f as FilterSpec).property
+          || (!!(f as FilterSpec).link && !!(f as FilterSpec).linkTo)))
       .map((f) => ({
         id: f.id as string, property: f.property as string, component: componentOf(f.component),
         ...(f.syntax === "advanced" ? { syntax: "advanced" as const } : {}),
+        ...(typeof f.link === "string" && f.link && typeof f.linkTo === "string" && f.linkTo
+          ? { link: f.link, linkTo: f.linkTo } : {}),
       }));
   }
   return String(legacy ?? "")
@@ -228,6 +239,12 @@ export function defaultComponentFor(dataType: string | null | undefined): Filter
  * would go on narrowing the set with nothing on screen to say so, or to undo.
  */
 export function withoutFilter(clauses: readonly Clause[], spec: FilterSpec): Clause[] {
+  if (spec.link) {
+    // A linked filter's clauses live inside its link's `has_link` (§545).
+    if (!spec.property) return withHasLink(clauses, spec.link, false);
+    const far = withoutFilter(linkedClausesOf(clauses, spec.link), { ...spec, link: undefined });
+    return withLinked(clauses, spec.link, far);
+  }
   switch (spec.component) {
     case "keyword":
       return withKeyword(clauses, spec.property, "");
@@ -266,6 +283,11 @@ export function viewerFilterId(taken: readonly FilterSpec[]): string {
 /** What a pill says about its filter while closed (p.449's Pills layout), so
  * a row of pills reads as the filters applied without opening each one. */
 export function pillSummary(spec: FilterSpec, clauses: readonly Clause[]): string {
+  if (spec.link) {
+    // A linked filter summarises its own clauses, inside its link's (§545).
+    if (!spec.property) return hasLinkOf(clauses, spec.link) ? "has a link" : "";
+    return pillSummary({ ...spec, link: undefined }, linkedClausesOf(clauses, spec.link));
+  }
   if (spec.component === "keyword") {
     const text = keywordOf(clauses, spec.property);
     return text ? `starts with “${text}”` : "";
@@ -398,4 +420,54 @@ export function isPeriodChosen(
 export function timelineIntervalOf(value: unknown): TimelineInterval {
   return (TIMELINE_INTERVALS as readonly unknown[]).includes(value)
     ? (value as TimelineInterval) : "day";
+}
+
+/**
+ * p.451's filters on linked objects, as the clauses a Filter List writes
+ * (§545; `object_sets.LINK_OPERATORS`).
+ *
+ * > "The Has Link filter is unique to linked object filters and filters on
+ * > the presence of a link. For example: "Filter for all Tasks that have a
+ * > link to Person."" (p.451)
+ *
+ * **Two clauses per link, never merged.** Has link is a `has_link` with no
+ * filters of its own; the values chosen on the linked type's properties are
+ * one `has_link` carrying them all, so one linked object has to satisfy every
+ * one ("a Person over 30 *in Leeds*", not a person over 30 and another in
+ * Leeds). The server ANDs the two, which is Has link and more - and clearing
+ * the values never takes away a Has link somebody ticked.
+ */
+export const HAS_LINK = "has_link";
+
+interface LinkedValue { filters?: Clause[] }
+
+function linkedFiltersOf(clause: Clause): Clause[] {
+  const value = clause.value as LinkedValue | null;
+  return Array.isArray(value?.filters) ? value!.filters! : [];
+}
+
+/** Whether the objects must have a link at all: the Has link box. */
+export function hasLinkOf(clauses: readonly Clause[], link: string): boolean {
+  return clauses.some((c) => c.op === HAS_LINK && c.property === link
+    && linkedFiltersOf(c).length === 0);
+}
+
+export function withHasLink(clauses: readonly Clause[], link: string, on: boolean): Clause[] {
+  const rest = clauses.filter((c) => !(c.op === HAS_LINK && c.property === link
+    && linkedFiltersOf(c).length === 0));
+  return on ? [...rest, { property: link, op: HAS_LINK, value: { filters: [] } }] : rest;
+}
+
+/** The linked type's own clauses, for the filters drawn on its properties. */
+export function linkedClausesOf(clauses: readonly Clause[], link: string): Clause[] {
+  const c = clauses.find((x) => x.op === HAS_LINK && x.property === link
+    && linkedFiltersOf(x).length > 0);
+  return c ? linkedFiltersOf(c) : [];
+}
+
+/** The linked type's clauses written back as one `has_link`, or none. */
+export function withLinked(clauses: readonly Clause[], link: string, far: Clause[]): Clause[] {
+  const rest = clauses.filter((c) => !(c.op === HAS_LINK && c.property === link
+    && linkedFiltersOf(c).length > 0));
+  return far.length ? [...rest, { property: link, op: HAS_LINK, value: { filters: far } }] : rest;
 }

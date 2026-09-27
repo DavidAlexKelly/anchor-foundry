@@ -77,7 +77,8 @@ async def resolve_traversal(
     Recursive, bounded by `MAX_TRAVERSALS` at parse time.
     """
     if definition.via is None:
-        return definition.filters, False
+        return await resolve_links(conn, store, prefix, workspace_id, definition.object_type_id,
+                                   definition.filters)
 
     base = definition.via.base
     await ontology_service.get_type(conn, workspace_id, base.object_type_id)
@@ -122,7 +123,72 @@ async def resolve_traversal(
     joined = object_sets.join_filter(far_property=str(link["far_property"]), values=values)
     if joined is None:
         return definition.filters, True
-    return (joined, *definition.filters), False
+    return await resolve_links(conn, store, prefix, workspace_id, definition.object_type_id,
+                               (joined, *definition.filters))
+
+
+async def resolve_links(
+    conn: Any,
+    store: Any,
+    prefix: str,
+    workspace_id: UUID,
+    object_type_id: UUID,
+    filters: tuple[Any, ...],
+) -> tuple[tuple[Any, ...], bool]:
+    """p.451's filters on linked objects (§545), as the `in` filters they
+    mean. Returns `(filters, empty)` as `resolve_traversal` does.
+
+    A traversal read backwards: where a hop keeps the far objects linked to a
+    base set, this keeps *these* objects linked to a far set - the far type
+    narrowed by the filter's own filters, or all of it for p.451's Has link.
+    The far set is evaluated, its join values read at the cap plus one, and
+    the filter becomes `in` on this side's join property. A far set with no
+    members, or members linked to nothing, leaves no object here with a link,
+    which is `empty` - never "no filter" (decision 0002).
+
+    **The link decides which end is near**, from this set's type, as it does
+    for a hop, and a link that does not touch this type is refused rather
+    than matching nothing.
+    """
+    if not any(f.op in object_sets.LINK_OPERATORS for f in filters):
+        return filters, False
+    links = await ontology_service.links_for_type(conn, workspace_id, object_type_id)
+    out: list[Any] = []
+    for f in filters:
+        if f.op not in object_sets.LINK_OPERATORS:
+            out.append(f)
+            continue
+        link = next((row for row in links if str(row["id"]) == str(f.value.link_type_id)), None)
+        if link is None:
+            raise ValueError(
+                "that link type does not touch the objects being filtered - a filter on "
+                "linked objects follows a link from this set's own type"
+            )
+        far_type = UUID(str(link["far_type_id"]))
+        far = object_sets.parse(
+            {"object_type_id": str(far_type), "filters": list(f.value.filters)},
+            property_types=await declared_types(conn, far_type),
+        )
+        members, _ = await store.evaluate_object_set(
+            search_prefix=prefix,
+            object_type_id=far_type,
+            filters=far.filters,
+            limit=object_sets.MAX_JOIN_VALUES + 1,
+            offset=0,
+            sort="key_asc",
+        )
+        far_property = str(link["far_property"])
+        values = [
+            row["primary_key"]
+            if far_property == ontology_service.PRIMARY_KEY_REF
+            else _jsonb(row["properties"]).get(far_property)
+            for row in members
+        ]
+        joined = object_sets.join_filter(far_property=str(link["near_property"]), values=values)
+        if joined is None:
+            return filters, True
+        out.append(joined)
+    return tuple(out), False
 
 
 # `in []` on the primary key: the empty set, which both stores already answer
