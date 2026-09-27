@@ -1,5 +1,5 @@
 """Many-to-many link types backed by a join table dataset (§552; db 0115;
-`object-link-types` p.35, p.197).
+`object-link-types` p.200, p.197).
 
     "Join table dataset: For "many-to-many" cardinality link types. This option
      allows you to use a join table dataset to back the link." (p.197)
@@ -7,9 +7,9 @@
     "In a many-to-many cardinality, select a datasource that includes all
      combinations of links between the primary key of the first object type
      (Aircraft in our example) and the second object type (Flight in our
-     example)." (p.35)
+     example)." (p.200)
 
-p.35's own example. Flight F2 was flown by two aircraft, which is the thing a
+p.200's own example. Flight F2 was flown by two aircraft, which is the thing a
 foreign key cannot say; A3 flew nothing, so Has link has one to leave out.
 The join table's aircraft column is an integer, as an upload infers it, while
 the aircraft keys are text everywhere else - so the pairs are compared as text
@@ -168,7 +168,7 @@ def refused(client, fx, world, **changes) -> str:
     ({"cardinality": "one_to_many"}, "a join table backs a many-to-many link"),
     ({"from_property": "route", "to_property": "$primary_key"}, "not both"),
     ({"join_to_column": "wing"}, "no column 'wing' (its columns: flight, aircraft)"),
-    # p.35: "A column can only be mapped to one primary key."
+    # p.200: "A column can only be mapped to one primary key."
     ({"join_to_column": "flight"}, "its own column"),
     ({"join_to_column": None}, "one column cannot pair anything"),
     ({"join_dataset_id": None}, "one column cannot pair anything"),

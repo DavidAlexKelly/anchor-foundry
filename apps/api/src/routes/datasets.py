@@ -474,6 +474,57 @@ async def update_dataset(
     return _out(row)
 
 
+class JoinTableCreate(BaseModel):
+    from_type_id: UUID
+    to_type_id: UUID
+    name: str = Field(min_length=1, max_length=200)
+
+
+class JoinTableOut(BaseModel):
+    dataset: DatasetOut
+    from_column: str
+    to_column: str
+
+
+@router.post("/join-table", response_model=JoinTableOut, status_code=status.HTTP_201_CREATED)
+async def generate_join_table(
+    body: JoinTableCreate,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> JoinTableOut:
+    """p.200's **Generate join table** (§562): an empty dataset in this
+    project with a column for each type's primary key, for a many-to-many
+    link to be backed by. Made here rather than with the link, so the link
+    dialog fills its join table fields from it and the person sees what was
+    made before saving anything else."""
+    from ..services import link_join_tables
+    from ..services import ontology as ontology_service
+
+    async with user_connection(access.auth.user_id) as conn:
+        from_type = await ontology_service.get_type(conn, access.workspace_id, body.from_type_id)
+        to_type = await ontology_service.get_type(conn, access.workspace_id, body.to_type_id)
+        made = await link_join_tables.generate(
+            conn, _storage, workspace_id=access.workspace_id, project_id=access.project_id,
+            from_type=from_type, to_type=to_type, name=body.name, by=access.auth.user_id,
+        )
+        row = await ds_service.get(conn, access.project_id, made["dataset_id"])
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="dataset.generate_join_table",
+            resource_type="dataset",
+            resource_id=made["dataset_id"],
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"from_type_id": str(body.from_type_id), "to_type_id": str(body.to_type_id)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return JoinTableOut(dataset=_out(row), from_column=made["from_column"],
+                        to_column=made["to_column"])
+
+
 class DatasetFork(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     # Defaults to the source's current version - forking "as it is now" is

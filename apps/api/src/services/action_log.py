@@ -32,21 +32,16 @@ source does not map would be a value written nowhere.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
-import duckdb
-from anyio import to_thread
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_one
 from ..lib.errors import ConflictError
 from . import datasets as ds_service
-from .dataset_engine import ColumnSchema
 from .storage import StorageGateway
 
 #: The key column: p.168's "Action RID: Unique identifier for a single action
@@ -140,28 +135,6 @@ def properties_of(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _empty_parquet(columns: list[tuple[str, str]], dest: str) -> None:
-    con = duckdb.connect()
-    try:
-        definition = ", ".join(f'"{name}" {kind}' for name, kind in columns)
-        con.execute(f"CREATE TABLE t ({definition})")
-        con.execute(f"COPY t TO '{dest}' (FORMAT parquet)")
-    finally:
-        con.close()
-
-
-async def _free_name(conn: AsyncConnection, project_id: UUID, wanted: str) -> str:
-    for n in range(1, 100):
-        name = wanted if n == 1 else f"{wanted} {n}"
-        taken = await fetch_one(
-            conn, "SELECT 1 AS x FROM datasets WHERE project_id = :pid AND slug = :s",
-            {"pid": str(project_id), "s": ds_service.slugify(name)},
-        )
-        if taken is None:
-            return name
-    raise ValueError("no free name for the action log's dataset")
-
-
 async def _free_api_name(conn: AsyncConnection, workspace_id: UUID, table: str, wanted: str) -> str:
     wanted = wanted[:95]
     for n in range(1, 100):
@@ -180,33 +153,11 @@ async def _empty_dataset(
     name: str, description: str, columns: list[tuple[str, str]], action_type_id: UUID,
     by: UUID,
 ) -> UUID:
-    """A dataset with these columns and no rows, at version 1 - what a source
-    can map before the first submission has happened."""
-    def build() -> bytes:
-        with tempfile.TemporaryDirectory() as tmp:
-            dest = os.path.join(tmp, "data.parquet")
-            _empty_parquet(columns, dest)
-            with open(dest, "rb") as handle:
-                return handle.read()
-
-    parquet = await to_thread.run_sync(build)
-    dataset_id = uuid4()
-    name = await _free_name(conn, project_id, name)
-    prefix = await ds_service.workspace_s3_prefix(conn, workspace_id)
-    await conn.execute(text("""
-        INSERT INTO datasets (id, project_id, workspace_id, name, slug, description, origin,
-                              s3_location, current_version, created_by)
-        VALUES (:id, :pid, :wid, :name, :slug, :descr, 'action_log', :loc, 0, :by)
-    """), {"id": str(dataset_id), "pid": str(project_id), "wid": str(workspace_id),
-           "name": name, "slug": ds_service.slugify(name), "descr": description,
-           "loc": ds_service.storage_prefix(prefix, dataset_id), "by": str(by)})
-    await ds_service.add_version(
-        conn, storage, dataset_id=dataset_id, workspace_id=workspace_id,
-        parquet_bytes=parquet, schema=[ColumnSchema(name=n, data_type=t) for n, t in columns],
-        row_count=0, produced_by_kind="action_log", produced_by_id=action_type_id,
-        created_by=by,
+    return await ds_service.create_empty(
+        conn, storage, workspace_id=workspace_id, project_id=project_id, name=name,
+        description=description, columns=columns, origin="action_log",
+        produced_by_kind="action_log", produced_by_id=action_type_id, by=by,
     )
-    return dataset_id
 
 
 async def enable(

@@ -1931,7 +1931,7 @@ async def _normalise_join_table(
     the column holding each end's primary key. `(None, None, None)` for a link
     with none.
 
-    p.35: "select a dataset that contains columns matching the primary keys for
+    p.200: "select a dataset that contains columns matching the primary keys for
     both selected object types. A column can only be mapped to one primary
     key." The columns are checked against the dataset's schema now, so a typo
     is a refusal at definition rather than a link that follows to nothing.
@@ -1957,7 +1957,7 @@ async def _normalise_join_table(
             "each is a whole answer to which objects are linked"
         )
     if a == b:
-        # p.35: "A column can only be mapped to one primary key."
+        # p.200: "A column can only be mapped to one primary key."
         raise ValueError("each end's primary key needs its own column of the join table")
     dataset = await fetch_one(
         conn,
@@ -2087,7 +2087,7 @@ async def links_for_type(
     out: list[dict[str, Any]] = []
     for row in rows:
         link = dict(row)
-        # A join table's pairs are of primary keys (p.35), so from either end
+        # A join table's pairs are of primary keys (p.200), so from either end
         # the key in hand is the near value and the key arrived at the far one;
         # `join` says which of the table's columns is which (§552).
         through = link["join_dataset_id"] is not None

@@ -362,8 +362,10 @@ function JoinByField({ value, onChange }: {
   );
 }
 
-/** p.35's join table: a dataset of this project, and the column holding each
- * end's primary key, read from the dataset's own schema. */
+/** p.200's join table: a dataset of this project, and the column holding each
+ * end's primary key, read from the dataset's own schema - or p.200's
+ * **Generate join table** (§562), which makes an empty one with the right
+ * columns and fills all three in. */
 function JoinTableFields({
   workspaceId,
   projectId,
@@ -371,6 +373,9 @@ function JoinTableFields({
   onChange,
   fromLabel,
   toLabel,
+  fromTypeId,
+  toTypeId,
+  linkName,
 }: {
   workspaceId: string;
   projectId: string;
@@ -378,10 +383,25 @@ function JoinTableFields({
   onChange: (next: JoinTableDraft) => void;
   fromLabel: string;
   toLabel: string;
+  fromTypeId: string;
+  toTypeId: string;
+  linkName: string;
 }) {
+  const queryClient = useQueryClient();
   const datasets = useQuery({
     queryKey: ["datasets", projectId],
     queryFn: () => dsApi.list(workspaceId, projectId),
+  });
+  const generate = useMutation({
+    mutationFn: () =>
+      dsApi.generateJoinTable(workspaceId, projectId, {
+        from_type_id: fromTypeId, to_type_id: toTypeId,
+        name: `${linkName.trim() || "Link"} join table`,
+      }),
+    onSuccess: async (made) => {
+      await queryClient.invalidateQueries({ queryKey: ["datasets", projectId] });
+      onChange({ dataset: made.dataset.id, from: made.from_column, to: made.to_column });
+    },
   });
   const chosen = datasets.data?.find((d: Dataset) => d.id === draft.dataset);
   // A join table in another project is not in this list; its columns are
@@ -411,6 +431,21 @@ function JoinTableFields({
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
         </select>
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="link-generate-join-table"
+          disabled={!fromTypeId || !toTypeId || generate.isPending}
+          title={!fromTypeId || !toTypeId ? "Choose both types first" : undefined}
+          onClick={() => generate.mutate()}
+        >
+          Generate join table
+        </button>
+        {generate.isError && (
+          <div className="form-error">
+            {generate.error instanceof ApiError ? generate.error.message : "Couldn't make the join table."}
+          </div>
+        )}
       </Field>
       {column(`Column holding ${fromLabel || "the from type"}'s key`, "link-join-from-column",
         draft.from, (from) => onChange({ ...draft, from }))}
@@ -508,6 +543,9 @@ function LinkTypeDialog({
             onChange={setJoinTable}
             fromLabel="the from type"
             toLabel="the to type"
+            fromTypeId={fromId}
+            toTypeId={toId}
+            linkName={displayName}
           />
         ) : (
           <>
@@ -601,6 +639,9 @@ function LinkJoinDialog({
             onChange={setJoinTable}
             fromLabel={link.from_display_name}
             toLabel={link.to_display_name}
+            fromTypeId={link.from_object_type_id}
+            toTypeId={link.to_object_type_id}
+            linkName={link.display_name}
           />
         ) : (
           <>
