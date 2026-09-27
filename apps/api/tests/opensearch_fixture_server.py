@@ -33,8 +33,9 @@ Endpoints:
   PUT    /{index}                 indices.create
   POST   /_bulk                   update + doc_as_upsert only
   POST   /{index}/_delete_by_query
-  POST   /{index}/_search       term/terms/range/multi_match in filter/must/
-                                should (+minimum_should_match)/must_not, sorted+paged
+  POST   /{index}/_search       term/terms/range/multi_match/prefix/exists and
+                                nested bool, in filter/must/should
+                                (+minimum_should_match)/must_not, sorted+paged
   GET    /{index}/_doc/{id}
   POST   /{index}/_update/{id}
   POST   /__reset                 test helper: forget every index
@@ -42,6 +43,7 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -326,6 +328,41 @@ def _match(source: dict, clause: dict, index: str = "") -> bool:
             raise MappingError(
                 f"failed to parse query value for [{field}] of type [{declared}]: {value!r}"
             ) from exc
+    if "bool" in clause:
+        # Nested, as p.452's advanced keyword query sends it (§543). A real
+        # cluster requires one `should` when there is no `must` or `filter`,
+        # and none otherwise, unless minimum_should_match says.
+        nested = clause["bool"]
+        required = list(nested.get("filter", [])) + list(nested.get("must", []))
+        should = list(nested.get("should", []))
+        minimum = int(nested.get("minimum_should_match", 0 if required else 1))
+        return (
+            all(_match(source, c, index) for c in required)
+            and not any(_match(source, c, index) for c in nested.get("must_not", []))
+            and (not should or sum(1 for c in should if _match(source, c, index)) >= minimum)
+        )
+    if "prefix" in clause:
+        # **As a cluster does it, by field type**, which is the point of
+        # having it here (§543): on a `keyword` field the prefix is of the
+        # whole value, and on a `text` field it is of any word the analyser
+        # made - so "west" matches "North West" there. A gateway that asked a
+        # text field would pass a fixture that treated both alike and still
+        # disagree with Postgres on a real cluster.
+        field, spec = next(iter(clause["prefix"].items()))
+        needle = str(spec["value"] if isinstance(spec, dict) else spec)
+        insensitive = isinstance(spec, dict) and spec.get("case_insensitive") is True
+        found = _resolve(source, field)
+        if found is MISSING or found is None:
+            return False
+        if _declared_type(index, field) == "keyword":
+            candidates = [str(found)]
+        else:
+            # The standard analyser: words, lower-cased.
+            candidates = [w for w in re.split(r"[^\w]+", str(found).lower()) if w]
+            needle, insensitive = needle.lower(), True
+        if insensitive:
+            return any(c.lower().startswith(needle.lower()) for c in candidates)
+        return any(c.startswith(needle) for c in candidates)
     if "terms" in clause:
         field, values = next(iter(clause["terms"].items()))
         found = _resolve(source, field)

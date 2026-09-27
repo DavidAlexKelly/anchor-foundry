@@ -53,6 +53,9 @@ export interface FilterSpec {
   id: string;
   property: string;
   component: FilterComponent;
+  /** p.452's search type for a keyword filter (§543): absent is the plain
+   * prefix search, "advanced" the syntax with AND, OR, NOT and brackets. */
+  syntax?: "advanced";
 }
 
 export function componentOf(value: unknown): FilterComponent {
@@ -86,6 +89,7 @@ export function filtersOf(filters: unknown, legacy: unknown): FilterSpec[] {
         && typeof (f as FilterSpec).property === "string" && !!(f as FilterSpec).property)
       .map((f) => ({
         id: f.id as string, property: f.property as string, component: componentOf(f.component),
+        ...(f.syntax === "advanced" ? { syntax: "advanced" as const } : {}),
       }));
   }
   return String(legacy ?? "")
@@ -136,16 +140,25 @@ export function toggleValue(
     ? current.filter((v) => v !== value) : [...current, value]);
 }
 
+/** A keyword filter's clause: the plain search's prefix, or p.452's
+ * advanced query (§543), which is the same prefix terms combined. */
+const KEYWORD_OPS = ["starts_with", "keyword_query"];
+
 export function keywordOf(clauses: readonly Clause[], property: string): string {
-  const c = clauses.find((x) => x.property === property && x.op === "starts_with");
+  const c = clauses.find((x) => x.property === property && KEYWORD_OPS.includes(x.op));
   return c ? String(c.value ?? "") : "";
 }
 
 /** p.446's keyword search, as a prefix: `starts_with` is the text operator
- * both stores answer from an index (`object_sets.py`). Blank removes it. */
-export function withKeyword(clauses: readonly Clause[], property: string, text: string): Clause[] {
-  const rest = clauses.filter((c) => !(c.property === property && c.op === "starts_with"));
-  return text.trim() ? [...rest, { property, op: "starts_with", value: text }] : rest;
+ * both stores answer from an index (`object_sets.py`). Blank removes it.
+ * **Advanced**, it is p.452's query instead, and replaces a plain one on the
+ * same property rather than ANDing with it: one box, one search. */
+export function withKeyword(
+  clauses: readonly Clause[], property: string, text: string, advanced = false,
+): Clause[] {
+  const rest = clauses.filter((c) => !(c.property === property && KEYWORD_OPS.includes(c.op)));
+  if (!text.trim()) return rest;
+  return [...rest, { property, op: advanced ? "keyword_query" : "starts_with", value: text }];
 }
 
 /** `day` moved by whole days, or null when it is not a `YYYY-MM-DD` - which

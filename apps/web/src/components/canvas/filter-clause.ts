@@ -56,6 +56,7 @@ export const OPERATOR_LABELS: Record<string, string> = {
   lt: "is less than",
   lte: "is at most",
   within_box: "is inside the area",
+  keyword_query: "matches",
 };
 
 /** `object_sets.GEO_OPERATORS`, named so a pill can *describe* one.
@@ -68,6 +69,12 @@ export const OPERATOR_LABELS: Record<string, string> = {
  * state, not a gap.
  */
 export const GEO_OPERATORS: readonly string[] = ["within_box"];
+
+/** `object_sets.QUERY_OPERATORS`: p.452's advanced keyword syntax (§543),
+ * whose value is a query over prefix terms. Written by a Filter List's
+ * keyword filter set to advanced syntax, and - like a box - described by a
+ * pill rather than offered by its editor, which has no query to build it in. */
+export const QUERY_OPERATORS: readonly string[] = ["keyword_query"];
 
 /** Which operators a property of this declared type may be filtered with.
  *

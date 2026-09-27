@@ -425,6 +425,36 @@ def _doc_id(source_id: UUID, primary_key: str) -> str:
     return str(uuid5(INSTANCE_NAMESPACE, f"{source_id}:{primary_key}"))
 
 
+def _prefix_clause(field: str, value: Any) -> dict[str, Any]:
+    """`starts_with` as OpenSearch asks it: a prefix of the **whole value**,
+    ignoring case - which is what Postgres's anchored `ILIKE 'x%'` means.
+
+    On the `.keyword` subfield, because a `string` property is mapped `text`
+    (`instance_mapping`) and a text field's prefix is of any *word*: until
+    §543 this was a `phrase_prefix` on the text field, so "west" matched
+    "North West" here and not on Postgres. The fixture could not see it,
+    having no analyser; it now treats the two field types apart. The primary
+    key is its own keyword field already.
+    """
+    keyword = field if field == "primary_key" else f"{field}.keyword"
+    return {"prefix": {keyword: {"value": _text_value(value), "case_insensitive": True}}}
+
+
+def _query_clause(field: str, node: Any) -> dict[str, Any]:
+    """p.452's advanced keyword query (§543) as a bool query, one prefix
+    clause per term (`object_sets.parse_keyword_query`)."""
+    if isinstance(node, object_sets.QueryTerm):
+        return _prefix_clause(field, node.text)
+    if isinstance(node, object_sets.QueryNot):
+        return {"bool": {"must_not": [_query_clause(field, node.operand)]}}
+    parts = [_query_clause(field, part) for part in node.operands]
+    if isinstance(node, object_sets.QueryAnd):
+        return {"bool": {"must": parts}}
+    # A bool of `should` alone needs one of them to match; saying so was the
+    # mutation sweep's equivalent code.
+    return {"bool": {"should": parts}}
+
+
 class OpenSearchInstanceStore:
     """Production gateway. Auth is HTTP basic against the domain's
     fine-grained-access-control master user (CDK: ``data-stores.ts``'s
@@ -858,13 +888,14 @@ class OpenSearchInstanceStore:
             elif f.op == "in":
                 must.append({"terms": {field: [_text_value(v) for v in f.value]}})
             elif f.op == "starts_with":
-                must.append({
-                    "multi_match": {
-                        "query": _text_value(f.value),
-                        "fields": [field],
-                        "type": "phrase_prefix",
-                    }
-                })
+                must.append(_prefix_clause(field, f.value))
+            elif f.op in object_sets.QUERY_OPERATORS:
+                # p.452's advanced syntax (§543): the tree `object_sets` parsed,
+                # as a bool query of the same prefix clauses. A value must be
+                # there to match, NOT included, which `exists` says.
+                must.append({"bool": {"must": [
+                    {"exists": {"field": field}}, _query_clause(field, f.value),
+                ]}})
             elif f.op in object_sets.GEO_OPERATORS:
                 # Decision 0006 §3's whole argument, in one clause. The mapped
                 # `geo_point` field answers this natively and **handles the

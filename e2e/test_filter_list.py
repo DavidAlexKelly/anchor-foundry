@@ -293,3 +293,63 @@ def test_the_panel_adds_filters_and_chooses_components(page, api, sites) -> None
     eventually(lambda: mod.definition()["layout"]["fl"]["props"]["filters"][1],
                lambda got: got == one("histogram", "name", fid="f_2"),
                what="the moved filter as a histogram")
+
+
+# ---- p.452's advanced keyword syntax (§543) ---------------------------------
+
+def advanced(prop: str = "name", fid: str = "f_1") -> dict:
+    return {**one("keyword", prop, fid), "syntax": "advanced"}
+
+
+def test_an_advanced_keyword_search_chains_its_terms(page, api, sites) -> None:
+    mod = build(api, sites, "Filter list advanced", {"filters": [advanced()]})
+    open_module(page, mod)
+    rows_are(page, EVERY, "every row first")
+    box = page.get_by_role("searchbox", name="name")
+    box.fill("north OR sou")
+    rows_are(page, NORTH + SOUTH, "north or south")
+    # A quotation is one term, spaces and all; NOT binds before AND, AND
+    # before OR.
+    box.fill('"north 1" OR east')
+    rows_are(page, ["N1", "E1"], "north 1 or east")
+    box.fill("NOT north AND NOT east")
+    rows_are(page, SOUTH, "neither north nor east")
+    box.fill("north NOT (\"north 1\" OR \"north 2\")")
+    rows_are(page, ["N3", "N4"], "the later northern sites")
+
+
+def test_a_query_that_does_not_parse_is_said_and_not_applied(page, api, sites) -> None:
+    mod = build(api, sites, "Filter list advanced problem", {"filters": [advanced()]})
+    open_module(page, mod)
+    box = page.get_by_role("searchbox", name="name")
+    box.fill("south")
+    rows_are(page, SOUTH, "the southern sites")
+    box.fill("south OR (east")
+    expect(page.get_by_test_id("filter-keyword-problem")).to_have_text(
+        "A bracket is not closed. Still applied: south")
+    # The last query that parsed stays applied, and nothing reads a refusal.
+    rows_are(page, SOUTH, "still the southern sites")
+    box.fill("south OR (east)")
+    expect(page.get_by_test_id("filter-keyword-problem")).to_have_count(0)
+    rows_are(page, SOUTH + ["E1"], "south or east")
+
+
+def test_the_plain_search_is_still_a_prefix_of_the_whole_value(page, api, sites) -> None:
+    # "north OR south" typed into the plain box is one prefix, matching nothing.
+    mod = build(api, sites, "Filter list plain words", {"filters": [one("keyword", "name")]})
+    open_module(page, mod)
+    page.get_by_role("searchbox", name="name").fill("north OR south")
+    rows_are(page, [], "no name starts with the whole phrase")
+
+
+def test_the_panel_offers_advanced_syntax_to_a_keyword_filter(page, api, sites) -> None:
+    mod = build(api, sites, "Filter list advanced panel", {"filters": [one("histogram", "name")]})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Sites").first.click()
+    expect(page.get_by_test_id("filter-syntax-f_1")).to_have_count(0)
+    page.get_by_test_id("filter-component-f_1").select_option("keyword")
+    page.get_by_test_id("filter-syntax-f_1").select_option("advanced")
+    save(page)
+    filters = mod.definition()["layout"]["fl"]["props"]["filters"]
+    assert filters == [advanced()], filters

@@ -286,3 +286,35 @@ describe("the timeline (§466)", () => {
     expect(withoutFilter(march, { id: "f", property: "at", component: "timeline" })).toEqual([]);
   });
 });
+
+describe("the advanced keyword search (p.452, §543)", () => {
+  it("keeps a filter's search type, and only the advanced one", () => {
+    expect(filtersOf([
+      { id: "f_1", property: "region", component: "keyword", syntax: "advanced" },
+      { id: "f_2", property: "status", component: "keyword", syntax: "fancy" },
+    ], "")).toEqual([
+      { id: "f_1", property: "region", component: "keyword", syntax: "advanced" },
+      { id: "f_2", property: "status", component: "keyword" },
+    ]);
+    expect("syntax" in filtersOf([{ id: "f_2", property: "s", component: "keyword" }], "")[0]!)
+      .toBe(false);
+  });
+
+  it("writes a query in place of a prefix on the property, and reads either back", () => {
+    const plain = withKeyword([{ property: "status", op: "eq", value: "open" }], "region", "nor");
+    const advanced = withKeyword(plain, "region", "north OR south", true);
+    expect(advanced).toEqual([
+      { property: "status", op: "eq", value: "open" },
+      { property: "region", op: "keyword_query", value: "north OR south" },
+    ]);
+    expect(keywordOf(advanced, "region")).toBe("north OR south");
+    expect(keywordOf(plain, "region")).toBe("nor");
+    expect(withKeyword(advanced, "region", "  ", true)).toEqual([
+      { property: "status", op: "eq", value: "open" },
+    ]);
+    expect(withKeyword(advanced, "region", "sou")).toEqual([
+      { property: "status", op: "eq", value: "open" },
+      { property: "region", op: "starts_with", value: "sou" },
+    ]);
+  });
+});

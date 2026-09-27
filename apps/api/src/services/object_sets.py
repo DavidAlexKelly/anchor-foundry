@@ -29,7 +29,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, Union
 from uuid import UUID
 
 if TYPE_CHECKING:  # this module imports nothing at runtime, on purpose
@@ -41,6 +41,8 @@ if TYPE_CHECKING:  # this module imports nothing at runtime, on purpose
 # deployment happens to run, which is the worst kind of difference - invisible
 # until somebody compares two environments.
 OPERATORS = ("eq", "neq", "in", "starts_with")
+# p.452's advanced keyword syntax, whose value is a query over `starts_with`
+# terms, is `QUERY_OPERATORS` at the end of this module (§543).
 
 # A filter may address the instance's **primary key** as well as a property,
 # under this name. It is `ontology.PRIMARY_KEY_REF`, restated here so this
@@ -811,10 +813,10 @@ def parse(
             data_type = _orderable_type(prop, op, property_types)
         elif op in GEO_OPERATORS:
             data_type = _boxable_type(prop, op, property_types)
-        elif op not in OPERATORS:
+        elif op not in OPERATORS and op not in QUERY_OPERATORS:
+            supported = (*OPERATORS, *QUERY_OPERATORS, *ORDERED_OPERATORS, *GEO_OPERATORS)
             raise ValueError(
-                f"unknown filter operator {op!r} "
-                f"(supported: {', '.join((*OPERATORS, *ORDERED_OPERATORS, *GEO_OPERATORS))})"
+                f"unknown filter operator {op!r} (supported: {', '.join(supported)})"
             )
         value = entry.get("value")
         if op in GEO_OPERATORS:
@@ -856,6 +858,13 @@ def parse(
                 f"filter on {prop!r} has no value - omit the filter rather than "
                 "sending an empty one, so an unset variable cannot silently widen the set"
             )
+        if op in QUERY_OPERATORS:
+            # Parsed here, as a box is, so every store walks one tree - and a
+            # query that does not parse is refused with what is wrong with it.
+            try:
+                value = parse_keyword_query(value)
+            except ValueError as exc:
+                raise ValueError(f"the keyword query on {prop!r}: {exc}") from exc
         filters.append(
             Filter(property=prop, op=op, value=value, data_type=data_type)
         )
@@ -1048,6 +1057,8 @@ def _matches_one(actual: Any, f: Filter) -> bool:
         return _text(actual) in {_text(v) for v in f.value}
     if f.op == "starts_with":
         return actual is not None and _text(actual).lower().startswith(_text(f.value).lower())
+    if f.op in QUERY_OPERATORS:
+        return actual is not None and query_matches(f.value, _text(actual))
     if f.op in ORDERED_OPERATORS:
         return _compares(actual, f)
     if f.op in GEO_OPERATORS:
@@ -1236,3 +1247,188 @@ def bucket_filters(prop: str, data_type: str, bucket: Bucket) -> tuple[Filter, F
         Filter(prop, "gte", bucket.low, data_type),
         Filter(prop, "lte" if bucket.closed else "lt", bucket.high, data_type),
     )
+
+
+# ---- the advanced keyword syntax (`workshop` p.452; §543) -------------------
+#
+# > "By switching the search type to advanced syntax, you can chain search
+# > operations with each other and define the order of operations through
+# > brackets. If no brackets are defined, common Boolean logic is used to
+# > determine precedence of operators as follows: quotations, parentheses, NOT,
+# > AND, OR." (p.452)
+#
+# **A term means what the plain keyword search means**: the value starts with
+# it, ignoring case - `starts_with`, which both stores answer from an index
+# (the reason it is a prefix and not a substring, above). A quotation is one
+# term that may hold spaces and the operator words, so `"NOT sure"` searches
+# for those words rather than negating `sure`. The operators combine terms and
+# nothing else, so each store compiles the same tree to its own boolean query
+# and `query_matches` is the reference both are tested against, as `matches`
+# is for every other operator.
+#
+# **The operators are upper case**, as in every syntax that has them (Lucene,
+# OpenSearch's query string): `north and south` is three terms. Two terms side
+# by side with no operator are ANDed, which is "common Boolean logic" for a
+# search box.
+#
+# **A value must be there to match**, NOT included: `NOT north` is the objects
+# whose region is something other than north, not also the ones with no region
+# - SQL's NULL and OpenSearch's missing field would otherwise disagree, and
+# the plain keyword search never matched a missing value either.
+QUERY_OPERATORS = ("keyword_query",)
+
+# Enough for any query a person types; a bound on what one filter can cost.
+MAX_QUERY_LENGTH = 500
+MAX_QUERY_TERMS = 32
+
+QUERY_WORDS = ("AND", "OR", "NOT")
+
+
+@dataclass(frozen=True)
+class QueryTerm:
+    text: str
+
+
+@dataclass(frozen=True)
+class QueryNot:
+    operand: "QueryNode"
+
+
+@dataclass(frozen=True)
+class QueryAnd:
+    operands: tuple["QueryNode", ...]
+
+
+@dataclass(frozen=True)
+class QueryOr:
+    operands: tuple["QueryNode", ...]
+
+
+QueryNode = Union[QueryTerm, QueryNot, QueryAnd, QueryOr]
+
+
+def _query_tokens(text: str) -> list[tuple[str, str]]:
+    """(kind, text) pairs: `(`, `)`, `AND`, `OR`, `NOT` or `term`."""
+    out: list[tuple[str, str]] = []
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c.isspace():
+            i += 1
+        elif c in "()":
+            out.append((c, c))
+            i += 1
+        elif c == '"':
+            end = text.find('"', i + 1)
+            if end < 0:
+                raise ValueError("a quotation is not closed")
+            quoted = text[i + 1:end]
+            if not quoted.strip():
+                raise ValueError("a quotation is empty, and would match every value")
+            out.append(("term", quoted))
+            i = end + 1
+        else:
+            start = i
+            while i < len(text) and not text[i].isspace() and text[i] not in '()"':
+                i += 1
+            word = text[start:i]
+            out.append((word if word in QUERY_WORDS else "term", word))
+    return out
+
+
+class _QueryParser:
+    def __init__(self, tokens: list[tuple[str, str]]) -> None:
+        self.tokens = tokens
+        self.at = 0
+
+    def peek(self) -> str | None:
+        return self.tokens[self.at][0] if self.at < len(self.tokens) else None
+
+    def take(self) -> tuple[str, str]:
+        token = self.tokens[self.at]
+        self.at += 1
+        return token
+
+    def or_expr(self) -> QueryNode:
+        parts = [self.and_expr()]
+        while self.peek() == "OR":
+            self.take()
+            parts.append(self.and_expr())
+        return parts[0] if len(parts) == 1 else QueryOr(tuple(parts))
+
+    def and_expr(self) -> QueryNode:
+        parts = [self.not_expr()]
+        while True:
+            kind = self.peek()
+            if kind == "AND":
+                self.take()
+            elif kind not in ("term", "(", "NOT"):
+                break
+            parts.append(self.not_expr())
+        return parts[0] if len(parts) == 1 else QueryAnd(tuple(parts))
+
+    def not_expr(self) -> QueryNode:
+        if self.peek() == "NOT":
+            self.take()
+            return QueryNot(self.not_expr())
+        return self.atom()
+
+    def atom(self) -> QueryNode:
+        kind = self.peek()
+        if kind is None:
+            raise ValueError("the query ends where a term was expected")
+        word = self.take()[1]
+        if kind == "term":
+            return QueryTerm(word)
+        if kind == "(":
+            if self.peek() == ")":
+                raise ValueError("a pair of brackets holds nothing")
+            inside = self.or_expr()
+            if self.peek() != ")":
+                raise ValueError("a bracket is not closed")
+            self.take()
+            return inside
+        if kind == ")":
+            raise ValueError("a closing bracket has no opening one")
+        raise ValueError(f"{word} needs a term on each side")
+
+
+def parse_keyword_query(text: object) -> QueryNode:
+    """The query as a tree, or a ValueError saying what is wrong with it."""
+    if not isinstance(text, str):
+        raise ValueError("an advanced keyword query is text")
+    if len(text) > MAX_QUERY_LENGTH:
+        raise ValueError(f"an advanced keyword query is at most {MAX_QUERY_LENGTH} characters")
+    tokens = _query_tokens(text)
+    if not tokens:
+        raise ValueError("the query is empty")
+    if sum(1 for kind, _ in tokens if kind == "term") > MAX_QUERY_TERMS:
+        raise ValueError(f"an advanced keyword query has at most {MAX_QUERY_TERMS} terms")
+    parser = _QueryParser(tokens)
+    tree = parser.or_expr()
+    if parser.peek() is not None:
+        # Only a stray `)` can stop the parse early: every other token either
+        # continues an AND or is consumed by the level that expects it.
+        raise ValueError("a closing bracket has no opening one")
+    return tree
+
+
+def query_terms(node: QueryNode) -> list[str]:
+    """Every term in the tree, in order."""
+    if isinstance(node, QueryTerm):
+        return [node.text]
+    if isinstance(node, QueryNot):
+        return query_terms(node.operand)
+    return [t for part in node.operands for t in query_terms(part)]
+
+
+def query_matches(node: QueryNode, value: str) -> bool:
+    """The reference semantics the stores are tested against: a term is a
+    prefix of the value, ignoring case."""
+    if isinstance(node, QueryTerm):
+        return value.lower().startswith(node.text.lower())
+    if isinstance(node, QueryNot):
+        return not query_matches(node.operand, value)
+    if isinstance(node, QueryAnd):
+        return all(query_matches(part, value) for part in node.operands)
+    return any(query_matches(part, value) for part in node.operands)
