@@ -350,6 +350,7 @@ import {
 } from "./map-tracks";
 // Aliased on §211's rule: `areaOf` is also §537's chart area option.
 import { shapeOutputOf, shapesText, syncShapes } from "./map-drawn";
+import { perimeterModeOf } from "./map-measure";
 import {
   DRAWN_OPACITY, DRAW_TOOLS, DRAW_TOOL_LABELS, areaOf as mapAreaOf, drawToolsOf, drawnOpacityOf,
   withArea as withMapArea, withDrawTool,
@@ -12095,6 +12096,10 @@ export function CanvasMap({
   drawnShapeOpacity = DRAWN_OPACITY,
   drawnShapesVariable = null,
   shapeOutputType = "features",
+  enableMeasurements = false,
+  measurePerimeter = true,
+  perimeterMode = "total",
+  measureArea = true,
   showLegend = false,
   legendCollapsed = false,
   legendSize = "full",
@@ -12142,6 +12147,12 @@ export function CanvasMap({
    * as geometries (`map-drawn.ts`). */
   drawnShapesVariable?: string | null;
   shapeOutputType?: string;
+  /** p.302's Enable measurements, Enable polygon perimeter (by segment or in
+   * total) and Enable polygon area (§575, `map-measure.ts`). */
+  enableMeasurements?: boolean;
+  measurePerimeter?: boolean;
+  perimeterMode?: string;
+  measureArea?: boolean;
   /** A `geotemporal_series` property (§557): each object's track drawn as a
    * line, and the object at its position at the selected time. */
   trackProperty?: string | null;
@@ -12518,6 +12529,10 @@ export function CanvasMap({
           drawTools={drawToolsOf(drawOptions)}
           drawnColor={layerColorOf(drawnShapeColor)}
           drawnOpacity={drawnOpacityOf(drawnShapeOpacity)}
+          measure={enableMeasurements ? {
+            perimeter: measurePerimeter ? perimeterModeOf(perimeterMode) : null,
+            area: !!measureArea,
+          } : null}
           onArea={selectsArea
             ? (area) => {
                 setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, area));
@@ -12680,6 +12695,7 @@ function MapSettings() {
     playbackPositionVariable, autoPauseVariable, layerLabel, selectedVariable, layerVisible,
     layerVisibleVariable, lockLayer, layerColor, layerOpacity,
     drawOptions, drawnShapeColor, drawnShapeOpacity, drawnShapesVariable, shapeOutputType,
+    enableMeasurements, measurePerimeter, perimeterMode, measureArea,
     showLegend, legendCollapsed, legendSize, showSelectionPanel, autoZoom, autoZoomSetVariable,
     autoZoomOutsideOnly, boundsVariable, followSetVariable,
     actions: { setProp },
@@ -12705,6 +12721,10 @@ function MapSettings() {
     drawnShapeOpacity: node.data.props.drawnShapeOpacity,
     drawnShapesVariable: node.data.props.drawnShapesVariable,
     shapeOutputType: node.data.props.shapeOutputType,
+    enableMeasurements: node.data.props.enableMeasurements,
+    measurePerimeter: node.data.props.measurePerimeter,
+    perimeterMode: node.data.props.perimeterMode,
+    measureArea: node.data.props.measureArea,
     windowStartVariable: node.data.props.windowStartVariable,
     windowEndVariable: node.data.props.windowEndVariable,
     timeZone: node.data.props.timeZone,
@@ -13009,6 +13029,52 @@ function MapSettings() {
                 <option value="features">As a feature collection</option>
                 <option value="geometries">As a geometry collection</option>
               </select>
+              {/* p.302's measurements (§575). */}
+              <label className="field canvas-toggle">
+                <input
+                  type="checkbox"
+                  data-testid="map-measure-enabled"
+                  checked={!!enableMeasurements}
+                  onChange={(e) => setProp((p: { enableMeasurements: boolean }) =>
+                    (p.enableMeasurements = e.target.checked))}
+                />
+                <span className="field-label">Measurements</span>
+              </label>
+              {enableMeasurements && (
+                <>
+                  <label className="field canvas-toggle">
+                    <input
+                      type="checkbox"
+                      data-testid="map-measure-perimeter"
+                      checked={measurePerimeter !== false}
+                      onChange={(e) => setProp((p: { measurePerimeter: boolean }) =>
+                        (p.measurePerimeter = e.target.checked))}
+                    />
+                    <span className="field-label">Perimeter</span>
+                  </label>
+                  <select
+                    aria-label="Perimeter as"
+                    data-testid="map-measure-perimeter-mode"
+                    value={perimeterModeOf(perimeterMode)}
+                    disabled={measurePerimeter === false}
+                    onChange={(e) => setProp((p: { perimeterMode: string }) =>
+                      (p.perimeterMode = e.target.value))}
+                  >
+                    <option value="total">The total</option>
+                    <option value="segments">Each segment</option>
+                  </select>
+                  <label className="field canvas-toggle">
+                    <input
+                      type="checkbox"
+                      data-testid="map-measure-area"
+                      checked={measureArea !== false}
+                      onChange={(e) => setProp((p: { measureArea: boolean }) =>
+                        (p.measureArea = e.target.checked))}
+                    />
+                    <span className="field-label">Area</span>
+                  </label>
+                </>
+              )}
             </div>
           )}
           {/* p.300's layer settings (§559), for the map's one object layer. */}
@@ -13376,6 +13442,7 @@ CanvasMap.craft = {
     lockLayer: false, layerColor: null, layerOpacity: 1,
     drawOptions: null, drawnShapeColor: null, drawnShapeOpacity: DRAWN_OPACITY,
     drawnShapesVariable: null, shapeOutputType: "features",
+    enableMeasurements: false, measurePerimeter: true, perimeterMode: "total", measureArea: true,
     showLegend: false, legendCollapsed: false, legendSize: "full", showSelectionPanel: false,
     autoZoom: "default", autoZoomSetVariable: null, autoZoomOutsideOnly: false,
     boundsVariable: null, followSetVariable: null,
