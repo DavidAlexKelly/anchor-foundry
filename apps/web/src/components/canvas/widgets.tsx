@@ -36,10 +36,10 @@ import {
   toDisplay as toTextDisplay, toStored as toTextStored,
 } from "./text-input";
 import {
-  chosenOf, columnsOf, DISPLAYS, displayOf, displaysFor, LAYOUTS,
+  canCreate, chosenOf, columnsOf, createdOf, DISPLAYS, displayOf, displaysFor, LAYOUTS,
   layoutOf as optionLayoutOf, layoutStyle, MAX_COLUMNS, MIN_COLUMNS, modeOf,
   optionsOf, outputKind, pick, placeholderOf, SELECTIONS,
-  selectionOf as pickModeOf, sourceOf,
+  selectionOf as pickModeOf, sourceOf, withTyped,
 } from "./string-selector";
 import {
   COMMON_ZONES, DATE_FORMATS, DEFAULT_DATE_FORMAT, DEFAULT_PRECISION,
@@ -3970,6 +3970,7 @@ export function CanvasStringSelector({
   allowClearing = true,
   layout = "vertical",
   columns = 3,
+  allowCreating = false,
 }: {
   name?: string;
   label?: string;
@@ -3982,6 +3983,8 @@ export function CanvasStringSelector({
   allowClearing?: boolean;
   layout?: string;
   columns?: number;
+  /** p.461's "Allow creating new options", for a Multiple dropdown (§579). */
+  allowCreating?: boolean;
 }) {
   const {
     id: nodeId,
@@ -4003,8 +4006,11 @@ export function CanvasStringSelector({
   const overlayIds = useOverlayIds();
   const eventContext = useEventContext(undefined, overlayIds);
 
-  function choose(option: string) {
-    const next = pick(selection, stored, option);
+  // **Every write goes through here**, so every one fires `change`. The two
+  // dropdowns wrote the variable straight and fired nothing, which left the
+  // events panel offering a trigger half this widget's forms never pulled
+  // (§579 found it).
+  function write(next: string | string[] | null) {
     set(name, next);
     if (mode === "run" && changed.length > 0) {
       runEvents(changed, {
@@ -4013,6 +4019,18 @@ export function CanvasStringSelector({
       });
     }
   }
+  function choose(option: string) {
+    write(pick(selection, stored, option));
+  }
+  // p.461's user-created options (§579): they live in the selection itself.
+  const creates = canCreate(selection, display, allowCreating);
+  const created = creates ? createdOf(options, chosen) : [];
+  const [typed, setTyped] = useState("");
+  const addTyped = () => {
+    if (!typed.trim()) return;
+    write(withTyped(stored, typed));
+    setTyped("");
+  };
 
   const text = placeholderOf(selection, display, placeholder);
   const listId = `sel-${nodeId}`;
@@ -4031,7 +4049,7 @@ export function CanvasStringSelector({
               aria-label={label || "String selector"}
               data-testid="selector-dropdown"
               value={chosen[0] ?? ""}
-              onChange={(e) => set(name, e.target.value || null)}
+              onChange={(e) => write(e.target.value || null)}
             >
               {/* p.461's "Disable clearing of the selected dropdown option":
                   the empty row *is* the clearing affordance, so forbidding one
@@ -4052,15 +4070,49 @@ export function CanvasStringSelector({
               multiple
               aria-label={label || "String selector"}
               data-testid="selector-dropdown"
-              size={Math.min(6, Math.max(2, options.length))}
+              size={Math.min(6, Math.max(2, options.length + created.length))}
               value={chosen}
               onChange={(e) =>
-                set(name, [...e.target.selectedOptions].map((o) => o.value))}
+                write([...e.target.selectedOptions].map((o) => o.value))}
             >
               {options.map((o) => (
                 <option key={o} value={o}>{o}</option>
               ))}
+              {/* p.461: "Any user-created options will be italicized." */}
+              {created.map((o) => (
+                <option key={`created:${o}`} value={o} data-created="true"
+                  style={{ fontStyle: "italic" }}>
+                  {o}
+                </option>
+              ))}
             </select>
+          )}
+          {creates && (
+            <span className="row-actions" style={{ gap: 6 }}>
+              <input
+                type="text"
+                aria-label="New option"
+                data-testid="selector-create-input"
+                placeholder={text}
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addTyped();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="btn quiet"
+                data-testid="selector-create"
+                disabled={!typed.trim()}
+                onClick={addTyped}
+              >
+                Add
+              </button>
+            </span>
           )}
 
           {shape.hasLayout && (
@@ -4086,7 +4138,7 @@ export function CanvasStringSelector({
             </div>
           )}
 
-          {options.length === 0 && (
+          {options.length === 0 && !creates && (
             <span className="field-hint">
               {sourceOf(optionSource) === "dynamic"
                 ? "No options yet — the array variable this reads is empty"
@@ -4102,7 +4154,7 @@ export function CanvasStringSelector({
 function StringSelectorSettings() {
   const {
     name, label, selection, display, optionSource, options, optionsVariable,
-    placeholder, allowClearing, layout, columns,
+    placeholder, allowClearing, layout, columns, allowCreating,
     actions: { setProp },
   } = useNode((node) => ({
     name: node.data.props.name,
@@ -4114,6 +4166,7 @@ function StringSelectorSettings() {
     optionsVariable: node.data.props.optionsVariable,
     placeholder: node.data.props.placeholder,
     allowClearing: node.data.props.allowClearing,
+    allowCreating: node.data.props.allowCreating,
     layout: node.data.props.layout,
     columns: node.data.props.columns,
   }));
@@ -4267,6 +4320,18 @@ function StringSelectorSettings() {
           <span className="field-label">Allow clearing the selection</span>
         </label>
       )}
+      {canCreate(selection, display, true) && (
+        <label className="field canvas-toggle">
+          <input
+            type="checkbox"
+            checked={allowCreating === true}
+            data-testid="selector-allow-creating"
+            onChange={(e) =>
+              setProp((p: { allowCreating: boolean }) => (p.allowCreating = e.target.checked))}
+          />
+          <span className="field-label">Allow creating new options</span>
+        </label>
+      )}
       {shape.hasLayout && (
         <>
           <label className="field">
@@ -4307,7 +4372,7 @@ CanvasStringSelector.craft = {
   props: {
     name: "", label: "", selection: "single", display: "dropdown",
     optionSource: "static", options: [], optionsVariable: "",
-    placeholder: "", allowClearing: true, layout: "vertical", columns: 3,
+    placeholder: "", allowClearing: true, layout: "vertical", columns: 3, allowCreating: false,
   },
   related: { settings: StringSelectorSettings },
 };
