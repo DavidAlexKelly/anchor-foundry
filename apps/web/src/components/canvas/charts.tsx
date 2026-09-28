@@ -235,6 +235,8 @@ export interface ChartDisplay {
   labels?: boolean;
   axis?: ValueAxis;
   titles?: AxisTitles;
+  /** p.281's Area, on a line chart (§537). */
+  shaded?: boolean;
 }
 
 interface Drawn {
@@ -392,13 +394,16 @@ function BarChart({ points, drill, labels, axis, titles }: Drawn) {
   );
 }
 
-function LineChart({ points, drill, labels, axis, titles }: Drawn) {
+function LineChart({ points, drill, labels, axis, titles, shaded = false }: Drawn & {
+  shaded?: boolean;
+}) {
   const area = plotArea(titles);
   const s = valueScale(points.map((p) => p.value), axis);
   const step = points.length > 1 ? area.w / (points.length - 1) : 0;
-  // A value a logarithmic axis cannot draw breaks the line rather than
-  // joining its neighbours across it, which would claim a reading between.
-  let path = "";
+  // A value that cannot be drawn - p.282's gap, or anything at or below zero
+  // on a logarithmic axis - breaks the line rather than joining its
+  // neighbours across it, which would claim a reading between.
+  const runs: [number, number][][] = [];
   let open = false;
   points.forEach((p, i) => {
     const y = yOf(s, p.value, area);
@@ -406,9 +411,23 @@ function LineChart({ points, drill, labels, axis, titles }: Drawn) {
       open = false;
       return;
     }
-    path += `${open ? " L" : `${path ? " " : ""}M`} ${area.x + step * i} ${y}`;
+    if (!open) runs.push([]);
+    runs[runs.length - 1]!.push([area.x + step * i, y]);
     open = true;
   });
+  const path = runs
+    .map((run) => run.map(([x, y], i) => `${i === 0 ? "M" : "L"} ${x} ${y}`).join(" "))
+    .join(" ");
+  // p.281's Area: each run shaded down to where a bar would start, so a gap
+  // is a gap in the shading too.
+  const baseY = area.y + area.h - s.base * area.h;
+  const shade = shaded
+    ? runs.map((run) => {
+        const first = run[0]!;
+        const last = run[run.length - 1]!;
+        return `M ${first[0]} ${baseY} ${run.map(([x, y]) => `L ${x} ${y}`).join(" ")} L ${last[0]} ${baseY} Z`;
+      }).join(" ")
+    : "";
   const labelY = HEIGHT - 12 - (titles?.category ? 16 : 0);
   // Every nth label only: a line chart with 200 points cannot show 200 of them.
   const labelEvery = Math.max(1, Math.ceil(points.length / 8));
@@ -417,7 +436,10 @@ function LineChart({ points, drill, labels, axis, titles }: Drawn) {
       <Axes scale={s} area={area} format={tickFormat(axis)} />
       <AxisTitleMarks titles={titles} area={area} />
       <Plot area={area} axis={axis}>
-        <path d={path} fill="none" stroke={PALETTE[0]} strokeWidth={2} />
+        {shaded && (
+          <path data-testid="chart-area" d={shade} fill={PALETTE[0]} fillOpacity={0.22} stroke="none" />
+        )}
+        <path data-testid="chart-line" d={path} fill="none" stroke={PALETTE[0]} strokeWidth={2} />
         {points.map((p, i) => {
           const y = yOf(s, p.value, area);
           return y === null ? null : (
@@ -737,7 +759,7 @@ export function Chart({
   const drawn = { points, drill, labels: display.labels, axis, titles: display.titles };
   const s = valueScale(points.map((p) => p.value), axis);
   let chart: React.ReactNode;
-  if (kind === "line") chart = <LineChart {...drawn} />;
+  if (kind === "line") chart = <LineChart {...drawn} shaded={display.shaded === true} />;
   else if (kind === "pie") return <PieChart points={points} drill={drill} />;
   // Scatter takes no drill-down: its label is an X *coordinate*, so clicking a
   // point would narrow to one exact value of a continuous axis — almost never
@@ -764,12 +786,15 @@ export function Chart({
 /** Rows come back from the query endpoint as `[label, value]` pairs of
  * unknowns. A non-numeric measure is dropped rather than charted as zero: a
  * zero bar is a claim about the data, and "this row could not be measured" is
- * not that claim. */
+ * not that claim. A null one is kept as missing, for `withMissing`. */
 export function toPoints(rows: unknown[][]): ChartPoint[] {
   const points: ChartPoint[] = [];
   for (const row of rows) {
-    const value = Number(row[1]);
-    if (!Number.isFinite(value)) continue;
+    // An aggregate over nothing is null: a category with no value, which
+    // p.282's null display decides the fate of (§537). NaN carries it.
+    const missing = row[1] === null || row[1] === undefined;
+    const value = missing ? NaN : Number(row[1]);
+    if (!missing && !Number.isFinite(value)) continue;
     points.push({ label: row[0] === null || row[0] === undefined ? "∅" : String(row[0]), value });
   }
   return points;

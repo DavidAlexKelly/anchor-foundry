@@ -274,6 +274,25 @@ def test_a_missing_reading_is_a_gap_and_not_a_zero(page, module):
     assert "1 with no reading skipped" in text, text
 
 
+
+@pytest.mark.parametrize("display, said, dots", [
+    ("zeroes", "1 with no reading drawn as zero", 2),
+    ("gap", "1 with no reading left as gaps", 1),
+])
+def test_p282_says_what_became_of_a_missing_reading(page, api, display, said, dots):
+    """§537, p.282: "Zeroes" (where a missing value is treated as equivalent
+    to value of "0") and "Gap" (… an empty gap in a plotted line). The patchy
+    sensor's hole is drawn as asked, and the caption says which."""
+    mod = build_module(api, f"Series nulls {display}")
+    definition = mod.definition()
+    definition["layout"]["cht"]["props"]["nullDisplay"] = display
+    mod.define(definition)
+    open_module(page, mod)
+    pick(page, "Patchy sensor")
+    eventually(lambda: caption(page), lambda t: said in t, what=f"the {display} caption")
+    assert "1 point," in caption(page), caption(page)
+    expect(chart_block(page).locator("circle")).to_have_count(dots)
+
 def test_a_transform_built_in_the_panel_reaches_the_chart(page, api):
     """§524, p.583: "A time series transform performs a mathematical operation
     on input time series data to yield a new output time series." Added in the

@@ -314,8 +314,9 @@ import {
   type FreshnessItem,
 } from "./data-freshness";
 import {
-  CHART_SORTS, SCALE_TYPES, axisProblem, axisTitlesOf, chartSortOf, defaultValueTitle,
-  orientationOf, sortPoints, valueAxisOf,
+  AREA_OPTIONS, CHART_SORTS, NULL_DISPLAYS, SCALE_TYPES, areaOf, axisProblem, axisTitlesOf,
+  chartSortOf, defaultValueTitle, missingCount, missingText, nullDisplayOf, orientationOf,
+  sortPoints, valueAxisOf, withMissing,
 } from "./chart-display";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
@@ -11938,6 +11939,8 @@ export function CanvasChart({
   categoryTitle = "",
   showValueTitle = false,
   valueTitle = "",
+  lineArea = "line",
+  nullDisplay = "ignored",
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -12009,6 +12012,12 @@ export function CanvasChart({
   categoryTitle?: string;
   showValueTitle?: boolean;
   valueTitle?: string;
+  /** p.281's **Area options** for a line: Line, or Area shaded beneath it
+   * (§537). Stacked needs lines per segment, which a line chart has not. */
+  lineArea?: string;
+  /** p.282's **Display of null/missing values** on a line: Ignored, Gap or
+   * Zeroes (`chart-display.withMissing`). */
+  nullDisplay?: string;
 }) {
   const {
     connectors: { connect, drag },
@@ -12092,18 +12101,19 @@ export function CanvasChart({
 
   // A reading with no value is a *gap*, and `Number(null)` is 0 - a finite
   // number that plots as a real measurement of zero (the bug §149 caught in
-  // `plot`). Dropped rather than zeroed, and the count is said below.
-  const readings = (seriesResult.data?.points ?? []).filter(
-    (p) => p.value !== null && p.value !== "" && Number.isFinite(Number(p.value)),
-  );
+  // `plot`). It is kept as missing, NaN, and p.282's null display decides
+  // whether it is skipped, left as a gap or drawn as zero (§537); the count
+  // is said below.
+  const reading = (value: unknown) =>
+    value !== null && value !== "" && Number.isFinite(Number(value)) ? Number(value) : NaN;
 
   const result = usingSeries ? seriesResult
     : segmenting ? crossTab : usingSet ? setResult : datasetResult;
   const unsorted = usingSeries
     ? seriesResult.data
-      ? readings.map((p) => ({
+      ? seriesResult.data.points.map((p) => ({
           label: seriesPointLabel(p.at, seriesRef!.interval),
-          value: Number(p.value),
+          value: reading(p.value),
         }))
       : null
     : usingSet
@@ -12118,7 +12128,13 @@ export function CanvasChart({
       : null;
   // p.283's Sort by, for categories. A series is a timeline and stays in time
   // order: a sorted one would be a line zig-zagging back through the weeks.
-  const points = unsorted && !usingSeries ? sortPoints(unsorted, chartSortOf(sort)) : unsorted;
+  const sorted = unsorted && !usingSeries ? sortPoints(unsorted, chartSortOf(sort)) : unsorted;
+  // p.282's null display, which is a line chart's; any other leaves a missing
+  // value out (`chart-display.withMissing`).
+  const drawnKind = usingSeries ? "line" : (kind ?? "bar");
+  const nulls = nullDisplayOf(nullDisplay);
+  const missing = sorted ? missingCount(sorted) : 0;
+  const points = sorted ? withMissing(sorted, drawnKind, nulls) : sorted;
 
   // p.283's value axis and titles. A problem with the bounds is said and the
   // chart drawn on calculated ones, rather than on an axis running backwards.
@@ -12206,6 +12222,7 @@ export function CanvasChart({
             labels: valueLabels === true,
             axis,
             titles,
+            shaded: drawnKind === "line" && areaOf(lineArea) === "area",
           }}
           drill={
             canDrill
@@ -12226,6 +12243,11 @@ export function CanvasChart({
               : undefined
           }
         />
+      )}
+      {!segmenting && !usingSeries && missingText(missing, drawnKind, nulls) && (
+        <p className="canvas-widget-empty" data-testid="chart-missing">
+          {missingText(missing, drawnKind, nulls)}
+        </p>
       )}
       {!segmenting && points && points.length > 0 && axisTrouble && (kind ?? "bar") !== "pie" && (
         <p className="canvas-widget-empty" data-testid="chart-axis-problem">
@@ -12252,11 +12274,11 @@ export function CanvasChart({
             : `by ${seriesRef!.interval} (${seriesRef!.aggregate})`}
           {/* §524: what the server did to it, in order. */}
           {transformsText(seriesRef!.transforms) && `, ${transformsText(seriesRef!.transforms)}`}
-          , in UTC. {points.length} point{points.length === 1 ? "" : "s"}
+          , in UTC. {sorted!.length - missing} point{sorted!.length - missing === 1 ? "" : "s"}
           {/* Said, not hidden - the same rule as the truncation notice below.
               A gap dropped in silence is a chart that looks complete. */}
-          {seriesResult.data.points.length > points.length &&
-            `, ${seriesResult.data.points.length - points.length} with no reading skipped`}
+          {missing > 0 && `, ${missing} with no reading ${
+            nulls === "gap" ? "left as gaps" : nulls === "zeroes" ? "drawn as zero" : "skipped"}`}
           {seriesResult.data.truncated && `, cut short at the point cap`}.
         </p>
       )}
@@ -12285,8 +12307,11 @@ function ChartSettings() {
     filterColumn, filterParameter, filterOperator, objectSetVariable, seriesVariable,
     drilldownVariable, segmentBy, segmentMode, showLegend, sort, orientation, valueLabels,
     scaleType, minBound, maxBound, showCategoryTitle, categoryTitle, showValueTitle, valueTitle,
+    lineArea, nullDisplay,
     actions: { setProp },
   } = useNode((node) => ({
+    lineArea: node.data.props.lineArea,
+    nullDisplay: node.data.props.nullDisplay,
     scaleType: node.data.props.scaleType,
     minBound: node.data.props.minBound,
     maxBound: node.data.props.maxBound,
@@ -12491,6 +12516,40 @@ function ChartSettings() {
           />
           <span className="field-label">Value labels</span>
         </label>
+      )}
+      {(kind === "line" || !!seriesVariable) && (
+        <>
+          <label className="field">
+            <span className="field-label">Area</span>
+            <select
+              data-testid="chart-line-area"
+              value={areaOf(lineArea)}
+              onChange={(e) => setProp((p: { lineArea: string }) => (p.lineArea = e.target.value))}
+            >
+              {Object.entries(AREA_OPTIONS).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Missing values</span>
+            <select
+              data-testid="chart-null-display"
+              value={nullDisplayOf(nullDisplay)}
+              onChange={(e) =>
+                setProp((p: { nullDisplay: string }) => (p.nullDisplay = e.target.value))}
+            >
+              {Object.entries(NULL_DISPLAYS).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+            <span className="field-hint">
+              {nullDisplayOf(nullDisplay) === "gap" ? "A gap in the line where a value is missing"
+                : nullDisplayOf(nullDisplay) === "zeroes" ? "A missing value is drawn as 0"
+                : "The line joins the values either side of a missing one"}
+            </span>
+          </label>
+        </>
       )}
       {(kind || "bar") !== "pie" && (
         <ChartAxisFields
@@ -12779,6 +12838,7 @@ CanvasChart.craft = {
     sort: "source", orientation: "vertical", valueLabels: false,
     scaleType: "linear", minBound: null, maxBound: null,
     showCategoryTitle: false, categoryTitle: "", showValueTitle: false, valueTitle: "",
+    lineArea: "line", nullDisplay: "ignored",
   },
   related: { settings: ChartSettings },
 };

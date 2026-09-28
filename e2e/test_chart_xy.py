@@ -440,3 +440,109 @@ def test_the_panel_holds_a_segmented_axis(page, api, sites) -> None:
     page.locator(".canvas-tree-row", has_text="Chart").first.click()
     expect(page.get_by_test_id("chart-axis-segmented")).to_be_visible()
     expect(page.get_by_test_id("chart-scale-type")).to_have_count(0)
+
+
+
+# ---- p.281's Area options and p.282's null display (§537) -------------------
+
+@pytest.fixture(scope="module")
+def days(api):
+    # Day 2's weight is empty, so its average is null: a missing value. A
+    # dataset, because that is where one comes from - an object set's groups
+    # leave out the objects with no value for the metric (`instances.py`'s
+    # group_by), and a series' gap is `test_series_variable.py`'s.
+    mod = Module(api, "Chart XY nulls")
+    mod.dataset = api.upload_csv(
+        f"{mod.base}/datasets/upload", f"days_{mod.tag}",
+        b"day,weight\n1,4\n2,\n3,6\n")
+    return mod
+
+
+def day_chart(api, days, name: str, props: dict) -> Module:
+    mod = Module(api, name, beside=days)
+    mod.define({
+        "format": 2,
+        "layout": layout({"chart": {"resolvedName": "CanvasChart", "props": {
+            "datasetId": days.dataset["id"], "kind": "line", "dimension": "day",
+            "aggregate": "avg", "measure": "weight", "sort": "keyAsc", **props}}}),
+        "variables": {},
+        "events": {},
+    })
+    return mod
+
+
+def line_path(page) -> str:
+    return page.get_by_test_id("chart-line").get_attribute("d") or ""
+
+
+@pytest.mark.parametrize("display, moves, lines, dots, said", [
+    # Ignored: day 1 joined straight to day 3.
+    (None, 1, 1, 2, "1 value is missing and not drawn."),
+    ("gap", 2, 0, 2, "1 value is missing, left as a gap in the line."),
+    ("zeroes", 1, 2, 3, "1 value is missing, drawn as zero."),
+])
+def test_a_missing_value_on_a_line_is_drawn_as_asked(
+        page, api, days, display, moves, lines, dots, said) -> None:
+    mod = day_chart(api, days, f"Chart XY nulls {display}",
+                    {"nullDisplay": display} if display else {})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-missing")).to_have_text(said)
+    expect(page.locator("svg[aria-label='Line chart'] circle")).to_have_count(dots)
+    path = line_path(page)
+    assert (path.count("M"), path.count("L")) == (moves, lines), path
+    if display == "zeroes":
+        titles = page.locator("svg[aria-label='Line chart'] circle title").all_text_contents()
+        assert titles == ["1: 4", "2: 0", "3: 6"], titles
+
+
+def test_a_missing_value_is_not_a_zero_bar(page, api, days) -> None:
+    # p.282 is a line chart's: a bar chart leaves a missing value out, and
+    # says so, whatever the line option was left at.
+    mod = day_chart(api, days, "Chart XY null bar", {"kind": "bar", "nullDisplay": "zeroes"})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-missing")).to_have_text("1 value is missing and not drawn.")
+    assert bar_titles(page) == ["1: 4", "3: 6"], bar_titles(page)
+
+
+def test_an_area_is_shaded_beneath_the_line(page, api, days) -> None:
+    mod = day_chart(api, days, "Chart XY area", {"lineArea": "area"})
+    open_module(page, mod)
+    shade = page.get_by_test_id("chart-area").get_attribute("d") or ""
+    assert shade.count("Z") == 1, shade
+    line = box(page.get_by_test_id("chart-line"))
+    area = box(page.get_by_test_id("chart-area"))
+    # Down to the axis: the line runs from 4 to 6 on an axis from 0, and the
+    # shading reaches well below its lowest point, and no higher than it.
+    assert area["y"] + area["height"] > line["y"] + line["height"] + 20, (line, area)
+    # (The line's box includes half its stroke.)
+    assert abs(area["y"] - line["y"]) < 4, (line, area)
+    # A gap in the line is a gap in the shading: one shape either side.
+    mod = day_chart(api, days, "Chart XY area gap", {"lineArea": "area", "nullDisplay": "gap"})
+    open_module(page, mod)
+    shade = page.get_by_test_id("chart-area").get_attribute("d") or ""
+    assert shade.count("Z") == 2, shade
+    mod = day_chart(api, days, "Chart XY no area", {})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-line")).to_have_count(1)
+    expect(page.get_by_test_id("chart-area")).to_have_count(0)
+
+
+def test_the_panel_sets_a_line_s_area_and_missing_values(page, api, days) -> None:
+    mod = day_chart(api, days, "Chart XY line panel", {})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    page.get_by_test_id("chart-line-area").select_option("area")
+    page.get_by_test_id("chart-null-display").select_option("gap")
+    expect(page.get_by_text("A gap in the line where a value is missing")).to_be_visible()
+    save(page)
+    props = mod.definition()["layout"]["chart"]["props"]
+    assert (props["lineArea"], props["nullDisplay"]) == ("area", "gap"), props
+    # A bar chart has neither.
+    mod = day_chart(api, days, "Chart XY bar panel", {"kind": "bar"})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    expect(page.get_by_test_id("chart-scale-type")).to_be_visible()
+    expect(page.get_by_test_id("chart-null-display")).to_have_count(0)
+    expect(page.get_by_test_id("chart-line-area")).to_have_count(0)
