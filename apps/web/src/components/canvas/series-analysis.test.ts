@@ -11,7 +11,7 @@ import {
   MIN_VIEW_MS, defaultRangeOf, inView, pannedRange, timeLabel, zoomedRange, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, pathOf, scaleOf, timesOf, readingsOf, rootOf, rootPlots,
-  statsOf, withAddedRoot, addDataSetsOf, objectLabelOf, MAX_ADD_DATA_SETS, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
+  statsOf, withAddedRoot, openedView, savedViewOf, addDataSetsOf, objectLabelOf, MAX_ADD_DATA_SETS, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
 } from "./series-analysis";
 import type { SeriesTransform } from "./series-transforms";
 
@@ -687,5 +687,44 @@ describe("p.396's Add data options (§661)", () => {
     expect(objectLabelOf(o, "blank")).toBe("S2");
     expect(objectLabelOf(o, "gone")).toBe("S2");
     expect(objectLabelOf({ primary_key: 7, properties: { n: 0 } }, "n")).toBe("0");
+  });
+});
+
+describe("p.397's saved analysis (§662)", () => {
+  it("saves the plots, canvases, event sets and axes", () => {
+    const plots = withDerived(roots, "root:i1", [cumulative], 2);
+    const sets = withEventSet([], plots, "plot-3", "gt", 1);
+    const axes = withAxisSetting({}, 1, 1, "log", true);
+    expect(savedViewOf(plots, 3, sets, axes)).toEqual({ plots, canvases: 3, eventSets: sets, axes });
+  });
+
+  it("opens over the set's roots now, keeping a saved root the set has lost", () => {
+    const plots = withDisplay(withDerived(roots, "root:i2", [cumulative], 2), "root:i1", "width", 4);
+    const saved = JSON.parse(JSON.stringify(savedViewOf(plots, 2, withEventSet([], plots, "plot-3", "gt", 1), {})));
+    // Pump 2 has left the set since; Pump 3 has joined it.
+    const now = rootPlots([pumps[0]!, { id: "i3", label: "Pump 3" }], "t1", "pressure");
+    const opened = openedView(saved, now);
+    expect(opened.plots.map((p) => [p.id, !!p.added])).toEqual([
+      ["root:i1", false], ["root:i3", false], ["root:i2", true], ["plot-3", false]]);
+    expect(displayOf(opened.plots[0]!).width).toBe(4);
+    expect(opened.canvases).toBe(2);
+    expect(opened.eventSets.map((e) => e.plot)).toEqual(["plot-3"]);
+    // Pump 2 back in the set is the set's again, once.
+    const back = withRoots(opened.plots, roots);
+    expect(back.map((p) => [p.id, !!p.added])).toEqual([["root:i1", false], ["root:i2", false], ["plot-3", false]]);
+  });
+
+  it("leaves out what is not a plot, an event set or a count", () => {
+    const good = roots[0]!;
+    const opened = openedView({
+      plots: [good, { ...good, id: 5 }, { ...good, id: "p1", style: "dotted" },
+        { ...good, id: "p4", root: { objectId: "x" } }, { ...good, id: "p2", parent: 3 },
+        { ...good, id: "p3", transforms: "none" }, { ...good, id: "p5", canvas: "1" }, null],
+      canvases: -1, eventSets: [{ id: "e", label: "E", plot: "root:i1" }, { id: "f" }], axes: [],
+    }, roots);
+    expect(opened.plots.map((p) => p.id)).toEqual(["root:i1", "root:i2"]);
+    expect([opened.canvases, opened.eventSets.length, opened.axes]).toEqual([0, 1, {}]);
+    expect(openedView(null, roots)).toEqual({ plots: roots, canvases: 0, eventSets: [], axes: {} });
+    expect(openedView({ canvases: 2.5 }, roots).canvases).toBe(0);
   });
 });

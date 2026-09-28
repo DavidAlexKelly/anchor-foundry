@@ -13,7 +13,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import React, { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   actions as actionApi, api, ApiError, canvas as canvasApi, datasets as dsApi,
-  objects as objApi,
+  objects as objApi, seriesAnalyses as seriesAnalysisApi, type SeriesAnalysis,
 } from "@/lib/api";
 import { eventsOf, variablesOf } from "@/lib/workshop-module";
 import { TypePicker } from "@/components/type-picker";
@@ -341,6 +341,7 @@ import {
   tooltipOptionsOf as seriesTooltipOptionsOf,
   addDataSetsOf as seriesAddDataSetsOf, objectLabelOf as seriesObjectLabelOf,
   withAddedRoot as withSeriesAddedRoot, MAX_ADD_DATA_SETS as MAX_SERIES_ADD_DATA_SETS,
+  openedView as seriesOpenedView, savedViewOf as seriesSavedViewOf,
   type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
@@ -13080,6 +13081,9 @@ export function CanvasSeriesAnalysis({
   tooltip = null,
   addData = false,
   addDataSets = null,
+  saving = false,
+  saveProjectVariable = null,
+  fixedSaveLocation = false,
 }: {
   objectSetVariable?: string | null;
   property?: string | null;
@@ -13116,11 +13120,17 @@ export function CanvasSeriesAnalysis({
    * reader may add any object's series, and the object sets that narrow it. */
   addData?: boolean;
   addDataSets?: unknown;
+  /** p.397's *Enable analysis saving* (§662), and where an analysis is saved:
+   * the project a string variable names, or the module's own; with
+   * *Don't allow users to choose save location*, there alone. */
+  saving?: boolean;
+  saveProjectVariable?: string | null;
+  fixedSaveLocation?: boolean;
 }) {
   const {
     connectors: { connect, drag },
   } = useNode();
-  const { workspaceId } = useCanvasEnv();
+  const { workspaceId, projectId } = useCanvasEnv();
   const definition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending } = useCanvasVariables();
   const typeId = (definition as { object_type_id?: string } | undefined)?.object_type_id ?? null;
@@ -13230,6 +13240,51 @@ export function CanvasSeriesAnalysis({
     .filter((o) => !dataDraft?.search.trim()
       || o.label.toLowerCase().includes(dataDraft.search.trim().toLowerCase()));
   const dataSeries = (dataType.data?.properties ?? []).filter((p) => p.data_type === "time_series");
+  // p.397's analysis saving (§662): the analysis open now, if one is, and
+  // where the next is saved.
+  const [currentAnalysis, setCurrentAnalysis] = useState<(SeriesAnalysis & { project: string }) | null>(null);
+  const [saveError, setSaveError] = useState("");
+  const saveWritten = useCanvasParameter(saveProjectVariable);
+  const saveResolved = useCanvasVariable(saveProjectVariable);
+  const namedProject = saveWritten !== undefined ? saveWritten : saveResolved;
+  const defaultLocation = typeof namedProject === "string" && namedProject ? namedProject : projectId;
+  const [saveDraft, setSaveDraft] = useState<{ name: string; visibility: string; location: string } | null>(null);
+  const [openFrom, setOpenFrom] = useState<string | null>(null);
+  const locations = useQuery({
+    queryKey: ["canvas-series-analysis-locations", workspaceId],
+    queryFn: () => api.projects(workspaceId),
+    enabled: !!saveDraft && !fixedSaveLocation,
+  });
+  const openable = useQuery({
+    queryKey: ["canvas-series-analyses", workspaceId, openFrom],
+    queryFn: () => seriesAnalysisApi.list(workspaceId, openFrom!),
+    enabled: !!openFrom,
+  });
+  const viewNow = () => seriesSavedViewOf(plots, addedCanvases, eventSets, axes);
+  const saveAnalysis = async (over: boolean) => {
+    try {
+      const saved = over && currentAnalysis
+        ? await seriesAnalysisApi.replace(workspaceId, currentAnalysis.project, currentAnalysis.id,
+          { visibility: currentAnalysis.visibility, state: viewNow() })
+        : await seriesAnalysisApi.save(workspaceId, saveDraft!.location,
+          { name: saveDraft!.name.trim(), visibility: saveDraft!.visibility, state: viewNow() });
+      setCurrentAnalysis({ ...saved, project: over && currentAnalysis ? currentAnalysis.project : saveDraft!.location });
+      setSaveDraft(null);
+      setSaveError("");
+    } catch (error) {
+      setSaveError(error instanceof ApiError ? error.message : "Couldn't save this analysis.");
+    }
+  };
+  const openAnalysis = (analysis: SeriesAnalysis, project: string) => {
+    const view = seriesOpenedView(analysis.state,
+      typeId && property ? seriesRootPlots(objects, typeId, property) : []);
+    setPlots(view.plots);
+    setAddedCanvases(view.canvases);
+    setEventSets(view.eventSets);
+    setAxes(view.axes);
+    setCurrentAnalysis({ ...analysis, project });
+    setOpenFrom(null);
+  };
   const viewKey = (canvas: number) => (syncXAxes ? "all" : String(canvas));
   const viewOf = (canvas: number) => (viewKey(canvas) in views ? views[viewKey(canvas)]! : defaultView);
   const fullOf = (canvas: number) => seriesTimesOf(plots.flatMap((p, n) => (p.canvas === canvas || syncXAxes
@@ -13563,6 +13618,31 @@ export function CanvasSeriesAnalysis({
                 Add data
               </button>
             )}
+            {saving && currentAnalysis?.mine && (
+              <button type="button" className="btn quiet" onClick={() => void saveAnalysis(true)}>
+                Save analysis
+              </button>
+            )}
+            {saving && (
+              <button type="button" className="btn quiet"
+                      onClick={() => {
+                        setSaveError("");
+                        setSaveDraft({ name: currentAnalysis ? `${currentAnalysis.name} copy` : "",
+                          visibility: currentAnalysis?.visibility ?? "private", location: defaultLocation });
+                      }}>
+                Save as new analysis
+              </button>
+            )}
+            {saving && (
+              <button type="button" className="btn quiet" onClick={() => setOpenFrom(defaultLocation)}>
+                Open analysis
+              </button>
+            )}
+            {saving && currentAnalysis && (
+              <span className="field-hint" data-testid="series-analysis-open">
+                {`${currentAnalysis.name} (${currentAnalysis.visibility}${currentAnalysis.mine ? "" : `, by ${currentAnalysis.created_by_name ?? "another reader"}`})`}
+              </span>
+            )}
             {setTypes.includes("search") && eventSets.length < MAX_SERIES_EVENT_SETS && (
               <button type="button" className="btn quiet"
                       onClick={() => setEventDraft({ plot: plots[0]!.id, op: "gt", value: "" })}>
@@ -13598,6 +13678,62 @@ export function CanvasSeriesAnalysis({
                 Add event set
               </button>
               <button type="button" className="btn quiet" onClick={() => setEventDraft(null)}>Cancel</button>
+            </div>
+          )}
+          {saveError && !saveDraft && <p className="field-hint" role="alert">{saveError}</p>}
+          {saveDraft && (
+            <div className="row-actions" data-testid="series-save-analysis" style={{ marginTop: 6, flexWrap: "wrap", gap: 4 }}>
+              <input aria-label="Analysis name" placeholder="Name" value={saveDraft.name} maxLength={200}
+                     onChange={(e) => setSaveDraft({ ...saveDraft, name: e.target.value })} />
+              <select aria-label="Analysis visibility" value={saveDraft.visibility}
+                      onChange={(e) => setSaveDraft({ ...saveDraft, visibility: e.target.value })}>
+                <option value="private">Private</option>
+                <option value="public">Public</option>
+              </select>
+              {!fixedSaveLocation && (
+                <select aria-label="Save location" value={saveDraft.location}
+                        onChange={(e) => setSaveDraft({ ...saveDraft, location: e.target.value })}>
+                  {!(locations.data ?? []).some((p) => p.id === saveDraft.location) && (
+                    <option value={saveDraft.location}>This project</option>
+                  )}
+                  {(locations.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              )}
+              <button type="button" className="btn" disabled={!saveDraft.name.trim()}
+                      onClick={() => void saveAnalysis(false)}>
+                Save
+              </button>
+              <button type="button" className="btn quiet" onClick={() => setSaveDraft(null)}>Cancel</button>
+              {saveError && <span className="field-hint" role="alert">{saveError}</span>}
+            </div>
+          )}
+          {openFrom && (
+            <div data-testid="series-open-analysis" style={{ marginTop: 6 }}>
+              {openable.isPending && <p className="field-hint">Loading…</p>}
+              {openable.data && openable.data.length === 0 && (
+                <p className="field-hint">No saved analyses here yet.</p>
+              )}
+              {openable.data && openable.data.length > 0 && (
+                <table className="data-grid">
+                  <thead><tr><th>Analysis</th><th>By</th><th>Shared</th><th /></tr></thead>
+                  <tbody>
+                    {openable.data.map((a) => (
+                      <tr key={a.id} data-label={a.name}>
+                        <td>{a.name}</td>
+                        <td>{a.mine ? "You" : a.created_by_name ?? "Another reader"}</td>
+                        <td>{a.visibility}</td>
+                        <td>
+                          <button type="button" className="btn quiet" aria-label={`Open ${a.name}`}
+                                  onClick={() => openAnalysis(a, openFrom)}>
+                            Open
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <button type="button" className="btn quiet" onClick={() => setOpenFrom(null)}>Close</button>
             </div>
           )}
           {dataDraft && (
@@ -13846,7 +13982,8 @@ function SeriesAnalysisSettings() {
   const {
     objectSetVariable, property, labelProperty, limit, title, plotTypes, eventSetTypes, newPlotCanvas,
     eventSets, viewRange, windowStartVariable, windowEndVariable, relativeAmount, relativeUnit, syncXAxes, utc,
-    overlayYAxes, collapseYAxes, collapsedBoundaries, tooltip, addData, addDataSets,
+    overlayYAxes, collapseYAxes, collapsedBoundaries, tooltip, addData, addDataSets, saving,
+    saveProjectVariable, fixedSaveLocation,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -13871,7 +14008,11 @@ function SeriesAnalysisSettings() {
     tooltip: node.data.props.tooltip,
     addData: node.data.props.addData,
     addDataSets: node.data.props.addDataSets,
+    saving: node.data.props.saving,
+    saveProjectVariable: node.data.props.saveProjectVariable,
+    fixedSaveLocation: node.data.props.fixedSaveLocation,
   }));
+  const strings = Object.values(declared).filter((v) => v.kind === "string");
   const rawDataSets: Record<string, unknown>[] = Array.isArray(addDataSets) ? addDataSets : [];
   const tips = seriesTooltipOptionsOf(tooltip);
   const setTip = (key: string, value: unknown) => setProp((p: { tooltip: unknown }) => {
@@ -13986,6 +14127,30 @@ function SeriesAnalysisSettings() {
           <span className="field-hint">
             {rawDataSets.length ? "Readers pick from these sets' objects." : "Readers pick from any object type."}
           </span>
+        )}
+      </div>
+      <div className="field" data-testid="series-saving-options">
+        <label className="field canvas-toggle">
+          <input type="checkbox" aria-label="Enable analysis saving" checked={!!saving}
+                 onChange={(e) => setProp((p: { saving: boolean }) => (p.saving = e.target.checked))} />
+          <span className="field-label">Let readers save and open analyses</span>
+        </label>
+        {!!saving && (
+          <>
+            <select aria-label="Default save location variable" value={saveProjectVariable || ""}
+                    onChange={(e) => setProp((p: { saveProjectVariable: string | null }) =>
+                      (p.saveProjectVariable = e.target.value || null))}>
+              <option value="">This module's project</option>
+              {strings.map((v) => <option key={v.id} value={v.id}>{`The project ${v.label} names`}</option>)}
+            </select>
+            <label className="field canvas-toggle">
+              <input type="checkbox" aria-label="Don't allow users to choose save location"
+                     checked={!!fixedSaveLocation}
+                     onChange={(e) => setProp((p: { fixedSaveLocation: boolean }) =>
+                       (p.fixedSaveLocation = e.target.checked))} />
+              <span className="field-label">Don't allow users to choose save location</span>
+            </label>
+          </>
         )}
       </div>
       <label className="field">
@@ -14181,7 +14346,8 @@ CanvasSeriesAnalysis.craft = {
     plotTypes: null, eventSetTypes: null, newPlotCanvas: "input", eventSets: null, viewRange: "full",
     windowStartVariable: null, windowEndVariable: null, relativeAmount: 2, relativeUnit: "week",
     syncXAxes: false, utc: false, overlayYAxes: false, collapseYAxes: false, collapsedBoundaries: false,
-    tooltip: null, addData: false, addDataSets: null },
+    tooltip: null, addData: false, addDataSets: null, saving: false, saveProjectVariable: null,
+    fixedSaveLocation: false },
   related: { settings: SeriesAnalysisSettings },
 };
 
