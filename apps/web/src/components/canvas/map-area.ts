@@ -17,7 +17,8 @@
  * rule `object_sets.in_polygon` states. As of §572 a circle too: a centre and
  * a radius in metres on the ground, `within_distance`, which both stores
  * answer as `object_sets.in_circle`'s great-circle distance. A property holds
- * one area of any of the three. Lines stay ○.
+ * one area of any of the three, or as of §640 several, when the map is out of
+ * p.301's single draw mode: they are written as §639's `within_any`.
  *
  * **p.301's Draw options and drawn shape style (§573)**: which of the three
  * tools the toolbar offers, and the colour and fill opacity of what is drawn.
@@ -216,38 +217,82 @@ export function isDrag(a: { x: number; y: number }, b: { x: number; y: number })
   return Math.abs(a.x - b.x) >= MIN_DRAG_PX && Math.abs(a.y - b.y) >= MIN_DRAG_PX;
 }
 
-const AREA_OPS = [AREA_OP, POLYGON_OP, CIRCLE_OP];
+/** §639's either-of: inside any one of several shapes, each the value its
+ * own operator takes. */
+export const ANY_OP = "within_any";
+/** `object_sets.MAX_SHAPES`: the shapes one `within_any` holds. */
+export const MAX_SHAPES = 20;
+
+const AREA_OPS = [AREA_OP, POLYGON_OP, CIRCLE_OP, ANY_OP];
 const isArea = (c: Clause, property: string) => c.property === property && AREA_OPS.includes(c.op);
 
-/** The area this property is narrowed to, read back from the clauses: a box,
- * a drawn shape, a circle, or nothing for a value that is none of them. */
-export function areaOf(clauses: readonly Clause[], property: string): Area | null {
-  const found = clauses.find((c) => isArea(c, property));
-  if (found?.op === CIRCLE_OP) {
-    const v = found.value as Partial<Circle> | undefined;
+/** One shape, read by the operator it stands for, or null for a value that
+ * is not one. */
+function shapeOf(op: string, value: unknown): Area | null {
+  if (op === CIRCLE_OP) {
+    const v = value as Partial<Circle> | undefined;
     const ok = !!v && ["lat", "lon", "radius"].every((k) => typeof v[k as keyof Circle] === "number");
     return ok ? { lat: v.lat!, lon: v.lon!, radius: v.radius! } : null;
   }
-  if (found?.op === POLYGON_OP) {
-    const points = (found.value as Partial<Polygon> | undefined)?.points;
+  if (op === POLYGON_OP) {
+    const points = (value as Partial<Polygon> | undefined)?.points;
     const ok = Array.isArray(points) && points.length >= 3
       && points.every((p) => typeof p?.lat === "number" && typeof p?.lon === "number");
     return ok ? { points: points as Polygon["points"] } : null;
   }
-  const v = found?.value as Partial<Box> | undefined;
+  const v = value as Partial<Box> | undefined;
   if (!v || !["north", "south", "east", "west"].every((k) => typeof v[k as keyof Box] === "number")) {
     return null;
   }
   return v as Box;
 }
 
-/** The clauses with this property's area replaced by a box, a shape or a
- * circle, or removed for `null`: one area to a property, of any kind. */
-export function withArea(clauses: readonly Clause[], property: string, area: Area | null): Clause[] {
+/** The operator a shape is written with: `object_sets.parse_shape`'s rule,
+ * by its keys. */
+function opOf(area: Area): string {
+  return isPolygon(area) ? POLYGON_OP : isCircle(area) ? CIRCLE_OP : AREA_OP;
+}
+
+/** The areas this property is narrowed to, read back from the clauses: one
+ * box, drawn shape or circle, or §639's several, each read by its own
+ * operator. A shape that is none of them is left out. */
+export function areasOf(clauses: readonly Clause[], property: string): Area[] {
+  const found = clauses.find((c) => isArea(c, property));
+  if (!found) return [];
+  if (found.op !== ANY_OP) {
+    const one = shapeOf(found.op, found.value);
+    return one ? [one] : [];
+  }
+  if (!Array.isArray(found.value)) return [];
+  return found.value.flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const shape = shapeOf(opOf(raw as Area), raw);
+    return shape ? [shape] : [];
+  });
+}
+
+/** The clauses with this property's areas replaced: none removes them, one
+ * is written with its own operator, and several with §639's `within_any`,
+ * the latest `MAX_SHAPES` of them. */
+export function withAreas(clauses: readonly Clause[], property: string, areas: readonly Area[]): Clause[] {
   const rest = clauses.filter((c) => !isArea(c, property));
-  if (!area) return rest;
-  const op = isPolygon(area) ? POLYGON_OP : isCircle(area) ? CIRCLE_OP : AREA_OP;
-  return [...rest, { property, op, value: area }];
+  const kept = areas.slice(-MAX_SHAPES);
+  if (kept.length === 0) return rest;
+  if (kept.length === 1) return [...rest, { property, op: opOf(kept[0]!), value: kept[0] }];
+  return [...rest, { property, op: ANY_OP, value: kept }];
+}
+
+/** p.301's single draw mode: the areas once a new one is drawn. With it on,
+ * "automatically removing the previous shape when a new one is drawn"; off,
+ * the new one joins the rest. */
+export function withDrawn(areas: readonly Area[], area: Area, single: boolean): Area[] {
+  return single ? [area] : [...areas, area].slice(-MAX_SHAPES);
+}
+
+/** Whether a map keeps one shape at a time. **On for a map saved before the
+ * choice**, which is how every earlier map behaved. */
+export function singleDrawOf(raw: unknown): boolean {
+  return raw !== false;
 }
 
 /** Where a shape's corners sit on the map's frame, as an SVG `points` list. */

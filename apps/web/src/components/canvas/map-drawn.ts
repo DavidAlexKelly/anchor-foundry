@@ -8,8 +8,9 @@
  * > as a GeoJSON string. On drawn shape: Configure Workshop events to trigger
  * > when a shape is drawn in the map." (p.301)
  *
- * The shape here is the map's area (§550, §571, §572), so a map holds one
- * drawn shape at a time, which is p.301's single draw mode. Written out:
+ * The shapes here are the map's areas (§550, §571, §572): one drawn shape at
+ * a time in p.301's single draw mode, and as of §640 several out of it, each
+ * written in the order it was drawn. Written out:
  *
  * - **as features**, a FeatureCollection whose feature says which tool drew
  *   it (`properties.shape`). A circle is a Point at its centre with its
@@ -19,7 +20,8 @@
  *   radius. A circle is written as its outline, walked the way the map draws
  *   it, and reads back as a shape with that many corners.
  *
- * Read back, the first shape in the text is the map's area: a Polygon
+ * Read back, each shape in the text is one of the map's areas (the first
+ * alone in single draw mode): a Polygon
  * (a rectangle when its feature says so), or a Point with a radius. Text
  * that is none of those is not a shape, and changes nothing.
  *
@@ -27,7 +29,8 @@
  */
 
 import {
-  MAX_POLYGON_POINTS, MAX_RADIUS_M, circleRings, isCircle, isPolygon, type Area, type Box,
+  MAX_POLYGON_POINTS, MAX_RADIUS_M, MAX_SHAPES, circleRings, isCircle, isPolygon, type Area,
+  type Box,
 } from "./map-area";
 
 export const SHAPE_OUTPUTS = ["features", "geometries"] as const;
@@ -75,16 +78,21 @@ function featureOf(area: Area): Feature {
   };
 }
 
-/** The map's drawn shape as p.301's GeoJSON text, or "" for none. */
-export function shapesText(area: Area | null, output: ShapeOutput): string {
-  if (!area) return "";
+const listOf = (areas: Area | readonly Area[] | null): readonly Area[] =>
+  !areas ? [] : Array.isArray(areas) ? areas : [areas as Area];
+
+/** The map's drawn shapes as p.301's GeoJSON text, in the order they were
+ * drawn, or "" for none. */
+export function shapesText(areas: Area | readonly Area[] | null, output: ShapeOutput): string {
+  const drawn = listOf(areas);
+  if (drawn.length === 0) return "";
   if (output === "geometries") {
     return JSON.stringify({
       type: "GeometryCollection",
-      geometries: [{ type: "Polygon", coordinates: ringsOf(area) }],
+      geometries: drawn.map((area) => ({ type: "Polygon", coordinates: ringsOf(area) })),
     });
   }
-  return JSON.stringify({ type: "FeatureCollection", features: [featureOf(area)] });
+  return JSON.stringify({ type: "FeatureCollection", features: drawn.map(featureOf) });
 }
 
 /** A drawn line as p.301's GeoJSON text, or "" for none. */
@@ -105,40 +113,51 @@ const position = (p: unknown): Position | null =>
   Array.isArray(p) && p.length >= 2 && isNumber(p[0]) && isNumber(p[1])
     && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 90 ? [p[0], p[1]] : null;
 
-/** The first geometry in GeoJSON, with the properties of the feature that
- * holds it. */
-function firstShape(json: unknown): { geometry: unknown; properties: Record<string, unknown> } | null {
-  if (!json || typeof json !== "object") return null;
+type Found = { geometry: unknown; properties: Record<string, unknown> };
+
+/** The geometries in GeoJSON, in order, each with the properties of the
+ * feature that holds it. */
+function shapesIn(json: unknown): Found[] {
+  if (!json || typeof json !== "object") return [];
   const g = json as { type?: unknown; features?: unknown; geometries?: unknown; geometry?: unknown;
     properties?: unknown };
   if (g.type === "FeatureCollection") {
-    return Array.isArray(g.features) && g.features.length ? firstShape(g.features[0]) : null;
+    return Array.isArray(g.features) ? g.features.flatMap(shapesIn) : [];
   }
   if (g.type === "GeometryCollection") {
-    return Array.isArray(g.geometries) && g.geometries.length ? firstShape(g.geometries[0]) : null;
+    return Array.isArray(g.geometries) ? g.geometries.flatMap(shapesIn) : [];
   }
   if (g.type === "Feature") {
     const properties = g.properties && typeof g.properties === "object"
       ? g.properties as Record<string, unknown> : {};
-    return g.geometry ? { geometry: g.geometry, properties } : null;
+    return g.geometry ? [{ geometry: g.geometry, properties }] : [];
   }
-  return { geometry: json, properties: {} };
+  return [{ geometry: json, properties: {} }];
 }
 
-/** p.301's GeoJSON text as the map's area: its first shape, or null for
- * text that holds none the map can draw. */
-export function areaOfShapes(text: unknown): Area | null {
-  // Blank text fails to parse like any other that is not JSON (a separate
-  // check for it survived the sweep as equivalent).
-  if (typeof text !== "string") return null;
-  let json: unknown;
+/** GeoJSON text, parsed, or undefined for text that is not JSON. Blank text
+ * fails to parse like any other (a separate check for it survived the sweep
+ * as equivalent). */
+function parsed(text: unknown): unknown {
+  if (typeof text !== "string") return undefined;
   try {
-    json = JSON.parse(text);
+    return JSON.parse(text);
   } catch {
-    return null;
+    return undefined;
   }
-  const found = firstShape(json);
-  if (!found) return null;
+}
+
+/** p.301's GeoJSON text as the map's areas (§640): every shape in it the map
+ * can draw, in order. A line, or anything else that is not an area, is left
+ * out rather than refusing the rest. */
+export function areasOfShapes(text: unknown): Area[] {
+  return shapesIn(parsed(text)).flatMap((found) => {
+    const area = areaOfShape(found);
+    return area ? [area] : [];
+  });
+}
+
+function areaOfShape(found: Found): Area | null {
   const geometry = found.geometry as { type?: unknown; coordinates?: unknown };
   if (geometry.type === "Point") {
     const at = position(geometry.coordinates);
@@ -173,14 +192,7 @@ export function areaOfShapes(text: unknown): Area | null {
 /** p.301's GeoJSON text as a drawn line: its first shape when that is a
  * LineString of at least two points the map can place, or null. */
 export function lineOfShapes(text: unknown): Line | null {
-  if (typeof text !== "string") return null;
-  let json: unknown;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  const found = firstShape(json);
+  const found = shapesIn(parsed(text))[0];
   const geometry = found?.geometry as { type?: unknown; coordinates?: unknown } | undefined;
   if (!geometry || geometry.type !== "LineString" || !Array.isArray(geometry.coordinates)) {
     return null;
@@ -197,27 +209,31 @@ export function lineOfShapes(text: unknown): Line | null {
  * shape the variable already holds is drawn onto a map with no area, which is
  * how an author's default shape arrives; otherwise the area is written out. */
 export type ShapesSync =
-  | { write: "area"; area: Area | null }
+  | { write: "area"; areas: Area[] }
   | { write: "shapes"; text: string }
   | null;
 
+/** `single` is p.301's single draw mode (§640): the map draws only the first
+ * of the shapes the variable holds, and writes that one back. */
 export function syncShapes(
   before: { area: string; shapes: string } | null,
-  now: { area: Area | null; shapes: string },
+  now: { areas: readonly Area[]; shapes: string },
   output: ShapeOutput,
+  single = true,
 ): ShapesSync {
-  const areaText = shapesText(now.area, output);
+  const areaText = shapesText(now.areas, output);
   if (areaText === now.shapes) return null;
+  const none = now.areas.length === 0;
   // A drawn line with no area agrees with itself (§634): a line encloses
   // nothing, so the map having no area is what it means.
-  if (!now.area && lineOfShapes(now.shapes)) return null;
-  const shapesMoved = before === null ? !now.area : before.shapes !== now.shapes;
+  if (none && lineOfShapes(now.shapes)) return null;
+  const shapesMoved = before === null ? none : before.shapes !== now.shapes;
   const areaMoved = before !== null && before.area !== areaText;
   if (shapesMoved && !areaMoved) {
-    const area = areaOfShapes(now.shapes);
+    const areas = areasOfShapes(now.shapes).slice(0, single ? 1 : MAX_SHAPES);
     // Text that is no shape clears the area only when it is empty; anything
     // else unreadable is left alone rather than wiping what was drawn.
-    if (area || !now.shapes.trim()) return { write: "area", area };
+    if (areas.length > 0 || !now.shapes.trim()) return { write: "area", areas };
     return null;
   }
   return { write: "shapes", text: areaText };

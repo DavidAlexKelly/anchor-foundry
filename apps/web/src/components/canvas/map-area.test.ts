@@ -2,10 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   AREA_OP, CIRCLE_OP, DRAWN_OPACITY, DRAW_TOOLS, EARTH_RADIUS_M, drawToolsOf, drawnOpacityOf,
-  withDrawTool, MAX_RADIUS_M, POLYGON_OP, areaOf, boxBetween, boxRect,
+  withDrawTool, ANY_OP, MAX_RADIUS_M, MAX_SHAPES, POLYGON_OP, areasOf, boxBetween, boxRect,
   circleBetween, circlePath, circleRings, closes, distanceM, isCircle, isDrag, isPolygon, lonLatAt,
-  polygonPoints, withArea, type Box,
+  polygonPoints, singleDrawOf, withAreas, withDrawn, type Area, type Box,
 } from "./map-area";
+import type { Clause } from "./filter-clause";
+
+// One area to a property, as a map in single draw mode holds it.
+const withArea = (clauses: Clause[], property: string, area: Area | null) =>
+  withAreas(clauses, property, area ? [area] : []);
+const areaOf = (clauses: Clause[], property: string) => areasOf(clauses, property)[0] ?? null;
 
 const frame = { width: 640, height: 320 };
 // 64 degrees across a 640px frame: ten pixels a degree, and 32 degrees tall.
@@ -226,5 +232,53 @@ describe("p.301's draw options and drawn shape style (§573)", () => {
     expect(drawnOpacityOf("  ")).toBe(DRAWN_OPACITY);
     expect(drawnOpacityOf("x")).toBe(DRAWN_OPACITY);
     expect(drawnOpacityOf(undefined)).toBe(0.35);
+  });
+});
+
+describe("several areas (§640)", () => {
+  const box = { north: 45, south: 40, east: 10, west: 0 };
+  const shape = { points: [{ lat: 40, lon: 0 }, { lat: 45, lon: 0 }, { lat: 40, lon: 10 }] };
+  const circle = { lat: 52, lon: 5, radius: 470_000 };
+  const other = { property: "status", op: "eq", value: "open" };
+
+  it("writes several as one within_any, and one as its own operator", () => {
+    const all = withAreas([other], "site", [box, shape, circle]);
+    expect(all).toEqual([other, { property: "site", op: ANY_OP, value: [box, shape, circle] }]);
+    expect(areasOf(all, "site")).toEqual([box, shape, circle]);
+    // Down to one, it is the plain operator again; to none, it is gone.
+    expect(withAreas(all, "site", [shape])).toEqual([other,
+      { property: "site", op: POLYGON_OP, value: shape }]);
+    expect(withAreas(all, "site", [])).toEqual([other]);
+  });
+
+  it("keeps the latest the server takes", () => {
+    const many = Array.from({ length: MAX_SHAPES + 1 }, (_, n) => ({ ...circle, radius: n + 1 }));
+    const [clause] = withAreas([], "site", many);
+    expect((clause!.value as { radius: number }[]).map((c) => c.radius))
+      .toEqual(many.slice(1).map((c) => c.radius));
+  });
+
+  it("reads back only the shapes that are whole", () => {
+    const read = (value: unknown) => areasOf([{ property: "site", op: ANY_OP, value }], "site");
+    expect(read([box, { north: 1 }, null, "x", shape, { points: [] }, circle]))
+      .toEqual([box, shape, circle]);
+    expect(read("x")).toEqual([]);
+    expect(areasOf([{ property: "other", op: ANY_OP, value: [box] }], "site")).toEqual([]);
+    expect(areasOf([], "site")).toEqual([]);
+  });
+
+  it("replaces the last shape in single draw mode, and adds to them out of it", () => {
+    expect(withDrawn([box, shape], circle, true)).toEqual([circle]);
+    expect(withDrawn([box, shape], circle, false)).toEqual([box, shape, circle]);
+    const full = Array.from({ length: MAX_SHAPES }, () => box);
+    const added = withDrawn(full, circle, false);
+    expect(added).toHaveLength(MAX_SHAPES);
+    expect(added[MAX_SHAPES - 1]).toEqual(circle);
+  });
+
+  it("is in single draw mode unless told otherwise", () => {
+    expect(singleDrawOf(undefined)).toBe(true);
+    expect(singleDrawOf(true)).toBe(true);
+    expect(singleDrawOf(false)).toBe(false);
   });
 });

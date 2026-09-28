@@ -205,7 +205,7 @@ export function MapCanvas({
   total,
   atLimit = false,
   onSelect,
-  area = null,
+  areas = [],
   onArea,
   drawTools = DRAW_TOOLS,
   drawnColor = null,
@@ -240,11 +240,11 @@ export function MapCanvas({
    * for — true even when nothing can say how many more. */
   atLimit?: boolean;
   onSelect?: (point: MapPoint) => void;
-  /** p.302's shape-based selection (§550): the area selected, drawn on the
+  /** p.302's shape-based selection (§550): the areas selected, drawn on the
    * map, and where a newly drawn one goes. Without `onArea` there is no
    * Select area tool - a map with nowhere to write the area has no use for
-   * one. */
-  area?: Area | null;
+   * one. Several out of p.301's single draw mode (§640). */
+  areas?: readonly Area[];
   onArea?: (area: Area | null) => void;
   /** p.301's Draw options (§573): the tools offered, all three by default. */
   drawTools?: readonly DrawTool[];
@@ -581,38 +581,36 @@ export function MapCanvas({
         </g>
         {/* p.302's selected area, and the one being drawn. Under the pins, as
             the shapes are, so a pin inside it stays a thing to click. */}
-        {area && isPolygon(area) && (
-          <polygon data-testid="map-area" data-shape="polygon"
+        {areas.map((area, at) => isPolygon(area) ? (
+          <polygon key={at} data-testid="map-area" data-shape="polygon"
             points={polygonPoints(area, current, { width: WIDTH, height: HEIGHT })}
             fill={drawnColor ?? "var(--accent-wash)"} fillOpacity={drawnOpacity}
             stroke={drawnColor ?? "var(--accent)"}
             strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
-        )}
-        {area && isCircle(area) && (
-          <path data-testid="map-area" data-shape="circle" fillRule="evenodd"
+        ) : isCircle(area) ? (
+          <path key={at} data-testid="map-area" data-shape="circle" fillRule="evenodd"
             d={circlePath(area, current, { width: WIDTH, height: HEIGHT })}
             fill={drawnColor ?? "var(--accent-wash)"} fillOpacity={drawnOpacity}
             stroke={drawnColor ?? "var(--accent)"}
             strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
-        )}
-        {area && !isPolygon(area) && !isCircle(area) && (() => {
+        ) : (() => {
           const r = boxRect(area, current, { width: WIDTH, height: HEIGHT });
           return (
-            <rect data-testid="map-area" x={r.x} y={r.y} width={r.width} height={r.height}
+            <rect key={at} data-testid="map-area" x={r.x} y={r.y} width={r.width} height={r.height}
               fill={drawnColor ?? "var(--accent-wash)"} fillOpacity={drawnOpacity}
-            stroke={drawnColor ?? "var(--accent)"}
+              stroke={drawnColor ?? "var(--accent)"}
               strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
           );
-        })()}
-        {area && measure && (measure.perimeter || measure.area)
-          && measureLabels(area, measure, current, { width: WIDTH, height: HEIGHT }).map((l, n) => (
-            <text key={`${l.kind}-${n}`} data-testid="map-measure" data-kind={l.kind}
+        })())}
+        {measure && (measure.perimeter || measure.area) && areas.flatMap((area, at) =>
+          measureLabels(area, measure, current, { width: WIDTH, height: HEIGHT }).map((l, n) => (
+            <text key={`${at}-${l.kind}-${n}`} data-testid="map-measure" data-kind={l.kind}
               x={l.x} y={l.y} textAnchor="middle" dominantBaseline="middle" fontSize={11}
               fill="var(--fg, #1d2327)" stroke="var(--bg, #fff)" strokeWidth={3}
               paintOrder="stroke" style={{ pointerEvents: "none" }}>
               {l.text}
             </text>
-          ))}
+          )))}
         {/* p.301's drawn line (§634), and its measurements (p.302). */}
         {line && line.length > 1 && (() => {
           const h = current.w * (HEIGHT / WIDTH);
@@ -795,9 +793,9 @@ export function MapCanvas({
             Draw line
           </button>
         )}
-        {onArea && area && (
+        {onArea && areas.length > 0 && (
           <button type="button" data-testid="map-clear-area" onClick={() => onArea(null)}>
-            Clear area
+            {areas.length > 1 ? `Clear ${areas.length} areas` : "Clear area"}
           </button>
         )}
         {onLine && line && (
