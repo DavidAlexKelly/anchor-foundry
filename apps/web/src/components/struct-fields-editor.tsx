@@ -110,6 +110,7 @@ export function StructFieldsEditor({
         <thead>
           <tr>
             <th>Name</th><th>Label</th><th>Type</th><th>Description</th>
+            <th title="p.169: the struct's core value, shown alone in tables and cards">Main</th>
             <th aria-label="Remove" />
           </tr>
         </thead>
@@ -160,6 +161,15 @@ export function StructFieldsEditor({
                 />
               </td>
               <td>
+                {/* p.169's struct main field (§674). */}
+                <input
+                  type="checkbox"
+                  aria-label={`Field ${index + 1} main field`}
+                  checked={field.main === true}
+                  onChange={(e) => patch(index, { main: e.target.checked ? true : undefined })}
+                />
+              </td>
+              <td>
                 <button
                   type="button"
                   className="btn"
@@ -176,7 +186,7 @@ export function StructFieldsEditor({
           ))}
           {fields.length === 0 && (
             <tr data-testid="struct-no-fields">
-              <td colSpan={5} className="field-hint">
+              <td colSpan={6} className="field-hint">
                 No fields yet. A struct needs at least one (p.149).
               </td>
             </tr>

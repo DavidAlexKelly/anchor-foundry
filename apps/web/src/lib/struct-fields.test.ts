@@ -5,7 +5,10 @@ import {
   parseStructDefault,
   problem,
   renamedFields,
+  compactRows,
+  mainFields,
   structRows,
+  structTitle,
   toFieldApiName,
 } from "./struct-fields";
 import type { StructField } from "@/lib/types";
@@ -234,5 +237,32 @@ describe("parseStructDefault", () => {
     // stores it. Nothing about a *variable* requires at least one field —
     // p.149's "at least 1 field" is a rule about a property's declaration.
     expect(parseStructDefault("{}")).toEqual({ value: {} });
+  });
+});
+
+describe("p.169's struct main fields (§674)", () => {
+  const address: StructField[] = [
+    { api_name: "street", display_name: "Street", description: "", data_type: "string", main: true },
+    { api_name: "collected", display_name: "Collected", description: "", data_type: "date" },
+    { api_name: "postal_code", display_name: "", description: "", data_type: "string", main: true },
+  ];
+  const value = { street: "12 Main St", collected: "2024-01-01", postal_code: "" };
+
+  it("are the fields marked main, in declared order", () => {
+    expect(mainFields(address).map((f) => f.api_name)).toEqual(["street", "postal_code"]);
+    expect(mainFields(null)).toEqual([]);
+  });
+
+  it("are what a compact view shows, and all of it where none is main", () => {
+    expect(compactRows(address, value)).toEqual([["Street", "12 Main St"], ["postal_code", ""]]);
+    const none = address.map(({ main: _, ...f }) => f);
+    expect(compactRows(none, value)).toEqual(structRows(none, value));
+    expect(compactRows(address, "not a struct")).toBeNull();
+  });
+
+  it("puts the whole struct in the hover, a blank as the empty marker", () => {
+    expect(structTitle(address, value)).toBe("Street: 12 Main St\nCollected: 2024-01-01\npostal_code: ∅");
+    expect(structTitle(address, { street: null })).toBe("Street: ∅\nCollected: ∅\npostal_code: ∅");
+    expect(structTitle(address, 5)).toBeNull();
   });
 });

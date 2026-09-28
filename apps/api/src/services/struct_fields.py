@@ -68,7 +68,7 @@ FIELD_TYPES = (
     "boolean", "date", "float", "geopoint", "integer", "string", "timestamp",
 )
 
-_FIELD_KEYS = ("api_name", "display_name", "description", "data_type")
+_FIELD_KEYS = ("api_name", "display_name", "description", "data_type", "main")
 
 
 class StructFieldError(ValueError):
@@ -169,12 +169,21 @@ def parse(
                 f"struct field {api!r} on {property_name!r} has type "
                 f"{field_type!r}; expected one of " + ", ".join(FIELD_TYPES)
             )
+        # p.169's struct main field (§674): "designate a struct's core value
+        # and supplementary metadata". Kept only when on, so every struct
+        # stored before it - and every export of one - reads as it did.
+        main = raw.get("main", False)
+        if not isinstance(main, bool):
+            raise StructFieldError(
+                f"struct field {api!r} on {property_name!r}: main must be true or false"
+            )
         out.append(
             {
                 "api_name": api,
                 "display_name": str(raw.get("display_name") or api),
                 "description": str(raw.get("description") or ""),
                 "data_type": field_type,
+                **({"main": True} if main else {}),
             }
         )
     return out
