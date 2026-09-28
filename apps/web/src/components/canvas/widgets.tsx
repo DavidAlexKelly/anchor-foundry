@@ -315,8 +315,8 @@ import {
 } from "./data-freshness";
 import {
   AREA_OPTIONS, CHART_SORTS, NULL_DISPLAYS, SCALE_TYPES, areaOf, axisProblem, axisTitlesOf,
-  chartSortOf, defaultValueTitle, missingCount, missingText, nullDisplayOf, orientationOf,
-  sortPoints, valueAxisOf, withMissing,
+  categoryText, chartSortOf, defaultValueTitle, missingCount, missingText, nullDisplayOf,
+  orientationOf, sortPoints, valueAxisOf, valueText, withMissing,
 } from "./chart-display";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
@@ -11941,6 +11941,8 @@ export function CanvasChart({
   valueTitle = "",
   lineArea = "line",
   nullDisplay = "ignored",
+  valueFormat = null,
+  categoryFormat = null,
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -12018,6 +12020,10 @@ export function CanvasChart({
   /** p.282's **Display of null/missing values** on a line: Ignored, Gap or
    * Zeroes (`chart-display.withMissing`). */
   nullDisplay?: string;
+  /** p.283's **numerical formatting** of the value and categorical axes
+   * (§538): a property formatter (p.97–98), or null for none. */
+  valueFormat?: unknown;
+  categoryFormat?: unknown;
 }) {
   const {
     connectors: { connect, drag },
@@ -12190,6 +12196,8 @@ export function CanvasChart({
               mode={segmentModeOf(segmentMode)}
               showLegend={showLegend !== false}
               titles={titles}
+              valueText={valueText(valueFormat) ?? undefined}
+              categoryText={categoryText(categoryFormat) ?? undefined}
               drill={canDrill ? {
                 selected: drilledLabel,
                 onSelect: (label) =>
@@ -12223,6 +12231,8 @@ export function CanvasChart({
             axis,
             titles,
             shaded: drawnKind === "line" && areaOf(lineArea) === "area",
+            valueText: valueText(valueFormat) ?? undefined,
+            categoryText: categoryText(categoryFormat) ?? undefined,
           }}
           drill={
             canDrill
@@ -12307,9 +12317,11 @@ function ChartSettings() {
     filterColumn, filterParameter, filterOperator, objectSetVariable, seriesVariable,
     drilldownVariable, segmentBy, segmentMode, showLegend, sort, orientation, valueLabels,
     scaleType, minBound, maxBound, showCategoryTitle, categoryTitle, showValueTitle, valueTitle,
-    lineArea, nullDisplay,
+    lineArea, nullDisplay, valueFormat, categoryFormat,
     actions: { setProp },
   } = useNode((node) => ({
+    valueFormat: node.data.props.valueFormat,
+    categoryFormat: node.data.props.categoryFormat,
     lineArea: node.data.props.lineArea,
     nullDisplay: node.data.props.nullDisplay,
     scaleType: node.data.props.scaleType,
@@ -12557,6 +12569,7 @@ function ChartSettings() {
             && (aggregate || "count") === "count"}
           axis={{ scaleType, minBound, maxBound }}
           titles={{ showCategoryTitle, categoryTitle, showValueTitle, valueTitle }}
+          formats={{ value: valueFormat, category: categoryFormat, keyed: !seriesVariable }}
           defaults={seriesVariable
             ? { category: "Time", value: "The series' property" }
             : { category: dimension || "The category property",
@@ -12732,13 +12745,16 @@ function ChartSettings() {
 }
 
 /** p.283's value axis and axis titles in the Chart's panel (§536). */
-function ChartAxisFields({ segmented, axis, titles, defaults, setProp }: {
+function ChartAxisFields({ segmented, axis, titles, formats, defaults, setProp }: {
   segmented: boolean;
   axis: { scaleType?: unknown; minBound?: unknown; maxBound?: unknown };
   titles: {
     showCategoryTitle?: unknown; categoryTitle?: unknown;
     showValueTitle?: unknown; valueTitle?: unknown;
   };
+  /** `keyed` is false where the categories are not a property's values: a
+   * time series' instants, which have no number format to take. */
+  formats: { value: unknown; category: unknown; keyed: boolean };
   defaults: { category: string; value: string };
   setProp: (fn: (p: Record<string, unknown>) => void) => void;
 }) {
@@ -12778,7 +12794,23 @@ function ChartAxisFields({ segmented, axis, titles, defaults, setProp }: {
   return (
     <>
       {title("showCategoryTitle", "categoryTitle", "category", defaults.category, "category")}
+      {formats.keyed && (
+        <ValueFormatField
+          label="Category axis number format"
+          testId="chart-category-format"
+          value={formats.category}
+          hint="Applies to category keys that are numbers"
+          onChange={(next) => setProp((p) => (p.categoryFormat = next))}
+        />
+      )}
       {title("showValueTitle", "valueTitle", "value", defaults.value, "value")}
+      <ValueFormatField
+        label="Value axis number format"
+        testId="chart-value-format"
+        value={formats.value}
+        hint="The axis's ticks and the value labels"
+        onChange={(next) => setProp((p) => (p.valueFormat = next))}
+      />
       {segmented ? (
         <p className="field-hint" data-testid="chart-axis-segmented">
           A segmented chart&apos;s value axis is calculated: a stack&apos;s height is the sum of
@@ -12838,7 +12870,7 @@ CanvasChart.craft = {
     sort: "source", orientation: "vertical", valueLabels: false,
     scaleType: "linear", minBound: null, maxBound: null,
     showCategoryTitle: false, categoryTitle: "", showValueTitle: false, valueTitle: "",
-    lineArea: "line", nullDisplay: "ignored",
+    lineArea: "line", nullDisplay: "ignored", valueFormat: null, categoryFormat: null,
   },
   related: { settings: ChartSettings },
 };

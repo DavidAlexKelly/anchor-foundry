@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  areaOf, axisProblem, axisTitlesOf, chartSortOf, defaultValueTitle, missingCount, missingText,
+  areaOf, axisProblem, axisTitlesOf, categoryText, chartSortOf, valueText, defaultValueTitle, missingCount, missingText,
   nullDisplayOf, orientationOf, sortPoints, valueAxisOf, valueScale, withMissing,
   type ValueAxis,
 } from "./chart-display";
@@ -225,5 +225,29 @@ describe("missing values (p.282's null display)", () => {
     const mixed = [{ label: "b", value: NaN }, { label: "a", value: 1 }, { label: "c", value: 5 }];
     expect(sortPoints(mixed, "valueDesc").map((p) => p.label)).toEqual(["c", "a", "b"]);
     expect(sortPoints(mixed, "valueAsc").map((p) => p.label)).toEqual(["a", "c", "b"]);
+  });
+});
+
+describe("axis number formats (p.283's Enable numerical formatting)", () => {
+  const compact = { kind: "number", style: "plain", notation: "compact" };
+  const money = { kind: "number", style: "currency", currency: "USD", maximum_fraction_digits: 0 };
+
+  it("is none unless a number format is set", () => {
+    expect(valueText(null)).toBeNull();
+    expect(valueText({ kind: "datetime", style: "date" })).toBeNull();
+    expect(categoryText(undefined)).toBeNull();
+  });
+
+  it("writes a value the formatter's way", () => {
+    expect(valueText(compact)!(1234567)).toBe("1.2M");
+    expect(valueText(money)!(2500.4)).toBe("$2,500");
+    expect(valueText({ kind: "number", style: "plain", grouping: false })!(12345)).toBe("12345");
+  });
+
+  it("writes a category key that is a number, and leaves any other as it is", () => {
+    const keys = categoryText(money)!;
+    expect(keys("2024")).toBe("$2,024");
+    expect(keys("north")).toBe("north");
+    expect(keys("")).toBe("");
   });
 });
