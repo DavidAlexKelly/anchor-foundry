@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
-from ..services import action_metrics
+from ..services import action_metrics, property_reducers
 from ..services import action_defaults, action_log
 from ..services import action_revert
 from ..services import object_edits
@@ -2515,6 +2515,14 @@ async def execute_action(
                     search_prefix=prefix,
                 )
                 type_name = str(implementation["display_name"])
+                # p.170 (§675): the implementing properties that present a
+                # reduced or main-field value, which an interface action cannot
+                # write back.
+                presented = {
+                    str(p["api_name"]): through
+                    for p in await ontology_service.list_properties(conn, object_type_id)
+                    if (through := property_reducers.presented_through(p))
+                }
                 # p.59's rename, and the only thing that differs from here on.
                 action_type = {
                     **action_type,
@@ -2523,6 +2531,7 @@ async def execute_action(
                         mapping=implementation["property_mapping"],
                         interface_name=str(action_type["subject_name"]),
                         type_name=type_name,
+                        presented=presented,
                     ),
                 }
             if instance is None:

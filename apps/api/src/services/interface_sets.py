@@ -41,6 +41,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from . import property_reducers
+
 #: How many object types one interface may fan out over in a single read.
 #:
 #: p.53 puts no limit on how many types implement an interface, and this is not
@@ -222,7 +224,8 @@ def filters_for(
 
 
 def project(
-    properties: dict[str, Any], *, member: Member, declared: dict[str, str]
+    properties: dict[str, Any], *, member: Member, declared: dict[str, str],
+    presenters: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """One row's properties, re-keyed onto the interface's vocabulary.
 
@@ -242,7 +245,11 @@ def project(
     for name in declared:
         target = member.property_mapping.get(name)
         if target and target in properties:
-            out[name] = properties[target]
+            # §675: what the implementing property *presents* - p.131's
+            # reduced element, p.170's main field - rather than what it holds.
+            # `presenters` is the type's property rows by name.
+            row = (presenters or {}).get(target)
+            out[name] = property_reducers.present(row, properties[target]) if row else properties[target]
     return out
 
 

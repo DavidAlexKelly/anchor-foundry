@@ -256,6 +256,23 @@ describe("what a property presents to an interface (p.131-132, §350)", () => {
     expect(implementsAs(row({ reducers: null }))).toBe("array");
   });
 
+  it("a struct's one main field, and a reduced struct array's (p.170, §675)", () => {
+    const withMain = (main: string[]) => [
+      { api_name: "on", display_name: "", description: "", data_type: "date" as const,
+        ...(main.includes("on") ? { main: true } : {}) },
+      { api_name: "who", display_name: "", description: "", data_type: "string" as const,
+        ...(main.includes("who") ? { main: true } : {}) },
+    ];
+    expect(implementsAs({ data_type: "struct", struct_fields: withMain(["who"]) })).toBe("string");
+    // Two main fields say nothing about which one an interface property is.
+    expect(implementsAs({ data_type: "struct", struct_fields: withMain(["on", "who"]) })).toBe("struct");
+    expect(implementsAs({ data_type: "array", array_of: "struct", struct_fields: withMain(["on"]),
+      reducers: [{ operation: "latest", field: "on" }] })).toBe("date");
+    // Unreduced, it is still an array: a main field does not reduce anything.
+    expect(implementsAs({ data_type: "array", array_of: "struct", struct_fields: withMain(["on"]) }))
+      .toBe("array");
+  });
+
   it("struct, for a reduced struct array", () => {
     // Reducing *by* a field still answers with the whole element (p.133), so
     // what a struct array presents is `struct` — which is itself not something

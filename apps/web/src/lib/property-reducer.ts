@@ -246,13 +246,15 @@ export function problem(
  * branching first.
  */
 export function implementsAs(property: Row): string {
-  if (property.data_type !== "array" || !property.reducers?.length) {
-    return property.data_type;
-  }
-  // No fallback, for the reason the server's has none: db 0087's pairing means
-  // an array always says what of, so `?? property.data_type` was a branch
-  // nothing could make fail — an adversarial sweep is what found it (§213).
-  return property.array_of ?? "";
+  // No fallback for `array_of`, for the reason the server's has none: db
+  // 0087's pairing means an array always says what of, so `?? data_type` was a
+  // branch nothing could make fail - an adversarial sweep found it (§213).
+  const base = property.data_type === "array" && property.reducers?.length
+    ? property.array_of ?? "" : property.data_type;
+  // p.170's struct main field (§675): a struct, or a reduced struct array's
+  // element, with exactly one main field presents that field.
+  const main = (property.struct_fields ?? []).filter((f) => f.main === true);
+  return base === "struct" && main.length === 1 ? main[0]!.data_type : base;
 }
 
 /** What a row's button says: the count, because a property with reducers and

@@ -321,16 +321,59 @@ def implements_as(prop: dict[str, Any]) -> str:
     a caller that invented a new shape is the louder, more useful failure.
     """
     data_type = str(prop.get("data_type") or "")
-    if data_type != "array" or not prop.get("reducers"):
-        return data_type
-    # **`array_of` is never absent on an array**, so there is no third branch
-    # here and nothing to test for one: db 0087's pairing is checked in both
-    # directions by `array_properties.parse` on every write path. An adversarial
-    # sweep found the fallback this line used to carry — `or data_type` — and
-    # nothing could make it fail, which is the tell (§213). A row that reached
-    # the database without going through that check answers `""`, and `""` and
-    # `"array"` satisfy exactly the same set of interface properties: none.
-    return str(prop.get("array_of") or "")
+    if data_type == "array" and prop.get("reducers"):
+        # **`array_of` is never absent on an array**, so there is no third
+        # branch here and nothing to test for one: db 0087's pairing is checked
+        # in both directions by `array_properties.parse` on every write path.
+        # An adversarial sweep found the fallback this line used to carry - `or
+        # data_type` - and nothing could make it fail, which is the tell
+        # (§213). A row that reached the database without going through that
+        # check answers `""`, and `""` and `"array"` satisfy exactly the same
+        # set of interface properties: none.
+        data_type = str(prop.get("array_of") or "")
+    # p.170's struct main field (§675): a struct - or a struct array's reduced
+    # element - with one main field presents that field. With several, which
+    # one an interface property would be is not said, so none is.
+    main = main_field(prop)
+    if data_type == "struct" and main is not None:
+        return str(main["data_type"])
+    return data_type
+
+
+def main_field(prop: dict[str, Any]) -> dict[str, Any] | None:
+    """The struct's one main field (p.169; §674), or None for none or
+    several."""
+    fields = [f for f in prop.get("struct_fields") or [] if isinstance(f, dict) and f.get("main")]
+    return fields[0] if len(fields) == 1 else None
+
+
+def presented_through(prop: dict[str, Any]) -> str | None:
+    """How this property presents something other than its own value to an
+    interface - "a property reducer" or "a struct main field" - or None.
+
+    p.170: "Interface actions that edit a property implemented through a
+    property reducer or struct main field will return an error ... reduced and
+    struct main field values cannot be translated back to the underlying
+    object property."
+    """
+    reduced = str(prop.get("data_type") or "") == "array" and bool(prop.get("reducers"))
+    base = str(prop.get("array_of") or "") if reduced else str(prop.get("data_type") or "")
+    through = [*(["a property reducer"] if reduced else []),
+               *(["a struct main field"] if base == "struct" and main_field(prop) is not None else [])]
+    return " and ".join(through) or None
+
+
+def present(prop: dict[str, Any], value: Any) -> Any:
+    """The value an interface reads from this property (p.131, p.170): the
+    reduced element of a reduced array, then the main field of a struct that
+    presents one - "Applies the configured property reducer ... Extracts the
+    configured main field" (p.170). Anything else, as it is."""
+    if str(prop.get("data_type") or "") == "array" and prop.get("reducers"):
+        value = reduce(value, prop["reducers"])
+    main = main_field(prop)
+    if main is not None and isinstance(value, dict):
+        return value.get(main["api_name"])
+    return value
 
 
 def reduce_all(
