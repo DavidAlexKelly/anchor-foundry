@@ -1425,6 +1425,19 @@ export const objects = {
       method: "POST",
       body: JSON.stringify({ definition, property_api_name: property, ...opts }),
     }),
+  /** A page of rows' derived properties, one read per hop (§604): for a
+   * table's derived columns. Keyed by primary key, with a sentence for any
+   * property the page could not be answered for. */
+  derivedValues: (
+    wid: string,
+    typeId: string,
+    body: { keys: string[]; properties: string[] },
+    application = "workshop",
+  ) =>
+    request<import("./types").DerivedValuesPage>(
+      `/workspaces/${wid}/object-types/${typeId}/derived-values?application=${application}`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   /** A page of objects' geotemporal tracks, in one read (§557): for the
    * Map's breadcrumbs and its timeline. */
   objectSetTracks: (

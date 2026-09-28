@@ -2491,6 +2491,13 @@ export interface ObjectTypeGroupMember {
   status: OntologyStatus;
 }
 
+/** A page of rows' derived properties (§604; `object-link-types` p.143). */
+export interface DerivedValuesPage {
+  rows: { primary_key: string; values: Record<string, unknown> }[];
+  /** A property the page could not be answered for, and why. */
+  errors: Record<string, string>;
+}
+
 export interface ObjectTypeDetail {
   id: string;
   api_name: string;

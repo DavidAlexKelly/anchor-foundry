@@ -120,3 +120,33 @@ async def follow(conn: Any, join: dict[str, Any], keys: list[Any]) -> list[str]:
         )
     except engine.DatasetEngineError as exc:
         raise ValueError(str(exc)) from exc
+
+
+async def follow_pairs(
+    conn: Any, join: dict[str, Any], keys: list[Any], limit: int,
+) -> dict[str, list[str]]:
+    """`follow` for many near objects at once, keyed by the near key (§604).
+
+    At most `limit` pairs are read, and one more than that is the caller's
+    signal to refuse: a page of derived values asks for every row's links in
+    one read, so the bound is on the page rather than on one object."""
+    wanted = sorted({str(k) for k in keys if k is not None})
+    row = await fetch_one(
+        conn, "SELECT s3_location FROM datasets WHERE id = :id", {"id": join["dataset_id"]}
+    )
+    if row is None:
+        raise ValueError(
+            "the join table behind this link is a dataset you cannot read, so the "
+            "link cannot be followed"
+        )
+    path = await anyio.to_thread.run_sync(storage.current().local_path, str(row["s3_location"]))
+    try:
+        pairs = await anyio.to_thread.run_sync(
+            engine.join_pairs, path, join["near_column"], join["far_column"], wanted, limit,
+        )
+    except engine.DatasetEngineError as exc:
+        raise ValueError(str(exc)) from exc
+    out: dict[str, list[str]] = {}
+    for near, far in pairs:
+        out.setdefault(near, []).append(far)
+    return out

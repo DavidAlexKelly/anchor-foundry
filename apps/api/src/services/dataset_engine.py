@@ -944,6 +944,45 @@ def join_keys(
         con.close()
 
 
+def join_pairs(
+    parquet_path: str, near_column: str, far_column: str, keys: list[str], limit: int,
+) -> list[tuple[str, str]]:
+    """`join_keys`, keeping which near key each far key came from (§604).
+
+    A page of derived values follows one join table for every row at once and
+    then has to hand each row its own far objects back, which the flat list
+    cannot say. Same comparison as `join_keys` - text on both sides, nulls
+    link nothing - and the same limit, counted in pairs.
+    """
+    con = duckdb.connect()
+    try:
+        try:
+            names = {
+                str(d[0]) for d in con.execute(
+                    f"SELECT * FROM read_parquet('{parquet_path}') LIMIT 0"
+                ).description
+            }
+            for column in (near_column, far_column):
+                if column not in names:
+                    raise DatasetEngineError(
+                        f"the join table has no column {column!r} any more, so this "
+                        "link cannot be followed until it is joined on one that exists"
+                    )
+            near, far = _quote_column(near_column), _quote_column(far_column)
+            rows = con.execute(
+                f"SELECT DISTINCT CAST({near} AS VARCHAR), CAST({far} AS VARCHAR) "
+                f"FROM read_parquet('{parquet_path}') "
+                f"WHERE CAST({near} AS VARCHAR) IN (SELECT unnest(CAST(? AS VARCHAR[])))"
+                f" AND {far} IS NOT NULL LIMIT ?",
+                [list(keys), limit],
+            ).fetchall()
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+        return [(str(r[0]), str(r[1])) for r in rows]
+    finally:
+        con.close()
+
+
 def write_rows(
     parquet_path: str,
     primary_key_column: str,

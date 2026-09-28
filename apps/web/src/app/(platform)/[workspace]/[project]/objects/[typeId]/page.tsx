@@ -8,6 +8,8 @@ import { actions as actionApi, ApiError, objects as objApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
+import { DerivedValue } from "@/components/derived-value";
+import { derivedCell, derivedNames } from "@/lib/derived-values";
 import { ReducedValue } from "@/components/reduced-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
@@ -177,6 +179,20 @@ export default function ObjectInstancesPage() {
 
   const properties = type.data?.properties ?? [];
   const rows = instances.data?.items ?? [];
+  // p.143's derived properties (§604): not on a list read's rows, so the page
+  // asks for them in one more read - one per hop for every row at once - and
+  // only when the type has any. Named as the Ontology Manager, for the list
+  // read's reason above.
+  const derivedWanted = derivedNames(properties);
+  const pageKeys = rows.map((r) => r.primary_key);
+  const derivedPage = useQuery({
+    queryKey: ["object-derived-values", params.typeId, derivedWanted, pageKeys],
+    queryFn: () => objApi.derivedValues(
+      workspace!.id, params.typeId, { keys: pageKeys, properties: derivedWanted },
+      "ontology_manager",
+    ),
+    enabled: !!workspace && derivedWanted.length > 0 && pageKeys.length > 0,
+  });
   const total = instances.data?.total ?? 0;
   const hasNext = (page + 1) * PAGE_SIZE < total;
   const canEdit = (project ? project.effective_role !== "viewer" : false) && (actionTypes.data?.length ?? 0) > 0;
@@ -213,6 +229,11 @@ export default function ObjectInstancesPage() {
           <p className="sub" style={{ marginBottom: 12 }}>
             {total.toLocaleString()} instance{total === 1 ? "" : "s"}
           </p>
+          {Object.entries(derivedPage.data?.errors ?? {}).map(([name, reason]) => (
+            <p key={name} className="field-hint" data-testid={`derived-error-${name}`}>
+              {properties.find((p) => p.api_name === name)?.display_name || name}: {reason}
+            </p>
+          ))}
           <div style={{ overflowX: "auto" }}>
             {/* **Named, because this page has two tables now** (§321). §320's
                 usage panel added a second, and `get_by_role("table")` in a
@@ -245,12 +266,21 @@ export default function ObjectInstancesPage() {
                             property on every type until somebody says
                             otherwise — so this is not an array special case
                             standing in the table's one rendering path. */}
-                        <ReducedValue
-                          workspaceId={workspace!.id}
-                          property={p}
-                          instance={instance}
-                          style={conditionalStyle(p.conditional_format, instance.properties)}
-                        />
+                        {p.derivation ? (
+                          <DerivedValue
+                            workspaceId={workspace!.id}
+                            property={p}
+                            cell={derivedCell(derivedPage.data, instance.primary_key, p.api_name)}
+                            testId={`derived-${instance.primary_key}-${p.api_name}`}
+                          />
+                        ) : (
+                          <ReducedValue
+                            workspaceId={workspace!.id}
+                            property={p}
+                            instance={instance}
+                            style={conditionalStyle(p.conditional_format, instance.properties)}
+                          />
+                        )}
                       </td>
                     ))}
                     <td className="count">{new Date(instance.updated_at).toLocaleString()}</td>
