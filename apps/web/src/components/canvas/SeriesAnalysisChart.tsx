@@ -4,7 +4,10 @@
  * one time axis and one value axis, each in its colour and line style. The
  * geometry is `series-analysis.ts`'s. */
 
-import { eventSpan, extentOf, pathOf, type Reading, type SeriesEvent } from "./series-analysis";
+import {
+  areaOf, eventSpan, extentOf, markersOf, outlineOf, pathOf,
+  type PlotDisplay, type Reading, type SeriesEvent,
+} from "./series-analysis";
 
 const WIDTH = 640;
 const HEIGHT = 200;
@@ -16,6 +19,7 @@ export interface CanvasPlot {
   label: string;
   color: string;
   dashed: boolean;
+  display: PlotDisplay;
   readings: Reading[];
 }
 
@@ -71,11 +75,30 @@ export function SeriesAnalysisChart({ canvas, plots, events = [] }: {
                       width={span.width} height={frame.height} fill={set.color} fillOpacity={0.15} />
               );
             }))}
+            {plots.map((p, n) => p.display.gradient && (
+              <g key={`gradient-${p.id}`}>
+                <defs>
+                  <linearGradient id={`series-${canvas}-gradient-${n}`} x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stopColor={p.color} stopOpacity={0.35} />
+                    <stop offset="100%" stopColor={p.color} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <path data-gradient={p.id} d={areaOf(p.readings, extent, frame)} stroke="none"
+                      fill={`url(#series-${canvas}-gradient-${n})`} />
+              </g>
+            ))}
             {plots.map((p) => (
               <path key={p.id} data-plot={p.id} d={pathOf(p.readings, extent, frame)} fill="none"
-                    stroke={p.color} strokeWidth={1.6} strokeDasharray={p.dashed ? "5 3" : undefined}>
+                    stroke={p.color} strokeWidth={p.display.width}
+                    strokeDasharray={p.dashed ? "5 3" : undefined}>
                 <title>{p.label}</title>
               </path>
+            ))}
+            {plots.map((p) => p.display.shape !== "none" && (
+              <path key={`points-${p.id}`} data-points={p.id}
+                    d={markersOf(p.readings, extent, frame, p.display.shape, p.display.size)}
+                    fill={p.display.fill === "line" ? p.color : p.display.fill === "white" ? "#fff" : "none"}
+                    stroke={p.color} strokeWidth={outlineOf(p.display)} />
             ))}
           </g>
         </svg>

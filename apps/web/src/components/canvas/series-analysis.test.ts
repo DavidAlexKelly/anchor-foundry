@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MAX_EVENT_SETS, withEventStatistics, eventCount, eventSpan, eventsOf, liveEventSets, withEventSet, withLinkedEventSet,
+  DEFAULT_DISPLAY, areaOf, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, extentOf, pathOf, readingsOf, rootOf, rootPlots,
   statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
@@ -330,5 +331,56 @@ describe("p.393's Linked event set (§654)", () => {
   it("is not what event statistics reads, whose events are found in the query", () => {
     const [set] = withLinkedEventSet([], roots, "root:i2", jobs, "Jobs");
     expect(withEventStatistics(roots, "root:i1", set, "avg", 1)).toEqual(roots);
+  });
+});
+
+describe("p.394's Display (§655)", () => {
+  const frame = { width: 100, height: 50 };
+  const extent = { t0: 0, t1: 10, v0: 0, v1: 10 };
+  const two = [{ t: 0, v: 0 }, { t: 10, v: 10 }];
+
+  it("starts as the line always was, with no points and no gradient", () => {
+    expect(displayOf(roots[0]!)).toEqual(DEFAULT_DISPLAY);
+    expect(DEFAULT_DISPLAY).toEqual({ width: 1.6, gradient: false, shape: "none", size: 5, fill: "line",
+      outline: 1 });
+  });
+
+  it("changes one plot's setting, holding a number to its bounds", () => {
+    const wide = withDisplay(roots, "root:i1", "width", 3);
+    expect(displayOf(wide[0]!).width).toBe(3);
+    expect(wide[1]).toBe(roots[1]);
+    expect(displayOf(withDisplay(wide, "root:i1", "gradient", true)[0]!)).toMatchObject({ width: 3, gradient: true });
+    expect(displayOf(withDisplay(roots, "root:i1", "width", 99)[0]!).width).toBe(8);
+    expect(displayOf(withDisplay(roots, "root:i1", "width", 0)[0]!).width).toBe(0.5);
+    expect(displayOf(withDisplay(roots, "root:i1", "size", 1)[0]!).size).toBe(2);
+    expect(displayOf(withDisplay(roots, "root:i1", "size", 40)[0]!).size).toBe(16);
+    expect(displayOf(withDisplay(roots, "root:i1", "outline", 0)[0]!).outline).toBe(0.5);
+    expect(displayOf(withDisplay(roots, "root:i1", "outline", 9)[0]!).outline).toBe(4);
+    expect(withDisplay(roots, "root:i1", "width", Number.NaN)).toEqual(roots);
+  });
+
+  it("offers size and fill only with points, and the outline only round a white fill", () => {
+    expect(pointOptions(DEFAULT_DISPLAY)).toEqual({ size: false, fill: false, outline: false });
+    const circles = { ...DEFAULT_DISPLAY, shape: "circle" as const };
+    expect(pointOptions(circles)).toEqual({ size: true, fill: true, outline: false });
+    expect(pointOptions({ ...circles, fill: "white" })).toEqual({ size: true, fill: true, outline: true });
+    expect(pointOptions({ ...circles, fill: "none" })).toEqual({ size: true, fill: true, outline: false });
+    expect(outlineOf({ ...circles, fill: "white", outline: 2.5 })).toBe(2.5);
+    expect(outlineOf({ ...circles, fill: "none", outline: 2.5 })).toBe(1);
+    expect(outlineOf({ ...circles, outline: 2.5 })).toBe(0);
+  });
+
+  it("shades under the line to the frame's foot", () => {
+    expect(areaOf(two, extent, frame)).toBe("M0.0,50.0L100.0,0.0L100.0,50.0L0.0,50.0Z");
+    expect(areaOf([], extent, frame)).toBe("");
+  });
+
+  it("draws each shape centred on its point, size across", () => {
+    expect(markerOf("square", 10, 20, 4)).toBe("M8.0,18.0h4.0v4.0h-4.0Z");
+    expect(markerOf("diamond", 10, 20, 4)).toBe("M10.0,18.0L12.0,20.0L10.0,22.0L8.0,20.0Z");
+    expect(markerOf("triangle", 10, 20, 4)).toBe("M10.0,18.0L12.0,22.0L8.0,22.0Z");
+    expect(markerOf("circle", 10, 20, 4)).toBe("M8.0,20.0a2.0,2.0 0 1,0 4.0,0a2.0,2.0 0 1,0 -4.0,0Z");
+    expect(markerOf("none", 10, 20, 4)).toBe("");
+    expect(markersOf(two, extent, frame, "square", 2)).toBe("M-1.0,49.0h2.0v2.0h-2.0ZM99.0,-1.0h2.0v2.0h-2.0Z");
   });
 });

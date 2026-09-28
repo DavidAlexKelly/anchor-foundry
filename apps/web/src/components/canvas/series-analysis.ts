@@ -79,6 +79,9 @@ export interface Plot {
   /** What a derived plot adds to its parent's chain, in order; empty on a
    * root. */
   transforms: SeriesTransform[];
+  /** p.394's display settings the reader changed (§655); `displayOf` fills
+   * in the rest. */
+  display?: Partial<PlotDisplay>;
 }
 
 /** One root plot per object, on the first canvas. */
@@ -248,15 +251,113 @@ export function extentOf(series: readonly (readonly Reading[])[]): {
   return { t0, t1, v0: v0 - pad, v1: v1 + pad };
 }
 
+type Extent = { t0: number; t1: number; v0: number; v1: number };
+type Frame = { width: number; height: number };
+
+/** Where each reading falls on a frame, over an extent. */
+function placed(readings: readonly Reading[], extent: Extent, frame: Frame): { x: number; y: number }[] {
+  return readings.map((r) => ({
+    x: ((r.t - extent.t0) / (extent.t1 - extent.t0)) * frame.width,
+    y: frame.height - ((r.v - extent.v0) / (extent.v1 - extent.v0)) * frame.height,
+  }));
+}
+
+const at = (n: number) => n.toFixed(1);
+
 /** A plot's line as an SVG path on a frame, over an extent. */
-export function pathOf(
-  readings: readonly Reading[],
-  extent: { t0: number; t1: number; v0: number; v1: number },
-  frame: { width: number; height: number },
+export function pathOf(readings: readonly Reading[], extent: Extent, frame: Frame): string {
+  return placed(readings, extent, frame).map((p, n) => `${n === 0 ? "M" : "L"}${at(p.x)},${at(p.y)}`).join("");
+}
+
+/** p.394's *Display* (§655): "Line width: The thickness of the plot line.
+ * Gradient: Toggle gradient shading under the plot line. Point shape: The
+ * shape of data points (circle, triangle, square, diamond, or none). Point
+ * size: The size of data points." With p.395's *Point fill* and *Point
+ * outline width*. */
+export const POINT_SHAPES = ["none", "circle", "triangle", "square", "diamond"] as const;
+export type PointShape = (typeof POINT_SHAPES)[number];
+/** A point filled in the plot's colour, in white inside an outline of it, or
+ * not at all. */
+export const POINT_FILLS = ["line", "white", "none"] as const;
+export type PointFill = (typeof POINT_FILLS)[number];
+export const POINT_FILL_WORDS: Record<PointFill, string> = { line: "plot colour", white: "white", none: "none" };
+export interface PlotDisplay {
+  width: number;
+  gradient: boolean;
+  shape: PointShape;
+  size: number;
+  fill: PointFill;
+  outline: number;
+}
+export const DEFAULT_DISPLAY: PlotDisplay = {
+  width: 1.6, gradient: false, shape: "none", size: 5, fill: "line", outline: 1,
+};
+/** The least and most each number may be, in pixels. */
+export const DISPLAY_BOUNDS = { width: [0.5, 8], size: [2, 16], outline: [0.5, 4] } as const;
+
+export function displayOf(plot: Pick<Plot, "display">): PlotDisplay {
+  return { ...DEFAULT_DISPLAY, ...plot.display };
+}
+
+/** The plots with one display setting of one changed; a number is held to
+ * its bounds, and one that is no number changes nothing. */
+export function withDisplay<K extends keyof PlotDisplay>(
+  plots: readonly Plot[], id: string, key: K, value: PlotDisplay[K],
+): Plot[] {
+  let set: PlotDisplay[K] = value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return [...plots];
+    const [lo, hi] = DISPLAY_BOUNDS[key as keyof typeof DISPLAY_BOUNDS];
+    set = Math.min(hi, Math.max(lo, value)) as PlotDisplay[K];
+  }
+  return plots.map((p) => (p.id === id ? { ...p, display: { ...p.display, [key]: set } } : p));
+}
+
+/** p.395: point size, fill and outline are "Disabled when point shape is set
+ * to none", and the outline width "when point fill is set to none or is the
+ * same as the plot color" - so a point without fill keeps a thin outline, or
+ * it could not be seen. */
+export function pointOptions(d: PlotDisplay): { size: boolean; fill: boolean; outline: boolean } {
+  const points = d.shape !== "none";
+  return { size: points, fill: points, outline: points && d.fill === "white" };
+}
+
+/** The width of a point's outline as drawn. */
+export function outlineOf(d: PlotDisplay): number {
+  return d.fill === "white" ? d.outline : d.fill === "none" ? 1 : 0;
+}
+
+/** p.394's *Gradient*: the area under a plot's line, down to the frame's
+ * foot; "" with no readings. */
+export function areaOf(readings: readonly Reading[], extent: Extent, frame: Frame): string {
+  const points = placed(readings, extent, frame);
+  if (points.length === 0) return "";
+  return `${pathOf(readings, extent, frame)}L${at(points.at(-1)!.x)},${at(frame.height)}` +
+    `L${at(points[0]!.x)},${at(frame.height)}Z`;
+}
+
+/** One point's marker, `size` across and centred on it; "" for none. */
+export function markerOf(shape: PointShape, x: number, y: number, size: number): string {
+  const r = size / 2;
+  switch (shape) {
+    case "circle":
+      return `M${at(x - r)},${at(y)}a${at(r)},${at(r)} 0 1,0 ${at(size)},0a${at(r)},${at(r)} 0 1,0 ${at(-size)},0Z`;
+    case "triangle":
+      return `M${at(x)},${at(y - r)}L${at(x + r)},${at(y + r)}L${at(x - r)},${at(y + r)}Z`;
+    case "square":
+      return `M${at(x - r)},${at(y - r)}h${at(size)}v${at(size)}h${at(-size)}Z`;
+    case "diamond":
+      return `M${at(x)},${at(y - r)}L${at(x + r)},${at(y)}L${at(x)},${at(y + r)}L${at(x - r)},${at(y)}Z`;
+    case "none":
+      return "";
+  }
+}
+
+/** Every reading's marker, as one path. */
+export function markersOf(
+  readings: readonly Reading[], extent: Extent, frame: Frame, shape: PointShape, size: number,
 ): string {
-  const x = (t: number) => ((t - extent.t0) / (extent.t1 - extent.t0)) * frame.width;
-  const y = (v: number) => frame.height - ((v - extent.v0) / (extent.v1 - extent.v0)) * frame.height;
-  return readings.map((r, n) => `${n === 0 ? "M" : "L"}${x(r.t).toFixed(1)},${y(r.v).toFixed(1)}`).join("");
+  return placed(readings, extent, frame).map((p) => markerOf(shape, p.x, p.y, size)).join("");
 }
 
 
