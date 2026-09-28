@@ -62,6 +62,30 @@ A listener's endpoint (`POST /api/listen/<token>`) carries no user. What a
 request proves is its listener's verification scheme, and its body is read
 only up to the size limit.
 
+### When a connection does not work
+
+TOC §6's *Where to start* is a list: confirm the source is reachable (`dig`,
+`curl`, `openssl s_client`), check egress, check credentials, check
+certificates. **Diagnose** on a connection runs that list, in order, against
+the one destination the connection's configuration names, and stops at the
+first step that fails with a sentence saying what to do
+(`apps/api/src/services/diagnose.py`):
+
+1. **destination**: the host and port the configuration reaches;
+2. **egress**: whether the source's policies allow it, checked **before** the
+   network is touched, so a refused destination is never probed;
+3. **dns**: does the name resolve from the platform;
+4. **tcp**: does anything accept a connection on that port;
+5. **tls**: for a source spoken to over TLS from the first byte (HTTPS), the
+   handshake and whether its certificate is trusted. A database negotiates
+   TLS inside its own protocol, so there the credentials step proves it;
+6. **credentials**: the connection's own test.
+
+**TOC §6's source terminal is not offered.** A shell on the platform's network
+could reach anything the API can, which is a much larger grant than the
+connection it was opened for; the list is what a terminal was for. Its
+*Debug with AI FDE* has no counterpart.
+
 ## 2. Permissions
 
 Roles are the workspace's (viewer, editor, admin) and the project's (viewer,
@@ -82,6 +106,7 @@ What each route requires, below `/api/workspaces/{workspace_id}`:
 | `PATCH /projects/{project_id}/connections/{connection_id}` | project editor |
 | `DELETE /projects/{project_id}/connections/{connection_id}` | project editor |
 | `POST /projects/{project_id}/connections/{connection_id}/test` | project editor |
+| `POST /projects/{project_id}/connections/{connection_id}/diagnose` | project editor |
 | `POST /projects/{project_id}/connections/{connection_id}/discover` | project editor |
 | `POST /projects/{project_id}/connections/{connection_id}/preview` | project editor |
 | `POST /projects/{project_id}/connections/{connection_id}/sync` | project editor |

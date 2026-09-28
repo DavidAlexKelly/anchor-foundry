@@ -26,6 +26,7 @@ from ..lib.errors import ConflictError, ForbiddenError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import connections as conn_service
+from ..services import diagnose as diagnose_service
 from ..services import egress, egress_store, export_store, webhook_store
 from ..services.connectors import (
     ConnectorConfigError,
@@ -119,6 +120,18 @@ class TestResult(BaseModel):
     ok: bool
     error: str | None
     connection: ConnectionOut
+
+
+class DiagnoseStep(BaseModel):
+    name: str
+    status: str
+    detail: str
+    hint: str | None = None
+
+
+class DiagnoseOut(BaseModel):
+    ok: bool
+    steps: list[DiagnoseStep]
 
 
 class ReferenceOut(BaseModel):
@@ -552,6 +565,51 @@ async def test_connection(
             user_agent=request.headers.get("user-agent"),
         )
     return TestResult(ok=ok, error=error, connection=_out(updated))
+
+
+@router.post("/{connection_id}/diagnose", response_model=DiagnoseOut)
+async def diagnose_connection(
+    connection_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> DiagnoseOut:
+    """TOC §6's "Where to start", run in order against the connection's own
+    destination (`services/diagnose.py`, §646). Editor, as Test is: its last
+    step uses the connection's credentials, and its others probe the network
+    from the platform. Unlike Test it does not record a result on the
+    connection, since it is a question about the connection rather than a
+    change to it."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        policies = await egress_store.for_connection(conn, connection_id)
+
+    connector = get_connector(str(row["source_type"]))
+    config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
+
+    def credentials() -> None:
+        secret = conn_service.secret_values_for(_secrets, row)
+        with egress.restricted_to(policies):
+            connector.test(config, secret)
+
+    steps = await anyio.to_thread.run_sync(
+        diagnose_service.run, str(row["source_type"]), config, policies, credentials
+    )
+    ok = all(step.status != "failed" for step in steps)
+    async with user_connection(access.auth.user_id) as conn:
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="connection.diagnose",
+            resource_type="connection",
+            resource_id=connection_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"ok": ok},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return DiagnoseOut(ok=ok, steps=[DiagnoseStep(**d) for d in diagnose_service.as_dicts(steps)])
 
 
 @router.post("/{connection_id}/discover", response_model=list[TableOut])
