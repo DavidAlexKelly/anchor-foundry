@@ -35,6 +35,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
@@ -93,13 +94,12 @@ FLAG_PRIORITY = (
 #: `\\[test|deprecated\\]` would match object types that have `[test]` or
 #: `[deprecated]` in their display names."
 #:
-#: **Matched as two plain substrings rather than as a regex**, and that is a
-#: deliberate narrowing of p.74. Foundry offers "ECMA (JavaScript) regex
-#: syntax" as a per-user setting; running a pattern somebody typed against
-#: every object type in a workspace is a query whose cost the person writing it
-#: cannot see. §619's flags panel turns this flag on, off and up the order, and
-#: stops short of the pattern for that reason: two substrings answer p.74's own
-#: example exactly, and a typed pattern needs a bound decided first.
+#: **The default is matched as two plain substrings, case-insensitively**,
+#: which is what p.74's sentence says it matches. A person's own pattern
+#: (§630, `name_pattern`) is a regex, as p.74's "Supports ECMA (JavaScript)
+#: regex syntax" says: run by Postgres, whose syntax is ECMA's for what p.74's
+#: examples use, and whose engine does not backtrack its way into a runaway on
+#: a pattern somebody typed, which was why §619 stopped short of it.
 TEMPORARY_MARKERS = ("[test]", "[deprecated]")
 
 
@@ -137,46 +137,99 @@ def parse_flags(flags: list[str]) -> list[str]:
     return list(flags)
 
 
-async def settings(conn: AsyncConnection, workspace_id: UUID, *, user_id: UUID) -> list[str] | None:
-    """Your custom flags, most urgent first, or `None` for the default set.
+#: The longest pattern kept, as db 0130's CHECK says.
+MAX_PATTERN = 200
+#: db 0130's bounds on p.74's "[x] days".
+MAX_STALE_DAYS = 3650
+
+
+async def settings(
+    conn: AsyncConnection, workspace_id: UUID, *, user_id: UUID,
+) -> dict[str, Any]:
+    """Your setup: `flags` most urgent first, or `None` for the default set;
+    p.74's `name_pattern` and `stale_days` (§630), each `None` for its default.
 
     Read through the row policy (db 0128), so it is only ever yours: p.72's
     "an individual customization that does not affect other Ontology editors".
     """
     row = await fetch_one(
         conn,
-        "SELECT flags FROM ontology_cleanup_settings "
+        "SELECT flags, name_pattern, stale_days FROM ontology_cleanup_settings "
         "WHERE workspace_id = :wid AND user_id = :uid",
         {"wid": str(workspace_id), "uid": str(user_id)},
     )
-    return list(row["flags"]) if row else None
+    return {
+        "flags": list(row["flags"]) if row and row["flags"] is not None else None,
+        "name_pattern": row["name_pattern"] if row else None,
+        "stale_days": row["stale_days"] if row else None,
+    }
+
+
+async def parse_pattern(conn: AsyncConnection, pattern: str | None) -> str | None:
+    """p.74's display name pattern, checked: blank is the default, and one the
+    engine cannot read is refused here rather than failing every queue read
+    after it. Asked of Postgres itself, in a savepoint, because it is the
+    engine that will run it - a check in any other dialect would pass patterns
+    this one refuses."""
+    if pattern is None or not pattern.strip():
+        return None
+    if len(pattern) > MAX_PATTERN:
+        raise SettingsError(f"a pattern is at most {MAX_PATTERN} characters")
+    try:
+        async with conn.begin_nested():
+            await conn.execute(text("SELECT '' ~ :p"), {"p": pattern})
+    except DBAPIError as exc:
+        reason = str(getattr(exc, "orig", exc)).splitlines()[0]
+        raise SettingsError(f"not a pattern this can match with: {reason}") from exc
+    return pattern
+
+
+def parse_days(days: int | None) -> int | None:
+    if days is None:
+        return None
+    if not 1 <= days <= MAX_STALE_DAYS:
+        raise SettingsError(f"days not updated is between 1 and {MAX_STALE_DAYS}")
+    return days
 
 
 async def save_settings(
-    conn: AsyncConnection, workspace_id: UUID, *, user_id: UUID, flags: list[str] | None,
-) -> list[str] | None:
-    """Keep a custom setup, or - with `None` - go back to the default set by
-    keeping nothing, so the default's future flags reach you again (p.72:
-    "new flags that get added in the future will not be automatically turned
-    on" is a property of a *custom* setup only)."""
-    if flags is None:
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    *,
+    user_id: UUID,
+    flags: list[str] | None,
+    name_pattern: str | None = None,
+    stale_days: int | None = None,
+) -> dict[str, Any]:
+    """Keep a setup. Each setting is independent, and `None` is its default:
+    `flags=None` is the default set, whose future flags reach you (p.72: "new
+    flags that get added in the future will not be automatically turned on" is
+    a property of a *custom* setup only). All three default keeps nothing."""
+    chosen = parse_flags(flags) if flags is not None else None
+    pattern = await parse_pattern(conn, name_pattern)
+    days = parse_days(stale_days)
+    params = {"wid": str(workspace_id), "uid": str(user_id)}
+    if chosen is None and pattern is None and days is None:
         await conn.execute(
             text("DELETE FROM ontology_cleanup_settings "
                  "WHERE workspace_id = :wid AND user_id = :uid"),
-            {"wid": str(workspace_id), "uid": str(user_id)},
+            params,
         )
-        return None
-    chosen = parse_flags(flags)
-    await conn.execute(
-        text("""
-            INSERT INTO ontology_cleanup_settings (workspace_id, user_id, flags)
-            VALUES (:wid, :uid, CAST(:flags AS text[]))
-            ON CONFLICT (workspace_id, user_id)
-            DO UPDATE SET flags = EXCLUDED.flags, updated_at = now()
-        """),
-        {"wid": str(workspace_id), "uid": str(user_id), "flags": chosen},
-    )
-    return chosen
+    else:
+        await conn.execute(
+            text("""
+                INSERT INTO ontology_cleanup_settings
+                       (workspace_id, user_id, flags, name_pattern, stale_days)
+                VALUES (:wid, :uid, CAST(:flags AS text[]), :pattern, :days)
+                ON CONFLICT (workspace_id, user_id)
+                DO UPDATE SET flags = EXCLUDED.flags,
+                              name_pattern = EXCLUDED.name_pattern,
+                              stale_days = EXCLUDED.stale_days,
+                              updated_at = now()
+            """),
+            {**params, "flags": chosen, "pattern": pattern, "days": days},
+        )
+    return {"flags": chosen, "name_pattern": pattern, "stale_days": days}
 
 
 async def candidates(
@@ -208,9 +261,9 @@ async def candidates(
     # p.72's setup (§619): the flags this reader uses, in their order - or the
     # default set's. A flag turned off is not a flag on any row, so a type
     # whose only flags are off is not in the queue at all.
-    order = await settings(conn, workspace_id, user_id=user_id)
-    if order is None:
-        order = list(FLAG_PRIORITY)
+    mine = await settings(conn, workspace_id, user_id=user_id)
+    order = mine["flags"] if mine["flags"] is not None else list(FLAG_PRIORITY)
+    stale_days = mine["stale_days"] or STALE_SOURCE_DAYS
     rows = await fetch_all(
         conn,
         """
@@ -259,9 +312,13 @@ async def candidates(
                -- p.74: "The object type has a blank description. Does not
                -- check for descriptions on all properties of the object type."
                (btrim(ot.description) = '') AS no_description,
-               (position(:marker_test in lower(ot.display_name)) > 0
-                OR position(:marker_dep in lower(ot.display_name)) > 0
-               ) AS name_looks_temporary
+               -- p.74's "Display name regex matches string": your pattern
+               -- (§630), or the default's two markers.
+               (CASE WHEN CAST(:pattern AS text) IS NULL
+                     THEN position(:marker_test in lower(ot.display_name)) > 0
+                          OR position(:marker_dep in lower(ot.display_name)) > 0
+                     ELSE ot.display_name ~ CAST(:pattern AS text)
+                END) AS name_looks_temporary
           FROM object_types ot
           LEFT JOIN usage u ON u.object_type_id = ot.id
           -- **`s.user_id = :uid` is belt to db 0080's braces, and the sweep
@@ -281,7 +338,8 @@ async def candidates(
             "wid": str(workspace_id),
             "uid": str(user_id),
             "unused_days": UNUSED_DAYS,
-            "stale_before": now - timedelta(days=STALE_SOURCE_DAYS),
+            "stale_before": now - timedelta(days=stale_days),
+            "pattern": mine["name_pattern"],
             "marker_test": TEMPORARY_MARKERS[0],
             "marker_dep": TEMPORARY_MARKERS[1],
         },

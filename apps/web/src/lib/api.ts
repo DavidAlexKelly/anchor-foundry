@@ -1944,13 +1944,17 @@ export const objects = {
   },
   /** p.72's flag setup (§619): yours, or `null` for the default set. */
   cleanupSettings: (wid: string) =>
-    request<{ flags: string[] | null; available: string[] }>(
+    request<import("./ontology-cleanup").CleanupSetup>(
       `/workspaces/${wid}/ontology-cleanup/settings`,
     ),
-  saveCleanupSettings: (wid: string, flags: string[] | null) =>
-    request<{ flags: string[] | null; available: string[] }>(
+  /** The whole setup (§619, §630): a setting sent as null is its default. */
+  saveCleanupSettings: (
+    wid: string,
+    setup: { flags: string[] | null; name_pattern: string | null; stale_days: number | null },
+  ) =>
+    request<import("./ontology-cleanup").CleanupSetup>(
       `/workspaces/${wid}/ontology-cleanup/settings`,
-      { method: "PUT", body: JSON.stringify({ flags }) },
+      { method: "PUT", body: JSON.stringify(setup) },
     ),
   /** p.71's snooze. **Yours alone** — "an action that will affect only the user
    * that performs it" — which db 0080's row policy enforces. */

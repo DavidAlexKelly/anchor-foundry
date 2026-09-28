@@ -69,7 +69,19 @@ export function flagLabel(flag: string): string {
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : flag;
 }
 
-export function flagHint(flag: string): string {
+/** A flag's hint, saying p.74's two values as this person set them (§630)
+ * rather than the defaults', since a hint promising thirty days to someone
+ * whose queue counts seven describes somebody else's queue. */
+export function flagHint(
+  flag: string,
+  setup?: { name_pattern: string | null; stale_days: number | null },
+): string {
+  if (flag === "stale_source" && setup?.stale_days) {
+    return `No mapping has synced in the last ${setup.stale_days} days.`;
+  }
+  if (flag === "name_looks_temporary" && setup?.name_pattern) {
+    return `The name matches ${setup.name_pattern}.`;
+  }
   return FLAG_LABELS[flag]?.hint ?? "";
 }
 
@@ -213,3 +225,35 @@ export function movedFlag(custom: readonly string[], flag: string, by: -1 | 1): 
 export const CUSTOM_FLAGS_NOTE =
   "A custom set keeps exactly these flags: one added to the default set later "
   + "is not turned on for you.";
+
+// ---- p.74's two values, per person (§630) ------------------------------------
+/** A person's whole cleanup setup, as the settings route answers. */
+export interface CleanupSetup {
+  flags: string[] | null;
+  /** p.74's "Display name regex matches string", or null for the default. */
+  name_pattern: string | null;
+  /** p.74's "Datasource not updated in [x] days", or null for the default. */
+  stale_days: number | null;
+  available: string[];
+  default_stale_days: number;
+}
+
+/** p.74's default, shown where a person's own pattern would go. */
+export const DEFAULT_PATTERN_NOTE =
+  "Blank uses the default: [test] or [deprecated] anywhere in the name, in any case.";
+
+/** The pattern box's text as sent: blank is the default, and a pattern is
+ * kept exactly as typed, spaces included - "UAT - " is p.74's own example. */
+export function patternOf(typed: string): string | null {
+  return typed.trim() === "" ? null : typed;
+}
+
+/** The days box's text as sent: blank is the default; anything but a whole
+ * number from 1 to 3650 is `undefined`, which the panel refuses to save. */
+export function daysOf(typed: string): number | null | undefined {
+  const text = typed.trim();
+  if (text === "") return null;
+  if (!/^\d+$/.test(text)) return undefined;
+  const days = Number(text);
+  return days >= 1 && days <= 3650 ? days : undefined;
+}
