@@ -95,6 +95,9 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   drawnShapesVariable: "write",
   // p.225's column visibility (§610): the table reads which columns to show.
   columnsVariable: "read",
+  // p.243's right-clicked object (§613): written by a right-click on a row,
+  // as the active object is by a click.
+  rightClickedVariable: "write",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",

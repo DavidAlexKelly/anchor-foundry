@@ -1844,6 +1844,51 @@ def test_an_item_is_a_non_empty_name_and_only_clicks_come_from_one() -> None:
         we.parse(item_event("i_csv", on="change"), layout=menu_layout(), variables=variables)
 
 
+def table_layout(custom: bool, items=None) -> dict:
+    """p.243's Object Table with a custom right-click menu (§613)."""
+    return {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["tbl"]},
+        "tbl": {"type": {"resolvedName": "CanvasObjectTable"},
+                "props": {"customMenu": custom, "menuItems": items if items is not None else [
+                    {"id": "m_flag", "label": "Flag"}, {"label": "no id"}, "junk"]}},
+    }
+
+
+def table_event(item=None, on: str = "click") -> dict:
+    trigger = {"node": "tbl", "on": on, **({"item": item} if item is not None else {})}
+    return {"e_1": {"id": "e_1", "trigger": trigger, "effects": [set_var("v_a", "x")]}}
+
+
+def test_a_tables_right_click_menu_items_are_clicks() -> None:
+    """p.243: "add custom items to the menu… choose whether your menu item
+    triggers an action or an event"."""
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    events = we.parse(table_event("m_flag"), layout=table_layout(True), variables=variables)
+    assert events["e_1"].item == "m_flag"
+
+
+def test_a_tables_click_must_name_a_menu_item_it_has() -> None:
+    """A table's clicks are its menu's items and nothing else: no item is a
+    wiring that never fires, and a table whose menu is not customised has no
+    items for an event to name."""
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    for custom in (True, False):
+        with pytest.raises(we.EventError, match="items of its right-click menu"):
+            we.parse(table_event(), layout=table_layout(custom), variables=variables)
+    with pytest.raises(we.EventError, match="does not have"):
+        we.parse(table_event("m_flag"), layout=table_layout(False), variables=variables)
+    with pytest.raises(we.EventError, match="does not have"):
+        we.parse(table_event("m_gone"), layout=table_layout(True), variables=variables)
+    # Items that are not a list are no items, rather than a crash.
+    for junk in (5, {"id": "m_flag"}, "m_flag"):
+        with pytest.raises(we.EventError, match="does not have"):
+            we.parse(table_event("m_flag"), layout=table_layout(True, junk),
+                     variables=variables)
+    # The table's own trigger is untouched by any of this.
+    assert we.parse(table_event(on="row_select"), layout=table_layout(True),
+                    variables=variables)["e_1"].on == "row_select"
+
+
 def test_without_a_layout_an_item_is_only_checked_for_shape() -> None:
     """The same rule as a trigger's node: no layout, no membership check."""
     events = we.parse(item_event("anything"))
