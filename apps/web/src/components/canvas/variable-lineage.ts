@@ -98,6 +98,10 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   // p.243's right-clicked object (§613): written by a right-click on a row,
   // as the active object is by a click.
   rightClickedVariable: "write",
+  // p.317's user text selection (§636): the Markdown widget writes all three.
+  selectedTextVariable: "write",
+  selectionStartVariable: "write",
+  selectionEndVariable: "write",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",

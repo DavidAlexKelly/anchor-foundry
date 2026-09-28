@@ -288,6 +288,11 @@ export const REFERENCE_PROPS = [
   "columnsVariable",
   // p.243's right-clicked object on the Object Table (§613). See the API's copy.
   "rightClickedVariable",
+  // p.317's user text selection on the Markdown widget (§636). See the API's
+  // copy.
+  "selectedTextVariable",
+  "selectionStartVariable",
+  "selectionEndVariable",
   "name",
 ] as const;
 

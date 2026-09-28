@@ -47,8 +47,11 @@
 // ---- the tree ---------------------------------------------------------------
 
 export type Inline =
-  | { kind: "text"; text: string }
-  | { kind: "code"; text: string }
+  /** `at`, when the parse was asked for offsets (§636): where in the source
+   * the text's first character is. A text node's characters are consecutive
+   * in the source, so `at + n` is its n-th. */
+  | { kind: "text"; text: string; at?: number }
+  | { kind: "code"; text: string; at?: number }
   | { kind: "strong"; children: Inline[] }
   | { kind: "em"; children: Inline[] }
   | { kind: "del"; children: Inline[] }
@@ -77,7 +80,7 @@ export interface ListItem {
 export type Block =
   | { kind: "heading"; level: number; children: Inline[] }
   | { kind: "paragraph"; children: Inline[] }
-  | { kind: "code"; text: string; lang: string }
+  | { kind: "code"; text: string; lang: string; at?: number }
   | { kind: "quote"; blocks: Block[] }
   | { kind: "list"; ordered: boolean; items: ListItem[] }
   | { kind: "rule" }
@@ -145,11 +148,18 @@ const MARKS: { open: string; close: string; kind: "strong" | "em" | "del" | "mar
   { open: "_", close: "_", kind: "em" },
 ];
 
-function pushText(out: Inline[], text: string): void {
+/** Append text, joined to the text before it when that is one run - and,
+ * with offsets, only when the two are consecutive in the source, so a text
+ * node's offset always names every one of its characters (§636). */
+function pushText(out: Inline[], text: string, at?: number): void {
   if (!text) return;
   const last = out[out.length - 1];
-  if (last && last.kind === "text") last.text += text;
-  else out.push({ kind: "text", text });
+  if (last && last.kind === "text"
+      && (at === undefined || (last.at !== undefined && last.at + last.text.length === at))) {
+    last.text += text;
+  } else {
+    out.push(at === undefined ? { kind: "text", text } : { kind: "text", text, at });
+  }
 }
 
 /** Parse one line's worth of inline syntax.
@@ -177,11 +187,24 @@ export function referenceAttributes(
     : null;
 }
 
-export function parseInline(source: string, references = false): Inline[] {
+export function parseInline(source: string, references = false, map?: readonly number[]): Inline[] {
   const out: Inline[] = [];
   let i = 0;
+  // `map[n]` is where the n-th character of `source` is in the whole
+  // document (§636), when offsets were asked for.
+  const at = (n: number) => (map ? map[n] : undefined);
+  const sub = (from: number, to: number) => (map ? map.slice(from, to) : undefined);
   let plain = "";
-  const flush = () => { pushText(out, plain); plain = ""; };
+  let plainAt: number | undefined;
+  const flush = () => { pushText(out, plain, plainAt); plain = ""; plainAt = undefined; };
+  // A character of plain text, starting a new run where the source skips.
+  const add = (ch: string, where: number | undefined) => {
+    if (plain && where !== undefined && plainAt !== undefined && plainAt + plain.length !== where) {
+      flush();
+    }
+    if (!plain) plainAt = where;
+    plain += ch;
+  };
 
   while (i < source.length) {
     const rest = source.slice(i);
@@ -189,7 +212,7 @@ export function parseInline(source: string, references = false): Inline[] {
     // Escapes first: `\*` is a literal asterisk, and without this there is no
     // way to write one.
     if (rest[0] === "\\" && rest.length > 1) {
-      plain += rest[1];
+      add(rest[1]!, at(i + 1));
       i += 2;
       continue;
     }
@@ -200,7 +223,10 @@ export function parseInline(source: string, references = false): Inline[] {
       const end = rest.indexOf("`", 1);
       if (end > 0) {
         flush();
-        out.push({ kind: "code", text: rest.slice(1, end) });
+        const where = at(i + 1);
+        out.push(where === undefined
+          ? { kind: "code", text: rest.slice(1, end) }
+          : { kind: "code", text: rest.slice(1, end), at: where });
         i += end + 1;
         continue;
       }
@@ -214,10 +240,12 @@ export function parseInline(source: string, references = false): Inline[] {
       const named = referenceAttributes(reference[2] ?? "");
       flush();
       if (named) {
+        const open = ":objectreference[".length;
         out.push({ kind: "objectref", ...named,
-                   children: parseInline(reference[1] ?? "", references) });
+                   children: parseInline(reference[1] ?? "", references,
+                     sub(i + open, i + open + (reference[1] ?? "").length)) });
       } else {
-        pushText(out, reference[0]);
+        pushText(out, reference[0], at(i));
       }
       i += reference[0].length;
       continue;
@@ -230,7 +258,7 @@ export function parseInline(source: string, references = false): Inline[] {
       const src = safeHref(image[2]);
       flush();
       if (src) out.push({ kind: "image", src, alt: image[1] ?? "" });
-      else pushText(out, image[0]);
+      else pushText(out, image[0], at(i));
       i += image[0].length;
       continue;
     }
@@ -242,8 +270,12 @@ export function parseInline(source: string, references = false): Inline[] {
       // **A refused URL renders as its own source text**, not as a link with a
       // dead href and not as nothing: an author who typed something this
       // platform will not follow should be able to see what was rejected.
-      if (href) out.push({ kind: "link", href, children: parseInline(link[1] ?? "", references) });
-      else pushText(out, link[0]);
+      if (href) {
+        out.push({ kind: "link", href, children: parseInline(link[1] ?? "", references,
+          sub(i + 1, i + 1 + (link[1] ?? "").length)) });
+      } else {
+        pushText(out, link[0], at(i));
+      }
       i += link[0].length;
       continue;
     }
@@ -257,14 +289,15 @@ export function parseInline(source: string, references = false): Inline[] {
         flush();
         out.push({
           kind: mark.kind,
-          children: parseInline(rest.slice(mark.open.length, end), references),
+          children: parseInline(rest.slice(mark.open.length, end), references,
+            sub(i + mark.open.length, i + end)),
         } as Inline);
         i += end + mark.close.length;
         continue;
       }
     }
 
-    plain += rest[0];
+    add(rest[0]!, at(i));
     i += 1;
   }
   flush();
@@ -285,13 +318,6 @@ const TABLE_ROW = /^\s*\|(.*)\|\s*$/;
 // drop its leading pipe made `cells` reachable with a line no pipe rule had
 // matched, which is how the dead fallback above came to be written.
 const TABLE_RULE = /^\s*\|[\s:|-]+\|\s*$/;
-
-function cells(line: string): string[] {
-  // Strips the outer pipes rather than re-matching `TABLE_ROW`: the match
-  // has already happened at both call sites, so a `?? line` fallback was a
-  // branch no input could reach and no test could kill.
-  return line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
-}
 
 function alignOf(spec: string): Align | null {
   const t = spec.trim();
@@ -314,80 +340,115 @@ export interface ParseOptions {
   breaks?: boolean;
   /** p.316's "Inline reference" tag type (§632): parse p.319's anchors. */
   references?: boolean;
+  /** Record where each text run came from in the source (§636), for p.317's
+   * user text selection. Offsets count the source with its line endings made
+   * `\n`, which is the text the widget renders. */
+  offsets?: boolean;
 }
+
+/** A line, and where each of its characters is in the source. */
+interface Line {
+  text: string;
+  map: number[] | undefined;
+}
+
+const range = (from: number, length: number) =>
+  Array.from({ length }, (_, n) => from + n);
 
 /** p.318's syntax, as blocks. */
 export function parse(source: unknown, options: ParseOptions = {}): Block[] {
+  const text = String(source ?? "").replace(/\r\n?/g, "\n");
+  let at = 0;
+  const lines: Line[] = text.split("\n").map((line) => {
+    const out = { text: line, map: options.offsets ? range(at, line.length) : undefined };
+    at += line.length + 1;
+    return out;
+  });
+  return parseLines(lines, options);
+}
+
+function parseLines(lines: Line[], options: ParseOptions): Block[] {
   const breaks = options.breaks !== false;
   const refs = options.references === true;
-  const inline = (text: string) => parseInline(text, refs);
-  const lines = String(source ?? "").replace(/\r\n?/g, "\n").split("\n");
+  // The tail of a line from `from` on, with its map.
+  const tail = (line: Line, from: number): Line => ({
+    text: line.text.slice(from),
+    map: line.map?.slice(from),
+  });
+  const inline = (l: Line) => parseInline(l.text, refs, l.map);
   const blocks: Block[] = [];
   let i = 0;
 
-  const paragraph: string[] = [];
+  const paragraph: Line[] = [];
   const endParagraph = () => {
     if (paragraph.length === 0) return;
-    const joined = breaks ? paragraph.join("\n") : paragraph.join(" ");
-    blocks.push({ kind: "paragraph", children: withBreaks(joined, refs) });
+    blocks.push({ kind: "paragraph", children: joined(paragraph, breaks, refs) });
     paragraph.length = 0;
   };
 
   while (i < lines.length) {
     const line = lines[i]!;
 
-    if (!line.trim()) { endParagraph(); i += 1; continue; }
+    if (!line.text.trim()) { endParagraph(); i += 1; continue; }
 
-    const fence = FENCE.exec(line);
+    const fence = FENCE.exec(line.text);
     if (fence) {
       endParagraph();
-      const body: string[] = [];
+      const body: Line[] = [];
       i += 1;
-      while (i < lines.length && !FENCE.test(lines[i]!)) { body.push(lines[i]!); i += 1; }
+      while (i < lines.length && !FENCE.test(lines[i]!.text)) { body.push(lines[i]!); i += 1; }
       i += 1;  // the closing fence, or the end of the source
-      blocks.push({ kind: "code", text: body.join("\n"), lang: fence[1] ?? "" });
+      const code: Block = { kind: "code", text: body.map((l) => l.text).join("\n"),
+        lang: fence[1] ?? "" };
+      // A code block's lines are consecutive in the source, so its first
+      // character's offset names the rest.
+      const first = body[0]?.map?.[0];
+      blocks.push(first === undefined ? code : { ...code, at: first } as Block);
       continue;
     }
 
     // Before the rule check, because `---` under a table is its alignment row
     // and `- item` starts with a dash.
-    if (RULE.test(line)) { endParagraph(); blocks.push({ kind: "rule" }); i += 1; continue; }
+    if (RULE.test(line.text)) { endParagraph(); blocks.push({ kind: "rule" }); i += 1; continue; }
 
-    const heading = HEADING.exec(line);
+    const heading = HEADING.exec(line.text);
     if (heading) {
       endParagraph();
       blocks.push({
         kind: "heading",
         level: heading[1]!.length,
-        children: inline(heading[2]!),
+        // The captured text runs to the end of the line, so it starts where
+        // the line's length less its own leaves off.
+        children: inline(tail(line, line.text.length - heading[2]!.length)),
       });
       i += 1;
       continue;
     }
 
-    if (QUOTE.test(line)) {
+    if (QUOTE.test(line.text)) {
       endParagraph();
-      const body: string[] = [];
-      while (i < lines.length && QUOTE.test(lines[i]!)) {
-        body.push(QUOTE.exec(lines[i]!)![1]!);
+      const body: Line[] = [];
+      while (i < lines.length && QUOTE.test(lines[i]!.text)) {
+        const rest = QUOTE.exec(lines[i]!.text)![1]!;
+        body.push(tail(lines[i]!, lines[i]!.text.length - rest.length));
         i += 1;
       }
       // Recursive, so a quote may hold a list or a heading - p.314's "block
       // styling" is a block, and a block that could only hold text would not be
       // one.
-      blocks.push({ kind: "quote", blocks: parse(body.join("\n"), options) });
+      blocks.push({ kind: "quote", blocks: parseLines(body, options) });
       continue;
     }
 
     // A table needs its alignment row on the *next* line; without it these are
     // just lines with pipes in them.
-    if (TABLE_ROW.test(line) && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]!)) {
+    if (TABLE_ROW.test(line.text) && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]!.text)) {
       endParagraph();
       const head = cells(line).map(inline);
-      const align = cells(lines[i + 1]!).map(alignOf);
+      const align = cells(lines[i + 1]!).map((c) => alignOf(c.text));
       i += 2;
       const rows: Inline[][][] = [];
-      while (i < lines.length && TABLE_ROW.test(lines[i]!)) {
+      while (i < lines.length && TABLE_ROW.test(lines[i]!.text)) {
         rows.push(cells(lines[i]!).map(inline));
         i += 1;
       }
@@ -395,21 +456,23 @@ export function parse(source: unknown, options: ParseOptions = {}): Block[] {
       continue;
     }
 
-    if (UNORDERED.test(line) || ORDERED.test(line)) {
+    if (UNORDERED.test(line.text) || ORDERED.test(line.text)) {
       endParagraph();
       // No `&& !UNORDERED.test(line)`: it was there, and it was dead. One
       // regex needs a digit where the other needs `-`, `*` or `+`, so no
       // line matches both and the guard could never decide anything (§202).
-      const ordered = ORDERED.test(line);
+      const ordered = ORDERED.test(line.text);
       const items: ListItem[] = [];
       while (i < lines.length) {
-        const m = ordered ? ORDERED.exec(lines[i]!) : UNORDERED.exec(lines[i]!);
+        const current = lines[i]!;
+        const m = ordered ? ORDERED.exec(current.text) : UNORDERED.exec(current.text);
         if (!m) break;
-        const text = m[1]!;
-        const task = TASK.exec(text);
+        const item = tail(current, current.text.length - m[1]!.length);
+        const task = TASK.exec(item.text);
         items.push(task
-          ? { children: inline(task[2]!), done: task[1]!.toLowerCase() === "x" }
-          : { children: inline(text) });
+          ? { children: inline(tail(item, item.text.length - task[2]!.length)),
+              done: task[1]!.toLowerCase() === "x" }
+          : { children: inline(item) });
         i += 1;
       }
       blocks.push({ kind: "list", ordered, items });
@@ -423,18 +486,48 @@ export function parse(source: unknown, options: ParseOptions = {}): Block[] {
   return blocks;
 }
 
-/** Turn the newlines inside a paragraph into explicit breaks.
- *
- * p.317's "Break on newlines" is decided by the *caller* — this only sees the
- * text it was handed, joined with newlines when the option is on and with
- * spaces when it is off.
- */
-function withBreaks(text: string, references: boolean): Inline[] {
-  const parts = text.split("\n");
+/** A table row's cells, each trimmed, with their maps. */
+function cells(line: Line): Line[] {
+  // Strips the outer pipes rather than re-matching `TABLE_ROW`: the match
+  // has already happened at both call sites, so a `?? line` fallback was a
+  // branch no input could reach and no test could kill.
+  const text = line.text;
+  let from = text.length - text.trimStart().length;
+  let to = text.trimEnd().length;
+  if (text[from] === "|") from += 1;
+  if (to > from && text[to - 1] === "|") to -= 1;
+  const out: Line[] = [];
+  let start = from;
+  for (let n = from; n <= to; n++) {
+    if (n === to || text[n] === "|") {
+      let a = start;
+      let b = n;
+      while (a < b && /\s/.test(text[a]!)) a += 1;
+      while (b > a && /\s/.test(text[b - 1]!)) b -= 1;
+      out.push({ text: text.slice(a, b), map: line.map?.slice(a, b) });
+      start = n + 1;
+    }
+  }
+  return out;
+}
+
+/** A paragraph's lines as inline text, p.317's "Break on newlines" deciding
+ * whether a newline is a break or a space. Either way the character stands
+ * where the source's newline did, so the map runs straight through. */
+function joined(lines: Line[], breaks: boolean, references: boolean): Inline[] {
+  if (!breaks) {
+    const text = lines.map((l) => l.text).join(" ");
+    // The space joining two lines stands for the newline after the first.
+    const map = lines[0]!.map
+      ? lines.flatMap((l, n) => (n === lines.length - 1
+        ? l.map! : [...l.map!, l.map![l.map!.length - 1]! + 1]))
+      : undefined;
+    return parseInline(text, references, map);
+  }
   const out: Inline[] = [];
-  parts.forEach((part, index) => {
+  lines.forEach((line, index) => {
     if (index > 0) out.push({ kind: "break" });
-    out.push(...parseInline(part, references));
+    out.push(...parseInline(line.text, references, line.map));
   });
   return out;
 }

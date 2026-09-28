@@ -57,10 +57,15 @@ function Anchor({ node }: { node: ObjectRef }) {
 function renderInline(nodes: Inline[]): React.ReactNode {
   return nodes.map((node, index) => {
     switch (node.kind) {
+      // A run with an offset (§636) is drawn in an element that says it, so a
+      // selection's ends can be read back as places in the source. A README
+      // parses without offsets and keeps bare text.
       case "text":
-        return <React.Fragment key={index}>{node.text}</React.Fragment>;
+        return node.at === undefined
+          ? <React.Fragment key={index}>{node.text}</React.Fragment>
+          : <span key={index} data-at={node.at}>{node.text}</span>;
       case "code":
-        return <code key={index}>{node.text}</code>;
+        return <code key={index} data-at={node.at}>{node.text}</code>;
       case "strong":
         return <strong key={index}>{renderInline(node.children)}</strong>;
       case "em":
@@ -122,7 +127,7 @@ function renderBlock(block: Block, key: number, widget: Align): React.ReactNode 
       // with it. The browser suite caught it as `start` != `left`.
       return (
         <pre key={key} style={style} className="canvas-markdown-code">
-          <code>{block.text}</code>
+          <code data-at={block.at}>{block.text}</code>
         </pre>
       );
     case "rule":
