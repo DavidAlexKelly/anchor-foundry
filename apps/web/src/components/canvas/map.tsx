@@ -29,6 +29,7 @@ import {
   DRAWN_OPACITY, DRAW_TOOLS, MAX_POLYGON_POINTS, MIN_DRAG_PX, boxBetween, boxRect, circleBetween, circlePath, closes, isCircle,
   isDrag, isPolygon, lonLatAt, polygonPoints, type Area, type DrawTool,
 } from "./map-area";
+import { bubbleColor } from "./map-layer";
 
 export interface MapPoint {
   id: string;
@@ -39,6 +40,10 @@ export interface MapPoint {
    * emit it as a `single_object` variable; absent for dataset rows, which are
    * not objects and have nothing to emit. */
   instance?: import("@/lib/types").ObjectInstance;
+  /** p.300's added layers (§642): a pin from one is drawn in that layer's
+   * style and selection, and a locked layer's pin cannot be clicked. Absent
+   * for the map's own layer, which the map's own props style. */
+  layer?: { id: string; color: string | null; opacity: number; selected: boolean; locked: boolean };
 }
 
 const WIDTH = 640;
@@ -503,6 +508,8 @@ export function MapCanvas({
   };
 
   const k = WIDTH / current.w;
+  // The map's own layer's selection, and each added layer's pins selected.
+  const selectedCount = (selectedKeys?.size ?? 0) + points.filter((p) => p.layer?.selected).length;
 
   // A drawn area's look, and what a click on it does (§641): selected ones
   // are outlined solid and heavier. Clickable only with somewhere to write
@@ -693,20 +700,23 @@ export function MapCanvas({
         )}
         {placed.map((group) => {
           const only = group.members.length === 1 ? group.members[0] : undefined;
-          const chosen = !!only && !!selectedKeys?.has(String(only.instance?.primary_key));
+          const chosen = !!only && (only.layer ? only.layer.selected
+            : !!selectedKeys?.has(String(only.instance?.primary_key)));
+          const clickable = !!onSelect && !only?.layer?.locked;
           return only ? (
             <circle
               key={group.key}
               cx={group.x}
               cy={group.y}
               r={chosen ? 7 : 5}
-              fill={fill}
-              fillOpacity={opacity}
+              fill={only.layer?.color ?? fill}
+              fillOpacity={only.layer?.opacity ?? opacity}
               stroke={chosen ? "var(--ink, #16232f)" : "#fff"}
               strokeWidth={chosen ? 2.5 : 1.5}
               data-selected={chosen ? "true" : undefined}
-              style={{ cursor: onSelect ? "pointer" : "inherit" }}
-              onClick={() => onSelect?.(only)}
+              data-layer={only.layer?.id}
+              style={{ cursor: clickable ? "pointer" : "inherit" }}
+              onClick={clickable ? () => onSelect!(only) : undefined}
             >
               <title>{`${only.label} (${only.lat.toFixed(4)}, ${only.lon.toFixed(4)})`}</title>
             </circle>
@@ -716,7 +726,7 @@ export function MapCanvas({
                 cx={group.x}
                 cy={group.y}
                 r={Math.min(20, 8 + Math.sqrt(group.members.length) * 2)}
-                fill={fill}
+                fill={bubbleColor(group.members.map((m) => m.layer?.color), fill)}
                 fillOpacity={0.82 * opacity}
                 stroke="#fff"
                 strokeWidth={1.5}
@@ -838,7 +848,7 @@ export function MapCanvas({
         <span className="canvas-map-note">
           {layerLabel ? `${layerLabel}: ` : ""}
           {points.length.toLocaleString()} placed
-          {selectedKeys && selectedKeys.size > 0 ? `, ${selectedKeys.size.toLocaleString()} selected` : ""}
+          {selectedCount > 0 ? `, ${selectedCount.toLocaleString()} selected` : ""}
           {shapes.length > 0 ? `, ${shapes.length.toLocaleString()} shape${
             shapes.length === 1 ? "" : "s"}` : ""}
           {shapesOff > 0 ? `, ${shapesOff.toLocaleString()} outside the view` : ""}

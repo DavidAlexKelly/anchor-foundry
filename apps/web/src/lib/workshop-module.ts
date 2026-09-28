@@ -318,7 +318,7 @@ export const NESTED_REFERENCE_PROPS: Record<string, readonly string[]> = {
   steps: ["completedVariable"],
   // p.348's Timeline layers, each with its own object set. See the API's copy
   // for why a second entry is the point rather than an afterthought.
-  layers: ["objectSetVariable"],
+  layers: ["objectSetVariable", "selectedVariable", "visibleVariable"],
   // p.280's Chart XY layers (§625): a series reading a set of its own. See
   // the API's copy.
   series: ["objectSetVariable", "drilldownVariable"],

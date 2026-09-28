@@ -587,7 +587,10 @@ NESTED_REFERENCE_PROPS: dict[str, tuple[str, ...]] = {
     # precedent to copy, and §222 is that widget. A layer bound to a deleted
     # set would draw an empty band with a legend entry and a colour, which
     # reads as "no events in this period" rather than "this binding is gone".
-    "layers": ("objectSetVariable",),
+    # p.300's Add object layer on the Map (§642) uses the same prop name, each
+    # layer with its Selected objects written by a click on one of its pins
+    # and a boolean its visibility reads.
+    "layers": ("objectSetVariable", "selectedVariable", "visibleVariable"),
     # p.280's Chart XY layers (§625): "The Object set option allows a Workshop
     # object set variable to be used as input", per layer. A series reading a
     # set of its own must have that set resolved to be asked at all, and must

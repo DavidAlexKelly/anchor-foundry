@@ -55,7 +55,10 @@ import {
 import {
   autoSelectKey, hasSelection, keysOf, selectionClauses, toggle as toggleKey,
 } from "./object-table-selection";
-import { layerColorOf, layerOpacityOf, layerVisibleOf } from "./map-layer";
+import {
+  MAX_LAYERS, layerColorOf, layerOpacityOf, layerPoints, layerVisibleOf, layersOf, withLayerSetting,
+  withNewLayer, withoutLayer, type MapLayer,
+} from "./map-layer";
 import {
   DEFAULT_LINES, EMPTY_MODES, MAX_LINES, cellStyle, emptyMessageOf, emptyModeOf,
   fillsCellOf, fitColumnsOf, frozenOf, linesOf, narrowHeadersOf, noValueOf,
@@ -14013,6 +14016,7 @@ export function CanvasMap({
   autoZoomOutsideOnly = false,
   boundsVariable = null,
   followSetVariable = null,
+  layers = null,
 }: {
   source?: "objects" | "dataset";
   /** An `object_set` variable to plot (roadmap 1.5). When set, this map reads
@@ -14118,6 +14122,9 @@ export function CanvasMap({
   autoZoomOutsideOnly?: boolean;
   boundsVariable?: string | null;
   followSetVariable?: string | null;
+  /** p.300's Add object layer (§642, `map-layer.ts`): the layers after the
+   * map's own, each with its own object set and settings. */
+  layers?: unknown;
 }) {
   const {
     id: nodeId,
@@ -14125,7 +14132,7 @@ export function CanvasMap({
   } = useNode();
   const { workspaceId, projectId } = useCanvasEnv();
   const filterValue = useCanvasParameter(filterParameter);
-  const { set: setParameter } = useCanvasParameters();
+  const { set: setParameter, values: parameterValues } = useCanvasParameters();
   // Read back from the variable it writes, as a Filter List's clauses are:
   // the area on the map is the one the document holds.
   const areaWritten = useCanvasParameter(areaVariable);
@@ -14170,7 +14177,8 @@ export function CanvasMap({
   });
   const searchValue = useCanvasParameter(searchParameter);
   const setDefinition = useCanvasVariable(objectSetVariable);
-  const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
+  const { pending: variablesPending, events: moduleEvents, resolved: resolvedVariables } =
+    useCanvasVariables();
   const eventContext = useEventContext(undefined, useOverlayIds());
   const usingSet = source === "objects" && !!objectSetVariable;
 
@@ -14342,6 +14350,56 @@ export function CanvasMap({
     return { points: collected, unplaceable: bad, notYet: later };
   }, [source, usingSet, setPage.data, objectPage.data, datasetRows.data,
       locationProperty, labelProperty, tracking, tracksByKey, selectedTime]);
+  // p.300's added layers (§642): each reads its own set, the way the map's
+  // own layer does, and its pins carry its style and selection.
+  const addedLayers = usingSet ? layersOf(layers) : [];
+  const valueOf = (id: string | null) => !id ? undefined
+    : parameterValues[id] !== undefined ? parameterValues[id] : resolvedVariables[id];
+  const layerSets = useQueries({
+    queries: addedLayers.map((layer) => {
+      const definition = layer.objectSetVariable ? resolvedVariables[layer.objectSetVariable] : undefined;
+      return {
+        queryKey: ["canvas-map-layer", layer.objectSetVariable, JSON.stringify(definition ?? null), limit],
+        queryFn: () =>
+          objApi.evaluateObjectSet(workspaceId, definition, { limit: Math.min(limit, 200) }),
+        enabled: !!definition && !!layer.locationProperty,
+      };
+    }),
+  });
+  const layerData = addedLayers.map((layer, n) => {
+    const keys = new Set(keysOf(valueOf(layer.selectedVariable)));
+    const placed = layerPoints(layer, layerSets[n]?.data?.instances ?? [], toLatLon,
+      (instance, at, label): MapPoint => ({
+        id: `${layer.id}:${instance.id}`, label, instance: instance as MapPoint["instance"], ...at,
+        layer: { id: layer.id, color: layer.color, opacity: layer.opacity,
+          selected: keys.has(String(instance.primary_key)), locked: layer.locked },
+      }));
+    return {
+      layer, keys, ...placed,
+      shown: layerVisibleOf(layer.visible, valueOf(layer.visibleVariable), !!layer.visibleVariable),
+    };
+  });
+  const layerPins = layerData.flatMap((d) => (d.shown ? d.points : []));
+  // Each layer's Selected objects written as "none selected" once, for the
+  // map's own layer's reason below.
+  const unstatedLayers = addedLayers.filter((l) => l.selectedVariable
+    && resolvedVariables[l.selectedVariable] !== undefined
+    && !hasSelection(parameterValues[l.selectedVariable])
+    && !hasSelection(resolvedVariables[l.selectedVariable]))
+    .map((l) => l.selectedVariable!).join("\n");
+  React.useEffect(() => {
+    if (variablesPending || !unstatedLayers) return;
+    for (const id of unstatedLayers.split("\n")) setParameter(id, selectionClauses([]));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [variablesPending, unstatedLayers]);
+  const selectLayerPin = (point: MapPoint) => {
+    const found = layerData.find((d) => d.layer.id === point.layer?.id);
+    // A locked layer's pins are not clickable at all (`MapCanvas`), so the
+    // lock needs no check here (one survived the sweep as equivalent).
+    if (!found || !found.layer.selectedVariable || !point.instance) return;
+    setParameter(found.layer.selectedVariable,
+      selectionClauses(toggleKey([...found.keys], String(point.instance.primary_key))));
+  };
   // p.302's "map breadcrumbs": each track as a line under the pins.
   const trackShapes: MapShape[] = tracking
     ? (setPage.data?.instances ?? []).flatMap((instance) => {
@@ -14439,7 +14497,7 @@ export function CanvasMap({
       )}
       {!needs && query.data && (
         <MapCanvas
-          points={layerShown ? points : []}
+          points={[...(layerShown ? points : []), ...layerPins]}
           shapes={layerShown ? trackShapes : []}
           color={layerColorOf(layerColor)}
           opacity={layerOpacityOf(layerOpacity)}
@@ -14460,6 +14518,9 @@ export function CanvasMap({
               ...(layerShown && trackShapes.length ? [{ label: `${layerLabel || "Objects"} tracks`,
                 kind: "track" as const, color: layerColorOf(layerColor) ?? "var(--accent, #14646e)",
                 count: trackShapes.length }] : []),
+              ...layerData.filter((d) => d.shown).map((d) => ({
+                label: d.layer.label || "Objects", kind: "points" as const,
+                color: d.layer.color ?? "var(--accent, #14646e)", count: d.points.length })),
             ],
           } : null}
           areas={mapAreas}
@@ -14514,7 +14575,7 @@ export function CanvasMap({
                 }
               }
             : undefined}
-          unplaceable={unplaceable}
+          unplaceable={unplaceable + layerData.reduce((n, d) => n + (d.shown ? d.unplaceable : 0), 0)}
           notYet={notYet}
           total={
             source === "objects"
@@ -14526,9 +14587,15 @@ export function CanvasMap({
           }
           onSelect={
             // p.300: "Objects in locked layers cannot be selected by users".
-            lockLayer ? undefined
-            : selectedVariable || pinEvents.length > 0
-              ? (point) => {
+            // An added layer's pin selects into its own layer (§642).
+            (lockLayer || !(selectedVariable || pinEvents.length > 0))
+              && !addedLayers.some((l) => !l.locked && l.selectedVariable) ? undefined
+              : (point) => {
+                  if (point.layer) {
+                    selectLayerPin(point);
+                    return;
+                  }
+                  if (lockLayer) return;
                   if (selectedVariable && point.instance) {
                     setParameter(selectedVariable, selectionClauses(
                       toggleKey([...selectedKeys], String(point.instance.primary_key))));
@@ -14553,7 +14620,6 @@ export function CanvasMap({
                   });
                   }
                 }
-              : undefined
           }
         />
       )}
@@ -14671,6 +14737,85 @@ function MapTimeline({ controls, start, end, selected, onSelect, playing, onPlay
   );
 }
 
+/** One added layer's settings (§642): p.300's Input and Style for it, the
+ * same as the map's own layer has, with its object set and the property its
+ * objects stand at. */
+function MapLayerSettings({ layer, onSet, onRemove }: {
+  layer: MapLayer;
+  onSet: <K extends keyof MapLayer>(key: K, value: MapLayer[K]) => void;
+  onRemove: () => void;
+}) {
+  const { workspaceId } = useCanvasEnv();
+  const { declared } = useCanvasVariables();
+  const typeId = (declared[layer.objectSetVariable ?? ""]?.object_set as
+    { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const properties = type.data?.properties ?? [];
+  const tag = `map-added-layer-${layer.id}`;
+  return (
+    <div className="field" data-testid={tag} style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+      <input type="text" aria-label="Layer label" data-testid={`${tag}-label`} value={layer.label}
+        placeholder="Label" onChange={(e) => onSet("label", e.target.value)} />
+      <select aria-label="Layer object set" data-testid={`${tag}-set`}
+        value={layer.objectSetVariable ?? ""}
+        onChange={(e) => onSet("objectSetVariable", e.target.value || null)}>
+        <option value="">Object set: choose…</option>
+        {Object.values(declared).filter((v) => v.kind === "object_set")
+          .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+      </select>
+      <select aria-label="Layer location property" data-testid={`${tag}-location`}
+        value={layer.locationProperty ?? ""} disabled={!typeId}
+        onChange={(e) => onSet("locationProperty", e.target.value || null)}>
+        <option value="">Location: choose…</option>
+        {properties.filter((p) => p.data_type === "geopoint")
+          .map((p) => <option key={p.api_name} value={p.api_name}>{p.api_name}</option>)}
+      </select>
+      <select aria-label="Layer label property" data-testid={`${tag}-label-property`}
+        value={layer.labelProperty ?? ""} disabled={!typeId}
+        onChange={(e) => onSet("labelProperty", e.target.value || null)}>
+        <option value="">Pin label: primary key</option>
+        {properties.map((p) => <option key={p.api_name} value={p.api_name}>{p.api_name}</option>)}
+      </select>
+      <select aria-label="Layer selected objects" data-testid={`${tag}-selected`}
+        value={layer.selectedVariable ?? ""}
+        onChange={(e) => onSet("selectedVariable", e.target.value || null)}>
+        <option value="">No selected objects</option>
+        {Object.values(declared).filter((v) => holdsClauses(v) && !v.derivation)
+          .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+      </select>
+      <label className="field canvas-toggle">
+        <input type="checkbox" data-testid={`${tag}-visible`} checked={layer.visible}
+          onChange={(e) => onSet("visible", e.target.checked)} />
+        <span className="field-label">Layer visible</span>
+      </label>
+      <select aria-label="Layer visibility variable" data-testid={`${tag}-visible-variable`}
+        value={layer.visibleVariable ?? ""}
+        onChange={(e) => onSet("visibleVariable", e.target.value || null)}>
+        <option value="">Visibility: the setting above</option>
+        {Object.values(declared).filter((v) => v.kind === "boolean")
+          .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+      </select>
+      <label className="field canvas-toggle">
+        <input type="checkbox" data-testid={`${tag}-lock`} checked={layer.locked}
+          onChange={(e) => onSet("locked", e.target.checked)} />
+        <span className="field-label">Lock layer</span>
+      </label>
+      <input type="color" aria-label="Layer colour" data-testid={`${tag}-color`}
+        value={layer.color ?? "#14646e"} onChange={(e) => onSet("color", e.target.value)} />
+      <input type="number" aria-label="Layer opacity" data-testid={`${tag}-opacity`}
+        min={0.1} max={1} step={0.1} value={layer.opacity}
+        onChange={(e) => onSet("opacity", layerOpacityOf(e.target.value))} />
+      <button type="button" className="btn quiet" data-testid={`${tag}-remove`} onClick={onRemove}>
+        Remove layer
+      </button>
+    </div>
+  );
+}
+
 function MapSettings() {
   const { workspaceId, projectId } = useCanvasEnv();
   const {
@@ -14685,9 +14830,10 @@ function MapSettings() {
     drawOptions, drawnShapeColor, drawnShapeOpacity, singleDrawMode, drawnShapesVariable,
     selectedShapesVariable, shapeOutputType, enableMeasurements, measurePerimeter, perimeterMode, measureArea, measureLine, lineMode,
     showLegend, legendCollapsed, legendSize, showSelectionPanel, autoZoom, autoZoomSetVariable,
-    autoZoomOutsideOnly, boundsVariable, followSetVariable,
+    autoZoomOutsideOnly, boundsVariable, followSetVariable, layers,
     actions: { setProp },
   } = useNode((node) => ({
+    layers: node.data.props.layers,
     showLegend: node.data.props.showLegend,
     legendCollapsed: node.data.props.legendCollapsed,
     legendSize: node.data.props.legendSize,
@@ -15194,6 +15340,30 @@ function MapSettings() {
                 onChange={(e) => setProp((p: { layerOpacity: number }) =>
                   (p.layerOpacity = layerOpacityOf(e.target.value)))}
               />
+            </div>
+          )}
+          {/* p.300's Add object layer (§642): layers after the map's own. */}
+          {objectSetVariable && (
+            <div className="field" data-testid="map-added-layers">
+              {layersOf(layers).map((layer) => (
+                <MapLayerSettings
+                  key={layer.id}
+                  layer={layer}
+                  onSet={(key, value) => setProp((p: { layers: unknown }) =>
+                    (p.layers = withLayerSetting(p.layers, layer.id, key, value)))}
+                  onRemove={() => setProp((p: { layers: unknown }) =>
+                    (p.layers = withoutLayer(p.layers, layer.id)))}
+                />
+              ))}
+              <button
+                type="button"
+                className="btn quiet"
+                data-testid="map-add-layer"
+                disabled={layersOf(layers).length >= MAX_LAYERS}
+                onClick={() => setProp((p: { layers: unknown }) => (p.layers = withNewLayer(p.layers)))}
+              >
+                Add object layer
+              </button>
             </div>
           )}
           {/* p.304's interface options (§560). */}

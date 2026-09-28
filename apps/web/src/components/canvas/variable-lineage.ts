@@ -143,6 +143,10 @@ export const NESTED_PROP_DIRECTION: Record<string, "read" | "write"> = {
   // widget - the same direction as every other `objectSetVariable`, which is
   // why the flat catalogue calls that one a read too.
   "layers.objectSetVariable": "read",
+  // p.300: a Map layer's Selected objects (§642), written by a click on one
+  // of its pins as the map's own layer's are; its visibility variable, read.
+  "layers.selectedVariable": "write",
+  "layers.visibleVariable": "read",
   // p.280: a Chart XY layer's Data input (§625), charted and never written.
   "series.objectSetVariable": "read",
   // p.282: a layer's Selection as filter (§628) writes the clause picked.
