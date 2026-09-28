@@ -602,6 +602,9 @@ NESTED_REFERENCE_PROPS: dict[str, tuple[str, ...]] = {
     # object set: Specify the object set containing annotation object types
     # to be displayed", per layer.
     "annotationLayers": ("objectSetVariable",),
+    # p.396's initial event sets on the Time Series Analysis widget (§658):
+    # "event sets backed by object sets", each reading its own.
+    "eventSets": ("objectSetVariable",),
 }
 
 

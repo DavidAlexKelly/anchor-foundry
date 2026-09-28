@@ -153,6 +153,8 @@ export const NESTED_PROP_DIRECTION: Record<string, "read" | "write"> = {
   "series.drilldownVariable": "write",
   // p.321: an annotation layer's object set is drawn, never written (§637).
   "annotationLayers.objectSetVariable": "read",
+  // p.396: an initial event set's object set is read for its events (§658).
+  "eventSets.objectSetVariable": "read",
 };
 
 /** The mapping props' directions (§598). p.241's variables passed as action

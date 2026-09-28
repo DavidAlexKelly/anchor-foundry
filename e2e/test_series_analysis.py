@@ -246,14 +246,13 @@ VISITS = (
     b"V1,S1,2026-01-02T00:00:00,2026-01-03T00:00:00\n"
     b"V2,S1,2026-01-04T00:00:00,\n"
     b"V3,S2,2026-01-01T00:00:00,2026-01-02T00:00:00\n"
+    b"V4,S3,,2026-01-02T00:00:00\n"
 )
 
 
-def test_a_linked_event_set_is_the_visits_to_a_sensor(page, api, module) -> None:
-    """p.393's Linked event set (§654). Visits link to their sensor, each
-    from its began to its ended timestamp: North has two - one a day long,
-    one with no end, a moment - and South's is its own."""
-    mod = build(api, module, "Analysis linked events")
+def visit_type(mod, module) -> tuple[dict, dict]:
+    """Visits to the sensors, each linked to its sensor, from `began` to
+    `ended`."""
     visits = mod.api.upload_csv(f"{mod.base}/datasets/upload", f"visits_{mod.tag}", VISITS)
     visit = mod.api.call("POST", f"/workspaces/{mod.workspace_id}/object-types", {
         "api_name": f"visit_{mod.tag}", "display_name": f"Visit {mod.tag}",
@@ -269,6 +268,15 @@ def test_a_linked_event_set_is_the_visits_to_a_sensor(page, api, module) -> None
         "from_type_id": visit["id"], "to_type_id": module.sensor_type, "cardinality": "one_to_many",
         "from_property": "sensor_id", "to_property": "$primary_key",
         "from_side_name": "Visits", "to_side_name": "Sensor"})
+    return visit, link
+
+
+def test_a_linked_event_set_is_the_visits_to_a_sensor(page, api, module) -> None:
+    """p.393's Linked event set (§654). Visits link to their sensor, each
+    from its began to its ended timestamp: North has two - one a day long,
+    one with no end, a moment - and South's is its own."""
+    mod = build(api, module, "Analysis linked events")
+    _, link = visit_type(mod, module)
     open_module(page, mod)
     expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
     page.get_by_role("button", name="New linked event set").click()
@@ -397,3 +405,76 @@ def test_interpolation_inside_and_beyond_the_readings(page, api, module) -> None
     expect(north).to_have_attribute("d", "")
     expect(canvas.locator(f"path[data-points='{north_id}']")).to_have_attribute(
         "d", re.compile(r"^(M[^M]*a[^M]*Z){4}$"))
+
+
+def with_visits(api, module, name: str, **props) -> Module:
+    """`build`'s analysis, plus an object set of every visit, and `props`."""
+    mod = build(api, module, name)
+    visit, _ = visit_type(mod, module)
+    definition = mod.definition()
+    definition["variables"]["v_visits"] = {"id": "v_visits", "kind": "object_set", "label": "Visits",
+                                           "object_set": object_set(visit["id"])}
+    definition["layout"]["tsa"]["props"].update(props)
+    mod.define(definition)
+    return mod
+
+
+def test_initial_event_sets_the_builder_gives(page, api, module) -> None:
+    """p.396's Add initial event sets (§658): every visit with a start is an
+    event - three of the four - shaded on every canvas; the reader can hide
+    the set but not remove it."""
+    mod = with_visits(api, module, "Analysis initial events", eventSets=[
+        {"objectSetVariable": "v_visits", "start": "began", "end": "ended", "label": "All visits"}])
+    open_module(page, mod)
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    row = page.locator("[data-testid='series-event-sets'] tr[data-label='All visits']")
+    expect(row.locator("td[data-stat='events']")).to_have_text("3")
+    expect(row.get_by_role("button")).to_have_count(0)
+    shaded = page.locator("[data-testid='series-canvas-1'] rect[data-event-set='initial-1']")
+    expect(shaded).to_have_count(3)
+    # On a new canvas too, once a plot is there: South reads on the 1st and
+    # 2nd only, so the visit on the 4th is past its canvas's end.
+    page.get_by_role("button", name="New canvas").click()
+    page.get_by_label("South sensor canvas").select_option("2")
+    expect(page.locator("[data-testid='series-canvas-2'] rect[data-event-set='initial-1']")).to_have_count(2)
+    page.get_by_label("Highlight All visits").uncheck()
+    expect(shaded).to_have_count(0)
+
+
+def test_new_plots_placed_and_event_set_types_offered(page, api, module) -> None:
+    """p.396's New plot placement and Customize available event set types
+    (§658): a new plot goes on a canvas of its own, and only a time series
+    search is offered."""
+    open_module(page, build(api, module, "Analysis placement", newPlotCanvas="new",
+                            eventSetTypes=["search"]))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    expect(page.get_by_role("button", name="New event set")).to_have_count(1)
+    expect(page.get_by_role("button", name="New linked event set")).to_have_count(0)
+    page.get_by_label("New plot").select_option("derivative")
+    page.get_by_label("Input plot").select_option(label="North sensor")
+    page.get_by_role("button", name="Add plot").click()
+    expect(page.locator("[data-testid='series-canvas-2'] path[data-plot]")).to_have_count(1)
+
+
+def test_the_panel_sets_the_plot_options(page, api, module) -> None:
+    mod = with_visits(api, module, "Analysis plot options")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Time series analysis").first.click()
+    page.get_by_label("New plot placement").select_option("3")
+    page.get_by_label("Offer Linked event set").uncheck()
+    page.get_by_role("button", name="Add initial event set").click()
+    page.get_by_label("Initial event set 1 object set").select_option("v_visits")
+    page.get_by_label("Initial event set 1 start").select_option("began")
+    # Another set's type has other properties: its start is chosen afresh.
+    page.get_by_label("Initial event set 1 object set").select_option("v_all")
+    page.get_by_label("Initial event set 1 object set").select_option("v_visits")
+    expect(page.get_by_label("Initial event set 1 start")).to_have_value("")
+    page.get_by_label("Initial event set 1 start").select_option("began")
+    page.get_by_label("Initial event set 1 label").fill("Visits")
+    save(page)
+    props = mod.definition()["layout"]["tsa"]["props"]
+    assert props["newPlotCanvas"] == 3
+    assert props["eventSetTypes"] == ["search"]
+    assert props["eventSets"] == [
+        {"objectSetVariable": "v_visits", "start": "began", "end": "", "label": "Visits"}]

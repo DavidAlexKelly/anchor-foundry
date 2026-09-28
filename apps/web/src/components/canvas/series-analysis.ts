@@ -677,9 +677,72 @@ export function eventsOf(raw: readonly { start: unknown; end: unknown }[]): Seri
   for (const e of raw) {
     const start = typeof e.start === "string" ? Date.parse(e.start) : NaN;
     const end = typeof e.end === "string" ? Date.parse(e.end) : NaN;
-    if (Number.isFinite(start) && Number.isFinite(end)) out.push({ start, end: Math.max(start, end) });
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      out.push({ start: Math.min(start, end), end: Math.max(start, end) });
+    }
   }
   return out;
+}
+
+/** p.396's *Add initial event sets* (§658): "Initialize the analysis with
+ * event sets backed by object sets, specifying the properties to use for
+ * event start and end times. Users cannot delete or edit the data
+ * configuration for these series". Each object of the set is an event, as a
+ * linked object is (§654): no end property, or a blank one, is a moment. */
+export interface InitialEventSet { objectSetVariable: string; start: string; end: string | null; label: string }
+/** The objects read of each set: an object set page at most. */
+export const MAX_INITIAL_EVENTS = 200;
+
+/** The builder's initial event sets that name a set and a start, at most
+ * `MAX_EVENT_SETS`. */
+export function initialEventSetsOf(raw: unknown): InitialEventSet[] {
+  if (!Array.isArray(raw)) return [];
+  const out: InitialEventSet[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const { objectSetVariable, start, end, label } = item as Record<string, unknown>;
+    if (typeof objectSetVariable !== "string" || !objectSetVariable || typeof start !== "string" || !start) continue;
+    out.push({ objectSetVariable, start, end: typeof end === "string" && end ? end : null,
+      label: typeof label === "string" && label.trim() ? label.trim() : objectSetVariable });
+  }
+  return out.slice(0, MAX_EVENT_SETS);
+}
+
+/** Each object's event, from its start property to its end. */
+export function objectEventsOf(
+  objects: readonly { properties: Record<string, unknown> }[], start: string, end: string | null,
+): SeriesEvent[] {
+  return eventsOf(objects.map((o) => {
+    const from = o.properties[start];
+    const to = end ? o.properties[end] : null;
+    return { start: from, end: to === null || to === undefined || to === "" ? from : to };
+  }));
+}
+
+/** p.396's *Customize available event set types* (§658): "Control which
+ * types of event sets can be added by the user." */
+export const EVENT_SET_TYPES = ["search", "linked"] as const;
+export type EventSetType = (typeof EVENT_SET_TYPES)[number];
+export const EVENT_SET_TYPE_LABELS: Record<EventSetType, string> = {
+  search: "Time series search", linked: "Linked event set",
+};
+
+/** p.396's *New plot placement* (§658): "Choose which canvas new plots are
+ * added to by default" - the input plot's, a new one, or a numbered one. */
+export type Placement = "input" | "new" | number;
+/** The numbered canvases a builder may choose from. */
+export const MAX_CANVASES = 8;
+
+export function placementOf(raw: unknown): Placement {
+  if (raw === "new") return "new";
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= MAX_CANVASES ? raw : "input";
+}
+
+/** The canvas a new plot goes on. */
+export function canvasFor(placement: Placement, input: number, canvases: readonly number[]): number {
+  if (placement === "input") return input;
+  if (placement === "new") return Math.max(1, ...canvases) + 1;
+  return placement;
 }
 
 /** p.395's *Event count*: "The number of events within the current view
