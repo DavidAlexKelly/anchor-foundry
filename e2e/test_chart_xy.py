@@ -908,7 +908,7 @@ def test_the_panel_adds_and_names_a_series(page, api, sites) -> None:
     props = mod.definition()["layout"]["chart"]["props"]
     assert props["series"] == [{"aggregate": "sum", "measure": "capacity", "name": "Capacity",
                                 "axis": "right", "objectSetVariable": None,
-                                "dimension": None}], props
+                                "dimension": None, "kind": None}], props
     assert (props["seriesName"], props["legendPosition"]) == ("Sites", "top"), props
     page.get_by_test_id("chart-series-remove").click()
     page.get_by_role("button", name="Save", exact=True).click()
@@ -1020,15 +1020,101 @@ def test_the_panel_points_a_series_at_another_set(page, api, sites, tickets) -> 
     props = mod.definition()["layout"]["chart"]["props"]
     assert props["series"] == [{"aggregate": "sum", "measure": "hours", "name": "",
                                 "axis": "right", "objectSetVariable": "v_tickets",
-                                "dimension": "state"}], props
+                                "dimension": "state", "kind": None}], props
     # Back to the chart's set lets go of what was the tickets'.
     page.get_by_test_id("chart-series-set").select_option("")
     page.get_by_role("button", name="Save", exact=True).click()
     eventually(lambda: mod.definition()["layout"]["chart"]["props"]["series"],
                lambda got: got == [{"aggregate": "sum", "measure": None, "name": "",
                                     "axis": "right", "objectSetVariable": None,
-                                    "dimension": None}],
+                                    "dimension": None, "kind": None}],
                what="the series back on the chart's set")
+
+
+# ---- p.280's Layer type: bars and a line on one chart (§626) ----------------
+
+def dot(page, series: str, category: str):
+    return page.locator(f"[data-testid='chart-series-line'][data-series='{series}'] circle",
+                        has=page.locator("title", has_text=f"{category} ·"))
+
+
+def test_a_line_layer_runs_across_the_bars(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY layer line", {
+        "series": [{**SUM_SERIES[0], "kind": "line"}]})
+    open_module(page, mod)
+    # The count is bars, the sum a line: one bar per status, and a dot each.
+    expect(page.get_by_test_id("chart-segment")).to_have_count(2)
+    expect(page.get_by_test_id("chart-series-line")).to_have_count(1)
+    expect(dot(page, "Sum of capacity", "closed").locator("title")).to_have_text(
+        "closed · Sum of capacity: 90")
+    # Through the middle of the category's bar, and read on the same axis:
+    # the sum of 90 stands far above the count of 1 beneath it.
+    bar = box(segment(page, "closed", "Count"))
+    point = box(dot(page, "Sum of capacity", "closed"))
+    middle = point["x"] + point["width"] / 2
+    assert bar["x"] < middle < bar["x"] + bar["width"], (bar, point)
+    assert point["y"] + point["height"] < bar["y"], (bar, point)
+    # The axis is drawn to hold the line as well as the bars, whose tallest
+    # is a count of 3.
+    eventually(lambda: value_ticks(page), lambda got: got[-1:] == ["90"],
+               what="an axis reaching the line's 90")
+    # The legend says which is which.
+    expect(page.get_by_test_id("chart-legend-line")).to_have_count(1)
+    expect(page.locator("[data-testid='chart-legend-entry'] title")).to_have_text(
+        ["Count", "Sum of capacity"])
+
+
+def test_a_bar_layer_under_a_line_chart(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY layer bar", {
+        "kind": "line", "series": [{**SUM_SERIES[0], "kind": "bar"}]})
+    open_module(page, mod)
+    expect(segment(page, "open", "Sum of capacity").locator("title")).to_have_text(
+        "open · Sum of capacity: 30")
+    expect(page.get_by_test_id("chart-segment")).to_have_count(2)
+    expect(dot(page, "Count", "open").locator("title")).to_have_text("open · Count: 3")
+    # All lines is still a line chart, drawn as one.
+    mod = build(api, sites, "Chart XY layer all lines", {
+        "kind": "line", "series": [{**SUM_SERIES[0], "kind": "line"}]})
+    open_module(page, mod)
+    expect(page.locator("svg[aria-label='Multi-series line chart']")).to_be_visible()
+    expect(page.get_by_test_id("chart-segment")).to_have_count(0)
+
+
+def test_a_mixed_chart_leaves_out_what_a_series_does_not_have(
+        page, api, sites, tickets) -> None:
+    """`held` is only the tickets': the sites' count has no bar there and the
+    sites' total no dot, rather than a zero of either."""
+    mod = build_layered(api, sites, tickets, "Chart XY layer gaps", [
+        {"aggregate": "count", "objectSetVariable": "v_tickets", "dimension": "state",
+         "kind": "line"},
+        {**SUM_SERIES[0], "kind": "line"},
+    ])
+    open_module(page, mod)
+    expect(dot(page, "Count · Tickets", "held").locator("title")).to_have_text(
+        "held · Count · Tickets: 1")
+    expect(page.get_by_test_id("chart-segment")).to_have_count(2)
+    expect(dot(page, "Sum of capacity", "closed")).to_have_count(1)
+    expect(dot(page, "Sum of capacity", "held")).to_have_count(0)
+
+
+def test_the_panel_sets_a_series_type(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY layer type panel", {"series": SUM_SERIES})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    kind = page.get_by_test_id("chart-series-kind")
+    expect(kind).to_have_value("")
+    expect(kind.locator("option")).to_have_text(["As the chart", "Bar", "Line"])
+    kind.select_option("line")
+    # The picker says what the series is now, not what it was.
+    expect(kind).to_have_value("line")
+    save(page)
+    props = mod.definition()["layout"]["chart"]["props"]
+    assert props["series"][0]["kind"] == "line", props
+    kind.select_option("")
+    page.get_by_role("button", name="Save", exact=True).click()
+    eventually(lambda: mod.definition()["layout"]["chart"]["props"]["series"][0]["kind"],
+               lambda got: got is None, what="the series back to the chart's type")
 
 
 # ---- p.283's Use multiple value axes (§542) --------------------------------

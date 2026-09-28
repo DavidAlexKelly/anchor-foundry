@@ -5,7 +5,7 @@ import {
   type SegmentLegendPosition,
   type SegmentMode, type Segmented,
 } from "./chart-segments";
-import type { AxisSide } from "./chart-series";
+import { type AxisSide, type LayerKind, splitLayers } from "./chart-series";
 import {
   valueScale, type AxisTitles, type ValueAxis, type ValueScale,
 } from "./chart-display";
@@ -717,10 +717,13 @@ export function PieChart({
  */
 export function SegmentedBarChart({
   data, mode, drill, showLegend = true, titles, valueText, categoryText,
-  legend = "bottom", names, sides,
+  legend = "bottom", names, sides, kinds,
 }: {
   data: Segmented;
   mode: SegmentMode;
+  /** p.280's Layer type per series (§626): a series drawn as a line runs
+   * across the grouped bars, through each category's middle. */
+  kinds?: LayerKind[];
   /** p.283's second value axis for grouped series (§542). */
   sides?: AxisSide[];
   drill?: Drill;
@@ -744,18 +747,35 @@ export function SegmentedBarChart({
     h: frame.h - inset.top - inset.bottom,
   };
   const beside = legend === "left" || legend === "right";
-  const { bars, max } = segmentLayout(data, mode);
+  // p.280's line layers (§626) come out of the bars' grid, each keeping its
+  // place in the legend: `barAt` and `lineAt` map back to it. A bar series
+  // with no value for a category has no bar there, which a zero draws as.
+  const layered = mode === "grouped" && !!kinds?.includes("line")
+    ? splitLayers(data, kinds) : null;
+  const barData = layered
+    ? { ...layered.bars, values: layered.bars.values.map((row) =>
+        row.map((v) => (Number.isNaN(v) ? 0 : v))) }
+    : data;
+  const barAt = layered ? layered.barAt : data.segments.map((_, i) => i);
+  const lineAt = layered ? layered.lineAt : [];
+  const { bars, max } = segmentLayout(barData, mode);
   // A second axis only for bars side by side: a stack adds its parts, and
   // parts read against two axes do not add.
   const twoAxes = mode === "grouped" && (sides?.includes("right") ?? false);
   if (twoAxes) area.w -= RIGHT_AXIS;
   const sideOf = (segment: number) => (twoAxes ? sides?.[segment] ?? "left" : "left");
-  const tallest = (side: AxisSide) =>
-    Math.max(0, ...bars.filter((b) => sideOf(b.segment) === side).map((b) => b.to));
+  const lineValues = (side: AxisSide | null) => lineAt
+    .filter((series) => side === null || sideOf(series) === side)
+    .flatMap((series) => data.values.map((row) => row[series] ?? NaN))
+    .filter((v) => Number.isFinite(v));
+  const tallest = (side: AxisSide) => Math.max(0,
+    ...bars.filter((b) => sideOf(barAt[b.segment]!) === side).map((b) => b.to),
+    ...lineValues(side));
   // Calculated, always: a stack's height is the sum of its segments, which a
   // logarithmic axis would not show, and a percentage's bound is 100%, not a
   // number a builder types (§536).
-  const s = valueScale([0, twoAxes ? tallest("left") : max], CALCULATED);
+  const s = valueScale([0, twoAxes ? tallest("left") : Math.max(max, ...lineValues(null))],
+    CALCULATED);
   const right = valueScale([0, tallest("right")], CALCULATED);
   const slot = area.w / Math.max(data.categories.length, 1);
   const barWidth = Math.max(2, slot * 0.72);
@@ -780,9 +800,10 @@ export function SegmentedBarChart({
         leftX={12 + inset.left}
       />
       {bars.map((bar, i) => {
+        const series = barAt[bar.segment]!;
         const category = data.categories[bar.category] ?? "";
-        const segment = data.segments[bar.segment] ?? "";
-        const scale = sideOf(bar.segment) === "right" ? right : s;
+        const segment = data.segments[series] ?? "";
+        const scale = sideOf(series) === "right" ? right : s;
         const top = yOf(scale, bar.to, area) ?? area.y;
         const bottom = yOf(scale, bar.from, area) ?? area.y + area.h;
         const x = area.x + slot * bar.category + (slot - barWidth) / 2 + barWidth * bar.offset;
@@ -796,12 +817,44 @@ export function SegmentedBarChart({
             y={top}
             width={Math.max(1, barWidth * bar.width - (bar.width < 1 ? 1 : 0))}
             height={Math.max(1, bottom - top)}
-            fill={PALETTE[bar.segment % PALETTE.length]}
+            fill={PALETTE[series % PALETTE.length]}
             opacity={dim(drill, category)}
             {...markProps(drill, category)}
           >
             <title>{`${category} · ${segmentName(segment, names)}: ${bar.value}`}</title>
           </rect>
+        );
+      })}
+      {lineAt.map((series) => {
+        // Through the middle of each category's slot, joining across one it
+        // has no value for.
+        const scale = sideOf(series) === "right" ? right : s;
+        const dots = data.categories.flatMap((category, i) => {
+          const value = data.values[i]?.[series] ?? NaN;
+          const y = Number.isFinite(value) ? yOf(scale, value, area) : null;
+          return y === null ? [] : [{ category, value, x: area.x + slot * i + slot / 2, y }];
+        });
+        const name = data.segments[series] ?? "";
+        return (
+          <g key={`l${series}`} data-testid="chart-series-line" data-series={name}>
+            <path
+              d={dots.map((d, i) => `${i ? "L" : "M"} ${d.x} ${d.y}`).join(" ")}
+              fill="none" stroke={PALETTE[series % PALETTE.length]} strokeWidth={2}
+            />
+            {dots.map((dot) => (
+              <circle
+                key={dot.category}
+                cx={dot.x}
+                cy={dot.y}
+                r={drill ? 5 : 3}
+                fill={PALETTE[series % PALETTE.length]}
+                opacity={dim(drill, dot.category)}
+                {...markProps(drill, dot.category)}
+              >
+                <title>{`${dot.category} · ${segmentName(name, names)}: ${dot.value}`}</title>
+              </circle>
+            ))}
+          </g>
         );
       })}
       {data.categories.map((category, i) => (
@@ -828,7 +881,10 @@ export function SegmentedBarChart({
             transform={`translate(${at.x}, ${at.y})`}
           >
             <title>{sideLabel(segmentName(segment, names), twoAxes ? sides?.[i] : undefined)}</title>
-            <rect width={10} height={10} y={-9} fill={PALETTE[i % PALETTE.length]} />
+            {lineAt.includes(i)
+              ? <line x1={0} x2={10} y1={-4} y2={-4} strokeWidth={2}
+                  stroke={PALETTE[i % PALETTE.length]} data-testid="chart-legend-line" />
+              : <rect width={10} height={10} y={-9} fill={PALETTE[i % PALETTE.length]} />}
             <text x={15} fontSize={11} fill="var(--ink)">
               {shortLabel(sideLabel(segmentName(segment, names), twoAxes ? sides?.[i] : undefined),
                 beside ? 15 : 12)}
