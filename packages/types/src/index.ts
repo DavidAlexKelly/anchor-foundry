@@ -1961,6 +1961,8 @@ export interface ObjectTypeProperty {
    * Null when the property is not editable in place. Whether the action still
    * writes it is re-read where it is used (`property-inline-action.ts`). */
   inline_action_type_id?: string | null;
+  /** p.91's type classes (§671; db 0133), `kind:name` each. */
+  type_classes?: string[];
 }
 
 /** One property definition used by several object types (Foundry

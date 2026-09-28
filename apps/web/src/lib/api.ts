@@ -1252,6 +1252,9 @@ export interface PropertyInput {
   deprecation?: import("./types").Deprecation | null;
   /** §594's inline action (`workshop` p.266). Null clears it. */
   inline_action_type_id?: string | null;
+  /** p.91's type classes (§671; db 0133). Sent on every save, for
+   * `reducers`' reason: one left out is one a save erases. */
+  type_classes?: string[];
 }
 
 /** The whole shape, saved as one document — the server's `InterfaceIn` shape

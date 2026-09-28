@@ -167,6 +167,8 @@ class PropertyIn(BaseModel):
     # The action an edit in place submits (`workshop` p.266; §594; db 0126).
     # Null means the property is not editable in place.
     inline_action_type_id: UUID | None = None
+    # p.91's type classes (§671; db 0133), `kind:name` each.
+    type_classes: list[str] | None = None
 
 
 class PropertyOut(BaseModel):
@@ -203,6 +205,7 @@ class PropertyOut(BaseModel):
     status: str = "experimental"
     deprecation: dict[str, Any] | None = None
     inline_action_type_id: UUID | None = None
+    type_classes: list[str] = []
 
 
 class ObjectTypeGroupRef(BaseModel):

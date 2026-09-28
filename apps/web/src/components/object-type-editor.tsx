@@ -19,7 +19,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { ValueFormatEditor, formattable } from "@/components/value-format-editor";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
@@ -40,6 +40,7 @@ import { ApiError, actions as actionApi, objects as objApi, type PropertyInput }
 import { inlineActionChoices, type InlineAction } from "@/lib/property-inline-action";
 import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
 import { relatedResources, type RelatedDestination } from "@/lib/related-resources";
+import { typeClassesOf } from "@/lib/type-classes";
 import type {
   ObjectTypeDetail,
   ObjectTypeImpact,
@@ -115,6 +116,7 @@ const CARRIED: { [K in keyof Required<PropertyInput>]: true } = {
   status: true,
   deprecation: true,
   inline_action_type_id: true,
+  type_classes: true,
 };
 
 /** One saved property, as the shape a save sends back. */
@@ -553,6 +555,14 @@ export function PropertyRows({
               )}
             </select>
           )}
+          {/* p.91's type classes (§671): "additional metadata that can be
+              interpreted by applications", such as p.222's hubble:icon. */}
+          <TypeClassesField index={index} value={prop.type_classes ?? []}
+            onCommit={(classes) => {
+              const rows = [...properties];
+              rows[index] = { ...prop, type_classes: classes };
+              onChange(rows);
+            }} />
           {/* Conditional formatting (`object-link-types` p.102-109). Unlike
               the formatter above there is no base-type gate: `Is null` applies
               to every type, so every property has at least one rule it could
@@ -1161,5 +1171,43 @@ export function EditObjectTypeDialog({
 
       <VersionHistory workspaceId={workspaceId} type={type} onRestored={onClose} />
     </Dialog>
+  );
+}
+
+/** A property's type classes as one box (§671), committed when it loses
+ * focus: a list rewritten on every keystroke would eat the comma a second
+ * class is typed after. What is not `kind:name` is said and not saved. */
+function TypeClassesField({ index, value, onCommit }: {
+  index: number;
+  value: string[];
+  onCommit: (classes: string[]) => void;
+}) {
+  const [text, setText] = useState(value.join(", "));
+  const [bad, setBad] = useState<string[]>([]);
+  // Keyed on the text, not the array: a property with none passes a new
+  // empty array on every render, which would reset the box as it is typed in.
+  const saved = value.join(", ");
+  useEffect(() => setText(saved), [saved]);
+  return (
+    <span className="field-inline" style={{ gap: 4 }}>
+      <input
+        type="text"
+        aria-label={`Property ${index + 1} type classes`}
+        placeholder="Type classes"
+        value={text}
+        style={{ fontSize: 12, maxWidth: 180 }}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          const read = typeClassesOf(text);
+          setBad(read.bad);
+          onCommit(read.classes);
+        }}
+      />
+      {bad.length > 0 && (
+        <span className="form-error" role="alert" style={{ fontSize: 12 }}>
+          {`Not kind:name: ${bad.join(", ")}`}
+        </span>
+      )}
+    </span>
   );
 }
