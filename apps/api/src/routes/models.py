@@ -19,7 +19,7 @@ from typing import Any
 from uuid import UUID
 
 import anyio
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -34,6 +34,7 @@ from ..services import datasets as ds_service
 from ..services import graph_access
 from ..services import models as model_service
 from ..services import pipeline as pipeline_service
+from ..services import related_artifacts
 from ..services import run_detail as run_detail_service
 from ..services import saved_graphs
 from ..services import transform_adoption as adoption_service
@@ -910,6 +911,45 @@ async def pipeline_graph(
                 nodes=graph["nodes"],
             )
         return PipelineGraph(**graph)
+
+
+class RelatedArtifactOut(BaseModel):
+    """One artifact linked to the lineage graph's selection from off it
+    (§614; `data-lineage` p.10, p.30)."""
+
+    kind: str
+    id: UUID
+    name: str
+    resource_id: UUID
+    project_id: UUID
+    project_name: str
+    created_at: datetime
+    updated_at: datetime
+    #: The asked-about nodes (`kind:uuid`) it links to, in asked order.
+    nodes: list[str]
+
+
+@project_router.get("/pipeline/related", response_model=list[RelatedArtifactOut])
+async def pipeline_related(
+    node: list[str] = Query(default=[]),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[RelatedArtifactOut]:
+    """p.10's Related artifacts: the Workshop modules and code repositories
+    linked to the selected nodes (§614). Viewer level, like the graph - and
+    read through the caller's own connection, so a module they cannot open is
+    not named."""
+    if len(node) > related_artifacts.MAX_NODES:
+        raise ValueError(
+            f"ask about at most {related_artifacts.MAX_NODES} nodes at a time"
+        )
+    for one in node:
+        if not saved_graphs.NODE_ID.fullmatch(one):
+            raise ValueError(saved_graphs.FOCUS_HINT.replace("focus", "a node", 1))
+    async with user_connection(access.auth.user_id) as conn:
+        found = await related_artifacts.for_nodes(
+            conn, workspace_id=access.workspace_id, nodes=node
+        )
+    return [RelatedArtifactOut(**a) for a in found]
 
 
 # ---- moving a transform into a repository (B.1; §274) ------------------------

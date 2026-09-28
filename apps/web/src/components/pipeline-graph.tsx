@@ -12,7 +12,7 @@ import {
   GRAPH_KINDS, columnsIn, foundByColumn, inverted, isDrag, kindsIn, outOfDateNote, relatives, search, toggleSelected, type GraphView, viewOf,
 } from "@/lib/pipeline-graph";
 import {
-  LAYOUTS, NODE_H, NODE_W, dragTo, layoutIn, layoutOf, movesIn, nodesInRect, withMoves,
+  LAYOUTS, NODE_H, NODE_W, dragTo, layoutIn, layoutOf, movesIn, nodesInRect, panTo, withMoves,
   type Moves, type Place,
   type Rect,
 } from "@/lib/graph-layout";
@@ -24,6 +24,7 @@ import {
 } from "@/lib/node-colouring";
 import { svgFilename, svgFor } from "@/lib/graph-svg";
 import { GraphInspector, type InspectFrom } from "@/components/graph-inspector";
+import { RelatedArtifacts } from "@/components/related-artifacts";
 
 // One renderer, two entry points: the project-wide Pipeline page and a
 // single dataset's lineage, which is the same endpoint with a `focus`
@@ -474,6 +475,10 @@ export function PipelineGraphView({
   const marqueeFrom = useRef<{ x: number; y: number; base: string[] } | null>(null);
 
   const byId = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph.nodes]);
+  // What the Related artifacts helper calls each node (§614).
+  const nodeNames = useMemo(
+    () => new Map(graph.nodes.map((n) => [n.id, n.name])), [graph.nodes],
+  );
   // p.11's arrangement, and the canvas it needs. **One answer**, read by the
   // cards, the edge curves, §354's marquee and §423's export — a second copy
   // of "where is that card" is a rectangle that selects the node beside the
@@ -1360,6 +1365,27 @@ export function PipelineGraphView({
             for every node kind, and these tabs only exist for two of them. */}
         {selectedNode && inspect && (
           <GraphInspector node={selectedNode} graph={graph} from={inspect} />
+        )}
+        {/* p.10's Related artifacts helper (§614), for the selection. Only
+            where there is a project to ask about - the review surface draws a
+            proposed graph and passes no `inspect`, for GraphInspector's
+            reason. */}
+        {selected.length > 0 && inspect && (
+          <div style={{ borderTop: "1px solid var(--line)", padding: "10px 16px" }}>
+            <RelatedArtifacts
+              selected={selected}
+              names={nodeNames}
+              from={inspect}
+              onZoom={(id) => {
+                // p.30's node icon: select the node alone and bring its card
+                // to the corner at full size.
+                setSelected([id]);
+                setZoom(1);
+                const at = canvas.at.get(id);
+                if (at) setPan(panTo(at));
+              }}
+            />
+          </div>
         )}
         {selected.length > 0 && (
           /* What a selection says for itself. The count is the part that
