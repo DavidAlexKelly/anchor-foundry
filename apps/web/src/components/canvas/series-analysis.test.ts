@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_EVENT_SETS, withEventStatistics, eventCount, eventSpan, eventsOf, liveEventSets, withEventSet,
+  MAX_EVENT_SETS, withEventStatistics, eventCount, eventSpan, eventsOf, liveEventSets, withEventSet, withLinkedEventSet,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, extentOf, pathOf, readingsOf, rootOf, rootPlots,
   statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
@@ -301,5 +301,34 @@ describe("p.393's Event statistics (§652)", () => {
     expect(withEventStatistics(roots, "root:i1", undefined, "avg", 1)).toEqual(roots);
     expect(withEventStatistics(roots, "gone", set, "avg", 1)).toEqual(roots);
     expect(withEventStatistics(roots, "root:i1", { ...set!, plot: "gone" }, "avg", 1)).toEqual(roots);
+  });
+});
+
+describe("p.393's Linked event set (§654)", () => {
+  const jobs = { link: "l1", direction: "inbound" as const, start: "started", end: "finished" };
+
+  it("adds a set of the objects linked to a plot's root, named for the link's side", () => {
+    const derived = withDerived(roots, "root:i1", [cumulative], 1);
+    const sets = withLinkedEventSet([], derived, "plot-3", jobs, "Jobs");
+    expect(sets).toEqual([{ id: "events-1", label: "Jobs of Pump 1", plot: "plot-3", linked: jobs,
+      highlight: true }]);
+    expect(withLinkedEventSet(sets, roots, "root:i2", { ...jobs, end: null }, "Jobs")[1])
+      .toMatchObject({ id: "events-2", label: "Jobs of Pump 2", linked: { end: null } });
+  });
+
+  it("needs a plot with a root, a link and a start, under the cap", () => {
+    expect(withLinkedEventSet([], roots, "gone", jobs, "Jobs")).toEqual([]);
+    expect(withLinkedEventSet([], roots, "root:i1", { ...jobs, link: "" }, "Jobs")).toEqual([]);
+    expect(withLinkedEventSet([], roots, "root:i1", { ...jobs, start: "" }, "Jobs")).toEqual([]);
+    let sets = withEventSet([], roots, "root:i1", "gt", 0);
+    const taken = [{ ...sets[0]!, id: "events-2" }];
+    expect(withLinkedEventSet(taken, roots, "root:i1", jobs, "Jobs")[1]!.id).toBe("events-3");
+    while (sets.length < MAX_EVENT_SETS) sets = withEventSet(sets, roots, "root:i1", "gt", sets.length);
+    expect(withLinkedEventSet(sets, roots, "root:i1", jobs, "Jobs")).toHaveLength(MAX_EVENT_SETS);
+  });
+
+  it("is not what event statistics reads, whose events are found in the query", () => {
+    const [set] = withLinkedEventSet([], roots, "root:i2", jobs, "Jobs");
+    expect(withEventStatistics(roots, "root:i1", set, "avg", 1)).toEqual(roots);
   });
 });

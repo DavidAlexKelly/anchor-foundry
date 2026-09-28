@@ -319,6 +319,7 @@ import {
   MAX_COMBINED as MAX_SERIES_COMBINED, withCombined as withSeriesCombined,
   MAX_EVENT_SETS as MAX_SERIES_EVENT_SETS, eventCount as seriesEventCount, eventsOf as seriesEventsOf,
   liveEventSets as liveSeriesEventSets, withEventSet as withSeriesEventSet,
+  withLinkedEventSet as withSeriesLinkedEventSet,
   type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
@@ -13103,9 +13104,34 @@ export function CanvasSeriesAnalysis({
   const [eventSetsRaw, setEventSets] = useState<SeriesEventSet[]>([]);
   const eventSets = liveSeriesEventSets(eventSetsRaw, plots);
   const [eventDraft, setEventDraft] = useState<{ plot: string; op: SeriesFilterOperator; value: string } | null>(null);
+  // p.393's Linked event set (§654): a link from a plot's root object, and
+  // the linked type's timestamp or date properties for the two ends.
+  const [linkedDraft, setLinkedDraft] = useState<{ plot: string; link: string; start: string; end: string } | null>(null);
+  const linkedRoot = linkedDraft ? seriesRootOf(plots, linkedDraft.plot)?.root ?? null : null;
+  const linkedLinks = useQuery({
+    queryKey: ["canvas-series-analysis-links", linkedRoot?.typeId],
+    queryFn: () => objApi.typeLinks(workspaceId, linkedRoot!.typeId),
+    enabled: !!linkedRoot,
+  });
+  const linkedChosen = (linkedLinks.data ?? []).find(
+    (l) => `${l.link_type_id}:${l.direction}` === linkedDraft?.link) ?? null;
+  const linkedType = useQuery({
+    queryKey: ["canvas-series-analysis-linked-type", linkedChosen?.far_type_id],
+    queryFn: () => objApi.getType(workspaceId, linkedChosen!.far_type_id),
+    enabled: !!linkedChosen,
+  });
+  const linkedMoments = (linkedType.data?.properties ?? [])
+    .filter((p) => p.data_type === "timestamp" || p.data_type === "date");
   const eventsFor = useQueries({
     queries: eventSets.map((set) => {
       const root = seriesRootOf(plots, set.plot)?.root ?? null;
+      if (set.linked) {
+        return {
+          queryKey: ["canvas-series-analysis-linked-events", root?.objectId, JSON.stringify(set.linked)],
+          queryFn: () => objApi.linkedEvents(workspaceId, root!.typeId, root!.objectId, set.linked),
+          enabled: !!root,
+        };
+      }
       const chain = seriesChainOf(plots, set.plot);
       return {
         queryKey: ["canvas-series-analysis-events", root?.objectId, root?.property,
@@ -13116,6 +13142,9 @@ export function CanvasSeriesAnalysis({
       };
     }),
   });
+  // Event statistics reads a search's events in the query; a linked set's
+  // are objects (§654).
+  const searchSets = eventSets.filter((set) => !set.linked);
   const eventsOfSet = eventSets.map((_, n) => seriesEventsOf(eventsFor[n]?.data?.events ?? []));
 
   return (
@@ -13219,7 +13248,7 @@ export function CanvasSeriesAnalysis({
                                 combine: { kind: e.target.value, others: [], aggregate: "avg" } }
                           : e.target.value === "event_statistics"
                             ? { parent: plots[0]!.id, transforms: [],
-                                eventStats: { set: eventSets[0]?.id ?? "", aggregate: "avg" } }
+                                eventStats: { set: searchSets[0]?.id ?? "", aggregate: "avg" } }
                             : { parent: plots[0]!.id,
                                 transforms: [blankTransform(e.target.value as TransformKind)] });
                       }}>
@@ -13235,6 +13264,12 @@ export function CanvasSeriesAnalysis({
               <button type="button" className="btn quiet"
                       onClick={() => setEventDraft({ plot: plots[0]!.id, op: "gt", value: "" })}>
                 New event set
+              </button>
+            )}
+            {eventSets.length < MAX_SERIES_EVENT_SETS && (
+              <button type="button" className="btn quiet"
+                      onClick={() => setLinkedDraft({ plot: plots[0]!.id, link: "", start: "", end: "" })}>
+                New linked event set
               </button>
             )}
           </div>
@@ -13260,6 +13295,49 @@ export function CanvasSeriesAnalysis({
                 Add event set
               </button>
               <button type="button" className="btn quiet" onClick={() => setEventDraft(null)}>Cancel</button>
+            </div>
+          )}
+          {linkedDraft && (
+            <div className="row-actions" data-testid="series-new-linked-events"
+                 style={{ marginTop: 6, flexWrap: "wrap" }}>
+              <select aria-label="Linked from plot" value={linkedDraft.plot}
+                      onChange={(e) => setLinkedDraft({ plot: e.target.value, link: "", start: "", end: "" })}>
+                {plots.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+              <select aria-label="Event link" value={linkedDraft.link}
+                      onChange={(e) => setLinkedDraft({ ...linkedDraft, link: e.target.value, start: "", end: "" })}>
+                <option value="">Choose a link…</option>
+                {(linkedLinks.data ?? []).map((l) => (
+                  <option key={`${l.link_type_id}:${l.direction}`} value={`${l.link_type_id}:${l.direction}`}>
+                    {`${l.side_name} (${l.far_type_display_name})`}
+                  </option>
+                ))}
+              </select>
+              <select aria-label="Event start" value={linkedDraft.start} disabled={!linkedChosen}
+                      onChange={(e) => setLinkedDraft({ ...linkedDraft, start: e.target.value })}>
+                <option value="">Start property…</option>
+                {linkedMoments.map((p) => <option key={p.api_name} value={p.api_name}>{p.display_name}</option>)}
+              </select>
+              <select aria-label="Event end" value={linkedDraft.end} disabled={!linkedChosen}
+                      onChange={(e) => setLinkedDraft({ ...linkedDraft, end: e.target.value })}>
+                <option value="">No end (a moment)</option>
+                {linkedMoments.map((p) => <option key={p.api_name} value={p.api_name}>{p.display_name}</option>)}
+              </select>
+              {linkedChosen && linkedType.data && linkedMoments.length === 0 && (
+                <span className="field-hint">{`${linkedChosen.far_type_display_name} has no timestamp or date property.`}</span>
+              )}
+              <button type="button" className="btn"
+                      disabled={!linkedChosen || !linkedDraft.start}
+                      onClick={() => {
+                        setEventSets(withSeriesLinkedEventSet(eventSets, plots, linkedDraft.plot, {
+                          link: linkedChosen!.link_type_id, direction: linkedChosen!.direction,
+                          start: linkedDraft.start, end: linkedDraft.end || null,
+                        }, linkedChosen!.side_name));
+                        setLinkedDraft(null);
+                      }}>
+                Add linked event set
+              </button>
+              <button type="button" className="btn quiet" onClick={() => setLinkedDraft(null)}>Cancel</button>
             </div>
           )}
           {eventSets.length > 0 && (
@@ -13301,7 +13379,7 @@ export function CanvasSeriesAnalysis({
               </label>
               {draft.eventStats ? (
                 <div className="row-actions" data-testid="series-event-statistics">
-                  {eventSets.length === 0 ? (
+                  {searchSets.length === 0 ? (
                     <span className="field-hint">Add an event set first: its events are what this aggregates over.</span>
                   ) : (
                     <>
@@ -13314,7 +13392,7 @@ export function CanvasSeriesAnalysis({
                       <select aria-label="Event set" value={draft.eventStats.set}
                               onChange={(e) => setDraft({ ...draft, eventStats: { ...draft.eventStats!,
                                 set: e.target.value } })}>
-                        {eventSets.map((set) => <option key={set.id} value={set.id}>{set.label}</option>)}
+                        {searchSets.map((set) => <option key={set.id} value={set.id}>{set.label}</option>)}
                       </select>
                     </>
                   )}
@@ -13369,7 +13447,7 @@ export function CanvasSeriesAnalysis({
               )}
               <div className="row-actions">
                 <button type="button" className="btn"
-                        disabled={draft.eventStats ? !eventSets.some((x) => x.id === draft.eventStats!.set)
+                        disabled={draft.eventStats ? !searchSets.some((x) => x.id === draft.eventStats!.set)
                           : draft.combine ? draft.combine.others.length === 0
                           : draft.bands ? !!seriesBandsProblem(draft.bands)
                           : draft.transforms.length === 0 || !!seriesTransformsProblem(draft.transforms)}
@@ -13377,7 +13455,7 @@ export function CanvasSeriesAnalysis({
                           const parent = plots.find((p) => p.id === draft.parent);
                           setPlots(draft.eventStats
                             ? withSeriesEventStatistics(plots, draft.parent,
-                              eventSets.find((x) => x.id === draft.eventStats!.set),
+                              searchSets.find((x) => x.id === draft.eventStats!.set),
                               draft.eventStats.aggregate, parent?.canvas ?? 1)
                             : draft.combine
                             ? withSeriesCombined(plots, draft.parent, draft.combine.others,

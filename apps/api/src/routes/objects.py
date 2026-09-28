@@ -3770,6 +3770,144 @@ async def type_links(
     ]
 
 
+async def _follow_link(
+    conn: Any, store: Any, prefix: str, link: dict[str, Any], instance: dict[str, Any],
+    properties: dict[str, Any], limit: int,
+) -> tuple[Any, list[dict[str, Any]], int, str | None]:
+    """One link from one instance: the value matched, a first page of the far
+    objects, how many there are, and why none could be read if so."""
+    near = str(link["near_property"])
+    far = str(link["far_property"])
+    value = (
+        instance["primary_key"]
+        if near == ontology_service.PRIMARY_KEY_REF
+        else properties.get(near)
+    )
+    if link.get("join"):
+        # p.197's join table (§552): this object's key, through its pairs, to
+        # the far objects' keys.
+        try:
+            keys = await link_join_tables.follow(conn, link["join"], [value])
+            joined = object_sets.join_filter(far_property=far, values=keys)
+        except ValueError as exc:
+            return value, [], 0, str(exc)
+        if joined is None:
+            return value, [], 0, None
+        rows, total = await store.evaluate_object_set(
+            search_prefix=prefix, object_type_id=UUID(str(link["far_type_id"])),
+            filters=(joined,), limit=limit, offset=0, sort="key_asc",
+        )
+        return value, rows, total, None
+    rows, total = await store.find_by_property(
+        search_prefix=prefix,
+        object_type_id=UUID(str(link["far_type_id"])),
+        property_name=None if far == ontology_service.PRIMARY_KEY_REF else far,
+        value=value,
+        limit=limit,
+        offset=0,
+    )
+    return value, rows, total, None
+
+
+#: p.393's *Linked event set* (§654): at most this many linked objects are
+#: read as events, as a time series search stops at `MAX_EVENTS`.
+MAX_LINKED_EVENTS = time_series_service.MAX_EVENTS
+
+
+class LinkedEvent(BaseModel):
+    id: str
+    start: datetime
+    end: datetime
+
+
+class LinkedEventsOut(BaseModel):
+    events: list[LinkedEvent]
+    # Linked objects past `MAX_LINKED_EVENTS`, and those whose start could not
+    # be read, are not events; each is counted so the widget can say so.
+    total: int
+    truncated: bool
+    unreadable: int
+
+
+def _moment(raw: Any) -> datetime | None:
+    """A timestamp or date property's value as a moment, UTC where it names no
+    zone, or None. Properties come back as JSON, so a moment is always text
+    here: a date is its midnight, and a trailing Z is read by `fromisoformat`
+    itself."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment
+
+
+@router.get(
+    "/object-types/{type_id}/instances/{instance_id}/linked-events",
+    response_model=LinkedEventsOut,
+)
+async def linked_events(
+    type_id: UUID,
+    instance_id: UUID,
+    link: UUID,
+    start: str,
+    end: str | None = None,
+    direction: str = "outbound",
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> LinkedEventsOut:
+    """p.393's *Linked event set* (§654): "Create an event set from linked
+    objects in the Ontology by traversing object relationships and specifying
+    which properties hold the start and end timestamps."
+
+    One event per object linked to this one, from its `start` property to its
+    `end`. **Without an end property, or where an object's end is blank, the
+    event is a moment**; an end before the start is read as the same range
+    backwards, since the pair still names one span. An object whose start
+    cannot be read is no event and is counted in `unreadable`."""
+    if direction not in ("outbound", "inbound"):
+        raise HTTPException(status_code=422, detail="the direction is outbound or inbound")
+    async with user_connection(access.auth.user_id) as conn:
+        links = await ontology_service.links_for_type(conn, access.workspace_id, type_id)
+        chosen = next((k for k in links if str(k["id"]) == str(link)
+                       and k["direction"] == direction), None)
+        if chosen is None:
+            raise NotFoundError("link from this object type")
+        far_type = UUID(str(chosen["far_type_id"]))
+        kinds = {str(p["api_name"]): str(p["data_type"])
+                 for p in await ontology_service.list_properties(conn, far_type)}
+        for role, name in (("start", start), ("end", end)):
+            if name is not None and kinds.get(name) not in ("timestamp", "date"):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"the {role} is a timestamp or date property of "
+                           f"{chosen['far_type_display_name']}, and {name!r} is not one")
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        instance = await store.get_instance(
+            search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id))
+        if instance is None:
+            raise NotFoundError("object instance")
+        _, rows, total, problem = await _follow_link(
+            conn, store, prefix, chosen, instance, _jsonb(instance["properties"]),
+            MAX_LINKED_EVENTS)
+        if problem:
+            raise HTTPException(status_code=422, detail=problem)
+    events: list[LinkedEvent] = []
+    unreadable = 0
+    for row in rows:
+        values = _jsonb(row["properties"])
+        began = _moment(values.get(start))
+        if began is None:
+            unreadable += 1
+            continue
+        ended = _moment(values.get(end)) or began
+        events.append(LinkedEvent(id=str(row["id"]), start=min(began, ended), end=max(began, ended)))
+    events.sort(key=lambda e: (e.start, e.end))
+    return LinkedEventsOut(events=events, total=total, truncated=total > len(rows),
+                           unreadable=unreadable)
+
+
 @router.get(
     "/object-types/{type_id}/instances/{instance_id}/links",
     response_model=list[LinkedInstances],
@@ -3813,36 +3951,8 @@ async def instance_links(
         for link in links:
             near = str(link["near_property"])
             far = str(link["far_property"])
-            value = (
-                instance["primary_key"]
-                if near == ontology_service.PRIMARY_KEY_REF
-                else properties.get(near)
-            )
-            problem: str | None = None
-            if link.get("join"):
-                # p.197's join table (§552): this object's key, through its
-                # pairs, to the far objects' keys.
-                try:
-                    keys = await link_join_tables.follow(conn, link["join"], [value])
-                    joined = object_sets.join_filter(far_property=far, values=keys)
-                except ValueError as exc:
-                    problem, joined = str(exc), None
-                rows, total = [], 0
-                if joined is not None:
-                    rows, total = await store.evaluate_object_set(
-                        search_prefix=prefix,
-                        object_type_id=UUID(str(link["far_type_id"])),
-                        filters=(joined,), limit=limit, offset=0, sort="key_asc",
-                    )
-            else:
-                rows, total = await store.find_by_property(
-                    search_prefix=prefix,
-                    object_type_id=UUID(str(link["far_type_id"])),
-                    property_name=None if far == ontology_service.PRIMARY_KEY_REF else far,
-                    value=value,
-                    limit=limit,
-                    offset=0,
-                )
+            value, rows, total, problem = await _follow_link(
+                conn, store, prefix, link, instance, properties, limit)
             groups.append(LinkedInstances(
                 link_type_id=UUID(str(link["id"])),
                 api_name=str(link["api_name"]),

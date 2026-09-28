@@ -357,13 +357,25 @@ export function withCombined(
 /** p.392's *Time series search* (§651): an event set from a plot, the time
  * ranges where its readings meet a threshold. p.395's *Event highlight*
  * shades them on the plot's canvas. */
-export interface EventSet {
+export type EventSet = {
   id: string;
   label: string;
+  /** The plot searched, or for a linked set the plot whose root object the
+   * events are linked to; shaded on that plot's canvas either way. */
   plot: string;
-  op: FilterOperator;
-  value: number;
   highlight: boolean;
+} & ({ op: FilterOperator; value: number; linked?: undefined } | { linked: LinkedEvents });
+
+/** p.393's *Linked event set* (§654): "Create an event set from linked
+ * objects in the Ontology by traversing object relationships and specifying
+ * which properties hold the start and end timestamps." A link from the
+ * plot's root object, which way it runs, and the linked objects' two
+ * properties - no end makes each event a moment. */
+export interface LinkedEvents {
+  link: string;
+  direction: "outbound" | "inbound";
+  start: string;
+  end: string | null;
 }
 export const MAX_EVENT_SETS = 6;
 
@@ -379,6 +391,20 @@ export function withEventSet(
   while (sets.some((e) => e.id === `events-${n}`)) n += 1;
   return [...sets, { id: `events-${n}`, label: `${on.label} ${FILTER_WORDS[op]} ${value}`, plot, op,
     value, highlight: true }];
+}
+
+/** The event sets with one more, of the objects linked to `plot`'s root
+ * object, named for the link's side (§654); unchanged at the cap, for a plot
+ * with no root, or without a start property. */
+export function withLinkedEventSet(
+  sets: readonly EventSet[], plots: readonly Plot[], plot: string, linked: LinkedEvents, side: string,
+): EventSet[] {
+  const root = rootOf(plots, plot);
+  if (!root || !linked.link || !linked.start || sets.length >= MAX_EVENT_SETS) return [...sets];
+  let n = sets.length + 1;
+  while (sets.some((e) => e.id === `events-${n}`)) n += 1;
+  return [...sets, { id: `events-${n}`, label: `${side} of ${root.label}`, plot, linked,
+    highlight: true }];
 }
 
 /** The event sets whose plot is still there: removing a plot removes the
@@ -436,8 +462,11 @@ export function withEventStatistics(
   aggregate: "sum" | "avg" | "min" | "max" | "count" | "stddev", canvas: number,
 ): Plot[] {
   const from = byId(plots).get(parent);
-  const searched = set ? referenceTo(plots, set.plot) : null;
-  if (!from || !set || !searched) return [...plots];
+  // The server finds a search's events inside the query; a linked set's are
+  // objects, which a series transform does not read (§654).
+  if (!from || !set || set.linked) return [...plots];
+  const searched = referenceTo(plots, set.plot);
+  if (!searched) return [...plots];
   const next = withDerived(plots, parent, [{
     kind: "event_statistics", aggregate, op: set.op, value: set.value, inputs: { e: searched },
   }], canvas);
