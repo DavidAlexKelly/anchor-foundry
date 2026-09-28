@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import {
   groupSummary, memberFirst, memberSummary, sameSelection, toGroupApiName,
   toggleSelection,
+  activeGroup, groupsEmptyReason,
 } from "./object-type-groups";
 
 function refs(...names: string[]) {
@@ -152,5 +153,29 @@ describe("memberFirst", () => {
 
   it("is the page itself when nothing is a member", () => {
     expect(memberFirst(page, [], [])).toEqual(page);
+  });
+});
+
+
+describe("the Explorer's groups (§618; p.262)", () => {
+  const north = { id: "g_1", members: ["t_a", "t_b"] };
+
+  it("lights the group whose members are exactly what is ticked, in any order", () => {
+    expect(activeGroup(["t_b", "t_a"], north)).toBe("g_1");
+  });
+
+  it("goes dark when the selection is more, less or other than the group", () => {
+    expect(activeGroup(["t_a", "t_b", "t_c"], north)).toBeNull();
+    expect(activeGroup(["t_a"], north)).toBeNull();
+    expect(activeGroup(["t_a", "t_c"], north)).toBeNull();
+    expect(activeGroup(["t_a", "t_b"], null)).toBeNull();
+  });
+
+  it("never lights an empty group, which an empty selection would match", () => {
+    expect(activeGroup([], { id: "g_0", members: [] })).toBeNull();
+  });
+
+  it("says where groups are made when there are none", () => {
+    expect(groupsEmptyReason()).toContain("Ontology Manager");
   });
 });

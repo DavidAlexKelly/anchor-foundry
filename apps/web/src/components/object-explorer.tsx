@@ -53,7 +53,9 @@ import {
 } from "@/lib/object-links";
 import { displayValue } from "@/components/object-value";
 import { CopyLinkButton, useUrlState } from "@/components/use-url-state";
-import { memberFirst } from "@/lib/object-type-groups";
+import {
+  activeGroup, groupsEmptyReason, memberFirst, memberSummary,
+} from "@/lib/object-type-groups";
 import { truncationNote } from "@/lib/type-picker";
 import {
   canStage,
@@ -495,6 +497,12 @@ export function ObjectExplorer({
         <Favourites workspaceId={workspaceId} onOpen={(ref) => url.set({
           [OBJECT_PARAM]: encodeObject(ref),
         })} />
+        {/* p.262: "Groups are also displayed on the Object Explorer home
+            page" (§618). Opening one ticks its object types, and nothing
+            else changes - the search, the page and the rest of the question
+            stay what they were. */}
+        <Groups workspaceId={workspaceId} selected={selected}
+                onChoose={(typeIds) => update({ typeIds })} />
       </div>
 
       <div className="ox-main">
@@ -898,6 +906,75 @@ export function ObjectExplorer({
         />
       )}
     </div>
+  );
+}
+
+// ---- the groups aside (§618) -------------------------------------------------
+/** p.262's object type groups, on the Explorer: "a classification primitive
+ * that help users better search and explore their ontology" (p.261).
+ *
+ * **A group is read for its members when it is opened**, not listed with
+ * them: the list already says how many each has, and reading every group's
+ * members to draw a list of names would be a request per group for what one
+ * click needs. The members the last click read are what `activeGroup` lights
+ * the row by, so a row stays lit exactly while the ticked types are its.
+ *
+ * An empty group is listed, as p.263 wants, and cannot be opened - it would
+ * untick everything and search every type, the opposite of narrowing.
+ */
+function Groups({
+  workspaceId,
+  selected,
+  onChoose,
+}: {
+  workspaceId: string;
+  selected: readonly string[];
+  onChoose: (typeIds: string[]) => void;
+}) {
+  const queryClient = useQueryClient();
+  const groups = useQuery({
+    queryKey: ["object-type-groups", workspaceId],
+    queryFn: () => objApi.listObjectTypeGroups(workspaceId),
+  });
+  const [chosen, setChosen] = useState<{ id: string; members: string[] } | null>(null);
+  const lit = activeGroup(selected, chosen);
+
+  async function open(groupId: string) {
+    const members = await queryClient.fetchQuery({
+      queryKey: ["object-type-group-members", workspaceId, groupId],
+      queryFn: () => objApi.objectTypeGroupMembers(workspaceId, groupId),
+    });
+    const ids = members.map((m) => m.id);
+    setChosen({ id: groupId, members: ids });
+    onChoose(ids);
+  }
+
+  return (
+    <aside className="ox-saved" aria-label="Groups">
+      <h2>Groups</h2>
+      {groups.isPending && <p className="slug">Loading…</p>}
+      {groups.isError && <p className="slug">Couldn&apos;t load groups.</p>}
+      {groups.data?.length === 0 && (
+        <p className="ox-note" data-testid="groups-empty">{groupsEmptyReason()}</p>
+      )}
+      <ul className="ox-saved-list">
+        {groups.data?.map((g) => (
+          <li key={g.id} className={lit === g.id ? "on" : undefined}>
+            <button
+              type="button"
+              className="ox-saved-open"
+              data-testid={`group-open-${g.api_name}`}
+              aria-pressed={lit === g.id}
+              disabled={g.member_count === 0}
+              onClick={() => void open(g.id)}
+            >
+              <strong>{g.display_name}</strong>
+              <span className="slug">{memberSummary(g.member_count)}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </aside>
   );
 }
 
