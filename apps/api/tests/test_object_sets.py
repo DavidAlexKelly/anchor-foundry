@@ -3694,3 +3694,79 @@ async def test_both_stores_bucket_a_date_property_the_same_way(
         assert got == expected_buckets(seen_stamps(), interval), interval
     finally:
         await store.close()
+
+
+# ---- p.310's "approximate unique count", per slice (§615) --------------------
+def distinct_per_region(rows) -> list[tuple[str, int, int]]:
+    """`(region, objects, distinct statuses)` worked out from the population,
+    in a pie's order: most distinct first, then the label ascending.
+
+    `region` against `status` is chosen because the two orders differ: north
+    and south both hold two objects, but south's two share a status - so
+    ordered by count south is second, and ordered by what sizes the slice it
+    is last."""
+    seen: dict[str, list[str]] = {}
+    for _, p in rows:
+        if p.get("region") is not None and p.get("status") is not None:
+            seen.setdefault(str(p["region"]), []).append(str(p["status"]))
+    return sorted(((r, len(s), len(set(s))) for r, s in seen.items()),
+                  key=lambda t: (-t[2], t[0]))
+
+
+def test_a_slice_can_be_sized_by_its_distinct_values(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    r = group(client, fx, {"object_type_id": seeded, "filters": []},
+              property="region", aggregation="count_distinct", aggregation_property="status")
+    assert r.status_code == 200, r.text
+    got = [(g["value"], g["count"], g["metric"]) for g in r.json()["groups"]]
+    assert got == distinct_per_region(ROWS)
+    # A count, so whole numbers: a slice of "2.0 suppliers" is a value nobody
+    # could have counted.
+    assert all(isinstance(m, int) for _, _, m in got), got
+    # The order is the metric's, not the count's - the fixture's whole point.
+    by_count = sorted(got, key=lambda t: (-t[1], t[0]))
+    assert [t[0] for t in got] != [t[0] for t in by_count]
+    assert r.json()["distinct_total"] == len(got)
+
+
+def test_a_distinct_count_still_needs_its_property(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    r = group(client, fx, {"object_type_id": seeded, "filters": []},
+              property="region", aggregation="count_distinct")
+    assert r.status_code == 422, r.text
+    assert "count_distinct needs a property" in r.text
+
+
+@pytest.mark.anyio
+async def test_both_stores_size_a_slice_by_its_distinct_values(opensearch: str) -> None:
+    """OpenSearch answers with a `cardinality` per bucket - p.310's
+    "approximate" is literally its word, and below its precision threshold
+    (3,000 by default) it is exact, which is what makes the two stores
+    comparable at all."""
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        # A region whose one site has no status: nothing to count, so no
+        # slice - the exclusion the numeric four follow, on this store too.
+        rows = [*ROWS, ("10", {"region": "west", "capacity": 3})]
+        await store.upsert_instances(
+            search_prefix="ws-distinct-slices", object_type_id=type_id, source_id=source_id,
+            rows=rows, synced_at=datetime.now(timezone.utc), declared=DECLARED,
+        )
+        agg = object_sets.parse_aggregation(
+            "count_distinct", "status", property_types={"status": "string"})
+        buckets, distinct_total = await store.group_object_set(
+            search_prefix="ws-distinct-slices", object_type_id=type_id, filters=(),
+            property_name="region", limit=object_sets.MAX_GROUPS, aggregation=agg,
+        )
+        assert buckets == distinct_per_region(rows)
+        assert "west" not in [b[0] for b in buckets]
+        assert all(isinstance(b[2], int) for b in buckets), buckets
+        assert distinct_total == len(buckets)
+    finally:
+        await store.close()

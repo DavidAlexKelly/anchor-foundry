@@ -151,6 +151,7 @@ describe("axis titles (p.283's Show title)", () => {
     expect(defaultValueTitle("bar", undefined, null)).toBe("Count");
     expect(defaultValueTitle("bar", "sum", "capacity")).toBe("Sum of capacity");
     expect(defaultValueTitle("line", "avg", "temp")).toBe("Average of temp");
+    expect(defaultValueTitle("bar", "count_distinct", "supplier")).toBe("Unique count of supplier");
     expect(defaultValueTitle("bar", "min", null)).toBe("Minimum of …");
     expect(defaultValueTitle("bar", "max", "x")).toBe("Maximum of x");
     expect(defaultValueTitle("scatter", "sum", "height")).toBe("height");

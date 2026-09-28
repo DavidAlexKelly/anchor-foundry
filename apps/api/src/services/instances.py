@@ -855,7 +855,10 @@ def _number(value: "Any", agg: "Any") -> "float | int | None":
     if value is None:
         return None
     number = float(value)
-    if agg.data_type == "integer" and agg.name in ("sum", "min", "max"):
+    # A count of distinct values is a count (§615).
+    if agg.name == "count_distinct" or (
+        agg.data_type == "integer" and agg.name in ("sum", "min", "max")
+    ):
         return int(number)
     return number
 
@@ -970,14 +973,22 @@ async def group_object_set(
     predicate, params = _set_predicate(object_type_id, filters)
     params["prop"] = property_name
     params["limit"] = max(1, limit)
-    sized = agg is not None and agg.numeric
+    # p.310's "approximate unique count" per slice (§615) is sized like the
+    # numeric four: by a metric over the second property, with the objects
+    # that have no value for it left out of the question.
+    sized = agg is not None and (agg.numeric or agg.name == "count_distinct")
     metric, present, order = "NULL", "", _order_group_by(sized)
     if sized:
         params["aggprop"] = agg.property
-        value = _comparable_sql(
-            "jsonb_extract_path_text(i.properties, :aggprop)", agg.data_type
-        )
-        metric = f"{agg.name}({value})"
+        raw = "jsonb_extract_path_text(i.properties, :aggprop)"
+        if agg.numeric:
+            value = _comparable_sql(raw, agg.data_type)
+            metric = f"{agg.name}({value})"
+        else:
+            # Distinct *text*, as the whole-set count and the Metric Card
+            # count it: identity, not arithmetic, so no declared type.
+            value = raw
+            metric = f"count(DISTINCT {value})"
         present = f" AND {value} IS NOT NULL"
     rows = await fetch_all(
         conn,

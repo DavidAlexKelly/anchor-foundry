@@ -8994,9 +8994,8 @@ CanvasObjectViewWidget.craft = {
  * paragraph used to list them as not built "because instance properties are
  * stored untyped and the two stores would disagree about a sum (decision
  * 0006)". `/object-sets/group` takes an aggregation and a property now.
- * `count_distinct` is the one still absent, and for a reason that is not
- * decision 0006's: per slice it is a question about a *third* property nobody
- * has named.
+ * The sixth, `count_distinct`, followed in §615 once the grouped endpoint
+ * answered it per bucket.
  *
  * p.309's **export as PNG / copy to clipboard** (§529) is `ChartExport`,
  * shown on hover in view mode.
@@ -9225,10 +9224,7 @@ function PieChartSettings() {
             <option key={key} value={key}>{name}</option>
           ))}
         </select>
-        <span className="field-hint">
-          What sizes a slice. p.310&apos;s &ldquo;approximate unique count&rdquo; is
-          not offered: per slice it would need a third property nobody has named
-        </span>
+        <span className="field-hint">What sizes a slice</span>
       </label>
       {pieNeedsProperty(aggregation) && (
         <label className="field">
@@ -9241,23 +9237,23 @@ function PieChartSettings() {
                 (p.aggregationProperty = e.target.value))}
           >
             <option value="">Choose…</option>
-            {/* **Only the properties the server will aggregate**, which is a
-                narrower list than the one Group by offers: `object_sets`
-                refuses anything but an integer or a float, and a picker that
-                offered a date would produce a sentence about arithmetic in
-                place of a chart. This panel already has the object type in
-                hand for Group by, so the list costs nothing. */}
-            {(type.data?.properties ?? [])
-              .filter((p) => p.data_type === "integer" || p.data_type === "float")
-              .map((p) => (
-                <option key={p.api_name} value={p.api_name}>
-                  {p.display_name || p.api_name}
-                </option>
-              ))}
+            {/* **Only the properties the server will aggregate**: every one
+                for a distinct count (§615), which asks about identity, and
+                integer and float for arithmetic, since `object_sets` refuses
+                the rest and a picker that offered a date would produce a
+                sentence about arithmetic in place of a chart. The Metric
+                Card's rule, read rather than repeated. */}
+            {metricPropertiesFor(aggregation, type.data?.properties ?? []).map((p) => (
+              <option key={p.api_name} value={p.api_name}>
+                {p.display_name || p.api_name}
+              </option>
+            ))}
           </select>
-          <span className="field-hint">
-            Integer and float properties only — the two the stores order and add
-            identically (decision 0006)
+          <span className="field-hint" data-testid="pie-aggregation-property-hint">
+            {pieAggregationOf(aggregation) === "count_distinct"
+              ? "How many different values it has in each slice"
+              : "Integer and float properties only — the two the stores order and add "
+                + "identically (decision 0006)"}
           </span>
         </label>
       )}
@@ -15645,6 +15641,8 @@ function ChartSettings() {
             onChange={(e) => setProp((p: { aggregate: string }) => (p.aggregate = e.target.value))}
           >
             <option value="count">Count of rows</option>
+            {/* p.282's "Approximate Unique Count" (§615). */}
+            <option value="count_distinct">Unique count of…</option>
             <option value="sum">Sum of…</option>
             <option value="avg">Average of…</option>
             <option value="min">Minimum of…</option>
@@ -15662,10 +15660,10 @@ function ChartSettings() {
             onChange={(e) => setProp((p: { measure: string | null }) => (p.measure = e.target.value || null))}
           >
             <option value="">Choose…</option>
-            {/* Over a set, p.281's aggregations other than a count run over a
-                declared number: the server refuses anything else, so it is
-                not offered. */}
-            {(objectSetVariable
+            {/* Over a set, p.281's arithmetic runs over a declared number:
+                the server refuses anything else, so it is not offered. A
+                unique count is of any column (§615). */}
+            {(objectSetVariable && aggregate !== "count_distinct"
               ? columns.filter((c) => c.data_type === "integer" || c.data_type === "float")
               : columns
             ).map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
@@ -15680,6 +15678,7 @@ function ChartSettings() {
           firstDefault={defaultValueTitle(kind || "bar", aggregate, measure)}
           numbers={columns.filter((c) => c.data_type === "integer" || c.data_type === "float")
             .map((c) => c.name)}
+          names={columns.map((c) => c.name)}
           showLegend={showLegend !== false}
           legend={legendPosition}
           twoAxes={multipleAxes === true}
@@ -15816,7 +15815,8 @@ function ChartSettings() {
 /** p.281's multiple series and p.282's name for each (§541), in the Chart's
  * panel. The Measure above is the first series; these are the rest. */
 function ChartSeriesFields({
-  segmented, series, firstName, firstDefault, numbers, showLegend, legend, twoAxes, setProp,
+  segmented, series, firstName, firstDefault, numbers, names, showLegend, legend, twoAxes,
+  setProp,
 }: {
   /** p.283's Use multiple value axes (§542). */
   twoAxes: boolean;
@@ -15825,6 +15825,8 @@ function ChartSeriesFields({
   firstName: string;
   firstDefault: string;
   numbers: string[];
+  /** Every property, for a unique count (§615). */
+  names: string[];
   showLegend: boolean;
   legend: unknown;
   setProp: (fn: (p: Record<string, unknown>) => void) => void;
@@ -15863,7 +15865,8 @@ function ChartSeriesFields({
                 (j === i ? { ...s, measure: e.target.value || null } : s)))}
             >
               <option value="">Choose…</option>
-              {numbers.map((n) => <option key={n} value={n}>{n}</option>)}
+              {(spec.aggregate === "count_distinct" ? names : numbers)
+                .map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           )}
           {twoAxes && (

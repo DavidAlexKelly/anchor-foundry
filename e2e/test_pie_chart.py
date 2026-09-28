@@ -183,6 +183,23 @@ def test_an_average_is_not_a_sum(page, api, sites) -> None:
     )
 
 
+def test_a_unique_count_sizes_a_slice_by_its_distinct_values(page, api, sites) -> None:
+    """p.310's "approximate unique count" (§615). Three open sites sit in two
+    regions and one closed site in one, so by distinct regions `open` is two
+    thirds - not the three quarters its count would give, nor the quarter its
+    capacity would."""
+    mod = build(api, sites, "Pie distinct",
+                {"aggregation": "count_distinct", "aggregationProperty": "region"})
+    open_module(page, mod)
+    settled(page)
+
+    expect(slice_for(page, "open").locator("title")).to_have_text(
+        "open: 2 (66.7%) — 3 objects"
+    )
+    # One region and one object: the same number, said once (charts.tsx).
+    expect(slice_for(page, "closed").locator("title")).to_have_text("closed: 1 (33.3%)")
+
+
 def test_the_legend_shows_what_the_wedge_is_drawn_from(page, api, sites) -> None:
     """A legend reading "open — 3" beside a wedge covering a quarter of the
     circle states a count next to a percentage of a total: two true numbers
@@ -500,11 +517,12 @@ def test_the_panel_offers_the_bound_type_s_properties(page, api, sites) -> None:
     expect(page.get_by_test_id("pie-group-by")).to_contain_text("Region")
 
 
-def test_the_panel_offers_five_of_p310s_six_aggregations(page, api, sites) -> None:
+def test_the_panel_offers_all_six_of_p310s_aggregations(page, api, sites) -> None:
     """This control was **disabled** until §228, with a hint saying a grouped
     sum needed declared property types. It does not any more (§220, §226,
     §227), so the hint would have been a refusal that was no longer true —
-    §216's stale line, in a settings panel."""
+    §216's stale line, in a settings panel. The sixth, the unique count,
+    arrived with §615."""
     mod = build(api, sites, "Pie panel aggregation")
     open_builder(page, mod)
     settled(page)
@@ -513,7 +531,8 @@ def test_the_panel_offers_five_of_p310s_six_aggregations(page, api, sites) -> No
     control = page.get_by_test_id("pie-aggregation")
     expect(control).to_be_enabled()
     assert control.locator("option").all_text_contents() == [
-        "Count of objects", "Sum of", "Average of", "Minimum of", "Maximum of",
+        "Count of objects", "Approximate unique count of", "Sum of", "Average of",
+        "Minimum of", "Maximum of",
     ]
 
 
@@ -538,6 +557,17 @@ def test_the_property_picker_appears_only_for_an_aggregation_that_needs_one(
     # offering them would produce a sentence about arithmetic in place of a
     # chart. A narrower list than Group by's, deliberately.
     assert option_labels(picker, count=2) == ["Choose…", "Capacity"]
+    expect(page.get_by_test_id("pie-aggregation-property-hint")).to_contain_text(
+        "Integer and float properties only")
+
+    # A unique count asks about identity, not arithmetic, so every property is
+    # one it can count the values of (§615).
+    page.get_by_test_id("pie-aggregation").select_option("count_distinct")
+    labels = option_labels(picker, count=5)
+    assert labels[0] == "Choose…" and sorted(labels[1:]) == [
+        "Capacity", "Id", "Region", "Status"], labels
+    expect(page.get_by_test_id("pie-aggregation-property-hint")).to_have_text(
+        "How many different values it has in each slice")
 
 
 # ---- §529: p.309's export and copy -----------------------------------------------
