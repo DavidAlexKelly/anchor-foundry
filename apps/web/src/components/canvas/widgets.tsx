@@ -120,6 +120,7 @@ import {
   METRIC_SIZES, SPARK_RANGES, baselineOf as metricBaselineOf,
   descriptionOf as metricDescriptionOf, metricSizeOf, pageNow, sparkRangeOf as metricSparkRangeOf,
   sparkRangeProblem as metricSparkRangeProblem, sparkRangeTransform as metricSparkRangeTransform,
+  secondaryLabelOf as metricSecondaryLabelOf,
 } from "./metric-card";
 import { ValueFormatEditor } from "@/components/value-format-editor";
 import {
@@ -13576,8 +13577,20 @@ export function CanvasMetricCard({
   sparkStart = null,
   sparkEnd = null,
   baseline = null,
+  showSecondary = false,
+  secondaryLabel = "",
+  secondaryAggregation = "count",
+  secondaryProperty = null,
+  secondaryFormat = null,
 }: {
   objectSetVariable?: string | null;
+  /** p.329's secondary metric (§528): a second aggregation of the same set,
+   * configured as the primary is. */
+  showSecondary?: boolean;
+  secondaryLabel?: string;
+  secondaryAggregation?: string;
+  secondaryProperty?: string | null;
+  secondaryFormat?: unknown;
   /** p.326's metric size (§526). */
   size?: string;
   /** p.328's description, shown on the "i tooltip" (§526). */
@@ -13655,6 +13668,18 @@ export function CanvasMetricCard({
     ],
     queryFn: () => objApi.aggregateObjectSet(workspaceId, setDefinition, ask ?? {}),
     enabled: !!objectSetVariable && !!setDefinition && !!ask,
+  });
+
+  // p.329's secondary metric, asked of the same set. `null` while its
+  // property is unchosen, for the primary's reason above.
+  const secondAsk = showSecondary === true ? metricRequest(secondaryAggregation, secondaryProperty) : null;
+  const second = useQuery({
+    queryKey: [
+      "canvas-metric", objectSetVariable, JSON.stringify(setDefinition ?? null),
+      secondAsk?.aggregation ?? null, secondAsk?.property ?? null,
+    ],
+    queryFn: () => objApi.aggregateObjectSet(workspaceId, setDefinition, secondAsk ?? {}),
+    enabled: !!objectSetVariable && !!setDefinition && !!secondAsk,
   });
 
   // **Matched against the aggregate, not against the series.** p.329's example
@@ -13750,6 +13775,21 @@ export function CanvasMetricCard({
             </span>
           )}
         </div>
+        {/* p.329: "under the primary metric". */}
+        {showSecondary === true && objectSetVariable && (
+          <span className="metric-secondary" data-testid="metric-secondary">
+            <span className="metric-secondary-label">
+              {metricSecondaryLabelOf(secondaryLabel, secondaryAggregation)}
+            </span>{" "}
+            <span className="metric-secondary-value" data-testid="metric-secondary-value">
+              {second.isError
+                ? (second.error as Error).message
+                : variablesPending || second.isPending
+                  ? "…"
+                  : metricValueLabel(second.data?.value, numberFormatOf(secondaryFormat))}
+            </span>
+          </span>
+        )}
         {/* A toggle switched on with nothing chosen. Said in edit mode only:
             a builder needs to know what is missing, and a reader would see an
             unexplained gap where a chart was promised. */}
@@ -13889,6 +13929,7 @@ function MetricCardSettings() {
     objectSetVariable, aggregation, property, label,
     showVisualization, visualizationPosition, seriesVariable, valueFormat,
     valueRules, size, description, sparkRange, sparkStart, sparkEnd, baseline,
+    showSecondary, secondaryLabel, secondaryAggregation, secondaryProperty, secondaryFormat,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -13906,6 +13947,11 @@ function MetricCardSettings() {
     sparkStart: node.data.props.sparkStart,
     sparkEnd: node.data.props.sparkEnd,
     baseline: node.data.props.baseline,
+    showSecondary: node.data.props.showSecondary,
+    secondaryLabel: node.data.props.secondaryLabel,
+    secondaryAggregation: node.data.props.secondaryAggregation,
+    secondaryProperty: node.data.props.secondaryProperty,
+    secondaryFormat: node.data.props.secondaryFormat,
   }));
   const rangeProblem = metricSparkRangeProblem(sparkRange, sparkStart, sparkEnd);
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
@@ -14040,6 +14086,76 @@ function MetricCardSettings() {
           setProp((p: { valueRules: ConditionalRule[] | null }) => (p.valueRules = next))
         }
       />
+      {/* p.329's "Show secondary metric?", in p.329's order: above Show
+          visualization. Its configuration "mimics the configuration for the
+          primary metric" (§528). */}
+      <label className="vars-toggle">
+        <input
+          type="checkbox"
+          checked={showSecondary === true}
+          data-testid="metric-show-secondary"
+          onChange={(e) =>
+            setProp((p: { showSecondary: boolean }) => (p.showSecondary = e.target.checked))
+          }
+        />
+        Show a secondary metric
+      </label>
+      {showSecondary === true && (
+        <>
+          <label className="field">
+            <span className="field-label">Secondary label</span>
+            <input
+              value={(secondaryLabel as string) ?? ""}
+              data-testid="metric-secondary-label"
+              placeholder={metricSecondaryLabelOf("", secondaryAggregation)}
+              onChange={(e) =>
+                setProp((p: { secondaryLabel: string }) => (p.secondaryLabel = e.target.value))
+              }
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">Secondary shows</span>
+            <select
+              value={metricAggregationOf(secondaryAggregation)}
+              data-testid="metric-secondary-aggregation"
+              onChange={(e) =>
+                setProp((p: { secondaryAggregation: string }) => (p.secondaryAggregation = e.target.value))
+              }
+            >
+              {Object.entries(METRIC_AGGREGATIONS).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+          </label>
+          {metricNeedsProperty(secondaryAggregation) && (
+            <label className="field">
+              <span className="field-label">Of property</span>
+              <select
+                value={(secondaryProperty as string) || ""}
+                data-testid="metric-secondary-property"
+                onChange={(e) =>
+                  setProp((p: { secondaryProperty: string | null }) =>
+                    (p.secondaryProperty = e.target.value || null))
+                }
+              >
+                <option value="">Choose…</option>
+                {metricPropertiesFor(secondaryAggregation, detail.data?.properties ?? []).map((prop) => (
+                  <option key={prop.api_name} value={prop.api_name}>{prop.api_name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <ValueFormatField
+            label="Secondary formatting"
+            testId="metric-secondary-format"
+            value={secondaryFormat}
+            hint="Local to this module — the ontology is unchanged (p.174)."
+            onChange={(next) =>
+              setProp((p: { secondaryFormat: NumberFormat | null }) => (p.secondaryFormat = next))
+            }
+          />
+        </>
+      )}
       {/* p.329's "Show visualization?" - "An optional configuration to display
           a sparkline depicting the history of a time series with the metric.
           Setting this toggle to Yes opens a configuration screen with the
@@ -14169,6 +14285,8 @@ CanvasMetricCard.craft = {
     seriesVariable: null,
     size: "regular", description: "", sparkRange: "all", sparkStart: null, sparkEnd: null,
     baseline: null,
+    showSecondary: false, secondaryLabel: "", secondaryAggregation: "count",
+    secondaryProperty: null, secondaryFormat: null,
   },
   related: { settings: MetricCardSettings },
 };
