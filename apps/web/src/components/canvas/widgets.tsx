@@ -245,6 +245,7 @@ import { MarkdownView } from "../markdown-view";
 import { SeriesCell } from "./SeriesCell";
 import { Sparkline } from "./Sparkline";
 import { useSeriesPoints, type SeriesRef } from "./series-points";
+import { ChartExport } from "./ChartExport";
 import { transformsText } from "./series-transforms";
 import { outputClauses } from "./action-output";
 import {
@@ -6955,9 +6956,8 @@ CanvasObjectViewWidget.craft = {
  * decision 0006's: per slice it is a question about a *third* property nobody
  * has named.
  *
- * **Not built, and named rather than approximated**: p.309's **export as PNG /
- * copy to clipboard**, which rasterises an SVG and is a capability rather than
- * a setting.
+ * p.309's **export as PNG / copy to clipboard** (§529) is `ChartExport`,
+ * shown on hover in view mode.
  */
 export function CanvasPieChart({
   objectSetVariable = null,
@@ -6994,7 +6994,9 @@ export function CanvasPieChart({
   const {
     connectors: { connect, drag },
   } = useNode();
-  const { workspaceId } = useCanvasEnv();
+  const { workspaceId, mode } = useCanvasEnv();
+  // What p.309's export draws: the chart's own SVG, found inside this.
+  const pieRef = React.useRef<HTMLDivElement | null>(null);
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending } = useCanvasVariables();
   const { set: setParameter } = useCanvasParameters();
@@ -7059,7 +7061,12 @@ export function CanvasPieChart({
           Couldn&apos;t group this object set.
         </p>
       ) : (
-        <div data-testid="pie-chart">
+        <div data-testid="pie-chart" ref={pieRef} className="chart-exportable">
+          {/* p.309: "Export and copy to clipboard options appear on hover of
+              the widget", in View mode. */}
+          {mode === "run" && (
+            <ChartExport target={pieRef} title={groupBy ? `${aggregation} by ${groupBy}` : "pie chart"} />
+          )}
           <PieChart
             // **`size`, not `count`** — what p.310's Aggregation made the two
             // different numbers. `PieChart` takes a series of values and knows

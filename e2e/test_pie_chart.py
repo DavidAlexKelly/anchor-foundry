@@ -538,3 +538,98 @@ def test_the_property_picker_appears_only_for_an_aggregation_that_needs_one(
     # offering them would produce a sentence about arithmetic in place of a
     # chart. A narrower list than Group by's, deliberately.
     assert option_labels(picker, count=2) == ["Choose…", "Capacity"]
+
+
+# ---- §529: p.309's export and copy -----------------------------------------------
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def png_pixels(data: bytes) -> list[tuple[int, int, int]]:
+    """An 8-bit RGBA PNG's pixels, decoded by hand: what the canvas writes,
+    and small enough not to need an imaging library."""
+    import struct
+    import zlib
+
+    assert data.startswith(PNG_MAGIC)
+    at, idat, width, height = 8, b"", 0, 0
+    while at < len(data):
+        length, kind = struct.unpack(">I4s", data[at:at + 8])
+        body = data[at + 8:at + 8 + length]
+        if kind == b"IHDR":
+            width, height, depth, colour = struct.unpack(">IIBB", body[:10])
+            assert (depth, colour) == (8, 6), (depth, colour)
+        elif kind == b"IDAT":
+            idat += body
+        at += 12 + length
+    raw, stride, rows, previous = zlib.decompress(idat), width * 4, [], bytearray(width * 4)
+    for y in range(height):
+        kind, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for x in range(stride):
+            left = line[x - 4] if x >= 4 else 0
+            up = previous[x]
+            corner = previous[x - 4] if x >= 4 else 0
+            if kind == 1:
+                line[x] = (line[x] + left) & 255
+            elif kind == 2:
+                line[x] = (line[x] + up) & 255
+            elif kind == 3:
+                line[x] = (line[x] + (left + up) // 2) & 255
+            elif kind == 4:
+                p = left + up - corner
+                pa, pb, pc = abs(p - left), abs(p - up), abs(p - corner)
+                line[x] = (line[x] + (left if pa <= pb and pa <= pc else up if pb <= pc else corner)) & 255
+        rows.append(bytes(line))
+        previous = line
+    return [(row[i], row[i + 1], row[i + 2]) for row in rows for i in range(0, stride, 4)]
+
+
+def test_the_chart_downloads_as_a_png(page, api, sites, tmp_path) -> None:
+    """p.309: "exporting of the current chart visualization as a PNG by using
+    … the Download chart as image option". The options appear on hover."""
+    mod = build(api, sites, "Pie export")
+    open_module(page, mod)
+    settled(page)
+    expect(slices(page).first).to_be_visible()
+    export = page.get_by_test_id("chart-export")
+    expect(export).to_have_css("opacity", "0")
+    page.get_by_test_id("pie-chart").hover()
+    expect(export).to_have_css("opacity", "1")
+    with page.expect_download() as downloading:
+        page.get_by_test_id("chart-export-download").click()
+    download = downloading.value
+    assert download.suggested_filename == "count-by-status.png", download.suggested_filename
+    saved = tmp_path / "pie.png"
+    download.save_as(saved)
+    data = saved.read_bytes()
+    assert data.startswith(PNG_MAGIC) and len(data) > 1000, len(data)
+    # The legend's text is `var(--ink)`, #16232f, which means nothing outside
+    # the page: drawn without its paint inlined it would come out black.
+    pixels = png_pixels(data)
+    assert any(abs(r - 22) + abs(g - 35) + abs(b - 47) <= 6 for r, g, b in pixels)
+    assert not any(r + g + b < 12 for r, g, b in pixels)
+    expect(page.get_by_test_id("chart-export-status")).to_have_text("Downloaded count-by-status.png")
+
+
+def test_the_chart_copies_to_the_clipboard(page, api, sites) -> None:
+    """p.309: "The current chart visualization can also be copied as an image
+    to the clipboard." Read back as a PNG."""
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    mod = build(api, sites, "Pie copy")
+    open_module(page, mod)
+    settled(page)
+    expect(slices(page).first).to_be_visible()
+    page.get_by_test_id("pie-chart").hover()
+    page.get_by_test_id("chart-export-copy").click()
+    expect(page.get_by_test_id("chart-export-status")).to_have_text("Copied the chart to the clipboard")
+    types = page.evaluate("async () => (await navigator.clipboard.read()).flatMap((i) => i.types)")
+    assert "image/png" in types, types
+
+
+def test_the_builder_does_not_offer_export(page, api, sites) -> None:
+    """p.309 puts the options "in View mode": in the builder a click on the
+    chart selects it."""
+    mod = build(api, sites, "Pie export builder")
+    open_builder(page, mod)
+    settled(page)
+    expect(page.get_by_test_id("pie-chart")).to_be_visible()
+    expect(page.get_by_test_id("chart-export")).to_have_count(0)

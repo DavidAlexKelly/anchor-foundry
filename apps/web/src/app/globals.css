@@ -2246,6 +2246,15 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 /* p.326's metric sizes (§526). Regular is the size above. */
 .metric-card--compact .metric-value { font-size: 18px; }
 .metric-card--large .metric-value { font-size: 44px; }
+/* p.309's chart export (§529): "Export and copy to clipboard options appear on
+   hover of the widget". Kept in the layout and faded, so keyboard focus can
+   still reach it. */
+.chart-exportable { position: relative; }
+.chart-export {
+  position: absolute; top: 0; right: 0; display: flex; gap: 4px; align-items: center;
+  opacity: 0; transition: opacity 0.12s; z-index: 1;
+}
+.chart-exportable:hover .chart-export, .chart-export:focus-within { opacity: 1; }
 /* p.329's secondary metric (§528): "under the primary metric", and smaller. */
 .metric-secondary { font-size: 13px; color: var(--ink-soft); }
 .metric-secondary-value { color: var(--ink); font-weight: 600; }
