@@ -374,7 +374,9 @@ import {
   extentOf, nextPlayback, pauseCrossed, pausesOf, positionAt, selectedTimeOf, selectedTimeText,
   timeLabel, timelineControls, timelineSpan, trackShape, windowOf, withinWindow, type TimeFormat,
 } from "./map-tracks";
-import { shapeOutputOf, shapesText, syncShapes } from "./map-drawn";
+import {
+  type Line as DrawnLine, lineOfShapes, lineText, shapeOutputOf, shapesText, syncShapes,
+} from "./map-drawn";
 import { perimeterModeOf } from "./map-measure";
 // Aliased on §211's rule: `areaOf` is also §537's chart area option.
 import {
@@ -13650,6 +13652,8 @@ export function CanvasMap({
   measurePerimeter = true,
   perimeterMode = "total",
   measureArea = true,
+  measureLine = true,
+  lineMode = "total",
   showLegend = false,
   legendCollapsed = false,
   legendSize = "full",
@@ -13703,6 +13707,9 @@ export function CanvasMap({
   measurePerimeter?: boolean;
   perimeterMode?: string;
   measureArea?: boolean;
+  /** p.302's Enable line measurements (§634): segments or the total. */
+  measureLine?: boolean;
+  lineMode?: string;
   /** A `geotemporal_series` property (§557): each object's track drawn as a
    * line, and the object at its position at the selected time. */
   trackProperty?: string | null;
@@ -13775,6 +13782,10 @@ export function CanvasMap({
   const shapesNow = String((shapesWritten !== undefined ? shapesWritten : shapesResolved) ?? "");
   const shapeOutput = shapeOutputOf(shapeOutputType);
   const shapesSeen = React.useRef<{ area: string; shapes: string } | null>(null);
+  // p.301's drawn line (§634): in the Drawn shapes text where there is one,
+  // and held here where there is not.
+  const [localLine, setLocalLine] = useState<DrawnLine | null>(null);
+  const drawnLine = drawnShapesVariable ? lineOfShapes(shapesNow) : localLine;
   React.useEffect(() => {
     if (!selectsArea || !drawnShapesVariable) {
       shapesSeen.current = null;
@@ -14088,10 +14099,28 @@ export function CanvasMap({
           drawnOpacity={drawnOpacityOf(drawnShapeOpacity)}
           measure={enableMeasurements ? {
             perimeter: measurePerimeter ? perimeterModeOf(perimeterMode) : null,
+            line: measureLine !== false ? perimeterModeOf(lineMode) : null,
             area: !!measureArea,
           } : null}
+          line={drawnLine}
+          onLine={selectsArea || drawnShapesVariable
+            ? (line) => {
+                // One drawn shape at a time (p.301's single draw mode): a line
+                // replaces the area, which a line cannot be.
+                if (selectsArea && mapArea) {
+                  setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, null));
+                }
+                const text = lineText(line, shapeOutput);
+                if (drawnShapesVariable) setParameter(drawnShapesVariable, text);
+                else setLocalLine(line);
+                if (line && drawEvents.length > 0) {
+                  runEvents(drawEvents, { ...eventContext, payload: { value: text } });
+                }
+              }
+            : undefined}
           onArea={selectsArea
             ? (area) => {
+                setLocalLine(null);
                 setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, area));
                 const text = shapesText(area, shapeOutput);
                 if (drawnShapesVariable) setParameter(drawnShapesVariable, text);
@@ -14270,7 +14299,7 @@ function MapSettings() {
     playbackPositionVariable, autoPauseVariable, layerLabel, selectedVariable, layerVisible,
     layerVisibleVariable, lockLayer, layerColor, layerOpacity,
     drawOptions, drawnShapeColor, drawnShapeOpacity, drawnShapesVariable, shapeOutputType,
-    enableMeasurements, measurePerimeter, perimeterMode, measureArea,
+    enableMeasurements, measurePerimeter, perimeterMode, measureArea, measureLine, lineMode,
     showLegend, legendCollapsed, legendSize, showSelectionPanel, autoZoom, autoZoomSetVariable,
     autoZoomOutsideOnly, boundsVariable, followSetVariable,
     actions: { setProp },
@@ -14300,6 +14329,8 @@ function MapSettings() {
     measurePerimeter: node.data.props.measurePerimeter,
     perimeterMode: node.data.props.perimeterMode,
     measureArea: node.data.props.measureArea,
+    measureLine: node.data.props.measureLine,
+    lineMode: node.data.props.lineMode,
     windowStartVariable: node.data.props.windowStartVariable,
     windowEndVariable: node.data.props.windowEndVariable,
     timeZone: node.data.props.timeZone,
@@ -14651,6 +14682,28 @@ function MapSettings() {
                     />
                     <span className="field-label">Area</span>
                   </label>
+                  {/* p.302's line measurements (§634). */}
+                  <label className="field canvas-toggle">
+                    <input
+                      type="checkbox"
+                      data-testid="map-measure-line"
+                      checked={measureLine !== false}
+                      onChange={(e) => setProp((p: { measureLine: boolean }) =>
+                        (p.measureLine = e.target.checked))}
+                    />
+                    <span className="field-label">Line length</span>
+                  </label>
+                  <select
+                    aria-label="Line length as"
+                    data-testid="map-measure-line-mode"
+                    value={perimeterModeOf(lineMode)}
+                    disabled={measureLine === false}
+                    onChange={(e) => setProp((p: { lineMode: string }) =>
+                      (p.lineMode = e.target.value))}
+                  >
+                    <option value="total">The total</option>
+                    <option value="segments">Each segment</option>
+                  </select>
                 </>
               )}
             </div>

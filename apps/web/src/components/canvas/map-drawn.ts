@@ -40,7 +40,12 @@ export function shapeOutputOf(raw: unknown): ShapeOutput {
 type Position = [number, number];
 type Geometry =
   | { type: "Polygon"; coordinates: Position[][] }
-  | { type: "Point"; coordinates: Position };
+  | { type: "Point"; coordinates: Position }
+  | { type: "LineString"; coordinates: Position[] };
+
+/** p.301's drawn line (§634): its points in order. It encloses nothing, so it
+ * is never the map's area; it lives in the Drawn shapes text alone. */
+export type Line = { lat: number; lon: number }[];
 type Feature = { type: "Feature"; geometry: Geometry; properties: Record<string, unknown> };
 
 const round = (n: number) => Math.round(n * 1e6) / 1e6;
@@ -80,6 +85,19 @@ export function shapesText(area: Area | null, output: ShapeOutput): string {
     });
   }
   return JSON.stringify({ type: "FeatureCollection", features: [featureOf(area)] });
+}
+
+/** A drawn line as p.301's GeoJSON text, or "" for none. */
+export function lineText(line: Line | null, output: ShapeOutput): string {
+  if (!line || line.length < 2) return "";
+  const geometry: Geometry = {
+    type: "LineString", coordinates: line.map((p) => [round(p.lon), round(p.lat)]),
+  };
+  if (output === "geometries") {
+    return JSON.stringify({ type: "GeometryCollection", geometries: [geometry] });
+  }
+  return JSON.stringify({ type: "FeatureCollection", features: [
+    { type: "Feature", geometry, properties: { shape: "line" } }] });
 }
 
 const isNumber = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
@@ -152,6 +170,28 @@ export function areaOfShapes(text: unknown): Area | null {
   return { points: points.map(([lon, lat]) => ({ lat, lon })) };
 }
 
+/** p.301's GeoJSON text as a drawn line: its first shape when that is a
+ * LineString of at least two points the map can place, or null. */
+export function lineOfShapes(text: unknown): Line | null {
+  if (typeof text !== "string") return null;
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const found = firstShape(json);
+  const geometry = found?.geometry as { type?: unknown; coordinates?: unknown } | undefined;
+  if (!geometry || geometry.type !== "LineString" || !Array.isArray(geometry.coordinates)) {
+    return null;
+  }
+  const points = geometry.coordinates.map(position);
+  if (points.length < 2 || points.length > MAX_POLYGON_POINTS || points.some((p) => !p)) {
+    return null;
+  }
+  return (points as Position[]).map(([lon, lat]) => ({ lat, lon }));
+}
+
 /** What the map writes when its area and its drawn shapes variable disagree:
  * whichever of the two changed since it last looked wins. On first look, a
  * shape the variable already holds is drawn onto a map with no area, which is
@@ -168,6 +208,9 @@ export function syncShapes(
 ): ShapesSync {
   const areaText = shapesText(now.area, output);
   if (areaText === now.shapes) return null;
+  // A drawn line with no area agrees with itself (§634): a line encloses
+  // nothing, so the map having no area is what it means.
+  if (!now.area && lineOfShapes(now.shapes)) return null;
   const shapesMoved = before === null ? !now.area : before.shapes !== now.shapes;
   const areaMoved = before !== null && before.area !== areaText;
   if (shapesMoved && !areaMoved) {

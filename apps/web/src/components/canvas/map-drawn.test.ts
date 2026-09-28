@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { areaOfShapes, shapeOutputOf, shapesText, syncShapes } from "./map-drawn";
+import {
+  areaOfShapes, lineOfShapes, lineText, shapeOutputOf, shapesText, syncShapes,
+} from "./map-drawn";
 import { distanceM } from "./map-area";
 
 const box = { north: 52, south: 48, east: 3, west: -1 };
@@ -167,5 +169,57 @@ describe("keeping the area and the variable in step (§574)", () => {
   it("writes in the output asked for", () => {
     expect(syncShapes(null, { area: shape, shapes: "" }, "geometries"))
       .toEqual({ write: "shapes", text: shapesText(shape, "geometries") });
+  });
+});
+
+describe("p.301's drawn line (§634)", () => {
+  const line = [{ lat: 50, lon: 0 }, { lat: 51.5, lon: -0.1234567 }, { lat: 52, lon: 4 }];
+
+  it("is a LineString feature, or a bare geometry, and reads back as itself", () => {
+    const features = JSON.parse(lineText(line, "features"));
+    expect(features).toEqual({ type: "FeatureCollection", features: [{
+      type: "Feature", properties: { shape: "line" },
+      geometry: { type: "LineString",
+        coordinates: [[0, 50], [-0.123457, 51.5], [4, 52]] } }] });
+    const geometries = JSON.parse(lineText(line, "geometries"));
+    expect(geometries.type).toBe("GeometryCollection");
+    expect(geometries.geometries[0].type).toBe("LineString");
+    expect(lineOfShapes(lineText(line, "geometries"))).toEqual(
+      [{ lat: 50, lon: 0 }, { lat: 51.5, lon: -0.123457 }, { lat: 52, lon: 4 }]);
+  });
+
+  it("is no line with fewer than two points", () => {
+    expect(lineText([line[0]!], "features")).toBe("");
+    expect(lineText(null, "features")).toBe("");
+    expect(lineOfShapes(JSON.stringify({ type: "LineString", coordinates: [[0, 50]] }))).toBeNull();
+  });
+
+  it("reads only a line the map can place", () => {
+    expect(lineOfShapes("not json")).toBeNull();
+    expect(lineOfShapes(7)).toBeNull();
+    expect(lineOfShapes(shapesText(box, "features"))).toBeNull();
+    expect(lineOfShapes(JSON.stringify({ type: "LineString",
+      coordinates: [[0, 50], [200, 50]] }))).toBeNull();
+    expect(lineOfShapes(JSON.stringify({ type: "LineString",
+      coordinates: Array.from({ length: 101 }, (_, n) => [n / 10, 50]) }))).toBeNull();
+    // Points in a row are not a line.
+    expect(lineOfShapes(JSON.stringify({ type: "MultiPoint",
+      coordinates: [[0, 50], [1, 51]] }))).toBeNull();
+    // Not an area, so a line never selects.
+    expect(areaOfShapes(lineText(line, "features"))).toBeNull();
+  });
+
+  it("agrees with a map that has no area, and yields to one that has", () => {
+    const text = lineText(line, "features");
+    expect(syncShapes({ area: "", shapes: "" }, { area: null, shapes: text }, "features"))
+      .toBeNull();
+    expect(syncShapes(null, { area: null, shapes: text }, "features")).toBeNull();
+    // The line that has just replaced an area: the area went as the line came,
+    // and the line is what stays, not the empty text the area now is.
+    expect(syncShapes({ area: shapesText(box, "features"), shapes: shapesText(box, "features") },
+      { area: null, shapes: text }, "features")).toBeNull();
+    // An area drawn since wins, as any drawn shape does.
+    expect(syncShapes({ area: "", shapes: text }, { area: box, shapes: text }, "features"))
+      .toEqual({ write: "shapes", text: shapesText(box, "features") });
   });
 });

@@ -12,7 +12,8 @@ from playwright.sync_api import expect
 from conftest import open_builder, open_module, save, settled
 from test_map_area import build, pin, rows_are, sites  # noqa: F401
 
-TOOLS = {"rectangle": "map-select-area", "polygon": "map-draw-shape", "circle": "map-draw-circle"}
+TOOLS = {"rectangle": "map-select-area", "polygon": "map-draw-shape", "circle": "map-draw-circle",
+         "line": "map-draw-line"}
 LONDON = {"property": "where", "op": "within_distance",
           "value": {"lat": 51.5, "lon": -0.1, "radius": 50_000}}
 
@@ -67,6 +68,6 @@ def test_the_panel_sets_the_tools_and_their_style(page, api, sites) -> None:
     page.get_by_test_id("map-drawn-opacity").fill("0.6")
     save(page)
     props = mod.definition()["layout"]["mp"]["props"]
-    assert props["drawOptions"] == ["polygon", "circle"]
+    assert props["drawOptions"] == ["polygon", "circle", "line"]
     assert props["drawnShapeColor"] == "#aa3300"
     assert props["drawnShapeOpacity"] == 0.6

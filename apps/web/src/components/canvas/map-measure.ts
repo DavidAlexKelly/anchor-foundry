@@ -24,7 +24,7 @@
  *   2πR·sin(r/R) and area 2πR²·(1 − cos(r/R)).
  *
  * Units are metric: there are no map or organization unit settings here.
- * Lines are not drawn here yet, so neither are their measurements.
+ * A drawn line (§634) is measured the same way, edge by edge.
  *
  * Pure.
  */
@@ -110,7 +110,7 @@ export function areaLabel(m2: number): string {
 }
 
 export interface MeasureLabel {
-  kind: "segment" | "perimeter" | "area";
+  kind: "segment" | "perimeter" | "area" | "length";
   text: string;
   x: number;
   y: number;
@@ -153,4 +153,39 @@ export function measureLabels(
     });
   }
   return out;
+}
+
+/** A drawn line's length on the ground, in metres (§634). */
+export function lineM(line: readonly LonLat[]): number {
+  let total = 0;
+  for (let n = 1; n < line.length; n++) total += edgeM(line[n - 1]!, line[n]!);
+  return total;
+}
+
+/**
+ * p.302's "Enable line measurements: Show either individual segment lengths
+ * or the total length of a drawn line" (§634): each segment's length at its
+ * middle, or the whole length at the line's end.
+ */
+export function lineLabels(
+  line: readonly LonLat[],
+  mode: PerimeterMode,
+  view: View,
+  frame: Frame,
+): MeasureLabel[] {
+  if (line.length < 2) return [];
+  const h = view.w * (frame.height / frame.width);
+  const px = (p: LonLat) => ({
+    x: ((p.lon - view.x) / view.w) * frame.width,
+    y: ((-p.lat - view.y) / h) * frame.height,
+  });
+  if (mode === "total") {
+    const end = px(line[line.length - 1]!);
+    return [{ kind: "length", text: lengthLabel(lineM(line)), x: end.x, y: end.y - 12 }];
+  }
+  return line.slice(1).map((b, n) => {
+    const a = line[n]!;
+    return { kind: "segment", text: lengthLabel(edgeM(a, b)),
+      ...px({ lat: (a.lat + b.lat) / 2, lon: (a.lon + b.lon) / 2 }) };
+  });
 }

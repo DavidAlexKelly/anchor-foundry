@@ -154,16 +154,19 @@ export function circlePath(circle: Circle, view: View, frame: Frame): string {
 
 /** p.301's Draw options (§573): the tools a map's toolbar may offer, in its
  * order. */
-export const DRAW_TOOLS = ["rectangle", "polygon", "circle"] as const;
+export const DRAW_TOOLS = ["rectangle", "polygon", "circle", "line"] as const;
 export type DrawTool = (typeof DRAW_TOOLS)[number];
 export const DRAW_TOOL_LABELS: Record<DrawTool, string> = {
   rectangle: "Rectangle",
   polygon: "Shape",
   circle: "Circle",
+  // p.301's line (§634): drawn and measured, and written to Drawn shapes. A
+  // line encloses nothing, so it selects nothing.
+  line: "Line",
 };
 
-/** The tools a map offers: those named, in the toolbar's order, or all
- * three for a map saved before there was a choice. None is a choice too: a
+/** The tools a map offers: those named, in the toolbar's order, or all of
+ * them for a map saved before there was a choice. None is a choice too: a
  * map whose area is set only by what writes its variable. */
 export function drawToolsOf(raw: unknown): DrawTool[] {
   if (!Array.isArray(raw)) return [...DRAW_TOOLS];
