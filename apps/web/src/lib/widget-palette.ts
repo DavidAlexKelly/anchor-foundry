@@ -96,6 +96,7 @@ export const CATEGORY_OF: Record<string, CategoryId> = {
   CanvasPivotTable: "visualization",
   CanvasMap: "visualization",
   CanvasTimeSeries: "visualization",
+  CanvasSeriesAnalysis: "visualization",
   CanvasTimeline: "visualization",
   CanvasStepper: "visualization",
   CanvasMarkdown: "visualization",

@@ -72,7 +72,7 @@ function markProps(drill: Drill | undefined, label: string) {
   };
 }
 
-const PALETTE = [
+export const PALETTE = [
   "#2f6f4f", "#b07d2b", "#3d6b8f", "#8f4b6b", "#5c6b3d",
   "#7a5c8f", "#2f8f8f", "#8f5c2f", "#4f4f8f", "#6b8f3d",
   "#8f2f4f", "#3d8f6b",
