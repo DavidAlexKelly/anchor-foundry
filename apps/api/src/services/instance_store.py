@@ -425,6 +425,33 @@ def _doc_id(source_id: UUID, primary_key: str) -> str:
     return str(uuid5(INSTANCE_NAMESPACE, f"{source_id}:{primary_key}"))
 
 
+def _geo_clause(field: str, shape: Any) -> dict[str, Any]:
+    """One shape (§230, §571, §572), as the clause the mapped `geo_point`
+    answers it with natively."""
+    if isinstance(shape, object_sets.Circle):
+        # §572: OpenSearch measures `geo_distance` as an arc on the mean
+        # Earth, the radius `object_sets.in_circle` uses.
+        return {"geo_distance": {
+            "distance": f"{shape.radius}m",
+            field: {"lat": shape.lat, "lon": shape.lon},
+        }}
+    if isinstance(shape, object_sets.Polygon):
+        # §571: by the even-odd rule `object_sets.in_polygon` states.
+        return {"geo_polygon": {field: {"points": [
+            {"lat": lat, "lon": lon} for lat, lon in shape.points
+        ]}}}
+    # Decision 0006 §3's whole argument, in one clause. The mapped `geo_point`
+    # field **handles the antimeridian itself** - a box whose `top_left`
+    # longitude is east of its `bottom_right` one wraps, which is the same
+    # rule `object_sets.in_box` states and the Postgres store writes out as a
+    # union. Four range clauses would need the rule restated here and would
+    # get it wrong the same silent way.
+    return {"geo_bounding_box": {field: {
+        "top_left": {"lat": shape.north, "lon": shape.west},
+        "bottom_right": {"lat": shape.south, "lon": shape.east},
+    }}}
+
+
 def _prefix_clause(field: str, value: Any) -> dict[str, Any]:
     """`starts_with` as OpenSearch asks it: a prefix of the **whole value**,
     ignoring case - which is what Postgres's anchored `ILIKE 'x%'` means.
@@ -896,31 +923,16 @@ class OpenSearchInstanceStore:
                 must.append({"bool": {"must": [
                     {"exists": {"field": field}}, _query_clause(field, f.value),
                 ]}})
-            elif f.op == "within_distance":
-                # §572: OpenSearch measures `geo_distance` as an arc on the
-                # mean Earth, the radius `object_sets.in_circle` uses.
-                must.append({"geo_distance": {
-                    "distance": f"{f.value.radius}m",
-                    field: {"lat": f.value.lat, "lon": f.value.lon},
+            elif f.op == "within_any":
+                # §639: inside any one of the shapes - one `should` clause
+                # each. A bool of nothing but `should` needs one of them to
+                # hold, so it says no `minimum_should_match` (a 1 written here
+                # survived the sweep as equivalent).
+                must.append({"bool": {
+                    "should": [_geo_clause(field, shape) for shape in f.value],
                 }})
-            elif f.op == "within_polygon":
-                # §571: the mapped `geo_point` answers a polygon natively, by
-                # the even-odd rule `object_sets.in_polygon` states.
-                must.append({"geo_polygon": {field: {"points": [
-                    {"lat": lat, "lon": lon} for lat, lon in f.value.points
-                ]}}})
             elif f.op in object_sets.GEO_OPERATORS:
-                # Decision 0006 §3's whole argument, in one clause. The mapped
-                # `geo_point` field answers this natively and **handles the
-                # antimeridian itself** - a box whose `top_left` longitude is
-                # east of its `bottom_right` one wraps, which is the same rule
-                # `object_sets.in_box` states and the Postgres store writes out
-                # as a union. Four range clauses would need the rule restated
-                # here and would get it wrong the same silent way.
-                must.append({"geo_bounding_box": {field: {
-                    "top_left": {"lat": f.value.north, "lon": f.value.west},
-                    "bottom_right": {"lat": f.value.south, "lon": f.value.east},
-                }}})
+                must.append(_geo_clause(field, f.value))
             elif f.op in object_sets.ORDERED_OPERATORS:
                 bound = object_sets.comparable(f.value, f.data_type)
                 if bound is None:
