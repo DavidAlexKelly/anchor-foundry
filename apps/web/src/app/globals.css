@@ -3875,3 +3875,12 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .connection-oidc div { display: flex; gap: 6px; align-items: baseline; }
 .connection-oidc dt { min-width: 64px; color: var(--ink-soft); }
 .connection-oidc dd { margin: 0; overflow-wrap: anywhere; }
+/* p.322's On hover interactions (§669): an annotation's hover card, below its
+   words, inside the widget. */
+.canvas-markdown { position: relative; }
+.canvas-markdown-hover {
+  position: absolute; z-index: 30; min-width: 160px; max-width: min(320px, calc(100vw - 32px));
+  padding: 6px 8px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: 0 8px 24px rgba(22, 35, 47, 0.14); font-size: 12.5px;
+}
+.canvas-markdown-hover-props { white-space: pre-line; margin-bottom: 4px; color: var(--ink-soft); }

@@ -1968,13 +1968,15 @@ def table_event(item=None, on: str = "click") -> dict:
     return {"e_1": {"id": "e_1", "trigger": trigger, "effects": [set_var("v_a", "x")]}}
 
 
-def markdown_layout(actions=None) -> dict:
-    """p.322's Create annotations via actions or events (§638)."""
+def markdown_layout(actions=None, hover=None) -> dict:
+    """p.322's Create annotations via actions or events (§638), and its On
+    hover interactions (§669)."""
     return {
         "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["md"]},
         "md": {"type": {"resolvedName": "CanvasMarkdown"},
                "props": {"highlightActions": actions if actions is not None else [
-                   {"id": "h_note", "label": "Annotate"}, {"label": "no id"}, "junk"]}},
+                   {"id": "h_note", "label": "Annotate"}, {"label": "no id"}, "junk"],
+                   **({"hoverActions": hover} if hover is not None else {})}},
     }
 
 
@@ -1990,7 +1992,7 @@ def test_a_markdown_widgets_highlight_actions_are_clicks() -> None:
     variables = wv.parse({"v_a": var("v_a", label="A")})
     events = we.parse(markdown_event("h_note"), layout=markdown_layout(), variables=variables)
     assert events["e_1"].item == "h_note"
-    with pytest.raises(we.EventError, match="actions offered on highlighted text"):
+    with pytest.raises(we.EventError, match="actions offered on highlighted text or an annotation's hover card"):
         we.parse(markdown_event(), layout=markdown_layout(), variables=variables)
     with pytest.raises(we.EventError, match="does not have"):
         we.parse(markdown_event("h_gone"), layout=markdown_layout(), variables=variables)
@@ -2001,6 +2003,24 @@ def test_a_markdown_widgets_highlight_actions_are_clicks() -> None:
     # Its row selection (a reference or an annotation) is untouched.
     assert we.parse(markdown_event(on="row_select"), layout=markdown_layout(),
                     variables=variables)["e_1"].on == "row_select"
+
+
+def test_a_markdown_widgets_hover_interactions_are_clicks_too() -> None:
+    """p.322's On hover interactions: "Configure on-hover interactions such as
+    actions and events, which will be displayed in the on-hover tooltip of an
+    annotation object." Each is a click beside the highlight actions."""
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    layout = markdown_layout(hover=[{"id": "hover_1", "label": "Resolve"}, {"label": "no id"}, "junk"])
+    assert we.parse(markdown_event("hover_1"), layout=layout, variables=variables)["e_1"].item == "hover_1"
+    assert we.parse(markdown_event("h_note"), layout=layout, variables=variables)["e_1"].item == "h_note"
+    # With no highlight actions, the hover interactions alone are its clicks.
+    alone = markdown_layout(actions=[], hover=[{"id": "hover_1", "label": "Resolve"}])
+    assert we.parse(markdown_event("hover_1"), layout=alone, variables=variables)["e_1"].item == "hover_1"
+    with pytest.raises(we.EventError, match="does not have"):
+        we.parse(markdown_event("hover_2"), layout=layout, variables=variables)
+    for junk in (5, {"id": "hover_1"}, "hover_1"):
+        with pytest.raises(we.EventError, match="does not have"):
+            we.parse(markdown_event("hover_1"), layout=markdown_layout(actions=[], hover=junk), variables=variables)
 
 
 def test_a_tables_right_click_menu_items_are_clicks() -> None:

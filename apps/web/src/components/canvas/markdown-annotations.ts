@@ -12,6 +12,20 @@
  * source offset, and a run is split where an annotation starts or ends.
  */
 
+import type { ConditionalRule } from "@/lib/types";
+import { conditionalStyle } from "../../lib/conditional-format";
+import { itemsOf, type ButtonItem } from "./button-items";
+import { rulesOf } from "./conditional-formats";
+
+/** p.322's Highlight color (§669): "A custom color may be statically defined
+ * or conditional formatting rules may be set." Only those two - p.320's third
+ * way for a reference, a property's own formatting, is not offered here. */
+export const ANNOTATION_COLOR_MODES = {
+  static: "Static colour",
+  rules: "Conditional formatting rules",
+} as const;
+export type AnnotationColorMode = keyof typeof ANNOTATION_COLOR_MODES;
+
 export interface AnnotationLayer {
   /** p.321's Name, for the configuration panel. */
   name: string;
@@ -20,8 +34,12 @@ export interface AnnotationLayer {
   /** p.321's Start index and End index: numeric properties of those objects. */
   startProperty: string;
   endProperty: string;
-  /** p.322's Highlight color, a static one; null for the accent. */
+  /** p.322's Highlight color, a static one; null for the accent. Also what
+   * the rules fall back to where none paints an annotation. */
   color: string | null;
+  colorMode: AnnotationColorMode;
+  /** §158's rules over the annotation object's properties (§669). */
+  colorRules: ConditionalRule[] | null;
 }
 
 export function annotationLayersOf(raw: unknown): AnnotationLayer[] {
@@ -36,6 +54,8 @@ export function annotationLayersOf(raw: unknown): AnnotationLayer[] {
       startProperty: text(e.startProperty),
       endProperty: text(e.endProperty),
       color: typeof e.color === "string" && /^#[0-9a-fA-F]{6}$/.test(e.color) ? e.color : null,
+      colorMode: e.colorMode === "rules" ? "rules" : "static",
+      colorRules: rulesOf(e.colorRules),
     }];
   });
 }
@@ -128,4 +148,40 @@ export function tooltipOf(annotation: Annotation, properties: readonly string[])
     .filter((p) => annotation.properties[p] !== undefined && annotation.properties[p] !== null)
     .map((p) => `${p}: ${String(annotation.properties[p])}`)
     .join("\n");
+}
+
+/** An annotation's colour: its layer's static one, or what the layer's rules
+ * paint its object's properties, the fill before the text's; the static
+ * colour where no rule matches. */
+export function annotationColorOf(layer: AnnotationLayer, annotation: Annotation): string | null {
+  if (layer.colorMode === "static") return layer.color;
+  const paint = conditionalStyle(layer.colorRules, annotation.properties);
+  return paint?.background ?? paint?.colour ?? layer.color;
+}
+
+/**
+ * p.322's On hover interactions (§669): "Configure on-hover interactions such
+ * as actions and events, which will be displayed in the on-hover tooltip of
+ * an annotation object." Each is a click the Events panel wires, as a
+ * highlighted-text action is (§638), and the ids are `hover_N` so the two lists,
+ * both the widget's clicks, never name the same item.
+ */
+export function hoverActionsOf(raw: unknown): ButtonItem[] {
+  return itemsOf(raw).filter((i) => /^hover_\d+$/.test(i.id));
+}
+
+export function addHoverAction(items: readonly ButtonItem[]): ButtonItem[] {
+  const taken = new Set(items.map((i) => i.id));
+  let n = items.length + 1;
+  while (taken.has(`hover_${n}`)) n += 1;
+  return [...items, { id: `hover_${n}`, label: `Interaction ${items.length + 1}` }];
+}
+
+/** The widget's clicks as the Events panel lists them: its highlighted-text
+ * actions, then its hover interactions, said as such. */
+export function markdownClickItems(highlight: unknown, hover: unknown): ButtonItem[] {
+  return [
+    ...itemsOf(highlight),
+    ...hoverActionsOf(hover).map((i) => ({ id: i.id, label: `On hover: ${i.label || "Interaction"}` })),
+  ];
 }

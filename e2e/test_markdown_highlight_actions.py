@@ -61,5 +61,5 @@ def test_the_events_panel_offers_each_action(page, api) -> None:
     page.get_by_role("button", name="New event").click()
     when = page.locator(".canvas-event.on select").nth(1)
     expect(when.locator("option")).to_have_text(
-        ["Highlighted text action", "Reference or annotation selected"])
+        ["Highlighted text or hover action", "Reference or annotation selected"])
     expect(page.get_by_test_id("event-item")).to_have_value("h_1")

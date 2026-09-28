@@ -277,9 +277,11 @@ import {
 import { readerLayout } from "./reader-layout";
 import { PALETTE as WIDGET_LIST } from "./widget-list";
 import { MarkdownReferences, MarkdownRuns, MarkdownView } from "../markdown-view";
+import { staticTypeOf } from "./object-export";
 import {
-  ANNOTATION_FORMATS, annotationFormatOf, annotationLayersOf, annotationsOf,
-  segmentsOf as annotatedPieces, tooltipOf,
+  ANNOTATION_COLOR_MODES, ANNOTATION_FORMATS, addHoverAction, annotationColorOf, annotationFormatOf,
+  annotationLayersOf, annotationsOf, hoverActionsOf, segmentsOf as annotatedPieces, tooltipOf,
+  type AnnotationColorMode,
 } from "./markdown-annotations";
 import {
   type SelectionEnd, selectedSource, selectionRange,
@@ -5068,6 +5070,7 @@ export function CanvasMarkdown({
   selectedAnnotationVariable = null,
   annotationTooltip = "",
   highlightActions = [],
+  hoverActions = [],
 }: {
   source?: string;
   text?: string;
@@ -5101,6 +5104,9 @@ export function CanvasMarkdown({
   /** p.322's Create annotations via actions or events (§638): what is offered
    * on highlighted text, each a click the Events panel wires. */
   highlightActions?: unknown;
+  /** p.322's On hover interactions (§669): what an annotation's hover card
+   * offers, each a click the Events panel wires. */
+  hoverActions?: unknown;
 }) {
   const {
     id: nodeId,
@@ -5159,6 +5165,11 @@ export function CanvasMarkdown({
     selectedAnnotationVariable ? parameterValues[selectedAnnotationVariable] : undefined);
   const tooltipProps = annotationTooltip.split(",").map((p) => p.trim()).filter(Boolean);
   const format = annotationFormatOf(annotationFormat);
+  // p.322's On hover interactions (§669): the hovered annotation, and where
+  // its card goes, below the words, inside the widget.
+  const hovering = annotating ? hoverActionsOf(hoverActions) : [];
+  const [hovered, setHovered] = useState<
+    { annotation: (typeof annotations)[number]; left: number; top: number } | null>(null);
   const drawRun = (runText: string, runAt: number) => annotatedPieces(runText, runAt, annotations)
     .map((piece) => {
       if (piece.covering.length === 0) {
@@ -5167,7 +5178,8 @@ export function CanvasMarkdown({
       // The first annotation covering a piece is the one a click selects;
       // the tooltip names every one.
       const top = piece.covering[0]!;
-      const color = layers[top.layer]?.color;
+      // p.322's Highlight color, static or by the layer's rules (§669).
+      const color = annotationColorOf(layers[top.layer]!, top);
       const on = piece.covering.some((a) => selectedAnnotations.includes(a.key));
       return (
         <mark
@@ -5177,9 +5189,16 @@ export function CanvasMarkdown({
           data-annotation={piece.covering.map((a) => a.key).join(" ")}
           className={`canvas-markdown-annotation fmt-${format}${on ? " on" : ""}`}
           style={color ? ({ "--annotation-color": color } as React.CSSProperties) : undefined}
-          title={piece.covering.map((a) => tooltipOf(a, tooltipProps)).filter(Boolean).join("\n\n")
-            || undefined}
+          data-color={color ?? undefined}
+          // With hover interactions the card is the tooltip, properties and all.
+          title={hovering.length > 0 ? undefined
+            : piece.covering.map((a) => tooltipOf(a, tooltipProps)).filter(Boolean).join("\n\n") || undefined}
           aria-pressed={on}
+          onMouseEnter={hovering.length > 0 ? (e) => {
+            const box = containerRef.current?.getBoundingClientRect();
+            const mark = e.currentTarget.getBoundingClientRect();
+            setHovered({ annotation: top, left: mark.left - (box?.left ?? 0), top: mark.bottom - (box?.top ?? 0) });
+          } : undefined}
           onClick={() => {
             if (selectedAnnotationVariable) {
               setParameter(selectedAnnotationVariable, selectionClauses([top.key]));
@@ -5335,7 +5354,8 @@ export function CanvasMarkdown({
         <p className="canvas-widget-empty">Markdown - add text in Settings</p>
       ) : (
         <div className={classes.join(" ")} data-testid="markdown" ref={containerRef}
-             onMouseUp={readSelection} onKeyUp={readSelection}>
+             onMouseUp={readSelection} onKeyUp={readSelection}
+             onMouseLeave={() => setHovered(null)}>
           <MarkdownReferences.Provider value={references ? drawReference : null}>
             <MarkdownRuns.Provider value={annotating ? drawRun : null}>
               <MarkdownView blocks={blocks} align={widgetAlign} />
@@ -5369,6 +5389,38 @@ export function CanvasMarkdown({
               ))}
             </div>
           )}
+          {/* p.322's On hover interactions (§669): "displayed in the on-hover
+              tooltip of an annotation object", each run with the hovered
+              object - p.322's "Hovered object" - as `{{primary_key}}`. */}
+          {hovered && hovering.length > 0 && (
+            <div className="canvas-markdown-hover" data-testid="markdown-annotation-hover"
+                 style={{ left: hovered.left, top: hovered.top }}>
+              {tooltipOf(hovered.annotation, tooltipProps) && (
+                <div className="canvas-markdown-hover-props">{tooltipOf(hovered.annotation, tooltipProps)}</div>
+              )}
+              <div className="row-actions">
+                {hovering.map((action) => (
+                  <button
+                    key={action.id}
+                    type="button"
+                    className="btn quiet"
+                    data-testid="markdown-hover-action"
+                    title={action.label || "Interaction"}
+                    onClick={() => {
+                      if (mode !== "run") return;
+                      runEvents(eventsFor(moduleEvents, nodeId, "click", action.id), {
+                        ...eventContext,
+                        payload: { primary_key: hovered.annotation.key,
+                                   layer: layers[hovered.annotation.layer]?.name ?? "" },
+                      });
+                    }}
+                  >
+                    {action.label || "Interaction"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {unreadable > 0 && (
             // Said, not dropped: an annotation that cannot be placed and one
             // that is not there look the same otherwise.
@@ -5393,10 +5445,11 @@ function MarkdownSettings() {
     tagType, selectedVariable, referenceTypes, selectionBehavior,
     selectedTextVariable, selectionStartVariable, selectionEndVariable,
     annotationLayers, annotationFormat, selectedAnnotationVariable, annotationTooltip,
-    highlightActions,
+    highlightActions, hoverActions,
     actions: { setProp },
   } = useNode((node) => ({
     highlightActions: node.data.props.highlightActions,
+    hoverActions: node.data.props.hoverActions,
     annotationLayers: node.data.props.annotationLayers,
     annotationFormat: node.data.props.annotationFormat,
     selectedAnnotationVariable: node.data.props.selectedAnnotationVariable,
@@ -5597,13 +5650,14 @@ function MarkdownSettings() {
                 <input type="color" aria-label={`Layer ${i + 1} highlight colour`}
                   value={layer.color ?? "#2563eb"}
                   onChange={(e) => change(i, { color: e.target.value })} />
+                <AnnotationLayerRules index={i} layer={layer} onChange={(patch) => change(i, patch)} />
                 <button type="button" className="btn quiet" aria-label={`Remove layer ${i + 1}`}
                   onClick={() => write(layers.filter((_, j) => j !== i))}>×</button>
               </div>
             ))}
             <button type="button" className="btn" data-testid="markdown-annotation-add"
               onClick={() => write([...layers, { name: "", objectSetVariable: null,
-                startProperty: "", endProperty: "", color: null }])}>
+                startProperty: "", endProperty: "", color: null, colorMode: "static", colorRules: null }])}>
               Add a layer
             </button>
             <label className="field">
@@ -5634,6 +5688,32 @@ function MarkdownSettings() {
                 onChange={(e) => setProp((p: { annotationTooltip: string }) =>
                   (p.annotationTooltip = e.target.value))} />
             </label>
+            {/* p.322's On hover interactions (§669). */}
+            <div className="field" data-testid="markdown-hover-settings">
+              <span className="field-label">On hover interactions</span>
+              {hoverActionsOf(hoverActions).map((action, i) => (
+                <div key={action.id} className="field-inline">
+                  <input type="text" aria-label={`Hover interaction ${i + 1} title`}
+                    value={action.label}
+                    onChange={(e) => setProp((p: { hoverActions: unknown }) =>
+                      (p.hoverActions = renameItem(hoverActionsOf(p.hoverActions), action.id, e.target.value)))} />
+                  <button type="button" className="btn quiet" aria-label={`Remove hover interaction ${i + 1}`}
+                    onClick={() => setProp((p: { hoverActions: unknown }) =>
+                      (p.hoverActions = removeItem(hoverActionsOf(p.hoverActions), action.id)))}>
+                    ×
+                  </button>
+                </div>
+              ))}
+              <button type="button" className="btn" data-testid="markdown-hover-add"
+                onClick={() => setProp((p: { hoverActions: unknown }) =>
+                  (p.hoverActions = addHoverAction(hoverActionsOf(p.hoverActions))))}>
+                Add an interaction
+              </button>
+              <span className="field-hint">
+                Offered on an annotation&apos;s hover card; wire each in Events, where {"{{primary_key}}"} is the
+                hovered annotation
+              </span>
+            </div>
             <span className="field-hint">
               Indices are into this Markdown: zero-based, start inclusive, end exclusive —
               what User text selection writes
@@ -14055,6 +14135,47 @@ export function CanvasSeriesAnalysis({
  * Highlight color - static, from a property's Ontology formatting, or the
  * builder's own rules (§664). The type is read by its api name so its
  * properties can be offered. */
+/** p.322's Highlight color for an annotation layer (§669): static, or §158's
+ * rules over the layer's objects' properties. The properties are the layer's
+ * set's type's, where the document can say which type that is. */
+function AnnotationLayerRules({ index, layer, onChange }: {
+  index: number;
+  layer: ReturnType<typeof annotationLayersOf>[number];
+  onChange: (patch: Partial<ReturnType<typeof annotationLayersOf>[number]>) => void;
+}) {
+  const { workspaceId } = useCanvasEnv();
+  const { declared } = useCanvasVariables();
+  const [editing, setEditing] = useState(false);
+  const typeId = layer.objectSetVariable ? staticTypeOf(layer.objectSetVariable, declared) : null;
+  const detail = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: layer.colorMode === "rules" && !!typeId,
+  });
+  const properties = detail.data?.properties ?? [];
+  const n = index + 1;
+  return (
+    <>
+      <select aria-label={`Layer ${n} colour from`} value={layer.colorMode}
+              onChange={(e) => onChange({ colorMode: e.target.value as AnnotationColorMode })}>
+        {Object.entries(ANNOTATION_COLOR_MODES).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+      </select>
+      {layer.colorMode === "rules" && (
+        <button type="button" className="btn quiet" disabled={properties.length === 0}
+                data-testid="markdown-annotation-rules" onClick={() => setEditing(true)}>
+          {layer.colorRules?.length
+            ? `Edit ${layer.colorRules.length} rule${layer.colorRules.length === 1 ? "" : "s"}` : "Add rules"}
+        </button>
+      )}
+      {editing && (
+        <ConditionalFormatEditor open onClose={() => setEditing(false)}
+          propertyName={properties[0]?.api_name ?? "value"} properties={properties} value={layer.colorRules}
+          onSave={(next) => { onChange({ colorRules: next }); setEditing(false); }} />
+      )}
+    </>
+  );
+}
+
 function MarkdownReferenceTypeRow({ index, type, newId, onChange, onRemove }: {
   index: number;
   /** The id the type takes if its override goes on without one (§665). */

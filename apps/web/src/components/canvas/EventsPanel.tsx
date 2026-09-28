@@ -62,7 +62,7 @@ const TRIGGERS: {
     // (§638).
     labels: {
       CanvasMetricCard: "Card selected", CanvasObjectTable: "Right-click menu item",
-      CanvasMarkdown: "Highlighted text action",
+      CanvasMarkdown: "Highlighted text or hover action",
     },
   },
   {
