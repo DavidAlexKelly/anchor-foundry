@@ -22,6 +22,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { CleanupQueue } from "@/components/cleanup-queue";
+import { CleanupSettings } from "@/components/cleanup-settings";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
 
 export default function CleanupPage() {
@@ -65,7 +66,11 @@ export default function CleanupPage() {
           only offer you buttons you cannot press.
         </p>
       ) : (
-        <CleanupQueue workspaceId={workspace.id} workspaceSlug={params.workspace} />
+        <>
+          {/* p.72's subpage (§619), above the queue it tunes. */}
+          <CleanupSettings workspaceId={workspace.id} />
+          <CleanupQueue workspaceId={workspace.id} workspaceSlug={params.workspace} />
+        </>
       )}
     </main>
   );

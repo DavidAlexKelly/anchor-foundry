@@ -34,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
@@ -75,8 +76,9 @@ DEFAULT_SNOOZE_DAYS = 14
 #: to answer. `no_description` is last because it says something about the
 #: documentation rather than about whether anyone would miss the type.
 #:
-#: p.72-73 makes this order configurable per user. That is ○ here and named in
-#: `ontology.md`: the queue is worth having before the panel that tunes it.
+#: The **default set**: p.72-73 makes the flags and their order configurable
+#: per user, and §619 built that (`settings`). A person who never opened the
+#: settings has no row and follows this tuple as it changes.
 FLAG_PRIORITY = (
     "past_deprecation",
     "unused",
@@ -95,23 +97,86 @@ FLAG_PRIORITY = (
 #: deliberate narrowing of p.74. Foundry offers "ECMA (JavaScript) regex
 #: syntax" as a per-user setting; running a pattern somebody typed against
 #: every object type in a workspace is a query whose cost the person writing it
-#: cannot see, and the configurable-flags panel that would let them type one is
-#: ○ anyway. Two substrings answer p.74's own example exactly, and the day the
-#: panel arrives is the day to decide how to bound a pattern.
+#: cannot see. §619's flags panel turns this flag on, off and up the order, and
+#: stops short of the pattern for that reason: two substrings answer p.74's own
+#: example exactly, and a typed pattern needs a bound decided first.
 TEMPORARY_MARKERS = ("[test]", "[deprecated]")
 
 
-def priority_of(flags: list[str]) -> int:
-    """Where an object type sits in p.70's ordering.
+def priority_of(flags: list[str], order: "tuple[str, ...] | list[str]" = FLAG_PRIORITY) -> int:
+    """Where an object type sits in p.70's ordering: the rank of its most
+    urgent flag in `order`, which is the reader's own when they set one (§619).
 
     Lower is more urgent. A type with no flags sorts last, which is where a
     type that is not a cleanup candidate belongs — it is in the answer at all
     only because a caller asked for everything.
     """
-    for rank, flag in enumerate(FLAG_PRIORITY):
+    for rank, flag in enumerate(order):
         if flag in flags:
             return rank
-    return len(FLAG_PRIORITY)
+    return len(order)
+
+
+# ---- p.72's configuration (§619) --------------------------------------------
+class SettingsError(ValueError):
+    """A flag setup that names something that is not a flag, or one twice."""
+
+
+def parse_flags(flags: list[str]) -> list[str]:
+    """A custom setup, checked: every name one of `FLAG_PRIORITY`'s, none
+    twice. Empty is allowed - p.72's custom set may turn every flag off, and
+    the queue that leaves is empty, which is what was asked for."""
+    unknown = [f for f in flags if f not in FLAG_PRIORITY]
+    if unknown:
+        raise SettingsError(
+            f"not a cleanup flag: {', '.join(unknown)}; the flags are "
+            + ", ".join(FLAG_PRIORITY)
+        )
+    if len(set(flags)) != len(flags):
+        raise SettingsError("a flag can be given a priority once")
+    return list(flags)
+
+
+async def settings(conn: AsyncConnection, workspace_id: UUID, *, user_id: UUID) -> list[str] | None:
+    """Your custom flags, most urgent first, or `None` for the default set.
+
+    Read through the row policy (db 0128), so it is only ever yours: p.72's
+    "an individual customization that does not affect other Ontology editors".
+    """
+    row = await fetch_one(
+        conn,
+        "SELECT flags FROM ontology_cleanup_settings "
+        "WHERE workspace_id = :wid AND user_id = :uid",
+        {"wid": str(workspace_id), "uid": str(user_id)},
+    )
+    return list(row["flags"]) if row else None
+
+
+async def save_settings(
+    conn: AsyncConnection, workspace_id: UUID, *, user_id: UUID, flags: list[str] | None,
+) -> list[str] | None:
+    """Keep a custom setup, or - with `None` - go back to the default set by
+    keeping nothing, so the default's future flags reach you again (p.72:
+    "new flags that get added in the future will not be automatically turned
+    on" is a property of a *custom* setup only)."""
+    if flags is None:
+        await conn.execute(
+            text("DELETE FROM ontology_cleanup_settings "
+                 "WHERE workspace_id = :wid AND user_id = :uid"),
+            {"wid": str(workspace_id), "uid": str(user_id)},
+        )
+        return None
+    chosen = parse_flags(flags)
+    await conn.execute(
+        text("""
+            INSERT INTO ontology_cleanup_settings (workspace_id, user_id, flags)
+            VALUES (:wid, :uid, CAST(:flags AS text[]))
+            ON CONFLICT (workspace_id, user_id)
+            DO UPDATE SET flags = EXCLUDED.flags, updated_at = now()
+        """),
+        {"wid": str(workspace_id), "uid": str(user_id), "flags": chosen},
+    )
+    return chosen
 
 
 async def candidates(
@@ -140,6 +205,12 @@ async def candidates(
     page of a queue and a sample of one.
     """
     now = datetime.now(timezone.utc)
+    # p.72's setup (§619): the flags this reader uses, in their order - or the
+    # default set's. A flag turned off is not a flag on any row, so a type
+    # whose only flags are off is not in the queue at all.
+    order = await settings(conn, workspace_id, user_id=user_id)
+    if order is None:
+        order = list(FLAG_PRIORITY)
     rows = await fetch_all(
         conn,
         """
@@ -230,8 +301,8 @@ async def candidates(
         # and reads far more clearly as arithmetic than as a NOT EXISTS over a
         # windowed aggregate.
         if int(row["interactions"]) == 0:
-            flags.insert(0, "unused")
-            flags = [name for name in FLAG_PRIORITY if name in flags]
+            flags.append("unused")
+        flags = [name for name in order if name in flags]
         if not flags:
             continue
         if flag is not None and flag not in flags:
@@ -245,7 +316,7 @@ async def candidates(
             "deprecation": _json(row["deprecation"]),
             "interactions": int(row["interactions"]),
             "flags": flags,
-            "priority": priority_of(flags),
+            "priority": priority_of(flags, order),
             "snoozed_until": row["snoozed_until"] if snoozed else None,
         })
     # p.70's ordering, then by name so two types with the same worst flag do

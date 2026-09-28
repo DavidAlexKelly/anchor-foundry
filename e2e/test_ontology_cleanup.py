@@ -238,3 +238,66 @@ def test_a_viewer_is_told_why_rather_than_shown_an_error(page, candidate) -> Non
     # (§318).
     expect(page.get_by_test_id("cleanup-queue")).to_be_visible(timeout=30000)
     expect(page.get_by_test_id("cleanup-read-only")).to_have_count(0)
+
+
+# ---- p.72's Configure Ontology cleanup (§619) ----------------------------------
+@pytest.fixture
+def own_setup(api, candidate):
+    """The e2e user's setup is theirs across the whole suite, so it goes back
+    to the default set afterwards - a custom set left behind would reorder
+    every later test's queue."""
+    yield candidate
+    api.call("PUT", f"/workspaces/{candidate.workspace_id}/ontology-cleanup/settings",
+             {"flags": None})
+
+
+def headline(page, module):
+    return row(page, module).get_by_test_id("cleanup-headline")
+
+
+def test_a_custom_flag_set_reorders_your_queue(page, own_setup) -> None:
+    """p.72: "customize the flags used and their respective priority… with a
+    choice of using either the default set or custom flags". The candidate is
+    unused, sourceless, undescribed and marked temporary, so which of those
+    heads its row is exactly the setup's order."""
+    mod = own_setup
+    open_queue(page, mod)
+    expect(headline(page, mod)).to_have_text("Nobody used it")
+
+    page.get_by_test_id("cleanup-settings").locator("summary").click()
+    expect(page.get_by_test_id("cleanup-setting-unused-on")).to_be_disabled()
+    page.get_by_test_id("cleanup-custom-set").check()
+    expect(page.get_by_test_id("cleanup-custom-note")).to_contain_text("not turned on")
+    page.get_by_test_id("cleanup-setting-unused-on").uncheck()
+    page.get_by_test_id("cleanup-setting-no_source-on").uncheck()
+    # Temporary now outranks description; one move puts description first of
+    # the two.
+    page.get_by_test_id("cleanup-setting-no_description-up").click()
+    page.get_by_test_id("cleanup-settings-save").click()
+    expect(page.get_by_test_id("cleanup-settings-saved")).to_be_visible()
+    expect(headline(page, mod)).to_have_text("No description")
+
+    # Kept: the page comes back with the same setup and the same queue.
+    open_queue(page, mod)
+    expect(headline(page, mod)).to_have_text("No description")
+    page.get_by_test_id("cleanup-settings").locator("summary").click()
+    expect(page.get_by_test_id("cleanup-custom-set")).to_be_checked()
+    expect(page.get_by_test_id("cleanup-setting-unused-on")).not_to_be_checked()
+
+    # And the default set again, which keeps nothing of the custom one.
+    page.get_by_test_id("cleanup-default-set").check()
+    page.get_by_test_id("cleanup-settings-save").click()
+    expect(headline(page, mod)).to_have_text("Nobody used it")
+
+
+def test_a_set_with_none_of_a_type_s_flags_leaves_it_out(page, own_setup) -> None:
+    mod = own_setup
+    open_queue(page, mod)
+    expect(row(page, mod)).to_be_visible()
+    page.get_by_test_id("cleanup-settings").locator("summary").click()
+    page.get_by_test_id("cleanup-custom-set").check()
+    for flag in ("unused", "no_source", "no_description", "name_looks_temporary"):
+        page.get_by_test_id(f"cleanup-setting-{flag}-on").uncheck()
+    page.get_by_test_id("cleanup-settings-save").click()
+    expect(page.get_by_test_id("cleanup-settings-saved")).to_be_visible()
+    expect(row(page, mod)).to_have_count(0)

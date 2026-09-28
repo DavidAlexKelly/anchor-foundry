@@ -168,3 +168,48 @@ export function deleteWarning(candidate: CleanupCandidate): string {
     + `This cannot be undone.${used}`
   );
 }
+
+// ---- p.72's Configure Ontology cleanup (§619) --------------------------------
+/**
+ * The flag editor's rows: the flags that are on, most urgent first, then the
+ * ones that are off, in the default set's order.
+ *
+ * `custom` is `null` for the default set, which shows every flag on in the
+ * default order - what the queue is doing for someone who never chose.
+ */
+export function flagRows(
+  custom: readonly string[] | null,
+  available: readonly string[],
+): { flag: string; on: boolean }[] {
+  const on = custom ?? available;
+  return [
+    ...on.map((flag) => ({ flag, on: true })),
+    ...available.filter((flag) => !on.includes(flag)).map((flag) => ({ flag, on: false })),
+  ];
+}
+
+/** A flag turned on goes to the end of the order - the least urgent place,
+ * so turning one on never demotes the flags someone already ranked - and a
+ * flag turned off leaves it. */
+export function toggledFlag(custom: readonly string[], flag: string, on: boolean): string[] {
+  const rest = custom.filter((f) => f !== flag);
+  return on ? [...rest, flag] : rest;
+}
+
+/** One flag moved a place up (`-1`) or down (`1`) the order; at an end it
+ * stays where it is. */
+export function movedFlag(custom: readonly string[], flag: string, by: -1 | 1): string[] {
+  const at = custom.indexOf(flag);
+  const to = at + by;
+  if (at < 0 || to < 0 || to >= custom.length) return [...custom];
+  const next = [...custom];
+  [next[at], next[to]] = [next[to]!, next[at]!];
+  return next;
+}
+
+/** p.72's caveat, said where the choice is made: "if using a custom flag
+ * setup, new flags that get added in the future will not be automatically
+ * turned on". */
+export const CUSTOM_FLAGS_NOTE =
+  "A custom set keeps exactly these flags: one added to the default set later "
+  + "is not turned on for you.";

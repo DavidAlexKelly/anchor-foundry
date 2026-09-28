@@ -1942,6 +1942,16 @@ export const objects = {
       `/workspaces/${wid}/ontology-cleanup${q ? `?${q}` : ""}`,
     );
   },
+  /** p.72's flag setup (§619): yours, or `null` for the default set. */
+  cleanupSettings: (wid: string) =>
+    request<{ flags: string[] | null; available: string[] }>(
+      `/workspaces/${wid}/ontology-cleanup/settings`,
+    ),
+  saveCleanupSettings: (wid: string, flags: string[] | null) =>
+    request<{ flags: string[] | null; available: string[] }>(
+      `/workspaces/${wid}/ontology-cleanup/settings`,
+      { method: "PUT", body: JSON.stringify({ flags }) },
+    ),
   /** p.71's snooze. **Yours alone** — "an action that will affect only the user
    * that performs it" — which db 0080's row policy enforces. */
   snoozeType: (wid: string, typeId: string, days: number, note?: string) =>
