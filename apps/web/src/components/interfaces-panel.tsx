@@ -39,6 +39,9 @@ import {
 import {
   canPage, depthNote, readSummary,
 } from "@/lib/interface-set";
+import {
+  OP_LABELS, blankFilter, filterProblem, filtersPayload, opsFor, withProperty, type FilterDraft,
+} from "@/lib/interface-filters";
 import { implementsAs } from "@/lib/property-reducer";
 import { canDelete, deleteBlockedReason } from "@/lib/ontology-status";
 import type {
@@ -618,15 +621,26 @@ function ObjectsDialog({
 }) {
   const [offset, setOffset] = useState(0);
   const limit = 25;
+  // §535: filters in the interface's vocabulary, which §254's read takes.
+  const [filters, setFilters] = useState<FilterDraft[]>([]);
 
   const detail = useQuery({
     queryKey: ["interface", workspaceId, iface.id],
     queryFn: () => objApi.getInterface(workspaceId, iface.id),
   });
+  const types = Object.fromEntries(
+    (detail.data?.effective_properties ?? []).map((p) => [p.api_name, p.data_type]),
+  );
+  const sent = filtersPayload(filters, types);
+  const change = (next: FilterDraft[]) => {
+    setFilters(next);
+    // A new question starts at its first page.
+    setOffset(0);
+  };
   const page = useQuery({
-    queryKey: ["interface-set", workspaceId, iface.id, offset],
+    queryKey: ["interface-set", workspaceId, iface.id, offset, JSON.stringify(sent)],
     queryFn: () =>
-      objApi.evaluateInterfaceSet(workspaceId, iface.id, { limit, offset }),
+      objApi.evaluateInterfaceSet(workspaceId, iface.id, { limit, offset, filters: sent }),
     // The set is a read of live data, so an old page is worse than a spinner.
     placeholderData: undefined,
   });
@@ -645,6 +659,62 @@ function ObjectsDialog({
 
   return (
     <Dialog open title={`${iface.api_name} objects`} onClose={onClose}>
+      {/* §535: p.61's one question of every implementing type, narrowed in
+          the interface's own terms. */}
+      <div data-testid="objects-filters" style={{ marginBottom: 8 }}>
+        {filters.map((f, index) => {
+          const dataType = types[f.property];
+          const problem = filterProblem(f, dataType);
+          return (
+            <div key={index} className="row-actions" style={{ gap: 6, marginBottom: 4 }}
+                 data-testid="objects-filter">
+              <select
+                aria-label={`Filter ${index + 1} property`}
+                value={f.property}
+                onChange={(e) => change(filters.map((d, i) => (
+                  i === index ? withProperty(d, e.target.value, types[e.target.value]) : d)))}
+              >
+                <option value="">Property…</option>
+                {columns.map((c) => <option key={c.api_name} value={c.api_name}>{c.display_name}</option>)}
+              </select>
+              <select
+                aria-label={`Filter ${index + 1} operator`}
+                value={f.op}
+                onChange={(e) => change(filters.map((d, i) => (i === index ? { ...d, op: e.target.value } : d)))}
+              >
+                {opsFor(dataType).map((op) => <option key={op} value={op}>{OP_LABELS[op]}</option>)}
+              </select>
+              {dataType === "boolean" ? (
+                <select
+                  aria-label={`Filter ${index + 1} value`}
+                  value={f.value}
+                  onChange={(e) => change(filters.map((d, i) => (i === index ? { ...d, value: e.target.value } : d)))}
+                >
+                  <option value="">Choose…</option>
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              ) : (
+                <input
+                  aria-label={`Filter ${index + 1} value`}
+                  type={dataType === "date" ? "date" : dataType === "timestamp" ? "datetime-local" : "text"}
+                  value={f.value}
+                  onChange={(e) => change(filters.map((d, i) => (i === index ? { ...d, value: e.target.value } : d)))}
+                />
+              )}
+              <button type="button" className="btn quiet" aria-label={`Remove filter ${index + 1}`}
+                      onClick={() => change(filters.filter((_, i) => i !== index))}>
+                Remove
+              </button>
+              {problem && <span className="field-hint" data-testid="objects-filter-problem">{problem}</span>}
+            </div>
+          );
+        })}
+        <button type="button" className="btn quiet" data-testid="objects-add-filter"
+                onClick={() => change([...filters, blankFilter()])}>
+          Add filter
+        </button>
+      </div>
       {page.isError && (
         <p className="field-hint" data-testid="objects-error">
           {page.error instanceof ApiError
