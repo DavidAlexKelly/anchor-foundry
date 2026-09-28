@@ -112,6 +112,58 @@ def test_a_derivative_is_the_rate_per_the_unit_chosen() -> None:
     assert values([{"kind": "derivative", "unit": "hour"}]) == pytest.approx([2 / 24, 1.5 / 24, 4 / 24])
 
 
+def periodic(**over) -> dict:
+    return {"kind": "periodic", "aggregate": "sum", "window": 2, "unit": "day",
+            "align": "2026-01-01T00:00:00", **over}
+
+
+def test_periodic_windows_start_at_the_alignment_and_do_not_overlap() -> None:
+    """p.584: "Output points are generated at equally spaced, non-overlapping
+    time intervals … aligned with a user-specified alignment timestamp". Two-day
+    windows from the 1st: the 1st and 2nd, the 3rd and 4th, the 5th and 6th."""
+    assert run([periodic()]) == [(day(1), 4.0), (day(3), 6.0), (day(5), 10.0)]
+    assert run([periodic(aggregate="count")]) == [(day(1), 2.0), (day(3), 1.0), (day(5), 1.0)]
+
+
+def test_an_end_window_is_stamped_with_its_end_and_takes_what_precedes_it() -> None:
+    """p.584: "End means that each output point represents the end of a time
+    interval, and is an aggregate over the input points that precede it". A
+    point on the boundary ends a window rather than starting one."""
+    assert run([periodic(window_type="end")]) == [(day(1), 1.0), (day(3), 3.0), (day(5), 16.0)]
+
+
+def test_moving_the_alignment_moves_the_windows() -> None:
+    assert run([periodic(align="2026-01-02T00:00:00")]) == [
+        (datetime(2025, 12, 31), 1.0), (day(2), 3.0), (day(4), 16.0)]
+    # A zone is read as the instant it names: midnight in UTC+1 is 23:00 UTC.
+    assert run([periodic(align="2026-01-02T00:00:00+01:00", window=1)])[0][0] == datetime(2025, 12, 31, 23)
+
+
+def test_without_an_alignment_windows_line_up_on_1970() -> None:
+    """1 January 1970 was a Thursday, and so was 1 January 2026: one week-long
+    window from it holds all four readings."""
+    assert run([{"kind": "periodic", "aggregate": "sum", "window": 1, "unit": "week"}]) == [
+        (day(1), 20.0)]
+
+
+@pytest.mark.parametrize("method, expected", [
+    # Gaps of one, two and one days, under 1-3, 3-6 and 6-10.
+    ("linear", [0, 2, 11, 19]),
+    ("left", [0, 1, 7, 13]),
+    ("right", [0, 3, 15, 25]),
+])
+def test_an_integral_is_the_area_so_far(method, expected) -> None:
+    """p.585: "the cumulative area under the input time series", with p.585's
+    three ways to take the height between two points."""
+    assert values([{"kind": "integral", "unit": "day", "method": method}]) == expected
+
+
+def test_an_integral_is_in_the_unit_chosen() -> None:
+    """p.585's kilowatt-hours: the same area per hour is twenty-four times the
+    area per day."""
+    assert values([{"kind": "integral", "unit": "hour"}]) == [0, 48, 264, 456]
+
+
 def test_two_readings_at_one_instant_have_no_rate() -> None:
     """Not infinity: a rate over no time is not a number to draw."""
     rows = [("S1", "2026-01-01 00:00:00", 1.0), ("S1", "2026-01-01 00:00:00", 5.0),
@@ -166,7 +218,7 @@ def test_the_cap_comes_after_the_transforms() -> None:
     ([{"kind": "cumulative", "aggregate": "sum"}] * 11, "a series takes at most 10 transforms"),
     (["cumulative"], "transform 1: must be an object"),
     ([{"kind": "smooth"}],
-     "transform 1: the kind must be one of cumulative, rolling, derivative, shift, range"),
+     "transform 1: the kind must be one of cumulative, periodic, rolling, derivative, integral, shift, range"),
     ([{"kind": "cumulative", "aggregate": "median"}],
      "transform 1: the aggregate must be one of sum, avg, min, max, count, stddev"),
     ([{"kind": "rolling", "aggregate": "sum", "window": 0, "unit": "day"}],
@@ -189,6 +241,19 @@ def test_the_cap_comes_after_the_transforms() -> None:
     ([{"kind": "range", "start": "soon"}], "transform 1: the start 'soon' is not a date and time"),
     ([{"kind": "range", "end": "later"}], "transform 1: the end 'later' is not a date and time"),
     ([{"kind": "range", "start": "2026-01-05", "end": "2026-01-01"}], "transform 1: the start is after the end"),
+    ([{"kind": "periodic", "window": 2, "unit": "day"}],
+     "transform 1: the aggregate must be one of sum, avg, min, max, count, stddev"),
+    ([{"kind": "periodic", "aggregate": "sum", "window": 0, "unit": "day"}],
+     "transform 1: the window must be from 1 to 100000"),
+    ([{"kind": "periodic", "aggregate": "sum", "window": 2, "unit": "month"}],
+     "transform 1: the unit must be one of second, minute, hour, day, week"),
+    ([{"kind": "periodic", "aggregate": "sum", "window": 2, "unit": "day", "window_type": "middle"}],
+     "transform 1: the window type must be one of start, end"),
+    ([{"kind": "periodic", "aggregate": "sum", "window": 2, "unit": "day", "align": "noon"}],
+     "transform 1: the alignment 'noon' is not a date and time"),
+    ([{"kind": "integral", "unit": "day", "method": "simpson"}],
+     "transform 1: the method must be one of linear, left, right"),
+    ([{"kind": "integral"}], "transform 1: the unit must be one of second, minute, hour, day, week"),
     ([{"kind": "derivative", "unit": "day"}, {"kind": "shift", "by": 1}],
      "transform 2: the unit must be one of second, minute, hour, day, week"),
 ])
@@ -208,6 +273,14 @@ def test_what_a_transform_may_say() -> None:
     assert ts.parse_transforms([{"kind": "range", "start": "2026-01-01", "end": "2026-01-01"}]) == [
         {"kind": "range", "start": "2026-01-01T00:00:00", "end": "2026-01-01T00:00:00"}]
     assert len(ts.parse_transforms([{"kind": "derivative", "unit": "day"}] * 10)) == 10
+    # A periodic window starts its windows at 1970 unless told otherwise, and
+    # an integral is linear unless told otherwise.
+    assert ts.parse_transforms([{"kind": "periodic", "aggregate": "avg", "window": 2, "unit": "week"},
+                                {"kind": "integral", "unit": "hour"}]) == [
+        {"kind": "periodic", "aggregate": "avg", "window": 2, "unit": "week",
+         "align": "1970-01-01T00:00:00", "window_type": "start"},
+        {"kind": "integral", "unit": "hour", "method": "linear"}]
+    assert ts.parse_transforms([periodic(window_type="end", align="")])[0]["align"] == ts.EPOCH
 
 
 # ---- where they are kept and read -----------------------------------------------
@@ -233,7 +306,7 @@ def test_a_series_variable_refuses_a_transform_that_could_not_run() -> None:
                                                    "transforms": [{"kind": "smooth"}]}}},
         })
     assert str(caught.value) == ("variable 'v_series': transform 1: the kind must be one of "
-                                 "cumulative, rolling, derivative, shift, range")
+                                 "cumulative, periodic, rolling, derivative, integral, shift, range")
 
 
 def test_the_points_endpoints_apply_transforms(client, fx, ontology, instance) -> None:
@@ -276,4 +349,6 @@ def test_the_browser_offers_what_the_server_takes() -> None:
     assert f"export const WINDOW_AGGREGATES = [{listed(ts.WINDOW_AGGREGATES)}] as const;" in source
     assert f"export const TIME_UNITS = [{listed(ts.TIME_UNITS)}] as const;" in source
     assert f"export const MAX_TRANSFORMS = {ts.MAX_TRANSFORMS};" in source
+    assert f"export const WINDOW_TYPES = [{listed(ts.WINDOW_TYPES)}] as const;" in source
+    assert f"export const INTEGRATION_METHODS = [{listed(ts.INTEGRATION_METHODS)}] as const;" in source
     assert f"export const MAX_SPAN = {ts.MAX_SPAN:_};" in source

@@ -7,9 +7,10 @@
  * it produced. The words and the checks are `series-transforms.ts`'s. */
 
 import {
-  KIND_LABELS, MAX_TRANSFORMS, TIME_UNITS, TRANSFORM_KINDS, WINDOW_AGGREGATES, blankTransform,
-  transformsProblem, withKind,
-  type SeriesTransform, type TimeUnit, type TransformKind, type WindowAggregate,
+  INTEGRATION_METHODS, KIND_LABELS, MAX_TRANSFORMS, TIME_UNITS, TRANSFORM_KINDS, WINDOW_AGGREGATES,
+  WINDOW_TYPES, blankTransform, transformsProblem, withKind,
+  type IntegrationMethod, type SeriesTransform, type TimeUnit, type TransformKind,
+  type WindowAggregate, type WindowType,
 } from "./series-transforms";
 
 export function SeriesTransformsEditor({
@@ -37,7 +38,7 @@ export function SeriesTransformsEditor({
           >
             {TRANSFORM_KINDS.map((k) => <option key={k} value={k}>{KIND_LABELS[k]}</option>)}
           </select>
-          {(t.kind === "cumulative" || t.kind === "rolling") && (
+          {(t.kind === "cumulative" || t.kind === "rolling" || t.kind === "periodic") && (
             <select
               aria-label={`Transform ${index + 1} aggregate`}
               value={t.aggregate}
@@ -47,7 +48,7 @@ export function SeriesTransformsEditor({
               {WINDOW_AGGREGATES.map((a) => <option key={a} value={a}>{a}</option>)}
             </select>
           )}
-          {t.kind === "rolling" && (
+          {(t.kind === "rolling" || t.kind === "periodic") && (
             <input
               type="number" min={1}
               aria-label={`Transform ${index + 1} window`}
@@ -65,7 +66,7 @@ export function SeriesTransformsEditor({
               onChange={(e) => set(index, { ...t, by: Number(e.target.value) })}
             />
           )}
-          {(t.kind === "rolling" || t.kind === "derivative" || t.kind === "shift") && (
+          {t.kind !== "cumulative" && t.kind !== "range" && (
             <select
               aria-label={`Transform ${index + 1} unit`}
               value={t.unit}
@@ -73,7 +74,41 @@ export function SeriesTransformsEditor({
               onChange={(e) => set(index, { ...t, unit: e.target.value as TimeUnit })}
             >
               {TIME_UNITS.map((u) => (
-                <option key={u} value={u}>{t.kind === "derivative" ? `per ${u}` : `${u}s`}</option>
+                <option key={u} value={u}>{t.kind === "derivative" ? `per ${u}` : t.kind === "integral" ? `in ${u}s` : `${u}s`}</option>
+              ))}
+            </select>
+          )}
+          {t.kind === "periodic" && (
+            <>
+              <select
+                aria-label={`Transform ${index + 1} window type`}
+                value={t.window_type}
+                disabled={readOnly}
+                onChange={(e) => set(index, { ...t, window_type: e.target.value as WindowType })}
+              >
+                {WINDOW_TYPES.map((w) => (
+                  <option key={w} value={w}>{w === "start" ? "stamped at the start" : "stamped at the end"}</option>
+                ))}
+              </select>
+              <input
+                type="datetime-local"
+                aria-label={`Transform ${index + 1} alignment`}
+                title="Windows start here and every window length either side of it; empty lines them up on 1970"
+                value={t.align ?? ""}
+                readOnly={readOnly}
+                onChange={(e) => set(index, { ...t, align: e.target.value || null })}
+              />
+            </>
+          )}
+          {t.kind === "integral" && (
+            <select
+              aria-label={`Transform ${index + 1} method`}
+              value={t.method}
+              disabled={readOnly}
+              onChange={(e) => set(index, { ...t, method: e.target.value as IntegrationMethod })}
+            >
+              {INTEGRATION_METHODS.map((m) => (
+                <option key={m} value={m}>{m === "linear" ? "linear" : `${m}-hand sum`}</option>
               ))}
             </select>
           )}

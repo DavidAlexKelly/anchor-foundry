@@ -308,3 +308,43 @@ def test_a_transform_built_in_the_panel_reaches_the_chart(page, api):
     eventually(lambda: caption(page), lambda t: "running sum" in t,
                what="the caption naming the transform")
     assert f"{S1_POINTS} points" in caption(page), caption(page)
+
+
+def test_periodic_windows_and_an_integral_built_in_the_panel(page, api):
+    """§525, p.584-585. S1 reads 10, 20, 30, 40 on the 1st to the 4th. Summed
+    in two-day windows stamped at their ends from the 1st: 10 on the 1st, 50
+    on the 3rd, 40 on the 5th. Its left-hand integral per day: 0, then 2 days
+    at 10, then 2 days at 50 - 0, 20, 120."""
+    mod = build_module(api, "Series periodic")
+    page.goto(f"{WEB_BASE}{mod.url}")
+    expect(page.get_by_role("button", name="Preview", exact=True)).to_be_visible(timeout=30000)
+    page.get_by_role("button", name="Variables", exact=False).first.click()
+    page.get_by_text("Readings", exact=True).first.click()
+
+    transforms = page.get_by_test_id("series-transforms")
+    transforms.get_by_label("Add a transform").select_option("periodic")
+    transforms.get_by_label("Transform 1 aggregate").select_option("sum")
+    transforms.get_by_label("Transform 1 window", exact=True).fill("2")
+    transforms.get_by_label("Transform 1 unit").select_option("day")
+    transforms.get_by_label("Transform 1 window type").select_option("end")
+    transforms.get_by_label("Transform 1 alignment").fill("2026-01-01T00:00")
+    transforms.get_by_label("Add a transform").select_option("integral")
+    transforms.get_by_label("Transform 2 method").select_option("left")
+    transforms.get_by_label("Transform 2 unit").select_option("day")
+
+    with page.expect_response(
+        lambda r: "/definition" in r.url and r.request.method in ("PUT", "POST")
+    ) as saved:
+        page.get_by_role("button", name="Save", exact=True).click()
+    assert saved.value.ok, saved.value.status
+    settled(page)
+
+    open_module(page, mod)
+    with page.expect_response(lambda r: "/series/readings/points" in r.url) as asked:
+        pick(page, "North sensor")
+    assert [p["value"] for p in asked.value.json()["points"]] == [0, 20, 120]
+    eventually(lambda: caption(page), lambda t: "left-hand sum" in t,
+               what="the caption naming both transforms")
+    # The alignment as the server keeps it, seconds and all.
+    assert ("sum per 2 days, stamped at each window's end, aligned to 2026-01-01T00:00:00, "
+            "then area in days (left-hand sum)") in caption(page), caption(page)
