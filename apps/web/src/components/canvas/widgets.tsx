@@ -327,6 +327,10 @@ import {
   axisOf as seriesAxisOf, axisProblem as seriesAxisProblem, axisSettingsOf as seriesAxisSettingsOf,
   newAxisOf as newSeriesAxisOf, withAxisSetting as withSeriesAxisSetting,
   type AxisAlign as SeriesAxisAlign, type Axes as SeriesAxes,
+  EXTERNAL_INTERPOLATIONS as SERIES_EXTERNAL_INTERPOLATIONS,
+  INTERNAL_INTERPOLATIONS as SERIES_INTERNAL_INTERPOLATIONS,
+  type ExternalInterpolation as SeriesExternalInterpolation,
+  type InternalInterpolation as SeriesInternalInterpolation,
   type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
@@ -13199,6 +13203,7 @@ export function CanvasSeriesAnalysis({
             <thead>
               <tr>
                 <th>Plot</th><th>Canvas</th><th>Axis</th><th>Line</th><th>Width</th><th>Gradient</th><th>Points</th>
+                <th>Interpolation</th>
                 <th>Min</th><th>Max</th><th>Mean</th><th />
               </tr>
             </thead>
@@ -13275,6 +13280,20 @@ export function CanvasSeriesAnalysis({
                                disabled={!options.outline}
                                onChange={(e) => setPlots(withSeriesDisplay(plots, plot.id, "outline",
                                  e.target.value === "" ? Number.NaN : Number(e.target.value)))} />
+                      </span>
+                    </td>
+                    <td>
+                      <span className="row-actions" style={{ gap: 4, flexWrap: "nowrap" }}>
+                        <select aria-label={`${plot.label} internal interpolation`} value={display.internal}
+                                onChange={(e) => setPlots(withSeriesDisplay(plots, plot.id, "internal",
+                                  e.target.value as SeriesInternalInterpolation))}>
+                          {SERIES_INTERNAL_INTERPOLATIONS.map((i) => <option key={i} value={i}>{i}</option>)}
+                        </select>
+                        <select aria-label={`${plot.label} external interpolation`} value={display.external}
+                                onChange={(e) => setPlots(withSeriesDisplay(plots, plot.id, "external",
+                                  e.target.value as SeriesExternalInterpolation))}>
+                          {SERIES_EXTERNAL_INTERPOLATIONS.map((i) => <option key={i} value={i}>{i}</option>)}
+                        </select>
                       </span>
                     </td>
                     <td data-stat="min">{stats ? Number(stats.min.toFixed(3)) : "—"}</td>

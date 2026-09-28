@@ -4,7 +4,7 @@ import {
   MAX_EVENT_SETS, withEventStatistics, eventCount, eventSpan, eventsOf, liveEventSets, withEventSet, withLinkedEventSet,
   DEFAULT_DISPLAY, areaOf,
   DEFAULT_AXIS, MAX_AXES, axesOf, axisOf, axisProblem, axisSettingsOf, fractionOf, newAxisOf, valueAt,
-  withAxisSetting, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
+  withAxisSetting, shownShape, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, pathOf, scaleOf, timesOf, readingsOf, rootOf, rootPlots,
   statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
@@ -347,7 +347,7 @@ describe("p.394's Display (§655)", () => {
   it("starts as the line always was, with no points and no gradient", () => {
     expect(displayOf(roots[0]!)).toEqual(DEFAULT_DISPLAY);
     expect(DEFAULT_DISPLAY).toEqual({ width: 1.6, gradient: false, shape: "none", size: 5, fill: "line",
-      outline: 1 });
+      outline: 1, internal: "linear", external: "none" });
   });
 
   it("changes one plot's setting, holding a number to its bounds", () => {
@@ -454,5 +454,38 @@ describe("p.394-395's Axis options (§656)", () => {
     expect(valueAt(up, 1)).toBe(0);
     expect(valueAt(up, 0)).toBe(10);
     expect(pathOf([{ t: 0, v: 0 }, { t: 10, v: 10 }], { t0: 0, t1: 10, ...up }, frame)).toBe("M0.0,0.0L100.0,50.0");
+  });
+});
+
+describe("p.395's Interpolation (§657)", () => {
+  const frame = { width: 100, height: 50 };
+  const extent = { t0: 0, t1: 10, v0: 0, v1: 10, log: false, invert: false };
+  const three = [{ t: 2, v: 0 }, { t: 4, v: 10 }, { t: 8, v: 5 }];
+  const how = (internal: "linear" | "previous" | "next" | "nearest" | "none", external: "none" | "nearest" = "none") =>
+    ({ internal, external });
+
+  it("joins readings straight, or in steps, or not at all", () => {
+    expect(pathOf(three, extent, frame, how("linear"))).toBe("M20.0,50.0L40.0,0.0L80.0,25.0");
+    expect(pathOf(three, extent, frame)).toBe(pathOf(three, extent, frame, how("linear")));
+    expect(pathOf(three, extent, frame, how("previous"))).toBe("M20.0,50.0L40.0,50.0L40.0,0.0L80.0,0.0L80.0,25.0");
+    expect(pathOf(three, extent, frame, how("next"))).toBe("M20.0,50.0L20.0,0.0L40.0,0.0L40.0,25.0L80.0,25.0");
+    expect(pathOf(three, extent, frame, how("nearest")))
+      .toBe("M20.0,50.0L30.0,50.0L30.0,0.0L40.0,0.0L60.0,0.0L60.0,25.0L80.0,25.0");
+    expect(pathOf(three, extent, frame, how("none"))).toBe("");
+  });
+
+  it("holds the first and last readings to the edges when asked", () => {
+    expect(pathOf(three, extent, frame, how("linear", "nearest")))
+      .toBe("M0.0,50.0L20.0,50.0L40.0,0.0L80.0,25.0L100.0,25.0");
+    expect(areaOf(three, extent, frame, how("linear", "nearest")))
+      .toBe("M0.0,50.0L20.0,50.0L40.0,0.0L80.0,25.0L100.0,25.0L100.0,50.0L0.0,50.0Z");
+    expect(pathOf([], extent, frame, how("linear", "nearest"))).toBe("");
+    expect(areaOf(three, extent, frame, how("none"))).toBe("");
+  });
+
+  it("draws a plot with no line and no shape as circles", () => {
+    expect(shownShape(DEFAULT_DISPLAY)).toBe("none");
+    expect(shownShape({ ...DEFAULT_DISPLAY, internal: "none" })).toBe("circle");
+    expect(shownShape({ ...DEFAULT_DISPLAY, internal: "none", shape: "square" })).toBe("square");
   });
 });

@@ -375,3 +375,25 @@ def test_axes_their_range_scale_side_and_unit(page, api, module) -> None:
     expect(tick(0.5)).to_have_text("10")
     # South's own axis is untouched: flat at 900, padded either side.
     expect(canvas.locator("g[data-axis='2'] text[data-tick='0.5']")).to_have_text("900")
+
+
+def test_interpolation_inside_and_beyond_the_readings(page, api, module) -> None:
+    """p.395's Interpolation (§657). North's four readings joined in steps
+    turn at three more corners; held beyond them, the line runs from the
+    canvas's left edge to its right; with no line, its readings are circles."""
+    open_module(page, build(api, module, "Analysis interpolation"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    north_id = plot_row(page, "North sensor").get_attribute("data-plot")
+    canvas = page.locator("[data-testid='series-canvas-1']")
+    north = canvas.locator(f"path[data-plot='{north_id}']")
+    corners = lambda: north.get_attribute("d").count("L")  # noqa: E731
+    expect(north).to_have_attribute("d", re.compile(r"^M[^L]*(L[^L]*){3}$"))
+    page.get_by_label("North sensor internal interpolation").select_option("previous")
+    expect(north).to_have_attribute("d", re.compile(r"^M[^L]*(L[^L]*){6}$"))
+    page.get_by_label("North sensor external interpolation").select_option("nearest")
+    expect(north).to_have_attribute("d", re.compile(r"^M0\.0,.*L584\.0,[^L]*$"))
+    assert corners() == 8
+    page.get_by_label("North sensor internal interpolation").select_option("none")
+    expect(north).to_have_attribute("d", "")
+    expect(canvas.locator(f"path[data-points='{north_id}']")).to_have_attribute(
+        "d", re.compile(r"^(M[^M]*a[^M]*Z){4}$"))
