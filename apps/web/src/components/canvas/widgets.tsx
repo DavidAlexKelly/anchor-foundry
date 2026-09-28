@@ -339,6 +339,8 @@ import {
   timesOf as seriesTimesOf, zoomedRange as seriesZoomedRange, type ViewRange as SeriesViewRange,
   MAX_DIGITS as MAX_SERIES_DIGITS, TOOLTIP_VALUES as SERIES_TOOLTIP_VALUES,
   tooltipOptionsOf as seriesTooltipOptionsOf,
+  addDataSetsOf as seriesAddDataSetsOf, objectLabelOf as seriesObjectLabelOf,
+  withAddedRoot as withSeriesAddedRoot, MAX_ADD_DATA_SETS as MAX_SERIES_ADD_DATA_SETS,
   type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
@@ -13076,6 +13078,8 @@ export function CanvasSeriesAnalysis({
   collapseYAxes = false,
   collapsedBoundaries = false,
   tooltip = null,
+  addData = false,
+  addDataSets = null,
 }: {
   objectSetVariable?: string | null;
   property?: string | null;
@@ -13108,6 +13112,10 @@ export function CanvasSeriesAnalysis({
   collapsedBoundaries?: boolean;
   /** p.396's *Tooltip options* (§660). */
   tooltip?: unknown;
+  /** p.392's *+ Add Data* and p.396's *Add data options* (§661): whether the
+   * reader may add any object's series, and the object sets that narrow it. */
+  addData?: boolean;
+  addDataSets?: unknown;
 }) {
   const {
     connectors: { connect, drag },
@@ -13153,7 +13161,7 @@ export function CanvasSeriesAnalysis({
   const placement = seriesPlacementOf(newPlotCanvas);
   // p.396's initial event sets (§658): the builder's, read from object sets,
   // shaded on every canvas; the reader may hide one but not change it.
-  const { resolved: resolvedVariables } = useCanvasVariables();
+  const { resolved: resolvedVariables, declared: declaredVariables } = useCanvasVariables();
   const initial = seriesInitialEventSetsOf(initialEventSets);
   const initialRead = useQueries({
     queries: initial.map((set) => {
@@ -13192,6 +13200,36 @@ export function CanvasSeriesAnalysis({
   const [collapsedAxes, setCollapsedAxes] = useState<Record<number, boolean>>({});
   const collapsedOf = (canvas: number) => collapsedAxes[canvas] ?? !!collapseYAxes;
   const tooltipOptions = seriesTooltipOptionsOf(tooltip);
+  // p.392's + Add Data (§661): a source - one of the builder's object sets,
+  // or with none any object type - then an object, then its series.
+  const dataSets = seriesAddDataSetsOf(addDataSets);
+  const [dataDraft, setDataDraft] = useState<{ source: string; object: string; property: string; search: string } | null>(null);
+  const dataSetDefinition = dataDraft && dataSets.length ? resolvedVariables[dataDraft.source] : undefined;
+  const dataTypeId = !dataDraft?.source ? null : dataSets.length
+    ? (dataSetDefinition as { object_type_id?: string } | undefined)?.object_type_id ?? null : dataDraft.source;
+  const dataTypes = useQuery({
+    queryKey: ["canvas-series-analysis-add-types"],
+    queryFn: () => objApi.listTypes(workspaceId, null, { limit: 200 }),
+    enabled: !!dataDraft && dataSets.length === 0,
+  });
+  const dataType = useQuery({
+    queryKey: ["object-type", dataTypeId],
+    queryFn: () => objApi.getType(workspaceId, dataTypeId!),
+    enabled: !!dataTypeId,
+  });
+  const dataObjects = useQuery({
+    queryKey: ["canvas-series-analysis-add-objects", dataDraft?.source, JSON.stringify(dataSetDefinition ?? null)],
+    queryFn: async () => (dataSets.length
+      ? (await objApi.evaluateObjectSet(workspaceId, dataSetDefinition, { limit: 200 })).instances
+      : (await objApi.listInstances(workspaceId, dataTypeId!, 200)).items),
+    enabled: !!dataTypeId && (dataSets.length === 0 || !!dataSetDefinition),
+  });
+  const dataTitle = dataType.data?.properties.find((p) => p.id === dataType.data?.title_property_id)?.api_name;
+  const dataOffered = (dataObjects.data ?? [])
+    .map((o) => ({ id: o.id, label: seriesObjectLabelOf(o, dataTitle) }))
+    .filter((o) => !dataDraft?.search.trim()
+      || o.label.toLowerCase().includes(dataDraft.search.trim().toLowerCase()));
+  const dataSeries = (dataType.data?.properties ?? []).filter((p) => p.data_type === "time_series");
   const viewKey = (canvas: number) => (syncXAxes ? "all" : String(canvas));
   const viewOf = (canvas: number) => (viewKey(canvas) in views ? views[viewKey(canvas)]! : defaultView);
   const fullOf = (canvas: number) => seriesTimesOf(plots.flatMap((p, n) => (p.canvas === canvas || syncXAxes
@@ -13421,7 +13459,7 @@ export function CanvasSeriesAnalysis({
                     <td data-stat="max">{stats ? Number(stats.max.toFixed(3)) : "—"}</td>
                     <td data-stat="mean">{stats ? Number(stats.mean.toFixed(3)) : "—"}</td>
                     <td>
-                      {!plot.root && (
+                      {(!plot.root || plot.added) && (
                         <button type="button" className="btn quiet"
                                 aria-label={`Remove ${plot.label}`}
                                 onClick={() => setPlots(withoutSeriesPlot(plots, plot.id))}>
@@ -13519,6 +13557,12 @@ export function CanvasSeriesAnalysis({
                     onClick={() => setAddedCanvases(Math.max(addedCanvases, ...canvases) + 1)}>
               New canvas
             </button>
+            {addData && plots.length < MAX_SERIES_PLOTS && (
+              <button type="button" className="btn quiet"
+                      onClick={() => setDataDraft({ source: dataSets[0] ?? "", object: "", property: "", search: "" })}>
+                Add data
+              </button>
+            )}
             {setTypes.includes("search") && eventSets.length < MAX_SERIES_EVENT_SETS && (
               <button type="button" className="btn quiet"
                       onClick={() => setEventDraft({ plot: plots[0]!.id, op: "gt", value: "" })}>
@@ -13554,6 +13598,45 @@ export function CanvasSeriesAnalysis({
                 Add event set
               </button>
               <button type="button" className="btn quiet" onClick={() => setEventDraft(null)}>Cancel</button>
+            </div>
+          )}
+          {dataDraft && (
+            <div className="row-actions" data-testid="series-add-data" style={{ marginTop: 6, flexWrap: "wrap", gap: 4 }}>
+              <select aria-label="Data source" value={dataDraft.source}
+                      onChange={(e) => setDataDraft({ ...dataDraft, source: e.target.value, object: "", property: "" })}>
+                {dataSets.length === 0 && <option value="">Object type…</option>}
+                {dataSets.length
+                  ? dataSets.map((id) => <option key={id} value={id}>{declaredVariables[id]?.label ?? id}</option>)
+                  : (dataTypes.data?.items ?? []).map((t) => <option key={t.id} value={t.id}>{t.display_name}</option>)}
+              </select>
+              <input aria-label="Find an object" placeholder="Find an object" value={dataDraft.search}
+                     onChange={(e) => setDataDraft({ ...dataDraft, search: e.target.value })} />
+              <select aria-label="Data object" value={dataDraft.object} disabled={!dataTypeId}
+                      onChange={(e) => setDataDraft({ ...dataDraft, object: e.target.value })}>
+                <option value="">Object…</option>
+                {dataOffered.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
+              <select aria-label="Data series" value={dataDraft.property} disabled={!dataTypeId}
+                      onChange={(e) => setDataDraft({ ...dataDraft, property: e.target.value })}>
+                <option value="">Time series…</option>
+                {dataSeries.map((p) => <option key={p.api_name} value={p.api_name}>{p.display_name}</option>)}
+              </select>
+              {dataType.data && dataSeries.length === 0 && (
+                <span className="field-hint">{`${dataType.data.display_name} has no time series property.`}</span>
+              )}
+              <button type="button" className="btn"
+                      disabled={!dataTypeId || !dataDraft.object || !dataDraft.property}
+                      onClick={() => {
+                        const picked = dataOffered.find((o) => o.id === dataDraft.object)
+                          ?? { id: dataDraft.object, label: dataDraft.object };
+                        setPlots(withSeriesAddedRoot(plots, { objectId: picked.id, typeId: dataTypeId!,
+                          property: dataDraft.property, objectLabel: picked.label },
+                        seriesCanvasFor(placement, 1, canvases)));
+                        setDataDraft(null);
+                      }}>
+                Add series
+              </button>
+              <button type="button" className="btn quiet" onClick={() => setDataDraft(null)}>Cancel</button>
             </div>
           )}
           {linkedDraft && (
@@ -13763,7 +13846,7 @@ function SeriesAnalysisSettings() {
   const {
     objectSetVariable, property, labelProperty, limit, title, plotTypes, eventSetTypes, newPlotCanvas,
     eventSets, viewRange, windowStartVariable, windowEndVariable, relativeAmount, relativeUnit, syncXAxes, utc,
-    overlayYAxes, collapseYAxes, collapsedBoundaries, tooltip,
+    overlayYAxes, collapseYAxes, collapsedBoundaries, tooltip, addData, addDataSets,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -13786,7 +13869,10 @@ function SeriesAnalysisSettings() {
     collapseYAxes: node.data.props.collapseYAxes,
     collapsedBoundaries: node.data.props.collapsedBoundaries,
     tooltip: node.data.props.tooltip,
+    addData: node.data.props.addData,
+    addDataSets: node.data.props.addDataSets,
   }));
+  const rawDataSets: Record<string, unknown>[] = Array.isArray(addDataSets) ? addDataSets : [];
   const tips = seriesTooltipOptionsOf(tooltip);
   const setTip = (key: string, value: unknown) => setProp((p: { tooltip: unknown }) => {
     p.tooltip = { ...seriesTooltipOptionsOf(p.tooltip), [key]: value };
@@ -13861,6 +13947,46 @@ function SeriesAnalysisSettings() {
             <span className="field-label">{SERIES_PLOT_LABELS[k]}</span>
           </label>
         ))}
+      </div>
+      <div className="field" data-testid="series-add-data-options">
+        <label className="field canvas-toggle">
+          <input type="checkbox" aria-label="Enable add data" checked={!!addData}
+                 onChange={(e) => setProp((p: { addData: boolean }) => (p.addData = e.target.checked))} />
+          <span className="field-label">Let readers add series from the Ontology</span>
+        </label>
+        {!!addData && rawDataSets.map((raw, n) => (
+          <span key={n} className="row-actions" style={{ gap: 4 }}>
+            <select aria-label={`Add data set ${n + 1}`}
+                    value={typeof raw.objectSetVariable === "string" ? raw.objectSetVariable : ""}
+                    onChange={(e) => setProp((p: { addDataSets: unknown }) => {
+                      const all = Array.isArray(p.addDataSets) ? [...p.addDataSets] : [];
+                      all[n] = { objectSetVariable: e.target.value };
+                      p.addDataSets = all;
+                    })}>
+              <option value="">Object set…</option>
+              {setVariables.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+            </select>
+            <button type="button" className="btn quiet" aria-label={`Remove add data set ${n + 1}`}
+                    onClick={() => setProp((p: { addDataSets: unknown }) => {
+                      const all = Array.isArray(p.addDataSets) ? [...p.addDataSets] : [];
+                      all.splice(n, 1);
+                      p.addDataSets = all;
+                    })}>×</button>
+          </span>
+        ))}
+        {!!addData && rawDataSets.length < MAX_SERIES_ADD_DATA_SETS && (
+          <button type="button" className="btn quiet"
+                  onClick={() => setProp((p: { addDataSets: unknown }) => {
+                    p.addDataSets = [...(Array.isArray(p.addDataSets) ? p.addDataSets : []), { objectSetVariable: "" }];
+                  })}>
+            Restrict to an object set
+          </button>
+        )}
+        {!!addData && (
+          <span className="field-hint">
+            {rawDataSets.length ? "Readers pick from these sets' objects." : "Readers pick from any object type."}
+          </span>
+        )}
       </div>
       <label className="field">
         <span className="field-label">New plot placement</span>
@@ -14055,7 +14181,7 @@ CanvasSeriesAnalysis.craft = {
     plotTypes: null, eventSetTypes: null, newPlotCanvas: "input", eventSets: null, viewRange: "full",
     windowStartVariable: null, windowEndVariable: null, relativeAmount: 2, relativeUnit: "week",
     syncXAxes: false, utc: false, overlayYAxes: false, collapseYAxes: false, collapsedBoundaries: false,
-    tooltip: null },
+    tooltip: null, addData: false, addDataSets: null },
   related: { settings: SeriesAnalysisSettings },
 };
 

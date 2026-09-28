@@ -682,3 +682,66 @@ def test_the_tooltip_s_significant_digits(page, api, module) -> None:
     point_at(page, 1, 48 + 584 / 3, 100)
     expect(page.get_by_test_id("series-tooltip-1").locator("[data-plot]").last).to_have_text(
         "■ Formula time series of North sensor: 6.7")
+
+
+def test_a_reader_adds_any_object_s_series(page, api, module) -> None:
+    """p.392's + Add Data (§661): with one sensor controlled by the set, the
+    reader adds South's readings from the sensor type, and can remove what
+    they added but not what the set gave."""
+    open_module(page, build(api, module, "Analysis add data", limit=1, addData=True))
+    rows = page.locator("[data-testid='series-plots'] tbody tr")
+    expect(rows).to_have_count(1)
+    page.get_by_role("button", name="Add data").click()
+    page.get_by_label("Data source").select_option(module.sensor_type)
+    page.get_by_label("Find an object").fill("sou")
+    expect(page.get_by_label("Data object").locator("option")).to_have_text(["Object…", "South sensor"])
+    page.get_by_label("Data object").select_option(label="South sensor")
+    page.get_by_label("Data series").select_option("readings")
+    page.get_by_role("button", name="Add series").click()
+    expect(rows).to_have_count(2)
+    expect(stat(page, "South sensor readings", "mean")).to_have_text("900")
+    # Derived from like any plot.
+    page.get_by_label("New plot").select_option("cumulative")
+    page.get_by_label("Input plot").select_option(label="South sensor readings")
+    page.get_by_role("button", name="Add plot").click()
+    expect(stat(page, "Cumulative aggregate of South sensor readings", "max")).to_have_text("1800")
+    expect(plot_row(page, rows.first.get_attribute("data-label")).get_by_role("button", name="Remove")).to_have_count(0)
+    page.get_by_label("Remove South sensor readings").click()
+    expect(rows).to_have_count(1)
+
+
+def test_add_data_narrowed_to_the_builder_s_sets(page, api, module) -> None:
+    """p.396's Add data options: "apply object set filters for each object
+    type" - here a set of South alone."""
+    mod = build(api, module, "Analysis add data sets", limit=1)
+    definition = mod.definition()
+    definition["variables"]["v_south"] = {
+        "id": "v_south", "kind": "object_set", "label": "The south",
+        "object_set": object_set(module.sensor_type, [{"property": "name", "op": "eq", "value": "South sensor"}])}
+    definition["layout"]["tsa"]["props"].update(addData=True, addDataSets=[{"objectSetVariable": "v_south"}])
+    mod.define(definition)
+    open_module(page, mod)
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(1)
+    page.get_by_role("button", name="Add data").click()
+    expect(page.get_by_label("Data source").locator("option")).to_have_text(["The south"])
+    expect(page.get_by_label("Data object").locator("option")).to_have_text(["Object…", "South sensor"])
+
+
+def test_no_add_data_unless_the_builder_allows_it(page, api, module) -> None:
+    open_module(page, build(api, module, "Analysis no add data"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    expect(page.get_by_role("button", name="Add data")).to_have_count(0)
+
+
+def test_the_panel_sets_the_add_data_options(page, api, module) -> None:
+    mod = build(api, module, "Analysis add data options")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Time series analysis").first.click()
+    page.get_by_label("Enable add data").check()
+    page.get_by_role("button", name="Restrict to an object set").click()
+    page.get_by_label("Add data set 1", exact=True).select_option("v_all")
+    save(page)
+    props = mod.definition()["layout"]["tsa"]["props"]
+    assert props["addData"] is True
+    assert props["addDataSets"] == [{"objectSetVariable": "v_all"}]

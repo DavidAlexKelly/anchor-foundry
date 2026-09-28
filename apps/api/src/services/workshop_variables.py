@@ -605,6 +605,9 @@ NESTED_REFERENCE_PROPS: dict[str, tuple[str, ...]] = {
     # p.396's initial event sets on the Time Series Analysis widget (§658):
     # "event sets backed by object sets", each reading its own.
     "eventSets": ("objectSetVariable",),
+    # p.396's Add data options (§661): "apply object set filters for each
+    # object type" - each set the reader may add a series from.
+    "addDataSets": ("objectSetVariable",),
 }
 
 

@@ -326,6 +326,8 @@ export const NESTED_REFERENCE_PROPS: Record<string, readonly string[]> = {
   annotationLayers: ["objectSetVariable"],
   // p.396's initial event sets on Time Series Analysis (§658). See the API's copy.
   eventSets: ["objectSetVariable"],
+  // p.396's Add data options (§661). See the API's copy.
+  addDataSets: ["objectSetVariable"],
 };
 
 /** Props holding a map of names to variable ids of this module (§598): an

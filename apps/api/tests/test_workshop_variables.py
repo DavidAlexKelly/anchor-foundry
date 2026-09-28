@@ -4423,3 +4423,15 @@ def test_an_initial_event_set_s_object_set_is_a_usage() -> None:
         {"node": "tsa", "prop": "eventSets[0].objectSetVariable"}]
     assert wv.dangling_references(layout, {}) == [
         {"node": "tsa", "prop": "eventSets[0].objectSetVariable", "variable": "v_jobs"}]
+
+
+def test_an_add_data_set_is_a_usage() -> None:
+    """p.396's Add data options (§661): a set the reader may add a series
+    from is a use of it, and one naming no set is refused."""
+    variables = wv.parse({"v_pumps": var("v_pumps", label="Pumps")})
+    layout = {"tsa": {"type": {"resolvedName": "CanvasSeriesAnalysis"}, "props": {
+        "addData": True, "addDataSets": [{"objectSetVariable": "v_pumps"}]}}}
+    assert wv.usages(layout, variables)["v_pumps"] == [
+        {"node": "tsa", "prop": "addDataSets[0].objectSetVariable"}]
+    assert wv.dangling_references(layout, {}) == [
+        {"node": "tsa", "prop": "addDataSets[0].objectSetVariable", "variable": "v_pumps"}]
