@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   axisEnds, barWidth, bucketLabel, componentOf, componentsFor, defaultComponentFor, filtersOf,
   groupFilters, hasLinkOf, isBucketChosen, isPeriodChosen, keywordOf, layoutOf, linkDisplayOf,
-  linkedClausesOf, newFilterId, numberRangeSummary, periodLabel, periodOf, pillSummary, rangeOf,
+  linkedClausesOf, linkedPillLabel, newFilterId, numberRangeSummary, periodLabel, periodOf, pillSummary, rangeOf,
   shiftDay, timelineIntervalOf, toggleValue, valuesOf, viewerFilterId, visibleFilters,
   withBucket, withHasLink, withKeyword, withLinked, withRange, withValues, withoutFilter,
 } from "./filter-list";
@@ -407,5 +407,20 @@ describe("p.451's display options for linked filters (§546)", () => {
       { link: "b", linkTo: "u", specs: [b] },
       { link: "a", linkTo: "s", specs: [aOther] },
     ]);
+  });
+});
+
+describe("a linked filter's pill (§621)", () => {
+  it("names the linked type, then the property by its display name", () => {
+    expect(linkedPillLabel({ property: "priority" }, "Issue", "Priority")).toBe("Issue · Priority");
+    expect(linkedPillLabel({ property: "priority" }, "Issue", null)).toBe("Issue · priority");
+  });
+
+  it("says Has link for p.451's link-only filter", () => {
+    expect(linkedPillLabel({ property: "" }, "Issue")).toBe("Issue · Has link");
+  });
+
+  it("says Linked objects until the type has loaded", () => {
+    expect(linkedPillLabel({ property: "" }, null)).toBe("Linked objects · Has link");
   });
 });
