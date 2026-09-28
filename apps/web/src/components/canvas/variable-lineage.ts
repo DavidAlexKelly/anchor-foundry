@@ -426,3 +426,89 @@ export function layers(graph: Lineage, shown: ReadonlySet<string>): Map<string, 
   for (const id of ids) depth(id, new Set());
   return out;
 }
+
+// ---- p.78's per-node detail (§627) -------------------------------------------
+//
+// > "Each node can display the pages and overlays where a variable is used and
+// > the time at which a variable was computed." (p.78)
+
+export interface Place {
+  id: string;
+  kind: "page" | "overlay";
+  label: string;
+}
+
+/** The page or overlay a layout node is on: the nearest one above it, walking
+ * `parent`. An overlay inside a page is the overlay - it is where the widget
+ * shows. Null for a node on neither (the header, or a module with no pages),
+ * and for a parent chain that loops, which a saved document can hold. */
+export function placeOf(layout: Record<string, unknown>, nodeId: string): Place | null {
+  const seen = new Set<string>();
+  let id: string | null = nodeId;
+  while (id && !seen.has(id)) {
+    seen.add(id);
+    const node = layout[id] as (LayoutNode & { parent?: unknown }) | undefined;
+    if (!node) return null;
+    const name = resolvedName(node);
+    if (id !== nodeId && (name === "CanvasPage" || name === "CanvasOverlay")) {
+      const title = node.props?.title;
+      const kind = name === "CanvasPage" ? "page" : "overlay";
+      return {
+        id,
+        kind,
+        label: typeof title === "string" && title.trim()
+          ? title.trim() : kind === "page" ? "Page" : "Overlay",
+      };
+    }
+    id = typeof node.parent === "string" ? node.parent : null;
+  }
+  return null;
+}
+
+/** Where a node of the graph is used: a widget's own page or overlay, and for
+ * a variable, those of every widget that reads or writes it directly - one
+ * entry each, in the order the widgets are met. */
+export function placesOf(
+  graph: Lineage, layout: Record<string, unknown>, id: string,
+): Place[] {
+  const node = graph.nodes.get(id);
+  if (!node) return [];
+  // A variable's neighbours include the variables it feeds and is fed by;
+  // those are not layout nodes, so `placeOf` finds no place for them.
+  const widgets = node.kind === "widget" ? [id] : unique(graph.edges.flatMap((e) =>
+    e.from === id ? [e.to] : e.to === id ? [e.from] : []));
+  const out: Place[] = [];
+  for (const widget of widgets) {
+    const place = placeOf(layout, widget);
+    if (place && !out.some((p) => p.id === place.id)) out.push(place);
+  }
+  return out;
+}
+
+/** When each variable was last computed, after a resolve answered at `now`.
+ * What the resolve was sent as held (p.76's recompute behaviours) came back as
+ * it went and was not computed, so it keeps its earlier time; everything else
+ * the answer holds was just computed. */
+export function stampComputed(
+  previous: Readonly<Record<string, number>>,
+  values: Readonly<Record<string, unknown>>,
+  held: Readonly<Record<string, unknown>>,
+  now: number,
+): Record<string, number> {
+  const out = { ...previous };
+  for (const id of Object.keys(values)) {
+    if (!(id in held)) out[id] = now;
+  }
+  return out;
+}
+
+/** What a variable's node says about its computation (§627). A variable not
+ * computed yet is one nothing on screen has needed (p.75's lazy rule), which is
+ * the answer rather than a blank. */
+export function computedLine(computed: number | undefined): string {
+  if (computed === undefined) {
+    return "Not computed yet: a variable is computed when something on screen needs it.";
+  }
+  return `Computed at ${new Date(computed).toLocaleTimeString("en-GB", {
+    hour: "2-digit", minute: "2-digit", second: "2-digit" })}.`;
+}

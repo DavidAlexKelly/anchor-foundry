@@ -42,6 +42,7 @@ import type { CollapseOverride } from "./collapse";
 import type { TabOverride } from "./tab-selection";
 import { asPageId, pageState, type PageOverride } from "./page-selection";
 import { heldFor, remember, request, requested, settled } from "./recompute";
+import { stampComputed } from "./variable-lineage";
 import { usedUpdates } from "./filter-default";
 import { defaultPageNode, pageNodeFor } from "./routing";
 import { visibleNodes } from "./visible-nodes";
@@ -152,6 +153,8 @@ export function VariableBridge({
     if (Object.keys(updates).length > 0) setMany(updates);
   }, [declared, values, setMany]);
   const [resolved, setResolved] = useState<Record<string, unknown>>({});
+  // p.78's computed time per variable (§627), for the lineage graph.
+  const [computedAt, setComputedAt] = useState<Record<string, number>>({});
   const [pending, setPending] = useState(enabled);
   // The latest of both, for a capability that has to wait on them from inside
   // a callback (§459's export clicked before its set resolved). A callback
@@ -316,6 +319,7 @@ export function VariableBridge({
       // nothing to merge with.
       setResolved((current) =>
         visible ? { ...current, ...data.values } : data.values);
+      setComputedAt((current) => stampComputed(current, data.values, held, Date.now()));
       setPending(false);
       // **Named from the declarations, not from the id.** A breakdown of
       // `v_7f3a` is a list somebody has to go and decode; the author called it
@@ -375,7 +379,7 @@ export function VariableBridge({
   });
 
   return (
-    <CanvasVariableProvider value={{ declared, events, resolved, pending }}>
+    <CanvasVariableProvider value={{ declared, events, resolved, pending, computedAt }}>
       <CanvasPageProvider
         value={{
           current: page,

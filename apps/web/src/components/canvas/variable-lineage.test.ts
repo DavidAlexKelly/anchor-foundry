@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildGraph, childrenOf, clear, collapse, directionOf, expand, hasMore, initial,
-  layers, NESTED_PROP_DIRECTION, parentsOf, PROP_DIRECTION, redo, showAll, step, undo,
+  layers, NESTED_PROP_DIRECTION, parentsOf, placeOf, placesOf, PROP_DIRECTION, redo, showAll,
+  stampComputed, step, undo, computedLine,
 } from "./variable-lineage";
 import { NESTED_REFERENCE_PROPS, REFERENCE_PROPS } from "../../lib/workshop-module";
 import type { WorkshopVariable } from "../../lib/types";
@@ -521,5 +522,95 @@ describe("a variable passed as an action parameter (§598)", () => {
     expect(directionOf("interface.ext")).toBeUndefined();
     expect(directionOf("inlineEditVariables")).toBeUndefined();
     expect(directionOf("inlineEditVariables.a.b")).toBeUndefined();
+  });
+});
+
+describe("p.78's pages and overlays where a variable is used (§627)", () => {
+  const at = (name: string, props: Record<string, unknown>, parent: string) =>
+    ({ ...widget(name, props), parent });
+  const layout = {
+    ROOT: widget("CanvasRoot", {}),
+    p1: at("CanvasPage", { title: "Overview" }, "ROOT"),
+    p2: at("CanvasPage", { title: "  " }, "ROOT"),
+    o1: at("CanvasOverlay", { title: "Details" }, "p1"),
+    sec: at("CanvasSection", {}, "p1"),
+    table: at("CanvasObjectTable", { objectSetVariable: "v_set", title: "Sites" }, "sec"),
+    chart: at("CanvasChart", { objectSetVariable: "v_set", title: "Chart" }, "p2"),
+    card: at("CanvasMetricCard", { objectSetVariable: "v_set", title: "Card" }, "o1"),
+    pick: at("CanvasFilterList", { filterParameter: "v_f", title: "Filter" }, "p1"),
+    head: at("CanvasText", { text: "{{v_h}}", objectSetVariable: "v_h" }, "ROOT"),
+    // A second reader on Overview, which is still one place.
+    also: at("CanvasText", { objectSetVariable: "v_set" }, "sec"),
+  };
+  const graph = buildGraph({ v_set: v("v_set"), v_f: v("v_f"), v_h: v("v_h"), v_x: v("v_x") },
+    layout);
+
+  it("is the nearest page or overlay above a widget", () => {
+    expect(placeOf(layout, "table")).toEqual({ id: "p1", kind: "page", label: "Overview" });
+    // An overlay on a page is where its widgets show.
+    expect(placeOf(layout, "card")).toEqual({ id: "o1", kind: "overlay", label: "Details" });
+    // An untitled page is still a page.
+    expect(placeOf(layout, "chart")).toEqual({ id: "p2", kind: "page", label: "Page" });
+    // A page is not on itself; the header is on none.
+    expect(placeOf(layout, "p2")).toBeNull();
+    expect(placeOf(layout, "head")).toBeNull();
+    expect(placeOf(layout, "gone")).toBeNull();
+  });
+
+  it("stops at a parent chain that loops", () => {
+    const loop = { a: at("CanvasText", {}, "b"), b: at("CanvasSection", {}, "a") };
+    expect(placeOf(loop, "a")).toBeNull();
+  });
+
+  it("lists each place a variable's readers and writers are on, once", () => {
+    expect(placesOf(graph, layout, "v_set").map((p) => p.label))
+      .toEqual(["Overview", "Page", "Details"]);
+    // A writer counts as much as a reader.
+    expect(placesOf(graph, layout, "v_f").map((p) => p.label)).toEqual(["Overview"]);
+    expect(placesOf(graph, layout, "chart").map((p) => p.label)).toEqual(["Page"]);
+    expect(placesOf(graph, layout, "v_h")).toEqual([]);
+    expect(placesOf(graph, layout, "v_x")).toEqual([]);
+    expect(placesOf(graph, layout, "nothing")).toEqual([]);
+  });
+
+  it("counts the widgets using a variable, not those using what it feeds", () => {
+    // `v_n` is derived from `v_set` and shown on a page nothing reads `v_set` on.
+    const more = {
+      ...layout,
+      p3: at("CanvasPage", { title: "Elsewhere" }, "ROOT"),
+      n: at("CanvasText", { objectSetVariable: "v_n" }, "p3"),
+    };
+    const derived = buildGraph({
+      v_set: v("v_set"),
+      v_n: v("v_n", { derivation: { transform: "object_set_aggregation", inputs: ["v_set"] },
+      } as Partial<WorkshopVariable>),
+    }, more);
+    expect(placesOf(derived, more, "v_n").map((p) => p.label)).toEqual(["Elsewhere"]);
+    expect(placesOf(derived, more, "v_set").map((p) => p.label))
+      .toEqual(["Overview", "Page", "Details"]);
+  });
+});
+
+describe("p.78's time at which a variable was computed (§627)", () => {
+  it("stamps what the answer holds, except what was sent to be held", () => {
+    const after = stampComputed({ v_old: 5, v_kept: 7 },
+      { v_a: 1, v_kept: 2, v_new: null }, { v_kept: 2 }, 100);
+    expect(after).toEqual({ v_old: 5, v_kept: 7, v_a: 100, v_new: 100 });
+  });
+
+  it("does not change what it was given", () => {
+    const before = { v_a: 1 };
+    stampComputed(before, { v_a: 0 }, {}, 9);
+    expect(before).toEqual({ v_a: 1 });
+  });
+});
+
+describe("computedLine", () => {
+  it("says when, to the second, or that nothing has needed it yet", () => {
+    const at = new Date(2026, 8, 28, 9, 5, 7).getTime();
+    expect(computedLine(at)).toBe("Computed at 09:05:07.");
+    expect(computedLine(undefined)).toMatch(/^Not computed yet/);
+    // The epoch is a time, not an absence.
+    expect(computedLine(0)).toMatch(/^Computed at /);
   });
 });

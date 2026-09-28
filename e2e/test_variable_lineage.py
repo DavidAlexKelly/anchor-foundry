@@ -31,6 +31,8 @@ add that no chevron would ever have reached.
 """
 from __future__ import annotations
 
+import re
+
 from playwright.sync_api import expect
 
 from api import Module, layout
@@ -271,3 +273,76 @@ def test_the_graph_closes_and_leaves_the_panel_behind(page, api) -> None:
     page.get_by_test_id("lineage-close").click()
     expect(page.get_by_test_id("lineage")).to_have_count(0)
     expect(page.locator(".vars-item.on")).to_have_count(1)
+
+
+# ---- p.78's per-node detail (§627) -------------------------------------------
+# > "Each node can display the pages and overlays where a variable is used and
+# > the time at which a variable was computed." (p.78)
+
+def paged_module(api, name: str):
+    mod = Module(api, name)
+    text = lambda parent, shown: {  # noqa: E731 - a spec, not logic
+        "resolvedName": "CanvasText", "parent": parent,
+        "props": {"tag": "p", "text": f"On {parent}", "visibleWhen": shown}}
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "p1": {"resolvedName": "CanvasPage", "props": {"title": "Overview", "pageId": "one"},
+                   "isCanvas": True, "nodes": ["t1"]},
+            "t1": text("p1", "v_shared"),
+            "p2": {"resolvedName": "CanvasPage", "props": {"title": "Second", "pageId": "two"},
+                   "isCanvas": True, "nodes": ["t2"]},
+            "t2": text("p2", "v_other"),
+            "ov": {"resolvedName": "CanvasOverlay", "props": {"title": "Detail"},
+                   "isCanvas": True, "nodes": ["t3"]},
+            "t3": text("ov", "v_shared"),
+        }),
+        "variables": {
+            "v_shared": {"id": "v_shared", "kind": "string", "label": "Shared",
+                         "default": "yes"},
+            "v_other": {"id": "v_other", "kind": "string", "label": "Other"},
+            "v_never": {"id": "v_never", "kind": "string", "label": "Never used"},
+            "v_pad": {"id": "v_pad", "kind": "string", "label": "Pad"},
+        },
+        "events": {},
+    })
+    return mod
+
+
+def select(page, vid: str) -> None:
+    page.locator(f".lineage-node[data-id='{vid}']").click()
+
+
+def test_a_node_says_where_it_is_used_and_when_it_was_computed(page, api) -> None:
+    mod = paged_module(api, "Lineage places")
+    open_builder(page, mod)
+    settled(page)
+    open_variables(page)
+    open_variable(page, "Shared")
+    open_lineage(page)
+    expect(page.get_by_test_id("lineage-detail")).to_have_count(0)
+
+    select(page, "v_shared")
+    detail = page.get_by_test_id("lineage-detail")
+    # Both places its readers are on, and not the page only `Other` is on.
+    expect(detail.get_by_test_id("lineage-place")).to_have_text(
+        ["Overview (page)", ", Detail (overlay)"])
+    expect(detail.get_by_test_id("lineage-places")).to_contain_text("Used on")
+    expect(detail.get_by_test_id("lineage-computed")).to_have_text(
+        re.compile(r"^Computed at \d{1,2}:\d{2}:\d{2}"))
+
+    # A widget says where it is, and has no computation of its own.
+    page.get_by_test_id("lineage-children-v_shared").click()
+    select(page, "t3")
+    expect(detail.get_by_test_id("lineage-places")).to_have_text("On Detail (overlay)")
+    expect(detail.get_by_test_id("lineage-computed")).to_have_count(0)
+
+    # A variable nothing shows is on no page.
+    page.get_by_test_id("lineage-show-all").click()
+    select(page, "v_never")
+    expect(detail.get_by_test_id("lineage-places")).to_have_text(
+        "Not used on any page or overlay.")
+
+    # Selecting the selected node again lets it go, and the detail with it.
+    select(page, "v_never")
+    expect(detail).to_have_count(0)
