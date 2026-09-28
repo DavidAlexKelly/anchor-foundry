@@ -71,6 +71,11 @@ MAX_SELECTED = 500
 
 MAX_QUERY = 200
 
+#: p.11's cards moved by hand (§606): far past any graph this platform draws
+#: (a card is 190 wide), and near enough that a stored position is a place on
+#: a canvas rather than an arbitrary number somebody could make it grow to.
+MAX_COORDINATE = 100_000
+
 
 class GraphViewError(ValueError):
     """Refusal, phrased for whoever saved the view."""
@@ -87,7 +92,8 @@ def parse(view: Any) -> dict[str, Any]:
     if not isinstance(view, dict):
         raise GraphViewError("a saved graph's view must be an object")
 
-    known = {"focus", "column", "selected", "query", "kinds", "colouring", "layout"}
+    known = {"focus", "column", "selected", "query", "kinds", "colouring", "layout",
+             "positions"}
     # **No `view_as`, and that is a decision rather than an omission** (§422).
     # p.82's dropdown names a colleague, and a saved graph or a shared link
     # carrying "as seen by Alice" is a claim about a person travelling further
@@ -182,6 +188,35 @@ def parse(view: Any) -> dict[str, Any]:
                 f"{layout!r} is not a graph layout ({', '.join(LAYOUTS)})"
             )
         out["layout"] = layout
+
+    positions = view.get("positions")
+    if positions is not None:
+        # p.11's manual arrangement (§606): where somebody put the cards they
+        # moved, laid over `layout` by the browser. Per node, for the nodes a
+        # graph draws, and bounded like a selection for a selection's reason.
+        if not isinstance(positions, dict):
+            raise GraphViewError("positions must map node ids to places")
+        if len(positions) > MAX_SELECTED:
+            raise GraphViewError(
+                f"a saved graph holds at most {MAX_SELECTED} moved nodes"
+            )
+        placed: dict[str, dict[str, float]] = {}
+        for node, place in positions.items():
+            if not NODE_ID.fullmatch(node):
+                raise GraphViewError(f"{node!r} is not a node id")
+            if not isinstance(place, dict) or set(place) != {"x", "y"}:
+                raise GraphViewError(f"{node}: a place is an x and a y")
+            for axis in ("x", "y"):
+                value = place[axis]
+                # `bool` is an `int` to Python and not a coordinate to anybody.
+                if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                        or not 0 <= value <= MAX_COORDINATE:
+                    raise GraphViewError(
+                        f"{node}: {axis} must be a number from 0 to {MAX_COORDINATE}"
+                    )
+            placed[node] = {"x": place["x"], "y": place["y"]}
+        if placed:
+            out["positions"] = placed
 
     return out
 

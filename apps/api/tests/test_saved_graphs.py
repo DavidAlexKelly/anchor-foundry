@@ -382,6 +382,63 @@ def test_a_selection_has_a_ceiling(client: TestClient, fx: Fixture) -> None:
     assert str(saved_graphs.MAX_SELECTED) in r.text
 
 
+def test_cards_moved_by_hand_are_saved_and_given_back(client: TestClient, fx: Fixture) -> None:
+    """p.11's manual arrangement (§606): where somebody put the cards they
+    moved. An empty map is the automatic layout and is not stored."""
+    moved = node()
+    r = client.post(base(fx), headers=hdr(fx.editor_sub), json={
+        "name": f"Moved {uuid.uuid4().hex[:6]}",
+        "view": {"layout": "vertical", "positions": {moved: {"x": 12, "y": 340.5}}},
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["view"] == {"layout": "vertical",
+                                "positions": {moved: {"x": 12, "y": 340.5}}}
+    r = client.post(base(fx), headers=hdr(fx.editor_sub), json={
+        "name": f"Unmoved {uuid.uuid4().hex[:6]}", "view": {"positions": {}}})
+    assert r.status_code == 201, r.text
+    assert r.json()["view"] == {}
+
+
+@pytest.mark.parametrize("positions,refusal", [
+    (["dataset:x"], "map node ids to places"),
+    ({"not-a-node": {"x": 1, "y": 1}}, "is not a node id"),
+    ({"NODE": {"x": 1}}, "a place is an x and a y"),
+    ({"NODE": {"x": 1, "y": 1, "z": 1}}, "a place is an x and a y"),
+    ({"NODE": [1, 1]}, "a place is an x and a y"),
+    ({"NODE": {"x": "1", "y": 1}}, "x must be a number"),
+    ({"NODE": {"x": True, "y": 1}}, "x must be a number"),
+    ({"NODE": {"x": 1, "y": -1}}, "y must be a number"),
+    ({"NODE": {"x": saved_graphs.MAX_COORDINATE + 1, "y": 1}}, "x must be a number"),
+])
+def test_a_place_that_is_not_one_is_refused(
+    client: TestClient, fx: Fixture, positions, refusal: str
+) -> None:
+    if isinstance(positions, dict) and "NODE" in positions:
+        positions = {node(): positions["NODE"]}
+    r = client.post(base(fx), headers=hdr(fx.editor_sub), json={
+        "name": f"Bad place {uuid.uuid4().hex[:6]}", "view": {"positions": positions}})
+    assert r.status_code == 422, r.text
+    assert refusal in r.text
+
+
+def test_the_far_edge_of_the_canvas_is_a_place(client: TestClient, fx: Fixture) -> None:
+    corner = node()
+    r = client.post(base(fx), headers=hdr(fx.editor_sub), json={
+        "name": f"Edge {uuid.uuid4().hex[:6]}",
+        "view": {"positions": {corner: {"x": 0, "y": saved_graphs.MAX_COORDINATE}}}})
+    assert r.status_code == 201, r.text
+
+
+def test_moved_cards_have_a_ceiling(client: TestClient, fx: Fixture) -> None:
+    r = client.post(base(fx), headers=hdr(fx.editor_sub), json={
+        "name": f"Many moved {uuid.uuid4().hex[:6]}",
+        "view": {"positions": {node(): {"x": 1, "y": 1}
+                               for _ in range(saved_graphs.MAX_SELECTED + 1)}},
+    })
+    assert r.status_code == 422, r.status_code
+    assert "moved nodes" in r.text
+
+
 # ---- sharing -----------------------------------------------------------------
 
 def test_a_saved_graph_is_shared_within_its_project(client: TestClient, fx: Fixture) -> None:

@@ -453,6 +453,10 @@ export interface GraphView {
    *  is: a graph sent with the pipeline running down the page, to fit beside
    *  a column of text, arrives sideways without it. Narrowed by `layoutIn`. */
   layout?: string;
+  /** p.11's cards moved by hand (§606), laid over `layout`. In the view for
+   *  the layout's reason: a graph tidied before sharing it is the picture
+   *  being sent. Narrowed by `movesIn`. */
+  positions?: Record<string, { x: number; y: number }>;
 }
 
 /** The kinds this graph draws, which is what a stored filter may name. */
@@ -517,6 +521,8 @@ export function viewOf(state: {
   kinds: readonly string[];
   colouring: string;
   layout: string;
+  /** Optional so the callers that predate §606 need not name it. */
+  positions?: Readonly<Record<string, { x: number; y: number }>>;
 }): GraphView {
   const view: GraphView = {};
   if (state.selected.length > 0) view.selected = [...state.selected];
@@ -532,5 +538,9 @@ export function viewOf(state: {
   // before §424 existed and one saved with the menu untouched are the same
   // view, and storing the default would make them two records.
   if (state.layout !== DEFAULT_LAYOUT) view.layout = state.layout;
+  // No moves is the automatic layout, which needs no record.
+  if (state.positions && Object.keys(state.positions).length > 0) {
+    view.positions = { ...state.positions };
+  }
   return view;
 }

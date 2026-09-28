@@ -224,6 +224,76 @@ export function layoutIn(view: { layout?: string } | undefined): string {
   return LAYOUTS.some((option) => option.id === named) ? named : DEFAULT_LAYOUT;
 }
 
+/* ------------------------------------------------------------------ *
+ * p.11's manual arrangement (§606)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Cards somebody has dragged, by node id, in canvas coordinates.
+ *
+ * > "Layout all nodes applies automatic layout for all the nodes on the
+ * > graphs." (p.11)
+ *
+ * That sentence is only needed because the nodes can be put somewhere by hand,
+ * which is what this is. **A move is laid over the arrangement, not a second
+ * arrangement**: every card nobody touched stays where the layout puts it, so
+ * a model added upstream after somebody tidied the graph arrives where the
+ * automatic layout would have drawn it, and the tidied cards stay tidied. That
+ * is the answer to the question the row said was the whole design - "you moved
+ * this card and then a model was added upstream" - and the price is stated
+ * rather than hidden: a new card can land under a moved one, and *Layout all
+ * nodes* is the way back.
+ */
+export type Moves = Record<string, Place>;
+
+/** The layout with the moves laid over it, for the nodes it draws.
+ *
+ * A move for a node this graph does not draw (deleted, or outside a focused
+ * lineage) is ignored rather than dropped - the move is the viewer's, and it
+ * applies again when the node is back. The canvas grows to take a card dragged
+ * past its edge, from the same rule every layout's canvas comes from. */
+export function withMoves(layout: Layout, moves: Moves): Layout {
+  const at = new Map(layout.at);
+  for (const [id, place] of Object.entries(moves)) {
+    if (at.has(id)) at.set(id, place);
+  }
+  return sized(at);
+}
+
+/** Where a card lands after a drag of (dx, dy) screen pixels at this zoom.
+ *
+ * Divided by the zoom because the pointer moves in screen pixels and the card
+ * in canvas ones; whole pixels, because a card at x=120.37 is a position
+ * nobody chose; and never above or left of the canvas's own corner, where it
+ * could not be seen or dragged back. */
+export function dragTo(start: Place, dx: number, dy: number, zoom: number): Place {
+  return {
+    x: Math.max(0, Math.round(start.x + dx / zoom)),
+    y: Math.max(0, Math.round(start.y + dy / zoom)),
+  };
+}
+
+/** The moves a stored view holds, keeping only well-formed ones - a view is
+ *  read at the other end of a save, where a later build may have written it
+ *  (`layoutIn`'s reason). */
+export function movesIn(view: { positions?: unknown } | undefined): Moves {
+  const raw = view?.positions;
+  if (!raw || typeof raw !== "object") return {};
+  // One check per coordinate, and §606's sweep is why: `Number.isFinite` does
+  // not coerce, so it already refuses text, `null` and a missing axis - and an
+  // array's entries have no `x` - which left a type check and an array check
+  // beside it unable to change the answer.
+  const out: Moves = {};
+  for (const [id, place] of Object.entries(raw as Record<string, unknown>)) {
+    const x = (place as { x?: unknown } | null)?.x;
+    const y = (place as { y?: unknown } | null)?.y;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if ((x as number) < 0 || (y as number) < 0) continue;
+    out[id] = { x: x as number, y: y as number };
+  }
+  return out;
+}
+
 /** Two corners of a drag, in canvas coordinates. Either corner may be first. */
 export interface Rect {
   x1: number;

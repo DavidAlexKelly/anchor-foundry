@@ -59,6 +59,7 @@ describe("a view from a link", () => {
       focus: "model:abc", column: "val", query: "x",
       kinds: ["dataset", "object_type"], selected: ["dataset:9"],
       colouring: "out_of_date", layout: "colour",
+      positions: { "dataset:9": { x: 12, y: 340 }, "model:abc": { x: 0, y: 7.5 } },
     };
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(toParams(view))) {
@@ -66,6 +67,11 @@ describe("a view from a link", () => {
       else if (value !== undefined) params.set(key, value);
     }
     expect(fromParams(params)).toEqual(view);
+  });
+
+  it("reads moved cards, skipping a part that is not a place (§606)", () => {
+    expect(of("pos=dataset:1@10,20&pos=nothing&pos=dataset:2@x,1&pos=@1,2&pos=model:3@5,6"))
+      .toEqual({ positions: { "dataset:1": { x: 10, y: 20 }, "model:3": { x: 5, y: 6 } } });
   });
 
   it("is an empty view when the link says nothing", () => {

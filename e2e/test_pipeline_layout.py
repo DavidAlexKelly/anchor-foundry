@@ -18,6 +18,7 @@ around — with nothing on the screen to say which copy is wrong.
 """
 from __future__ import annotations
 
+import re
 import uuid
 
 import pytest
@@ -183,3 +184,120 @@ def test_a_link_naming_a_layout_this_build_dropped_opens_on_the_default(
     """
     open_graph(page, arranged, "?layout=spiral")
     expect(page.get_by_test_id("graph-layout")).to_have_value("level")
+
+
+# ---- p.11's cards moved by hand (§606) ----------------------------------------
+
+def drag_card(page, node_id: str, dx: int, dy: int) -> None:
+    card = page.locator(f"[data-testid='graph-node'][data-node='{node_id}']")
+    box = card.bounding_box()
+    page.mouse.move(box["x"] + 20, box["y"] + 20)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 20 + dx, box["y"] + 20 + dy, steps=10)
+    page.mouse.up()
+
+
+def test_a_card_dragged_by_hand_stays_where_it_was_put(page, arranged) -> None:
+    """p.11's other half: "Layout all nodes applies automatic layout" is only
+    a sentence because a card can be put somewhere by hand."""
+    open_graph(page, arranged)
+    raw = f"dataset:{arranged['raw']}"
+    before = boxes(page)
+    edge = page.locator("svg path[marker-end]").first.get_attribute("d")
+
+    drag_card(page, raw, 60, 150)
+    after = boxes(page)
+    assert round(after[raw]["x"] - before[raw]["x"]) == 60, (before[raw], after[raw])
+    assert round(after[raw]["y"] - before[raw]["y"]) == 150, (before[raw], after[raw])
+    # Only the card that was moved, and the edges come with it.
+    for key in before:
+        if key != raw:
+            assert after[key] == before[key], key
+    expect(page.locator("svg path[marker-end]").first).not_to_have_attribute("d", edge)
+    # A drag is not a click: the card was not selected by being moved.
+    expect(page.get_by_test_id("selection-summary")).to_have_count(0)
+
+    # In the link, so a reload - and a shared link - keeps it. Waited for:
+    # the address bar is written a beat after the view changes.
+    expect(page).to_have_url(re.compile(r"[?&]pos="))
+    page.reload()
+    expect(page.get_by_test_id("graph-layout")).to_be_visible(timeout=30000)
+    assert boxes(page)[raw] == after[raw]
+
+
+def test_layout_all_nodes_puts_every_card_back(page, arranged) -> None:
+    open_graph(page, arranged)
+    raw = f"dataset:{arranged['raw']}"
+    before = boxes(page)
+    expect(page.get_by_test_id("graph-layout-all")).to_have_count(0)
+    drag_card(page, raw, 80, 120)
+    assert boxes(page)[raw] != before[raw]
+
+    page.get_by_test_id("graph-layout-all").click()
+    assert boxes(page) == before
+    expect(page.get_by_test_id("graph-layout-all")).to_have_count(0)
+    expect(page).not_to_have_url(re.compile(r"[?&]pos="))
+
+
+def test_choosing_an_arrangement_lays_out_every_card(page, arranged) -> None:
+    """A move made under one arrangement means nothing under another, so
+    choosing one is p.11's automatic layout for all the nodes."""
+    open_graph(page, arranged)
+    raw = f"dataset:{arranged['raw']}"
+    page.get_by_test_id("graph-layout").select_option("vertical")
+    vertical = boxes(page)
+    page.get_by_test_id("graph-layout").select_option("level")
+    drag_card(page, raw, 90, 90)
+    page.get_by_test_id("graph-layout").select_option("vertical")
+    assert boxes(page) == vertical
+    expect(page.get_by_test_id("graph-layout-all")).to_have_count(0)
+
+
+def placed(page) -> dict:
+    """Card positions relative to the graph's own viewport - selecting a node
+    opens panels that move the whole graph down the page, which is not a card
+    moving."""
+    origin = page.get_by_test_id("graph-viewport").bounding_box()
+    return {k: (round(b["x"] - origin["x"]), round(b["y"] - origin["y"]))
+            for k, b in boxes(page).items() if b}
+
+
+def test_a_press_that_barely_moves_is_still_a_click(page, arranged) -> None:
+    """A hand is not still. A card pressed and released two pixels away was
+    clicked, and moving it two pixels instead would make selecting a node
+    depend on how steady the mouse was."""
+    open_graph(page, arranged)
+    raw = f"dataset:{arranged['raw']}"
+    before = placed(page)[raw]
+    card = page.locator(f"[data-testid='graph-node'][data-node='{raw}']")
+    box = card.bounding_box()
+    page.mouse.move(box["x"] + 20, box["y"] + 20)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 22, box["y"] + 21)
+    page.mouse.up()
+    expect(page.get_by_test_id("selection-count")).to_have_text("1 node selected")
+    assert placed(page)[raw] == before
+    expect(page.get_by_test_id("graph-layout-all")).to_have_count(0)
+
+
+@pytest.mark.parametrize("how", ["shift", "tool"])
+def test_the_rectangle_still_starts_on_a_card(page, arranged, how) -> None:
+    """§354's selection gesture - Shift held, or the drag-select tool - is a
+    rectangle wherever it starts, including on a card, rather than a move."""
+    open_graph(page, arranged)
+    raw = f"dataset:{arranged['raw']}"
+    before = placed(page)
+    if how == "tool":
+        page.get_by_test_id("tool-drag-select").click()
+    box = boxes(page)[raw]
+    page.mouse.move(box["x"] + 20, box["y"] + 20)
+    if how == "shift":
+        page.keyboard.down("Shift")
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] + 4, box["y"] + box["height"] + 4, steps=8)
+    page.mouse.up()
+    if how == "shift":
+        page.keyboard.up("Shift")
+    expect(page.get_by_test_id("selection-count")).to_have_text("1 node selected")
+    assert placed(page) == before
+    expect(page.get_by_test_id("graph-layout-all")).to_have_count(0)
