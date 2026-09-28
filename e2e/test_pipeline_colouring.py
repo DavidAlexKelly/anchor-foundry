@@ -177,3 +177,30 @@ def test_a_link_naming_a_colouring_this_build_dropped_opens_on_the_default(
     open_graph(page, coloured, "?colour=spark_usage")
     expect(page.get_by_test_id("graph-colouring")).to_have_value("status")
     assert set(colours(page)) == {"unknown", "ok", "stale"}, colours(page)
+
+
+def test_row_count_colours_datasets_by_quarter_and_leaves_models_out(page, coloured) -> None:
+    """p.39's quantitative colouring (§622). Every dataset here holds two rows,
+    so they share one quarter - a graph of equal values is one colour, not
+    four - and a model, which holds no rows of its own, has nothing to
+    measure."""
+    open_graph(page, coloured)
+    page.get_by_test_id("graph-colouring").select_option("rows")
+    expect(page.locator("[data-colour='q3']")).to_have_count(3)
+    expect(page.locator("[data-colour='none']")).to_have_count(2)
+    expect(page.get_by_test_id("legend-q3")).to_have_attribute("data-count", "3")
+    expect(page.get_by_test_id("legend-q3")).to_contain_text("2 rows or more")
+    expect(page.get_by_test_id("legend-none")).to_contain_text("No rows counted")
+    # The legend reads most first, then what has nothing to measure.
+    keys = [row.get_attribute("data-testid")
+            for row in page.locator("[data-testid^='legend-']").all()]
+    assert keys == ["legend-q3", "legend-none"], keys
+
+
+def test_time_last_built_is_offered_and_keyed(page, coloured) -> None:
+    open_graph(page, coloured)
+    page.get_by_test_id("graph-colouring").select_option("built")
+    expect(page.get_by_test_id("graph-legend")).to_be_visible()
+    # Built at some point in the last minutes: whatever quarter, an age.
+    expect(page.locator("[data-testid^='legend-q']").first).to_contain_text(
+        re.compile(r"\d+ (min|h|days)"))

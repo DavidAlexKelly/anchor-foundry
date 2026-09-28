@@ -20,7 +20,7 @@ import {
   durationLabel, emptyReason, placeOf, timelineFor,
 } from "@/lib/build-timeline";
 import {
-  COLOURINGS, type Swatch, colouringIn, legendFor, swatchFor,
+  COLOURINGS, type Swatch, colouringIn, legendFor, scaleFor, swatchFor,
 } from "@/lib/node-colouring";
 import { svgFilename, svgFor } from "@/lib/graph-svg";
 import { GraphInspector, type InspectFrom } from "@/components/graph-inspector";
@@ -484,6 +484,14 @@ export function PipelineGraphView({
   // of "where is that card" is a rectangle that selects the node beside the
   // one it was drawn over, and nothing on the screen says which copy is wrong
   // (§191, §424).
+  // p.39's quantitative colourings (§622) split the graph into quarters, so
+  // their scale is the graph's rather than a node's: worked out once, with
+  // one "now" for every card's age, and read by the cards, the colour layout,
+  // the export and the legend alike.
+  const now = useMemo(() => Date.now(), [graph.nodes]);
+  const scale = useMemo(
+    () => scaleFor(graph.nodes, colouring, now), [graph.nodes, colouring, now],
+  );
   const canvas = useMemo(
     () => withMoves(
       layoutOf(
@@ -491,13 +499,13 @@ export function PipelineGraphView({
           id: n.id,
           layer: n.layer,
           position: n.position,
-          group: swatchFor({ ...n, access: graph.access?.[n.id] ?? null }, colouring)?.key,
+          group: swatchFor({ ...n, access: graph.access?.[n.id] ?? null }, colouring, scale)?.key,
         })),
         layout,
       ),
       moves,
     ),
-    [graph.nodes, graph.access, colouring, layout, moves],
+    [graph.nodes, graph.access, colouring, scale, layout, moves],
   );
 
   // **Reported after the render that changed it, not during.** Calling a
@@ -526,7 +534,7 @@ export function PipelineGraphView({
         graph.nodes
           .map((n) => [
             n.id,
-            swatchFor({ ...n, access: graph.access?.[n.id] ?? null }, colouring)?.token,
+            swatchFor({ ...n, access: graph.access?.[n.id] ?? null }, colouring, scale)?.token,
           ])
           .filter((pair): pair is [string, string] => pair[1] !== undefined),
       ),
@@ -592,8 +600,9 @@ export function PipelineGraphView({
     () => legendFor(
       graph.nodes.map((n) => ({ ...n, access: graph.access?.[n.id] ?? null })),
       colouring,
+      now,
     ),
-    [graph.nodes, graph.access, colouring],
+    [graph.nodes, graph.access, colouring, now],
   );
   // p.11's other half (§417): "you can either search for the name of the node
   // or column names in datasets". The index is `graph.columns`, which §353
@@ -1315,6 +1324,7 @@ export function PipelineGraphView({
                 swatch={swatchFor(
                   { ...n, access: graph.access?.[n.id] ?? null },
                   colouring,
+                  scale,
                 )}
                 lit={lit.has(n.id)}
                 matched={matched.has(n.id)}

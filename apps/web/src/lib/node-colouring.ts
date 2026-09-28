@@ -10,16 +10,15 @@
  *
  * ---
  *
- * **Every colouring is categorical, and that is a palette decision rather than
- * a reading of p.38.** p.39-40 also offer quantitative ones — row count, build
- * duration, time last built — and each wants a sequential ramp. This palette
- * declares no ramp: `--accent-wash`, `--accent` and `--accent-deep` are not
- * ordered the same way in both themes (`--accent-deep` is darker than
- * `--accent` in light mode and lighter in dark), so a scale built from them
- * would read backwards for half the readers. Inventing three tokens would be
- * a second palette nobody else shares, which is the argument
- * `BACKGROUND_PRESETS` already makes one module over. `datasets-lineage.md`
- * carries what the quantitative half would cost.
+ * **p.39's quantitative colourings are built (§622)**: row count and time
+ * last built. They were held back on a palette argument that was right about
+ * the tokens and wrong about the answer: `--accent-wash`, `--accent` and
+ * `--accent-deep` are not ordered the same way in both themes, so a ramp built
+ * *from them* reads backwards for half the readers - and inventing three
+ * tokens would be a second palette. `RAMP` is neither. It is one token,
+ * `--accent`, mixed with `transparent` at rising strengths, so each step is
+ * further from *whatever the page is* than the last, in either theme. Build
+ * duration is ○: no node carries one (`datasets-lineage.md`).
  *
  * **The legend reads the graph rather than listing the vocabulary.** A key
  * showing every value a colouring *could* take would show six rows over a
@@ -62,6 +61,10 @@ export const COLOURINGS: ColouringOption[] = [
     hint: "p.38: the way the resource was created" },
   { id: "permissions", label: "Permissions",
     hint: "p.80: what one person can see, chosen under View as" },
+  { id: "rows", label: "Row count",
+    hint: "p.39: how many rows each dataset holds, in quarters of this graph" },
+  { id: "built", label: "Time last built",
+    hint: "p.39: how long ago each was built, in quarters of this graph" },
   { id: "none", label: "No colour",
     hint: "p.38's first option: remove colouring altogether" },
 ];
@@ -92,6 +95,10 @@ export interface ColourableNode {
   last_run_status: string | null;
   out_of_date: boolean;
   out_of_date_reason: string | null;
+  /** p.39's quantitative colourings (§622): a dataset's rows, and when a
+   *  dataset or model output was last built. */
+  row_count: number | null;
+  built_at: string | null;
 }
 
 export interface Swatch {
@@ -235,10 +242,15 @@ function permissionSwatch(node: ColourableNode): Swatch {
  * a saved view (§360) naming a colouring a later build dropped should open
  * looking like the graph, not like a graph somebody switched the colour off on.
  */
-export function swatchFor(node: ColourableNode, colouring: string): Swatch | null {
+export function swatchFor(
+  node: ColourableNode, colouring: string, scale?: Scale | null,
+): Swatch | null {
   switch (colouring) {
     case "none":
       return null;
+    case "rows":
+    case "built":
+      return quantitySwatch(node, colouring, scale ?? null);
     case "out_of_date":
       return outOfDateSwatch(node);
     case "health":
@@ -282,6 +294,10 @@ const LEGEND_ORDER: Record<string, readonly string[]> = {
   // `effective_project_role` could grow one — sorts after everything rather
   // than being dropped, which is the rule every colouring here follows.
   permissions: ["none", "viewer", "editor", "owner", "unasked"],
+  // Most first - the biggest datasets, the longest since built - then the
+  // nodes with nothing to measure.
+  rows: ["q3", "q2", "q1", "q0", "none"],
+  built: ["q3", "q2", "q1", "q0", "none"],
 };
 
 /**
@@ -300,11 +316,13 @@ const LEGEND_ORDER: Record<string, readonly string[]> = {
 export function legendFor(
   nodes: readonly ColourableNode[],
   colouring: string,
+  now: number = Date.now(),
 ): LegendEntry[] {
   if (colouring === "none") return [];
+  const scale = scaleFor(nodes, colouring, now);
   const seen = new Map<string, LegendEntry>();
   for (const node of nodes) {
-    const swatch = swatchFor(node, colouring);
+    const swatch = swatchFor(node, colouring, scale);
     if (swatch === null) continue;
     const held = seen.get(swatch.key);
     if (held) held.count += 1;
@@ -336,4 +354,87 @@ export function colouringIn(view: { colouring?: string } | undefined): string {
   const named = view?.colouring;
   if (named === undefined) return DEFAULT_COLOURING;
   return COLOURINGS.some((option) => option.id === named) ? named : DEFAULT_COLOURING;
+}
+
+
+// ---- p.39's quantitative colourings (§622) ----------------------------------
+/** Four steps of one token, each further from the page than the last in
+ * either theme - see the header. Lightest is least. */
+export const RAMP = [30, 55, 80, 100].map(
+  (strength) => `color-mix(in srgb, var(--accent) ${strength}%, transparent)`,
+);
+
+/** Where a graph's values split into quarters: the three inner edges, over the
+ * values the graph actually holds. A quarter nothing falls in is simply not
+ * drawn, so a graph of equal values is one colour rather than four. */
+export interface Scale {
+  colouring: string;
+  now: number;
+  edges: number[];
+}
+
+/** What a node measures under a quantitative colouring, or `null` for none:
+ * rows for a dataset only (a model or a type holds no rows of its own), and
+ * the time since it was built for anything that has been. */
+export function quantityOf(node: ColourableNode, colouring: string, now: number): number | null {
+  if (colouring === "rows") {
+    return node.kind === "dataset" && node.row_count !== null ? node.row_count : null;
+  }
+  if (colouring === "built" && node.built_at) {
+    const at = Date.parse(node.built_at);
+    return Number.isNaN(at) ? null : Math.max(0, now - at);
+  }
+  return null;
+}
+
+/** The quarters of one graph under one colouring, or `null` for a colouring
+ * that is not quantitative. */
+export function scaleFor(
+  nodes: readonly ColourableNode[], colouring: string, now: number = Date.now(),
+): Scale | null {
+  if (colouring !== "rows" && colouring !== "built") return null;
+  const values = nodes.map((n) => quantityOf(n, colouring, now))
+    .filter((v): v is number => v !== null).sort((a, b) => a - b);
+  const at = (q: number) => values[Math.min(values.length - 1, Math.floor(q * values.length))]!;
+  return { colouring, now, edges: values.length ? [at(0.25), at(0.5), at(0.75)] : [] };
+}
+
+/** Which quarter a value is in: the first whose edge it does not pass. */
+export function quarterOf(value: number, edges: readonly number[]): number {
+  const at = edges.findIndex((edge) => value < edge);
+  return at === -1 ? edges.length : at;
+}
+
+const NO_VALUE: Record<string, string> = { rows: "No rows counted", built: "Never built" };
+
+function quantitySwatch(node: ColourableNode, colouring: string, scale: Scale | null): Swatch {
+  // No scale is no value, so one check covers both (§622's sweep).
+  const value = scale ? quantityOf(node, colouring, scale.now) : null;
+  if (value === null) return { key: "none", label: NO_VALUE[colouring]!, token: QUIET };
+  const q = quarterOf(value, scale!.edges);
+  return { key: `q${q}`, label: quarterLabel(colouring, q, scale!.edges), token: RAMP[q]! };
+}
+
+/** A quarter in words: its bounds, as rows or as an age. */
+export function quarterLabel(colouring: string, q: number, edges: readonly number[]): string {
+  const say = colouring === "rows" ? rowsText : ageText;
+  const low = q === 0 ? null : edges[q - 1]!;
+  const high = q === edges.length ? null : edges[q]!;
+  if (low === null && high === null) return colouring === "rows" ? "Any rows" : "Any time";
+  if (low === null) return `Under ${say(high!)}`;
+  if (high === null) return `${say(low)} or more`;
+  return `${say(low)} to ${say(high)}`;
+}
+
+function rowsText(n: number): string {
+  return `${Math.round(n).toLocaleString("en")} rows`;
+}
+
+/** An age in the largest whole unit that fits. */
+export function ageText(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} h`;
+  return `${Math.floor(hours / 24)} days`;
 }

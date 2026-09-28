@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   COLOURINGS, DEFAULT_COLOURING, type ColourableNode, colouringIn, legendFor,
-  swatchFor,
+  swatchFor, RAMP, ageText, quantityOf, quarterLabel, quarterOf, scaleFor,
 } from "./node-colouring";
 
 /** A node the graph could actually draw: every field the server sends, set.
@@ -11,7 +11,7 @@ import {
 function node(kind: string, over: Partial<ColourableNode> = {}): ColourableNode {
   return {
     kind, origin: null, health_status: null, last_run_status: null,
-    out_of_date: false, out_of_date_reason: null, ...over,
+    out_of_date: false, out_of_date_reason: null, row_count: null, built_at: null, ...over,
   };
 }
 
@@ -327,5 +327,80 @@ describe("the colouring a stored view names (§360)", () => {
     for (const named of ["health", "spark_usage", "", "none"]) {
       expect(COLOURINGS.map((o) => o.id)).toContain(colouringIn({ colouring: named }));
     }
+  });
+});
+
+
+describe("p.39's quantitative colourings (§622)", () => {
+  const NOW = Date.parse("2026-09-28T12:00:00Z");
+  const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
+  const SIZES = [10, 20, 30, 40, 50, 60, 70, 80].map((n) => dataset({ row_count: n }));
+
+  it("offers row count and time last built", () => {
+    expect(COLOURINGS.map((c) => c.id)).toEqual(expect.arrayContaining(["rows", "built"]));
+    expect(colouringIn({ colouring: "rows" })).toBe("rows");
+  });
+
+  it("measures rows on datasets only, and age on anything built", () => {
+    expect(quantityOf(dataset({ row_count: 5 }), "rows", NOW)).toBe(5);
+    expect(quantityOf(node("model", { row_count: 5 }), "rows", NOW)).toBeNull();
+    expect(quantityOf(dataset(), "rows", NOW)).toBeNull();
+    expect(quantityOf(node("model", { built_at: hoursAgo(2) }), "built", NOW)).toBe(7_200_000);
+    expect(quantityOf(dataset({ built_at: "not a date" }), "built", NOW)).toBeNull();
+    // A clock a little behind the server is not a negative age.
+    expect(quantityOf(dataset({ built_at: hoursAgo(-1) }), "built", NOW)).toBe(0);
+    expect(quantityOf(dataset({ row_count: 5 }), "health", NOW)).toBeNull();
+  });
+
+  it("splits the graph's own values into quarters", () => {
+    expect(scaleFor(SIZES, "rows", NOW)).toEqual({ colouring: "rows", now: NOW, edges: [30, 50, 70] });
+    expect(scaleFor([], "rows", NOW)!.edges).toEqual([]);
+    expect(scaleFor(SIZES, "health", NOW)).toBeNull();
+  });
+
+  it("puts a value in the first quarter whose edge it does not reach", () => {
+    expect([10, 30, 49, 50, 69, 70, 99].map((v) => quarterOf(v, [30, 50, 70])))
+      .toEqual([0, 1, 1, 2, 2, 3, 3]);
+  });
+
+  it("colours more as the ramp goes, and says the bounds", () => {
+    const scale = scaleFor(SIZES, "rows", NOW)!;
+    expect(swatchFor(dataset({ row_count: 10 }), "rows", scale))
+      .toEqual({ key: "q0", label: "Under 30 rows", token: RAMP[0] });
+    expect(swatchFor(dataset({ row_count: 55 }), "rows", scale))
+      .toEqual({ key: "q2", label: "50 rows to 70 rows", token: RAMP[2] });
+    expect(swatchFor(dataset({ row_count: 5000 }), "rows", scale))
+      .toEqual({ key: "q3", label: "70 rows or more", token: RAMP[3] });
+    expect(swatchFor(node("model"), "rows", scale)).toEqual(
+      { key: "none", label: "No rows counted", token: "var(--line)" });
+    // Without a scale there is nothing to place a node against.
+    expect(swatchFor(dataset({ row_count: 10 }), "rows")!.key).toBe("none");
+    expect(swatchFor(dataset(), "built", scaleFor([], "built", NOW))!.label).toBe("Never built");
+  });
+
+  it("builds the ramp from one token, weakest first", () => {
+    expect(RAMP).toHaveLength(4);
+    expect(RAMP.every((t) => t.includes("var(--accent)") && t.includes("transparent"))).toBe(true);
+    expect(RAMP.map((t) => Number(/(\d+)%/.exec(t)![1]))).toEqual([30, 55, 80, 100]);
+  });
+
+  it("words an age in the largest unit that fits", () => {
+    expect(ageText(59 * 60_000)).toBe("59 min");
+    expect(ageText(60 * 60_000)).toBe("1 h");
+    expect(ageText(47 * 3_600_000)).toBe("47 h");
+    expect(ageText(48 * 3_600_000)).toBe("2 days");
+    expect(quarterLabel("built", 3, [3_600_000, 7_200_000, 86_400_000 * 3]))
+      .toBe("3 days or more");
+    expect(quarterLabel("rows", 0, [])).toBe("Any rows");
+    expect(quarterLabel("built", 0, [])).toBe("Any time");
+  });
+
+  it("keys the legend most first, then what has nothing to measure", () => {
+    const legend = legendFor([...SIZES, node("model")], "rows", NOW);
+    expect(legend.map((e) => [e.key, e.count])).toEqual(
+      [["q3", 2], ["q2", 2], ["q1", 2], ["q0", 2], ["none", 1]]);
+    const ages = legendFor([node("model", { built_at: hoursAgo(1) }),
+                            node("model", { built_at: hoursAgo(100) })], "built", NOW);
+    expect(ages.map((e) => e.label)).toEqual(["4 days or more", "1 h to 4 days"]);
   });
 });
