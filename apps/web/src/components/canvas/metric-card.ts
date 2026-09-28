@@ -287,3 +287,91 @@ export function secondaryLabelOf(label: unknown, aggregation: unknown): string {
   const text = typeof label === "string" ? label.trim() : "";
   return text !== "" ? text : (AGGREGATIONS[aggregationOf(aggregation)] ?? "");
 }
+
+// ---- §533: p.325-326's groups of metrics and their layout -------------------------
+/** p.325: "Display groups of metrics together" and "Style the layout of
+ * metrics, so they are displayed as Cards, Tags, or in a List." */
+export const LAYOUT_STYLES: Record<string, string> = { card: "Card", tag: "Tag", list: "List" };
+export const DIRECTIONS: Record<string, string> = { horizontal: "Horizontal", vertical: "Vertical" };
+/** p.326's templates, "used to arrange data in every card". */
+export const TEMPLATES: Record<string, string> = { stacked: "Stacked", side_by_side: "Side-by-side" };
+
+function oneOf(options: Record<string, string>, raw: unknown, fallback: string): string {
+  const value = String(raw ?? "");
+  return value in options ? value : fallback;
+}
+
+export const layoutStyleOf = (raw: unknown): string => oneOf(LAYOUT_STYLES, raw, "card");
+export const directionOf = (raw: unknown): string => oneOf(DIRECTIONS, raw, "horizontal");
+export const templateOf = (raw: unknown): string => oneOf(TEMPLATES, raw, "stacked");
+
+/** Which of p.326's two arrangement settings a style has: "The Card layout
+ * style also lets the user choose the Direction … [and the] Template"; "The
+ * Tag layout style lets the user choose the Direction"; "The List layout
+ * style lets the user choose the Template". */
+export function layoutSettings(style: unknown): { direction: boolean; template: boolean } {
+  const which = layoutStyleOf(style);
+  return { direction: which !== "list", template: which !== "tag" };
+}
+
+/** p.326: "Note that time series visualizations are only supported in this
+ * layout style" (Card). */
+export function sparkAllowedIn(style: unknown): boolean {
+  return layoutStyleOf(style) === "card";
+}
+
+/** One metric after the first: a label, an aggregation of the card's set and
+ * its property, and formatting, as p.327-328 configure each metric. */
+export interface ExtraMetric {
+  id: string;
+  label: string;
+  aggregation: string;
+  property: string | null;
+  valueFormat: unknown;
+}
+
+/** The stored list, read through: anything that is not a metric is dropped,
+ * and a repeated id keeps its first. */
+export function extraMetricsOf(raw: unknown): ExtraMetric[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: ExtraMetric[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const it = item as Record<string, unknown>;
+    if (typeof it.id !== "string" || it.id === "" || seen.has(it.id)) continue;
+    seen.add(it.id);
+    out.push({
+      id: it.id,
+      label: typeof it.label === "string" ? it.label : "",
+      aggregation: aggregationOf(it.aggregation),
+      property: typeof it.property === "string" && it.property !== "" ? it.property : null,
+      valueFormat: it.valueFormat ?? null,
+    });
+  }
+  return out;
+}
+
+/** p.325's Add Metric: a count, with an id the list does not have yet. */
+export function addMetric(list: readonly ExtraMetric[]): ExtraMetric[] {
+  const taken = new Set(list.map((m) => m.id));
+  let n = list.length + 2;
+  while (taken.has(`m${n}`)) n += 1;
+  return [...list, { id: `m${n}`, label: "", aggregation: "count", property: null, valueFormat: null }];
+}
+
+/** p.325's Up and Down arrows. A move past either end is no move. */
+export function moveMetric(list: readonly ExtraMetric[], index: number, by: -1 | 1): ExtraMetric[] {
+  const to = index + by;
+  if (index < 0 || index >= list.length || to < 0 || to >= list.length) return [...list];
+  const next = [...list];
+  const [moved] = next.splice(index, 1);
+  next.splice(to, 0, moved as ExtraMetric);
+  return next;
+}
+
+/** A metric's label, or what it computes when it has none, the secondary
+ * metric's rule. */
+export function metricLabelOf(metric: Pick<ExtraMetric, "label" | "aggregation">): string {
+  return secondaryLabelOf(metric.label, metric.aggregation);
+}

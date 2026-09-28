@@ -121,6 +121,11 @@ import {
   descriptionOf as metricDescriptionOf, metricSizeOf, pageNow, sparkRangeOf as metricSparkRangeOf,
   sparkRangeProblem as metricSparkRangeProblem, sparkRangeTransform as metricSparkRangeTransform,
   secondaryLabelOf as metricSecondaryLabelOf,
+  DIRECTIONS as METRIC_DIRECTIONS, LAYOUT_STYLES as METRIC_LAYOUT_STYLES,
+  TEMPLATES as METRIC_TEMPLATES, addMetric, directionOf as metricDirectionOf,
+  extraMetricsOf, layoutSettings as metricLayoutSettings, layoutStyleOf as metricLayoutStyleOf,
+  metricLabelOf, moveMetric, sparkAllowedIn, templateOf as metricTemplateOf,
+  type ExtraMetric,
 } from "./metric-card";
 import { ValueFormatEditor } from "@/components/value-format-editor";
 import {
@@ -13589,8 +13594,18 @@ export function CanvasMetricCard({
   secondaryAggregation = "count",
   secondaryProperty = null,
   secondaryFormat = null,
+  metrics = [],
+  layoutStyle = "card",
+  direction = "horizontal",
+  template = "stacked",
 }: {
   objectSetVariable?: string | null;
+  /** p.325's group (§533): the metrics after this card's own first one. */
+  metrics?: unknown;
+  /** p.326's layout style, and its direction and template. */
+  layoutStyle?: string;
+  direction?: string;
+  template?: string;
   /** p.329's secondary metric (§528): a second aggregation of the same set,
    * configured as the primary is. */
   showSecondary?: boolean;
@@ -13646,7 +13661,14 @@ export function CanvasMetricCard({
   };
   // p.329's sparkline: the same read the Chart makes of a time series set
   // variable, through the hook they share (§292).
-  const drawsSpark = metricShowsSpark(showVisualization, seriesVariable);
+  // p.326: "time series visualizations are only supported in this layout
+  // style" (Card), so a Tag or List group draws no line.
+  const style = metricLayoutStyleOf(layoutStyle);
+  const drawsSpark = metricShowsSpark(showVisualization, seriesVariable) && sparkAllowedIn(style);
+  const extras = extraMetricsOf(metrics);
+  const arrangement = metricLayoutSettings(style);
+  const groupDirection = arrangement.direction ? metricDirectionOf(direction) : "vertical";
+  const groupTemplate = arrangement.template ? metricTemplateOf(template) : "side_by_side";
   // p.175's rules, matched against the number this card is showing. One match
   // for both marks, the same as the table's column.
   const cardRules = useMemo(() => rulesOf(valueRules), [valueRules]);
@@ -13730,7 +13752,13 @@ export function CanvasMetricCard({
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
-      <div className={`metric-card metric-card--${metricSizeOf(size)}${interactive ? " metric-card--interactive" : ""}`}
+      {/* p.325-326's group and its layout (§533). A Tag's template and a
+          List's direction are not settings p.326 gives them, so each takes
+          the arrangement its style implies. */}
+      <div className={`metric-group metric-group--${style} metric-group--${groupDirection} metric-group--${groupTemplate}`}
+           data-testid="metric-group" data-layout={style} data-direction={groupDirection}
+           data-template={groupTemplate}>
+      <div className={`metric-card metric-item metric-card--${metricSizeOf(size)}${interactive ? " metric-card--interactive" : ""}`}
            data-testid="metric-card"
            data-size={metricSizeOf(size)}
            // A control only when something is wired to it: role and focus
@@ -13806,6 +13834,54 @@ export function CanvasMetricCard({
           </p>
         )}
       </div>
+      {objectSetVariable && extras.map((extra) => (
+        <ExtraMetricItem
+          key={extra.id}
+          metric={extra}
+          size={metricSizeOf(size)}
+          workspaceId={workspaceId}
+          objectSetVariable={objectSetVariable}
+          setDefinition={setDefinition}
+          variablesPending={variablesPending}
+        />
+      ))}
+      </div>
+    </div>
+  );
+}
+
+/** One metric of p.325's group after the first (§533): its own aggregation
+ * of the card's set, labelled and formatted. */
+function ExtraMetricItem({
+  metric, size, workspaceId, objectSetVariable, setDefinition, variablesPending,
+}: {
+  metric: ExtraMetric;
+  size: string;
+  workspaceId: string;
+  objectSetVariable: string;
+  setDefinition: unknown;
+  variablesPending: boolean;
+}) {
+  const ask = metricRequest(metric.aggregation, metric.property);
+  const answer = useQuery({
+    queryKey: [
+      "canvas-metric", objectSetVariable, JSON.stringify(setDefinition ?? null),
+      ask?.aggregation ?? null, ask?.property ?? null,
+    ],
+    queryFn: () => objApi.aggregateObjectSet(workspaceId, setDefinition, ask ?? {}),
+    enabled: !!setDefinition && !!ask,
+  });
+  return (
+    <div className={`metric-card metric-item metric-card--${size}`} data-testid="metric-extra"
+         data-metric={metric.id}>
+      <span className="metric-label">{metricLabelOf(metric)}</span>
+      <span className="metric-value" data-testid="metric-extra-value">
+        {answer.isError
+          ? (answer.error as Error).message
+          : variablesPending || answer.isPending
+            ? "…"
+            : metricValueLabel(answer.data?.value, numberFormatOf(metric.valueFormat))}
+      </span>
     </div>
   );
 }
@@ -13937,6 +14013,7 @@ function MetricCardSettings() {
     showVisualization, visualizationPosition, seriesVariable, valueFormat,
     valueRules, size, description, sparkRange, sparkStart, sparkEnd, baseline,
     showSecondary, secondaryLabel, secondaryAggregation, secondaryProperty, secondaryFormat,
+    metrics, layoutStyle, direction, template,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -13959,7 +14036,14 @@ function MetricCardSettings() {
     secondaryAggregation: node.data.props.secondaryAggregation,
     secondaryProperty: node.data.props.secondaryProperty,
     secondaryFormat: node.data.props.secondaryFormat,
+    metrics: node.data.props.metrics,
+    layoutStyle: node.data.props.layoutStyle,
+    direction: node.data.props.direction,
+    template: node.data.props.template,
   }));
+  const extras = extraMetricsOf(metrics);
+  const setExtras = (next: ExtraMetric[]) => setProp((p: { metrics: ExtraMetric[] }) => (p.metrics = next));
+  const arrangement = metricLayoutSettings(layoutStyle);
   const rangeProblem = metricSparkRangeProblem(sparkRange, sparkStart, sparkEnd);
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   // p.329: "Time series set: The time series that is to be visualized. This is
@@ -14093,6 +14177,110 @@ function MetricCardSettings() {
           setProp((p: { valueRules: ConditionalRule[] | null }) => (p.valueRules = next))
         }
       />
+      {/* p.326's layout style, and the arrangement each style has (§533). */}
+      <label className="field">
+        <span className="field-label">Layout</span>
+        <select
+          value={metricLayoutStyleOf(layoutStyle)}
+          data-testid="metric-layout"
+          onChange={(e) => setProp((p: { layoutStyle: string }) => (p.layoutStyle = e.target.value))}
+        >
+          {Object.entries(METRIC_LAYOUT_STYLES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+        {!sparkAllowedIn(layoutStyle) && showVisualization === true && (
+          <span className="field-hint" data-testid="metric-layout-no-spark">
+            Sparklines show only in the Card layout (p.326).
+          </span>
+        )}
+      </label>
+      {arrangement.direction && (
+        <label className="field">
+          <span className="field-label">Direction</span>
+          <select
+            value={metricDirectionOf(direction)}
+            data-testid="metric-direction"
+            onChange={(e) => setProp((p: { direction: string }) => (p.direction = e.target.value))}
+          >
+            {Object.entries(METRIC_DIRECTIONS).map(([key, name]) => (
+              <option key={key} value={key}>{name}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {arrangement.template && (
+        <label className="field">
+          <span className="field-label">Template</span>
+          <select
+            value={metricTemplateOf(template)}
+            data-testid="metric-template"
+            onChange={(e) => setProp((p: { template: string }) => (p.template = e.target.value))}
+          >
+            {Object.entries(METRIC_TEMPLATES).map(([key, name]) => (
+              <option key={key} value={key}>{name}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {/* p.325's Metrics: "The Add Metric button adds a new metric … The Up
+          and Down direction arrows on the metrics in the list change the
+          order". The card's own metric is the first; these follow it. */}
+      <div className="field" data-testid="metric-extras">
+        <span className="field-label">More metrics</span>
+        {extras.map((extra, index) => (
+          <div key={extra.id} className="card" data-testid="metric-extra-settings"
+               style={{ padding: 6, margin: "4px 0" }}>
+            <input
+              aria-label={`Metric ${index + 2} label`}
+              placeholder={metricLabelOf({ label: "", aggregation: extra.aggregation })}
+              value={extra.label}
+              onChange={(e) => setExtras(extras.map((m, i) => (i === index ? { ...m, label: e.target.value } : m)))}
+            />
+            <select
+              aria-label={`Metric ${index + 2} shows`}
+              value={extra.aggregation}
+              onChange={(e) => setExtras(extras.map((m, i) => (i === index ? { ...m, aggregation: e.target.value } : m)))}
+            >
+              {Object.entries(METRIC_AGGREGATIONS).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+            {metricNeedsProperty(extra.aggregation) && (
+              <select
+                aria-label={`Metric ${index + 2} property`}
+                value={extra.property ?? ""}
+                onChange={(e) => setExtras(extras.map((m, i) => (
+                  i === index ? { ...m, property: e.target.value || null } : m)))}
+              >
+                <option value="">Choose…</option>
+                {metricPropertiesFor(extra.aggregation, detail.data?.properties ?? []).map((prop) => (
+                  <option key={prop.api_name} value={prop.api_name}>{prop.api_name}</option>
+                ))}
+              </select>
+            )}
+            <span className="row-actions" style={{ gap: 4 }}>
+              <button type="button" className="btn quiet" aria-label={`Move metric ${index + 2} up`}
+                      disabled={index === 0} onClick={() => setExtras(moveMetric(extras, index, -1))}>
+                ↑
+              </button>
+              <button type="button" className="btn quiet" aria-label={`Move metric ${index + 2} down`}
+                      disabled={index === extras.length - 1}
+                      onClick={() => setExtras(moveMetric(extras, index, 1))}>
+                ↓
+              </button>
+              <button type="button" className="btn quiet" aria-label={`Remove metric ${index + 2}`}
+                      onClick={() => setExtras(extras.filter((_, i) => i !== index))}>
+                Remove
+              </button>
+            </span>
+          </div>
+        ))}
+        <button type="button" className="btn quiet" data-testid="metric-add"
+                onClick={() => setExtras(addMetric(extras))}>
+          Add metric
+        </button>
+      </div>
       {/* p.329's "Show secondary metric?", in p.329's order: above Show
           visualization. Its configuration "mimics the configuration for the
           primary metric" (§528). */}
@@ -14294,6 +14482,7 @@ CanvasMetricCard.craft = {
     baseline: null,
     showSecondary: false, secondaryLabel: "", secondaryAggregation: "count",
     secondaryProperty: null, secondaryFormat: null,
+    metrics: [], layoutStyle: "card", direction: "horizontal", template: "stacked",
   },
   related: { settings: MetricCardSettings },
 };

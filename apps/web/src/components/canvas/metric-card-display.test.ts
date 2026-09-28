@@ -128,3 +128,66 @@ describe("the secondary metric (§528)", () => {
     expect(secondaryLabelOf("", "median")).toBe("How many");
   });
 });
+
+describe("groups of metrics and their layout (§533)", () => {
+  it("offers p.326's three styles and their arrangements", async () => {
+    const m = await import("./metric-card");
+    expect(m.LAYOUT_STYLES).toEqual({ card: "Card", tag: "Tag", list: "List" });
+    expect(m.DIRECTIONS).toEqual({ horizontal: "Horizontal", vertical: "Vertical" });
+    expect(m.TEMPLATES).toEqual({ stacked: "Stacked", side_by_side: "Side-by-side" });
+    expect(m.layoutStyleOf("tag")).toBe("tag");
+    expect(m.layoutStyleOf("grid")).toBe("card");
+    expect(m.directionOf("vertical")).toBe("vertical");
+    expect(m.directionOf("diagonal")).toBe("horizontal");
+    expect(m.templateOf("side_by_side")).toBe("side_by_side");
+    expect(m.templateOf(undefined)).toBe("stacked");
+  });
+
+  it("gives each style the settings p.326 gives it", async () => {
+    const { layoutSettings } = await import("./metric-card");
+    expect(layoutSettings("card")).toEqual({ direction: true, template: true });
+    expect(layoutSettings("tag")).toEqual({ direction: true, template: false });
+    expect(layoutSettings("list")).toEqual({ direction: false, template: true });
+  });
+
+  it("draws a sparkline only in the Card layout", async () => {
+    const { sparkAllowedIn } = await import("./metric-card");
+    expect(sparkAllowedIn("card")).toBe(true);
+    expect(sparkAllowedIn("tag")).toBe(false);
+    expect(sparkAllowedIn("list")).toBe(false);
+    expect(sparkAllowedIn("unknown")).toBe(true);
+  });
+
+  it("reads the stored metrics through", async () => {
+    const { extraMetricsOf } = await import("./metric-card");
+    expect(extraMetricsOf(null)).toEqual([]);
+    expect(extraMetricsOf([
+      { id: "m2", label: "Total", aggregation: "sum", property: "capacity", valueFormat: { kind: "number" } },
+      { id: "m2", label: "again" },
+      { label: "no id" },
+      "junk",
+      { id: "m3", aggregation: "median", property: "" },
+    ])).toEqual([
+      { id: "m2", label: "Total", aggregation: "sum", property: "capacity", valueFormat: { kind: "number" } },
+      { id: "m3", label: "", aggregation: "count", property: null, valueFormat: null },
+    ]);
+  });
+
+  it("adds a count with a new id, and moves within the ends", async () => {
+    const { addMetric, moveMetric, metricLabelOf } = await import("./metric-card");
+    const one = addMetric([]);
+    expect(one).toEqual([{ id: "m2", label: "", aggregation: "count", property: null, valueFormat: null }]);
+    const two = addMetric(one);
+    expect(two.map((m) => m.id)).toEqual(["m2", "m3"]);
+    // An id already taken is skipped.
+    expect(addMetric([{ ...one[0]!, id: "m3" }]).map((m) => m.id)).toEqual(["m3", "m4"]);
+    const three = addMetric(two);
+    expect(moveMetric(three, 2, -1).map((m) => m.id)).toEqual(["m2", "m4", "m3"]);
+    expect(moveMetric(three, 0, 1).map((m) => m.id)).toEqual(["m3", "m2", "m4"]);
+    expect(moveMetric(three, 0, -1).map((m) => m.id)).toEqual(["m2", "m3", "m4"]);
+    expect(moveMetric(three, 2, 1).map((m) => m.id)).toEqual(["m2", "m3", "m4"]);
+    expect(moveMetric(three, 5, -1).map((m) => m.id)).toEqual(["m2", "m3", "m4"]);
+    expect(metricLabelOf({ label: "", aggregation: "sum" })).toBe("Sum of");
+    expect(metricLabelOf({ label: "Total", aggregation: "sum" })).toBe("Total");
+  });
+});

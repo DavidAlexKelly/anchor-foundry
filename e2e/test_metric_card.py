@@ -290,3 +290,100 @@ def test_the_panel_builds_a_secondary_metric(page, api, sites) -> None:
     open_module(page, mod)
     settled(page)
     expect(secondary(page)).to_have_text("Largest 60")
+
+
+# ---- §533: p.325-326's groups and layouts ---------------------------------------
+GROUP = [
+    {"id": "m2", "label": "Total", "aggregation": "sum", "property": "capacity",
+     "valueFormat": {"kind": "number", "style": "percent"}},
+    {"id": "m3", "label": "", "aggregation": "max", "property": "capacity"},
+]
+
+
+def extras(page):
+    return page.get_by_test_id("metric-extra")
+
+
+def test_a_group_shows_every_metric_in_order(page, api, sites) -> None:
+    """p.325: "Display groups of metrics together." The card's own metric
+    first, then the group's, each its own aggregation of the one set."""
+    mod = build(api, sites, "Metric group", {"metrics": GROUP})
+    open_module(page, mod)
+    settled(page)
+    expect(value(page)).to_have_text("3")
+    expect(extras(page)).to_have_count(2)
+    # Each keeps its own formatting: p.174's percent of 90.
+    expect(extras(page).nth(0)).to_have_text("Total9,000%")
+    expect(extras(page).nth(1)).to_have_text("Maximum of60")
+
+
+def item_boxes(page):
+    items = page.locator(".metric-item")
+    return [items.nth(i).bounding_box() for i in range(items.count())]
+
+
+def test_horizontal_cards_sit_side_by_side_and_vertical_ones_stack(page, api, sites) -> None:
+    across = build(api, sites, "Metric across", {"metrics": GROUP, "direction": "horizontal"})
+    open_module(page, across)
+    settled(page)
+    expect(extras(page).nth(1)).to_contain_text("60")
+    first, second, _ = item_boxes(page)
+    assert second["x"] > first["x"] + first["width"] - 1 and abs(second["y"] - first["y"]) < 5
+    down = build(api, sites, "Metric down", {"metrics": GROUP, "direction": "vertical"})
+    open_module(page, down)
+    settled(page)
+    expect(extras(page).nth(1)).to_contain_text("60")
+    first, second, _ = item_boxes(page)
+    assert second["y"] > first["y"] + first["height"] - 1
+
+
+@pytest.mark.parametrize("style, given, shown", [
+    ("card", ("vertical", "side_by_side"), ("vertical", "side_by_side")),
+    # A Tag has no template and a List no direction (p.326): what is stored
+    # for them is not what they draw.
+    ("tag", ("vertical", "stacked"), ("vertical", "side_by_side")),
+    ("list", ("horizontal", "stacked"), ("vertical", "stacked")),
+])
+def test_each_layout_takes_the_arrangement_p326_gives_it(page, api, sites, style, given, shown) -> None:
+    mod = build(api, sites, f"Metric {style}", {
+        "metrics": GROUP, "layoutStyle": style, "direction": given[0], "template": given[1]})
+    open_module(page, mod)
+    settled(page)
+    group = page.get_by_test_id("metric-group")
+    expect(group).to_have_attribute("data-layout", style)
+    expect(group).to_have_attribute("data-direction", shown[0])
+    expect(group).to_have_attribute("data-template", shown[1])
+
+
+def test_the_panel_adds_orders_and_removes_metrics(page, api, sites) -> None:
+    mod = build(api, sites, "Metric group panel")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row").filter(has_text="Metric card").first.click()
+    expect(page.get_by_test_id("metric-direction")).to_be_visible()
+    page.get_by_test_id("metric-layout").select_option("list")
+    expect(page.get_by_test_id("metric-direction")).to_have_count(0)
+    expect(page.get_by_test_id("metric-template")).to_be_visible()
+    page.get_by_test_id("metric-layout").select_option("tag")
+    expect(page.get_by_test_id("metric-template")).to_have_count(0)
+    page.get_by_test_id("metric-layout").select_option("card")
+
+    page.get_by_test_id("metric-add").click()
+    page.get_by_label("Metric 2 shows").select_option("sum")
+    assert option_labels(page.get_by_label("Metric 2 property"), count=2) == ["Choose…", "capacity"]
+    page.get_by_label("Metric 2 property").select_option("capacity")
+    page.get_by_label("Metric 2 label").fill("Total")
+    page.get_by_test_id("metric-add").click()
+    page.get_by_label("Metric 3 shows").select_option("count_distinct")
+    page.get_by_label("Metric 3 property").select_option("region")
+    page.get_by_label("Move metric 3 up").click()
+    expect(page.get_by_label("Metric 2 label")).to_have_value("")
+    page.get_by_test_id("metric-add").click()
+    page.get_by_label("Remove metric 4").click()
+    save(page)
+
+    open_module(page, mod)
+    settled(page)
+    expect(extras(page)).to_have_count(2)
+    expect(extras(page).nth(0)).to_have_text("How many distinct values2")
+    expect(extras(page).nth(1)).to_have_text("Total90")

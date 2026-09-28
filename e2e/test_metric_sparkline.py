@@ -310,3 +310,13 @@ def test_the_panel_sets_all_four(page, api):
     _, values = spark_values(page)
     assert values == [20, 30]
     expect(page.get_by_test_id("metric-spark-line-baseline")).to_have_count(1)
+
+
+def test_a_tag_layout_draws_no_line(page, api):
+    """§533, p.326: "time series visualizations are only supported in this
+    layout style" (Card)."""
+    mod = build(api, "Metric sparkline tag", card={"layoutStyle": "tag"})
+    open_module(page, mod)
+    pick(page, "North sensor")
+    expect(page.get_by_test_id("metric-value")).to_have_text("2")
+    expect(page.get_by_test_id("metric-spark")).to_have_count(0)
