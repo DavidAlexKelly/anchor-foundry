@@ -284,6 +284,8 @@ export const REFERENCE_PROPS = [
   "boundsVariable",
   // p.301's Drawn shapes on the Map (§574). See the API's copy.
   "drawnShapesVariable",
+  // p.225's column visibility on the Object Table (§610). See the API's copy.
+  "columnsVariable",
   "name",
 ] as const;
 

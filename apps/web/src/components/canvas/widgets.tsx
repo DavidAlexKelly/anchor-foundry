@@ -145,6 +145,7 @@ import {
   columnsFor, derivedInputs, problem as columnMathProblem, valueFor,
 } from "./derived-columns";
 import { derivedCell } from "@/lib/derived-values";
+import { unknownColumns, visibleColumns } from "./column-visibility";
 import { DerivedValue } from "@/components/derived-value";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import type { ConditionalRule } from "@/lib/types";
@@ -5371,6 +5372,7 @@ export function CanvasObjectTable({
   inlineEditAction = null,
   inlineEditMapping = null,
   inlineEditVariables = null,
+  columnsVariable = null,
   inlineEditButtonText = "",
   inlineEditByDefault = false,
   inlineEditOneClick = false,
@@ -5462,6 +5464,9 @@ export function CanvasObjectTable({
   /** p.241's variables passed as action parameters (§598),
    * `{parameter: variable id}`. */
   inlineEditVariables?: Record<string, string> | null;
+  /** p.225's variable-backed column visibility (§610): a string array
+   * variable naming which of the configured columns show, in its order. */
+  columnsVariable?: string | null;
   /** p.242's Custom button text, and its two toggles; p.243's One-click. */
   inlineEditButtonText?: string;
   inlineEditByDefault?: boolean;
@@ -5570,12 +5575,26 @@ export function CanvasObjectTable({
   // Configured order wins, and a name that matches nothing is dropped rather
   // than rendered as an empty column: a property can be removed from the type
   // long after a table was pointed at it.
-  const wanted = String(columns || "")
+  const configured = String(columns || "")
     .split(",")
     .map((c) => c.trim())
     .filter(Boolean);
-  const properties = wanted.length
-    ? wanted.map((name) => all.find((p) => p.api_name === name)).filter((p) => !!p)
+  // p.225's variable-backed column visibility (§610): the variable chooses
+  // among the configured columns - every property, when none are configured -
+  // and orders them. Empty, it shows them all, so a table whose variable has
+  // not been written yet looks the way it was configured to.
+  //
+  // `null` is "no list, every property"; a list the variable emptied by naming
+  // only columns this table does not have is an empty list, and shows none -
+  // the variable said which, and none of them is here.
+  const listed: string[] | null = columnsVariable
+    ? visibleColumns(
+      configured.length ? configured : all.map((p) => p.api_name),
+      variableValues[columnsVariable],
+    )
+    : configured.length ? configured : null;
+  const properties = listed
+    ? listed.map((name) => all.find((p) => p.api_name === name)).filter((p) => !!p)
     : all;
 
   // p.170's calculated columns for whichever type this table is showing.
@@ -5589,8 +5608,8 @@ export function CanvasObjectTable({
     () => columnsFor(derivedColumns, String(effectiveTypeId ?? "")),
     [derivedColumns, effectiveTypeId],
   );
-  const derived = wanted.length
-    ? wanted.map((name) => declaredDerived.find((c) => c.api_name === name))
+  const derived = listed
+    ? listed.map((name) => declaredDerived.find((c) => c.api_name === name))
         .filter((c) => !!c)
     : [];
 
@@ -5646,7 +5665,7 @@ export function CanvasObjectTable({
   // p.170 lets it reference an aggregation, and an expression over a value
   // the table never fetched is a column of blanks.
   const derivedWanted = derivedInputs(
-    wanted.length ? wanted : properties.map((p) => p.api_name), all, declaredDerived,
+    listed ?? properties.map((p) => p.api_name), all, declaredDerived,
   );
   const needsDerived = derivedWanted.properties.length > 0
     || Object.keys(derivedWanted.derivations).length > 0;
@@ -6688,8 +6707,10 @@ function ObjectTableSettings() {
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
     inlineEditAction, inlineEditMapping, inlineEditVariables, inlineEditButtonText,
     inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules, seriesTransforms, seriesBaselines,
+    columnsVariable,
     actions: { setProp },
   } = useNode((node) => ({
+    columnsVariable: node.data.props.columnsVariable,
     objectTypeId: node.data.props.objectTypeId,
     filterProperty: node.data.props.filterProperty,
     filterParameter: node.data.props.filterParameter,
@@ -6769,6 +6790,19 @@ function ObjectTableSettings() {
   // controls are offered for those and nothing else. Every other column is
   // written by the ontology's formatter (§157) and an override here would be
   // the second place to set the same thing.
+  // §610: names the column visibility variable holds that are not columns of
+  // this table - said here, where somebody can act on them. Only once the
+  // type has been read, for `seriesColumns`' reason below.
+  const configuredColumns = String(columns || "").split(",").map((c) => c.trim())
+    .filter(Boolean);
+  const strayColumns = columnsVariable && detail.data
+    ? unknownColumns(
+      configuredColumns.length
+        ? configuredColumns
+        : detail.data.properties.map((p) => p.api_name),
+      resolved[columnsVariable],
+    )
+    : [];
   const seriesColumns = useMemo(() => {
     const types = new Map(
       (detail.data?.properties ?? []).map((prop) => [prop.api_name, prop.data_type]),
@@ -6896,6 +6930,34 @@ function ObjectTableSettings() {
         <span className="field-hint">
           Property names in the order to show them. Blank shows all of them.
         </span>
+      </label>
+      {/* p.225's "Variable-backed column visibility" (§610). String arrays
+          only - an array of numbers names no column - and an untyped one,
+          which may hold names. */}
+      <label className="field">
+        <span className="field-label">Column visibility variable</span>
+        <select
+          value={columnsVariable ?? ""}
+          data-testid="table-columns-variable"
+          onChange={(e) => setProp((p: { columnsVariable: string | null }) =>
+            (p.columnsVariable = e.target.value || null))}
+        >
+          <option value="">None — show the columns above</option>
+          {Object.values(declared)
+            .filter((v) => v.kind === "array" && (!v.element || v.element === "string"))
+            .map((v) => (
+              <option key={v.id} value={v.id}>{v.label || v.id}</option>
+            ))}
+        </select>
+        <span className="field-hint">
+          p.225: a string array of the column names to show, in its order. Empty shows
+          all the columns above.
+        </span>
+        {strayColumns.length > 0 && (
+          <span className="field-hint" data-testid="table-columns-variable-unknown">
+            Not columns of this table, so not shown: {strayColumns.join(", ")}
+          </span>
+        )}
       </label>
       {/* p.174's value formatting, one control per time series column shown.
           **Only when the type has been read**: before that `seriesColumns` is
@@ -7291,6 +7353,7 @@ CanvasObjectTable.craft = {
     inlineEditButtonText: "",
     inlineEditByDefault: false, inlineEditOneClick: false,
     seriesFormats: null, seriesRules: null, seriesTransforms: null, seriesBaselines: null,
+    columnsVariable: null,
   },
   related: { settings: ObjectTableSettings },
 };
