@@ -377,6 +377,9 @@ class LinkJoinUpdate(_JoinTable):
         default=None,
         pattern="^(promoted|active|experimental|deprecated|example)$",
     )
+    #: p.254's note (§631). Left out, it is kept while the link stays
+    #: deprecated; `null` clears it.
+    deprecation: dict[str, Any] | None = None
 
 
 class SourceOut(BaseModel):
@@ -3657,6 +3660,8 @@ async def update_link_join(
             join_dataset_id=body.join_dataset_id,
             join_from_column=body.join_from_column,
             join_to_column=body.join_to_column,
+            deprecation=(body.deprecation if "deprecation" in body.model_fields_set
+                         else ontology_service.KEEP_DEPRECATION),
         )
         await audit.record(
             conn,
