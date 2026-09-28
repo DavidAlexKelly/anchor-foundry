@@ -2,14 +2,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  INTEGRATION_METHODS, KIND_LABELS, MAX_SPAN, WINDOW_TYPES, MAX_TRANSFORMS, TIME_UNITS, TRANSFORM_KINDS, WINDOW_AGGREGATES,
+  FORMULA_FUNCTIONS, INTEGRATION_METHODS, KIND_LABELS, MAX_FORMULA, MAX_SPAN, WINDOW_TYPES, MAX_TRANSFORMS, TIME_UNITS, TRANSFORM_KINDS, WINDOW_AGGREGATES,
   blankTransform, transformProblem, transformText, transformsProblem, transformsText, withKind,
   type SeriesTransform,
 } from "./series-transforms";
 
 describe("the vocabulary", () => {
   it("is p.583-586's, as the server takes it", () => {
-    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range"]);
+    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula"]);
+    expect([...FORMULA_FUNCTIONS]).toEqual(["abs", "sqrt", "ln", "log10", "exp", "floor", "ceil", "round"]);
+    expect(MAX_FORMULA).toBe(200);
     expect([...WINDOW_TYPES]).toEqual(["start", "end"]);
     expect([...INTEGRATION_METHODS]).toEqual(["linear", "left", "right"]);
     expect([...WINDOW_AGGREGATES]).toEqual(["sum", "avg", "min", "max", "count", "stddev"]);
@@ -25,6 +27,7 @@ describe("the vocabulary", () => {
     expect(blankTransform("periodic")).toEqual({
       kind: "periodic", aggregate: "avg", window: 2, unit: "week", align: null, window_type: "start" });
     expect(blankTransform("integral")).toEqual({ kind: "integral", unit: "hour", method: "linear" });
+    expect(blankTransform("formula")).toEqual({ kind: "formula", expression: "x * 2 + 5" });
     expect(blankTransform("shift")).toEqual({ kind: "shift", by: 1, unit: "day" });
     expect(blankTransform("range")).toEqual({ kind: "range", start: null, end: null });
   });
@@ -50,6 +53,7 @@ describe("in words", () => {
     expect(transformText({ kind: "periodic", aggregate: "sum", window: 1, unit: "day", align: "2026-01-01T06:00", window_type: "end" }))
       .toBe("sum per 1 day, stamped at each window's end, aligned to 2026-01-01T06:00");
     expect(transformText({ kind: "integral", unit: "hour", method: "linear" })).toBe("area in hours");
+    expect(transformText({ kind: "formula", expression: "  x * 2 + 5 " })).toBe("x → x * 2 + 5");
     expect(transformText({ kind: "integral", unit: "day", method: "left" })).toBe("area in days (left-hand sum)");
     expect(transformText({ kind: "shift", by: 2, unit: "day" })).toBe("shifted 2 days later");
     expect(transformText({ kind: "shift", by: -1, unit: "minute" })).toBe("shifted 1 minute earlier");
@@ -89,6 +93,10 @@ describe("what is wrong with one", () => {
     expect(transformProblem({ kind: "periodic", aggregate: "sum", window: 1, unit: "day", align: null, window_type: "end" }))
       .toBeNull();
     expect(transformProblem({ kind: "integral", unit: "day", method: "right" })).toBeNull();
+    expect(transformProblem({ kind: "formula", expression: "x / 2" })).toBeNull();
+    expect(transformProblem({ kind: "formula", expression: "   " })).toBe("A formula needs an expression.");
+    expect(transformProblem({ kind: "formula", expression: "x".repeat(200) })).toBeNull();
+    expect(transformProblem({ kind: "formula", expression: "x".repeat(201) })).toBe("A formula is at most 200 characters.");
     const shift = "The shift must be a whole number, not zero, and at most 100,000 either way.";
     for (const bad of [0, 100_001, -100_001, 0.5, Number.NaN]) {
       expect(transformProblem({ kind: "shift", by: bad, unit: "day" })).toBe(shift);

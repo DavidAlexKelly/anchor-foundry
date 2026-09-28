@@ -348,3 +348,35 @@ def test_periodic_windows_and_an_integral_built_in_the_panel(page, api):
     # The alignment as the server keeps it, seconds and all.
     assert ("sum per 2 days, stamped at each window's end, aligned to 2026-01-01T00:00:00, "
             "then area in days (left-hand sum)") in caption(page), caption(page)
+
+
+def test_a_formula_built_in_the_panel_reaches_the_chart(page, api):
+    """§532, p.586: "The example below scales the input time series by a
+    factor of two, and adds five to the result." S1 reads 10, 20, 30, 40,
+    and x * 2 + 5 of it is 25, 45, 65, 85."""
+    mod = build_module(api, "Series formula")
+    page.goto(f"{WEB_BASE}{mod.url}")
+    expect(page.get_by_role("button", name="Preview", exact=True)).to_be_visible(timeout=30000)
+    page.get_by_role("button", name="Variables", exact=False).first.click()
+    page.get_by_text("Readings", exact=True).first.click()
+    transforms = page.get_by_test_id("series-transforms")
+    transforms.get_by_label("Add a transform").select_option("formula")
+    formula = transforms.get_by_label("Transform 1 formula")
+    expect(formula).to_have_value("x * 2 + 5")
+    formula.fill("")
+    expect(page.get_by_test_id("series-transforms-problem")).to_have_text(
+        "Transform 1: A formula needs an expression.")
+    formula.fill("x * 2 + 5")
+    with page.expect_response(
+        lambda r: "/definition" in r.url and r.request.method in ("PUT", "POST")
+    ) as saved:
+        page.get_by_role("button", name="Save", exact=True).click()
+    assert saved.value.ok, saved.value.status
+    settled(page)
+
+    open_module(page, mod)
+    with page.expect_response(lambda r: "/series/readings/points" in r.url) as asked:
+        pick(page, "North sensor")
+    assert [p["value"] for p in asked.value.json()["points"]] == [25, 45, 65, 85]
+    eventually(lambda: caption(page), lambda t: "x → x * 2 + 5" in t,
+               what="the caption naming the formula")

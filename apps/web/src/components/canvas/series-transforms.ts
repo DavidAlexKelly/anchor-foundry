@@ -12,7 +12,7 @@
  * vocabularies are held to the server's by `test_time_series_transforms.py`.
  */
 
-export const TRANSFORM_KINDS = ["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range"] as const;
+export const TRANSFORM_KINDS = ["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula"] as const;
 export type TransformKind = (typeof TRANSFORM_KINDS)[number];
 export const WINDOW_AGGREGATES = ["sum", "avg", "min", "max", "count", "stddev"] as const;
 export type WindowAggregate = (typeof WINDOW_AGGREGATES)[number];
@@ -25,6 +25,10 @@ export type WindowType = (typeof WINDOW_TYPES)[number];
 /** p.585's integration methods. */
 export const INTEGRATION_METHODS = ["linear", "left", "right"] as const;
 export type IntegrationMethod = (typeof INTEGRATION_METHODS)[number];
+/** p.586's formula (§532): arithmetic on the series, named `x`. The server
+ * parses it; these are what the editor says it may use. */
+export const FORMULA_FUNCTIONS = ["abs", "sqrt", "ln", "log10", "exp", "floor", "ceil", "round"] as const;
+export const MAX_FORMULA = 200;
 export const MAX_SPAN = 100_000;
 
 export type SeriesTransform =
@@ -36,7 +40,8 @@ export type SeriesTransform =
   | { kind: "derivative"; unit: TimeUnit }
   | { kind: "integral"; unit: TimeUnit; method: IntegrationMethod }
   | { kind: "shift"; by: number; unit: TimeUnit }
-  | { kind: "range"; start: string | null; end: string | null };
+  | { kind: "range"; start: string | null; end: string | null }
+  | { kind: "formula"; expression: string };
 
 /** What the editor offers each kind as. */
 export const KIND_LABELS: Record<TransformKind, string> = {
@@ -47,6 +52,7 @@ export const KIND_LABELS: Record<TransformKind, string> = {
   integral: "Integral",
   shift: "Time shift",
   range: "Time range",
+  formula: "Formula",
 };
 
 /** A new transform of `kind`, ready to use: p.584's own examples where it
@@ -70,6 +76,10 @@ export function blankTransform(kind: TransformKind): SeriesTransform {
       return { kind, by: 1, unit: "day" };
     case "range":
       return { kind, start: null, end: null };
+    case "formula":
+      // p.586's own example: "scales the input time series by a factor of
+      // two, and adds five to the result".
+      return { kind, expression: "x * 2 + 5" };
   }
 }
 
@@ -102,6 +112,8 @@ export function transformText(t: SeriesTransform): string {
     case "range":
       if (t.start && t.end) return `from ${t.start} to ${t.end}`;
       return t.start ? `from ${t.start}` : `until ${t.end}`;
+    case "formula":
+      return `x → ${t.expression.trim()}`;
   }
 }
 
@@ -125,6 +137,10 @@ export function transformProblem(t: SeriesTransform): string | null {
       return whole(t.by) && t.by !== 0 && Math.abs(t.by) <= MAX_SPAN
         ? null
         : `The shift must be a whole number, not zero, and at most ${MAX_SPAN.toLocaleString("en-US")} either way.`;
+    case "formula":
+      if (t.expression.trim() === "") return "A formula needs an expression.";
+      if (t.expression.length > MAX_FORMULA) return `A formula is at most ${MAX_FORMULA} characters.`;
+      return null;
     case "range":
       if (!t.start && !t.end) return "A time range needs a start, an end or both.";
       if (t.start && t.end && t.start > t.end) return "The time range starts after it ends.";
