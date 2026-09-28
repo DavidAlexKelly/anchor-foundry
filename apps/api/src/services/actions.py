@@ -1013,6 +1013,41 @@ def _passes(condition: dict[str, Any], *, bound: dict[str, Any], user: dict[str,
     return left in right
 
 
+# p.56's logical operators: "can be nested to create even more complex logic
+# and can require either all, any, or no conditions underneath it to be met to
+# pass". A group is `{"logic": ..., "conditions": [...]}` in place of a
+# condition, and only the root carries a failure message: "If conditions of
+# lower levels are not met, the failure message of the corresponding root
+# level (parent) is displayed." Bounded, as every nested document here is.
+CRITERION_LOGIC = ("all", "any", "none")
+MAX_CRITERION_DEPTH = 4
+MAX_CRITERION_CONDITIONS = 50
+
+
+def _holds(condition: dict[str, Any], *, bound: dict[str, Any], user: dict[str, Any]) -> bool:
+    """A condition or a group of them (p.56).
+
+    **Every condition in a group is decided, even once the group's answer is
+    known**, so one that cannot be decided refuses wherever it sits: `any`
+    over a misconfiguration and a condition that happens to pass would
+    otherwise grant access on the pass and hide the misconfiguration until
+    the day it did not. `none` is p.52's NOT, whose warning is exactly that a
+    condition failing for a missing attribute grants "more access than
+    intended" once negated."""
+    logic = condition.get("logic")
+    if logic is None:
+        return _passes(condition, bound=bound, user=user)
+    results = [_holds(_json(c) or {}, bound=bound, user=user)
+               for c in condition.get("conditions") or []]
+    if logic == "all":
+        return all(results)
+    if logic == "any":
+        return any(results)
+    if logic == "none":
+        return not any(results)
+    raise _Unevaluable(f"unknown logical operator {logic!r}")
+
+
 def check_criteria(
     bound: dict[str, Any],
     *,
@@ -1038,7 +1073,7 @@ def check_criteria(
         condition = _json(criterion.get("config")) or {}
         message = str(criterion.get("message") or "this action cannot be submitted")
         try:
-            ok = _passes(condition, bound=bound, user=user)
+            ok = _holds(condition, bound=bound, user=user)
         except _Unevaluable as exc:
             raise CriteriaRefusal(f"{message} (this criterion could not be checked: {exc})")
         if not ok:
@@ -3501,24 +3536,48 @@ def _validate_definition(
             # p.56: the failure message is what the blocked user is told. A
             # criterion without one refuses in silence.
             raise ValueError("every criterion needs a message saying why it refuses")
-        config = criterion.get("config") or {}
-        operator = str(config.get("operator", ""))
-        if operator not in CRITERION_OPERATORS:
-            raise ValueError(f"unknown criterion operator {operator!r}")
-        for side in ("left", "right"):
-            spec = config.get(side) or {}
-            kind = str(spec.get("kind", ""))
-            if kind == "parameter" and str(spec.get("parameter", "")) not in seen:
-                raise ValueError(
-                    f"a criterion reads {spec.get('parameter')!r}, which is not a parameter"
-                )
-            elif kind == "current_user" and str(spec.get("attribute", "id")) not in _USER_ATTRIBUTES:
-                raise ValueError(
-                    f"a criterion reads the current user's {spec.get('attribute')!r}, "
-                    "which this build cannot answer"
-                )
-            elif kind not in ("parameter", "current_user", "value", "none"):
-                raise ValueError(f"a criterion has an unknown {side} side {kind!r}")
+        leaves = _check_condition(criterion.get("config") or {}, seen, depth=1)
+        if leaves > MAX_CRITERION_CONDITIONS:
+            raise ValueError(
+                f"a criterion holds at most {MAX_CRITERION_CONDITIONS} conditions, "
+                f"and this one holds {leaves}"
+            )
+
+
+def _check_condition(config: dict[str, Any], seen: set[str], *, depth: int) -> int:
+    """Refuse a condition, or a group of them (p.56), that cannot be decided,
+    naming what is wrong; returns how many conditions it holds."""
+    if "logic" in config:
+        logic = config.get("logic")
+        if logic not in CRITERION_LOGIC:
+            raise ValueError(
+                f"unknown logical operator {logic!r} (p.56 has {', '.join(CRITERION_LOGIC)})"
+            )
+        conditions = config.get("conditions")
+        if not isinstance(conditions, list) or not conditions:
+            raise ValueError(f"an {logic!r} group needs at least one condition under it")
+        if depth > MAX_CRITERION_DEPTH:
+            raise ValueError(f"criteria nest at most {MAX_CRITERION_DEPTH} groups deep")
+        return sum(_check_condition(c if isinstance(c, dict) else {}, seen, depth=depth + 1)
+                   for c in conditions)
+    operator = str(config.get("operator", ""))
+    if operator not in CRITERION_OPERATORS:
+        raise ValueError(f"unknown criterion operator {operator!r}")
+    for side in ("left", "right"):
+        spec = config.get(side) or {}
+        kind = str(spec.get("kind", ""))
+        if kind == "parameter" and str(spec.get("parameter", "")) not in seen:
+            raise ValueError(
+                f"a criterion reads {spec.get('parameter')!r}, which is not a parameter"
+            )
+        elif kind == "current_user" and str(spec.get("attribute", "id")) not in _USER_ATTRIBUTES:
+            raise ValueError(
+                f"a criterion reads the current user's {spec.get('attribute')!r}, "
+                "which this build cannot answer"
+            )
+        elif kind not in ("parameter", "current_user", "value", "none"):
+            raise ValueError(f"a criterion has an unknown {side} side {kind!r}")
+    return 1
 
 
 async def set_definition(

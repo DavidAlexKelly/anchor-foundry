@@ -84,6 +84,10 @@ import type { ActionType } from "@/lib/types";
 import { DEFAULT_ELEMENT, ELEMENT_TYPES } from "@/lib/array-property";
 import { constraintBaseType, isStructParameter } from "@/lib/parameter-constraint";
 import { ValueConstraintEditor } from "@/components/value-constraint-editor";
+import {
+  LOGIC, LOGIC_LABELS, MAX_DEPTH, atPath, childrenOf, depthOf, grouped, isGroup, renamed, withAdded,
+  withAt, withoutAt,
+} from "@/lib/criterion-logic";
 
 /** `action_parameter_type` (migration 0044): the ontology's property types
  * plus `object`, which p.25 needs for a parameter that takes an object. */
@@ -150,6 +154,107 @@ type Criterion = ActionDefinitionInput["criteria"][number];
 
 function side(spec: unknown): Record<string, unknown> {
   return (spec ?? {}) as Record<string, unknown>;
+}
+
+/** One condition of a criterion, or one of p.56's groups of them (§643),
+ * addressed by its path from the criterion's root. A group names its logic
+ * and holds the conditions under it, and adds more, or a group nested in it
+ * while there is room. Labels follow the path ("Criterion 1.2"), so the root's
+ * are what a flat criterion always had. */
+function ConditionEditor({ root, path, label, parameters, onChange }: {
+  root: Record<string, unknown>;
+  path: number[];
+  label: string;
+  parameters: { api_name: string }[];
+  onChange: (next: Record<string, unknown>) => void;
+}) {
+  const node = atPath(root, path) ?? {};
+  if (isGroup(node)) {
+    const children = childrenOf(node);
+    return (
+      <div data-testid={`criterion-group-${label}`}
+        style={{ borderLeft: "2px solid var(--border)", paddingLeft: 10, marginTop: 6 }}>
+        <select
+          aria-label={`${label} logic`}
+          value={String(node.logic)}
+          onChange={(e) => onChange(withAt(root, path, { ...node, logic: e.target.value }))}
+        >
+          {LOGIC.map((l) => <option key={l} value={l}>{LOGIC_LABELS[l]}</option>)}
+        </select>
+        {children.map((_, n) => (
+          <div key={n} className="row" style={{ gap: 8, alignItems: "flex-end" }}>
+            <ConditionEditor root={root} path={[...path, n]} label={`${label}.${n + 1}`}
+              parameters={parameters} onChange={onChange} />
+            {children.length > 1 && (
+              <button className="btn quiet" aria-label={`Remove ${label}.${n + 1}`}
+                onClick={() => onChange(withoutAt(root, [...path, n]))}>
+                Remove
+              </button>
+            )}
+          </div>
+        ))}
+        <button className="btn quiet" aria-label={`${label} add condition`}
+          onClick={() => onChange(withAdded(root, path, "condition"))}>
+          Add condition
+        </button>
+        {depthOf(path) < MAX_DEPTH && (
+          <button className="btn quiet" aria-label={`${label} add group`}
+            onClick={() => onChange(withAdded(root, path, "group"))}>
+            Add group
+          </button>
+        )}
+      </div>
+    );
+  }
+  const left = side(node.left);
+  const right = side(node.right);
+  const set = (next: Record<string, unknown>) => onChange(withAt(root, path, next));
+  return (
+    <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
+      <Field label="Parameter">
+        <select
+          value={String(left.parameter ?? "")}
+          aria-label={`${label} parameter`}
+          onChange={(e) => set({ ...node, left: { kind: "parameter", parameter: e.target.value } })}
+        >
+          <option value="">Choose…</option>
+          {parameters.map((p) => (
+            <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Operator">
+        <select
+          value={String(node.operator ?? "is")}
+          aria-label={`${label} operator`}
+          onChange={(e) => set({ ...node, operator: e.target.value })}
+        >
+          {OPERATORS.map(([value, text]) => (
+            <option key={value} value={value}>{text}</option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Value">
+        {/* Blank is p.55's "no value", which asks whether the left
+            side is empty - a different question from "equals the
+            empty string", and the only way to express "must be
+            filled in". */}
+        <input
+          value={right.kind === "value" ? String(right.value ?? "") : ""}
+          placeholder="(leave blank for: is empty)"
+          aria-label={`${label} value`}
+          onChange={(e) =>
+            set({
+              ...node,
+              right: e.target.value === ""
+                ? { kind: "none" }
+                : { kind: "value", value: e.target.value },
+            })
+          }
+        />
+      </Field>
+    </div>
+  );
 }
 
 /** The properties of whichever object type a rule writes.
@@ -803,18 +908,11 @@ export function ActionDefinitionEditor({
     // the old parameter makes the server refuse the save, and the refusal is
     // about a row the person did not touch.
     editSections((current) => renameParameter(current, before ?? "", after));
+    // Throughout each criterion, groups included (§643).
     setCriteria(
-      criteria.map((c) => {
-        const config = c.config as Record<string, unknown>;
-        const next = { ...config };
-        for (const key of ["left", "right"]) {
-          const spec = side(config[key]);
-          if (spec.kind === "parameter" && spec.parameter === before) {
-            next[key] = { ...spec, parameter: after };
-          }
-        }
-        return { ...c, config: next };
-      }),
+      criteria.map((c) => ({
+        ...c, config: renamed(c.config as Record<string, unknown>, before ?? "", after),
+      })),
     );
   };
   const patchCriterion = (index: number, config: Record<string, unknown>) =>
@@ -1352,13 +1450,12 @@ export function ActionDefinitionEditor({
       <h3 className="field-label" style={{ marginTop: 24 }}>Submission criteria</h3>
       <p className="field-hint">
         Conditions that must all hold before anything is written. The message is what
-        somebody blocked by it is told.
+        somebody blocked by it is told. Combine a criterion's conditions to require all,
+        any or none of them, in groups inside groups if need be.
       </p>
       <div data-testid="criterion-rows">
         {criteria.map((c, i) => {
           const config = c.config as Record<string, unknown>;
-          const left = side(config.left);
-          const right = side(config.right);
           return (
             <div key={i} className="card" style={{ marginBottom: 10 }}>
               <Field label="Refusal message">
@@ -1370,51 +1467,17 @@ export function ActionDefinitionEditor({
                   }
                 />
               </Field>
-              <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
-                <Field label="Parameter">
-                  <select
-                    value={String(left.parameter ?? "")}
-                    aria-label={`Criterion ${i + 1} parameter`}
-                    onChange={(e) =>
-                      patchCriterion(i, { ...config, left: { kind: "parameter", parameter: e.target.value } })
-                    }
-                  >
-                    <option value="">Choose…</option>
-                    {parameters.map((p) => (
-                      <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Operator">
-                  <select
-                    value={String(config.operator ?? "is")}
-                    aria-label={`Criterion ${i + 1} operator`}
-                    onChange={(e) => patchCriterion(i, { ...config, operator: e.target.value })}
-                  >
-                    {OPERATORS.map(([value, label]) => (
-                      <option key={value} value={value}>{label}</option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Value">
-                  {/* Blank is p.55's "no value", which asks whether the left
-                      side is empty - a different question from "equals the
-                      empty string", and the only way to express "must be
-                      filled in". */}
-                  <input
-                    value={right.kind === "value" ? String(right.value ?? "") : ""}
-                    placeholder="(leave blank for: is empty)"
-                    aria-label={`Criterion ${i + 1} value`}
-                    onChange={(e) =>
-                      patchCriterion(i, {
-                        ...config,
-                        right: e.target.value === ""
-                          ? { kind: "none" }
-                          : { kind: "value", value: e.target.value },
-                      })
-                    }
-                  />
-                </Field>
+              <ConditionEditor root={config} path={[]} label={`Criterion ${i + 1}`}
+                parameters={parameters} onChange={(next) => patchCriterion(i, next)} />
+              <div className="row" style={{ gap: 8 }}>
+                {/* p.56: "A logical operator can be used to combine different
+                    conditions" (§643). */}
+                {!isGroup(config) && (
+                  <button className="btn quiet" aria-label={`Criterion ${i + 1} combine`}
+                    onClick={() => patchCriterion(i, grouped(config))}>
+                    Combine with more conditions
+                  </button>
+                )}
                 <button
                   className="btn quiet"
                   onClick={() => setCriteria(criteria.filter((_, j) => j !== i))}
