@@ -537,6 +537,9 @@ REFERENCE_PROPS = (
     "boundsVariable",
     # p.301's Drawn shapes on the Map (§574): GeoJSON it reads and writes.
     "drawnShapesVariable",
+    # p.301's Selected shapes on the Map (§641): GeoJSON of the drawn shapes
+    # selected, read and written.
+    "selectedShapesVariable",
     # p.225's variable-backed column visibility on the Object Table (§610):
     # the string array naming which configured columns show, in order.
     "columnsVariable",

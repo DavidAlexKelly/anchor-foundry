@@ -207,6 +207,8 @@ export function MapCanvas({
   onSelect,
   areas = [],
   onArea,
+  selectedAreas = [],
+  onSelectArea,
   drawTools = DRAW_TOOLS,
   drawnColor = null,
   drawnOpacity = DRAWN_OPACITY,
@@ -246,6 +248,11 @@ export function MapCanvas({
    * one. Several out of p.301's single draw mode (§640). */
   areas?: readonly Area[];
   onArea?: (area: Area | null) => void;
+  /** p.301's Selected shapes (§641): which of `areas` are selected, by
+   * index, and what a click on one does. Without `onSelectArea` the areas
+   * are not clickable, and a click on one reaches the map beneath. */
+  selectedAreas?: readonly number[];
+  onSelectArea?: (at: number) => void;
   /** p.301's Draw options (§573): the tools offered, all three by default. */
   drawTools?: readonly DrawTool[];
   /** p.301's Drawn shape colors and opacity: null for the theme's accent. */
@@ -297,6 +304,10 @@ export function MapCanvas({
   const [lining, setLining] = useState<{ x: number; y: number }[] | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drag = useRef<{ px: number; py: number; view: MapView } | null>(null);
+  // Where the last press on the map was, until it moves far enough to be a
+  // pan: a click on a drawn shape selects it (§641) only when the press never
+  // did, even a pan that came back to where it started.
+  const downAt = useRef<{ x: number; y: number } | null>(null);
 
   // The fitted view is recomputed from the data until the viewer moves; after
   // that it is theirs. A filter changing under a map that keeps snapping back
@@ -387,6 +398,10 @@ export function MapCanvas({
     document.addEventListener("dragstart", noDrag, true);
     const onMove = (e: MouseEvent) => {
       const d = drag.current;
+      const from = downAt.current;
+      if (from && Math.hypot(e.clientX - from.x, e.clientY - from.y) >= MIN_DRAG_PX) {
+        downAt.current = null;
+      }
       const rect = svgRef.current?.getBoundingClientRect();
       if (!d || !rect) return;
       const degPerPx = d.view.w / rect.width;
@@ -489,6 +504,28 @@ export function MapCanvas({
 
   const k = WIDTH / current.w;
 
+  // A drawn area's look, and what a click on it does (§641): selected ones
+  // are outlined solid and heavier. Clickable only with somewhere to write
+  // the selection and no drawing tool in hand, and a click that ended a pan
+  // is not one.
+  const clickable = !!onSelectArea && !selecting && !circling && !outline && !lining;
+  const areaLook = (at: number) => {
+    const on = selectedAreas.includes(at);
+    return {
+      "data-selected": on ? "true" : "false",
+      fill: drawnColor ?? "var(--accent-wash)",
+      fillOpacity: drawnOpacity,
+      stroke: drawnColor ?? "var(--accent)",
+      strokeWidth: on ? 3 : 1,
+      strokeDasharray: on ? undefined : "4 3",
+      style: { pointerEvents: clickable ? "visiblePainted" as const : "none" as const,
+        cursor: clickable ? "pointer" : undefined },
+      onClick: clickable ? () => {
+        if (downAt.current) onSelectArea!(at);
+      } : undefined,
+    };
+  };
+
   return (
     <div className="canvas-map">
       <svg
@@ -505,6 +542,7 @@ export function MapCanvas({
           // carry it across the canvas the moment somebody tried to pan.
           // Panning wins inside the map; the block's border still drags it.
           e.stopPropagation();
+          downAt.current = { x: e.clientX, y: e.clientY };
           if (lining) {
             if (lining.length < MAX_POLYGON_POINTS) setLining([...lining, svgPoint(e)]);
             return;
@@ -584,22 +622,16 @@ export function MapCanvas({
         {areas.map((area, at) => isPolygon(area) ? (
           <polygon key={at} data-testid="map-area" data-shape="polygon"
             points={polygonPoints(area, current, { width: WIDTH, height: HEIGHT })}
-            fill={drawnColor ?? "var(--accent-wash)"} fillOpacity={drawnOpacity}
-            stroke={drawnColor ?? "var(--accent)"}
-            strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
+            {...areaLook(at)} />
         ) : isCircle(area) ? (
           <path key={at} data-testid="map-area" data-shape="circle" fillRule="evenodd"
             d={circlePath(area, current, { width: WIDTH, height: HEIGHT })}
-            fill={drawnColor ?? "var(--accent-wash)"} fillOpacity={drawnOpacity}
-            stroke={drawnColor ?? "var(--accent)"}
-            strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
+            {...areaLook(at)} />
         ) : (() => {
           const r = boxRect(area, current, { width: WIDTH, height: HEIGHT });
           return (
             <rect key={at} data-testid="map-area" x={r.x} y={r.y} width={r.width} height={r.height}
-              fill={drawnColor ?? "var(--accent-wash)"} fillOpacity={drawnOpacity}
-              stroke={drawnColor ?? "var(--accent)"}
-              strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
+              {...areaLook(at)} />
           );
         })())}
         {measure && (measure.perimeter || measure.area) && areas.flatMap((area, at) =>

@@ -93,6 +93,9 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   // p.301 (§574): the drawn shape is written as GeoJSON when one is drawn,
   // and read back from it; a write, as the bounds are.
   drawnShapesVariable: "write",
+  // p.301 (§641): the drawn shapes selected, written as GeoJSON when one is
+  // clicked and read back from it, as the drawn shapes are.
+  selectedShapesVariable: "write",
   // p.225's column visibility (§610): the table reads which columns to show.
   columnsVariable: "read",
   // p.243's right-clicked object (§613): written by a right-click on a row,

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  areasOfShapes, lineOfShapes, lineText, shapeOutputOf, shapesText, syncShapes,
+  areasOfShapes, lineOfShapes, lineText, selectedIn, selectedText, shapeOutputOf, shapesText,
+  syncShapes, toggledShape,
 } from "./map-drawn";
 import { distanceM } from "./map-area";
 
@@ -271,5 +272,35 @@ describe("p.301's drawn line (§634)", () => {
     // An area drawn since wins, as any drawn shape does.
     expect(syncShapes({ area: "", shapes: text }, { areas: [box], shapes: text }, "features"))
       .toEqual({ write: "shapes", text: shapesText(box, "features") });
+  });
+});
+
+describe("p.301's Selected shapes (§641)", () => {
+  const areas = [box, shape, circle];
+
+  it("names the areas the text holds, in the areas' order", () => {
+    const text = shapesText([circle, box], "features");
+    expect(selectedIn(areas, text, "features")).toEqual([0, 2]);
+    expect(selectedIn(areas, "", "features")).toEqual([]);
+    expect(selectedIn(areas, "{nope", "features")).toEqual([]);
+    // A shape not on the map is not selected.
+    expect(selectedIn(areas, shapesText({ ...circle, radius: 5 }, "features"), "features"))
+      .toEqual([]);
+  });
+
+  it("names a box and a circle written as geometries, which read back as outlines", () => {
+    const text = shapesText([box, circle], "geometries");
+    expect(selectedIn(areas, text, "geometries")).toEqual([0, 2]);
+  });
+
+  it("toggles a clicked area", () => {
+    expect(toggledShape([], 1)).toEqual([1]);
+    expect(toggledShape([2], 0)).toEqual([0, 2]);
+    expect(toggledShape([0, 2], 2)).toEqual([0]);
+  });
+
+  it("writes the selected areas in the areas' order", () => {
+    expect(selectedText(areas, [2, 0], "features")).toBe(shapesText([box, circle], "features"));
+    expect(selectedText(areas, [], "features")).toBe("");
   });
 });
