@@ -300,7 +300,8 @@ import { useSeriesPoints, type SeriesRef } from "./series-points";
 import { ChartExport } from "./ChartExport";
 import {
   blankTransform, readableTransforms, transformsByColumn, transformsProblem as seriesTransformsProblem,
-  transformsText, withColumnTransforms, type SeriesTransform, type TransformKind,
+  transformsText, withColumnTransforms, TIME_UNITS, type SeriesTransform, type TimeUnit,
+  type TransformKind,
 } from "./series-transforms";
 import { SeriesTransformsEditor } from "./SeriesTransformsEditor";
 import { SeriesAnalysisChart } from "./SeriesAnalysisChart";
@@ -310,7 +311,8 @@ import {
   chainOf as seriesChainOf, readingsOf as seriesReadingsOf, rootOf as seriesRootOf,
   rootPlots as seriesRootPlots, statsOf as seriesStatsOf, withDerived as withSeriesDerived,
   withPlotSetting as withSeriesPlotSetting, withRoots as withSeriesRoots, withoutPlot as withoutSeriesPlot,
-  type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
+  DEFAULT_BANDS as DEFAULT_SERIES_BANDS, bandsProblem as seriesBandsProblem, withBands as withSeriesBands,
+  type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
 import { outputClauses } from "./action-output";
 import {
@@ -13082,7 +13084,9 @@ export function CanvasSeriesAnalysis({
   const readings = plots.map((_, n) => seriesReadingsOf(readingsFor[n]?.data?.points ?? []));
   const colorOf = (n: number) => CHART_PALETTE[n % CHART_PALETTE.length]!;
   const offered = SERIES_PLOT_TYPES.filter((k) => !plotTypes || plotTypes.includes(k));
-  const [draft, setDraft] = useState<{ parent: string; transforms: SeriesTransform[] } | null>(null);
+  const [draft, setDraft] = useState<{
+    parent: string; transforms: SeriesTransform[]; bands?: SeriesBands;
+  } | null>(null);
   const canvases = seriesCanvasesOf(plots, addedCanvases);
 
   return (
@@ -13169,8 +13173,12 @@ export function CanvasSeriesAnalysis({
               <select aria-label="New plot" value=""
                       onChange={(e) => {
                         if (!e.target.value) return;
-                        setDraft({ parent: plots[0]!.id,
-                          transforms: [blankTransform(e.target.value as TransformKind)] });
+                        // p.393's Bollinger bands are three plots, set up by
+                        // their own three numbers (§649).
+                        setDraft(e.target.value === "bollinger"
+                          ? { parent: plots[0]!.id, transforms: [], bands: DEFAULT_SERIES_BANDS }
+                          : { parent: plots[0]!.id,
+                              transforms: [blankTransform(e.target.value as TransformKind)] });
                       }}>
                 <option value="">New plot…</option>
                 {offered.map((k) => <option key={k} value={k}>{SERIES_PLOT_LABELS[k]}</option>)}
@@ -13190,15 +13198,39 @@ export function CanvasSeriesAnalysis({
                   {plots.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                 </select>
               </label>
-              <SeriesTransformsEditor transforms={draft.transforms} readOnly={false}
-                onChange={(next) => setDraft({ ...draft, transforms: next })} />
+              {draft.bands ? (
+                <div className="row-actions" data-testid="series-bands">
+                  <input type="number" min={1} aria-label="Bands window" value={draft.bands.window}
+                         onChange={(e) => setDraft({ ...draft,
+                           bands: { ...draft.bands!, window: Number(e.target.value) } })} />
+                  <select aria-label="Bands unit" value={draft.bands.unit}
+                          onChange={(e) => setDraft({ ...draft,
+                            bands: { ...draft.bands!, unit: e.target.value as TimeUnit } })}>
+                    {TIME_UNITS.map((u) => <option key={u} value={u}>{`${u}s`}</option>)}
+                  </select>
+                  <input type="number" min={0.1} step={0.5} aria-label="Bands deviations"
+                         value={draft.bands.deviations}
+                         onChange={(e) => setDraft({ ...draft,
+                           bands: { ...draft.bands!, deviations: Number(e.target.value) } })} />
+                  <span className="field-hint">standard deviations either side</span>
+                  {seriesBandsProblem(draft.bands) && (
+                    <span className="field-hint">{seriesBandsProblem(draft.bands)}</span>
+                  )}
+                </div>
+              ) : (
+                <SeriesTransformsEditor transforms={draft.transforms} readOnly={false}
+                  onChange={(next) => setDraft({ ...draft, transforms: next })} />
+              )}
               <div className="row-actions">
                 <button type="button" className="btn"
-                        disabled={draft.transforms.length === 0 || !!seriesTransformsProblem(draft.transforms)}
+                        disabled={draft.bands ? !!seriesBandsProblem(draft.bands)
+                          : draft.transforms.length === 0 || !!seriesTransformsProblem(draft.transforms)}
                         onClick={() => {
                           const parent = plots.find((p) => p.id === draft.parent);
-                          setPlots(withSeriesDerived(plots, draft.parent, draft.transforms,
-                            parent?.canvas ?? 1));
+                          setPlots(draft.bands
+                            ? withSeriesBands(plots, draft.parent, draft.bands, parent?.canvas ?? 1)
+                            : withSeriesDerived(plots, draft.parent, draft.transforms,
+                              parent?.canvas ?? 1));
                           setDraft(null);
                         }}>
                   Add plot
