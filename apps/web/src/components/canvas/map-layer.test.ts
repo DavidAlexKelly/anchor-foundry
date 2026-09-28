@@ -38,6 +38,7 @@ describe("p.300's Add object layer (§642)", () => {
     id: "layer-2", objectSetVariable: "v_ports", locationProperty: "where", labelProperty: "name",
     label: "Ports", selectedVariable: "v_sel", visible: false, visibleVariable: "v_show",
     locked: true, color: "#aa3300", opacity: 0.5,
+    geometries: [{ id: "geometry-1", property: "area", color: "#112233", legend: false }], inLegend: false,
   };
 
   it("reads each layer's settings by their own rules", () => {
@@ -45,7 +46,7 @@ describe("p.300's Add object layer (§642)", () => {
     expect(layersOf([{ id: "a", color: "red", opacity: 0, label: 7, locked: "yes", visible: 0 }]))
       .toEqual([{ id: "a", objectSetVariable: null, locationProperty: null, labelProperty: null,
         label: "", selectedVariable: null, visible: true, visibleVariable: null, locked: false,
-        color: null, opacity: 0.1 }]);
+        color: null, opacity: 0.1, geometries: [], inLegend: true }]);
   });
 
   it("leaves out what is not a layer, a repeated id, and past the cap", () => {
@@ -87,10 +88,11 @@ describe("p.300's Add object layer (§642)", () => {
       { key: "A", label: "Alpha", lat: 1, lon: 2 },
       { key: "B", label: "B", lat: 3, lon: 4 },
     ], unplaceable: 1 });
-    // No location property: nothing is placed.
+    // No location property: a layer of shapes alone (§670), with no pins
+    // and none counted as unplaceable.
     expect(layerPoints({ ...layer, locationProperty: null },
-      [{ id: "1", primary_key: "A", properties: { where: [1, 2] } }], locate, (i) => i).unplaceable)
-      .toBe(1);
+      [{ id: "1", primary_key: "A", properties: { where: [1, 2] } }], locate, (i) => i))
+      .toEqual({ points: [], unplaceable: 0 });
   });
 });
 
