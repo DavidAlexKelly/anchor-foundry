@@ -860,3 +860,71 @@ export function timeLabel(t: number, span: number, offset: number): string {
   const shifted = new Date(t + offset * 60_000).toISOString();
   return span > 2 * 86_400_000 ? shifted.slice(0, 10) : shifted.slice(5, 16).replace("T", " ");
 }
+
+
+/** p.396's *Chart options* for the Y-axes (§660): "Overlay Y-axes: When
+ * enabled, Y-axes are rendered as transparent overlays. Otherwise, the
+ * Y-axes will shift the chart data to the side. Collapse Y-axes by default:
+ * Start with Y-axes collapsed to save chart space. Display Y-axes boundaries
+ * when collapsed". Each axis's room beside the frame, the room each side
+ * takes, and the ticks drawn, as fractions up the axis. */
+export const AXIS_ROOM = 48;
+export const COLLAPSED_ROOM = 14;
+export const EDGE_ROOM = 8;
+
+export function axisLayout(
+  lefts: number, rights: number, o: { overlay: boolean; collapsed: boolean; boundaries: boolean },
+): { per: number; left: number; right: number; ticks: number[] } {
+  const per = o.collapsed ? COLLAPSED_ROOM : AXIS_ROOM;
+  const side = (n: number) => (o.overlay ? EDGE_ROOM : Math.max(EDGE_ROOM, n * per));
+  return {
+    per, left: side(lefts), right: side(rights),
+    ticks: !o.collapsed ? [0, 0.5, 1] : o.boundaries ? [0, 1] : [],
+  };
+}
+
+/** p.396's *Tooltip options* (§660): "Configure tooltip visibility,
+ * displayed values, time and label formatting, text wrapping, and the number
+ * of significant digits." The values are every plot's on the canvas, or the
+ * hovered plot's alone; the time is shown or not, in the chart's own zone. */
+export const TOOLTIP_VALUES = ["all", "hovered"] as const;
+export type TooltipValues = (typeof TOOLTIP_VALUES)[number];
+export interface TooltipOptions { show: boolean; values: TooltipValues; time: boolean; wrap: boolean; digits: number }
+export const DEFAULT_TOOLTIP: TooltipOptions = { show: true, values: "all", time: true, wrap: false, digits: 4 };
+export const MAX_DIGITS = 10;
+
+export function tooltipOptionsOf(raw: unknown): TooltipOptions {
+  const o = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const flag = (key: "show" | "time" | "wrap") => (typeof o[key] === "boolean" ? o[key] as boolean : DEFAULT_TOOLTIP[key]);
+  const digits = o.digits;
+  return {
+    show: flag("show"), time: flag("time"), wrap: flag("wrap"),
+    values: o.values === "hovered" ? "hovered" : "all",
+    digits: typeof digits === "number" && Number.isInteger(digits) && digits >= 1 && digits <= MAX_DIGITS
+      ? digits : DEFAULT_TOOLTIP.digits,
+  };
+}
+
+/** The reading nearest an instant, the earlier on a tie; null with none. */
+export function readingAt(readings: readonly Reading[], t: number): Reading | null {
+  let best: Reading | null = null;
+  for (const r of readings) {
+    if (!best || Math.abs(r.t - t) < Math.abs(best.t - t)) best = r;
+  }
+  return best;
+}
+
+/** A value to `digits` significant digits, without trailing zeros. */
+export function significant(v: number, digits: number): string {
+  return String(Number(v.toPrecision(digits)));
+}
+
+/** Which plot the pointer is over: the one whose point at the pointer's time
+ * is drawn nearest it, up or down. */
+export function hoveredOf(candidates: readonly { id: string; y: number }[], pointerY: number): string | null {
+  let best: { id: string; y: number } | null = null;
+  for (const c of candidates) {
+    if (!best || Math.abs(c.y - pointerY) < Math.abs(best.y - pointerY)) best = c;
+  }
+  return best?.id ?? null;
+}

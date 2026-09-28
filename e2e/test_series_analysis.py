@@ -580,3 +580,105 @@ def test_the_panel_sets_the_view_options(page, api, module) -> None:
     assert (props["viewRange"], props["windowStartVariable"], props["relativeAmount"],
             props["relativeUnit"], props["syncXAxes"], props["utc"]) == (
         "fixed", "v_from", 3, "day", True, True)
+
+
+def point_at(page, canvas: int, x: float, y: float) -> None:
+    """The pointer at (x, y) of the canvas's 640 by 200 drawing."""
+    box = page.locator(f"[data-testid='series-canvas-{canvas}'] svg").bounding_box()
+    page.mouse.move(box["x"] + box["width"] * x / 640, box["y"] + box["height"] * y / 200)
+
+
+def test_the_tooltip_every_value_or_the_hovered_one(page, api, module) -> None:
+    """p.396's Tooltip options (§660). A third of the way along, midnight on
+    the 2nd, North reads 20 and South 900, and Patchy's nearest reading is
+    its 5 of the 1st."""
+    mod = build(api, module, "Analysis tooltip", utc=True)
+    open_module(page, mod)
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    tip = page.get_by_test_id("series-tooltip-1")
+    expect(tip).to_have_count(0)
+    # One left axis: the frame runs from 48 to 632.
+    point_at(page, 1, 48 + 584 / 3, 100)
+    expect(tip.locator("[data-time]")).to_have_text("01-02 00:00 UTC")
+    expect(tip.locator("[data-plot]")).to_have_text(["■ North sensor: 20", "■ South sensor: 900", "■ Patchy sensor: 5"])
+    page.mouse.move(0, 0)
+    expect(tip).to_have_count(0)
+
+
+def test_the_hovered_plot_s_value_alone_to_its_digits(page, api, module) -> None:
+    mod = build(api, module, "Analysis tooltip hovered",
+                tooltip={"values": "hovered", "digits": 1, "time": False})
+    open_module(page, mod)
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    tip = page.get_by_test_id("series-tooltip-1")
+    # Near the top of the frame, where South's 900 is drawn.
+    point_at(page, 1, 48 + 584 / 3, 12)
+    expect(tip.locator("[data-plot]")).to_have_text(["■ South sensor: 900"])
+    expect(tip.locator("[data-time]")).to_have_count(0)
+    # Near the foot, North's 20 is drawn at about 169 and Patchy's 5 at about
+    # 172, so above both it is North's; to one significant digit, 20.
+    point_at(page, 1, 48 + 584 / 3, 165)
+    expect(tip.locator("[data-plot]")).to_have_text(["■ North sensor: 20"])
+
+
+def test_no_tooltip_when_the_builder_hides_it(page, api, module) -> None:
+    open_module(page, build(api, module, "Analysis tooltip hidden", tooltip={"show": False}))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    point_at(page, 1, 48 + 584 / 3, 100)
+    page.wait_for_timeout(300)
+    expect(page.get_by_test_id("series-tooltip-1")).to_have_count(0)
+    expect(page.locator("[data-testid='series-canvas-1'] line[data-cursor]")).to_have_count(0)
+
+
+def test_axes_overlaid_or_collapsed_with_their_boundaries(page, api, module) -> None:
+    """p.396's Overlay Y-axes, Collapse Y-axes by default and Display Y-axes
+    boundaries when collapsed (§660)."""
+    open_module(page, build(api, module, "Analysis overlay", overlayYAxes=True))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    axis = page.locator("[data-testid='series-canvas-1'] g[data-axis='1']")
+    expect(axis).to_have_attribute("data-overlay", "")
+    # Over the frame, which starts at the edge's 8, facing in.
+    expect(axis.locator("text[data-tick='0']")).to_have_attribute("x", "12")
+    expect(axis.locator("text[data-tick='0']")).to_have_attribute("text-anchor", "start")
+    open_module(page, build(api, module, "Analysis collapsed", collapseYAxes=True, collapsedBoundaries=True))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    expect(axis).to_have_attribute("data-collapsed", "")
+    expect(axis.locator("text[data-tick]")).to_have_count(2)
+    expect(axis.locator("text[data-tick='0.5']")).to_have_count(0)
+    page.get_by_label("Canvas 1 expand axes").click()
+    expect(axis.locator("text[data-tick]")).to_have_count(3)
+    expect(axis).not_to_have_attribute("data-collapsed", "")
+    page.get_by_label("Canvas 1 collapse axes").click()
+    expect(axis.locator("text[data-tick]")).to_have_count(2)
+
+
+def test_the_panel_sets_the_chart_options(page, api, module) -> None:
+    mod = build(api, module, "Analysis chart options")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Time series analysis").first.click()
+    expect(page.get_by_label("Display Y-axes boundaries when collapsed")).to_be_disabled()
+    page.get_by_label("Collapse Y-axes by default").check()
+    page.get_by_label("Display Y-axes boundaries when collapsed").check()
+    page.get_by_label("Overlay Y-axes").check()
+    page.get_by_label("Tooltip values").select_option("hovered")
+    page.get_by_label("Tooltip wrap").check()
+    page.get_by_label("Tooltip significant digits").fill("6")
+    save(page)
+    props = mod.definition()["layout"]["tsa"]["props"]
+    assert (props["collapseYAxes"], props["collapsedBoundaries"], props["overlayYAxes"]) == (True, True, True)
+    assert props["tooltip"] == {"show": True, "values": "hovered", "time": True, "wrap": True, "digits": 6}
+
+
+def test_the_tooltip_s_significant_digits(page, api, module) -> None:
+    """North over three is 6.666… on the 2nd, to two significant digits 6.7."""
+    open_module(page, build(api, module, "Analysis tooltip digits", tooltip={"digits": 2}))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_label("New plot").select_option("formula")
+    page.get_by_label("Input plot").select_option(label="North sensor")
+    page.get_by_label("Transform 1 formula").fill("x / 3")
+    page.get_by_role("button", name="Add plot").click()
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(4)
+    point_at(page, 1, 48 + 584 / 3, 100)
+    expect(page.get_by_test_id("series-tooltip-1").locator("[data-plot]").last).to_have_text(
+        "■ Formula time series of North sensor: 6.7")
