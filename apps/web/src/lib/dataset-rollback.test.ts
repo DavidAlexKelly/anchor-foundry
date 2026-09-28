@@ -1,6 +1,8 @@
 /** Rolling a dataset back to an earlier version (§361; `data-lineage` p.73). */
 import { describe, expect, it } from "vitest";
-import { isRebuilt, rollbackSummary, whyNotRollbackable } from "./dataset-rollback";
+import {
+  isRebuilt, nextSyncNote, rollbackSummary, whyNotRollbackable,
+} from "./dataset-rollback";
 
 describe("whether a version can be rolled back to", () => {
   it("allows an earlier version whose data is there", () => {
@@ -81,5 +83,31 @@ describe("what rebuilds itself", () => {
     // default is the one that says less rather than the one that says
     // something untrue about a build that may not exist.
     expect(isRebuilt("something_new")).toBe(false);
+  });
+});
+
+describe("nextSyncNote (p.73's force a snapshot on the next build, §629)", () => {
+  const sync = {
+    sync_mode: "incremental", sync_dataset_id: "d1",
+    sync_cursor_column: "id", sync_last_cursor_value: "42",
+  };
+
+  it("says where the next incremental sync starts", () => {
+    expect(nextSyncNote(sync, "d1")).toEqual({
+      forced: false, text: "The next sync reads only rows with id after 42.",
+    });
+  });
+
+  it("says the next sync is a snapshot once the position is forgotten", () => {
+    expect(nextSyncNote({ ...sync, sync_last_cursor_value: null }, "d1")).toEqual({
+      forced: true, text: "The next sync reads the whole table, as a snapshot.",
+    });
+  });
+
+  it("is nothing for a full sync, another dataset, or no sync", () => {
+    expect(nextSyncNote({ ...sync, sync_mode: "full" }, "d1")).toBeNull();
+    expect(nextSyncNote(sync, "d2")).toBeNull();
+    expect(nextSyncNote(null, "d1")).toBeNull();
+    expect(nextSyncNote(undefined, "d1")).toBeNull();
   });
 });
