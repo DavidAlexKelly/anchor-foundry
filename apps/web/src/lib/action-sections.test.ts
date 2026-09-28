@@ -534,6 +534,14 @@ describe("blankSection", () => {
   });
 });
 
+describe("a list operator in a section's condition (§644)", () => {
+  it("takes its values between commas, and shows them back", () => {
+    const value = conditionValue({ parameter: "status", operator: "includes_any", value: "a, b" });
+    expect(value?.right).toEqual({ kind: "value", value: ["a", "b"] });
+    expect(conditionDraft(section({ visible_when: value! })).value).toBe("a, b");
+  });
+});
+
 describe("conditionDraft", () => {
   it("is empty for a section with no condition", () => {
     expect(conditionDraft(section())).toEqual({

@@ -80,11 +80,11 @@ def test_the_editor_reads_a_nested_criterion_back(page, api) -> None:
     api.call("PUT", f"/workspaces/{mod.workspace_id}/action-types/{mod.action['id']}/definition", {
         "parameters": stored["parameters"], "rules": stored["rules"],
         "criteria": [{"message": MESSAGE, "config": {"logic": "all", "conditions": [
-            cond("x", "is_not"), {"logic": "any", "conditions": [cond("a"), cond("b")]}]}}],
+            cond("x", "each_is_not"), {"logic": "any", "conditions": [cond("a"), cond("b")]}]}}],
     })
     open_editor(page, mod)
     expect(page.get_by_label("Criterion 1 logic")).to_have_value("all")
-    expect(page.get_by_label("Criterion 1.1 operator")).to_have_value("is_not")
+    expect(page.get_by_label("Criterion 1.1 operator")).to_have_value("each_is_not")
     expect(page.get_by_label("Criterion 1.2 logic")).to_have_value("any")
     expect(page.get_by_label("Criterion 1.2.2 value")).to_have_value("b")
 
@@ -107,3 +107,34 @@ def test_a_renamed_parameter_is_renamed_inside_the_groups(page, api) -> None:
     [criterion] = definition(api, mod)["criteria"]
     inner = criterion["config"]["conditions"][0]["conditions"][0]
     assert inner["left"] == {"kind": "parameter", "parameter": "new_status"}
+
+
+def test_a_list_operator_and_the_current_user_typed_in_the_dialog(page, api) -> None:
+    """p.55's list operators take their values between commas (§644), and
+    p.50's "based on current user" template is offered beside the
+    parameters."""
+    mod = build(api, "Criteria lists")
+    open_editor(page, mod)
+    page.get_by_role("button", name="Add a criterion").click()
+    page.get_by_label("Criterion 1 message").fill(MESSAGE)
+    page.get_by_label("Criterion 1 parameter").select_option("status")
+    # Typed under "is", then read again as a list when the operator changes.
+    page.get_by_label("Criterion 1 value").fill("open, triaged")
+    page.get_by_label("Criterion 1 operator").select_option("is_included_in")
+    page.get_by_role("button", name="Add a criterion").click()
+    page.get_by_label("Criterion 2 message").fill("Not for nobody.")
+    page.get_by_label("Criterion 2 parameter").select_option("@user:id")
+    page.get_by_label("Criterion 2 operator").select_option("is_not")
+    page.get_by_label("Criterion 2 value").fill("nobody")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    first, second = definition(api, mod)["criteria"]
+    assert first["config"]["right"] == {"kind": "value", "value": ["open", "triaged"]}
+    assert second["config"]["left"] == {"kind": "current_user", "attribute": "id"}
+    assert check(api, mod, "triaged") == {"ok": True, "error": None}
+    assert check(api, mod, "closed") == {"ok": False, "error": MESSAGE}
+    # And the dialog draws both back as they were typed.
+    open_editor(page, mod)
+    expect(page.get_by_label("Criterion 1 value")).to_have_value("open, triaged")
+    expect(page.get_by_label("Criterion 2 parameter")).to_have_value("@user:id")

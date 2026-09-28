@@ -47,6 +47,7 @@ import type { ActionFormSection, ValueConstraint } from "@platform/types";
 export type FormSection = ActionFormSection;
 
 import type { StructField } from "./types";
+import { rightText, valueFor } from "./criterion-logic";
 
 /** As much of an action's parameter as a form layout needs. */
 export interface FormParameter {
@@ -502,7 +503,7 @@ export function conditionDraft(section: FormSection): ConditionDraft {
   const left = side(condition.left);
   const right = side(condition.right);
   const parameter = left.kind === "parameter" ? String(left.parameter ?? "") : "";
-  const value = right.kind === "value" ? String(right.value ?? "") : "";
+  const value = rightText(right);
   return {
     parameter,
     operator: String(condition.operator ?? "is"),
@@ -528,7 +529,8 @@ export function conditionValue(draft: ConditionDraft): Record<string, unknown> |
   return {
     left: { kind: "parameter", parameter: draft.parameter.trim() },
     operator: draft.operator || "is",
-    right: { kind: "value", value: draft.value },
+    // A list operator's values between commas (§644), as the criteria take them.
+    right: { kind: "value", value: valueFor(draft.operator || "is", draft.value) },
   };
 }
 
