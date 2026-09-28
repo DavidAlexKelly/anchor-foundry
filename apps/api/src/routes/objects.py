@@ -51,6 +51,7 @@ from ..services import derived_properties
 from ..services import derived_values
 from ..services import object_sets
 from ..services import object_set_eval
+from ..services import link_backing
 from ..services import link_join_tables
 from ..services import object_views as object_views_service
 from ..services import instances as instances_service
@@ -3719,6 +3720,13 @@ class LinkedInstances(BaseModel):
     join_table: bool = False
     #: Backed by an object type (§666): each linked pair is one backing object.
     backed: bool = False
+    #: p.199's "view the link's backing object properties" (§667): the backing
+    #: objects linking this object, a first page, and the property on each
+    #: that names the far object it links to.
+    backing_type_id: UUID | None = None
+    backing_type_display_name: str | None = None
+    backing_far_property: str | None = None
+    backing_items: list[InstanceOut] = []
     # Why this link could not be followed from here - a join table the reader
     # cannot see, or one whose column has gone. One unfollowable link says so
     # in its own group rather than failing the object's every other link.
@@ -3974,6 +3982,12 @@ async def instance_links(
             far = str(link["far_property"])
             value, rows, total, problem = await _follow_link(
                 conn, store, prefix, link, instance, properties, limit)
+            backing_rows: list[dict[str, Any]] = []
+            if link.get("backing_type_id") and problem is None:
+                try:
+                    backing_rows = await link_backing.objects_of(conn, link["join"], value, limit)
+                except ValueError as exc:
+                    problem = str(exc)
             groups.append(LinkedInstances(
                 link_type_id=UUID(str(link["id"])),
                 api_name=str(link["api_name"]),
@@ -3987,6 +4001,16 @@ async def instance_links(
                 far_property=far,
                 join_table=link.get("join_dataset_id") is not None,
                 backed=bool(link.get("backing_type_id")),
+                backing_type_id=link.get("backing_type_id"),
+                backing_type_display_name=link.get("backing_display_name"),
+                backing_far_property=(link["join"] or {}).get("far_column") if link.get("backing_type_id") else None,
+                backing_items=[
+                    InstanceOut(**{
+                        "id": r["id"], "primary_key": r["primary_key"],
+                        "properties": _jsonb(r["properties"]), "updated_at": r["updated_at"],
+                    })
+                    for r in backing_rows
+                ],
                 problem=problem,
                 matched_value=value,
                 total=total,

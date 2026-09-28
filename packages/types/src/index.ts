@@ -2745,6 +2745,13 @@ export interface LinkType {
   join_dataset_id?: string | null;
   join_from_column?: string | null;
   join_to_column?: string | null;
+  /** p.197's backing object type, in place of either (§666; db 0132): each
+   * of its objects is one link, reached from each end by the link named. A
+   * deleted backing link leaves its id null and the link untraversable. */
+  backing_type_id?: string | null;
+  backing_display_name?: string | null;
+  backing_from_link_id?: string | null;
+  backing_to_link_id?: string | null;
   /** Per-side labels (`object-link-types` p.192) — what this link is called
    * when read from each end ("placed by" one way, "orders" the other). Null
    * falls back to `display_name`, which is what every link had before sides
@@ -2784,6 +2791,8 @@ export interface TypeLink {
   /** Followed through p.197's join table (§552): both ends are primary keys,
    * and the pairs are rows of a dataset rather than a value either holds. */
   join_table?: boolean;
+  /** Followed through backing objects (§666), each one link. */
+  backed?: boolean;
 }
 
 /**
@@ -2809,6 +2818,17 @@ export interface LinkedInstances {
    * object's own key, which the far objects do not hold - so "all of them" is
    * a traversal, never a match on `far_property`. */
   join_table?: boolean;
+  /** Followed through backing objects (§666): each is one link, and
+   * `matched_value` is this object's value of `near_property`, which the far
+   * objects need not hold. */
+  backed?: boolean;
+  /** p.199's "view the link's backing object properties" (§667): the backing
+   * objects linking this object, and the property on each naming the far
+   * object it links to. */
+  backing_type_id?: string | null;
+  backing_type_display_name?: string | null;
+  backing_far_property?: string | null;
+  backing_items?: ObjectInstance[];
   /** Why this one link could not be followed from here - a join table the
    * reader cannot see, or one whose column has gone. */
   problem?: string | null;

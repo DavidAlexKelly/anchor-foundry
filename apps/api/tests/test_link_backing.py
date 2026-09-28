@@ -143,6 +143,13 @@ def test_an_object_shows_what_its_backing_objects_link_it_to(client, fx, world) 
     back = links_of(client, fx, world["flights"], "F2")[world["link"]]
     assert sorted(i["primary_key"] for i in back["items"]) == ["1", "2"]
     assert links_of(client, fx, world["flights"], "F4")[world["link"]]["total"] == 0
+    # p.199: "Select a link to view the link's backing object properties" (§667).
+    assert (group["backing_type_id"], group["backing_type_display_name"], group["backing_far_property"]) == (
+        world["manifests"], f"manifest_{world['tag']}", "flight")
+    assert sorted((m["primary_key"], m["properties"]["flight"], m["properties"]["pilot"])
+                  for m in group["backing_items"]) == [("M1", "F1", "Ada"), ("M2", "F2", "Grace")]
+    assert sorted(m["primary_key"] for m in back["backing_items"]) == ["M2", "M3"]
+    assert back["backing_far_property"] == "aircraft"
 
 
 def test_a_hop_through_the_backing_objects(client, fx, world) -> None:

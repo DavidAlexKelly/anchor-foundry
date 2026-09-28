@@ -41,6 +41,10 @@ import {
   type JoinTableDraft,
 } from "@/lib/link-join-table";
 import {
+  NO_BACKING, backingDescription, backingDraftOf, backingLinksFor, backingPayload, backingProblem,
+  type BackingDraft,
+} from "@/lib/link-backing";
+import {
   EditObjectTypeDialog,
   PROPERTY_VISIBILITIES,
   PropertyRows,
@@ -343,25 +347,76 @@ function joinLabel(property: string): string {
   return property === PRIMARY_KEY_REF ? "primary key" : property;
 }
 
-/** p.197's two ways of joining a many-to-many link (§552): a pair of
- * properties that hold a shared key, or a join table dataset whose rows are
- * the pairs. Offered only for many-to-many, which is the only cardinality
- * p.197 backs with a join table. */
-function JoinByField({ value, onChange }: {
-  value: "properties" | "join_table";
-  onChange: (next: "properties" | "join_table") => void;
+type JoinBy = "properties" | "join_table" | "backing";
+
+/** p.197's three ways of joining a link: a pair of properties that hold a
+ * shared key; a join table dataset whose rows are the pairs (§552), offered
+ * only for many-to-many as p.197 says; or a backing object type whose objects
+ * are the links (§666, §667). */
+function JoinByField({ value, onChange, manyToMany }: {
+  value: JoinBy;
+  onChange: (next: JoinBy) => void;
+  manyToMany: boolean;
 }) {
   return (
     <Field label="Joined by">
       <select
         data-testid="link-joined-by"
         value={value}
-        onChange={(e) => onChange(e.target.value as "properties" | "join_table")}
+        onChange={(e) => onChange(e.target.value as JoinBy)}
       >
         <option value="properties">Properties holding a shared key</option>
-        <option value="join_table">A join table dataset</option>
+        {manyToMany && <option value="join_table">A join table dataset</option>}
+        <option value="backing">A backing object type</option>
       </select>
     </Field>
+  );
+}
+
+/** p.199's backing object type and its prerequisites (§667): the type whose
+ * objects are the links, and the many-to-one link from it to each end - the
+ * links offered being those that join that end and the backing type on a
+ * pair of properties. */
+function BackingFields({ workspaceId, draft, onChange, fromTypeId, toTypeId, fromLabel, toLabel }: {
+  workspaceId: string;
+  draft: BackingDraft;
+  onChange: (next: BackingDraft) => void;
+  fromTypeId: string;
+  toTypeId: string;
+  fromLabel: string;
+  toLabel: string;
+}) {
+  const links = useQuery({
+    queryKey: ["link-types", workspaceId],
+    queryFn: () => objApi.listLinkTypes(workspaceId),
+  });
+  const all = links.data ?? [];
+  const pick = (end: string, which: "fromLink" | "toLink", label: string) => {
+    const offered = backingLinksFor(all, end, draft.type);
+    return (
+      <Field label={`Link from the backing type to ${label}`}>
+        <select data-testid={`link-backing-${which === "fromLink" ? "from" : "to"}`} value={draft[which]}
+                disabled={!draft.type || !end} onChange={(e) => onChange({ ...draft, [which]: e.target.value })}>
+          <option value="">Choose a link…</option>
+          {offered.map((l) => <option key={l.id} value={l.id}>{l.display_name}</option>)}
+        </select>
+        {draft.type && end && links.data && offered.length === 0 && (
+          <span className="field-hint">
+            No link joins the backing type to {label} on a pair of properties yet - p.199 has that made first.
+          </span>
+        )}
+      </Field>
+    );
+  };
+  return (
+    <>
+      <Field label="Backing object type" hint="Each of its objects is one link, and its properties what is known of it">
+        <TypePicker workspaceId={workspaceId} testId="link-backing-type" value={draft.type}
+                    placeholder="Choose a type…" onChange={(id) => onChange({ type: id, fromLink: "", toLink: "" })} />
+      </Field>
+      {pick(fromTypeId, "fromLink", fromLabel)}
+      {pick(toTypeId, "toLink", toLabel)}
+    </>
   );
 }
 
@@ -476,10 +531,12 @@ function LinkTypeDialog({
   const [cardinality, setCardinality] = useState<LinkCardinality>("one_to_many");
   const [fromProperty, setFromProperty] = useState("");
   const [toProperty, setToProperty] = useState("");
-  const [joinBy, setJoinBy] = useState<"properties" | "join_table">("properties");
+  const [joinBy, setJoinBy] = useState<JoinBy>("properties");
   const [joinTable, setJoinTable] = useState<JoinTableDraft>(NO_JOIN_TABLE);
+  const [backing, setBacking] = useState<BackingDraft>(NO_BACKING);
   const queryClient = useQueryClient();
   const throughTable = cardinality === "many_to_many" && joinBy === "join_table";
+  const throughBacking = joinBy === "backing";
 
   const create = useMutation({
     mutationFn: () =>
@@ -489,9 +546,10 @@ function LinkTypeDialog({
         from_type_id: fromId,
         to_type_id: toId,
         cardinality,
-        from_property: throughTable ? null : fromProperty || null,
-        to_property: throughTable ? null : toProperty || null,
+        from_property: throughTable || throughBacking ? null : fromProperty || null,
+        to_property: throughTable || throughBacking ? null : toProperty || null,
         ...joinTablePayload(throughTable ? joinTable : NO_JOIN_TABLE),
+        ...backingPayload(throughBacking ? backing : null),
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["link-types", workspaceId] });
@@ -501,8 +559,9 @@ function LinkTypeDialog({
 
   // Both ends or neither: half a join cannot answer a question, and the API
   // refuses it, so the form does too rather than sending it to be rejected.
-  const halfJoin = !throughTable && !fromProperty !== !toProperty;
-  const tableProblem = throughTable ? joinTableProblem(joinTable, cardinality) : null;
+  const halfJoin = !throughTable && !throughBacking && !fromProperty !== !toProperty;
+  const tableProblem = throughTable ? joinTableProblem(joinTable, cardinality)
+    : throughBacking ? backingProblem(backing, fromId, toId) : null;
 
   return (
     <Dialog open title="New link type" onClose={onClose}>
@@ -537,8 +596,11 @@ function LinkTypeDialog({
             {CARDINALITIES.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </Field>
-        {cardinality === "many_to_many" && <JoinByField value={joinBy} onChange={setJoinBy} />}
-        {throughTable ? (
+        <JoinByField value={joinBy} onChange={setJoinBy} manyToMany={cardinality === "many_to_many"} />
+        {throughBacking ? (
+          <BackingFields workspaceId={workspaceId} draft={backing} onChange={setBacking}
+            fromTypeId={fromId} toTypeId={toId} fromLabel="the from type" toLabel="the to type" />
+        ) : throughTable ? (
           <JoinTableFields
             workspaceId={workspaceId}
             projectId={projectId}
@@ -604,22 +666,26 @@ function LinkJoinDialog({
 }) {
   const [fromProperty, setFromProperty] = useState(link.from_property ?? "");
   const [toProperty, setToProperty] = useState(link.to_property ?? "");
-  const [joinBy, setJoinBy] = useState<"properties" | "join_table">(
-    link.join_from_column ? "join_table" : "properties");
+  const [joinBy, setJoinBy] = useState<JoinBy>(
+    link.backing_type_id ? "backing" : link.join_from_column ? "join_table" : "properties");
   const [joinTable, setJoinTable] = useState<JoinTableDraft>(draftOf(link));
+  const [backing, setBacking] = useState<BackingDraft>(backingDraftOf(link));
   // p.253's status and p.254's note (§631), which a link had and no screen set.
   const [status, setStatus] = useState<OntologyStatus>(link.status);
   const [deprecation, setDeprecation] = useState<Deprecation | null>(link.deprecation);
   const [capped, setCapped] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const throughTable = link.cardinality === "many_to_many" && joinBy === "join_table";
+  const throughBacking = joinBy === "backing";
 
   const save = useMutation({
     mutationFn: () =>
       objApi.setLinkJoin(workspaceId, link.id, {
-        from_property: throughTable ? null : fromProperty || null,
-        to_property: throughTable ? null : toProperty || null,
+        from_property: throughTable || throughBacking ? null : fromProperty || null,
+        to_property: throughTable || throughBacking ? null : toProperty || null,
         ...joinTablePayload(throughTable ? joinTable : NO_JOIN_TABLE),
+        // p.199's "Convert existing links to object-backed link types" (§667).
+        ...backingPayload(throughBacking ? backing : null),
         status,
         deprecation: status === "deprecated" ? deprecation : null,
       }),
@@ -638,8 +704,9 @@ function LinkJoinDialog({
     },
   });
 
-  const halfJoin = !throughTable && !fromProperty !== !toProperty;
-  const tableProblem = throughTable ? joinTableProblem(joinTable, link.cardinality) : null;
+  const halfJoin = !throughTable && !throughBacking && !fromProperty !== !toProperty;
+  const tableProblem = throughTable ? joinTableProblem(joinTable, link.cardinality)
+    : throughBacking ? backingProblem(backing, link.from_object_type_id, link.to_object_type_id) : null;
 
   return (
     <Dialog open title={`Join - ${link.display_name}`} onClose={onClose}>
@@ -647,8 +714,12 @@ function LinkJoinDialog({
         <p className="login-note" style={{ marginTop: 0 }}>
           {link.from_display_name} → {link.to_display_name}. {throughTable ? "" : JOIN_HINT}
         </p>
-        {link.cardinality === "many_to_many" && <JoinByField value={joinBy} onChange={setJoinBy} />}
-        {throughTable ? (
+        <JoinByField value={joinBy} onChange={setJoinBy} manyToMany={link.cardinality === "many_to_many"} />
+        {throughBacking ? (
+          <BackingFields workspaceId={workspaceId} draft={backing} onChange={setBacking}
+            fromTypeId={link.from_object_type_id} toTypeId={link.to_object_type_id}
+            fromLabel={link.from_display_name} toLabel={link.to_display_name} />
+        ) : throughTable ? (
           <JoinTableFields
             workspaceId={workspaceId}
             projectId={projectId}
@@ -1741,7 +1812,7 @@ export default function ObjectsPage() {
                     <td>{lt.from_display_name} → {lt.to_display_name}</td>
                     <td className="count">{lt.cardinality}</td>
                     <td className="slug">
-                      {joinDescription(lt, joinLabel)}
+                      {backingDescription(lt) ?? joinDescription(lt, joinLabel)}
                     </td>
                     {/* p.32's usage, for a link type (§620). */}
                     <td className="slug" data-testid={`link-usage-${lt.api_name}`}>
