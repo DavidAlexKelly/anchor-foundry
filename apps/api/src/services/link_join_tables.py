@@ -90,7 +90,14 @@ async def follow(conn: Any, join: dict[str, Any], keys: list[Any]) -> list[str]:
     """The far primary keys the join table pairs with these near ones, at most
     `MAX_JOIN_VALUES + 1` - one past the cap, so `join_filter` refuses a
     traversal that starts too wide with its number rather than a join table
-    quietly cut short."""
+    quietly cut short.
+
+    A backed link's pairs are its backing objects rather than a dataset's rows
+    (§666), and are read by `link_backing`."""
+    if "backing_type_id" in join:
+        from . import link_backing
+
+        return await link_backing.follow(conn, join, keys)
     wanted = sorted({str(k) for k in keys if k is not None})
     if len(wanted) > object_sets.MAX_JOIN_VALUES:
         # `join_filter`'s refusal, a step earlier: past the cap the table
@@ -130,6 +137,10 @@ async def follow_pairs(
     At most `limit` pairs are read, and one more than that is the caller's
     signal to refuse: a page of derived values asks for every row's links in
     one read, so the bound is on the page rather than on one object."""
+    if "backing_type_id" in join:
+        from . import link_backing
+
+        return await link_backing.follow_pairs(conn, join, keys, limit)
     wanted = sorted({str(k) for k in keys if k is not None})
     row = await fetch_one(
         conn, "SELECT s3_location FROM datasets WHERE id = :id", {"id": join["dataset_id"]}
