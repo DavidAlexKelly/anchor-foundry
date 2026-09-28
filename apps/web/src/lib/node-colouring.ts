@@ -18,7 +18,7 @@
  * tokens would be a second palette. `RAMP` is neither. It is one token,
  * `--accent`, mixed with `transparent` at rising strengths, so each step is
  * further from *whatever the page is* than the last, in either theme. Build
- * duration is ○: no node carries one (`datasets-lineage.md`).
+ * duration followed (§623) once the timeline's build window was read here too.
  *
  * **The legend reads the graph rather than listing the vocabulary.** A key
  * showing every value a colouring *could* take would show six rows over a
@@ -26,6 +26,8 @@
  * legend a summary as well as a key. It stays in a fixed order rather than by
  * count, so it does not reshuffle as the graph changes underneath it.
  */
+
+import { buildWindowOf, durationLabel } from "./build-timeline";
 
 /** Only tokens `globals.css` declares in **both** themes. A colour a reader
  * cannot see in dark mode is a colour that means nothing to them. */
@@ -65,6 +67,8 @@ export const COLOURINGS: ColouringOption[] = [
     hint: "p.39: how many rows each dataset holds, in quarters of this graph" },
   { id: "built", label: "Time last built",
     hint: "p.39: how long ago each was built, in quarters of this graph" },
+  { id: "duration", label: "Build duration",
+    hint: "p.39: how long each dataset's last build took, in quarters of this graph" },
   { id: "none", label: "No colour",
     hint: "p.38's first option: remove colouring altogether" },
 ];
@@ -99,6 +103,10 @@ export interface ColourableNode {
    *  dataset or model output was last built. */
   row_count: number | null;
   built_at: string | null;
+  /** The build window behind a dataset's version (§418), for p.39's build
+   *  duration (§623). */
+  build_started_at: string | null;
+  build_finished_at: string | null;
 }
 
 export interface Swatch {
@@ -250,6 +258,7 @@ export function swatchFor(
       return null;
     case "rows":
     case "built":
+    case "duration":
       return quantitySwatch(node, colouring, scale ?? null);
     case "out_of_date":
       return outOfDateSwatch(node);
@@ -298,6 +307,7 @@ const LEGEND_ORDER: Record<string, readonly string[]> = {
   // nodes with nothing to measure.
   rows: ["q3", "q2", "q1", "q0", "none"],
   built: ["q3", "q2", "q1", "q0", "none"],
+  duration: ["q3", "q2", "q1", "q0", "none"],
 };
 
 /**
@@ -384,6 +394,13 @@ export function quantityOf(node: ColourableNode, colouring: string, now: number)
     const at = Date.parse(node.built_at);
     return Number.isNaN(at) ? null : Math.max(0, now - at);
   }
+  if (colouring === "duration") {
+    // The build timeline's own window (§418), so a card's colour and its bar
+    // cannot disagree about how long a build took - including refusing a
+    // finish before its start rather than inventing a length.
+    const window = buildWindowOf(node);
+    return window === null ? null : window.to - window.from;
+  }
   return null;
 }
 
@@ -392,7 +409,7 @@ export function quantityOf(node: ColourableNode, colouring: string, now: number)
 export function scaleFor(
   nodes: readonly ColourableNode[], colouring: string, now: number = Date.now(),
 ): Scale | null {
-  if (colouring !== "rows" && colouring !== "built") return null;
+  if (!QUANTITATIVE.includes(colouring)) return null;
   const values = nodes.map((n) => quantityOf(n, colouring, now))
     .filter((v): v is number => v !== null).sort((a, b) => a - b);
   const at = (q: number) => values[Math.min(values.length - 1, Math.floor(q * values.length))]!;
@@ -405,7 +422,11 @@ export function quarterOf(value: number, edges: readonly number[]): number {
   return at === -1 ? edges.length : at;
 }
 
-const NO_VALUE: Record<string, string> = { rows: "No rows counted", built: "Never built" };
+const QUANTITATIVE = ["rows", "built", "duration"];
+
+const NO_VALUE: Record<string, string> = {
+  rows: "No rows counted", built: "Never built", duration: "No build timed",
+};
 
 function quantitySwatch(node: ColourableNode, colouring: string, scale: Scale | null): Swatch {
   // No scale is no value, so one check covers both (§622's sweep).
@@ -417,10 +438,12 @@ function quantitySwatch(node: ColourableNode, colouring: string, scale: Scale | 
 
 /** A quarter in words: its bounds, as rows or as an age. */
 export function quarterLabel(colouring: string, q: number, edges: readonly number[]): string {
-  const say = colouring === "rows" ? rowsText : ageText;
+  const say = colouring === "rows" ? rowsText : colouring === "duration" ? durationLabel : ageText;
   const low = q === 0 ? null : edges[q - 1]!;
   const high = q === edges.length ? null : edges[q]!;
-  if (low === null && high === null) return colouring === "rows" ? "Any rows" : "Any time";
+  if (low === null && high === null) {
+    return colouring === "rows" ? "Any rows" : colouring === "duration" ? "Any length" : "Any time";
+  }
   if (low === null) return `Under ${say(high!)}`;
   if (high === null) return `${say(low)} or more`;
   return `${say(low)} to ${say(high)}`;

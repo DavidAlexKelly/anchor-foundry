@@ -11,7 +11,8 @@ import {
 function node(kind: string, over: Partial<ColourableNode> = {}): ColourableNode {
   return {
     kind, origin: null, health_status: null, last_run_status: null,
-    out_of_date: false, out_of_date_reason: null, row_count: null, built_at: null, ...over,
+    out_of_date: false, out_of_date_reason: null, row_count: null, built_at: null,
+    build_started_at: null, build_finished_at: null, ...over,
   };
 }
 
@@ -402,5 +403,32 @@ describe("p.39's quantitative colourings (§622)", () => {
     const ages = legendFor([node("model", { built_at: hoursAgo(1) }),
                             node("model", { built_at: hoursAgo(100) })], "built", NOW);
     expect(ages.map((e) => e.label)).toEqual(["4 days or more", "1 h to 4 days"]);
+  });
+});
+
+describe("p.39's build duration (§623)", () => {
+  const built = (ms: number) => dataset({
+    build_started_at: "2026-09-28T10:00:00.000Z",
+    build_finished_at: new Date(Date.parse("2026-09-28T10:00:00.000Z") + ms).toISOString(),
+  });
+
+  it("is the build timeline's own window, so card and bar agree", () => {
+    expect(quantityOf(built(1500), "duration", 0)).toBe(1500);
+    // A finish before its start is no build rather than a negative one.
+    expect(quantityOf(built(-10), "duration", 0)).toBeNull();
+    expect(quantityOf(dataset(), "duration", 0)).toBeNull();
+  });
+
+  it("is offered, scaled, worded as a duration and keyed most first", () => {
+    expect(COLOURINGS.map((c) => c.id)).toContain("duration");
+    const nodes = [built(500), built(1500), built(40_000), built(90_000), dataset()];
+    const scale = scaleFor(nodes, "duration", 0)!;
+    expect(scale.edges).toEqual([1500, 40_000, 90_000]);
+    expect(swatchFor(built(500), "duration", scale)!.label).toBe("Under 1.5 s");
+    expect(swatchFor(built(90_000), "duration", scale)!.label).toBe("1m 30s or more");
+    expect(swatchFor(dataset(), "duration", scale)!.label).toBe("No build timed");
+    expect(quarterLabel("duration", 0, [])).toBe("Any length");
+    expect(legendFor(nodes, "duration", 0).map((e) => e.key)).toEqual(
+      ["q3", "q2", "q1", "q0", "none"]);
   });
 });
