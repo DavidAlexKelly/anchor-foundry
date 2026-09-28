@@ -45,6 +45,10 @@ export interface SeriesSpec {
   /** p.280's **Layer type** (§626): drawn as bars or as a line whatever the
    * chart's own type is, or null for the chart's. */
   kind: LayerKind | null;
+  /** p.282's **Selection as filter** for this layer (§628): an array
+   * variable a click on its marks writes a clause into, on the layer's own
+   * property. Null for the chart's own drill-down. */
+  drilldownVariable: string | null;
 }
 
 export type LayerKind = "bar" | "line";
@@ -69,6 +73,7 @@ export function seriesOf(raw: unknown): SeriesSpec[] {
       objectSetVariable: nonEmpty(s.objectSetVariable),
       dimension: nonEmpty(s.dimension),
       kind: s.kind === "bar" || s.kind === "line" ? s.kind : null,
+      drilldownVariable: nonEmpty(s.drilldownVariable),
     }));
 }
 
@@ -188,4 +193,29 @@ export function mergeSeries(
 export function axisSides(specs: readonly SeriesSpec[], twoAxes: boolean): AxisSide[] {
   if (!twoAxes || specs.length === 0) return ["left", ...specs.map((): AxisSide => "left")];
   return ["left", ...specs.map((s) => s.axis)];
+}
+
+/**
+ * Which category a drill-down variable is narrowed to on a property: the
+ * value of its `eq` clause on that property, or null. Read back from the
+ * variable rather than held as a second copy, so a chart shows the document's
+ * state, including a clause something else set (§628 shares it between the
+ * chart's drill-down and each layer's).
+ */
+export function drilledLabel(clauses: unknown, property: string | null): string | null {
+  // A null property matches no clause a filter writes, so it needs no case.
+  if (!Array.isArray(clauses)) return null;
+  for (const clause of clauses) {
+    const c = clause as { property?: unknown; op?: unknown; value?: unknown } | null;
+    if (c && c.property === property && c.op === "eq") return String(c.value);
+  }
+  return null;
+}
+
+/** What a click on `label` writes: the clause narrowing to it, or nothing
+ * when it is already the one drilled into - clicking it again clears it. */
+export function drillClauses(
+  property: string, label: string, selected: string | null,
+): { property: string; op: "eq"; value: string }[] {
+  return label === selected ? [] : [{ property, op: "eq", value: label }];
 }

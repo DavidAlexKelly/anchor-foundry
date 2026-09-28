@@ -413,7 +413,7 @@ def test_a_chart_series_reading_its_own_set_uses_it() -> None:
     """p.280's Chart XY layers (§625): a series names an object set of its own.
     Uncounted, deleting that set would leave a series drawing nothing under a
     legend entry still naming it."""
-    assert wv.NESTED_REFERENCE_PROPS.get("series") == ("objectSetVariable",)
+    assert wv.NESTED_REFERENCE_PROPS.get("series") == ("objectSetVariable", "drilldownVariable")
     layout = {"c1": node({"objectSetVariable": "v_alerts", "series": [
         {"aggregate": "count"},
         {"aggregate": "count", "objectSetVariable": "v_flights", "dimension": "origin"},
@@ -423,6 +423,17 @@ def test_a_chart_series_reading_its_own_set_uses_it() -> None:
         "v_flights": object_set_var("v_flights", object_set={"object_type_id": TYPE_ID}),
     }))
     assert found["v_flights"] == [{"node": "c1", "prop": "series[1].objectSetVariable"}]
+
+
+def test_a_chart_series_selection_filter_uses_its_variable() -> None:
+    """p.282's Selection as filter per layer (§628): the array a click writes."""
+    layout = {"c1": node({"objectSetVariable": "v_alerts", "series": [
+        {"aggregate": "count", "drilldownVariable": "v_picked"}]})}
+    found = wv.usages(layout, wv.parse({
+        "v_alerts": object_set_var("v_alerts", object_set={"object_type_id": TYPE_ID}),
+        "v_picked": var("v_picked", kind="array"),
+    }))
+    assert found["v_picked"] == [{"node": "c1", "prop": "series[0].drilldownVariable"}]
 
 
 def test_a_list_prop_holding_junk_names_no_variables() -> None:

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_SERIES, axisSides, layerKinds, mergeSeries, seriesName, seriesOf, seriesRequests,
-  seriesSource, splitLayers, type SeriesSpec,
+  MAX_SERIES, axisSides, drillClauses, drilledLabel, layerKinds, mergeSeries, seriesName,
+  seriesOf, seriesRequests, seriesSource, splitLayers, type SeriesSpec,
 } from "./chart-series";
 
-const ON_CHART = { objectSetVariable: null, dimension: null, kind: null };
+const ON_CHART = { objectSetVariable: null, dimension: null, kind: null,
+  drilldownVariable: null };
 
 describe("seriesOf (p.281's multiple series)", () => {
   it("reads what a saved chart holds, and nothing else", () => {
@@ -119,6 +120,36 @@ describe("splitLayers", () => {
     expect(split.lineAt).toEqual([0]);
     expect(split.barAt).toEqual([1, 2]);
     expect(split.bars.values).toEqual([[NaN, NaN], [1, 90]]);
+  });
+});
+
+describe("p.282's Selection as filter per layer (§628)", () => {
+  it("reads a series' own selection variable when it names one", () => {
+    expect(seriesOf([{ drilldownVariable: "v_picked" }, { drilldownVariable: "" }])
+      .map((s) => s.drilldownVariable)).toEqual(["v_picked", null]);
+  });
+
+  it("finds the category a variable is narrowed to on a property", () => {
+    const clauses = [
+      { property: "region", op: "eq", value: "north" },
+      { property: "state", op: "in", value: ["open"] },
+      { property: "state", op: "eq", value: 3 },
+    ];
+    expect(drilledLabel(clauses, "region")).toBe("north");
+    // Not another property's, and not an operator other than eq.
+    expect(drilledLabel(clauses, "state")).toBe("3");
+    expect(drilledLabel(clauses.slice(0, 2), "state")).toBeNull();
+    expect(drilledLabel(clauses, null)).toBeNull();
+    expect(drilledLabel(undefined, "region")).toBeNull();
+    expect(drilledLabel([null, 4], "region")).toBeNull();
+  });
+
+  it("narrows to a click, and clears on a second click on the same", () => {
+    expect(drillClauses("state", "open", null))
+      .toEqual([{ property: "state", op: "eq", value: "open" }]);
+    expect(drillClauses("state", "open", "closed"))
+      .toEqual([{ property: "state", op: "eq", value: "open" }]);
+    expect(drillClauses("state", "open", "open")).toEqual([]);
   });
 });
 

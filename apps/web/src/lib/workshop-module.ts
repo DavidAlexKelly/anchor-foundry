@@ -312,7 +312,7 @@ export const NESTED_REFERENCE_PROPS: Record<string, readonly string[]> = {
   layers: ["objectSetVariable"],
   // p.280's Chart XY layers (§625): a series reading a set of its own. See
   // the API's copy.
-  series: ["objectSetVariable"],
+  series: ["objectSetVariable", "drilldownVariable"],
 };
 
 /** Props holding a map of names to variable ids of this module (§598): an

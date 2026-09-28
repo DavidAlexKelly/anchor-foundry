@@ -717,10 +717,13 @@ export function PieChart({
  */
 export function SegmentedBarChart({
   data, mode, drill, showLegend = true, titles, valueText, categoryText,
-  legend = "bottom", names, sides, kinds,
+  legend = "bottom", names, sides, kinds, drills,
 }: {
   data: Segmented;
   mode: SegmentMode;
+  /** p.282's Selection as filter per layer (§628): a series' own drill-down,
+   * by its place in the legend, where it has one; `drill` otherwise. */
+  drills?: (Drill | undefined)[];
   /** p.280's Layer type per series (§626): a series drawn as a line runs
    * across the grouped bars, through each category's middle. */
   kinds?: LayerKind[];
@@ -804,6 +807,7 @@ export function SegmentedBarChart({
         const category = data.categories[bar.category] ?? "";
         const segment = data.segments[series] ?? "";
         const scale = sideOf(series) === "right" ? right : s;
+        const own = drills?.[series] ?? drill;
         const top = yOf(scale, bar.to, area) ?? area.y;
         const bottom = yOf(scale, bar.from, area) ?? area.y + area.h;
         const x = area.x + slot * bar.category + (slot - barWidth) / 2 + barWidth * bar.offset;
@@ -818,8 +822,8 @@ export function SegmentedBarChart({
             width={Math.max(1, barWidth * bar.width - (bar.width < 1 ? 1 : 0))}
             height={Math.max(1, bottom - top)}
             fill={PALETTE[series % PALETTE.length]}
-            opacity={dim(drill, category)}
-            {...markProps(drill, category)}
+            opacity={dim(own, category)}
+            {...markProps(own, category)}
           >
             <title>{`${category} · ${segmentName(segment, names)}: ${bar.value}`}</title>
           </rect>
@@ -835,6 +839,7 @@ export function SegmentedBarChart({
           return y === null ? [] : [{ category, value, x: area.x + slot * i + slot / 2, y }];
         });
         const name = data.segments[series] ?? "";
+        const own = drills?.[series] ?? drill;
         return (
           <g key={`l${series}`} data-testid="chart-series-line" data-series={name}>
             <path
@@ -846,10 +851,10 @@ export function SegmentedBarChart({
                 key={dot.category}
                 cx={dot.x}
                 cy={dot.y}
-                r={drill ? 5 : 3}
+                r={own ? 5 : 3}
                 fill={PALETTE[series % PALETTE.length]}
-                opacity={dim(drill, dot.category)}
-                {...markProps(drill, dot.category)}
+                opacity={dim(own, dot.category)}
+                {...markProps(own, dot.category)}
               >
                 <title>{`${dot.category} · ${segmentName(name, names)}: ${dot.value}`}</title>
               </circle>
@@ -903,9 +908,11 @@ export function SegmentedBarChart({
  */
 export function MultiLineChart({
   data: given, drill, axis = CALCULATED, nulls = "ignored", showLegend = true,
-  legend = "bottom", titles, valueText, categoryText, sides, fill = "line",
+  legend = "bottom", titles, valueText, categoryText, sides, fill = "line", drills,
 }: {
   data: Segmented;
+  /** p.282's Selection as filter per layer (§628), as the bar chart's. */
+  drills?: (Drill | undefined)[];
   /** p.281's Area options (§601): shade beneath each line, or stack the
    * segments so each band is one segment's values. */
   fill?: "line" | "area" | "stacked";
@@ -1003,7 +1010,9 @@ export function MultiLineChart({
             stroke="none"
           />
         ))}
-        {lines.map((line, series) => (
+        {lines.map((line, series) => {
+          const own = drills?.[series] ?? drill;
+          return (
           <g key={series} data-testid="chart-series-line" data-series={data.segments[series]}>
             <path
               d={line.path} fill="none" stroke={PALETTE[series % PALETTE.length]} strokeWidth={2}
@@ -1013,16 +1022,17 @@ export function MultiLineChart({
                 key={dot.category}
                 cx={dot.x}
                 cy={dot.y}
-                r={drill ? 5 : 2.5}
+                r={own ? 5 : 2.5}
                 fill={PALETTE[series % PALETTE.length]}
-                opacity={dim(drill, dot.category)}
-                {...markProps(drill, dot.category)}
+                opacity={dim(own, dot.category)}
+                {...markProps(own, dot.category)}
               >
                 <title>{`${dot.category} · ${data.segments[series]}: ${dot.value}`}</title>
               </circle>
             ))}
           </g>
-        ))}
+          );
+        })}
       </Plot>
       {data.categories.map((category, i) =>
         i % labelEvery === 0 ? (

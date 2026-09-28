@@ -136,6 +136,8 @@ export const NESTED_PROP_DIRECTION: Record<string, "read" | "write"> = {
   "layers.objectSetVariable": "read",
   // p.280: a Chart XY layer's Data input (§625), charted and never written.
   "series.objectSetVariable": "read",
+  // p.282: a layer's Selection as filter (§628) writes the clause picked.
+  "series.drilldownVariable": "write",
 };
 
 /** The mapping props' directions (§598). p.241's variables passed as action
