@@ -968,6 +968,57 @@ def points_sql(
     return f"{_base_sql(ts, val, clause, interval, aggregate)} ORDER BY at LIMIT {capped}"
 
 
+#: p.392's *Time series search* (§651): at most this many events from one
+#: search. A threshold that splits a decade of readings into a million
+#: one-point runs is a question about the threshold.
+MAX_EVENTS = 1000
+
+
+def events_sql(
+    *,
+    key_column: str,
+    timestamp_column: str,
+    value_column: str,
+    series_id: str,
+    interval: str,
+    aggregate: str,
+    transforms: list[dict[str, Any]] | None,
+    op: str,
+    value: float,
+) -> str:
+    """p.392's *Time series search*: "Create an event set from conditions on
+    time series data, identifying time ranges that match a specified pattern
+    or threshold."
+
+    **An event is a run of consecutive readings that meet the threshold**,
+    from its first to its last: the series read through its transforms over
+    every point, as a read does before its cap, each reading marked, and each
+    reading that does not meet it closing the run before it. A gap is not a
+    reading, so it neither meets the threshold nor closes a run."""
+    if interval not in INTERVALS:
+        raise ValueError(f"unknown interval {interval!r} (supported: {', '.join(INTERVALS)})")
+    if aggregate not in AGGREGATES:
+        raise ValueError(f"unknown aggregate {aggregate!r} (supported: {', '.join(AGGREGATES)})")
+    if op not in FILTER_OPERATORS:
+        raise ValueError(f"the comparison must be one of {', '.join(FILTER_OPERATORS)}")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError("a search compares with a number")
+    key, ts, val = _quote(key_column), _quote(timestamp_column), _quote(value_column)
+    clause = f"CAST({key} AS VARCHAR) = {_literal(series_id)}"
+    ctes: list[str] = []
+    last = _chain(ctes, "t", _base_sql(ts, val, clause, interval, aggregate), transforms or [])
+    condition = f"value {FILTER_OPERATORS[op]} {float(value)!r}"
+    return (
+        f"WITH {', '.join(ctes)}, "
+        f"marked AS (SELECT CAST(at AS TIMESTAMP) AS at, ({condition}) AS hit FROM {last} "
+        "WHERE value IS NOT NULL), "
+        "runs AS (SELECT at, hit, sum(CASE WHEN hit THEN 0 ELSE 1 END) OVER "
+        "(ORDER BY at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS run FROM marked) "
+        "SELECT min(at) AS start, max(at) AS finish, count(*) AS points FROM runs WHERE hit "
+        f"GROUP BY run ORDER BY start LIMIT {MAX_EVENTS + 1}"
+    )
+
+
 def _chain(ctes: list[str], prefix: str, base: str, transforms: list[dict[str, Any]]) -> str:
     """A series and its transforms as CTEs `<prefix>0`, `<prefix>1`, …, added
     to `ctes`, with the name of the last. A formula's other inputs (§561) are

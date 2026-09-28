@@ -158,3 +158,37 @@ def test_two_sensors_combined_by_their_maximum(page, api, module) -> None:
     expect(stat(page, combined, "min")).to_have_text("30")
     expect(stat(page, combined, "max")).to_have_text("900")
     expect(stat(page, combined, "mean")).to_have_text("467.5")
+
+
+def test_an_event_set_is_counted_and_highlighted(page, api, module) -> None:
+    """p.392's Time series search and p.395's Event count and Event highlight
+    (§651). North at least 25 is one run, its last two readings; below 25 is
+    the other run; and South, flat at 900, is never above 1000."""
+    open_module(page, build(api, module, "Analysis events"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+
+    def add(plot: str, op: str, value: str) -> None:
+        page.get_by_role("button", name="New event set").click()
+        page.get_by_label("Event plot").select_option(label=plot)
+        page.get_by_label("Event comparison").select_option(op)
+        page.get_by_label("Event threshold").fill(value)
+        page.get_by_role("button", name="Add event set").click()
+
+    add("North sensor", "gte", "25")
+    add("South sensor", "gt", "1000")
+    # Not equal to 20 is two runs, the 10 and then the 30 and 40.
+    add("North sensor", "neq", "20")
+    sets = page.locator("[data-testid='series-event-sets'] tbody tr")
+    expect(sets).to_have_count(3)
+    count = lambda label: page.locator(  # noqa: E731
+        f"[data-testid='series-event-sets'] tr[data-label='{label}'] td[data-stat='events']")
+    expect(count("North sensor at least 25")).to_have_text("1")
+    expect(count("South sensor above 1000")).to_have_text("0")
+    expect(count("North sensor not equal to 20")).to_have_text("2")
+    shaded = page.locator("[data-testid='series-canvas-1'] rect[data-event-set='events-1']")
+    expect(shaded).to_have_count(1)
+    assert float(shaded.get_attribute("width")) > 2
+    page.get_by_label("Highlight North sensor at least 25").uncheck()
+    expect(shaded).to_have_count(0)
+    page.get_by_label("Remove South sensor above 1000").click()
+    expect(sets).to_have_count(2)

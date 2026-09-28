@@ -25,7 +25,8 @@
  */
 
 import {
-  KIND_LABELS, MAX_SPAN, type SeriesTransform, type TimeUnit, type TransformKind,
+  FILTER_WORDS, KIND_LABELS, MAX_SPAN, type FilterOperator, type SeriesTransform, type TimeUnit,
+  type TransformKind,
 } from "./series-transforms";
 
 /** p.393's Bollinger bands (§649), which is three plots rather than one
@@ -342,4 +343,76 @@ export function withCombined(
   const made = next[next.length - 1]!;
   const names = chosen.map((o) => byId(plots).get(o)!.label);
   return [...next.slice(0, -1), { ...made, label: `${from.label} combined with ${names.join(", ")}` }];
+}
+
+
+/** p.392's *Time series search* (§651): an event set from a plot, the time
+ * ranges where its readings meet a threshold. p.395's *Event highlight*
+ * shades them on the plot's canvas. */
+export interface EventSet {
+  id: string;
+  label: string;
+  plot: string;
+  op: FilterOperator;
+  value: number;
+  highlight: boolean;
+}
+export const MAX_EVENT_SETS = 6;
+
+/** The event sets with one more, searching `plot`, under an id none has;
+ * unchanged at the cap, for a plot that is not there, or a value that is no
+ * number. */
+export function withEventSet(
+  sets: readonly EventSet[], plots: readonly Plot[], plot: string, op: FilterOperator, value: number,
+): EventSet[] {
+  const on = byId(plots).get(plot);
+  if (!on || !Number.isFinite(value) || sets.length >= MAX_EVENT_SETS) return [...sets];
+  let n = sets.length + 1;
+  while (sets.some((e) => e.id === `events-${n}`)) n += 1;
+  return [...sets, { id: `events-${n}`, label: `${on.label} ${FILTER_WORDS[op]} ${value}`, plot, op,
+    value, highlight: true }];
+}
+
+/** The event sets whose plot is still there: removing a plot removes the
+ * searches of it. */
+export function liveEventSets(sets: readonly EventSet[], plots: readonly Plot[]): EventSet[] {
+  const ids = new Set(plots.map((p) => p.id));
+  return sets.filter((e) => ids.has(e.plot));
+}
+
+export interface SeriesEvent { start: number; end: number }
+
+/** An event set's events as times, those with both ends readable. */
+export function eventsOf(raw: readonly { start: unknown; end: unknown }[]): SeriesEvent[] {
+  const out: SeriesEvent[] = [];
+  for (const e of raw) {
+    const start = typeof e.start === "string" ? Date.parse(e.start) : NaN;
+    const end = typeof e.end === "string" ? Date.parse(e.end) : NaN;
+    if (Number.isFinite(start) && Number.isFinite(end)) out.push({ start, end: Math.max(start, end) });
+  }
+  return out;
+}
+
+/** p.395's *Event count*: "The number of events within the current view
+ * range", counting an event that overlaps it. */
+export function eventCount(events: readonly SeriesEvent[], range: { from: number; to: number } | null = null): number {
+  return range ? events.filter((e) => e.end >= range.from && e.start <= range.to).length : events.length;
+}
+
+/** Where an event is shaded on a canvas: from its first reading to its last,
+ * at least two pixels wide so a one-reading event can be seen, and clipped to
+ * the frame. */
+export function eventSpan(
+  event: SeriesEvent,
+  extent: { t0: number; t1: number },
+  width: number,
+): { x: number; width: number } | null {
+  const x = (t: number) => ((t - extent.t0) / (extent.t1 - extent.t0)) * width;
+  const from = Math.max(0, x(event.start));
+  const to = Math.min(width, x(event.end));
+  // Clipped to the frame, an event outside it ends before it starts (a test
+  // for each side of the frame survived the sweep as equivalent).
+  if (to < from) return null;
+  const w = Math.max(2, to - from);
+  return { x: Math.min(from, width - w), width: w };
 }

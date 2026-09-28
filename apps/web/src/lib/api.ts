@@ -1860,6 +1860,20 @@ export const objects = {
         (opts.transforms?.length
           ? `&transforms=${encodeURIComponent(JSON.stringify(opts.transforms))}` : ""),
     ),
+  /** p.392's *Time series search* (§651): the runs of one object's series,
+   * through its transforms, whose readings meet a threshold. */
+  seriesEvents: (
+    wid: string, typeId: string, instanceId: string, property: string,
+    opts: { op: string; value: number; transforms?: unknown[] },
+  ) =>
+    request<{ property_api_name: string; truncated: boolean;
+      events: { start: string; end: string; points: number }[] }>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}` +
+        `/series/${encodeURIComponent(property)}/events` +
+        `?op=${encodeURIComponent(opts.op)}&value=${encodeURIComponent(String(opts.value))}` +
+        (opts.transforms?.length
+          ? `&transforms=${encodeURIComponent(JSON.stringify(opts.transforms))}` : ""),
+    ),
   /** One object's track: where it was, in time order (§427;
    * `object-link-types` p.127). `seriesPoints`' counterpart, and a separate
    * call rather than an option on it, because a track takes no interval and

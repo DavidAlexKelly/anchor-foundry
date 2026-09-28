@@ -540,3 +540,111 @@ def test_a_filter_and_a_sample_parse_with_their_defaults() -> None:
         {"kind": "filter", "op": "lt", "value": 2.0, "keep": True}]
     assert ts.parse_transforms([{"kind": "sample", "every": 3, "unit": "hour"}]) == [
         {"kind": "sample", "every": 3, "unit": "hour", "method": "previous"}]
+
+
+# ---- p.392's Time series search (§651) ----------------------------------------------
+def events(op: str, value: float, transforms: list[dict] | None = None, rows=None) -> list[tuple]:
+    con = duckdb.connect()
+    try:
+        con.execute("CREATE TABLE dataset (sensor VARCHAR, taken TIMESTAMP, reading DOUBLE)")
+        con.executemany("INSERT INTO dataset VALUES (?, ?, ?)", rows or ROWS)
+        sql = ts.events_sql(key_column="sensor", timestamp_column="taken", value_column="reading",
+                            series_id="S1", interval="none", aggregate="avg",
+                            transforms=ts.parse_transforms(transforms or []), op=op, value=value)
+        return [(r[0], r[1], r[2]) for r in con.execute(sql).fetchall()]
+    finally:
+        con.close()
+
+
+def test_an_event_is_a_run_of_readings_that_meet_the_threshold() -> None:
+    """p.392: "identifying time ranges that match a specified pattern or
+    threshold". S1 reads 1, 3, 6, 10: above 2 is one run, from the 2nd to the
+    5th; S2's 1000 is another series."""
+    assert events("gt", 2) == [(day(2), day(5), 3)]
+    assert events("lt", 5) == [(day(1), day(2), 2)]
+    assert events("gt", 100) == []
+
+
+def test_a_reading_that_misses_closes_the_run_and_a_gap_does_not() -> None:
+    rows = [("S1", "2026-01-01", 5.0), ("S1", "2026-01-02", 1.0), ("S1", "2026-01-03", 6.0),
+            ("S1", "2026-01-04", None), ("S1", "2026-01-05", 7.0)]
+    assert events("gte", 5, rows=rows) == [(day(1), day(1), 1), (day(3), day(5), 2)]
+
+
+def test_a_search_reads_the_series_through_its_transforms() -> None:
+    """A running sum of 1, 3, 6, 10 is 1, 4, 10, 20: above 5 from the 4th."""
+    assert events("gt", 5, [{"kind": "cumulative", "aggregate": "sum"}]) == [(day(4), day(5), 2)]
+
+
+def test_a_search_is_capped_one_past_the_limit_so_the_cut_can_be_said() -> None:
+    sql = ts.events_sql(key_column="k", timestamp_column="t", value_column="v", series_id="S1",
+                        interval="none", aggregate="avg", transforms=[], op="eq", value=1)
+    assert sql.endswith(f"LIMIT {ts.MAX_EVENTS + 1}")
+
+
+@pytest.mark.parametrize("kw, said", [
+    ({"op": "near", "value": 1}, "the comparison must be one of"),
+    ({"op": "gt", "value": float("nan")}, "compares with a number"),
+    ({"op": "gt", "value": True}, "compares with a number"),
+    ({"op": "gt", "value": 1, "interval": "year"}, "unknown interval"),
+    ({"op": "gt", "value": 1, "aggregate": "median"}, "unknown aggregate"),
+])
+def test_a_search_that_says_too_little_is_refused(kw, said) -> None:
+    with pytest.raises(ValueError) as caught:
+        ts.events_sql(key_column="k", timestamp_column="t", value_column="v", series_id="S1",
+                      interval=kw.pop("interval", "none"), aggregate=kw.pop("aggregate", "avg"),
+                      transforms=[], **kw)
+    assert said in str(caught.value)
+
+
+def test_the_events_endpoint_searches_one_object_s_series(client, fx, ontology, instance) -> None:
+    assert declare(client, fx, ontology).status_code == 200
+    url = (f"{wbase(fx)}/object-types/{ontology['type_id']}/instances/{instance}"
+           "/series/readings/events")
+    readings = points(client, fx, ontology).json()["points"]
+    r = client.get(url, headers=hdr(fx.viewer_sub), params={"op": "gte", "value": 20})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"property_api_name": "readings", "truncated": False, "events": [
+        {"start": readings[1]["at"], "end": readings[-1]["at"], "points": len(readings) - 1}]}
+    # Through a transform, and refused in a sentence for a comparison it lacks.
+    running = json.dumps([{"kind": "cumulative", "aggregate": "sum"}])
+    r = client.get(url, headers=hdr(fx.viewer_sub),
+                   params={"op": "gt", "value": 50, "transforms": running})
+    assert [e["points"] for e in r.json()["events"]] == [1]
+    r = client.get(url, headers=hdr(fx.viewer_sub), params={"op": "near", "value": 1})
+    assert r.status_code == 422 and "comparison" in r.text
+    assert client.get(url, headers=hdr(fx.outsider_sub),
+                      params={"op": "gt", "value": 1}).status_code == 404
+
+
+def test_a_search_past_the_cap_says_it_was_cut(client, fx, ontology, instance, monkeypatch) -> None:
+    """S1 reads 10, 20, 30: not equal to 20 is two runs, and with room for
+    one the answer says there were more."""
+    assert declare(client, fx, ontology).status_code == 200
+    url = (f"{wbase(fx)}/object-types/{ontology['type_id']}/instances/{instance}"
+           "/series/readings/events")
+    body = client.get(url, headers=hdr(fx.viewer_sub), params={"op": "neq", "value": 20}).json()
+    assert [e["points"] for e in body["events"]] == [1, 1] and body["truncated"] is False
+    monkeypatch.setattr(ts, "MAX_EVENTS", 1)
+    body = client.get(url, headers=hdr(fx.viewer_sub), params={"op": "neq", "value": 20}).json()
+    assert len(body["events"]) == 1 and body["truncated"] is True
+
+
+def test_an_object_with_no_series_id_has_no_events(client, fx, ontology, instance) -> None:
+    import psycopg
+
+    from test_api import ADMIN_DSN
+
+    assert declare(client, fx, ontology).status_code == 200
+    url = (f"{wbase(fx)}/object-types/{ontology['type_id']}/instances/{instance}"
+           "/series/readings/events")
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE object_instances SET properties = properties - 'readings' "
+                     "WHERE id = %s", (instance,))
+        try:
+            r = client.get(url, headers=hdr(fx.viewer_sub), params={"op": "gt", "value": 0})
+        finally:
+            conn.execute("UPDATE object_instances SET properties = jsonb_set(properties, "
+                         "'{readings}', to_jsonb(primary_key)) WHERE id = %s", (instance,))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"property_api_name": "readings", "events": [], "truncated": False}
