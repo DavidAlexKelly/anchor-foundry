@@ -265,6 +265,9 @@ def collapsible_sections(layout: Any) -> list[str]:
 TABLE_WIDGET = "CanvasObjectTable"
 #: p.349's per-layer Override selection event lives on the Timeline (§616).
 TIMELINE_WIDGET = "CanvasTimeline"
+#: p.322's "Create annotations via actions or events" lives on the Markdown
+#: widget (§638): interactions offered on highlighted text, each a click.
+MARKDOWN_WIDGET = "CanvasMarkdown"
 #: The trigger each kind of item belongs to. Everything else's items are
 #: clicks; a timeline's layers are row selections.
 ITEM_TRIGGERS = {"layers": "row_select"}
@@ -313,6 +316,13 @@ def button_items(layout: Any) -> dict[str, tuple[str, list[str]]]:
                 str(layer["id"]) for layer in layers
                 if isinstance(layer, dict) and layer.get("id")
                 and layer.get("overrideSelection") is True
+            ])
+        if name == MARKDOWN_WIDGET and isinstance(props, dict):
+            # p.322 (§638): the interactions offered on highlighted text.
+            actions = props.get("highlightActions")
+            out[node_id] = ("highlight", [
+                str(a["id"]) for a in (actions if isinstance(actions, list) else [])
+                if isinstance(a, dict) and a.get("id")
             ])
         # A table falls through here and out: it is not a Button (§613's sweep
         # found a `continue` above could not change an answer).
@@ -483,6 +493,12 @@ def _parse_item(
             f"event {key!r} fires when table {node!r} is clicked, but a table's clicks are "
             "the items of its right-click menu - choose which item fires the event"
         )
+    if item is None and menus is not None and on == "click" \
+            and menus.get(node, ("",))[0] == "highlight":
+        raise EventError(
+            f"event {key!r} fires when Markdown {node!r} is clicked, but its clicks are the "
+            "actions offered on highlighted text - choose which one fires the event"
+        )
     if item is None:
         # A Menu button's own click opens its menu; an event on it would be a
         # wiring that never fires. A Two-part button's is its main button.
@@ -505,7 +521,7 @@ def _parse_item(
             raise EventError(
                 f"event {key!r} fires from item {item!r} of {node!r}, which has no items - "
                 "only a Menu or Two-part button does, or a table's right-click menu, "
-                "or a timeline's overriding layers"
+                "a timeline's overriding layers, or a Markdown widget's highlight actions"
             )
         wanted = ITEM_TRIGGERS.get(entry[0], "click")
         if on != wanted:

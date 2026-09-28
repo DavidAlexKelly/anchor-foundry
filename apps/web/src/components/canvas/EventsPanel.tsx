@@ -53,10 +53,17 @@ const TRIGGERS: {
     label: "Clicked",
     // p.330's Interactive metric: "trigger a command, action, or event upon
     // card selection" (§527).
-    widgets: ["CanvasButton", "CanvasTabs", "CanvasMetricCard", "CanvasObjectTable"],
+    widgets: [
+      "CanvasButton", "CanvasTabs", "CanvasMetricCard", "CanvasObjectTable", "CanvasMarkdown",
+    ],
     // p.243's custom right-click menu (§613): a table's clicks are its
-    // menu's items, and it is offered only when the menu has some.
-    labels: { CanvasMetricCard: "Card selected", CanvasObjectTable: "Right-click menu item" },
+    // menu's items, and it is offered only when the menu has some. p.322's
+    // actions on highlighted text are the Markdown widget's, the same way
+    // (§638).
+    labels: {
+      CanvasMetricCard: "Card selected", CanvasObjectTable: "Right-click menu item",
+      CanvasMarkdown: "Highlighted text action",
+    },
   },
   {
     on: "row_select",
@@ -260,8 +267,8 @@ function triggersFor(
   return TRIGGERS.filter((t) => t.widgets.includes(widget))
     // A table's click is a right-click menu item, so it is not a trigger of a
     // table with none - the server refuses the event (§613).
-    .filter((t) => !(widget === "CanvasObjectTable" && t.on === "click"
-      && (node?.items?.length ?? 0) === 0))
+    .filter((t) => !((widget === "CanvasObjectTable" || widget === "CanvasMarkdown")
+      && t.on === "click" && (node?.items?.length ?? 0) === 0))
     .map((t) => ({
     on: t.on,
     label: t.labels?.[widget] ?? t.label,

@@ -5015,6 +5015,7 @@ export function CanvasMarkdown({
   annotationFormat = "highlight",
   selectedAnnotationVariable = null,
   annotationTooltip = "",
+  highlightActions = [],
 }: {
   source?: string;
   text?: string;
@@ -5045,6 +5046,9 @@ export function CanvasMarkdown({
   annotationFormat?: string;
   selectedAnnotationVariable?: string | null;
   annotationTooltip?: string;
+  /** p.322's Create annotations via actions or events (§638): what is offered
+   * on highlighted text, each a click the Events panel wires. */
+  highlightActions?: unknown;
 }) {
   const {
     id: nodeId,
@@ -5069,7 +5073,12 @@ export function CanvasMarkdown({
   const widgetAlign = alignmentOf(alignment);
   const references = tagType === "inline_reference";
   // p.317's outputs need to know where each character came from (§636).
-  const selecting = !!(selectedTextVariable || selectionStartVariable || selectionEndVariable);
+  const offered = itemsOf(highlightActions);
+  // The text highlighted now, for p.322's actions on it (§638).
+  const [highlighted, setHighlighted] = useState<
+    { text: string; start: number; end: number } | null>(null);
+  const selecting = !!(selectedTextVariable || selectionStartVariable || selectionEndVariable)
+    || offered.length > 0;
   // p.321's annotations (§637): each layer's objects read, and drawn over the
   // runs their indices name.
   const annotating = tagType === "annotation";
@@ -5170,6 +5179,7 @@ export function CanvasMarkdown({
       endOf(chosen.anchorNode, chosen.anchorOffset), endOf(chosen.focusNode, chosen.focusOffset));
     const inside = containerRef.current?.contains(chosen.anchorNode ?? null);
     if (!inside) return;
+    setHighlighted(range ? { text: selectedSource(rawSource, range), ...range } : null);
     if (selectedTextVariable) {
       setParameter(selectedTextVariable, range ? selectedSource(rawSource, range) : "");
     }
@@ -5240,6 +5250,34 @@ export function CanvasMarkdown({
               <MarkdownView blocks={blocks} align={widgetAlign} />
             </MarkdownRuns.Provider>
           </MarkdownReferences.Provider>
+          {/* p.322: "Configure actions or events to create new annotation
+              objects when text is highlighted within the widget" (§638). Each
+              runs its events with the highlighted text - p.322's "Highlighted
+              text" - as `{{value}}`, and its indices. */}
+          {highlighted && offered.length > 0 && (
+            <div className="row-actions canvas-markdown-highlight" data-testid="markdown-highlight">
+              {offered.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  className="btn quiet"
+                  data-testid="markdown-highlight-action"
+                  title={`${action.label}: “${highlighted.text}”`}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (mode !== "run") return;
+                    runEvents(eventsFor(moduleEvents, nodeId, "click", action.id), {
+                      ...eventContext,
+                      payload: { value: highlighted.text, start: highlighted.start,
+                                 end: highlighted.end },
+                    });
+                  }}
+                >
+                  {action.label || "Action"}
+                </button>
+              ))}
+            </div>
+          )}
           {unreadable > 0 && (
             // Said, not dropped: an annotation that cannot be placed and one
             // that is not there look the same otherwise.
@@ -5264,8 +5302,10 @@ function MarkdownSettings() {
     tagType, selectedVariable, referenceTypes, selectionBehavior,
     selectedTextVariable, selectionStartVariable, selectionEndVariable,
     annotationLayers, annotationFormat, selectedAnnotationVariable, annotationTooltip,
+    highlightActions,
     actions: { setProp },
   } = useNode((node) => ({
+    highlightActions: node.data.props.highlightActions,
     annotationLayers: node.data.props.annotationLayers,
     annotationFormat: node.data.props.annotationFormat,
     selectedAnnotationVariable: node.data.props.selectedAnnotationVariable,
@@ -5532,6 +5572,44 @@ function MarkdownSettings() {
           </div>
         );
       })()}
+      {/* p.322's Create annotations via actions or events (§638). */}
+      <div className="field" data-testid="markdown-highlight-settings">
+        <span className="field-label">Actions on highlighted text</span>
+        {itemsOf(highlightActions).map((action, i) => (
+          <div key={action.id} className="field-inline">
+            <input
+              type="text"
+              aria-label={`Highlight action ${i + 1} title`}
+              data-testid="markdown-highlight-title"
+              value={action.label}
+              onChange={(e) => setProp((p: { highlightActions: unknown }) =>
+                (p.highlightActions = renameItem(itemsOf(p.highlightActions), action.id,
+                  e.target.value)))}
+            />
+            <button
+              type="button"
+              className="btn quiet"
+              aria-label={`Remove highlight action ${i + 1}`}
+              onClick={() => setProp((p: { highlightActions: unknown }) =>
+                (p.highlightActions = removeItem(itemsOf(p.highlightActions), action.id)))}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="btn"
+          data-testid="markdown-highlight-add"
+          onClick={() => setProp((p: { highlightActions: unknown }) =>
+            (p.highlightActions = addItem(itemsOf(p.highlightActions))))}
+        >
+          Add an action
+        </button>
+        <span className="field-hint">
+          Offered on highlighted text; wire each in Events, where {"{{value}}"} is the text
+        </span>
+      </div>
       {/* p.317's User text selection (§636). */}
       <div className="field" data-testid="markdown-selection-outputs">
         <span className="field-label">User text selection</span>
