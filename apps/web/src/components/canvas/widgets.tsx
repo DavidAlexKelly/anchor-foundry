@@ -335,6 +335,8 @@ import {
   MAX_CANVASES as MAX_SERIES_CANVASES, MAX_INITIAL_EVENTS as MAX_SERIES_INITIAL_EVENTS,
   canvasFor as seriesCanvasFor, initialEventSetsOf as seriesInitialEventSetsOf,
   objectEventsOf as seriesObjectEventsOf, placementOf as seriesPlacementOf,
+  VIEW_RANGES as SERIES_VIEW_RANGES, defaultRangeOf as seriesDefaultRangeOf, pannedRange as seriesPannedRange,
+  timesOf as seriesTimesOf, zoomedRange as seriesZoomedRange, type ViewRange as SeriesViewRange,
   type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
@@ -13061,6 +13063,13 @@ export function CanvasSeriesAnalysis({
   eventSetTypes = null,
   newPlotCanvas = "input",
   eventSets: initialEventSets = null,
+  viewRange = "full",
+  windowStartVariable = null,
+  windowEndVariable = null,
+  relativeAmount = 2,
+  relativeUnit = "week",
+  syncXAxes = false,
+  utc = false,
 }: {
   objectSetVariable?: string | null;
   property?: string | null;
@@ -13076,6 +13085,17 @@ export function CanvasSeriesAnalysis({
   newPlotCanvas?: string | number;
   /** p.396's *Add initial event sets* (§658). */
   eventSets?: unknown;
+  /** p.396's *Default view range* (§659): "full", "fixed" between two date
+   * or timestamp variables, or "relative", this long before the page loaded. */
+  viewRange?: string;
+  windowStartVariable?: string | null;
+  windowEndVariable?: string | null;
+  relativeAmount?: number;
+  relativeUnit?: string;
+  /** p.396's *Sync X-axes across canvases* (§659). */
+  syncXAxes?: boolean;
+  /** p.396's *Enable UTC time format* (§659). */
+  utc?: boolean;
 }) {
   const {
     connectors: { connect, drag },
@@ -13144,6 +13164,26 @@ export function CanvasSeriesAnalysis({
     eventStats?: { set: string; aggregate: "sum" | "avg" | "min" | "max" | "count" | "stddev" };
   } | null>(null);
   const canvases = seriesCanvasesOf(plots, addedCanvases);
+  // p.396's view range (§659): each canvas's, or one for them all when the
+  // X-axes are synced; a canvas the reader has not moved shows the default.
+  const [loaded] = useState(() => Date.now());
+  const windowStartWritten = useCanvasParameter(windowStartVariable);
+  const windowStartResolved = useCanvasVariable(windowStartVariable);
+  const windowEndWritten = useCanvasParameter(windowEndVariable);
+  const windowEndResolved = useCanvasVariable(windowEndVariable);
+  const defaultView = seriesDefaultRangeOf(viewRange, windowOf(
+    windowStartWritten !== undefined ? windowStartWritten : windowStartResolved,
+    windowEndWritten !== undefined ? windowEndWritten : windowEndResolved,
+  ), relativeAmount, relativeUnit, loaded);
+  const [views, setViews] = useState<Record<string, SeriesViewRange | null>>({});
+  const viewKey = (canvas: number) => (syncXAxes ? "all" : String(canvas));
+  const viewOf = (canvas: number) => (viewKey(canvas) in views ? views[viewKey(canvas)]! : defaultView);
+  const fullOf = (canvas: number) => seriesTimesOf(plots.flatMap((p, n) => (p.canvas === canvas || syncXAxes
+    ? [readings[n] ?? []] : [])));
+  const setView = (canvas: number, next: SeriesViewRange | null | undefined) => {
+    const { [viewKey(canvas)]: _was, ...rest } = views;
+    setViews(next === undefined ? rest : { ...rest, [viewKey(canvas)]: next });
+  };
   // p.394-395's axes (§656), by canvas and axis.
   const [axes, setAxes] = useState<SeriesAxes>({});
   // p.392's Time series search (§651): event sets over the plots, each
@@ -13217,7 +13257,27 @@ export function CanvasSeriesAnalysis({
       {plots.length > 0 && (
         <>
           {canvases.map((canvas) => (
-            <SeriesAnalysisChart key={canvas} canvas={canvas}
+            <React.Fragment key={canvas}>
+            <div className="row-actions" data-testid={`series-view-${canvas}`} style={{ gap: 4 }}>
+              {([["zoom in", "Zoom in"], ["zoom out", "Zoom out"], ["earlier", "◀"], ["later", "▶"]] as const)
+                .map(([what, text]) => (
+                  <button key={what} type="button" className="btn quiet" aria-label={`Canvas ${canvas} ${what}`}
+                          disabled={!fullOf(canvas)}
+                          onClick={() => {
+                            const full = fullOf(canvas)!;
+                            setView(canvas, what === "zoom in" ? seriesZoomedRange(viewOf(canvas), full, 0.5)
+                              : what === "zoom out" ? seriesZoomedRange(viewOf(canvas), full, 2)
+                              : seriesPannedRange(viewOf(canvas), full, what === "earlier" ? -0.5 : 0.5));
+                          }}>
+                    {text}
+                  </button>
+                ))}
+              <button type="button" className="btn quiet" aria-label={`Canvas ${canvas} reset view`}
+                      onClick={() => setView(canvas, undefined)}>
+                Reset view
+              </button>
+            </div>
+            <SeriesAnalysisChart canvas={canvas} view={viewOf(canvas)} utc={utc}
               axes={seriesAxesOf(plots, canvas).map((axis) => ({
                 axis, settings: seriesAxisSettingsOf(axes, canvas, axis) }))}
               events={[...initial.flatMap((_, n) => initialHidden.includes(n) ? []
@@ -13233,6 +13293,7 @@ export function CanvasSeriesAnalysis({
               .map(({ plot, n }) => ({ id: plot.id, label: plot.label, color: colorOf(n),
                 dashed: plot.style === "dashed", display: seriesDisplayOf(plot), axis: seriesAxisOf(plot),
                 readings: readings[n] ?? [] }))} />
+            </React.Fragment>
           ))}
           {/* The Plots panel: each plot's display, place and statistics. */}
           <table className="data-grid" data-testid="series-plots">
@@ -13245,7 +13306,8 @@ export function CanvasSeriesAnalysis({
             </thead>
             <tbody>
               {plots.map((plot, n) => {
-                const stats = seriesStatsOf(readings[n] ?? []);
+                // p.395: "within the current view range".
+                const stats = seriesStatsOf(readings[n] ?? [], viewOf(plot.canvas));
                 const failed = readingsFor[n]?.error;
                 const display = seriesDisplayOf(plot);
                 const options = seriesPointOptions(display);
@@ -13524,7 +13586,7 @@ export function CanvasSeriesAnalysis({
                     <tr key={`initial-${n}`} data-label={set.label} data-initial="">
                       <td>{set.label}</td>
                       <td data-stat="events">
-                        {read ? `${seriesEventCount(initialEvents[n] ?? [])}${read.total > read.instances.length ? "+" : ""}` : "…"}
+                        {read ? `${seriesEventCount(initialEvents[n] ?? [], viewOf(1))}${read.total > read.instances.length ? "+" : ""}` : "…"}
                       </td>
                       <td>
                         <input type="checkbox" aria-label={`Highlight ${set.label}`} checked={!initialHidden.includes(n)}
@@ -13540,7 +13602,7 @@ export function CanvasSeriesAnalysis({
                     <td>{set.label}</td>
                     <td data-stat="events">
                       {eventsFor[n]?.data
-                        ? `${seriesEventCount(eventsOfSet[n] ?? [])}${eventsFor[n]!.data!.truncated ? "+" : ""}`
+                        ? `${seriesEventCount(eventsOfSet[n] ?? [], viewOf(plots.find((p) => p.id === set.plot)?.canvas ?? 1))}${eventsFor[n]!.data!.truncated ? "+" : ""}`
                         : "…"}
                     </td>
                     <td>
@@ -13677,7 +13739,7 @@ function SeriesAnalysisSettings() {
   const { declared } = useCanvasVariables();
   const {
     objectSetVariable, property, labelProperty, limit, title, plotTypes, eventSetTypes, newPlotCanvas,
-    eventSets,
+    eventSets, viewRange, windowStartVariable, windowEndVariable, relativeAmount, relativeUnit, syncXAxes, utc,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -13689,7 +13751,15 @@ function SeriesAnalysisSettings() {
     eventSetTypes: node.data.props.eventSetTypes,
     newPlotCanvas: node.data.props.newPlotCanvas,
     eventSets: node.data.props.eventSets,
+    viewRange: node.data.props.viewRange,
+    windowStartVariable: node.data.props.windowStartVariable,
+    windowEndVariable: node.data.props.windowEndVariable,
+    relativeAmount: node.data.props.relativeAmount,
+    relativeUnit: node.data.props.relativeUnit,
+    syncXAxes: node.data.props.syncXAxes,
+    utc: node.data.props.utc,
   }));
+  const moments = Object.values(declared).filter((v) => v.kind === "timestamp" || v.kind === "date");
   const setTypes = SERIES_EVENT_SET_TYPES.filter((k) => !eventSetTypes || eventSetTypes.includes(k));
   const initial = seriesInitialEventSetsOf(eventSets);
   const rawInitial: Record<string, unknown>[] = Array.isArray(eventSets) ? eventSets : [];
@@ -13809,6 +13879,50 @@ function SeriesAnalysisSettings() {
         )}
       </div>
       <label className="field">
+        <span className="field-label">Default view range</span>
+        <select aria-label="Default view range" value={viewRange || "full"}
+                onChange={(e) => setProp((p: { viewRange: string }) => (p.viewRange = e.target.value))}>
+          {SERIES_VIEW_RANGES.map((k) => (
+            <option key={k} value={k}>
+              {k === "full" ? "Full data range" : k === "fixed" ? "Fixed date range" : "Relative date range"}
+            </option>
+          ))}
+        </select>
+      </label>
+      {viewRange === "fixed" && (["windowStartVariable", "windowEndVariable"] as const).map((key) => (
+        <label key={key} className="field">
+          <span className="field-label">{key === "windowStartVariable" ? "View from" : "View to"}</span>
+          <select aria-label={key === "windowStartVariable" ? "View from variable" : "View to variable"}
+                  value={(key === "windowStartVariable" ? windowStartVariable : windowEndVariable) || ""}
+                  onChange={(e) => setProp((p: Record<string, string | null>) => (p[key] = e.target.value || null))}>
+            <option value="">Choose…</option>
+            {moments.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+          </select>
+        </label>
+      ))}
+      {viewRange === "relative" && (
+        <div className="row-actions" style={{ gap: 4 }}>
+          <input type="number" min={1} aria-label="View range length" value={Number(relativeAmount) || ""}
+                 style={{ width: 64 }}
+                 onChange={(e) => setProp((p: { relativeAmount: number }) => (p.relativeAmount = Number(e.target.value)))} />
+          <select aria-label="View range unit" value={relativeUnit || "week"}
+                  onChange={(e) => setProp((p: { relativeUnit: string }) => (p.relativeUnit = e.target.value))}>
+            {TIME_UNITS.map((u) => <option key={u} value={u}>{`${u}s`}</option>)}
+          </select>
+          <span className="field-hint">before the page loaded, to then</span>
+        </div>
+      )}
+      <label className="field canvas-toggle">
+        <input type="checkbox" aria-label="Sync X-axes across canvases" checked={!!syncXAxes}
+               onChange={(e) => setProp((p: { syncXAxes: boolean }) => (p.syncXAxes = e.target.checked))} />
+        <span className="field-label">Sync X-axes across canvases</span>
+      </label>
+      <label className="field canvas-toggle">
+        <input type="checkbox" aria-label="Enable UTC time format" checked={!!utc}
+               onChange={(e) => setProp((p: { utc: boolean }) => (p.utc = e.target.checked))} />
+        <span className="field-label">Enable UTC time format</span>
+      </label>
+      <label className="field">
         <span className="field-label">Title</span>
         <input type="text" value={title || ""}
                onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))} />
@@ -13866,7 +13980,9 @@ function SeriesInitialEventSetRow({ index, raw, sets, onChange }: {
 CanvasSeriesAnalysis.craft = {
   displayName: "Time series analysis",
   props: { objectSetVariable: null, property: null, labelProperty: null, limit: 5, title: "",
-    plotTypes: null, eventSetTypes: null, newPlotCanvas: "input", eventSets: null },
+    plotTypes: null, eventSetTypes: null, newPlotCanvas: "input", eventSets: null, viewRange: "full",
+    windowStartVariable: null, windowEndVariable: null, relativeAmount: 2, relativeUnit: "week",
+    syncXAxes: false, utc: false },
   related: { settings: SeriesAnalysisSettings },
 };
 

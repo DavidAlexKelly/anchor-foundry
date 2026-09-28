@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import open_builder, open_module, save, settled
+from conftest import _signed_in, open_builder, open_module, save, settled
 from test_series_column import module  # noqa: F401
 
 
@@ -478,3 +480,103 @@ def test_the_panel_sets_the_plot_options(page, api, module) -> None:
     assert props["eventSetTypes"] == ["search"]
     assert props["eventSets"] == [
         {"objectSetVariable": "v_visits", "start": "began", "end": "", "label": "Visits"}]
+
+
+def view_button(page, canvas: int, what: str):
+    return page.get_by_label(f"Canvas {canvas} {what}")
+
+
+def time_tick(page, canvas: int, f: str):
+    return page.locator(f"[data-testid='series-canvas-{canvas}'] text[data-time='{f}']")
+
+
+@pytest.fixture
+def tokyo_page(browser, token: str, request):
+    yield from _signed_in(browser, token, request, timezone_id="Asia/Tokyo")
+
+
+def test_zooming_and_panning_narrow_the_statistics(tokyo_page, api, module) -> None:
+    """p.395's statistics and event count are "within the current view
+    range" (§659). North reads 10 to 40 on the 1st to the 4th: zoomed in on
+    the middle it reads 20 and 30, and panned back half a view, 10 and 20.
+    The times are the reader's own, here Tokyo's, nine hours ahead of UTC."""
+    page = tokyo_page
+    open_module(page, build(api, module, "Analysis view"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_role("button", name="New event set").click()
+    page.get_by_label("Event plot").select_option(label="North sensor")
+    page.get_by_label("Event comparison").select_option("gte")
+    page.get_by_label("Event threshold").fill("25")
+    page.get_by_role("button", name="Add event set").click()
+    events = page.locator("[data-testid='series-event-sets'] tr[data-label='North sensor at least 25'] "
+                          "td[data-stat='events']")
+    expect(events).to_have_text("1")
+    expect(time_tick(page, 1, "0")).to_have_text("2026-01-01")
+    view_button(page, 1, "zoom in").click()
+    expect(stat(page, "North sensor", "min")).to_have_text("20")
+    expect(stat(page, "North sensor", "max")).to_have_text("30")
+    # 18:00 UTC on the 1st.
+    expect(time_tick(page, 1, "0")).to_have_text("01-02 03:00")
+    # The value axis scales to what is in view: North's 20 to South's 900,
+    # padded, where Patchy's 5 on the 1st at midnight is not.
+    expect(page.locator("[data-testid='series-canvas-1'] g[data-axis='1'] text[data-tick='0']")).to_have_text("-24")
+    expect(events).to_have_text("1")
+    view_button(page, 1, "earlier").click()
+    expect(stat(page, "North sensor", "min")).to_have_text("10")
+    expect(stat(page, "North sensor", "max")).to_have_text("20")
+    expect(events).to_have_text("0")
+    view_button(page, 1, "reset view").click()
+    expect(stat(page, "North sensor", "max")).to_have_text("40")
+    view_button(page, 1, "zoom in").click()
+    view_button(page, 1, "zoom out").click()
+    expect(time_tick(page, 1, "0")).to_have_text("2026-01-01")
+    # The reader's own time carries no UTC label.
+    expect(time_tick(page, 1, "1")).to_have_text("2026-01-04")
+
+
+def test_a_fixed_default_view_synced_across_canvases_in_utc(page, api, module) -> None:
+    """p.396's Default view range from two variables, Sync X-axes across
+    canvases, and Enable UTC time format (§659)."""
+    mod = build(api, module, "Analysis fixed view")
+    definition = mod.definition()
+    definition["layout"]["tsa"]["props"].update(viewRange="fixed", windowStartVariable="v_from",
+                                                windowEndVariable="v_to", syncXAxes=True, utc=True)
+    definition["variables"].update({
+        "v_from": {"id": "v_from", "kind": "timestamp", "label": "From", "default": "2026-01-02T00:00:00Z"},
+        "v_to": {"id": "v_to", "kind": "timestamp", "label": "To", "default": "2026-01-03T00:00:00Z"}})
+    mod.define(definition)
+    open_module(page, mod)
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    expect(stat(page, "North sensor", "min")).to_have_text("20")
+    expect(stat(page, "North sensor", "max")).to_have_text("30")
+    expect(time_tick(page, 1, "1")).to_have_text("01-03 00:00 UTC")
+    page.get_by_role("button", name="New canvas").click()
+    page.get_by_label("South sensor canvas").select_option("2")
+    expect(time_tick(page, 2, "0")).to_have_text("01-02 00:00")
+    view_button(page, 2, "zoom in").click()
+    expect(time_tick(page, 1, "0")).to_have_text("01-02 06:00")
+    expect(time_tick(page, 2, "0")).to_have_text("01-02 06:00")
+    view_button(page, 1, "reset view").click()
+    expect(time_tick(page, 2, "0")).to_have_text("01-02 00:00")
+
+
+def test_the_panel_sets_the_view_options(page, api, module) -> None:
+    mod = build(api, module, "Analysis view options")
+    definition = mod.definition()
+    definition["variables"]["v_from"] = {"id": "v_from", "kind": "date", "label": "From"}
+    mod.define(definition)
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Time series analysis").first.click()
+    page.get_by_label("Default view range").select_option("relative")
+    page.get_by_label("View range length").fill("3")
+    page.get_by_label("View range unit").select_option("day")
+    page.get_by_label("Default view range").select_option("fixed")
+    page.get_by_label("View from variable").select_option("v_from")
+    page.get_by_label("Sync X-axes across canvases").check()
+    page.get_by_label("Enable UTC time format").check()
+    save(page)
+    props = mod.definition()["layout"]["tsa"]["props"]
+    assert (props["viewRange"], props["windowStartVariable"], props["relativeAmount"],
+            props["relativeUnit"], props["syncXAxes"], props["utc"]) == (
+        "fixed", "v_from", 3, "day", True, True)

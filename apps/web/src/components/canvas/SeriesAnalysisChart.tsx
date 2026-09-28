@@ -5,8 +5,8 @@
  * geometry is `series-analysis.ts`'s. */
 
 import {
-  areaOf, eventSpan, markersOf, outlineOf, pathOf, scaleOf, shownShape, timesOf, valueAt,
-  type AxisSettings, type PlotDisplay, type Reading, type Scale, type SeriesEvent,
+  areaOf, eventSpan, inView, markersOf, outlineOf, pathOf, scaleOf, shownShape, timeLabel, timesOf, valueAt,
+  type AxisSettings, type PlotDisplay, type Reading, type Scale, type SeriesEvent, type ViewRange,
 } from "./series-analysis";
 
 const WIDTH = 640;
@@ -35,26 +35,26 @@ function valueText(v: number): string {
   return abs >= 1000 || (abs > 0 && abs < 0.01) ? v.toExponential(1) : String(Number(v.toFixed(2)));
 }
 
-function timeText(t: number, span: number): string {
-  const d = new Date(t);
-  return span > 2 * 86_400_000 ? d.toISOString().slice(0, 10) : d.toISOString().slice(5, 16).replace("T", " ");
-}
 
 /** p.395's *Event highlight* (§651): an event set's time ranges, shaded in
  * its plot's colour under the lines. */
 export interface CanvasEvents { id: string; color: string; events: SeriesEvent[] }
 
-export function SeriesAnalysisChart({ canvas, plots, axes, events = [] }: {
+export function SeriesAnalysisChart({ canvas, plots, axes, events = [], view = null, utc = false }: {
   canvas: number; plots: CanvasPlot[]; axes: CanvasAxis[]; events?: CanvasEvents[];
+  /** The reader's view of the time axis (§659); null is the full range. */
+  view?: ViewRange | null;
+  /** p.396's *Enable UTC time format*; otherwise the reader's own time. */
+  utc?: boolean;
 }) {
-  const times = timesOf(plots.map((p) => p.readings));
+  const times = view ? { t0: view.from, t1: view.to } : timesOf(plots.map((p) => p.readings));
   const lefts = axes.filter((a) => a.settings.align === "left");
   const rights = axes.filter((a) => a.settings.align === "right");
   const LEFT = Math.max(EDGE, lefts.length * AXIS_WIDTH);
   const RIGHT = Math.max(EDGE, rights.length * AXIS_WIDTH);
   const frame = { width: WIDTH - LEFT - RIGHT, height: HEIGHT - BOTTOM };
   const scales = new Map<number, Scale | null>(axes.map((a) => [a.axis, scaleOf(
-    plots.filter((p) => p.axis === a.axis).map((p) => p.readings), a.settings)]));
+    plots.filter((p) => p.axis === a.axis).map((p) => inView(p.readings, view)), a.settings)]));
   const extentFor = (axis: number) => {
     const scale = scales.get(axis);
     return times && scale ? { ...times, ...scale } : null;
@@ -100,12 +100,21 @@ export function SeriesAnalysisChart({ canvas, plots, axes, events = [] }: {
             );
           })}
           {[0, 0.5, 1].map((f) => (
-            <text key={`t${f}`} x={LEFT + f * frame.width} y={HEIGHT - 4} fontSize={10}
+            <text key={`t${f}`} data-time={f} x={LEFT + f * frame.width} y={HEIGHT - 4} fontSize={10}
                   textAnchor={f === 0 ? "start" : f === 1 ? "end" : "middle"} fill="var(--muted, #5c6670)">
-              {timeText(times.t0 + (times.t1 - times.t0) * f, times.t1 - times.t0)}
+              {(() => {
+                const t = times.t0 + (times.t1 - times.t0) * f;
+                const text = timeLabel(t, times.t1 - times.t0, utc ? 0 : -new Date(t).getTimezoneOffset());
+                return f === 1 && utc ? `${text} UTC` : text;
+              })()}
             </text>
           ))}
-          <g transform={`translate(${LEFT} 0)`}>
+          <defs>
+            <clipPath id={`series-${canvas}-frame`}>
+              <rect x={0} y={0} width={frame.width} height={frame.height} />
+            </clipPath>
+          </defs>
+          <g transform={`translate(${LEFT} 0)`} clipPath={`url(#series-${canvas}-frame)`}>
             {events.flatMap((set) => set.events.map((e, n) => {
               const span = eventSpan(e, times, frame.width);
               return span && (
