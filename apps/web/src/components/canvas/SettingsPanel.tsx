@@ -1,10 +1,10 @@
 "use client";
 
 import { useEditor, useNode } from "@craftjs/core";
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import {
-  DEFAULT_MOUNT, DEFAULT_UNMOUNT, MOUNTS, UNMOUNTS, UNSUPPORTED, mountOf,
-  placeholderHeight, shows, unmountOf, watches,
+  DEFAULT_MOUNT, DEFAULT_UNMOUNT, DISPLAY_NOTE, MOUNTS, UNMOUNTS, keptOffLayout, mayKeep,
+  mountOf, placeholderHeight, shows, unmountOf, watches,
 } from "./display-optimization";
 import { useOnScreen } from "./object-set";
 import { useCanvasEnv } from "./context";
@@ -369,8 +369,8 @@ function DisplayTab({ id }: { id: string }) {
             <option key={key} value={key}>{label}</option>
           ))}
         </select>
-        <span className="field-hint" data-testid="display-unsupported">
-          {UNSUPPORTED}
+        <span className="field-hint" data-testid="display-note">
+          {DISPLAY_NOTE}
         </span>
       </label>
       {display.mode === "flex" && (
@@ -441,11 +441,18 @@ export function displayStyle(display: DisplayConfig | undefined): React.CSSPrope
  * exactly as it was before this existed, with no extra elements in any flex
  * chain to change how anything lays out.
  */
+/** Whether the nodes below are on a page that is not showing (§609). Set by
+ * `CanvasPage`, which renders a closed page hidden rather than not at all when
+ * something on it is kept mounted - see `keptOffLayout`. */
+export const OffLayout = createContext(false);
+
 export function CanvasNode({ render }: { render: React.ReactElement }) {
-  const { display } = useNode((node) => ({
+  const { id, display } = useNode((node) => ({
     display: (node.data.custom as { display?: DisplayConfig } | undefined)?.display,
   }));
   const { mode } = useCanvasEnv();
+  const offLayout = useContext(OffLayout);
+  const { query } = useEditor();
   const style = displayStyle(display);
   const mount = mountOf(display?.mount);
   const unmount = unmountOf(display?.unmount);
@@ -468,11 +475,28 @@ export function CanvasNode({ render }: { render: React.ReactElement }) {
 
   const showing = !optimised || shows({ mount, unmount, visible, seen });
 
+  // p.182's "once mounted", for Never unmount: mounted while its page showed
+  // to a reader. **Run mode only**: the builder draws every page's widgets,
+  // and Preview is the same component tree a click later, so a mount counted
+  // there would keep a widget on a page the reader has never opened.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    if (mode === "run" && !offLayout && showing && !mounted) setMounted(true);
+  }, [mode, offLayout, showing, mounted]);
+
   useEffect(() => {
     if (!optimised || !showing) return;
     const height = box.current?.offsetHeight ?? 0;
     if (height > 0) setMeasured(height);
   }, [optimised, showing, visible]);
+
+  if (mode === "run" && offLayout
+      && !keptOffLayout({ mount, unmount, mounted })
+      && !holdsKept(query, id)) {
+    // A closed page's node, as closed pages always were: not mounted. The
+    // same element either way for a node that is kept, so React keeps it.
+    return null;
+  }
 
   if (!optimised) {
     if (!style) return render;
@@ -499,4 +523,20 @@ export function CanvasNode({ render }: { render: React.ReactElement }) {
       {showing ? render : null}
     </div>
   );
+}
+
+/** Whether anything below this node may stay mounted while its page is closed,
+ * which is when a container has to render for it to have somewhere to be.
+ * Asked only of nodes on a closed page. */
+export function holdsKept(
+  query: { node: (id: string) => { descendants: (deep: boolean) => string[]; get: () => { data?: { custom?: unknown } } } },
+  id: string,
+): boolean {
+  try {
+    return query.node(id).descendants(true).some((child) =>
+      mayKeep((query.node(child).get()?.data?.custom as { display?: DisplayConfig } | undefined)
+        ?.display));
+  } catch {
+    return false;
+  }
 }

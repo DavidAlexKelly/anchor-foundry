@@ -305,7 +305,7 @@ import { filterKey, isWaiting, waitingNote } from "@/lib/action-filters";
 import { interfaceQuery } from "./routing";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
-import { CanvasNode } from "./SettingsPanel";
+import { CanvasNode, OffLayout, holdsKept } from "./SettingsPanel";
 import {
   CanvasHeaderCollapsedContext,
   CanvasParameterProvider,
@@ -19483,14 +19483,25 @@ export function CanvasPage({
     }
   }
 
-  if (mode === "run" && !active) return null;
+  // p.182's Eagerly mount and Never unmount (§609): a closed page renders
+  // hidden rather than not at all when something on it may stay mounted, and
+  // tells what it holds that it is closed, so everything else on it is not
+  // mounted - as a closed page's widgets never were. A page holding none of
+  // them is `null`, as it always was.
+  if (mode === "run" && !active && !holdsKept(query, nodeId)) return null;
 
   return (
     <section
       ref={(ref) => connectDragDrop(ref, connect, drag)}
       className={`canvas-page${active ? " on" : ""}`}
       data-scheme={schemeFor({ background }, saved)}
-      style={styleFor({ background, padding, customPadding }, saved)}
+      // Inline rather than the `hidden` attribute, which any `display` rule on
+      // `.canvas-page` would override - a closed page drawn over the open one.
+      style={{
+        ...styleFor({ background, padding, customPadding }, saved),
+        ...(mode === "run" && !active ? { display: "none" } : {}),
+      }}
+      data-closed={mode === "run" && !active ? "yes" : undefined}
     >
       {mode === "edit" && (
         <p className="canvas-page-label">
@@ -19498,7 +19509,7 @@ export function CanvasPage({
           {active ? " · shown first" : ""}
         </p>
       )}
-      {children}
+      <OffLayout.Provider value={mode === "run" && !active}>{children}</OffLayout.Provider>
       {/* p.52's picker, "at the bottom of the page" and only while editing:
           it is an authoring control, and a reader has no layout to choose. */}
       {mode === "edit" && <LayoutTemplatePicker pageId={nodeId} />}
