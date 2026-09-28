@@ -278,7 +278,7 @@ BUTTON_WIDGET = "CanvasButton"
 BUTTON_TYPES = ("inline", "menu", "twoPart")
 
 
-def button_items(layout: Any) -> dict[str, tuple[str, list[str]]]:
+def button_items(layout: Any) -> dict[str, tuple[str, list[str], dict[str, str]]]:
     """Every button with items: its type, and its items' ids (p.483; §462).
 
     An event names an item by id rather than by label, for the reason a
@@ -286,7 +286,7 @@ def button_items(layout: Any) -> dict[str, tuple[str, list[str]]]:
     an event's `item` is checked against - and what a deleted item's event is
     refused by, as an event on a deleted widget is.
     """
-    out: dict[str, tuple[str, list[str]]] = {}
+    out: dict[str, tuple[str, list[str], dict[str, str]]] = {}
     if not isinstance(layout, dict):
         return out
     # Every node, not `pages()`'s walk: that reads ROOT's own children, which
@@ -307,6 +307,7 @@ def button_items(layout: Any) -> dict[str, tuple[str, list[str]]]:
                 "row_menu",
                 [str(i["id"]) for i in items if isinstance(i, dict) and i.get("id")]
                 if props.get("customMenu") else [],
+                {},
             )
         if name == TIMELINE_WIDGET and isinstance(props, dict):
             # p.349 (§616): the layers that override the widget's selection
@@ -316,14 +317,21 @@ def button_items(layout: Any) -> dict[str, tuple[str, list[str]]]:
                 str(layer["id"]) for layer in layers
                 if isinstance(layer, dict) and layer.get("id")
                 and layer.get("overrideSelection") is True
-            ])
+            ], {})
         if name == MARKDOWN_WIDGET and isinstance(props, dict):
-            # p.322 (§638): the interactions offered on highlighted text.
+            # p.322 (§638): the interactions offered on highlighted text, each
+            # a click; and p.320's per-type Override event on selection
+            # (§665), each a row selection of its own, as a timeline's layers.
             actions = props.get("highlightActions")
+            types = props.get("referenceTypes")
+            overriding = [
+                str(t["id"]) for t in (types if isinstance(types, list) else [])
+                if isinstance(t, dict) and t.get("id") and t.get("overrideSelection") is True
+            ]
             out[node_id] = ("highlight", [
                 str(a["id"]) for a in (actions if isinstance(actions, list) else [])
                 if isinstance(a, dict) and a.get("id")
-            ])
+            ] + overriding, {item: "row_select" for item in overriding})
         # A table falls through here and out: it is not a Button (§613's sweep
         # found a `continue` above could not change an answer).
         if name != BUTTON_WIDGET or not isinstance(props, dict):
@@ -335,6 +343,7 @@ def button_items(layout: Any) -> dict[str, tuple[str, list[str]]]:
         out[node_id] = (
             str(kind),
             [str(i["id"]) for i in items if isinstance(i, dict) and i.get("id")],
+            {},
         )
     return out
 
@@ -513,7 +522,7 @@ def _parse_item(
     if on not in ("click", "row_select"):
         raise EventError(
             f"event {key!r}: only a click comes from a button's item, or a row selection "
-            f"from a timeline's layer - not {on!r}"
+            f"from a timeline's layer or a Markdown widget's object type - not {on!r}"
         )
     if menus is not None:
         entry = menus.get(node)
@@ -521,19 +530,22 @@ def _parse_item(
             raise EventError(
                 f"event {key!r} fires from item {item!r} of {node!r}, which has no items - "
                 "only a Menu or Two-part button does, or a table's right-click menu, "
-                "a timeline's overriding layers, or a Markdown widget's highlight actions"
-            )
-        wanted = ITEM_TRIGGERS.get(entry[0], "click")
-        if on != wanted:
-            raise EventError(
-                f"event {key!r} fires on {on!r} from item {item!r} of {node!r}, whose items "
-                f"are {wanted!r} triggers"
+                "a timeline's overriding layers, or a Markdown widget's highlight actions "
+                "and overriding object types"
             )
         if item not in entry[1]:
             # Named against the items that are there: the usual cause is an
             # item deleted after the event was wired to it.
             raise EventError(
                 f"event {key!r} fires from item {item!r}, which {node!r} does not have"
+            )
+        # An item's own trigger where its widget has items of two kinds (a
+        # Markdown widget's, §665), else its kind's.
+        wanted = entry[2].get(item) or ITEM_TRIGGERS.get(entry[0], "click")
+        if on != wanted:
+            raise EventError(
+                f"event {key!r} fires on {on!r} from item {item!r} of {node!r}, whose items "
+                f"are {wanted!r} triggers"
             )
     return item
 

@@ -288,6 +288,7 @@ import {
   SELECTION_BEHAVIORS as REFERENCE_SELECTIONS, isLit as isReferenceLit, numberReferences, referenceTypesOf,
   selectionBehaviorOf as referenceSelectionOf, COLOR_MODES as REFERENCE_COLOR_MODES,
   keysToColor as referenceKeysToColor, referenceColorOf, type ColorMode as ReferenceColorMode,
+  newReferenceTypeId, selectionItemOfType,
 } from "./markdown-references";
 import {
   FORMATS, FORMAT_LABELS, applyFormat, autoRows, type MarkdownFormat,
@@ -5307,9 +5308,11 @@ export function CanvasMarkdown({
             setParameter(selectedVariable, selectionClauses([node.primaryKey]));
           }
           // p.320's Event on selection, in a running module only: a navigate
-          // fired while arranging the page would move the builder off it.
-          if (mode === "run" && onSelect.length > 0) {
-            runEvents(onSelect, { ...eventContext,
+          // fired while arranging the page would move the builder off it. A
+          // type with its own events fires those instead (§665).
+          const picked = eventsFor(moduleEvents, nodeId, "row_select", selectionItemOfType(type));
+          if (mode === "run" && picked.length > 0) {
+            runEvents(picked, { ...eventContext,
               payload: { primary_key: node.primaryKey, object_type: node.objectType } });
           }
         }}
@@ -5523,7 +5526,7 @@ function MarkdownSettings() {
           <div className="field" data-testid="markdown-ref-types">
             <span className="field-label">Object types</span>
             {types.map((type, i) => (
-              <MarkdownReferenceTypeRow key={i} index={i} type={type}
+              <MarkdownReferenceTypeRow key={i} index={i} type={type} newId={newReferenceTypeId(types)}
                 onChange={(next) => writeTypes(types.map((t, j) => (j === i ? next : t)))}
                 onRemove={() => writeTypes(types.filter((_, j) => j !== i))} />
             ))}
@@ -5537,7 +5540,7 @@ function MarkdownSettings() {
                   if (e.key !== "Enter" || !value) return;
                   e.preventDefault();
                   writeTypes([...types, { objectType: value, color: null, colorMode: "static",
-                    colorProperty: null, colorRules: null }]);
+                    colorProperty: null, colorRules: null, overrideSelection: false, id: null }]);
                   e.currentTarget.value = "";
                 }}
               />
@@ -14052,8 +14055,10 @@ export function CanvasSeriesAnalysis({
  * Highlight color - static, from a property's Ontology formatting, or the
  * builder's own rules (§664). The type is read by its api name so its
  * properties can be offered. */
-function MarkdownReferenceTypeRow({ index, type, onChange, onRemove }: {
+function MarkdownReferenceTypeRow({ index, type, newId, onChange, onRemove }: {
   index: number;
+  /** The id the type takes if its override goes on without one (§665). */
+  newId: string;
   type: ReturnType<typeof referenceTypesOf>[number];
   onChange: (next: ReturnType<typeof referenceTypesOf>[number]) => void;
   onRemove: () => void;
@@ -14107,6 +14112,15 @@ function MarkdownReferenceTypeRow({ index, type, onChange, onRemove }: {
           </button>
         )}
       </div>
+      {/* p.320's Override event on selection (§665): its own events in the
+          Events panel, instead of the widget's. */}
+      <label className="field canvas-toggle">
+        <input type="checkbox" aria-label={`Object type ${n} override event on selection`}
+               checked={type.overrideSelection}
+               onChange={(e) => onChange({ ...type, overrideSelection: e.target.checked,
+                 id: type.id ?? (e.target.checked ? newId : null) })} />
+        <span className="field-label">Its own event on selection</span>
+      </label>
       {type.colorMode !== "static" && typeId.data === null && (
         <span className="field-hint">{`No object type is called ${type.objectType}.`}</span>
       )}

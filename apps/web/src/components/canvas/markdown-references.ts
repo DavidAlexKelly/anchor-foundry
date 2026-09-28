@@ -41,6 +41,10 @@ export interface ReferenceType {
   colorProperty: string | null;
   /** The builder's own rules, §158's grammar, over the object's properties. */
   colorRules: ConditionalRule[] | null;
+  /** p.320's per-type Override event on selection (§665), and the id an
+   * event names the type by, given when the override goes on. */
+  overrideSelection: boolean;
+  id: string | null;
 }
 
 /** The configured types, read defensively: a saved document is data. */
@@ -59,9 +63,32 @@ export function referenceTypesOf(raw: unknown): ReferenceType[] {
     const colorMode: ColorMode = e.colorMode === "property" || e.colorMode === "rules" ? e.colorMode : "static";
     const colorProperty = typeof e.colorProperty === "string" && e.colorProperty.trim()
       ? e.colorProperty.trim() : null;
-    out.push({ objectType, color, colorMode, colorProperty, colorRules: rulesOf(e.colorRules) });
+    const id = typeof e.id === "string" && /^rt_\d+$/.test(e.id) ? e.id : null;
+    out.push({ objectType, color, colorMode, colorProperty, colorRules: rulesOf(e.colorRules),
+      overrideSelection: e.overrideSelection === true, id });
   }
   return out;
+}
+
+/** The id a type's override is named by: `rt_N`, one no type has. */
+export function newReferenceTypeId(types: readonly ReferenceType[]): string {
+  let n = types.length + 1;
+  while (types.some((t) => t.id === `rt_${n}`)) n += 1;
+  return `rt_${n}`;
+}
+
+/** The item a reference's selection fires as (§665): its type's own, when
+ * the type overrides the widget's event; null for the widget's. */
+export function selectionItemOfType(type: ReferenceType): string | null {
+  return type.overrideSelection && type.id ? type.id : null;
+}
+
+/** The types whose selection is their own, as the Events panel lists them. */
+export function overridingTypes(types: readonly ReferenceType[]): { id: string; label: string }[] {
+  return types.flatMap((t) => {
+    const item = selectionItemOfType(t);
+    return item ? [{ id: item, label: t.objectType }] : [];
+  });
 }
 
 /** p.320's Selection behavior. */

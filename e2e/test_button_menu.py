@@ -148,3 +148,22 @@ def test_the_builder_wires_an_event_to_an_item(page, api) -> None:
                what="the event aimed at the second item")
     document = mod.definition()
     assert [i["label"] for i in document["layout"]["btn"]["props"]["items"]] == ["First", "Second"]
+
+
+def test_a_two_part_button_offers_its_main_button_beside_its_items(page, api) -> None:
+    """A Two-part button's own click is its primary button (p.483), so the
+    Events panel's Which offers it first, beside the menu's items."""
+    mod = Module(api, "Button two-part panel")
+    mod.define({
+        "format": 2,
+        "layout": layout({"two": {"resolvedName": "CanvasButton", "props": {
+            "label": "Save", "buttonType": "twoPart", "items": [{"id": "i_1", "label": "Save as draft"}]}}}),
+        "variables": {},
+        "events": {},
+    })
+    open_builder(page, mod)
+    settled(page)
+    page.get_by_role("button", name="Events (0)").click()
+    page.get_by_role("button", name="New event").click()
+    expect(page.get_by_test_id("event-item").locator("option")).to_have_text(
+        ["The main button", "Save as draft"])

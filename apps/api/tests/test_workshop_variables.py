@@ -4435,3 +4435,30 @@ def test_an_add_data_set_is_a_usage() -> None:
         {"node": "tsa", "prop": "addDataSets[0].objectSetVariable"}]
     assert wv.dangling_references(layout, {}) == [
         {"node": "tsa", "prop": "addDataSets[0].objectSetVariable", "variable": "v_pumps"}]
+
+
+def test_a_markdown_type_that_overrides_is_a_row_selection_of_its_own() -> None:
+    """p.320's per-type Override event on selection (§665): "Configure
+    Workshop events to trigger for the specified object type. These will
+    override any other event on selection." Beside the highlight actions,
+    which stay clicks."""
+    layout = markdown_layout()
+    layout["md"]["props"]["referenceTypes"] = [
+        {"objectType": "ship", "id": "rt_1", "overrideSelection": True},
+        {"objectType": "port", "id": "rt_2", "overrideSelection": False},
+        {"objectType": "dock", "overrideSelection": True},
+        "junk",
+    ]
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    events = we.parse(markdown_event("rt_1", on="row_select"), layout=layout, variables=variables)
+    assert (events["e_1"].on, events["e_1"].item) == ("row_select", "rt_1")
+    with pytest.raises(we.EventError, match="whose items are 'row_select' triggers"):
+        we.parse(markdown_event("rt_1"), layout=layout, variables=variables)
+    with pytest.raises(we.EventError, match="whose items are 'click' triggers"):
+        we.parse(markdown_event("h_note", on="row_select"), layout=layout, variables=variables)
+    for gone in ("rt_2", "rt_9"):
+        with pytest.raises(we.EventError, match="does not have"):
+            we.parse(markdown_event(gone, on="row_select"), layout=layout, variables=variables)
+    # The highlight action is still a click, and the widget's own selection stands.
+    assert we.parse(markdown_event("h_note"), layout=layout, variables=variables)["e_1"].item == "h_note"
+    assert we.parse(markdown_event(on="row_select"), layout=layout, variables=variables)["e_1"].item is None

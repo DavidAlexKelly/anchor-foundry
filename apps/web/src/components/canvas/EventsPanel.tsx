@@ -233,6 +233,23 @@ export interface TriggerCandidate {
   itemsOn?: string;
   /** What the "Which" picker calls the widget's own trigger, beside the items. */
   noItemLabel?: string;
+  /** Row-selection items beside click items, for a widget with both - a
+   * Markdown widget's overriding object types (p.320; §665) beside its
+   * highlight actions. Its own selection is a choice among them. */
+  selectItems?: { id: string; label: string }[];
+}
+
+/** The items a trigger on this widget may name, and what its own trigger is
+ * called beside them; null where it has none. */
+function itemChoices(node: TriggerCandidate | undefined, on: string | undefined) {
+  if (!node) return null;
+  if (on === "row_select" && node.selectItems?.length) {
+    return { items: node.selectItems, own: "Every other object type" };
+  }
+  if (node.buttonType && (node.items?.length ?? 0) > 0 && on === (node.itemsOn ?? "click")) {
+    return { items: node.items!, own: node.buttonType === "twoPart" ? node.noItemLabel ?? "The main button" : null };
+  }
+  return null;
 }
 
 /** The item a trigger on this widget starts with: a Menu button's first item,
@@ -471,8 +488,7 @@ export function EventsPanel({
                 {/* p.483: a Menu or Two-part button's items are clicks of their
                     own. A Two-part button's main button is one more choice; a
                     Menu button's own click only opens the menu, so it is not. */}
-                {node?.buttonType && (node.items?.length ?? 0) > 0
-                  && event.trigger?.on === (node.itemsOn ?? "click") && (
+                {itemChoices(node, event.trigger?.on) && (
                   <label className="field">
                     <span className="field-label">Which</span>
                     <select
@@ -487,10 +503,10 @@ export function EventsPanel({
                         });
                       }}
                     >
-                      {node.buttonType === "twoPart" && (
-                        <option value="">{node.noItemLabel ?? "The main button"}</option>
+                      {itemChoices(node, event.trigger?.on)!.own !== null && (
+                        <option value="">{itemChoices(node, event.trigger?.on)!.own}</option>
                       )}
-                      {node.items!.map((i) => (
+                      {itemChoices(node, event.trigger?.on)!.items.map((i) => (
                         <option key={i.id} value={i.id}>{i.label || i.id}</option>
                       ))}
                     </select>
