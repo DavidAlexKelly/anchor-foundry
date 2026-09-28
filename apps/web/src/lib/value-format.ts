@@ -54,9 +54,44 @@ export function formatValue(
 ): string | null {
   if (raw === null || raw === undefined || raw === "") return null;
   if (!format) return String(raw);
+  // p.95's lookups (§624) are not a transformation of the value in hand: they
+  // ask who or what an id names, which a pure function cannot. `null` sends
+  // the caller to `LookupValue`, which asks.
+  if (isLookup(format)) return null;
   const locale = options.locale ?? "en-US";
   if (format.kind === "number") return formatNumber(raw, format, locale);
   return formatDateTime(raw, format, locale, options.now ?? Date.now());
+}
+
+/** Whether a format is one of p.95's lookups (§624). */
+export function isLookup(
+  format: ValueFormat | null | undefined,
+): format is { kind: "user" } | { kind: "resource" } {
+  return format?.kind === "user" || format?.kind === "resource";
+}
+
+/**
+ * p.95's Foundry ID formatting: "Display a Foundry ID as a user's first and
+ * last name or group name" (§624). A person's name, or their email where they
+ * have none; a group's name; `null` for an id that is neither, which the
+ * screen shows as the id itself rather than as a blank.
+ */
+export function directoryName(
+  id: string,
+  people: readonly { id: string; email: string; display_name: string }[],
+  groups: readonly { id: string; name: string }[],
+): string | null {
+  const person = people.find((p) => p.id === id);
+  if (person) return person.display_name.trim() || person.email;
+  return groups.find((g) => g.id === id)?.name ?? null;
+}
+
+const RESOURCE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Whether a value could be a resource id at all - asked before the server
+ * is, so a column of free text is not a request per cell. */
+export function looksLikeResourceId(value: string): boolean {
+  return RESOURCE_ID.test(value.trim());
 }
 
 /** p.97–98's options, on `Intl.NumberFormat`.

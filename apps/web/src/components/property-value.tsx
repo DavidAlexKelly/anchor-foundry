@@ -20,7 +20,8 @@ import type {
 import { structRows } from "@/lib/struct-fields";
 import { GEOSHAPE_PLACEHOLDER, summarise } from "@/lib/geoshape";
 import { cssFor } from "@/lib/conditional-format";
-import { formatValue } from "@/lib/value-format";
+import { formatValue, isLookup } from "@/lib/value-format";
+import { LookupValue } from "@/components/lookup-value";
 // The Canvas Action Form's rule for which control a type gets, now shared
 // rather than duplicated (§237).
 import { inputTypeFor } from "@/components/canvas/pure";
@@ -189,6 +190,10 @@ export function PropertyValue({
   const paint = cssFor(conditional);
   if (value === null || value === undefined || value === "") {
     return <span style={{ color: "var(--ink-soft)", ...paint }}>{emptyText}</span>;
+  }
+  if (isLookup(valueFormat) && typeof value === "string") {
+    // p.95's lookups (§624): who or what the id names, asked where shown.
+    return <LookupValue kind={valueFormat.kind} value={value} style={paint} />;
   }
   if (valueFormat) {
     const formatted = formatValue(value, valueFormat);

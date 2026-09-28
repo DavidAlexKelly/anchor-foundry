@@ -153,18 +153,20 @@ def test_a_formatter_can_be_drawn_and_it_changes_what_a_reader_sees(page, module
     expect(page.get_by_text("72.5 kg", exact=True).first).to_be_visible()
 
 
-def test_a_string_property_is_not_offered_a_formatter(page, module) -> None:
-    """p.95: the options you see depend on the property's base type. A Format
-    button on a string would open a dialog whose every answer the server
-    refuses - a Save button that is a trap. `name` is the second row."""
+def test_a_string_property_is_offered_only_the_lookups(page, module) -> None:
+    """p.95: the options you see depend on the property's base type. A string
+    has no number or date to format, so what it is offered is p.95's lookups
+    (§624) and nothing a string's every value would be refused for. `name` is
+    the second row."""
     open_type_editor(page, module)
-    # **Presence first, and it is not a style point.** `to_have_count(0)` is
-    # satisfied by a dialog that has not rendered yet, so asserting the absence
-    # first made this test pass against a build where *every* property offered
-    # a Format button - the check could not fail. Waiting for the numeric row's
-    # button is what makes the string row's silence mean something.
-    expect(page.get_by_role("button", name="Property 3 format")).to_be_visible()
-    expect(page.get_by_role("button", name="Property 2 format")).to_have_count(0)
+    page.get_by_role("button", name="Property 2 format").click()
+    options = page.get_by_test_id("format-on").locator("option")
+    expect(options).to_have_text(["None", "Person or group", "Resource"])
+    # And a lookup draws no preview: what an id names is asked where it is
+    # shown, so a sample typed here would have nothing to show.
+    page.get_by_test_id("format-on").select_option("user")
+    expect(page.get_by_test_id("format-lookup-note")).to_contain_text("person's name")
+    expect(page.get_by_test_id("format-sample")).to_have_count(0)
 
 
 def test_editing_an_object_type_does_not_clear_a_formatter(page, module) -> None:

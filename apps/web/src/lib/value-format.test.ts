@@ -15,7 +15,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ValueFormat } from "@/lib/types";
-import { formatValue } from "./value-format";
+import { directoryName, formatValue, isLookup, looksLikeResourceId } from "./value-format";
 
 /** 2020-07-22T13:00:00Z — p.99's own example instant. */
 const AT = "2020-07-22T13:00:00.000Z";
@@ -202,5 +202,36 @@ describe("what does not render", () => {
         minimum_fraction_digits: 3, maximum_fraction_digits: 1,
       }),
     ).toBe("3.5");
+  });
+});
+
+describe("p.95's lookup formatters (§624)", () => {
+  const PEOPLE = [
+    { id: "u1", email: "ada@example.com", display_name: "Ada Lovelace" },
+    { id: "u2", email: "grace@example.com", display_name: "  " },
+  ];
+  const GROUPS = [{ id: "g1", name: "Analysts" }];
+
+  it("are not a transformation of the value, so formatValue leaves them", () => {
+    expect(formatValue("u1", { kind: "user" })).toBeNull();
+    expect(formatValue("r1", { kind: "resource" })).toBeNull();
+    expect(isLookup({ kind: "user" })).toBe(true);
+    expect(isLookup({ kind: "resource" })).toBe(true);
+    expect(isLookup({ kind: "number", style: "plain" })).toBe(false);
+    expect(isLookup(null)).toBe(false);
+  });
+
+  it("name a person, or their email without a name, or a group", () => {
+    expect(directoryName("u1", PEOPLE, GROUPS)).toBe("Ada Lovelace");
+    expect(directoryName("u2", PEOPLE, GROUPS)).toBe("grace@example.com");
+    expect(directoryName("g1", PEOPLE, GROUPS)).toBe("Analysts");
+    expect(directoryName("nobody", PEOPLE, GROUPS)).toBeNull();
+  });
+
+  it("ask about a resource only when the value could be an id", () => {
+    expect(looksLikeResourceId("0f8fad5b-d9cb-469f-a165-70867728950e")).toBe(true);
+    expect(looksLikeResourceId(" 0F8FAD5B-D9CB-469F-A165-70867728950E ")).toBe(true);
+    expect(looksLikeResourceId("quarterly report")).toBe(false);
+    expect(looksLikeResourceId("0f8fad5b-d9cb-469f-a165-70867728950")).toBe(false);
   });
 });

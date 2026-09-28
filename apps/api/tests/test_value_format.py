@@ -181,3 +181,23 @@ def test_the_property_is_named_in_every_message() -> None:
     without a name leaves somebody hunting through fifteen of them."""
     with pytest.raises(vf.FormatError, match="^total: "):
         vf.parse({"kind": "number"}, data_type="string", property_name="total")
+
+
+# ---- p.95's lookup formatters (§624) ----------------------------------------
+@pytest.mark.parametrize("kind", ["user", "resource"])
+def test_a_lookup_formats_a_string_and_has_no_options(kind: str) -> None:
+    """p.95: a Foundry ID shown "as a user's first and last name or group
+    name", a resource RID "as an icon and resource name, with a clickable
+    link". Both read an id, which is text here."""
+    assert parse({"kind": kind}, data_type="string") == {"kind": kind}
+    with pytest.raises(vf.FormatError, match="reads an id, which is a string property; this one is integer"):
+        parse({"kind": kind}, data_type="integer")
+    with pytest.raises(vf.FormatError, match="has no options, not style"):
+        parse({"kind": kind, "style": "plain"}, data_type="string")
+
+
+def test_a_lookup_says_which_it_is() -> None:
+    with pytest.raises(vf.FormatError, match="person or group formatting"):
+        parse({"kind": "user"}, data_type="float")
+    with pytest.raises(vf.FormatError, match="resource formatting"):
+        parse({"kind": "resource"}, data_type="float")
