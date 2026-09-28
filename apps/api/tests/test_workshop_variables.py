@@ -159,17 +159,61 @@ def test_a_transform_configured_with_the_wrong_number_of_inputs_is_refused() -> 
         )
 
 
-def test_the_ontology_transform_says_it_is_not_built_rather_than_failing_oddly() -> None:
-    """An aggregate over a set needs the instance store, so it is a round trip
-    rather than a pure function. Returning None for it would make every caller
-    guess which of its results were real.
+def test_an_aggregation_is_asked_for_rather_than_guessed() -> None:
+    """p.73's Object set aggregation (§617). This test used to be the refusal:
+    an aggregate over a set needs the instance store, and returning `None` for
+    it would make every caller guess which results were real. It still does
+    not guess. It resolves to `None` *and says so*, in `wanted`, keyed by the
+    question - so the caller that has a store can answer and ask again."""
+    variables = wv.parse(agg_vars())
+    wanted: dict = {}
+    first = wv.evaluate(variables, {}, wanted=wanted)
+    assert first["v_n"] is None
+    (key, request), = wanted.items()
+    assert request == {"definition": {"object_type_id": TYPE_ID, "filters": []},
+                       "aggregation": "sum", "property": "capacity"}
+    assert key == wv.aggregate_key(request)
+    # Answered, it is the answer - and nothing more is wanted.
+    again: dict = {}
+    second = wv.evaluate(variables, {}, aggregates={key: 42}, wanted=again)
+    assert second["v_n"] == 42 and again == {}
+    # Downstream variables read it like any number.
+    assert second["v_twice"] == 84
 
-    `object_property` used to be the other example here and is now built (§84):
-    its premise was that a `single_object` variable holds a key to fetch, and
-    it holds the object the viewer picked, so there is no round trip to wait
-    for. See the tests at the bottom of this file."""
-    with pytest.raises(wv.VariableError, match="not built yet"):
-        wv.parse({"v_a": var("v_a", derivation={"transform": "object_set_aggregation"})})
+
+def agg_vars() -> dict:
+    """A sum over a set, and a number that reads it (§617). A function because
+    `TYPE_ID` and `object_set_var` are defined further down this file."""
+    return {
+        "v_set": object_set_var("v_set", label="Set",
+                                object_set={"object_type_id": TYPE_ID, "filters": []}),
+        "v_n": var("v_n", kind="number", label="Total", derivation={
+            "transform": "object_set_aggregation", "inputs": ["v_set"],
+            "config": {"aggregation": "sum", "property": "capacity"}}),
+        "v_two": var("v_two", kind="number", label="Two", default=2),
+        "v_twice": var("v_twice", kind="number", label="Twice", derivation={
+            "transform": "multiply", "inputs": ["v_n", "v_two"]}),
+    }
+
+
+def test_two_variables_asking_the_same_question_share_an_answer() -> None:
+    base = agg_vars()
+    variables = wv.parse({**base, "v_m": var("v_m", kind="number", label="Again",
+                                           derivation=base["v_n"]["derivation"])})
+    wanted: dict = {}
+    wv.evaluate(variables, {}, wanted=wanted)
+    assert len(wanted) == 1
+
+
+def test_no_set_is_no_number_rather_than_zero() -> None:
+    """An input that resolved to nothing is a set nobody chose yet; "0" would
+    describe data that was never asked about."""
+    variables = wv.parse(agg_vars())
+    wanted: dict = {}
+    # A host that mapped the set and has not filled it (p.127's rule): unset.
+    got = wv.evaluate(variables, {}, bound=frozenset({"v_set"}), wanted=wanted)
+    assert got["v_set"] is None and got["v_n"] is None
+    assert wanted == {}
 
 
 # ---- what the transforms mean ------------------------------------------------
@@ -1691,16 +1735,54 @@ def test_an_array_of_structs_cannot_be_in_the_url() -> None:
                           "external_id": "a", "interface": {}, "url_behavior": "always"}})
 
 
-def test_an_aggregation_over_a_set_is_still_refused_and_says_why() -> None:
-    """The other store transform did not move: it needs the instance store,
-    which `/object-sets/aggregate` is what answers."""
-    with pytest.raises(wv.VariableError, match="not built yet"):
-        wv.parse({"v_set": object_set_var(
-                      "v_set", label="Set",
-                      object_set={"object_type_id": TYPE_ID, "filters": []}),
-                  "v_n": var("v_n", kind="number", label="Count",
-                             derivation={"transform": "object_set_aggregation",
-                                         "inputs": ["v_set"], "config": {}})})
+def aggregation(config: dict, *, kind: str = "number", source: str = "v_set") -> dict:
+    return {
+        "v_set": object_set_var("v_set", label="Set",
+                                object_set={"object_type_id": TYPE_ID, "filters": []}),
+        "v_word": var("v_word", label="Word"),
+        "v_n": var("v_n", kind=kind, label="Total", derivation={
+            "transform": "object_set_aggregation", "inputs": [source], "config": config}),
+    }
+
+
+@pytest.mark.parametrize("config, match", [
+    ({}, "aggregation None"),
+    ({"aggregation": "median"}, "aggregation 'median'"),
+    ({"aggregation": "sum"}, "sum needs a property"),
+    ({"aggregation": "count_distinct", "property": ""}, "count_distinct needs a property"),
+])
+def test_an_aggregation_says_what_it_is_of(config: dict, match: str) -> None:
+    with pytest.raises(wv.VariableError, match=match):
+        wv.parse(aggregation(config))
+
+
+def test_an_aggregation_is_a_number_of_an_object_set() -> None:
+    with pytest.raises(wv.VariableError, match="is a number, not a string"):
+        wv.parse(aggregation({"aggregation": "count"}, kind="string"))
+    with pytest.raises(wv.VariableError, match="'Word' is not an object set"):
+        wv.parse(aggregation({"aggregation": "count"}, source="v_word"))
+    with pytest.raises(wv.VariableError, match="exactly one input"):
+        raw = aggregation({"aggregation": "count"})
+        raw["v_n"]["derivation"]["inputs"] = ["v_set", "v_set"]
+        wv.parse(raw)
+    # A count needs no property.
+    assert wv.parse(aggregation({"aggregation": "count"}))["v_n"].derivation is not None
+
+
+def test_an_aggregation_s_property_is_checked_against_the_set_s_type() -> None:
+    """At save, for a set the document defines outright: the declared types
+    are in hand, and a sum over a text property is a sentence somebody should
+    read while wiring it rather than a blank number a viewer finds."""
+    types = {TYPE_ID: {"capacity": "integer", "name": "string"}}
+    with pytest.raises(wv.VariableError, match="Total"):
+        wv.parse(aggregation({"aggregation": "sum", "property": "name"}), property_types=types)
+    with pytest.raises(wv.VariableError, match="Total"):
+        wv.parse(aggregation({"aggregation": "avg", "property": "missing"}),
+                 property_types=types)
+    assert wv.parse(aggregation({"aggregation": "sum", "property": "capacity"}),
+                    property_types=types)
+    assert wv.parse(aggregation({"aggregation": "count_distinct", "property": "name"}),
+                    property_types=types)
 
 
 def test_a_row_click_may_write_the_whole_object() -> None:
@@ -3293,10 +3375,10 @@ def test_the_builder_offers_every_variable_kind_the_server_accepts() -> None:
 def test_the_builder_offers_every_transform_the_server_accepts() -> None:
     """The transform half, and its exclusions are the interesting part.
 
-    Two are deliberately not offered and each has its own reason, so the test
-    names them rather than comparing against a subset nobody has to justify:
-    `object_set_aggregation` reads the instance store, so it is refused by the
-    API until it is built, and the three set transforms plus `object_series`
+    Some are deliberately not in the general list and the test names them
+    rather than comparing against a subset nobody has to justify:
+    `object_set_aggregation` was the first, refused by the API until §617
+    built it and offered since, and the three set transforms plus `object_series`
     are offered from *other* lists in the same panel - they belong to one kind
     of variable each, and folding them into the general catalogue would offer
     "narrow an object set" on a string.

@@ -398,10 +398,10 @@ export type WorkshopVariableKind =
    * so a widget can ask for "a filter" specifically. */
   | "object_set_filter";
 
-/** Foundry's transformation vocabulary, less the two that read the ontology
- * (`object_property`, `object_set_aggregation`) — those need the instance
- * store, so they are a server round trip rather than a pure function and the
- * API refuses them until they are built. */
+/** Foundry's transformation vocabulary. Both that read the ontology are built
+ * now: `object_property` (§84) because a picked object is held rather than
+ * fetched, and `object_set_aggregation` (§617) because the server's evaluation
+ * asks the store for what it needs. */
 export type WorkshopTransform =
   | "concat"
   | "if_else"
@@ -421,6 +421,10 @@ export type WorkshopTransform =
    * config carries the property name. Pure, because a `single_object` variable
    * holds the object rather than a key to fetch (`STATUS.md` §84). */
   | "object_property"
+  /** p.73's Object set aggregation (§617): a number from an object set. Input
+   * is `[setVariable]`; config carries the `aggregation` (p.310's six) and,
+   * for all but `count`, the `property` it runs over. */
+  | "object_set_aggregation"
   /** What the viewer chose for one property, read back out of a filter's
    * clauses (p.444's "reused in widget configurations"). Input is
    * `[clausesVariable]`; config carries the property. `narrow_set` applies

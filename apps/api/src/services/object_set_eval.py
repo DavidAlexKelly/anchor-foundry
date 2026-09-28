@@ -230,3 +230,37 @@ async def members_filters(
     """
     filters, empty = await resolve_traversal(conn, store, prefix, workspace_id, definition)
     return (NOTHING,) if empty else filters
+
+
+async def aggregate(
+    conn: Any, workspace_id: UUID, raw: Any, name: str, property_name: str | None,
+) -> "tuple[Any, object_sets.Aggregation]":
+    """One number over a set, and the aggregation it was, validated: what
+    `/object-sets/aggregate` answers and what p.73's Object set aggregation
+    variable reads (§617). One reading of a set for both, so a Metric Card and
+    a heading over one set cannot disagree - and both follow a set's hop.
+
+    **The ontology first, then the definition**, the order `/evaluate` uses
+    since §221: an ordered filter is validated against the declared types,
+    and so is p.310's numeric aggregation. A malformed definition or
+    aggregation is a `ValueError`, for each caller to word; a type this
+    workspace does not have is the ontology's `NotFoundError`.
+    """
+    from . import instance_store
+    from . import instances as instances_service
+
+    type_id = object_sets.object_type_id_of(raw)
+    await ontology_service.get_type(conn, workspace_id, type_id)
+    property_types = await declared_types(conn, type_id)
+    definition = object_sets.parse(raw, property_types=property_types)
+    aggregation = object_sets.parse_aggregation(
+        name, property_name, property_types=property_types)
+    prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
+    store = instance_store.store_for(conn)
+    value = await store.aggregate_object_set(
+        search_prefix=prefix,
+        object_type_id=definition.object_type_id,
+        filters=await members_filters(conn, store, prefix, workspace_id, definition),
+        aggregation=aggregation,
+    )
+    return value, aggregation
