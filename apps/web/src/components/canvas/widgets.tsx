@@ -141,8 +141,10 @@ import {
   METRIC_SUBJECT, paintFor, rulesByColumn, rulesOf, SERIES_SUBJECT,
   strokeFor, subjectProperties,
 } from "./conditional-formats";
-import { columnsFor, problem as columnMathProblem, valueFor } from "./derived-columns";
-import { derivedCell, derivedNames } from "@/lib/derived-values";
+import {
+  columnsFor, derivedInputs, problem as columnMathProblem, valueFor,
+} from "./derived-columns";
+import { derivedCell } from "@/lib/derived-values";
 import { DerivedValue } from "@/components/derived-value";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import type { ConditionalRule } from "@/lib/types";
@@ -5636,19 +5638,30 @@ export function CanvasObjectTable({
     : { isError: page.isError, isPending: page.isPending };
   const setFilters = setPage.filters;
 
-  // p.143's derived properties among the columns (§604). A list read carries
-  // none - they are calculated from each object's links - so the page asks for
-  // them in one more read, one read per hop for every row at once, and only
-  // when a visible column is one.
-  const derivedWanted = derivedNames(properties);
+  // p.143's derived properties among the columns (§604), and p.169's linked
+  // columns the module declares (§605). A list read carries neither - both
+  // are calculated from each object's links - so the page asks for them in
+  // one more read, one read per hop for every row at once, and only when a
+  // visible column needs one. "Needs" includes a column-math column's inputs:
+  // p.170 lets it reference an aggregation, and an expression over a value
+  // the table never fetched is a column of blanks.
+  const derivedWanted = derivedInputs(
+    wanted.length ? wanted : properties.map((p) => p.api_name), all, declaredDerived,
+  );
+  const needsDerived = derivedWanted.properties.length > 0
+    || Object.keys(derivedWanted.derivations).length > 0;
   const pageKeys = (rows ?? []).map((r) => r.primary_key);
   const derivedPage = useQuery({
     queryKey: ["canvas-derived-values", effectiveTypeId, derivedWanted, pageKeys],
     queryFn: () => objApi.derivedValues(workspaceId, String(effectiveTypeId), {
-      keys: pageKeys, properties: derivedWanted,
+      keys: pageKeys, ...derivedWanted,
     }),
-    enabled: derivedWanted.length > 0 && pageKeys.length > 0 && !!effectiveTypeId,
+    enabled: needsDerived && pageKeys.length > 0 && !!effectiveTypeId,
   });
+  // A row's own values with its derived ones beside them, for column math.
+  const derivedByKey = new Map(
+    (derivedPage.data?.rows ?? []).map((r) => [r.primary_key, r.values]),
+  );
 
   // Row selection (roadmap 1.3). The widget does not decide what a click
   // *means* - it announces that a row was chosen and hands over the row, and
@@ -5829,7 +5842,9 @@ export function CanvasObjectTable({
               for the column rather than in every one of its cells. */}
           {Object.entries(derivedPage.data?.errors ?? {}).map(([name, reason]) => (
             <p key={name} className="field-hint" data-testid={`derived-error-${name}`}>
-              {properties.find((p) => p.api_name === name)?.display_name || name}: {reason}
+              {properties.find((p) => p.api_name === name)?.display_name
+                || declaredDerived.find((c) => c.api_name === name)?.display_name
+                || name}: {reason}
             </p>
           ))}
           <div
@@ -6124,10 +6139,28 @@ export function CanvasObjectTable({
                       );
                     })}
                     {derived.map((c) => {
-                      // p.171: "computed on the fly". Every value it needs is
-                      // already on this row, so a page of these costs nothing
-                      // the table was not already paying.
-                      const value = valueFor(c, instance.properties);
+                      if (c.kind === "linked") {
+                        return (
+                          <td key={`derived-${c.api_name}`} data-derived={c.api_name}>
+                            <div className="canvas-cell">
+                              <DerivedValue
+                                workspaceId={workspaceId}
+                                cell={derivedCell(
+                                  derivedPage.data, instance.primary_key, c.api_name,
+                                )}
+                                emptyText={emptyText}
+                                testId={`derived-${instance.primary_key}-${c.api_name}`}
+                              />
+                            </div>
+                          </td>
+                        );
+                      }
+                      // p.171: "computed on the fly", from this row's values
+                      // and the derived ones the page read beside them.
+                      const value = valueFor(c, {
+                        ...instance.properties,
+                        ...(derivedByKey.get(instance.primary_key) ?? {}),
+                      });
                       return (
                         <td key={`derived-${c.api_name}`} data-derived={c.api_name}>
                           <div className="canvas-cell">

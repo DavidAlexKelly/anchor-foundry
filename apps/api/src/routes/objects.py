@@ -5229,7 +5229,11 @@ class DerivedValuesIn(BaseModel):
     properties to fill in for them (§604)."""
 
     keys: list[str] = Field(max_length=MAX_DERIVED_KEYS)
-    properties: list[str] = Field(min_length=1)
+    #: The type's own derived properties, by name.
+    properties: list[str] = []
+    #: A module's own (`workshop` p.169; §605): a chain held by the module
+    #: rather than by the type, keyed by the column's name.
+    derivations: dict[str, Any] = {}
 
 
 class DerivedValuesRow(BaseModel):
@@ -5270,6 +5274,11 @@ async def derived_values_for_page(
         declared = {
             str(p["api_name"]): p for p in await ontology_service.list_properties(conn, type_id)
         }
+        if not body.properties and not body.derivations:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="name at least one derived property to fill in",
+            )
         wanted: list[tuple[str, dict[str, Any]]] = []
         for name in body.properties:
             prop = declared.get(name)
@@ -5279,6 +5288,40 @@ async def derived_values_for_page(
                     detail=f"{name!r} is not a derived property of this object type",
                 )
             wanted.append((name, _jsonb(prop["derivation"])))
+        errors: dict[str, str] = {}
+        if body.derivations:
+            # **Checked the way a type's save checks one**, against the
+            # workspace's links and the far types' native properties (p.169:
+            # "native properties") - but refused per column rather than for the
+            # page. A module is not validated by the server when it is saved,
+            # so a chain that stopped making sense (its link deleted since) is
+            # a fact about that one column, and the others still answer.
+            links_by_id = {
+                str(link["id"]): link
+                for link in await ontology_service.list_link_types(conn, access.workspace_id)
+            }
+            far_properties = await ontology_service.native_property_types(
+                conn, access.workspace_id
+            )
+            for name, raw in body.derivations.items():
+                if name in declared:
+                    errors[name] = (
+                        f"{name} is already a property of this object type, so a module "
+                        "column cannot use the name"
+                    )
+                    continue
+                try:
+                    parsed = derived_properties.parse(
+                        raw, property_name=name, link_types=links_by_id,
+                        object_type_id=str(type_id), far_properties=far_properties,
+                    )
+                except derived_properties.DerivationError as exc:
+                    errors[name] = str(exc)
+                    continue
+                if parsed is None:
+                    errors[name] = f"{name}: a module column needs a chain to follow"
+                    continue
+                wanted.append((name, parsed))
         await _count_usage(
             conn, object_type_id=type_id, user_id=access.auth.user_id,
             application=application, reads=1,
@@ -5301,7 +5344,6 @@ async def derived_values_for_page(
             sort="key_asc",
         )
         values: dict[str, dict[str, Any]] = {str(r["primary_key"]): {} for r in rows}
-        errors: dict[str, str] = {}
         for name, derivation in wanted:
             try:
                 answers = await derived_values.derive_for_rows(

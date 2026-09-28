@@ -1431,7 +1431,12 @@ export const objects = {
   derivedValues: (
     wid: string,
     typeId: string,
-    body: { keys: string[]; properties: string[] },
+    body: {
+      keys: string[];
+      properties: string[];
+      /** p.169's module-level chains (§605), by the column's name. */
+      derivations?: Record<string, import("./types").Derivation>;
+    },
     application = "workshop",
   ) =>
     request<import("./types").DerivedValuesPage>(

@@ -3,7 +3,7 @@
  */
 import { describe as group, expect, test } from "vitest";
 
-import { derivedCell, derivedNames } from "./derived-values";
+import { derivedCell, derivedNames, plainValue } from "./derived-values";
 
 group("derived columns", () => {
   test("only the derived properties, in column order", () => {
@@ -46,5 +46,21 @@ group("derived columns", () => {
 
   test("a row the answer does not mention has no value", () => {
     expect(derivedCell(page, "gone", "total")).toEqual({ state: "value", value: null });
+  });
+});
+
+group("a value with no property to format it (§605)", () => {
+  test("nothing is nothing, and an empty collection is nothing too", () => {
+    expect(plainValue(null)).toBeNull();
+    expect(plainValue(undefined)).toBeNull();
+    expect(plainValue([])).toBeNull();
+  });
+
+  test("a collection is a list, a number is the reader's, the rest is text", () => {
+    expect(plainValue(["Anvil", "Bolt"])).toBe("Anvil, Bolt");
+    expect(plainValue(1234.5)).toBe((1234.5).toLocaleString());
+    expect(plainValue(0)).toBe("0");
+    expect(plainValue(true)).toBe("true");
+    expect(plainValue([1, null, "x"])).toBe("1, , x");
   });
 });

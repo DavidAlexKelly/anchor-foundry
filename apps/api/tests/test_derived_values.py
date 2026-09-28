@@ -393,3 +393,87 @@ def test_a_viewer_of_another_workspace_gets_nothing(client, fx, world) -> None:
         headers=hdr(fx.outsider_sub), json={"keys": ["C1"], "properties": ["products"]},
     )
     assert r.status_code in (403, 404), r.text
+
+
+# ---- a module's own chains (`workshop` p.169; §605) ---------------------------
+
+def _module_page(client, fx, type_id: str, keys: list[str], derivations: dict,
+                 properties: list[str] | None = None) -> dict:
+    r = client.post(
+        f"{wbase(fx)}/object-types/{type_id}/derived-values", headers=hdr(fx.viewer_sub),
+        json={"keys": keys, "properties": properties or [], "derivations": derivations},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_modules_chain_answers_what_the_same_ontology_one_does(client, fx, world) -> None:
+    """p.169's linked aggregation is the ontology's shape held by a module, so
+    the same chain has to give the same answer whichever holds it."""
+    chains = {
+        "avg_total": one_hop(world, aggregate="avg", property="total"),
+        "products": two_hops(world, aggregate="count"),
+        "names": two_hops(world, aggregate="collect_set", property="name", limit=10),
+    }
+    _derive(client, fx, world["customer"], {
+        name: (chain, "string" if name == "names" else "float")
+        for name, chain in chains.items()
+    })
+    keys = ["C1", "C2", "C3", "C4"]
+    typed = _page(client, fx, world["customer"], keys, list(chains))
+    _derive(client, fx, world["customer"], {})
+    module = _module_page(client, fx, world["customer"], keys,
+                          {f"m_{name}": chain for name, chain in chains.items()})
+    assert module["errors"] == {}
+    as_typed = {r["primary_key"]: r["values"] for r in typed["rows"]}
+    for row in module["rows"]:
+        for name in chains:
+            assert row["values"][f"m_{name}"] == as_typed[row["primary_key"]][name]
+    assert {r["primary_key"]: r["values"]["m_products"] for r in module["rows"]} == {
+        "C1": 3, "C2": 0, "C3": 1, "C4": 0}
+
+
+def test_a_type_property_and_a_module_chain_in_one_read(client, fx, world) -> None:
+    _derive(client, fx, world["customer"], {
+        "orders": (one_hop(world, aggregate="count"), "integer"),
+    })
+    body = _module_page(client, fx, world["customer"], ["C1"],
+                        {"m_sum": one_hop(world, aggregate="sum", property="total")},
+                        properties=["orders"])
+    assert body == {"rows": [{"primary_key": "C1", "values": {"orders": 3, "m_sum": 61}}],
+                    "errors": {}}
+
+
+def test_a_module_chain_that_does_not_check_is_that_columns_sentence(
+    client, fx, world
+) -> None:
+    """Refused per column, as a type's save would refuse it - and the good
+    column beside them still answers."""
+    body = _module_page(client, fx, world["customer"], ["C1"], {
+        "good": one_hop(world, aggregate="count"),
+        # A name the type already has.
+        "name": one_hop(world, aggregate="count"),
+        # A link this workspace does not have (deleted since, say).
+        "gone": {"links": [{"link_type_id": "00000000-0000-0000-0000-000000000000"}],
+                 "aggregate": "count"},
+        # p.145: a hop that reaches many needs an aggregation.
+        "bare": one_hop(world, property="total"),
+        # Arithmetic over a property the far type does not have.
+        "ghost": one_hop(world, aggregate="sum", property="weight"),
+        "empty": None,
+    })
+    assert body["rows"] == [{"primary_key": "C1", "values": {"good": 3}}]
+    errors = body["errors"]
+    assert set(errors) == {"name", "gone", "bare", "ghost", "empty"}
+    assert "already a property" in errors["name"]
+    assert "no such link type" in errors["gone"]
+    assert "needs a chain" in errors["empty"]
+
+
+def test_asking_for_nothing_is_refused(client, fx, world) -> None:
+    r = client.post(
+        f"{wbase(fx)}/object-types/{world['customer']}/derived-values",
+        headers=hdr(fx.viewer_sub), json={"keys": ["C1"]},
+    )
+    assert r.status_code == 422, r.text
+    assert "at least one derived property" in r.json()["detail"]

@@ -150,7 +150,7 @@ describe("reading the stored declarations", () => {
     // order, and the second is the one nobody meant.
     const got = columnsFor(stored, "type-a");
     expect(got).toHaveLength(1);
-    expect(got[0]!.expression).toBe("revenue - cost");
+    expect(got[0]).toMatchObject({ kind: "column_math", expression: "revenue - cost" });
   });
 
   it("refuses one at a time, unlike a rule list", () => {
