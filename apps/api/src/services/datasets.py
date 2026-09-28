@@ -560,7 +560,8 @@ async def roll_back(
     source = await fetch_one(
         conn,
         """
-        SELECT id, version_number, s3_manifest_key, table_schema, row_count
+        SELECT id, version_number, s3_manifest_key, table_schema, row_count,
+               sync_cursor_value
           FROM dataset_versions
          WHERE dataset_id = :did AND version_number = :v
         """,
@@ -618,8 +619,9 @@ async def roll_back(
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                       table_schema, row_count, produced_by_kind,
-                                      produced_by_id, created_by)
-        VALUES (:did, :v, :key, CAST(:schema AS jsonb), :rows, 'rollback', :src, :by)
+                                      produced_by_id, created_by, sync_cursor_value)
+        VALUES (:did, :v, :key, CAST(:schema AS jsonb), :rows, 'rollback', :src, :by,
+                :cursor)
         RETURNING id
         """,
         {
@@ -627,9 +629,38 @@ async def roll_back(
             "key": source["s3_manifest_key"], "schema": schema_json,
             "rows": source["row_count"], "src": str(source["id"]),
             "by": str(rolled_back_by),
+            # The new version *is* the old one's data, so it carries the old
+            # one's cursor: a rollback to this version later puts back the same.
+            "cursor": source["sync_cursor_value"],
         },
     )
-    return {**dict(row), "rolled_back_to": version_number}
+    # p.73: "If the dataset is being built incrementally, the dataset rollback
+    # feature also ensures that the incrementality of your dataset is
+    # preserved" (§607). An incremental sync asks the source only for rows past
+    # its stored cursor, so a dataset rolled back under a cursor left at the
+    # newest run would never be sent the rows between the two again. The
+    # cursor goes back with the data - to where the sync had got when that
+    # version was written, or to nothing when no incremental sync wrote it, in
+    # which case the next sync reads the source from the start and merges by
+    # key: slower, and still the whole table.
+    #
+    # In this transaction, so the data and the cursor move together or not at
+    # all. A full-mode sync keeps no cursor and needs nothing.
+    restored = await fetch_one(
+        conn,
+        """
+        UPDATE connections SET sync_last_cursor_value = :cursor
+         WHERE sync_dataset_id = :did AND sync_mode = 'incremental'
+        RETURNING id
+        """,
+        {"did": str(dataset_id), "cursor": source["sync_cursor_value"]},
+    )
+    return {
+        **dict(row),
+        "rolled_back_to": version_number,
+        "sync_cursor": {"connection_id": restored["id"], "value": source["sync_cursor_value"]}
+        if restored else None,
+    }
 
 
 async def version_location(

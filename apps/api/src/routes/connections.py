@@ -825,7 +825,6 @@ async def trigger_sync(
             dataset, rows_synced, created, schema_changes = await sync_service.run_full_sync(
                 conn,
                 _dataset_storage(),
-                _secrets,
                 connection_row=row,
                 workspace_id=access.workspace_id,
                 project_id=access.project_id,

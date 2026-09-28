@@ -1,0 +1,28 @@
+-- ============================================================================
+-- 0127_version_sync_cursor.sql
+-- Parity `docs/parity/datasets-lineage.md` ("Roll back a dataset").
+-- `data-lineage` p.73.
+--
+-- > "The dataset rollback feature allows you to update the data and job
+-- >  history of a dataset. If the dataset is being built incrementally, the
+-- >  dataset rollback feature also ensures that the incrementality of your
+-- >  dataset is preserved." (p.73)
+--
+-- Where an incremental sync had got to when it wrote each version (§607).
+-- §361's rollback put a dataset's *data* back and left the connection's
+-- `sync_last_cursor_value` at the newest run's cursor, so the next sync asked
+-- the source only for rows past that cursor and the rows between the version
+-- rolled back to and it were never read again: missing from the dataset, and
+-- nothing on any screen to say so.
+--
+-- **On the version, not on the connection**, because the question a rollback
+-- asks is "where had the sync got to when *this* version was written", and
+-- only the version can answer it after later runs have moved the connection
+-- on. NULL for every version an incremental sync did not write - an upload, a
+-- model run, a full sync - and for every version written before this column
+-- existed: a rollback to one of those resets the cursor, so the next sync
+-- reads the source from the beginning and merges by primary key. That is
+-- slower and still right, which is the trade to make with no record.
+-- ============================================================================
+
+ALTER TABLE dataset_versions ADD COLUMN sync_cursor_value text;

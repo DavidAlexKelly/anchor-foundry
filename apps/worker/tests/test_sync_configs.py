@@ -281,6 +281,19 @@ def test_incremental_sync_first_run_then_merges_new_rows(workspace: dict, source
     version3, count3 = _dataset_rows(row3["sync_dataset_id"])
     assert (version3, count3) == (2, 3)
 
+    # §607 (migration 0127): each version says where the sync had got to when
+    # it was written, which is what a rollback to it puts back.
+    assert _version_cursors(row["sync_dataset_id"]) == {1: "2", 2: "3"}
+
+
+def _version_cursors(dataset_id) -> dict:
+    with psycopg.connect(ADMIN_DSN) as conn:
+        rows = conn.execute(
+            "SELECT version_number, sync_cursor_value FROM dataset_versions "
+            "WHERE dataset_id = %s ORDER BY version_number", (str(dataset_id),),
+        ).fetchall()
+    return {int(v): c for v, c in rows}
+
 
 def test_full_sync_replaces_dataset_wholesale(workspace: dict, source_database: dict) -> None:
     cid = _create_connection(workspace, source_database, mode="full", dataset_name="full_items")
@@ -291,12 +304,17 @@ def test_full_sync_replaces_dataset_wholesale(workspace: dict, source_database: 
     assert (version, count) == (1, 2)
 
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
-        conn.execute("UPDATE connections SET sync_next_run_at = NULL WHERE id=%s", (cid,))
+        # A cursor left from when this connection was incremental, which a
+        # full run neither reads nor records (§607).
+        conn.execute("UPDATE connections SET sync_next_run_at = NULL, "
+                     "sync_last_cursor_value = '7' WHERE id=%s", (cid,))
     run_due_scheduled_syncs(_ctx())
     row2 = _connection_row(cid)
     version2, count2 = _dataset_rows(row2["sync_dataset_id"])
     # Full mode re-snapshots the whole table each time: same 2 rows, new version.
     assert (version2, count2) == (2, 2)
+    # And records no cursor, because it kept none (§607).
+    assert _version_cursors(row["sync_dataset_id"]) == {1: None, 2: None}
 
 
 def test_failing_sync_is_recorded_and_schedule_still_advances(workspace: dict, source_database: dict) -> None:

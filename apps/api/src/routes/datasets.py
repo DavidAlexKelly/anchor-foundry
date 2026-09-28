@@ -1115,7 +1115,13 @@ async def roll_back_dataset(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"rolled_back_to": body.version_number,
-                      "new_version": rolled["current_version"]},
+                      "new_version": rolled["current_version"],
+                      # p.73's "incrementality… preserved" (§607): which sync's
+                      # cursor went back with the data, and to what.
+                      **({"sync_cursor": {
+                          "connection_id": str(rolled["sync_cursor"]["connection_id"]),
+                          "value": rolled["sync_cursor"]["value"],
+                      }} if rolled["sync_cursor"] else {})},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
