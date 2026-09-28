@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_EVENT_SETS, withEventStatistics, eventCount, eventSpan, eventsOf, liveEventSets, withEventSet,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
-  MAX_PLOTS, MAX_ROOTS, canvasesOf, chainOf, extentOf, pathOf, readingsOf, rootOf, rootPlots,
+  MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, extentOf, pathOf, readingsOf, rootOf, rootPlots,
   statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
 } from "./series-analysis";
 import type { SeriesTransform } from "./series-transforms";
@@ -223,6 +223,15 @@ describe("p.393's Combine time series (§650)", () => {
     expect(withCombined(roots, "root:i1", ["root:i1"], "sum", 1)).toEqual(roots);
     expect(withCombined(roots, "root:i1", ["gone"], "sum", 1)).toEqual(roots);
     expect(withCombined(roots, "gone", ["root:i2"], "sum", 1)).toEqual(roots);
+  });
+
+  it("makes p.393's Linear aggregation the same way (§653)", () => {
+    const made = withCombined(roots, "root:i1", ["root:i2"], "sum", 1, "linear_aggregate")[2]!;
+    expect(made.label).toBe("Linear aggregation of Pump 1 with Pump 2");
+    expect(made.transforms).toEqual([{ kind: "linear_aggregate", aggregate: "sum", inputs: {
+      y: referenceTo(roots, "root:i2") } }]);
+    expect(PLOT_LABELS.linear_aggregate).toBe("Linear aggregation");
+    expect(PLOT_TYPES).toContain("linear_aggregate");
   });
 });
 

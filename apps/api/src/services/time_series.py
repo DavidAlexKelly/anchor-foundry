@@ -434,7 +434,7 @@ def points_for_many_sql(
 #: multiple transforms to be chained together." (p.583)
 TRANSFORM_KINDS = (
     "cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula",
-    "filter", "sample", "combine", "event_statistics",
+    "filter", "sample", "combine", "event_statistics", "linear_aggregate",
 )
 #: p.393's *Combine time series*: "Merge multiple time series into a single
 #: plot, specifying how to handle overlapping time points (for example, mean,
@@ -567,7 +567,7 @@ def parse_transforms(
                 if not isinstance(keep, bool):
                     raise ValueError("keep is true (keep the points that match) or false")
                 parsed = {"kind": kind, "op": operator, "value": float(value), "keep": keep}
-            elif kind == "combine":
+            elif kind in ("combine", "linear_aggregate"):
                 aggregate = item.get("aggregate", "avg")
                 if aggregate not in COMBINE_AGGREGATES:
                     raise ValueError(
@@ -909,6 +909,28 @@ def _transform_sql(
             f"AS value FROM ({events}) e LEFT JOIN (SELECT CAST(at AS TIMESTAMP) AS at, value FROM "
             f"{source}) x ON x.at BETWEEN e.start AND e.finish GROUP BY e.start"
         )
+    if kind == "linear_aggregate":
+        # p.393's *Linear aggregation* (§653): "Compute a linear aggregation
+        # across multiple time series over time." At every instant any of the
+        # series has a reading, each series stands where the straight line
+        # between its readings either side puts it - only inside its own
+        # span, where there are readings either side - and the series there
+        # are aggregated. Where combine takes only the points that meet, this
+        # lines the series up first.
+        queries = [source, *(inputs or {}).values()]
+        readings = [
+            f"(SELECT CAST(at AS TIMESTAMP) AS at, value FROM {q} WHERE value IS NOT NULL)"
+            for q in queries
+        ]
+        grid = f"(SELECT DISTINCT at FROM ({' UNION ALL '.join(readings)}) every)"
+        lines = " UNION ALL ".join(
+            f"SELECT g.at AS at, CASE WHEN n.at = p.at THEN p.value ELSE p.value + (n.value - p.value) "
+            f"* (epoch_ms(g.at) - epoch_ms(p.at)) / (epoch_ms(n.at) - epoch_ms(p.at)) END AS value "
+            f"FROM {grid} g ASOF JOIN {r} p ON g.at >= p.at ASOF JOIN {r} n ON g.at <= n.at"
+            for r in readings
+        )
+        return (f"SELECT at, {transform['aggregate']}(value) AS value FROM ({lines}) lined "
+                "GROUP BY at")
     if kind == "combine":
         # p.393: every point of every series, and where two share an instant,
         # one point for it by the aggregate chosen. SQL's aggregates skip a

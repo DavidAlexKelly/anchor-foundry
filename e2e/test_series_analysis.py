@@ -212,3 +212,28 @@ def test_statistics_per_event(page, api, module) -> None:
     label = "avg of North sensor per event of South sensor at least 900"
     expect(stat(page, label, "mean")).to_have_text("15")
     expect(stat(page, label, "max")).to_have_text("15")
+
+
+def test_a_linear_aggregation_lines_the_series_up(page, api, module) -> None:
+    """p.393's Linear aggregation (§653). South shifted twelve hours later
+    reads 900 at noon on the 1st and 2nd, between North's readings: North
+    stands at 15 and 25 there on the line between its own, so the sum peaks at
+    925 - where combining would only add the points that meet. Before South
+    begins, midnight on the 1st is North's 10 alone."""
+    open_module(page, build(api, module, "Analysis linear"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_label("New plot").select_option("shift")
+    page.get_by_label("Input plot").select_option(label="South sensor")
+    page.get_by_label("Transform 1 shift").fill("12")
+    page.get_by_label("Transform 1 unit").select_option("hour")
+    page.get_by_role("button", name="Add plot").click()
+    shifted = "Shift time series of South sensor"
+    expect(stat(page, shifted, "max")).to_have_text("900")
+    page.get_by_label("New plot").select_option("linear_aggregate")
+    page.get_by_label("Input plot").select_option(label="North sensor")
+    page.get_by_label("Combine by").select_option("sum")
+    page.get_by_label(f"Combine with {shifted}").check()
+    page.get_by_role("button", name="Add plot").click()
+    lined = f"Linear aggregation of North sensor with {shifted}"
+    expect(stat(page, lined, "max")).to_have_text("925")
+    expect(stat(page, lined, "min")).to_have_text("10")

@@ -11,7 +11,7 @@ import {
 
 describe("the vocabulary", () => {
   it("is p.583-586's, as the server takes it", () => {
-    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine", "event_statistics"]);
+    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine", "event_statistics", "linear_aggregate"]);
     expect([...FORMULA_FUNCTIONS]).toEqual(["abs", "sqrt", "ln", "log10", "exp", "floor", "ceil", "round"]);
     expect(MAX_FORMULA).toBe(200);
     expect([...WINDOW_TYPES]).toEqual(["start", "end"]);
@@ -236,6 +236,30 @@ describe("p.393's Combine time series (§650)", () => {
     expect(withoutInput(combine({ y: "v1", z: "v2" }) as never, "y")).toEqual(combine({ z: "v2" }));
     expect(seriesInputs([combine({ y: "v1" }), { kind: "formula", expression: "x", inputs: { y: "v2" } }]))
       .toEqual(["v1", "v2"]);
+  });
+});
+
+describe("p.393's Linear aggregation (§653)", () => {
+  const linear = (inputs?: Record<string, unknown>) =>
+    ({ kind: "linear_aggregate" as const, aggregate: "sum" as const, ...(inputs ? { inputs } : {}) });
+
+  it("starts as a combine does, and says what it does", () => {
+    expect(blankTransform("linear_aggregate")).toEqual({ kind: "linear_aggregate", aggregate: "avg",
+      inputs: { y: "" } });
+    expect(transformText(linear({ y: "v1", z: "v2" })))
+      .toBe("sum with y, z, each on the line between its readings");
+    expect(transformText(linear())).toBe("sum with nothing, each on the line between its readings");
+    expect(KIND_LABELS.linear_aggregate).toBe("Linear aggregation");
+  });
+
+  it("needs another series, chosen, and names its variables", () => {
+    expect(transformProblem(linear())).toBe("Combining needs at least one other series.");
+    expect(transformProblem(linear({ y: "" }))).toBe("Choose a series for y.");
+    expect(transformProblem(linear({ y: "v1" }))).toBeNull();
+    const one = withInput(linear({ y: "v1" }));
+    expect(Object.keys((one as { inputs: object }).inputs)).toEqual(["y", "z"]);
+    expect(withoutInput(linear({ y: "v1" }), "y")).toEqual(linear());
+    expect(seriesInputs([linear({ y: "v3" })])).toEqual(["v3"]);
   });
 });
 

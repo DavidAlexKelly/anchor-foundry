@@ -83,7 +83,7 @@ export function SeriesTransformsEditor({
             />
           )}
           {t.kind !== "cumulative" && t.kind !== "range" && t.kind !== "formula" && t.kind !== "filter"
-            && t.kind !== "combine" && t.kind !== "event_statistics" && (
+            && t.kind !== "combine" && t.kind !== "linear_aggregate" && t.kind !== "event_statistics" && (
             <select
               aria-label={`Transform ${index + 1} unit`}
               value={t.unit}
@@ -220,17 +220,21 @@ export function SeriesTransformsEditor({
               )}
             </>
           )}
-          {t.kind === "combine" && (
+          {(t.kind === "combine" || t.kind === "linear_aggregate") && (
             <select
               aria-label={`Transform ${index + 1} combine by`}
               value={t.aggregate}
               disabled={readOnly}
               onChange={(e) => set(index, { ...t, aggregate: e.target.value as CombineAggregate })}
             >
-              {COMBINE_AGGREGATES.map((a) => <option key={a} value={a}>{`${COMBINE_WORDS[a]} where they meet`}</option>)}
+              {COMBINE_AGGREGATES.map((a) => (
+                <option key={a} value={a}>
+                  {t.kind === "combine" ? `${COMBINE_WORDS[a]} where they meet` : COMBINE_WORDS[a]}
+                </option>
+              ))}
             </select>
           )}
-          {(t.kind === "formula" || t.kind === "combine") && seriesVariables && (
+          {(t.kind === "formula" || t.kind === "combine" || t.kind === "linear_aggregate") && seriesVariables && (
             <span className="row-actions" data-testid="formula-inputs" style={{ gap: 6, flexWrap: "wrap" }}>
               {Object.entries(t.inputs ?? {}).map(([name, chosen]) => (
                 <span key={name} className="row-actions" style={{ gap: 4 }}>

@@ -35,12 +35,13 @@ export type PlotType = TransformKind | "bollinger";
 /** The derived plot types this widget offers, as the source names them, in
  * p.393's order. */
 export const PLOT_TYPES: PlotType[] = [
-  "bollinger", "combine", "cumulative", "rolling", "periodic", "derivative", "integral", "shift",
+  "bollinger", "combine", "linear_aggregate", "cumulative", "rolling", "periodic", "derivative", "integral", "shift",
   "event_statistics", "formula", "filter", "sample",
 ];
 export const PLOT_LABELS: Partial<Record<PlotType, string>> = {
   bollinger: "Bollinger bands",
   combine: "Combine time series",
+  linear_aggregate: "Linear aggregation",
   event_statistics: "Event statistics",
   cumulative: "Cumulative aggregate",
   rolling: "Rolling aggregate",
@@ -328,22 +329,28 @@ export const MAX_COMBINED = 4;
 const COMBINE_NAMES = ["y", "z", "a", "b"];
 
 /** The plots with one combining `parent` with `others`: every point of each,
- * and where points meet, one by `aggregate`. Unchanged at the cap, without
- * another plot, or for a plot that is not there. */
+ * and where points meet, one by `aggregate` - or for p.393's *Linear
+ * aggregation* (§653), each lined up on its own readings at every instant
+ * first. Unchanged at the cap, without another plot, or for a plot that is
+ * not there. */
 export function withCombined(
   plots: readonly Plot[], parent: string, others: readonly string[],
   aggregate: "avg" | "min" | "max" | "sum", canvas: number,
+  kind: "combine" | "linear_aggregate" = "combine",
 ): Plot[] {
   const from = byId(plots).get(parent);
   const chosen = others.filter((o) => o !== parent).slice(0, MAX_COMBINED);
   const refs = chosen.map((o) => referenceTo(plots, o));
   if (!from || chosen.length === 0 || refs.some((r) => r === null)) return [...plots];
   const inputs = Object.fromEntries(chosen.map((_, n) => [COMBINE_NAMES[n]!, refs[n]]));
-  const next = withDerived(plots, parent, [{ kind: "combine", aggregate, inputs }], canvas);
+  const next = withDerived(plots, parent, [{ kind, aggregate, inputs }], canvas);
   if (next.length === plots.length) return next;
   const made = next[next.length - 1]!;
   const names = chosen.map((o) => byId(plots).get(o)!.label);
-  return [...next.slice(0, -1), { ...made, label: `${from.label} combined with ${names.join(", ")}` }];
+  const label = kind === "combine"
+    ? `${from.label} combined with ${names.join(", ")}`
+    : `Linear aggregation of ${from.label} with ${names.join(", ")}`;
+  return [...next.slice(0, -1), { ...made, label }];
 }
 
 
