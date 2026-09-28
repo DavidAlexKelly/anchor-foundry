@@ -639,6 +639,25 @@ button { font: inherit; cursor: pointer; }
   box-shadow: var(--shadow-card-hover);
 }
 .explore-menu .btn { text-align: left; }
+
+/* p.222's Configure columns on the Object Table (§612). */
+/* The arrow is drawn by CSS so the header's own text stays "Key"; the button
+   is named by its aria-label. */
+.canvas-column-menu::after { content: "▾"; }
+.canvas-column-menu {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.canvas-columns-panel { width: 260px; gap: 2px; }
+.canvas-columns-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.canvas-columns-row .row-actions { gap: 2px; }
+.canvas-columns-row .btn { padding: 0 6px; }
 .explore-menu .field-hint { padding: 4px 8px; }
 
 /* ---- data tables ---------------------------------------------------------- */
