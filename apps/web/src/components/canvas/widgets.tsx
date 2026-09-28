@@ -302,6 +302,7 @@ import {
   blankTransform, readableTransforms, transformsByColumn, transformsProblem as seriesTransformsProblem,
   transformsText, withColumnTransforms, TIME_UNITS, COMBINE_AGGREGATES, COMBINE_WORDS,
   FILTER_OPERATORS as SERIES_FILTER_OPERATORS, FILTER_WORDS as SERIES_FILTER_WORDS,
+  WINDOW_AGGREGATES as SERIES_WINDOW_AGGREGATES,
   type FilterOperator as SeriesFilterOperator,
   type SeriesTransform, type TimeUnit,
   type TransformKind,
@@ -318,7 +319,7 @@ import {
   MAX_COMBINED as MAX_SERIES_COMBINED, withCombined as withSeriesCombined,
   MAX_EVENT_SETS as MAX_SERIES_EVENT_SETS, eventCount as seriesEventCount, eventsOf as seriesEventsOf,
   liveEventSets as liveSeriesEventSets, withEventSet as withSeriesEventSet,
-  type EventSet as SeriesEventSet,
+  type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
 import { outputClauses } from "./action-output";
@@ -13094,6 +13095,7 @@ export function CanvasSeriesAnalysis({
   const [draft, setDraft] = useState<{
     parent: string; transforms: SeriesTransform[]; bands?: SeriesBands;
     combine?: { others: string[]; aggregate: "avg" | "min" | "max" | "sum" };
+    eventStats?: { set: string; aggregate: "sum" | "avg" | "min" | "max" | "count" | "stddev" };
   } | null>(null);
   const canvases = seriesCanvasesOf(plots, addedCanvases);
   // p.392's Time series search (§651): event sets over the plots, each
@@ -13214,6 +13216,9 @@ export function CanvasSeriesAnalysis({
                           : e.target.value === "combine"
                             ? { parent: plots[0]!.id, transforms: [],
                                 combine: { others: [], aggregate: "avg" } }
+                          : e.target.value === "event_statistics"
+                            ? { parent: plots[0]!.id, transforms: [],
+                                eventStats: { set: eventSets[0]?.id ?? "", aggregate: "avg" } }
                             : { parent: plots[0]!.id,
                                 transforms: [blankTransform(e.target.value as TransformKind)] });
                       }}>
@@ -13293,7 +13298,27 @@ export function CanvasSeriesAnalysis({
                   {plots.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                 </select>
               </label>
-              {draft.combine ? (
+              {draft.eventStats ? (
+                <div className="row-actions" data-testid="series-event-statistics">
+                  {eventSets.length === 0 ? (
+                    <span className="field-hint">Add an event set first: its events are what this aggregates over.</span>
+                  ) : (
+                    <>
+                      <select aria-label="Statistic" value={draft.eventStats.aggregate}
+                              onChange={(e) => setDraft({ ...draft, eventStats: { ...draft.eventStats!,
+                                aggregate: e.target.value as "sum" | "avg" | "min" | "max" | "count" | "stddev" } })}>
+                        {SERIES_WINDOW_AGGREGATES.map((a) => <option key={a} value={a}>{a}</option>)}
+                      </select>
+                      <span className="field-hint">per event of</span>
+                      <select aria-label="Event set" value={draft.eventStats.set}
+                              onChange={(e) => setDraft({ ...draft, eventStats: { ...draft.eventStats!,
+                                set: e.target.value } })}>
+                        {eventSets.map((set) => <option key={set.id} value={set.id}>{set.label}</option>)}
+                      </select>
+                    </>
+                  )}
+                </div>
+              ) : draft.combine ? (
                 <div className="row-actions" data-testid="series-combine" style={{ flexWrap: "wrap" }}>
                   <select aria-label="Combine by" value={draft.combine.aggregate}
                           onChange={(e) => setDraft({ ...draft, combine: { ...draft.combine!,
@@ -13341,12 +13366,17 @@ export function CanvasSeriesAnalysis({
               )}
               <div className="row-actions">
                 <button type="button" className="btn"
-                        disabled={draft.combine ? draft.combine.others.length === 0
+                        disabled={draft.eventStats ? !eventSets.some((x) => x.id === draft.eventStats!.set)
+                          : draft.combine ? draft.combine.others.length === 0
                           : draft.bands ? !!seriesBandsProblem(draft.bands)
                           : draft.transforms.length === 0 || !!seriesTransformsProblem(draft.transforms)}
                         onClick={() => {
                           const parent = plots.find((p) => p.id === draft.parent);
-                          setPlots(draft.combine
+                          setPlots(draft.eventStats
+                            ? withSeriesEventStatistics(plots, draft.parent,
+                              eventSets.find((x) => x.id === draft.eventStats!.set),
+                              draft.eventStats.aggregate, parent?.canvas ?? 1)
+                            : draft.combine
                             ? withSeriesCombined(plots, draft.parent, draft.combine.others,
                               draft.combine.aggregate, parent?.canvas ?? 1)
                             : draft.bands

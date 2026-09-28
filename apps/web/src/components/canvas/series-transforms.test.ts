@@ -11,7 +11,7 @@ import {
 
 describe("the vocabulary", () => {
   it("is p.583-586's, as the server takes it", () => {
-    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine"]);
+    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine", "event_statistics"]);
     expect([...FORMULA_FUNCTIONS]).toEqual(["abs", "sqrt", "ln", "log10", "exp", "floor", "ceil", "round"]);
     expect(MAX_FORMULA).toBe(200);
     expect([...WINDOW_TYPES]).toEqual(["start", "end"]);
@@ -236,5 +236,27 @@ describe("p.393's Combine time series (§650)", () => {
     expect(withoutInput(combine({ y: "v1", z: "v2" }) as never, "y")).toEqual(combine({ z: "v2" }));
     expect(seriesInputs([combine({ y: "v1" }), { kind: "formula", expression: "x", inputs: { y: "v2" } }]))
       .toEqual(["v1", "v2"]);
+  });
+});
+
+describe("p.393's Event statistics (§652)", () => {
+  const stats = (inputs?: Record<string, unknown>, value = 5) =>
+    ({ kind: "event_statistics" as const, aggregate: "max" as const, op: "gte" as const, value,
+      ...(inputs ? { inputs } : {}) });
+
+  it("starts with the searched series to choose, and says what it does", () => {
+    expect(blankTransform("event_statistics")).toEqual({ kind: "event_statistics", aggregate: "avg",
+      op: "gt", value: 0, inputs: { e: "" } });
+    expect(transformText(stats({ e: "v1" }))).toBe("maximum over each time e is at least 5");
+  });
+
+  it("needs exactly one searched series, chosen, and a number", () => {
+    expect(transformProblem(stats())).toBe("Event statistics needs the one series its events are found in.");
+    expect(transformProblem(stats({ e: "v1", f: "v2" })))
+      .toBe("Event statistics needs the one series its events are found in.");
+    expect(transformProblem(stats({ e: "" }))).toBe("Choose the series the events are found in.");
+    expect(transformProblem(stats({ e: "v1" }, Number.NaN))).toBe("The events are found by comparing with a number.");
+    expect(transformProblem(stats({ e: "v1" }))).toBeNull();
+    expect(seriesInputs([stats({ e: "v9" })])).toEqual(["v9"]);
   });
 });

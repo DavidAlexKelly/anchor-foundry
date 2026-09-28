@@ -36,11 +36,12 @@ export type PlotType = TransformKind | "bollinger";
  * p.393's order. */
 export const PLOT_TYPES: PlotType[] = [
   "bollinger", "combine", "cumulative", "rolling", "periodic", "derivative", "integral", "shift",
-  "formula", "filter", "sample",
+  "event_statistics", "formula", "filter", "sample",
 ];
 export const PLOT_LABELS: Partial<Record<PlotType, string>> = {
   bollinger: "Bollinger bands",
   combine: "Combine time series",
+  event_statistics: "Event statistics",
   cumulative: "Cumulative aggregate",
   rolling: "Rolling aggregate",
   periodic: "Periodic aggregate",
@@ -415,4 +416,25 @@ export function eventSpan(
   if (to < from) return null;
   const w = Math.max(2, to - from);
   return { x: Math.min(from, width - w), width: w };
+}
+
+
+/** p.393's *Event statistics* (§652): "Aggregate a time series over
+ * intervals where an event occurs, returning one point per event." `parent`
+ * is the series aggregated; the events are an event set's, found by the
+ * server in that set's plot through its whole chain. Unchanged for an event
+ * set or a plot that is not there. */
+export function withEventStatistics(
+  plots: readonly Plot[], parent: string, set: EventSet | undefined,
+  aggregate: "sum" | "avg" | "min" | "max" | "count" | "stddev", canvas: number,
+): Plot[] {
+  const from = byId(plots).get(parent);
+  const searched = set ? referenceTo(plots, set.plot) : null;
+  if (!from || !set || !searched) return [...plots];
+  const next = withDerived(plots, parent, [{
+    kind: "event_statistics", aggregate, op: set.op, value: set.value, inputs: { e: searched },
+  }], canvas);
+  if (next.length === plots.length) return next;
+  const made = next[next.length - 1]!;
+  return [...next.slice(0, -1), { ...made, label: `${aggregate} of ${from.label} per event of ${set.label}` }];
 }

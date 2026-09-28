@@ -83,7 +83,7 @@ export function SeriesTransformsEditor({
             />
           )}
           {t.kind !== "cumulative" && t.kind !== "range" && t.kind !== "formula" && t.kind !== "filter"
-            && t.kind !== "combine" && (
+            && t.kind !== "combine" && t.kind !== "event_statistics" && (
             <select
               aria-label={`Transform ${index + 1} unit`}
               value={t.unit}
@@ -181,6 +181,45 @@ export function SeriesTransformsEditor({
           )}
           {/* p.586's Add input (§561): each input a series variable, named
               in the formula. */}
+          {t.kind === "event_statistics" && (
+            <>
+              <select
+                aria-label={`Transform ${index + 1} aggregate`}
+                value={t.aggregate}
+                disabled={readOnly}
+                onChange={(e) => set(index, { ...t, aggregate: e.target.value as WindowAggregate })}
+              >
+                {WINDOW_AGGREGATES.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+              <span className="soft">over each time e is</span>
+              <select
+                aria-label={`Transform ${index + 1} comparison`}
+                value={t.op}
+                disabled={readOnly}
+                onChange={(e) => set(index, { ...t, op: e.target.value as FilterOperator })}
+              >
+                {FILTER_OPERATORS.map((o) => <option key={o} value={o}>{FILTER_WORDS[o]}</option>)}
+              </select>
+              <input
+                type="number"
+                aria-label={`Transform ${index + 1} value`}
+                value={Number.isFinite(t.value) ? t.value : ""}
+                readOnly={readOnly}
+                onChange={(e) => set(index, { ...t, value: Number(e.target.value) })}
+              />
+              {seriesVariables && (
+                <select
+                  aria-label={`Transform ${index + 1} input e`}
+                  value={typeof t.inputs?.e === "string" ? t.inputs.e : ""}
+                  disabled={readOnly}
+                  onChange={(e) => set(index, { ...t, inputs: { e: e.target.value } })}
+                >
+                  <option value="">Choose a series…</option>
+                  {seriesVariables.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                </select>
+              )}
+            </>
+          )}
           {t.kind === "combine" && (
             <select
               aria-label={`Transform ${index + 1} combine by`}
