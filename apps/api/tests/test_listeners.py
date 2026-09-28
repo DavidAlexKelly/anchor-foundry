@@ -467,9 +467,22 @@ def test_a_slack_listener_checks_the_signed_timestamp(client, fx) -> None:
     body = b'{"type": "event_callback", "event": {"type": "app_mention"}}'
     now = int(time.time())
     assert client.post(path_of(listener), content=body, headers=signed_slack("slack-secret", body, now)).status_code == 200
-    for headers in (signed_slack("wrong", body, now), signed_slack("slack-secret", body + b" ", now),
-                    signed_slack("slack-secret", body, now - 301), signed_slack("slack-secret", body, now + 301),
-                    {**signed_slack("slack-secret", body, now), "X-Slack-Request-Timestamp": "soon"}, {}):
+    # **Each refusal signed against the clock as it is sent**, and the future
+    # stamp well outside the window rather than a second outside it. A stamp
+    # read once before six requests drifts: by the time the server checks it
+    # the clock has moved on, so `now + 301` became 300 ahead - inside the
+    # tolerance - and was accepted, which failed CI with a correct listener.
+    # The past side can only drift further out, so it keeps its one second.
+    refused = (
+        lambda at: signed_slack("wrong", body, at),
+        lambda at: signed_slack("slack-secret", body + b" ", at),
+        lambda at: signed_slack("slack-secret", body, at - 301),
+        lambda at: signed_slack("slack-secret", body, at + 310),
+        lambda at: {**signed_slack("slack-secret", body, at), "X-Slack-Request-Timestamp": "soon"},
+        lambda at: {},
+    )
+    for sign in refused:
+        headers = sign(int(time.time()))
         assert client.post(path_of(listener), content=body, headers=headers).status_code == 401, headers
     # The clock read again: the six refusals above can take a second, and a
     # stamp 299 seconds before a `now` taken before them is then 300 old.
