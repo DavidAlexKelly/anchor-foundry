@@ -370,3 +370,76 @@ def test_a_read_by_series_id_takes_no_inputs(client, fx, ontology, weather) -> N
     r = points(client, fx, ontology, transforms=json.dumps([formula("x - y", y=station(weather))]))
     assert r.status_code == 422
     assert "other inputs are a time series set variable's" in r.json()["detail"]
+
+
+# ---- p.393's Combine time series (§650) -------------------------------------------
+def combine(aggregate: str | None = None, **inputs) -> dict:
+    out = {"kind": "combine", "inputs": inputs}
+    return {**out, "aggregate": aggregate} if aggregate else out
+
+
+@pytest.mark.parametrize("aggregate, on_the_2nd", [
+    ("avg", 16.0), ("min", 2.0), ("max", 30.0), ("sum", 32.0), (None, 16.0),
+])
+def test_combining_keeps_every_point_and_merges_where_they_meet(aggregate, on_the_2nd) -> None:
+    """p.393: "Merge multiple time series into a single plot, specifying how to
+    handle overlapping time points (for example, mean, min, or max)". S1 and W1
+    meet only at midnight on the 2nd; elsewhere each point is its own."""
+    got = run([ts.parse_transforms([combine(aggregate, y=ref())], inputs="references")[0]
+               | {"inputs": {"y": spec("W1", "input_1")}}])
+    assert got == [(datetime(2026, 1, 1, 0), 10.0), (datetime(2026, 1, 1, 3), 1.0),
+                   (datetime(2026, 1, 1, 6), 20.0), (datetime(2026, 1, 2, 0), on_the_2nd)]
+
+
+def test_combining_several_with_a_gap_left_out() -> None:
+    """A series silent at an instant does not drag its mean: S1's gap on the
+    3rd is not a point, so W1's is the only one there."""
+    rows_gap = spec("S2", "dataset")
+    got = values([{"kind": "combine", "aggregate": "sum",
+                   "inputs": {"y": spec("W1", "input_1"), "z": rows_gap}}])
+    assert got == [10.0 + 99.0, 1.0, 20.0, 30.0 + 2.0]
+
+
+def test_an_instant_where_every_series_is_silent_stays_a_gap() -> None:
+    con = duckdb.connect()
+    try:
+        con.execute("CREATE TABLE dataset (sensor VARCHAR, taken TIMESTAMP, reading DOUBLE)")
+        con.executemany("INSERT INTO dataset VALUES (?, ?, ?)",
+                        S1 + [("S1", "2026-01-03 00:00:00", None)])
+        con.execute("CREATE TABLE input_1 (sensor VARCHAR, taken TIMESTAMP, reading DOUBLE)")
+        con.executemany("INSERT INTO input_1 VALUES (?, ?, ?)", W1)
+        sql = ts.points_sql(key_column="sensor", timestamp_column="taken", value_column="reading",
+                            series_id="S1", interval="none", aggregate="avg", transforms=[
+                                {"kind": "combine", "aggregate": "avg",
+                                 "inputs": {"y": spec("W1", "input_1")}}])
+        got = con.execute(sql).fetchall()
+    finally:
+        con.close()
+    assert got[-1] == (datetime(2026, 1, 3), None)
+
+
+def test_combining_chains_after_other_transforms() -> None:
+    chain = [{"kind": "cumulative", "aggregate": "sum"},
+             {"kind": "combine", "aggregate": "max", "inputs": {"y": spec("W1", "input_1")}}]
+    assert values(chain) == [10.0, 1.0, 30.0, 60.0]
+
+
+@pytest.mark.parametrize("raw, mode, said", [
+    ({"kind": "combine", "inputs": {}}, "references",
+     "transform 1: combining needs at least one other series"),
+    ({"kind": "combine", "aggregate": "median", "inputs": {"y": ref()}}, "references",
+     "transform 1: overlapping points combine by one of avg, min, max, sum"),
+    ({"kind": "combine", "inputs": {"y": ref()}}, "none",
+     "transform 1: a formula here has only its own series - other inputs are a time series "
+     "set variable's (p.586)"),
+])
+def test_a_combine_that_could_not_be_read_is_refused(raw, mode, said) -> None:
+    with pytest.raises(ValueError) as caught:
+        parsed([raw], mode)
+    assert str(caught.value) == said
+
+
+def test_a_combine_names_its_variables_as_a_formula_does() -> None:
+    got = parsed([{"kind": "combine", "inputs": {"y": "v_other"}}], "variables")
+    assert got == [{"kind": "combine", "aggregate": "avg", "inputs": {"y": "v_other"}}]
+    assert wv.series_inputs(got) == ["v_other"]

@@ -141,3 +141,20 @@ def test_bollinger_bands_around_a_moving_average(page, api, module) -> None:
     expect(stat(page, "Upper Bollinger band of North sensor", "max")).to_have_text("50")
     expect(stat(page, "Upper Bollinger band of North sensor", "min")).to_have_text("29.142")
     expect(stat(page, "Lower Bollinger band of North sensor", "min")).to_have_text("0")
+
+
+def test_two_sensors_combined_by_their_maximum(page, api, module) -> None:
+    """p.393's Combine time series (§650). North reads 10-40 and South 900 on
+    the first two days; where they meet the maximum is South's, and on the
+    3rd and 4th only North reads."""
+    open_module(page, build(api, module, "Analysis combine"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_label("New plot").select_option("combine")
+    page.get_by_label("Input plot").select_option(label="North sensor")
+    page.get_by_label("Combine by").select_option("max")
+    page.get_by_label("Combine with South sensor").check()
+    page.get_by_role("button", name="Add plot").click()
+    combined = "North sensor combined with South sensor"
+    expect(stat(page, combined, "min")).to_have_text("30")
+    expect(stat(page, combined, "max")).to_have_text("900")
+    expect(stat(page, combined, "mean")).to_have_text("467.5")

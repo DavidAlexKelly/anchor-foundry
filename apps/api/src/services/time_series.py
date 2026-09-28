@@ -434,8 +434,12 @@ def points_for_many_sql(
 #: multiple transforms to be chained together." (p.583)
 TRANSFORM_KINDS = (
     "cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula",
-    "filter", "sample",
+    "filter", "sample", "combine",
 )
+#: p.393's *Combine time series*: "Merge multiple time series into a single
+#: plot, specifying how to handle overlapping time points (for example, mean,
+#: min, or max)" (§650). The other series are inputs, as a formula's are.
+COMBINE_AGGREGATES = ("avg", "min", "max", "sum")
 #: p.393's *Filter time series*: "Keep or remove points in a time series based
 #: on a time range or mathematical condition" (§648). The time range is
 #: `range`; the condition is a comparison of each reading with a number.
@@ -563,6 +567,15 @@ def parse_transforms(
                 if not isinstance(keep, bool):
                     raise ValueError("keep is true (keep the points that match) or false")
                 parsed = {"kind": kind, "op": operator, "value": float(value), "keep": keep}
+            elif kind == "combine":
+                aggregate = item.get("aggregate", "avg")
+                if aggregate not in COMBINE_AGGREGATES:
+                    raise ValueError(
+                        f"overlapping points combine by one of {', '.join(COMBINE_AGGREGATES)}")
+                named = _formula_inputs(item.get("inputs"), inputs, _depth)
+                if not named:
+                    raise ValueError("combining needs at least one other series")
+                parsed = {"kind": kind, "aggregate": aggregate, "inputs": named}
             elif kind == "sample":
                 method = item.get("method", "previous")
                 if method not in SAMPLE_METHODS:
@@ -858,6 +871,18 @@ def _transform_sql(
             f"FROM {grid} g ASOF LEFT JOIN {readings} p ON {on.format('p')}g.at >= p.at "
             f"ASOF LEFT JOIN {readings} n ON {on.format('n')}g.at <= n.at"
         )
+    if kind == "combine":
+        # p.393: every point of every series, and where two share an instant,
+        # one point for it by the aggregate chosen. SQL's aggregates skip a
+        # gap, so a series silent at an instant does not drag a mean, and an
+        # instant where every series is silent stays a gap (a filter on the
+        # gaps survived the sweep as equivalent in all but that).
+        parts = " UNION ALL ".join(
+            f"SELECT CAST(at AS TIMESTAMP) AS at, value FROM {query}"
+            for query in [source, *(inputs or {}).values()]
+        )
+        return (f"SELECT at, {transform['aggregate']}(value) AS value FROM ({parts}) combined "
+                "GROUP BY at")
     if kind == "formula" and inputs:
         # §561: p.586's formula over several series. **Its points are the
         # series' own**, and each other input is read *as of* each of them -

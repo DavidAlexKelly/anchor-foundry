@@ -12,7 +12,7 @@
  * vocabularies are held to the server's by `test_time_series_transforms.py`.
  */
 
-export const TRANSFORM_KINDS = ["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample"] as const;
+export const TRANSFORM_KINDS = ["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine"] as const;
 export type TransformKind = (typeof TRANSFORM_KINDS)[number];
 export const WINDOW_AGGREGATES = ["sum", "avg", "min", "max", "count", "stddev"] as const;
 export type WindowAggregate = (typeof WINDOW_AGGREGATES)[number];
@@ -44,6 +44,13 @@ export const FILTER_WORDS: Record<FilterOperator, string> = {
  * between the readings either side. */
 export const SAMPLE_METHODS = ["previous", "linear"] as const;
 export type SampleMethod = (typeof SAMPLE_METHODS)[number];
+/** p.393's *Combine time series* (§650): how points that meet at one instant
+ * become one. */
+export const COMBINE_AGGREGATES = ["avg", "min", "max", "sum"] as const;
+export type CombineAggregate = (typeof COMBINE_AGGREGATES)[number];
+export const COMBINE_WORDS: Record<CombineAggregate, string> = {
+  avg: "mean", min: "minimum", max: "maximum", sum: "sum",
+};
 /** The names offered, in order: the series itself is `x`. */
 const INPUT_NAMES = "yzabcdefghijklmnopqrstuvw".split("");
 export const MAX_SPAN = 100_000;
@@ -60,6 +67,9 @@ export type SeriesTransform =
   | { kind: "range"; start: string | null; end: string | null }
   | { kind: "filter"; op: FilterOperator; value: number; keep: boolean }
   | { kind: "sample"; every: number; unit: TimeUnit; method: SampleMethod }
+  | { kind: "combine"; aggregate: CombineAggregate;
+      /** The other series, by name, as a formula's inputs are (§561). */
+      inputs?: Record<string, unknown> }
   | { kind: "formula"; expression: string;
       /** §561: the other inputs by name - a variable's id where the variable
        * is edited, and that variable resolved where a widget reads it. */
@@ -77,6 +87,7 @@ export const KIND_LABELS: Record<TransformKind, string> = {
   formula: "Formula",
   filter: "Filter",
   sample: "Sample",
+  combine: "Combine",
 };
 
 /** A new transform of `kind`, ready to use: p.584's own examples where it
@@ -108,6 +119,8 @@ export function blankTransform(kind: TransformKind): SeriesTransform {
       return { kind, op: "gt", value: 0, keep: true };
     case "sample":
       return { kind, every: 1, unit: "hour", method: "previous" };
+    case "combine":
+      return { kind, aggregate: "avg", inputs: { y: "" } };
   }
 }
 
@@ -146,6 +159,9 @@ export function transformText(t: SeriesTransform): string {
       return `${t.keep ? "only" : "without"} readings ${FILTER_WORDS[t.op]} ${t.value}`;
     case "sample":
       return `sampled every ${units(t.every, t.unit)}${t.method === "linear" ? ", interpolated" : ""}`;
+    case "combine":
+      return `combined with ${Object.keys(t.inputs ?? {}).join(", ") || "nothing"}, ` +
+        `${COMBINE_WORDS[t.aggregate]} where they meet`;
   }
 }
 
@@ -165,6 +181,12 @@ export function transformProblem(t: SeriesTransform): string | null {
     case "rolling":
       return whole(t.window) && t.window >= 1 && t.window <= MAX_SPAN
         ? null : `The window must be a whole number from 1 to ${MAX_SPAN.toLocaleString("en-US")}.`;
+    case "combine":
+      if (Object.keys(t.inputs ?? {}).length === 0) return "Combining needs at least one other series.";
+      for (const [name, chosen] of Object.entries(t.inputs ?? {})) {
+        if (!chosen) return `Choose a series for ${name}.`;
+      }
+      return null;
     case "sample":
       return whole(t.every) && t.every >= 1 && t.every <= MAX_SPAN
         ? null : `The step must be a whole number from 1 to ${MAX_SPAN.toLocaleString("en-US")}.`;
@@ -202,7 +224,7 @@ export function transformsProblem(transforms: SeriesTransform[]): string | null 
 
 /** A formula with one more input (§561), under the first name it does not
  * use yet, with no series chosen. */
-export function withInput(t: Extract<SeriesTransform, { kind: "formula" }>): SeriesTransform {
+export function withInput(t: Extract<SeriesTransform, { kind: "formula" | "combine" }>): SeriesTransform {
   const inputs = t.inputs ?? {};
   const name = INPUT_NAMES.find((n) => !(n in inputs));
   if (!name || Object.keys(inputs).length >= MAX_FORMULA_INPUTS) return t;
@@ -212,7 +234,7 @@ export function withInput(t: Extract<SeriesTransform, { kind: "formula" }>): Ser
 /** A formula without one of its inputs; none left is no `inputs` at all, so
  * a one-series formula reads as it always has. */
 export function withoutInput(
-  t: Extract<SeriesTransform, { kind: "formula" }>, name: string,
+  t: Extract<SeriesTransform, { kind: "formula" | "combine" }>, name: string,
 ): SeriesTransform {
   const { [name]: _dropped, ...rest } = t.inputs ?? {};
   const { inputs: _all, ...plain } = t;
@@ -224,7 +246,7 @@ export function withoutInput(
 export function seriesInputs(transforms: SeriesTransform[]): string[] {
   const out: string[] = [];
   for (const t of transforms) {
-    if (t.kind !== "formula") continue;
+    if (t.kind !== "formula" && t.kind !== "combine") continue;
     for (const chosen of Object.values(t.inputs ?? {})) {
       if (typeof chosen === "string" && chosen && !out.includes(chosen)) out.push(chosen);
     }

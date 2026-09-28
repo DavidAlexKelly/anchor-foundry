@@ -300,7 +300,8 @@ import { useSeriesPoints, type SeriesRef } from "./series-points";
 import { ChartExport } from "./ChartExport";
 import {
   blankTransform, readableTransforms, transformsByColumn, transformsProblem as seriesTransformsProblem,
-  transformsText, withColumnTransforms, TIME_UNITS, type SeriesTransform, type TimeUnit,
+  transformsText, withColumnTransforms, TIME_UNITS, COMBINE_AGGREGATES, COMBINE_WORDS,
+  type SeriesTransform, type TimeUnit,
   type TransformKind,
 } from "./series-transforms";
 import { SeriesTransformsEditor } from "./SeriesTransformsEditor";
@@ -312,6 +313,7 @@ import {
   rootPlots as seriesRootPlots, statsOf as seriesStatsOf, withDerived as withSeriesDerived,
   withPlotSetting as withSeriesPlotSetting, withRoots as withSeriesRoots, withoutPlot as withoutSeriesPlot,
   DEFAULT_BANDS as DEFAULT_SERIES_BANDS, bandsProblem as seriesBandsProblem, withBands as withSeriesBands,
+  MAX_COMBINED as MAX_SERIES_COMBINED, withCombined as withSeriesCombined,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
 import { outputClauses } from "./action-output";
@@ -13086,6 +13088,7 @@ export function CanvasSeriesAnalysis({
   const offered = SERIES_PLOT_TYPES.filter((k) => !plotTypes || plotTypes.includes(k));
   const [draft, setDraft] = useState<{
     parent: string; transforms: SeriesTransform[]; bands?: SeriesBands;
+    combine?: { others: string[]; aggregate: "avg" | "min" | "max" | "sum" };
   } | null>(null);
   const canvases = seriesCanvasesOf(plots, addedCanvases);
 
@@ -13175,10 +13178,14 @@ export function CanvasSeriesAnalysis({
                         if (!e.target.value) return;
                         // p.393's Bollinger bands are three plots, set up by
                         // their own three numbers (§649).
+                        // Combine picks other plots as its inputs (§650).
                         setDraft(e.target.value === "bollinger"
                           ? { parent: plots[0]!.id, transforms: [], bands: DEFAULT_SERIES_BANDS }
-                          : { parent: plots[0]!.id,
-                              transforms: [blankTransform(e.target.value as TransformKind)] });
+                          : e.target.value === "combine"
+                            ? { parent: plots[0]!.id, transforms: [],
+                                combine: { others: [], aggregate: "avg" } }
+                            : { parent: plots[0]!.id,
+                                transforms: [blankTransform(e.target.value as TransformKind)] });
                       }}>
                 <option value="">New plot…</option>
                 {offered.map((k) => <option key={k} value={k}>{SERIES_PLOT_LABELS[k]}</option>)}
@@ -13198,7 +13205,30 @@ export function CanvasSeriesAnalysis({
                   {plots.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                 </select>
               </label>
-              {draft.bands ? (
+              {draft.combine ? (
+                <div className="row-actions" data-testid="series-combine" style={{ flexWrap: "wrap" }}>
+                  <select aria-label="Combine by" value={draft.combine.aggregate}
+                          onChange={(e) => setDraft({ ...draft, combine: { ...draft.combine!,
+                            aggregate: e.target.value as "avg" | "min" | "max" | "sum" } })}>
+                    {COMBINE_AGGREGATES.map((a) => (
+                      <option key={a} value={a}>{`${COMBINE_WORDS[a]} where they meet`}</option>
+                    ))}
+                  </select>
+                  {plots.filter((p) => p.id !== draft.parent).map((p) => (
+                    <label key={p.id} className="field canvas-toggle">
+                      <input type="checkbox" aria-label={`Combine with ${p.label}`}
+                             checked={draft.combine!.others.includes(p.id)}
+                             disabled={!draft.combine!.others.includes(p.id)
+                               && draft.combine!.others.length >= MAX_SERIES_COMBINED}
+                             onChange={(e) => setDraft({ ...draft, combine: { ...draft.combine!,
+                               others: e.target.checked
+                                 ? [...draft.combine!.others, p.id]
+                                 : draft.combine!.others.filter((o) => o !== p.id) } })} />
+                      <span className="field-label">{p.label}</span>
+                    </label>
+                  ))}
+                </div>
+              ) : draft.bands ? (
                 <div className="row-actions" data-testid="series-bands">
                   <input type="number" min={1} aria-label="Bands window" value={draft.bands.window}
                          onChange={(e) => setDraft({ ...draft,
@@ -13223,11 +13253,15 @@ export function CanvasSeriesAnalysis({
               )}
               <div className="row-actions">
                 <button type="button" className="btn"
-                        disabled={draft.bands ? !!seriesBandsProblem(draft.bands)
+                        disabled={draft.combine ? draft.combine.others.length === 0
+                          : draft.bands ? !!seriesBandsProblem(draft.bands)
                           : draft.transforms.length === 0 || !!seriesTransformsProblem(draft.transforms)}
                         onClick={() => {
                           const parent = plots.find((p) => p.id === draft.parent);
-                          setPlots(draft.bands
+                          setPlots(draft.combine
+                            ? withSeriesCombined(plots, draft.parent, draft.combine.others,
+                              draft.combine.aggregate, parent?.canvas ?? 1)
+                            : draft.bands
                             ? withSeriesBands(plots, draft.parent, draft.bands, parent?.canvas ?? 1)
                             : withSeriesDerived(plots, draft.parent, draft.transforms,
                               parent?.canvas ?? 1));

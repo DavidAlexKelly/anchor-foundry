@@ -8,6 +8,7 @@
 
 import {
   FILTER_OPERATORS, FILTER_WORDS, SAMPLE_METHODS, type FilterOperator, type SampleMethod,
+  COMBINE_AGGREGATES, COMBINE_WORDS, type CombineAggregate,
   FORMULA_FUNCTIONS, INTEGRATION_METHODS, KIND_LABELS, MAX_FORMULA, MAX_FORMULA_INPUTS, MAX_TRANSFORMS, TIME_UNITS,
   TRANSFORM_KINDS, WINDOW_AGGREGATES, WINDOW_TYPES, blankTransform, transformsProblem, withInput, withKind,
   withoutInput,
@@ -81,7 +82,8 @@ export function SeriesTransformsEditor({
               onChange={(e) => set(index, { ...t, every: Number(e.target.value) })}
             />
           )}
-          {t.kind !== "cumulative" && t.kind !== "range" && t.kind !== "formula" && t.kind !== "filter" && (
+          {t.kind !== "cumulative" && t.kind !== "range" && t.kind !== "formula" && t.kind !== "filter"
+            && t.kind !== "combine" && (
             <select
               aria-label={`Transform ${index + 1} unit`}
               value={t.unit}
@@ -179,7 +181,17 @@ export function SeriesTransformsEditor({
           )}
           {/* p.586's Add input (§561): each input a series variable, named
               in the formula. */}
-          {t.kind === "formula" && seriesVariables && (
+          {t.kind === "combine" && (
+            <select
+              aria-label={`Transform ${index + 1} combine by`}
+              value={t.aggregate}
+              disabled={readOnly}
+              onChange={(e) => set(index, { ...t, aggregate: e.target.value as CombineAggregate })}
+            >
+              {COMBINE_AGGREGATES.map((a) => <option key={a} value={a}>{`${COMBINE_WORDS[a]} where they meet`}</option>)}
+            </select>
+          )}
+          {(t.kind === "formula" || t.kind === "combine") && seriesVariables && (
             <span className="row-actions" data-testid="formula-inputs" style={{ gap: 6, flexWrap: "wrap" }}>
               {Object.entries(t.inputs ?? {}).map(([name, chosen]) => (
                 <span key={name} className="row-actions" style={{ gap: 4 }}>

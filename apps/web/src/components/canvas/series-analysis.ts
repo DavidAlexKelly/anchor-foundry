@@ -34,11 +34,12 @@ export type PlotType = TransformKind | "bollinger";
 /** The derived plot types this widget offers, as the source names them, in
  * p.393's order. */
 export const PLOT_TYPES: PlotType[] = [
-  "bollinger", "cumulative", "rolling", "periodic", "derivative", "integral", "shift", "formula",
-  "filter", "sample",
+  "bollinger", "combine", "cumulative", "rolling", "periodic", "derivative", "integral", "shift",
+  "formula", "filter", "sample",
 ];
 export const PLOT_LABELS: Partial<Record<PlotType, string>> = {
   bollinger: "Bollinger bands",
+  combine: "Combine time series",
   cumulative: "Cumulative aggregate",
   rolling: "Rolling aggregate",
   periodic: "Periodic aggregate",
@@ -283,13 +284,9 @@ export function withBands(plots: readonly Plot[], parent: string, bands: Bands, 
   const from = byId(plots).get(parent);
   const root = rootOf(plots, parent)?.root;
   if (!from || !root || bandsProblem(bands) || plots.length + 3 > MAX_PLOTS) return [...plots];
-  const chain = chainOf(plots, parent);
   const rolling = (aggregate: "avg" | "stddev"): SeriesTransform =>
     ({ kind: "rolling", aggregate, window: bands.window, unit: bands.unit });
-  const input = (aggregate: "avg" | "stddev") => ({
-    object_type_id: root.typeId, instance_id: root.objectId, property: root.property,
-    interval: "none", aggregate: "avg", transforms: [...chain, rolling(aggregate)],
-  });
+  const input = (aggregate: "avg" | "stddev") => referenceTo(plots, parent, [rolling(aggregate)])!;
   const band = (sign: "+" | "-"): SeriesTransform => ({
     kind: "formula", expression: `y ${sign} ${bands.deviations} * z`,
     inputs: { y: input("avg"), z: input("stddev") },
@@ -307,4 +304,42 @@ export function withBands(plots: readonly Plot[], parent: string, bands: Bands, 
     made("Upper Bollinger band", [band("+")], "dashed"),
     made("Lower Bollinger band", [band("-")], "dashed"),
   ];
+}
+
+
+/** A plot as a formula or combine input reads it (§561): its root's object and
+ * property, raw, through its whole chain and then `more`. Null for a plot with
+ * no root. */
+export function referenceTo(
+  plots: readonly Plot[], id: string, more: readonly SeriesTransform[] = [],
+): Record<string, unknown> | null {
+  const root = rootOf(plots, id)?.root;
+  if (!root) return null;
+  return {
+    object_type_id: root.typeId, instance_id: root.objectId, property: root.property,
+    interval: "none", aggregate: "avg", transforms: [...chainOf(plots, id), ...more],
+  };
+}
+
+/** p.393's *Combine time series* (§650): at most this many other plots. */
+export const MAX_COMBINED = 4;
+const COMBINE_NAMES = ["y", "z", "a", "b"];
+
+/** The plots with one combining `parent` with `others`: every point of each,
+ * and where points meet, one by `aggregate`. Unchanged at the cap, without
+ * another plot, or for a plot that is not there. */
+export function withCombined(
+  plots: readonly Plot[], parent: string, others: readonly string[],
+  aggregate: "avg" | "min" | "max" | "sum", canvas: number,
+): Plot[] {
+  const from = byId(plots).get(parent);
+  const chosen = others.filter((o) => o !== parent).slice(0, MAX_COMBINED);
+  const refs = chosen.map((o) => referenceTo(plots, o));
+  if (!from || chosen.length === 0 || refs.some((r) => r === null)) return [...plots];
+  const inputs = Object.fromEntries(chosen.map((_, n) => [COMBINE_NAMES[n]!, refs[n]]));
+  const next = withDerived(plots, parent, [{ kind: "combine", aggregate, inputs }], canvas);
+  if (next.length === plots.length) return next;
+  const made = next[next.length - 1]!;
+  const names = chosen.map((o) => byId(plots).get(o)!.label);
+  return [...next.slice(0, -1), { ...made, label: `${from.label} combined with ${names.join(", ")}` }];
 }
