@@ -390,7 +390,8 @@ export function LinkExplorerDialog({
 
   const links = useQuery({
     queryKey: ["instance-links", workspaceId, here.typeId, here.instance.id],
-    queryFn: () => objApi.instanceLinks(workspaceId, here.typeId, here.instance.id),
+    // The Explorer's own label, for p.32's counting (§620).
+    queryFn: () => objApi.instanceLinks(workspaceId, here.typeId, here.instance.id, "explorer"),
   });
   // Cleared when the object under it changes: a panel still showing something
   // linked to where you *were* is the same wrong-context bug the trail exists

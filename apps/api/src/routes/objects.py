@@ -1187,7 +1187,8 @@ APPLICATION_QUERY = Query(default="api", max_length=50)
 async def _count_usage(
     conn: Any,
     *,
-    object_type_id: UUID,
+    object_type_id: UUID | None = None,
+    link_type_id: UUID | None = None,
     user_id: UUID | None,
     application: str,
     reads: int = 0,
@@ -1208,6 +1209,7 @@ async def _count_usage(
         await usage_service.record(
             conn,
             object_type_id=object_type_id,
+            link_type_id=link_type_id,
             user_id=user_id,
             application=application,
             reads=reads,
@@ -1529,6 +1531,32 @@ async def object_type_editing_projects(
         await ontology_service.get_type(conn, access.workspace_id, type_id)
         rows = await ontology_service.editing_projects(conn, type_id)
     return [EditingProject(**row) for row in rows]
+
+
+class LinkTypeUsage(BaseModel):
+    """p.32's numbers for one link type (§620), and which applications did it
+    (p.33) - both at once, because a link's row has room for one read."""
+
+    summary: UsageSummary
+    applications: list[UsageByApplication]
+
+
+@router.get("/link-types/{link_id}/usage", response_model=LinkTypeUsage)
+async def link_type_usage(
+    link_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> LinkTypeUsage:
+    """p.32's usage for a link type: reads when an application traverses it,
+    over the last 30 days. The link is looked up first, so one this workspace
+    cannot see is not found rather than reported as unused."""
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_link_type(conn, access.workspace_id, link_id)
+        summary = await usage_service.summary(conn, link_type_id=link_id)
+        applications = await usage_service.by_application(conn, link_type_id=link_id)
+    return LinkTypeUsage(
+        summary=UsageSummary(**summary),
+        applications=[UsageByApplication(**row) for row in applications],
+    )
 
 
 @router.get("/object-types/{type_id}/usage", response_model=UsageSummary)
@@ -3734,6 +3762,7 @@ async def instance_links(
     type_id: UUID,
     instance_id: UUID,
     limit: int = Query(default=LINK_PREVIEW_LIMIT, ge=1, le=50),
+    application: str = APPLICATION_QUERY,
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
 ) -> list[LinkedInstances]:
     """Traverse every mapped link from one instance (roadmap Objects item 3).
@@ -3821,6 +3850,14 @@ async def instance_links(
                     for r in rows
                 ],
             ))
+        # p.32's reads, for the link types this request traversed (§620): one
+        # each, however many objects came back, and once for a link seen from
+        # both of its ends - the request is the unit, not the side.
+        for link_type_id in dict.fromkeys(g.link_type_id for g in groups):
+            await _count_usage(
+                conn, link_type_id=link_type_id, user_id=access.auth.user_id,
+                application=application, reads=1,
+            )
     return groups
 
 

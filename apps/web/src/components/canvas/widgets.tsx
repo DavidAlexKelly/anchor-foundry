@@ -8296,7 +8296,7 @@ export function CanvasLinksWidget({
   // reader who opens both pays for one request.
   const linkQuery = useQuery({
     queryKey: ["instance-links", workspaceId, setPage.typeId, instance?.id],
-    queryFn: () => objApi.instanceLinks(workspaceId, setPage.typeId!, instance!.id),
+    queryFn: () => objApi.instanceLinks(workspaceId, setPage.typeId!, instance!.id, "workshop"),
     enabled: !!setPage.typeId && !!instance,
   });
 

@@ -2263,10 +2263,19 @@ export const objects = {
     request<import("./types").TypeLink[]>(
       `/workspaces/${wid}/object-types/${typeId}/links`,
     ),
-  instanceLinks: (wid: string, typeId: string, instanceId: string) =>
+  /** Every link from one object. `application` is p.32's (§620): each link
+   * type traversed is a read by the caller that says which it is. */
+  instanceLinks: (wid: string, typeId: string, instanceId: string, application?: string) =>
     request<import("./types").LinkedInstances[]>(
-      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/links`,
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/links` +
+        (application ? `?application=${encodeURIComponent(application)}` : ""),
     ),
+  /** p.32's usage for a link type (§620). */
+  linkTypeUsage: (wid: string, linkId: string) =>
+    request<{
+      summary: import("./types").ObjectTypeUsage;
+      applications: import("./types").ObjectTypeUsageByApplication[];
+    }>(`/workspaces/${wid}/link-types/${linkId}/usage`),
 };
 
 export interface ActionTypeCreateInput {
