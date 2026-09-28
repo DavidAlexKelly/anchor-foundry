@@ -126,6 +126,7 @@ import {
   extraMetricsOf, layoutSettings as metricLayoutSettings, layoutStyleOf as metricLayoutStyleOf,
   metricLabelOf, moveMetric, sparkAllowedIn, templateOf as metricTemplateOf,
   type ExtraMetric,
+  BASELINE_KINDS, BASELINE_SUMMARIES, RELATIVE_UNITS, baselineKindOf, summarise,
 } from "./metric-card";
 import { ValueFormatEditor } from "@/components/value-format-editor";
 import {
@@ -13595,11 +13596,25 @@ export function CanvasMetricCard({
   secondaryProperty = null,
   secondaryFormat = null,
   metrics = [],
+  sparkAgo = null,
+  sparkAgoUnit = "week",
+  sparkAhead = null,
+  sparkAheadUnit = "day",
+  baselineKind = null,
+  baselineSummary = "last",
   layoutStyle = "card",
   direction = "horizontal",
   template = "stacked",
 }: {
   objectSetVariable?: string | null;
+  /** p.591's relative range (§534): so many units ago, to so many ahead. */
+  sparkAgo?: unknown;
+  sparkAgoUnit?: string;
+  sparkAhead?: unknown;
+  sparkAheadUnit?: string;
+  /** p.592's baseline type (§534), and the summary a series baseline takes. */
+  baselineKind?: string | null;
+  baselineSummary?: string;
   /** p.325's group (§533): the metrics after this card's own first one. */
   metrics?: unknown;
   /** p.326's layout style, and its direction and template. */
@@ -13676,13 +13691,22 @@ export function CanvasMetricCard({
   // widget's, not the variable's: two cards can show one series over two
   // ranges. `pageNow` is p.591's "current time … when it is first needed".
   const rangeTransform = useMemo(
-    () => metricSparkRangeTransform(sparkRange, sparkStart, sparkEnd, pageNow()),
-    [sparkRange, sparkStart, sparkEnd],
+    () => metricSparkRangeTransform(sparkRange, sparkStart, sparkEnd, pageNow(), {
+      ago: sparkAgo, agoUnit: sparkAgoUnit, ahead: sparkAhead, aheadUnit: sparkAheadUnit,
+    }),
+    [sparkRange, sparkStart, sparkEnd, sparkAgo, sparkAgoUnit, sparkAhead, sparkAheadUnit],
   );
   const spark = useSeriesPoints(
     workspaceId, drawsSpark ? seriesVariable : null, rangeTransform ? [rangeTransform] : [],
   );
   const info = metricDescriptionOf(description);
+  // p.592's baseline: a typed value, or the series' own summary (§534).
+  const kindOfBaseline = baselineKindOf(baselineKind, baseline);
+  const baselineValue = kindOfBaseline === "static"
+    ? metricBaselineOf(baseline)
+    : kindOfBaseline === "series"
+      ? summarise((spark.points ?? []).map((p) => p.value as number), baselineSummary)
+      : null;
   const sparkMissing = metricSparkEmptyReason(showVisualization, seriesVariable);
 
   // `null` while the setting is unfinished - an aggregation whose property has
@@ -13804,7 +13828,7 @@ export function CanvasMetricCard({
                   pending={spark.isPending}
                   testId="metric-spark-line"
                   colour={strokeFor(cardPaint)}
-                  baseline={metricBaselineOf(baseline)}
+                  baseline={baselineValue}
                 />
               )}
             </span>
@@ -14014,6 +14038,7 @@ function MetricCardSettings() {
     valueRules, size, description, sparkRange, sparkStart, sparkEnd, baseline,
     showSecondary, secondaryLabel, secondaryAggregation, secondaryProperty, secondaryFormat,
     metrics, layoutStyle, direction, template,
+    sparkAgo, sparkAgoUnit, sparkAhead, sparkAheadUnit, baselineKind, baselineSummary,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -14040,7 +14065,14 @@ function MetricCardSettings() {
     layoutStyle: node.data.props.layoutStyle,
     direction: node.data.props.direction,
     template: node.data.props.template,
+    sparkAgo: node.data.props.sparkAgo,
+    sparkAgoUnit: node.data.props.sparkAgoUnit,
+    sparkAhead: node.data.props.sparkAhead,
+    sparkAheadUnit: node.data.props.sparkAheadUnit,
+    baselineKind: node.data.props.baselineKind,
+    baselineSummary: node.data.props.baselineSummary,
   }));
+  const kindOfBaseline = baselineKindOf(baselineKind, baseline);
   const extras = extraMetricsOf(metrics);
   const setExtras = (next: ExtraMetric[]) => setProp((p: { metrics: ExtraMetric[] }) => (p.metrics = next));
   const arrangement = metricLayoutSettings(layoutStyle);
@@ -14451,19 +14483,82 @@ function MetricCardSettings() {
               )}
             </>
           )}
-          {/* p.330's Baseline, as p.592's Static kind: "a static
-              user-specified value". Empty draws none. */}
+          {metricSparkRangeOf(sparkRange) === "relative" && (
+            /* p.591: "The relative option specifies the start and end of a
+               window relative to the current time." */
+            <>
+              <label className="field">
+                <span className="field-label">From</span>
+                <span className="row-actions" style={{ gap: 4 }}>
+                  <input type="number" min={0} data-testid="metric-spark-ago"
+                         value={sparkAgo === null || sparkAgo === undefined ? "" : String(sparkAgo)}
+                         onChange={(e) => setProp((p: { sparkAgo: number | null }) =>
+                           (p.sparkAgo = e.target.value === "" ? null : Number(e.target.value)))} />
+                  <select data-testid="metric-spark-ago-unit" value={(sparkAgoUnit as string) ?? "week"}
+                          onChange={(e) => setProp((p: { sparkAgoUnit: string }) => (p.sparkAgoUnit = e.target.value))}>
+                    {Object.keys(RELATIVE_UNITS).map((u) => <option key={u} value={u}>{u}s ago</option>)}
+                  </select>
+                </span>
+              </label>
+              <label className="field">
+                <span className="field-label">To</span>
+                <span className="row-actions" style={{ gap: 4 }}>
+                  <input type="number" min={0} data-testid="metric-spark-ahead"
+                         value={sparkAhead === null || sparkAhead === undefined ? "" : String(sparkAhead)}
+                         onChange={(e) => setProp((p: { sparkAhead: number | null }) =>
+                           (p.sparkAhead = e.target.value === "" ? null : Number(e.target.value)))} />
+                  <select data-testid="metric-spark-ahead-unit" value={(sparkAheadUnit as string) ?? "day"}
+                          onChange={(e) => setProp((p: { sparkAheadUnit: string }) => (p.sparkAheadUnit = e.target.value))}>
+                    {Object.keys(RELATIVE_UNITS).map((u) => <option key={u} value={u}>{u}s from now</option>)}
+                  </select>
+                </span>
+                <span className="field-hint">Empty is no end. Counted from when the page opened (p.591).</span>
+              </label>
+            </>
+          )}
+          {/* p.330's Baseline, with p.592's Static and Time series types
+              (§526, §534). Numeric property is ○: the card does not read the
+              object's own properties. */}
           <label className="field">
             <span className="field-label">Baseline</span>
-            <input
-              type="number"
-              data-testid="metric-spark-baseline"
-              value={baseline === null || baseline === undefined ? "" : String(baseline)}
-              onChange={(e) => setProp((p: { baseline: number | null }) =>
-                (p.baseline = e.target.value === "" ? null : Number(e.target.value)))}
-            />
-            <span className="field-hint">A dotted line at this value, beside the sparkline.</span>
+            <select
+              data-testid="metric-spark-baseline-kind"
+              value={kindOfBaseline}
+              onChange={(e) => setProp((p: { baselineKind: string }) => (p.baselineKind = e.target.value))}
+            >
+              {Object.entries(BASELINE_KINDS).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
           </label>
+          {kindOfBaseline === "static" && (
+            <label className="field">
+              <span className="field-label">Baseline value</span>
+              <input
+                type="number"
+                data-testid="metric-spark-baseline"
+                value={baseline === null || baseline === undefined ? "" : String(baseline)}
+                onChange={(e) => setProp((p: { baseline: number | null }) =>
+                  (p.baseline = e.target.value === "" ? null : Number(e.target.value)))}
+              />
+              <span className="field-hint">A dotted line at this value, beside the sparkline.</span>
+            </label>
+          )}
+          {kindOfBaseline === "series" && (
+            <label className="field">
+              <span className="field-label">Baseline is the series&apos;</span>
+              <select
+                data-testid="metric-spark-baseline-summary"
+                value={(baselineSummary as string) ?? "last"}
+                onChange={(e) => setProp((p: { baselineSummary: string }) => (p.baselineSummary = e.target.value))}
+              >
+                {Object.entries(BASELINE_SUMMARIES).map(([key, name]) => (
+                  <option key={key} value={key}>{name}</option>
+                ))}
+              </select>
+              <span className="field-hint">p.592: e.g. &quot;the most recent observation in the time series&quot;.</span>
+            </label>
+          )}
         </>
       )}
       </>}
@@ -14483,6 +14578,8 @@ CanvasMetricCard.craft = {
     showSecondary: false, secondaryLabel: "", secondaryAggregation: "count",
     secondaryProperty: null, secondaryFormat: null,
     metrics: [], layoutStyle: "card", direction: "horizontal", template: "stacked",
+    sparkAgo: null, sparkAgoUnit: "week", sparkAhead: null, sparkAheadUnit: "day",
+    baselineKind: null, baselineSummary: "last",
   },
   related: { settings: MetricCardSettings },
 };

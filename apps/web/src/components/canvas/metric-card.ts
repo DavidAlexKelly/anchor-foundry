@@ -211,7 +211,23 @@ export const SPARK_RANGES: Record<string, string> = {
   day: "Last day",
   week: "Last week",
   custom: "Custom range",
+  relative: "Relative range",
 };
+
+/** p.591: "The window size can be specified in terms of milliseconds,
+ * seconds, minutes, hours, days, and weeks." */
+export const RELATIVE_UNITS: Record<string, number> = {
+  millisecond: 1, second: 1_000, minute: 60_000, hour: 3_600_000, day: 86_400_000,
+  week: 604_800_000,
+};
+
+/** A relative bound: so many units before or after now. Null when it is not
+ * a count of a known unit, which is an open end. */
+export function relativeMs(amount: unknown, unit: unknown): number | null {
+  if (typeof unit !== "string" || !(unit in RELATIVE_UNITS)) return null;
+  const n = typeof amount === "number" ? amount : typeof amount === "string" && amount !== "" ? Number(amount) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n * (RELATIVE_UNITS[unit] ?? 0) : null;
+}
 export const DEFAULT_SPARK_RANGE = "all";
 
 export function sparkRangeOf(raw: unknown): string {
@@ -233,9 +249,19 @@ function utc(ms: number): string {
  * neither end is everything too, rather than a transform the server refuses. */
 export function sparkRangeTransform(
   range: unknown, start: unknown, end: unknown, now: number,
+  relative: { ago?: unknown; agoUnit?: unknown; ahead?: unknown; aheadUnit?: unknown } = {},
 ): { kind: "range"; start: string | null; end: string | null } | null {
   const which = sparkRangeOf(range);
   if (which in RANGE_MS) return { kind: "range", start: utc(now - (RANGE_MS[which] ?? 0)), end: null };
+  if (which === "relative") {
+    // p.591: "a relative start of '2 weeks ago' … a relative end of '1 week
+    // from now'", counted from the page's fixed now.
+    const ago = relativeMs(relative.ago, relative.agoUnit);
+    const ahead = relativeMs(relative.ahead, relative.aheadUnit);
+    if (ago === null && ahead === null) return null;
+    return { kind: "range", start: ago === null ? null : utc(now - ago),
+             end: ahead === null ? null : utc(now + ahead) };
+  }
   if (which !== "custom") return null;
   const from = typeof start === "string" && start !== "" ? start : null;
   const to = typeof end === "string" && end !== "" ? end : null;
@@ -374,4 +400,38 @@ export function moveMetric(list: readonly ExtraMetric[], index: number, by: -1 |
  * metric's rule. */
 export function metricLabelOf(metric: Pick<ExtraMetric, "label" | "aggregation">): string {
   return secondaryLabelOf(metric.label, metric.aggregation);
+}
+
+// ---- §534: p.592's time-series baseline ----------------------------------------------
+/** p.592's baseline types. Static is §526's; Time series is "a time series
+ * summarizer to generate a unique baseline value for every series … the
+ * value of the most recent observation". Numeric property needs the object's
+ * own properties, which the card does not read. */
+export const BASELINE_KINDS: Record<string, string> = {
+  none: "No baseline", static: "Static", series: "From the series",
+};
+/** p.586's summarizers a line can be read by. */
+export const BASELINE_SUMMARIES: Record<string, string> = {
+  last: "Last", first: "First", avg: "Average", min: "Min", max: "Max",
+};
+
+/** Which baseline a card has. A card from before §534 has a number and no
+ * kind, which is a static one. */
+export function baselineKindOf(kind: unknown, value: unknown): string {
+  if (typeof kind === "string" && kind in BASELINE_KINDS) return kind;
+  return baselineOf(value) === null ? "none" : "static";
+}
+
+/** The series summarised for its baseline, over the points drawn; null when
+ * there are none. */
+export function summarise(values: readonly number[], how: unknown): number | null {
+  const finite = values.filter((v) => Number.isFinite(v));
+  if (finite.length === 0) return null;
+  switch (how) {
+    case "first": return finite[0] ?? null;
+    case "avg": return finite.reduce((a, b) => a + b, 0) / finite.length;
+    case "min": return Math.min(...finite);
+    case "max": return Math.max(...finite);
+    default: return finite[finite.length - 1] ?? null;
+  }
 }

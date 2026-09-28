@@ -32,7 +32,7 @@ describe("the sparkline's time range", () => {
   afterEach(() => resetPageNow());
 
   it("offers p.330's presets and a custom range", () => {
-    expect(Object.values(SPARK_RANGES)).toEqual(["All time", "Last hour", "Last day", "Last week", "Custom range"]);
+    expect(Object.values(SPARK_RANGES)).toEqual(["All time", "Last hour", "Last day", "Last week", "Custom range", "Relative range"]);
     expect(DEFAULT_SPARK_RANGE).toBe("all");
     expect(sparkRangeOf("week")).toBe("week");
     expect(sparkRangeOf("month")).toBe("all");
@@ -189,5 +189,58 @@ describe("groups of metrics and their layout (§533)", () => {
     expect(moveMetric(three, 5, -1).map((m) => m.id)).toEqual(["m2", "m3", "m4"]);
     expect(metricLabelOf({ label: "", aggregation: "sum" })).toBe("Sum of");
     expect(metricLabelOf({ label: "Total", aggregation: "sum" })).toBe("Total");
+  });
+});
+
+describe("the relative range and the series baseline (§534)", () => {
+  it("counts p.591's units", async () => {
+    const { RELATIVE_UNITS, relativeMs } = await import("./metric-card");
+    expect(Object.keys(RELATIVE_UNITS)).toEqual(["millisecond", "second", "minute", "hour", "day", "week"]);
+    expect(relativeMs(2, "week")).toBe(2 * 604_800_000);
+    expect(relativeMs("3", "hour")).toBe(3 * 3_600_000);
+    expect(relativeMs(0, "day")).toBe(0);
+    expect(relativeMs(500, "millisecond")).toBe(500);
+    expect(relativeMs(1, "fortnight")).toBeNull();
+    expect(relativeMs(-1, "day")).toBeNull();
+    expect(relativeMs("", "day")).toBeNull();
+    expect(relativeMs(null, "day")).toBeNull();
+    expect(relativeMs("soon", "day")).toBeNull();
+  });
+
+  it("windows a relative range around now, either end open", async () => {
+    const { sparkRangeTransform } = await import("./metric-card");
+    const now = Date.parse("2026-09-26T12:00:00Z");
+    expect(sparkRangeTransform("relative", null, null, now, { ago: 2, agoUnit: "week", ahead: 1, aheadUnit: "day" }))
+      .toEqual({ kind: "range", start: "2026-09-12T12:00:00", end: "2026-09-27T12:00:00" });
+    expect(sparkRangeTransform("relative", null, null, now, { ago: 1, agoUnit: "day" }))
+      .toEqual({ kind: "range", start: "2026-09-25T12:00:00", end: null });
+    expect(sparkRangeTransform("relative", null, null, now, { ahead: 3, aheadUnit: "hour" }))
+      .toEqual({ kind: "range", start: null, end: "2026-09-26T15:00:00" });
+    expect(sparkRangeTransform("relative", null, null, now, {})).toBeNull();
+    expect(sparkRangeTransform("relative", null, null, now)).toBeNull();
+  });
+
+  it("reads the baseline's kind, with a bare number as a static one", async () => {
+    const { BASELINE_KINDS, baselineKindOf } = await import("./metric-card");
+    expect(Object.keys(BASELINE_KINDS)).toEqual(["none", "static", "series"]);
+    expect(baselineKindOf("series", null)).toBe("series");
+    expect(baselineKindOf(null, 25)).toBe("static");
+    expect(baselineKindOf(undefined, null)).toBe("none");
+    expect(baselineKindOf("sideways", 25)).toBe("static");
+    expect(baselineKindOf("none", 25)).toBe("none");
+  });
+
+  it("summarises the series for its baseline", async () => {
+    const { BASELINE_SUMMARIES, summarise } = await import("./metric-card");
+    expect(Object.keys(BASELINE_SUMMARIES)).toEqual(["last", "first", "avg", "min", "max"]);
+    const values = [10, Number.NaN, 30, 20];
+    expect(summarise(values, "last")).toBe(20);
+    expect(summarise(values, "first")).toBe(10);
+    expect(summarise(values, "avg")).toBe(20);
+    expect(summarise(values, "min")).toBe(10);
+    expect(summarise(values, "max")).toBe(30);
+    expect(summarise(values, "unknown")).toBe(20);
+    expect(summarise([], "last")).toBeNull();
+    expect(summarise([Number.NaN], "avg")).toBeNull();
   });
 });
