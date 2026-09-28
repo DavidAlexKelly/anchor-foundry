@@ -548,6 +548,9 @@ REFERENCE_PROPS = (
     "selectedTextVariable",
     "selectionStartVariable",
     "selectionEndVariable",
+    # p.322's Selected annotation on the Markdown widget (§637): the
+    # annotation clicked, as selection clauses.
+    "selectedAnnotationVariable",
     "name",
 )
 
@@ -589,6 +592,10 @@ NESTED_REFERENCE_PROPS: dict[str, tuple[str, ...]] = {
     # nothing under a legend entry that still names it. p.282's Selection as
     # filter per layer (§628) names the array variable a click writes into.
     "series": ("objectSetVariable", "drilldownVariable"),
+    # p.321's annotation layers on the Markdown widget (§637): "Annotation
+    # object set: Specify the object set containing annotation object types
+    # to be displayed", per layer.
+    "annotationLayers": ("objectSetVariable",),
 }
 
 

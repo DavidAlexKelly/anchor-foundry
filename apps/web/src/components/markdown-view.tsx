@@ -48,6 +48,18 @@ export const MarkdownReferences = React.createContext<
   ((node: ObjectRef, children: React.ReactNode) => React.ReactNode) | null
 >(null);
 
+/** A text run with a source offset, drawn by whoever asked (§637): the
+ * Markdown widget's annotations split a run where one starts or ends. Without
+ * a provider, the run is one span with its offset (§636). */
+export const MarkdownRuns = React.createContext<
+  ((text: string, at: number) => React.ReactNode) | null
+>(null);
+
+function Run({ text, at }: { text: string; at: number }) {
+  const draw = React.useContext(MarkdownRuns);
+  return <>{draw ? draw(text, at) : <span data-at={at}>{text}</span>}</>;
+}
+
 function Anchor({ node }: { node: ObjectRef }) {
   const draw = React.useContext(MarkdownReferences);
   const children = renderInline(node.children);
@@ -63,7 +75,7 @@ function renderInline(nodes: Inline[]): React.ReactNode {
       case "text":
         return node.at === undefined
           ? <React.Fragment key={index}>{node.text}</React.Fragment>
-          : <span key={index} data-at={node.at}>{node.text}</span>;
+          : <Run key={index} text={node.text} at={node.at} />;
       case "code":
         return <code key={index} data-at={node.at}>{node.text}</code>;
       case "strong":

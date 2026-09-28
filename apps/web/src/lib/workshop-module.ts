@@ -293,6 +293,8 @@ export const REFERENCE_PROPS = [
   "selectedTextVariable",
   "selectionStartVariable",
   "selectionEndVariable",
+  // p.322's Selected annotation on the Markdown widget (§637).
+  "selectedAnnotationVariable",
   "name",
 ] as const;
 
@@ -318,6 +320,8 @@ export const NESTED_REFERENCE_PROPS: Record<string, readonly string[]> = {
   // p.280's Chart XY layers (§625): a series reading a set of its own. See
   // the API's copy.
   series: ["objectSetVariable", "drilldownVariable"],
+  // p.321's annotation layers on the Markdown widget (§637). See the API's copy.
+  annotationLayers: ["objectSetVariable"],
 };
 
 /** Props holding a map of names to variable ids of this module (§598): an
