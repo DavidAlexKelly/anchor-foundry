@@ -605,6 +605,9 @@ class TestRunIn(BaseModel):
     #: server already has the commit, and shipping five hundred files to test
     #: the three that changed would make the button too expensive to press.
     overrides: dict[str, str | None] = Field(default_factory=dict)
+    #: p.13's "run all unit tests defined in the current file" (§530): one
+    #: file of the working set, or none for every test in the repository.
+    file: str | None = Field(default=None, max_length=1024)
 
 
 class TestOutcomeOut(BaseModel):
@@ -629,6 +632,8 @@ class TestRunOut(BaseModel):
     status: str
     outcomes: list[TestOutcomeOut] | None = None
     error: str | None = None
+    #: The one file this run was over (§530), or null for every test.
+    target: str | None = None
     queued_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -685,6 +690,7 @@ async def run_tests(
         row = await test_run_service.request(
             conn, repo_id=repo_id, branch=branch, files=working,
             requested_by=access.auth.user_id,
+            target=None if body.file is None else repo_service.normalise_path(body.file),
         )
     return _run_out(row)
 

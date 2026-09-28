@@ -233,3 +233,39 @@ describe("who is offered the Run button", () => {
     expect(canEditProject("owner")).toBe(true);
   });
 });
+
+describe("one file's tests (§530; p.13)", () => {
+  const run = (over: Partial<CodeTestRun>): CodeTestRun => ({
+    id: "r", repo_id: "x", branch: "main", status: "failed", outcomes: [], error: null,
+    target: null, queued_at: "2026-01-01T00:00:00Z", started_at: null, finished_at: null, ...over,
+  } as CodeTestRun);
+
+  it("is offered for a Python file only", async () => {
+    const { canRunFile } = await import("./test-runs");
+    expect(canRunFile("tests/test_daily.py")).toBe(true);
+    expect(canRunFile("src/daily.py")).toBe(true);
+    expect(canRunFile("README.md")).toBe(false);
+    expect(canRunFile(null)).toBe(false);
+    expect(canRunFile(undefined)).toBe(false);
+  });
+
+  it("names the file on its button, and says it is running", async () => {
+    const { fileRunLabel } = await import("./test-runs");
+    expect(fileRunLabel("tests/test_daily.py", undefined)).toBe("Run tests in test_daily.py");
+    expect(fileRunLabel("checks.py", run({ status: "succeeded" }))).toBe("Run tests in checks.py");
+    expect(fileRunLabel("checks.py", run({ status: "queued" }))).toBe("Running…");
+  });
+
+  it("says which tests a run was over", async () => {
+    const { scopeLabel } = await import("./test-runs");
+    expect(scopeLabel(undefined)).toBe("");
+    expect(scopeLabel(run({ target: "tests/test_daily.py" }))).toBe("in tests/test_daily.py");
+    expect(scopeLabel(run({ target: null }))).toBe("every test");
+  });
+
+  it("says a file with no tests has none, without pytest's naming rule", async () => {
+    const { verdict } = await import("./test-runs");
+    expect(verdict(run({ target: "src/daily.py", outcomes: [] }))).toBe("No unit tests found in src/daily.py.");
+    expect(verdict(run({ target: null, outcomes: [] }))).toMatch(/^No unit tests found\. pytest collects/);
+  });
+});

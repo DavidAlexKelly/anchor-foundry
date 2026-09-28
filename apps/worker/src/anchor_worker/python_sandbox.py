@@ -279,6 +279,7 @@ def is_test_file(path: str) -> bool:
 def run_python_tests(
     files: dict[str, str],
     timeout_s: int = TEST_TIMEOUT_S,
+    target: str | None = None,
 ) -> "unit_test_report.TestReport":
     """Run a repository's unit tests over the files it was given.
 
@@ -297,15 +298,22 @@ def run_python_tests(
     caller that showed them as "your tests failed" would send the wrong person
     looking. That is `transform_runner.py`'s result-file distinction, in the
     shape this function has.
+
+    `target` is p.13's "all unit tests defined in the current file" (§530):
+    one path of the working set, handed to pytest instead of the directory.
+    The rest of the files are still written, since the file under test
+    imports them. None runs every test.
     """
     from . import unit_test_report
 
     with tempfile.TemporaryDirectory() as tmp:
         user_api.write_into(tmp)
         for path, content in files.items():
-            target = os.path.join(tmp, path)
-            os.makedirs(os.path.dirname(target) or tmp, exist_ok=True)
-            with open(target, "w") as handle:
+            # Not `target`: that is the parameter, and a loop that reused the
+            # name handed pytest the last file written instead (§530).
+            destination = os.path.join(tmp, path)
+            os.makedirs(os.path.dirname(destination) or tmp, exist_ok=True)
+            with open(destination, "w") as handle:
                 handle.write(content)
 
         # **The configuration this run obeys, and the reason it is a file
@@ -333,6 +341,14 @@ def run_python_tests(
             with open(config_path, "w") as handle:
                 handle.write("[pytest]\n")
 
+        collect = tmp
+        if target is not None:
+            # The API normalised the path; this is the second guard, because
+            # the path is written into a command line.
+            collect = os.path.realpath(os.path.join(tmp, target))
+            if not collect.startswith(os.path.realpath(tmp) + os.sep) or not os.path.isfile(collect):
+                raise DatasetEngineError(f"{target} is not a file in this working set")
+
         report_path = os.path.join(tmp, "_report.xml")
         # **No `PYTHONPATH`, and a mutant is why.** It used to be set to `tmp`
         # so that a test could import the transform under test by its
@@ -354,7 +370,7 @@ def run_python_tests(
                  # whose job is to open the failing test needs the file it is
                  # in, so ask for the format that says.
                  "-o", "junit_family=xunit1",
-                 f"--junitxml={report_path}", tmp],
+                 f"--junitxml={report_path}", collect],
                 # **Load-bearing, not tidiness.** `python -m pytest` prepends
                 # the invocation directory to `sys.path`, so this is what makes
                 # `from src.daily import build` resolve to the repository's own

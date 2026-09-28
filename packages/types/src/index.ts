@@ -3401,6 +3401,8 @@ export interface CodeTestRun {
   outcomes: CodeTestOutcome[] | null;
   /** Set only when `status` is `errored`, and never a test's failure message. */
   error: string | null;
+  /** The one file this run was over (§530; p.13), or null for every test. */
+  target?: string | null;
   queued_at: string;
   started_at: string | null;
   finished_at: string | null;

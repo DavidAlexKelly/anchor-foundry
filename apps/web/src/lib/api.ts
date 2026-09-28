@@ -338,7 +338,8 @@ export const repositories = {
     wid: string,
     pid: string,
     rid: string,
-    input: { branch?: string; overrides: Record<string, string | null> },
+    /** `file` is p.13's "the current file" (§530); none runs every test. */
+    input: { branch?: string; overrides: Record<string, string | null>; file?: string },
   ) =>
     request<import("./types").CodeTestRun>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tests`,

@@ -173,6 +173,7 @@ import {
   target as testTarget,
   verdict as testVerdict,
   worstFirst as worstTestsFirst,
+  canRunFile, fileRunLabel, scopeLabel,
 } from "@/lib/test-runs";
 // `shouldPoll` above is the same function this module re-exports - db 0071 and
 // db 0092 define the same five statuses, so one rule serves both panels (§292).
@@ -894,6 +895,7 @@ function FilesTab({
                   rid={rid}
                   branch={branch}
                   working={working}
+                  path={selected}
                   onOpen={(path, line) => {
                     openFile(path);
                     // A new object every time, so clicking the same failing
@@ -2692,6 +2694,7 @@ function TestsPanel({
   rid,
   branch,
   working,
+  path,
   onOpen,
 }: {
   wid: string;
@@ -2699,6 +2702,9 @@ function TestsPanel({
   rid: string;
   branch: string;
   working: Record<string, string>;
+  /** The open file, for p.13's "run all unit tests defined in the current
+   * file" (§530). */
+  path?: string | null;
   onOpen: (path: string, line: number) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -2730,14 +2736,15 @@ function TestsPanel({
   });
 
   const start = useMutation({
-    mutationFn: () =>
+    // `file` is §530's narrowing: the same working set, pytest handed one path.
+    mutationFn: (file?: string) =>
       // **The whole working set, not a delta.** Problems sends `edits` over a
       // commit the server already has; here the *files themselves* are what
       // gets stored and run (db 0071), and the server lays these over the
       // branch. Sending only the edits would run the committed version of
       // every file somebody had not touched, which is the right answer to a
       // question nobody asked.
-      repoApi.runTests(wid, pid, rid, { branch, overrides: working }),
+      repoApi.runTests(wid, pid, rid, { branch, overrides: working, ...(file ? { file } : {}) }),
     onSuccess: (made) => {
       setFailure(null);
       setRunId(made.id);
@@ -2763,9 +2770,20 @@ function TestsPanel({
             className="btn quiet"
             data-testid="tests-run"
             disabled={start.isPending || shouldPoll(current)}
-            onClick={() => start.mutate()}
+            onClick={() => start.mutate(undefined)}
           >
             {runLabel(current)}
+          </button>
+        )}
+        {open && canRun && canRunFile(path) && (
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="tests-run-file"
+            disabled={start.isPending || shouldPoll(current)}
+            onClick={() => start.mutate(path as string)}
+          >
+            {fileRunLabel(path as string, current)}
           </button>
         )}
         {open && (
@@ -2775,6 +2793,9 @@ function TestsPanel({
           >
             {testVerdict(current)}
           </span>
+        )}
+        {open && current && (
+          <span className="soft" data-testid="tests-scope">{scopeLabel(current)}</span>
         )}
       </div>
       {open && failure && (
