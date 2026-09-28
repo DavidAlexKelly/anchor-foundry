@@ -13608,11 +13608,22 @@ export function CanvasMetricCard({
   valueRules?: unknown;
 }) {
   const {
+    id: nodeId,
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId, mode } = useCanvasEnv();
   const setDefinition = useCanvasVariable(objectSetVariable);
-  const { pending: variablesPending } = useCanvasVariables();
+  const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
+  // p.330's **Interactive metric**: "An optional configuration to trigger a
+  // command, action, or event upon card selection. Defaults to No
+  // interaction." Wired in the Events panel as the card's `click` (§527); a
+  // card with nothing wired is not a control, which is p.330's default.
+  const eventContext = useEventContext(undefined, useOverlayIds());
+  const selected = eventsFor(moduleEvents, nodeId, "click");
+  const interactive = mode === "run" && selected.length > 0;
+  const select = () => {
+    if (interactive) runEvents(selected, eventContext);
+  };
   // p.329's sparkline: the same read the Chart makes of a time series set
   // variable, through the hook they share (§292).
   const drawsSpark = metricShowsSpark(showVisualization, seriesVariable);
@@ -13687,8 +13698,18 @@ export function CanvasMetricCard({
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
-      <div className={`metric-card metric-card--${metricSizeOf(size)}`} data-testid="metric-card"
-           data-size={metricSizeOf(size)}>
+      <div className={`metric-card metric-card--${metricSizeOf(size)}${interactive ? " metric-card--interactive" : ""}`}
+           data-testid="metric-card"
+           data-size={metricSizeOf(size)}
+           // A control only when something is wired to it: role and focus
+           // on a card that does nothing would be a button that does nothing.
+           {...(interactive ? {
+             role: "button", tabIndex: 0, "aria-label": label || "Metric",
+             onClick: select,
+             onKeyDown: (e: React.KeyboardEvent) => {
+               if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(); }
+             },
+           } : {})}>
         <span className="metric-label">
           {label || "Metric"}
           {info && (

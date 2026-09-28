@@ -2246,6 +2246,11 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 /* p.326's metric sizes (§526). Regular is the size above. */
 .metric-card--compact .metric-value { font-size: 18px; }
 .metric-card--large .metric-value { font-size: 44px; }
+/* p.330's Interactive metric (§527): a card something is wired to. */
+.metric-card--interactive { cursor: pointer; border-radius: 6px; }
+.metric-card--interactive:hover, .metric-card--interactive:focus-visible {
+  background: var(--accent-wash); outline: none;
+}
 /* p.328's "i tooltip": the description on hover, and to a screen reader as
    the marker's label. */
 .metric-info {
