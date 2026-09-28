@@ -323,6 +323,10 @@ import {
   POINT_FILLS as SERIES_POINT_FILLS, POINT_FILL_WORDS as SERIES_POINT_FILL_WORDS,
   POINT_SHAPES as SERIES_POINT_SHAPES, displayOf as seriesDisplayOf, pointOptions as seriesPointOptions,
   withDisplay as withSeriesDisplay, type PointFill as SeriesPointFill, type PointShape as SeriesPointShape,
+  AXIS_ALIGNS as SERIES_AXIS_ALIGNS, MAX_UNIT as MAX_SERIES_UNIT, axesOf as seriesAxesOf,
+  axisOf as seriesAxisOf, axisProblem as seriesAxisProblem, axisSettingsOf as seriesAxisSettingsOf,
+  newAxisOf as newSeriesAxisOf, withAxisSetting as withSeriesAxisSetting,
+  type AxisAlign as SeriesAxisAlign, type Axes as SeriesAxes,
   type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
@@ -13102,6 +13106,8 @@ export function CanvasSeriesAnalysis({
     eventStats?: { set: string; aggregate: "sum" | "avg" | "min" | "max" | "count" | "stddev" };
   } | null>(null);
   const canvases = seriesCanvasesOf(plots, addedCanvases);
+  // p.394-395's axes (§656), by canvas and axis.
+  const [axes, setAxes] = useState<SeriesAxes>({});
   // p.392's Time series search (§651): event sets over the plots, each
   // searched by the server over the plot's whole chain.
   const [eventSetsRaw, setEventSets] = useState<SeriesEventSet[]>([]);
@@ -13174,6 +13180,8 @@ export function CanvasSeriesAnalysis({
         <>
           {canvases.map((canvas) => (
             <SeriesAnalysisChart key={canvas} canvas={canvas}
+              axes={seriesAxesOf(plots, canvas).map((axis) => ({
+                axis, settings: seriesAxisSettingsOf(axes, canvas, axis) }))}
               events={eventSets.flatMap((set, n) => {
                 const at = plots.findIndex((p) => p.id === set.plot);
                 return set.highlight && plots[at]?.canvas === canvas
@@ -13183,14 +13191,14 @@ export function CanvasSeriesAnalysis({
               .map((p, n) => ({ plot: p, n }))
               .filter(({ plot }) => plot.canvas === canvas)
               .map(({ plot, n }) => ({ id: plot.id, label: plot.label, color: colorOf(n),
-                dashed: plot.style === "dashed", display: seriesDisplayOf(plot),
+                dashed: plot.style === "dashed", display: seriesDisplayOf(plot), axis: seriesAxisOf(plot),
                 readings: readings[n] ?? [] }))} />
           ))}
           {/* The Plots panel: each plot's display, place and statistics. */}
           <table className="data-grid" data-testid="series-plots">
             <thead>
               <tr>
-                <th>Plot</th><th>Canvas</th><th>Line</th><th>Width</th><th>Gradient</th><th>Points</th>
+                <th>Plot</th><th>Canvas</th><th>Axis</th><th>Line</th><th>Width</th><th>Gradient</th><th>Points</th>
                 <th>Min</th><th>Max</th><th>Mean</th><th />
               </tr>
             </thead>
@@ -13215,6 +13223,15 @@ export function CanvasSeriesAnalysis({
                               onChange={(e) => setPlots(withSeriesPlotSetting(plots, plot.id, "canvas",
                                 Number(e.target.value)))}>
                         {canvases.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </td>
+                    <td>
+                      <select aria-label={`${plot.label} axis`} value={seriesAxisOf(plot)}
+                              onChange={(e) => setPlots(withSeriesPlotSetting(plots, plot.id, "axis",
+                                e.target.value === "new" ? newSeriesAxisOf(plots, plot.canvas)!
+                                  : Number(e.target.value)))}>
+                        {seriesAxesOf(plots, plot.canvas).map((a) => <option key={a} value={a}>{`Axis ${a}`}</option>)}
+                        {newSeriesAxisOf(plots, plot.canvas) !== null && <option value="new">New axis</option>}
                       </select>
                     </td>
                     <td>
@@ -13275,6 +13292,63 @@ export function CanvasSeriesAnalysis({
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+          <table className="data-grid" data-testid="series-axes" style={{ marginTop: 6 }}>
+            <thead>
+              <tr>
+                <th>Axis</th><th>Unit</th><th>Auto scale</th><th>Min</th><th>Max</th><th>Log</th>
+                <th>Invert</th><th>Align</th>
+              </tr>
+            </thead>
+            <tbody>
+              {canvases.flatMap((c) => seriesAxesOf(plots, c).map((axis) => {
+                const a = seriesAxisSettingsOf(axes, c, axis);
+                const name = `Canvas ${c} axis ${axis}`;
+                const set = <K extends keyof typeof a>(key: K, value: (typeof a)[K]) =>
+                  setAxes(withSeriesAxisSetting(axes, c, axis, key, value));
+                const problem = seriesAxisProblem(a);
+                return (
+                  <tr key={`${c}:${axis}`} data-axis={`${c}:${axis}`}>
+                    <td>
+                      {name}
+                      {problem && <div className="field-hint" data-testid="series-axis-problem">{problem}</div>}
+                    </td>
+                    <td>
+                      <input aria-label={`${name} unit`} value={a.unit} maxLength={MAX_SERIES_UNIT}
+                             style={{ width: 64 }} onChange={(e) => set("unit", e.target.value)} />
+                    </td>
+                    <td>
+                      <input type="checkbox" aria-label={`${name} auto scale`} checked={a.auto}
+                             onChange={(e) => set("auto", e.target.checked)} />
+                    </td>
+                    <td>
+                      <input type="number" aria-label={`${name} min`} value={a.min ?? ""} disabled={a.auto}
+                             style={{ width: 72 }}
+                             onChange={(e) => set("min", e.target.value === "" ? null : Number(e.target.value))} />
+                    </td>
+                    <td>
+                      <input type="number" aria-label={`${name} max`} value={a.max ?? ""} disabled={a.auto}
+                             style={{ width: 72 }}
+                             onChange={(e) => set("max", e.target.value === "" ? null : Number(e.target.value))} />
+                    </td>
+                    <td>
+                      <input type="checkbox" aria-label={`${name} log scale`} checked={a.log}
+                             onChange={(e) => set("log", e.target.checked)} />
+                    </td>
+                    <td>
+                      <input type="checkbox" aria-label={`${name} invert`} checked={a.invert}
+                             onChange={(e) => set("invert", e.target.checked)} />
+                    </td>
+                    <td>
+                      <select aria-label={`${name} align`} value={a.align}
+                              onChange={(e) => set("align", e.target.value as SeriesAxisAlign)}>
+                        {SERIES_AXIS_ALIGNS.map((x) => <option key={x} value={x}>{x}</option>)}
+                      </select>
+                    </td>
+                  </tr>
+                );
+              }))}
             </tbody>
           </table>
           <div className="row-actions" style={{ marginTop: 6 }}>
