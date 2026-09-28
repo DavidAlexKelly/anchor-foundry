@@ -63,9 +63,12 @@ const TRIGGERS: {
     label: "Row selected",
     widgets: [
       "CanvasObjectTable", "CanvasObjectCards", "CanvasMap", "CanvasTimeline",
+      "CanvasMarkdown",
     ],
     labels: {
       CanvasMap: "Pin selected", CanvasObjectCards: "Card selected",
+      // p.320's Event on selection, for an inline reference (§632).
+      CanvasMarkdown: "Reference selected",
       // p.349's "On active timeline event selection". **The same trigger, not
       // a second one** - the comment on `labels` above argues exactly this: a
       // second trigger name meaning "an object was selected" would be a second

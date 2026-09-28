@@ -273,7 +273,11 @@ import {
 } from "./inline-edit";
 import { readerLayout } from "./reader-layout";
 import { PALETTE as WIDGET_LIST } from "./widget-list";
-import { MarkdownView } from "../markdown-view";
+import { MarkdownReferences, MarkdownView } from "../markdown-view";
+import {
+  SELECTION_BEHAVIORS as REFERENCE_SELECTIONS, isLit as isReferenceLit, numberReferences, referenceTypesOf,
+  selectionBehaviorOf as referenceSelectionOf,
+} from "./markdown-references";
 import {
   FORMATS, FORMAT_LABELS, applyFormat, autoRows, type MarkdownFormat,
 } from "./markdown-editor";
@@ -4991,6 +4995,10 @@ export function CanvasMarkdown({
   wordWrap = true,
   breaks = true,
   alignment = "left",
+  tagType = "standard",
+  selectedVariable = null,
+  referenceTypes = [],
+  selectionBehavior = "last",
 }: {
   source?: string;
   text?: string;
@@ -5000,11 +5008,27 @@ export function CanvasMarkdown({
   wordWrap?: boolean;
   breaks?: boolean;
   alignment?: string;
+  /** p.316's Tag type configuration (§632): `standard`, or
+   * `inline_reference` for p.319's anchors. */
+  tagType?: string;
+  /** p.320's Selected object set: the output, as selection clauses. */
+  selectedVariable?: string | null;
+  /** p.320's Object types, each with its highlight colour. */
+  referenceTypes?: unknown;
+  /** p.320's Selection behavior. */
+  selectionBehavior?: string;
 }) {
   const {
+    id: nodeId,
     connectors: { connect, drag },
   } = useNode();
-  const { resolved } = useCanvasVariables();
+  const { resolved, events: moduleEvents } = useCanvasVariables();
+  const { mode } = useCanvasEnv();
+  const { values: parameterValues, set: setParameter } = useCanvasParameters();
+  const overlayIds = useOverlayIds();
+  const eventContext = useEventContext(undefined, overlayIds);
+  // p.320's "most recently selected anchor text", by its place in the text.
+  const [lastAnchor, setLastAnchor] = useState<number | null>(null);
 
   const raw = markdownTextOf(
     source, text, textVariable ? resolved[textVariable] : undefined,
@@ -5015,7 +5039,52 @@ export function CanvasMarkdown({
   // and data that can name variables is data that reads them.
   const filled = markdownSourceOf(source) === "text" ? interpolate(raw, resolved) : raw;
   const widgetAlign = alignmentOf(alignment);
-  const blocks = parseMarkdown(filled, { breaks: breaks !== false });
+  const references = tagType === "inline_reference";
+  const blocks = parseMarkdown(filled, { breaks: breaks !== false, references });
+  if (references) numberReferences(blocks);
+  const types = referenceTypesOf(referenceTypes);
+  const behavior = referenceSelectionOf(selectionBehavior);
+  const selectedKeys = keysOf(selectedVariable ? parameterValues[selectedVariable] : undefined);
+  const onSelect = eventsFor(moduleEvents, nodeId, "row_select");
+  // p.319-320's anchor. A type the builder did not configure is not an
+  // anchor - p.320: "the object reference will not appear" - and its text is
+  // kept as text, since dropping it would drop words from a sentence.
+  const drawReference = (
+    node: { objectType: string; primaryKey: string; index?: number },
+    children: React.ReactNode,
+  ) => {
+    const type = types.find((t) => t.objectType === node.objectType);
+    if (!type) return children;
+    const index = node.index ?? -1;
+    const lit = isReferenceLit(behavior, { index, primaryKey: node.primaryKey },
+      lastAnchor, selectedKeys);
+    return (
+      <button
+        type="button"
+        className={`canvas-markdown-ref${lit ? " on" : ""}`}
+        style={type.color ? ({ "--ref-color": type.color } as React.CSSProperties) : undefined}
+        data-testid="markdown-ref"
+        data-object-type={node.objectType}
+        data-primary-key={node.primaryKey}
+        aria-pressed={lit}
+        onClick={() => {
+          setLastAnchor(index);
+          // p.320: "that object will be output into this object set variable".
+          if (selectedVariable) {
+            setParameter(selectedVariable, selectionClauses([node.primaryKey]));
+          }
+          // p.320's Event on selection, in a running module only: a navigate
+          // fired while arranging the page would move the builder off it.
+          if (mode === "run" && onSelect.length > 0) {
+            runEvents(onSelect, { ...eventContext,
+              payload: { primary_key: node.primaryKey, object_type: node.objectType } });
+          }
+        }}
+      >
+        {children}
+      </button>
+    );
+  };
 
   const classes = ["canvas-markdown"];
   if (monospace) classes.push("canvas-markdown-mono");
@@ -5030,7 +5099,9 @@ export function CanvasMarkdown({
         <p className="canvas-widget-empty">Markdown - add text in Settings</p>
       ) : (
         <div className={classes.join(" ")} data-testid="markdown">
-          <MarkdownView blocks={blocks} align={widgetAlign} />
+          <MarkdownReferences.Provider value={references ? drawReference : null}>
+            <MarkdownView blocks={blocks} align={widgetAlign} />
+          </MarkdownReferences.Provider>
         </div>
       )}
     </div>
@@ -5040,8 +5111,13 @@ export function CanvasMarkdown({
 function MarkdownSettings() {
   const {
     source, text, textVariable, monospace, scrolling, wordWrap, breaks, alignment,
+    tagType, selectedVariable, referenceTypes, selectionBehavior,
     actions: { setProp },
   } = useNode((node) => ({
+    tagType: node.data.props.tagType,
+    selectedVariable: node.data.props.selectedVariable,
+    referenceTypes: node.data.props.referenceTypes,
+    selectionBehavior: node.data.props.selectionBehavior,
     source: node.data.props.source,
     text: node.data.props.text,
     textVariable: node.data.props.textVariable,
@@ -5053,6 +5129,13 @@ function MarkdownSettings() {
   }));
   const { declared } = useCanvasVariables();
   const strings = Object.values(declared).filter((v) => v.kind === "string");
+  // p.320's Selected object set: written as selection clauses, the shape
+  // every selecting widget here writes, into an array a derivation narrows by.
+  const clauseVariables = Object.values(declared).filter(
+    (v) => holdsClauses(v) && !v.derivation);
+  const types = referenceTypesOf(referenceTypes);
+  const writeTypes = (next: { objectType: string; color: string | null }[]) =>
+    setProp((p: { referenceTypes: unknown }) => (p.referenceTypes = next));
 
   return (
     <WidgetSetup
@@ -5104,6 +5187,103 @@ function MarkdownSettings() {
       )}
       </>}
       configuration={<>
+      {/* p.316's Tag type configuration and p.320's reference options (§632). */}
+      <label className="field">
+        <span className="field-label">Tag type</span>
+        <select
+          value={tagType === "inline_reference" ? "inline_reference" : "standard"}
+          data-testid="markdown-tag-type"
+          onChange={(e) => setProp((p: { tagType: string }) => (p.tagType = e.target.value))}
+        >
+          <option value="standard">Standard</option>
+          <option value="inline_reference">Inline reference</option>
+        </select>
+        {tagType === "inline_reference" && (
+          <span className="field-hint">
+            {":objectreference[text]{objectType=\"api_name\" primaryKey=\"key\"}"}
+          </span>
+        )}
+      </label>
+      {tagType === "inline_reference" && (
+        <>
+          <label className="field">
+            <span className="field-label">Selected object set</span>
+            <select
+              value={selectedVariable || ""}
+              data-testid="markdown-ref-selected"
+              onChange={(e) => setProp((p: { selectedVariable: string | null }) =>
+                (p.selectedVariable = e.target.value || null))}
+            >
+              <option value="">None</option>
+              {clauseVariables.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+            </select>
+            <span className="field-hint">
+              The selected reference, as a filter on its key; derive a set from it
+            </span>
+          </label>
+          <div className="field" data-testid="markdown-ref-types">
+            <span className="field-label">Object types</span>
+            {types.map((type, i) => (
+              <div key={i} className="field-inline" data-testid="markdown-ref-type">
+                <input
+                  type="text"
+                  aria-label={`Object type ${i + 1}`}
+                  data-testid="markdown-ref-type-name"
+                  value={type.objectType}
+                  onChange={(e) => writeTypes(types.map((t, j) =>
+                    (j === i ? { ...t, objectType: e.target.value } : t)))}
+                />
+                <input
+                  type="color"
+                  aria-label={`Object type ${i + 1} highlight colour`}
+                  data-testid="markdown-ref-type-color"
+                  value={type.color ?? "#2563eb"}
+                  onChange={(e) => writeTypes(types.map((t, j) =>
+                    (j === i ? { ...t, color: e.target.value } : t)))}
+                />
+                <button
+                  type="button"
+                  className="btn quiet"
+                  aria-label={`Remove object type ${i + 1}`}
+                  onClick={() => writeTypes(types.filter((_, j) => j !== i))}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            <div className="field-inline">
+              <input
+                type="text"
+                data-testid="markdown-ref-new-type"
+                placeholder="api_name"
+                onKeyDown={(e) => {
+                  const value = e.currentTarget.value.trim();
+                  if (e.key !== "Enter" || !value) return;
+                  e.preventDefault();
+                  writeTypes([...types, { objectType: value, color: null }]);
+                  e.currentTarget.value = "";
+                }}
+              />
+            </div>
+            <span className="field-hint">
+              A reference to a type not listed here is shown as plain text (p.320)
+            </span>
+          </div>
+          <label className="field">
+            <span className="field-label">Selection behavior</span>
+            <select
+              value={referenceSelectionOf(selectionBehavior)}
+              data-testid="markdown-ref-behavior"
+              onChange={(e) => setProp((p: { selectionBehavior: string }) =>
+                (p.selectionBehavior = e.target.value))}
+            >
+              {Object.entries(REFERENCE_SELECTIONS).map(([key, label]) => (
+                <option key={key} value={key}>{label}</option>
+              ))}
+            </select>
+          </label>
+        </>
+      )}
       <label className="field">
         <span className="field-label">Text alignment</span>
         <select
