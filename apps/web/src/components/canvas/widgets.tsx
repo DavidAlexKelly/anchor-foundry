@@ -342,6 +342,7 @@ import {
   addDataSetsOf as seriesAddDataSetsOf, objectLabelOf as seriesObjectLabelOf,
   withAddedRoot as withSeriesAddedRoot, MAX_ADD_DATA_SETS as MAX_SERIES_ADD_DATA_SETS,
   openedView as seriesOpenedView, savedViewOf as seriesSavedViewOf,
+  autoloadIdsOf as seriesAutoloadIdsOf, mergedView as seriesMergedView,
   type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
@@ -13084,6 +13085,9 @@ export function CanvasSeriesAnalysis({
   saving = false,
   saveProjectVariable = null,
   fixedSaveLocation = false,
+  outputVariable = null,
+  autoloadVariable = null,
+  keepOnLoad = false,
 }: {
   objectSetVariable?: string | null;
   property?: string | null;
@@ -13126,6 +13130,13 @@ export function CanvasSeriesAnalysis({
   saving?: boolean;
   saveProjectVariable?: string | null;
   fixedSaveLocation?: boolean;
+  /** p.397's *Output analysis RID* (§663): the string variable the open
+   * analysis's RID is written to. */
+  outputVariable?: string | null;
+  /** p.397's *Autoload analyses* (§663): a variable naming the analyses to
+   * load, and *Don't clear on load*. */
+  autoloadVariable?: string | null;
+  keepOnLoad?: boolean;
 }) {
   const {
     connectors: { connect, drag },
@@ -13275,6 +13286,51 @@ export function CanvasSeriesAnalysis({
       setSaveError(error instanceof ApiError ? error.message : "Couldn't save this analysis.");
     }
   };
+  // p.397's Output analysis RID (§663): the open analysis's, once there is one.
+  const { set: setOutput } = useCanvasParameters();
+  React.useEffect(() => {
+    if (outputVariable && currentAnalysis) setOutput(outputVariable, currentAnalysis.id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outputVariable, currentAnalysis?.id]);
+  // p.397's Autoload analyses (§663): read by RID once the set's roots are
+  // known. A change of RIDs starts again from the set's roots, or with Don't
+  // clear on load adds the analyses not loaded yet to what is there.
+  const autoloadWritten = useCanvasParameter(autoloadVariable);
+  const autoloadResolved = useCanvasVariable(autoloadVariable);
+  const autoloadIds = seriesAutoloadIdsOf(autoloadWritten !== undefined ? autoloadWritten : autoloadResolved);
+  const autoloads = useQueries({
+    queries: autoloadIds.map((id) => ({
+      queryKey: ["canvas-series-analysis-rid", workspaceId, id],
+      queryFn: () => seriesAnalysisApi.byRid(workspaceId, id),
+      retry: false,
+    })),
+  });
+  const [autoloaded, setAutoloaded] = useState<string[] | null>(null);
+  const autoloadsSettled = autoloads.every((q) => !q.isPending);
+  React.useEffect(() => {
+    if (!typeId || !property || !set.data || !autoloadsSettled) return;
+    if (autoloaded && JSON.stringify(autoloaded) === JSON.stringify(autoloadIds)) return;
+    const rootsNow = seriesRootPlots(objects, typeId, property);
+    const fresh = keepOnLoad && autoloaded ? autoloadIds.filter((id) => !autoloaded.includes(id)) : autoloadIds;
+    let view = keepOnLoad && autoloaded
+      ? seriesSavedViewOf(plots, addedCanvases, eventSetsRaw, axes)
+      : seriesSavedViewOf(rootsNow, 0, [], {});
+    let last: SeriesAnalysis | null = null;
+    for (const id of fresh) {
+      const found = autoloads[autoloadIds.indexOf(id)]?.data;
+      if (!found) continue;
+      view = seriesMergedView(view, seriesOpenedView(found.state, rootsNow));
+      last = found;
+    }
+    setAutoloaded(autoloadIds);
+    if (!last && !(autoloaded && !keepOnLoad)) return;
+    setPlots(view.plots);
+    setAddedCanvases(view.canvases);
+    setEventSets(view.eventSets);
+    setAxes(view.axes);
+    if (last) setCurrentAnalysis({ ...last, project: last.project_id });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(autoloadIds), autoloadsSettled, set.data, typeId, property]);
   const openAnalysis = (analysis: SeriesAnalysis, project: string) => {
     const view = seriesOpenedView(analysis.state,
       typeId && property ? seriesRootPlots(objects, typeId, property) : []);
@@ -13983,7 +14039,7 @@ function SeriesAnalysisSettings() {
     objectSetVariable, property, labelProperty, limit, title, plotTypes, eventSetTypes, newPlotCanvas,
     eventSets, viewRange, windowStartVariable, windowEndVariable, relativeAmount, relativeUnit, syncXAxes, utc,
     overlayYAxes, collapseYAxes, collapsedBoundaries, tooltip, addData, addDataSets, saving,
-    saveProjectVariable, fixedSaveLocation,
+    saveProjectVariable, fixedSaveLocation, outputVariable, autoloadVariable, keepOnLoad,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -14011,7 +14067,11 @@ function SeriesAnalysisSettings() {
     saving: node.data.props.saving,
     saveProjectVariable: node.data.props.saveProjectVariable,
     fixedSaveLocation: node.data.props.fixedSaveLocation,
+    outputVariable: node.data.props.outputVariable,
+    autoloadVariable: node.data.props.autoloadVariable,
+    keepOnLoad: node.data.props.keepOnLoad,
   }));
+  const ridHolders = Object.values(declared).filter((v) => v.kind === "string" || v.kind === "array");
   const strings = Object.values(declared).filter((v) => v.kind === "string");
   const rawDataSets: Record<string, unknown>[] = Array.isArray(addDataSets) ? addDataSets : [];
   const tips = seriesTooltipOptionsOf(tooltip);
@@ -14151,6 +14211,32 @@ function SeriesAnalysisSettings() {
               <span className="field-label">Don't allow users to choose save location</span>
             </label>
           </>
+        )}
+        <label className="field">
+          <span className="field-label">Output analysis RID</span>
+          <select aria-label="Output analysis RID variable" value={outputVariable || ""}
+                  onChange={(e) => setProp((p: { outputVariable: string | null }) =>
+                    (p.outputVariable = e.target.value || null))}>
+            <option value="">None</option>
+            {strings.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">Autoload analyses</span>
+          <select aria-label="Autoload analyses variable" value={autoloadVariable || ""}
+                  onChange={(e) => setProp((p: { autoloadVariable: string | null }) =>
+                    (p.autoloadVariable = e.target.value || null))}>
+            <option value="">None</option>
+            {ridHolders.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+          </select>
+          <span className="field-hint">A string variable naming one analysis's RID, or an array naming several</span>
+        </label>
+        {!!autoloadVariable && (
+          <label className="field canvas-toggle">
+            <input type="checkbox" aria-label="Don't clear on load" checked={!!keepOnLoad}
+                   onChange={(e) => setProp((p: { keepOnLoad: boolean }) => (p.keepOnLoad = e.target.checked))} />
+            <span className="field-label">Don't clear on load</span>
+          </label>
         )}
       </div>
       <label className="field">
@@ -14347,7 +14433,7 @@ CanvasSeriesAnalysis.craft = {
     windowStartVariable: null, windowEndVariable: null, relativeAmount: 2, relativeUnit: "week",
     syncXAxes: false, utc: false, overlayYAxes: false, collapseYAxes: false, collapsedBoundaries: false,
     tooltip: null, addData: false, addDataSets: null, saving: false, saveProjectVariable: null,
-    fixedSaveLocation: false },
+    fixedSaveLocation: false, outputVariable: null, autoloadVariable: null, keepOnLoad: false },
   related: { settings: SeriesAnalysisSettings },
 };
 

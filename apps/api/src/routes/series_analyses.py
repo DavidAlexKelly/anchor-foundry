@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
-from ..middleware.permissions import ProjectAccess, require_project_role
+from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
 from ..services import series_analyses as service
 
@@ -30,8 +30,17 @@ router = APIRouter(
 )
 
 
+#: p.397's RID alone (§663): "loaded into the Workshop widget using its RID",
+#: and a widget's autoload names analyses by that and nothing else.
+workspace_router = APIRouter(
+    prefix="/workspaces/{workspace_id}/series-analyses",
+    tags=["series-analyses"],
+)
+
+
 class AnalysisOut(BaseModel):
     id: UUID
+    project_id: UUID
     name: str
     visibility: str
     #: The widget's view this reopens - never readings (db 0131).
@@ -65,6 +74,17 @@ async def list_analyses(access: ProjectAccess = Depends(require_project_role("vi
     async with user_connection(access.auth.user_id) as conn:
         rows = await service.list_analyses(conn, access.project_id)
     return [_out(r, access.auth.user_id) for r in rows]
+
+
+@workspace_router.get("/{analysis_id}", response_model=AnalysisOut)
+async def get_analysis_by_rid(
+    analysis_id: UUID, access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> AnalysisOut:
+    """One analysis by its id, in whichever of the workspace's projects it is
+    - if the reader may see it there."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await service.by_id(conn, access.workspace_id, analysis_id)
+    return _out(row, access.auth.user_id)
 
 
 @router.get("/{analysis_id}", response_model=AnalysisOut)

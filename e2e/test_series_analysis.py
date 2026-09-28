@@ -847,3 +847,103 @@ def test_the_panel_sets_the_saving_options(page, api, module) -> None:
     save(page)
     props = mod.definition()["layout"]["tsa"]["props"]
     assert (props["saving"], props["saveProjectVariable"], props["fixedSaveLocation"]) == (True, "v_where", True)
+
+
+def saved_analysis(mod: Module, name: str, plots: list[dict], **extra) -> str:
+    """An analysis saved through the API, as a reader's Save would."""
+    made = mod.api.call("POST", f"{mod.base}/series-analyses",
+                        {"name": name, "visibility": extra.pop("visibility", "private"),
+                         "state": {"plots": plots, "canvases": extra.pop("canvases", 0), "eventSets": [],
+                                   "axes": {}}})
+    return made["id"]
+
+
+def derived(plot_id: str, parent: str, label: str, kind: str, canvas: int = 1) -> dict:
+    transform = {"kind": "cumulative", "aggregate": "sum"} if kind == "cumulative" else {"kind": kind, "unit": "day"}
+    return {"id": plot_id, "label": label, "canvas": canvas, "style": "solid", "root": None, "parent": parent,
+            "transforms": [transform]}
+
+
+def with_autoload(api, module, name: str, rid, **props) -> tuple[Module, str, str]:
+    """An analysis loading the RIDs a variable names, writing the open one's
+    to `v_out`, with a button that names the second analysis instead."""
+    mod = build(api, module, name)
+    north = api.call("POST", "/workspaces/{}/object-sets/evaluate".format(mod.workspace_id),
+                     {"definition": object_set(module.sensor_type), "limit": 5})
+    ids = {i["properties"]["name"]: i["id"] for i in north["instances"]}
+    first = saved_analysis(mod, f"First {mod.tag}", [
+        derived("plot-4", f"root:{ids['North sensor']}", "Running North", "cumulative", 2)], canvases=2)
+    second = saved_analysis(mod, f"Second {mod.tag}", [
+        derived("plot-4", f"root:{ids['South sensor']}", "South change", "derivative")])
+    definition = mod.definition()
+    definition["layout"] = layout({
+        "tsa": {"resolvedName": "CanvasSeriesAnalysis", "props": {
+            **definition["layout"]["tsa"]["props"], "saving": True, "outputVariable": "v_out",
+            "autoloadVariable": "v_rid", **props}},
+        "out": {"resolvedName": "CanvasText", "props": {"tag": "p", "text": "OUT={{v_out}}"}},
+        "next": {"resolvedName": "CanvasButton", "props": {"label": "Load the second"}},
+    })
+    definition["variables"].update({
+        "v_out": {"id": "v_out", "kind": "string", "label": "Open analysis", "default": ""},
+        "v_rid": {"id": "v_rid", "kind": "array" if isinstance(rid(first, second), list) else "string",
+                  "label": "Analyses", "default": rid(first, second)},
+    })
+    definition["events"] = {"e_next": {"id": "e_next", "trigger": {"node": "next", "on": "click"},
+                                       "effects": [{"type": "set_variable",
+                                                    "config": {"variable": "v_rid", "value": second}}]}}
+    mod.define(definition)
+    return mod, first, second
+
+
+def test_an_analysis_autoloaded_by_its_rid_and_written_out(page, api, module) -> None:
+    """p.397's Autoload analyses and Output analysis RID (§663). The first
+    analysis's running total of North opens on its own canvas, and its RID
+    is written out; naming the second instead starts again from the set."""
+    mod, first, second = with_autoload(api, module, "Analysis autoload", lambda a, b: a)
+    open_module(page, mod)
+    rows = page.locator("[data-testid='series-plots'] tbody tr")
+    expect(rows).to_have_count(4)
+    expect(plot_row(page, "Running North")).to_have_count(1)
+    expect(page.locator("[data-testid='series-canvas-2'] path[data-plot]")).to_have_count(1)
+    expect(page.get_by_text(f"OUT={first}")).to_be_visible()
+    page.get_by_role("button", name="Load the second").click()
+    expect(plot_row(page, "South change")).to_have_count(1)
+    expect(plot_row(page, "Running North")).to_have_count(0)
+    expect(rows).to_have_count(4)
+    expect(page.get_by_text(f"OUT={second}")).to_be_visible()
+
+
+def test_several_autoloaded_and_kept_on_load(page, api, module) -> None:
+    """Two RIDs load both analyses together; with Don't clear on load, a new
+    RID adds its analysis to what is there."""
+    mod, first, second = with_autoload(api, module, "Analysis autoload two", lambda a, b: [a, b])
+    open_module(page, mod)
+    rows = page.locator("[data-testid='series-plots'] tbody tr")
+    expect(rows).to_have_count(5)
+    expect(plot_row(page, "Running North")).to_have_count(1)
+    expect(plot_row(page, "South change")).to_have_count(1)
+    mod2, first2, second2 = with_autoload(api, module, "Analysis kept", lambda a, b: a, keepOnLoad=True)
+    open_module(page, mod2)
+    expect(rows).to_have_count(4)
+    page.get_by_role("button", name="Load the second").click()
+    expect(rows).to_have_count(5)
+    expect(plot_row(page, "Running North")).to_have_count(1)
+    expect(plot_row(page, "South change")).to_have_count(1)
+
+
+def test_the_panel_sets_the_autoload_options(page, api, module) -> None:
+    mod = build(api, module, "Analysis autoload options")
+    definition = mod.definition()
+    definition["variables"].update({
+        "v_out": {"id": "v_out", "kind": "string", "label": "Out"},
+        "v_rids": {"id": "v_rids", "kind": "array", "label": "RIDs"}})
+    mod.define(definition)
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Time series analysis").first.click()
+    page.get_by_label("Output analysis RID variable").select_option("v_out")
+    page.get_by_label("Autoload analyses variable").select_option("v_rids")
+    page.get_by_label("Don't clear on load").check()
+    save(page)
+    props = mod.definition()["layout"]["tsa"]["props"]
+    assert (props["outputVariable"], props["autoloadVariable"], props["keepOnLoad"]) == ("v_out", "v_rids", True)

@@ -2377,6 +2377,7 @@ export interface ActionDefinitionInput {
  * caller's own and its public ones. */
 export interface SeriesAnalysis {
   id: string;
+  project_id: string;
   name: string;
   visibility: "private" | "public";
   state: Record<string, unknown>;
@@ -2393,6 +2394,9 @@ export const seriesAnalyses = {
     request<SeriesAnalysis[]>(`/workspaces/${wid}/projects/${pid}/series-analyses`),
   get: (wid: string, pid: string, id: string) =>
     request<SeriesAnalysis>(`/workspaces/${wid}/projects/${pid}/series-analyses/${id}`),
+  /** By p.397's RID alone (§663), in whichever of the workspace's projects. */
+  byRid: (wid: string, id: string) =>
+    request<SeriesAnalysis>(`/workspaces/${wid}/series-analyses/${encodeURIComponent(id)}`),
   save: (wid: string, pid: string, body: { name: string; visibility: string; state: unknown }) =>
     request<SeriesAnalysis>(`/workspaces/${wid}/projects/${pid}/series-analyses`, {
       method: "POST", body: JSON.stringify(body),

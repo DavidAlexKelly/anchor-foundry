@@ -98,6 +98,8 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   selectedShapesVariable: "write",
   // p.397: the project an analysis is saved to by default (§662), read.
   saveProjectVariable: "read",
+  // p.397: the analyses a Time Series Analysis loads (§663), read.
+  autoloadVariable: "read",
   // p.225's column visibility (§610): the table reads which columns to show.
   columnsVariable: "read",
   // p.243's right-clicked object (§613): written by a right-click on a row,

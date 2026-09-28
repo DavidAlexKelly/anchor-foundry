@@ -134,3 +134,38 @@ def test_a_stranger_to_the_project_finds_nothing(client, fx) -> None:
 def test_the_state_must_be_an_object() -> None:
     with pytest.raises(service.AnalysisError, match="an analysis is saved as an object"):
         service.parse([])
+
+
+def test_an_analysis_is_found_by_its_rid_alone(client, fx) -> None:
+    """p.397: "loaded into the Workshop widget using its RID" (§663)."""
+    shared = save(client, fx, fx.viewer_sub, name="By RID", visibility="public").json()
+    private = save(client, fx, fx.viewer_sub, name="By RID private").json()
+    rid = lambda a: f"/api/workspaces/{fx.workspace}/series-analyses/{a['id']}"  # noqa: E731
+    r = client.get(rid(shared), headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    assert (r.json()["name"], r.json()["project_id"]) == ("By RID", str(fx.project))
+    assert client.get(rid(private), headers=hdr(fx.viewer_sub)).status_code == 200
+    assert client.get(rid(private), headers=hdr(fx.editor_sub)).status_code == 404
+    assert client.get(rid({"id": uuid.uuid4()}), headers=hdr(fx.viewer_sub)).status_code == 404
+    assert client.get(rid(shared), headers=hdr(fx.outsider_sub)).status_code == 404
+
+
+def test_an_rid_names_an_analysis_in_this_workspace_only(client, fx) -> None:
+    """Asked for through another workspace's address, an analysis is not
+    found, even by a reader who could open it in its own."""
+    import psycopg
+
+    shared = save(client, fx, fx.viewer_sub, name="Elsewhere", visibility="public").json()
+    other = uuid.uuid4()
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as db:
+        org = db.execute("SELECT organisation_id FROM workspaces WHERE id = %s", (fx.workspace,)).fetchone()[0]
+        db.execute(
+            """INSERT INTO workspaces (id, organisation_id, name, slug, s3_prefix, pg_schema, search_prefix,
+                                       created_by)
+               SELECT %s, %s, %s, %s, %s, %s, %s, created_by FROM workspaces WHERE id = %s""",
+            (other, org, f"Other {other.hex[:6]}", f"other-{other.hex[:6]}", f"workspaces/o-{other.hex[:6]}/",
+             f"ws_{other.hex[:12]}", f"ws-{other.hex[:12]}-", fx.workspace))
+        db.execute("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (%s, %s, 'viewer')",
+                   (other, fx.viewer))
+    r = client.get(f"/api/workspaces/{other}/series-analyses/{shared['id']}", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 404

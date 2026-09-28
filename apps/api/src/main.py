@@ -202,6 +202,7 @@ def create_app() -> FastAPI:
     app.include_router(object_routes.router, prefix=prefix)
     app.include_router(object_routes.project_router, prefix=prefix)
     app.include_router(series_analysis_routes.router, prefix=prefix)
+    app.include_router(series_analysis_routes.workspace_router, prefix=prefix)
     app.include_router(action_routes.router, prefix=prefix)
     app.include_router(action_routes.project_router, prefix=prefix)
     app.include_router(canvas_routes.router, prefix=prefix)
