@@ -1,17 +1,25 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_SERIES, axisSides, mergeSeries, seriesName, seriesOf, seriesRequests,
+  MAX_SERIES, axisSides, mergeSeries, seriesName, seriesOf, seriesRequests, seriesSource,
+  type SeriesSpec,
 } from "./chart-series";
+
+const ON_CHART = { objectSetVariable: null, dimension: null };
 
 describe("seriesOf (p.281's multiple series)", () => {
   it("reads what a saved chart holds, and nothing else", () => {
     expect(seriesOf(undefined)).toEqual([]);
     expect(seriesOf({ aggregate: "sum" })).toEqual([]);
     expect(seriesOf([null, 3, { aggregate: "sum", measure: "capacity", name: "Total" }]))
-      .toEqual([{ aggregate: "sum", measure: "capacity", name: "Total", axis: "right" }]);
+      .toEqual([{ aggregate: "sum", measure: "capacity", name: "Total", axis: "right",
+                  ...ON_CHART }]);
     expect(seriesOf([{ aggregate: "median", measure: "", name: 4 }]))
-      .toEqual([{ aggregate: "count", measure: null, name: "", axis: "right" }]);
+      .toEqual([{ aggregate: "count", measure: null, name: "", axis: "right", ...ON_CHART }]);
+    // p.280's layer input and X axis property (§625), when they are names.
+    expect(seriesOf([{ objectSetVariable: "v_flights", dimension: "origin" }])[0])
+      .toMatchObject({ objectSetVariable: "v_flights", dimension: "origin" });
+    expect(seriesOf([{ objectSetVariable: "", dimension: 3 }])[0]).toMatchObject(ON_CHART);
   });
 
   it("holds the chart to six series, the Measure's among them", () => {
@@ -22,26 +30,61 @@ describe("seriesOf (p.281's multiple series)", () => {
 
 describe("seriesName (p.282's display override)", () => {
   it("is the override, else what the series plots", () => {
-    expect(seriesName({ aggregate: "sum", measure: "capacity", name: "", axis: "left" }))
+    expect(seriesName(spec({ aggregate: "sum", measure: "capacity" })))
       .toBe("Sum of capacity");
-    expect(seriesName({ aggregate: "count", measure: null, name: "  ", axis: "left" }))
-      .toBe("Count");
-    expect(seriesName({ aggregate: "avg", measure: "age", name: " Mean age ", axis: "left" }))
+    expect(seriesName(spec({ name: "  " }))).toBe("Count");
+    expect(seriesName(spec({ aggregate: "avg", measure: "age", name: " Mean age " })))
       .toBe("Mean age");
+  });
+
+  it("names the set a series reads when it is not the chart's (§625)", () => {
+    expect(seriesName(spec({}), "Flights")).toBe("Count · Flights");
+    expect(seriesName(spec({ name: "Departures" }), "Flights")).toBe("Departures");
   });
 });
 
 describe("seriesRequests", () => {
   it("asks for each finished series, and nothing for an unfinished one", () => {
     expect(seriesRequests([
-      { aggregate: "count", measure: null, name: "", axis: "right" },
-      { aggregate: "sum", measure: null, name: "", axis: "right" },
-      { aggregate: "max", measure: "capacity", name: "", axis: "right" },
+      spec({}), spec({ aggregate: "sum" }), spec({ aggregate: "max", measure: "capacity" }),
     ])).toEqual([
       { aggregation: "count", aggregation_property: null },
       null,
       { aggregation: "max", aggregation_property: "capacity" },
     ]);
+  });
+});
+
+describe("seriesSource (p.280's layers, §625)", () => {
+  const chart = { objectSetVariable: "v_alerts", dimension: "airport" };
+  const resolved = { v_alerts: { type: "alerts" }, v_flights: { type: "flights" } };
+
+  it("is the chart's set by the chart's property, unless the series says otherwise", () => {
+    expect(seriesSource(spec({}), chart, resolved))
+      .toEqual({ key: "v_alerts", definition: { type: "alerts" }, dimension: "airport" });
+    expect(seriesSource(spec({ dimension: "kind" }), chart, resolved))
+      .toEqual({ key: "v_alerts", definition: { type: "alerts" }, dimension: "kind" });
+    expect(seriesSource(spec({ objectSetVariable: "v_flights", dimension: "origin" }),
+      chart, resolved))
+      .toEqual({ key: "v_flights", definition: { type: "flights" }, dimension: "origin" });
+  });
+
+  it("waits for a property of a set of its own rather than borrowing the chart's", () => {
+    expect(seriesSource(spec({ objectSetVariable: "v_flights" }), chart, resolved)).toBeNull();
+    // Naming the chart's own set is the chart's set, property and all.
+    expect(seriesSource(spec({ objectSetVariable: "v_alerts" }), chart, resolved))
+      .toEqual({ key: "v_alerts", definition: { type: "alerts" }, dimension: "airport" });
+  });
+
+  it("asks nothing of a set not yet resolved, or of no set", () => {
+    expect(seriesSource(spec({ objectSetVariable: "v_gone", dimension: "x" }), chart, resolved))
+      .toBeNull();
+    expect(seriesSource(spec({ objectSetVariable: "v_null", dimension: "x" }), chart,
+      { v_null: null })).toBeNull();
+    expect(seriesSource(spec({}), { objectSetVariable: null, dimension: "airport" }, resolved))
+      .toBeNull();
+    expect(seriesSource(spec({}), { objectSetVariable: "v_alerts", dimension: null }, resolved))
+      .toBeNull();
   });
 });
 
@@ -81,3 +124,7 @@ describe("axisSides (p.283's Use multiple value axes)", () => {
     expect(axisSides([], true)).toEqual(["left"]);
   });
 });
+
+function spec(over: Partial<SeriesSpec>): SeriesSpec {
+  return { aggregate: "count", measure: null, name: "", axis: "right", ...ON_CHART, ...over };
+}

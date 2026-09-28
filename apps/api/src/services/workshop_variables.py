@@ -577,6 +577,12 @@ NESTED_REFERENCE_PROPS: dict[str, tuple[str, ...]] = {
     # set would draw an empty band with a legend entry and a colour, which
     # reads as "no events in this period" rather than "this binding is gone".
     "layers": ("objectSetVariable",),
+    # p.280's Chart XY layers (§625): "The Object set option allows a Workshop
+    # object set variable to be used as input", per layer. A series reading a
+    # set of its own must have that set resolved to be asked at all, and must
+    # count as a use of it, or deleting the set leaves a series drawing
+    # nothing under a legend entry that still names it.
+    "series": ("objectSetVariable",),
 }
 
 

@@ -907,7 +907,8 @@ def test_the_panel_adds_and_names_a_series(page, api, sites) -> None:
     save(page)
     props = mod.definition()["layout"]["chart"]["props"]
     assert props["series"] == [{"aggregate": "sum", "measure": "capacity", "name": "Capacity",
-                                "axis": "right"}], props
+                                "axis": "right", "objectSetVariable": None,
+                                "dimension": None}], props
     assert (props["seriesName"], props["legendPosition"]) == ("Sites", "top"), props
     page.get_by_test_id("chart-series-remove").click()
     page.get_by_role("button", name="Save", exact=True).click()
@@ -922,6 +923,112 @@ def test_a_segmented_chart_is_offered_no_more_series(page, api, sites) -> None:
     page.locator(".canvas-tree-row", has_text="Chart").first.click()
     expect(page.get_by_test_id("chart-series-segmented")).to_be_visible()
     expect(page.get_by_test_id("chart-add-series")).to_have_count(0)
+
+
+# ---- p.280's layers: a series reading a set of its own (§625) ---------------
+
+TICKETS = [
+    {"id": "T1", "state": "open", "hours": 2},
+    {"id": "T2", "state": "open", "hours": 4},
+    {"id": "T3", "state": "closed", "hours": 1},
+    {"id": "T4", "state": "held", "hours": 8},
+]
+
+
+@pytest.fixture(scope="module")
+def tickets(api, sites):
+    """A second type whose `state` shares the sites' `status` values, bar one
+    only it has - so the categories meet by label and a category only the
+    layer has is drawn too."""
+    mod = Module(api, "Chart XY tickets", beside=sites)
+    mod.ticket_type_id = mod.object_type(
+        columns=["id", "state", "hours"], rows=TICKETS, key="id", title="id",
+        types={"hours": "integer"}, slug=f"ticket_{sites.tag}")
+    return mod
+
+
+def build_layered(api, sites, tickets, name: str, series: list) -> Module:
+    mod = Module(api, name, beside=sites)
+    mod.define({
+        "format": 2,
+        "layout": layout({"chart": {"resolvedName": "CanvasChart", "props": {
+            "objectSetVariable": "v_set", "kind": "bar", "dimension": "status",
+            "series": series}}}),
+        "variables": {
+            "v_set": {"id": "v_set", "kind": "object_set", "label": "Sites",
+                      "object_set": object_set(sites.site_type_id)},
+            "v_tickets": {"id": "v_tickets", "kind": "object_set", "label": "Tickets",
+                          "object_set": object_set(tickets.ticket_type_id)},
+        },
+        "events": {},
+    })
+    return mod
+
+
+def test_a_series_reads_its_own_set_by_its_own_property(page, api, sites, tickets) -> None:
+    mod = build_layered(api, sites, tickets, "Chart XY layers", [
+        {"aggregate": "count", "objectSetVariable": "v_tickets", "dimension": "state"},
+        {"aggregate": "sum", "measure": "hours", "objectSetVariable": "v_tickets",
+         "dimension": "state", "name": "Hours"},
+    ])
+    open_module(page, mod)
+    # Sites by status and tickets by state, met on the label.
+    expect(segment(page, "open", "Count").locator("title")).to_have_text("open · Count: 3")
+    expect(segment(page, "open", "Count · Tickets").locator("title")).to_have_text(
+        "open · Count · Tickets: 2")
+    expect(segment(page, "closed", "Hours").locator("title")).to_have_text("closed · Hours: 1")
+    # A category only the layer has is on the axis too.
+    expect(segment(page, "held", "Hours").locator("title")).to_have_text("held · Hours: 8")
+    expect(page.locator("[data-testid='chart-legend-entry'] title")).to_have_text(
+        ["Count", "Count · Tickets", "Hours"])
+
+
+def test_a_series_of_its_own_set_waits_for_its_property(page, api, sites, tickets) -> None:
+    """The chart's `status` names a column the tickets do not have: borrowed,
+    it would be asked and refused. The series waits, and the chart is drawn."""
+    mod = build_layered(api, sites, tickets, "Chart XY layer unfinished", [
+        {"aggregate": "count", "objectSetVariable": "v_tickets"}])
+    open_module(page, mod)
+    expect(page.locator("svg[aria-label='Bar chart']")).to_be_visible(timeout=20000)
+    expect(page.get_by_text("Loading the other series…")).to_have_count(0)
+    expect(page.get_by_text("Loading…")).to_have_count(0)
+
+
+def test_the_panel_points_a_series_at_another_set(page, api, sites, tickets) -> None:
+    mod = build_layered(api, sites, tickets, "Chart XY layers panel", [])
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    page.get_by_test_id("chart-add-series").click()
+    # The chart's own set is the default, and offers no property of its own.
+    expect(page.get_by_test_id("chart-series-set")).to_have_value("")
+    expect(page.get_by_test_id("chart-series-set").locator("option")).to_have_text(
+        ["The chart's set", "Tickets"])
+    expect(page.get_by_test_id("chart-series-dimension")).to_have_count(0)
+    page.get_by_test_id("chart-series-set").select_option("v_tickets")
+    expect(page.get_by_test_id("chart-series-dimension").locator("option")).to_have_text(
+        ["Group by…", "id", "state", "hours"])
+    page.get_by_test_id("chart-series-dimension").select_option("state")
+    expect(page.get_by_test_id("chart-series-name")).to_have_attribute(
+        "placeholder", "Count · Tickets")
+    # Its measures are the tickets' numbers, not the sites'.
+    page.get_by_test_id("chart-series-aggregate").select_option("sum")
+    expect(page.get_by_test_id("chart-series-measure").locator("option")).to_have_text(
+        ["Choose…", "hours"])
+    page.get_by_test_id("chart-series-measure").select_option("hours")
+    save(page)
+    props = mod.definition()["layout"]["chart"]["props"]
+    assert props["series"] == [{"aggregate": "sum", "measure": "hours", "name": "",
+                                "axis": "right", "objectSetVariable": "v_tickets",
+                                "dimension": "state"}], props
+    # Back to the chart's set lets go of what was the tickets'.
+    page.get_by_test_id("chart-series-set").select_option("")
+    page.get_by_role("button", name="Save", exact=True).click()
+    eventually(lambda: mod.definition()["layout"]["chart"]["props"]["series"],
+               lambda got: got == [{"aggregate": "sum", "measure": None, "name": "",
+                                    "axis": "right", "objectSetVariable": None,
+                                    "dimension": None}],
+               what="the series back on the chart's set")
 
 
 # ---- p.283's Use multiple value axes (§542) --------------------------------
