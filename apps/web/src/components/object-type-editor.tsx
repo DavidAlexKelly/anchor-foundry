@@ -41,6 +41,7 @@ import { inlineActionChoices, type InlineAction } from "@/lib/property-inline-ac
 import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
 import { relatedResources, type RelatedDestination } from "@/lib/related-resources";
 import { typeClassesOf } from "@/lib/type-classes";
+import { bulkApply, classesIn, sharedDataType, toggled, type BulkChange } from "@/lib/property-bulk";
 import type {
   ObjectTypeDetail,
   ObjectTypeImpact,
@@ -178,9 +179,38 @@ export function PropertyRows({
   const structuringRow = structuring === null ? null : properties[structuring];
   const [reducing, setReducing] = useState<number | null>(null);
   const reducingRow = reducing === null ? null : properties[reducing];
+  // p.91's bulk edit (§672): the rows selected, by index. A row added or
+  // removed renumbers the rest, so the selection starts again.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkNote, setBulkNote] = useState<string | null>(null);
+  const [bulkFormatting, setBulkFormatting] = useState(false);
+  useEffect(() => setSelected(new Set()), [properties.length]);
+  const bulk = (change: BulkChange) => {
+    const made = bulkApply(properties, selected, change);
+    onChange(made.rows);
+    setBulkNote(made.skipped > 0
+      ? `${made.skipped} shared propert${made.skipped === 1 ? "y keeps" : "ies keep"} their shared property's setting`
+      : null);
+  };
+  const bulkType = sharedDataType(properties, selected);
 
   return (
     <div>
+      {selected.size >= 2 && (
+        <PropertyBulkBar count={selected.size} classes={classesIn(properties, selected)}
+          formattable={bulkType !== null && formattable(bulkType)} note={bulkNote}
+          onChange={bulk} onFormat={() => setBulkFormatting(true)} onClear={() => setSelected(new Set())} />
+      )}
+      {bulkFormatting && bulkType && (
+        <ValueFormatEditor
+          open
+          onClose={() => setBulkFormatting(false)}
+          propertyName={`${selected.size} properties`}
+          dataType={bulkType}
+          value={null}
+          onSave={(next) => bulk({ kind: "value_format", value: next })}
+        />
+      )}
       {editing && (
         <ValueFormatEditor
           open
@@ -305,6 +335,15 @@ export function PropertyRows({
       )}
       {properties.map((prop, index) => (
         <div key={index} className="row-actions" style={{ marginBottom: 6 }}>
+          {/* p.91: "select multiple properties … Once multiple properties are
+              selected, the following bulk editing actions become available".
+              A checkbox rather than p.91's Cmd/Ctrl-click: a row here is all
+              controls, with nowhere to click that is not one of them. */}
+          {properties.length > 1 && (
+            <input type="checkbox" aria-label={`Select property ${index + 1}`}
+              checked={selected.has(index)}
+              onChange={() => { setSelected(toggled(selected, index)); setBulkNote(null); }} />
+          )}
           <input
             type="text"
             placeholder="property_name"
@@ -1209,5 +1248,59 @@ function TypeClassesField({ index, value, onCommit }: {
         </span>
       )}
     </span>
+  );
+}
+
+/** p.91's bulk editing actions (§672), for the selected properties. Render
+ * hints are not among them: this platform has none. */
+function PropertyBulkBar({ count, classes, formattable: canFormat, note, onChange, onFormat, onClear }: {
+  count: number;
+  classes: string[];
+  formattable: boolean;
+  note: string | null;
+  onChange: (change: BulkChange) => void;
+  onFormat: () => void;
+  onClear: () => void;
+}) {
+  const [adding, setAdding] = useState("");
+  const toAdd = typeClassesOf(adding);
+  return (
+    <div className="card" data-testid="property-bulk" style={{ padding: 8, marginBottom: 8 }}>
+      <div className="row-actions" style={{ gap: 6, flexWrap: "wrap" }}>
+        <strong style={{ fontSize: 12.5 }}>{count} properties selected</strong>
+        <select aria-label="Change base type" value=""
+          onChange={(e) => e.target.value && onChange({ kind: "data_type", value: e.target.value as PropertyDataType })}>
+          <option value="">Base type…</option>
+          {PROPERTY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select aria-label="Change visibility" value=""
+          onChange={(e) => e.target.value
+            && onChange({ kind: "visibility", value: e.target.value as PropertyVisibility })}>
+          <option value="">Visibility…</option>
+          {PROPERTY_VISIBILITIES.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <input type="text" aria-label="Type class to add" placeholder="kind:name" value={adding}
+          style={{ fontSize: 12, maxWidth: 140 }} onChange={(e) => setAdding(e.target.value)} />
+        <button type="button" className="btn quiet"
+          disabled={toAdd.classes.length !== 1 || toAdd.bad.length > 0}
+          onClick={() => { onChange({ kind: "add_class", value: toAdd.classes[0]! }); setAdding(""); }}>
+          Add type class
+        </button>
+        <select aria-label="Type class to remove" value=""
+          onChange={(e) => e.target.value && onChange({ kind: "remove_class", value: e.target.value })}>
+          <option value="">Remove type class…</option>
+          {classes.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <button type="button" className="btn quiet" disabled={!canFormat} onClick={onFormat}
+          title={canFormat ? undefined : "Formatting is written for one base type: select properties of one"}>
+          Add formatting
+        </button>
+        <button type="button" className="btn quiet" onClick={() => onChange({ kind: "value_format", value: null })}>
+          Remove formatting
+        </button>
+        <button type="button" className="btn quiet" onClick={onClear}>Clear selection</button>
+      </div>
+      {note && <p className="field-hint" role="status">{note}</p>}
+    </div>
   );
 }
