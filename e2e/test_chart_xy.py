@@ -246,3 +246,197 @@ def test_the_panel_sets_the_display(page, api, sites) -> None:
     props = mod.definition()["layout"]["chart"]["props"]
     assert (props["sort"], props["orientation"], props["valueLabels"]) == (
         "keyAsc", "horizontal", True), props
+
+
+# ---- p.283's value axis and titles (§536) -----------------------------------
+
+def value_ticks(page) -> list[str]:
+    return page.get_by_test_id("chart-value-tick").all_text_contents()
+
+
+def bar_heights(page) -> dict[str, float]:
+    bars = page.locator("svg[aria-label='Bar chart'] rect")
+    out = {}
+    for i in range(bars.count()):
+        title = bars.nth(i).locator("title").text_content() or ""
+        out[title.split(":")[0]] = box(bars.nth(i))["height"]
+    return out
+
+
+def test_a_logarithmic_axis_draws_by_the_power_of_ten(page, api, sites) -> None:
+    # Sums of 30 and 90: linear draws closed three times open's height, and
+    # a logarithm from 10 draws log(9) / log(3) = 2 times.
+    mod = build(api, sites, "Chart XY log", {
+        "aggregate": "sum", "measure": "capacity", "scaleType": "log"})
+    open_module(page, mod)
+    eventually(lambda: value_ticks(page), lambda got: got == ["10", "100"], what="log ticks")
+    heights = bar_heights(page)
+    assert abs(heights["closed"] / heights["open"] - 2) < 0.05, heights
+    mod = build(api, sites, "Chart XY linear", {"aggregate": "sum", "measure": "capacity"})
+    open_module(page, mod)
+    eventually(lambda: value_ticks(page), lambda got: got[-1:] == ["90"], what="linear ticks")
+    heights = bar_heights(page)
+    assert abs(heights["closed"] / heights["open"] - 3) < 0.05, heights
+
+
+def test_fixed_bounds_hold_the_axis_and_cut_what_runs_past(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY bounds", {
+        "dimension": "region", "minBound": 0, "maxBound": 4, "valueLabels": True})
+    open_module(page, mod)
+    eventually(lambda: value_ticks(page), lambda got: got == ["0", "1", "2", "3", "4"],
+               what="bounded ticks")
+    heights = bar_heights(page)
+    # North's 2 is half of 4, and east's 1 a quarter.
+    assert abs(heights["north"] / heights["east"] - 2) < 0.05, heights
+    mod = build(api, sites, "Chart XY cut", {
+        "dimension": "region", "maxBound": 1.5, "valueLabels": True})
+    open_module(page, mod)
+    eventually(lambda: value_ticks(page), lambda got: got[-1:] == ["1.50"], what="cut ticks")
+    expect(page.get_by_test_id("chart-plot-clip")).to_have_count(3)
+    # North's 2 runs past 1.5: its bar is cut and its number not written in
+    # the margin, and east's and south's are.
+    expect(page.get_by_test_id("chart-value-label")).to_have_text(["1", "1"])
+
+
+def test_a_calculated_axis_is_not_cut(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY uncut", {"dimension": "region"})
+    open_module(page, mod)
+    expect(page.locator("svg[aria-label='Bar chart'] rect")).to_have_count(3)
+    expect(page.get_by_test_id("chart-plot-clip")).to_have_count(0)
+    assert value_ticks(page) == ["0", "0.50", "1", "1.50", "2"]
+
+
+def test_bounds_that_cannot_be_drawn_are_said(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY backwards", {
+        "dimension": "region", "minBound": 5, "maxBound": 2})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-axis-problem")).to_contain_text("below the maximum bound")
+    assert value_ticks(page)[0] == "0" and value_ticks(page)[-1] == "2", value_ticks(page)
+    mod = build(api, sites, "Chart XY log of zero", {
+        "dimension": "region", "scaleType": "log", "minBound": 0})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-axis-problem")).to_contain_text("above 0")
+    mod = build(api, sites, "Chart XY fine bounds", {"dimension": "region", "minBound": 0})
+    open_module(page, mod)
+    expect(page.locator("svg[aria-label='Bar chart'] rect")).to_have_count(3)
+    expect(page.get_by_test_id("chart-axis-problem")).to_have_count(0)
+
+
+def test_a_logarithm_says_what_it_could_not_draw(page, api) -> None:
+    # Averages by bin: a 50, b 0, c 5 and d 0.5, so the axis runs from 0.1 to
+    # 100 and `b` has nothing a logarithm can draw.
+    mod = Module(api, "Chart XY zeroes")
+    type_id = mod.object_type(
+        columns=["id", "bin", "weight"], key="id", title="id", types={"weight": "integer"},
+        rows=[{"id": "A", "bin": "a", "weight": 50}, {"id": "B", "bin": "b", "weight": 0},
+              {"id": "C", "bin": "c", "weight": 5}, {"id": "D", "bin": "d", "weight": 1},
+              {"id": "E", "bin": "d", "weight": 0}])
+
+    def chart(kind: str) -> Module:
+        built = Module(api, f"Chart XY zeroes {kind}", beside=mod)
+        built.define({
+            "format": 2,
+            "layout": layout({"chart": {"resolvedName": "CanvasChart", "props": {
+                "objectSetVariable": "v_set", "kind": kind, "dimension": "bin",
+                "aggregate": "avg", "measure": "weight", "scaleType": "log",
+                "sort": "keyAsc"}}}),
+            "variables": {"v_set": {"id": "v_set", "kind": "object_set", "label": "Bins",
+                                    "object_set": object_set(type_id)}},
+            "events": {},
+        })
+        return built
+
+    open_module(page, chart("bar"))
+    expect(page.get_by_test_id("chart-undrawn")).to_have_text(
+        "1 value is zero or below, which a logarithmic axis cannot draw.")
+    # A tick below 1 reads as itself, not as two decimals.
+    eventually(lambda: value_ticks(page), lambda got: got == ["0.1", "1", "10", "100"],
+               what="small log ticks")
+    # Three bars, and all four categories still named under the axis.
+    expect(page.locator("svg[aria-label='Bar chart'] rect")).to_have_count(3)
+    names = page.locator("svg[aria-label='Bar chart'] text").all_text_contents()
+    assert {"a", "b", "c", "d"} <= set(names), names
+    open_module(page, chart("line"))
+    expect(page.get_by_test_id("chart-undrawn")).to_be_visible()
+    # a, b, c, d in order: `b` cannot be drawn, so the line breaks there
+    # rather than joining a to c across a reading it does not have.
+    path = page.locator("svg[aria-label='Line chart'] path").get_attribute("d") or ""
+    assert path.count("M") == 2 and path.count("L") == 1, path
+    expect(page.locator("svg[aria-label='Line chart'] circle")).to_have_count(3)
+
+
+def test_axis_titles_default_to_what_is_plotted_and_can_be_overridden(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY titles", {
+        "aggregate": "sum", "measure": "capacity",
+        "showCategoryTitle": True, "showValueTitle": True})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-category-title")).to_have_text("status")
+    expect(page.get_by_test_id("chart-value-title")).to_have_text("Sum of capacity")
+    mod = build(api, sites, "Chart XY own titles", {
+        "orientation": "horizontal", "showCategoryTitle": True, "categoryTitle": "State",
+        "showValueTitle": True, "valueTitle": "Sites"})
+    open_module(page, mod)
+    chart = page.locator("svg[aria-label='Horizontal bar chart']")
+    expect(chart.get_by_test_id("chart-category-title")).to_have_text("State")
+    expect(chart.get_by_test_id("chart-value-title")).to_have_text("Sites")
+    # Turned: the categories run down the left, so their title stands up the
+    # left edge and the values' lies along the bottom.
+    category, value = box(chart.get_by_test_id("chart-category-title")), box(
+        chart.get_by_test_id("chart-value-title"))
+    assert category["height"] > category["width"], category
+    assert value["y"] > category["y"] + category["height"] / 2, (category, value)
+    mod = build(api, sites, "Chart XY no titles", {"categoryTitle": "Unshown"})
+    open_module(page, mod)
+    expect(page.locator("svg[aria-label='Bar chart'] rect")).to_have_count(2)
+    expect(page.get_by_test_id("chart-category-title")).to_have_count(0)
+    expect(page.get_by_test_id("chart-value-title")).to_have_count(0)
+
+
+def test_a_segmented_chart_takes_titles_and_keeps_a_calculated_axis(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY segmented titles", {
+        "segmentBy": "region", "showCategoryTitle": True, "showValueTitle": True,
+        "scaleType": "log", "maxBound": 1})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-category-title")).to_have_text("status")
+    expect(page.get_by_test_id("chart-value-title")).to_have_text("Count")
+    assert value_ticks(page)[-1] == "3", value_ticks(page)
+    expect(page.get_by_test_id("chart-axis-problem")).to_have_count(0)
+
+
+def test_the_panel_sets_the_axis(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY axis panel", {})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    page.get_by_test_id("chart-scale-type").select_option("log")
+    page.get_by_test_id("chart-min-bound").fill("0")
+    expect(page.get_by_test_id("chart-axis-problem-hint")).to_contain_text("above 0")
+    page.get_by_test_id("chart-min-bound").fill("0.5")
+    page.get_by_test_id("chart-max-bound").fill("20")
+    expect(page.get_by_test_id("chart-axis-problem-hint")).to_have_count(0)
+    page.get_by_test_id("chart-show-value-title").check()
+    expect(page.get_by_test_id("chart-value-title-input")).to_have_attribute(
+        "placeholder", "Count")
+    page.get_by_test_id("chart-value-title-input").fill("Sites")
+    page.get_by_test_id("chart-show-category-title").check()
+    save(page)
+    props = mod.definition()["layout"]["chart"]["props"]
+    got = {k: props.get(k) for k in (
+        "scaleType", "minBound", "maxBound", "showValueTitle", "valueTitle",
+        "showCategoryTitle", "categoryTitle")}
+    assert got == {"scaleType": "log", "minBound": 0.5, "maxBound": 20, "showValueTitle": True,
+                   "valueTitle": "Sites", "showCategoryTitle": True, "categoryTitle": ""}, got
+    page.get_by_test_id("chart-max-bound").fill("")
+    # A second save: "saved" is already on the page, so wait on the document.
+    page.get_by_role("button", name="Save", exact=True).click()
+    eventually(lambda: mod.definition()["layout"]["chart"]["props"].get("maxBound", "absent"),
+               lambda got: got in (None, "absent"), what="an emptied bound saved as calculated")
+
+
+def test_the_panel_holds_a_segmented_axis(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY segmented panel", {"segmentBy": "region"})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    expect(page.get_by_test_id("chart-axis-segmented")).to_be_visible()
+    expect(page.get_by_test_id("chart-scale-type")).to_have_count(0)

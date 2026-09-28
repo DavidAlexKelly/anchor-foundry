@@ -1,6 +1,9 @@
 "use client";
 
 import { segmentLayout, type SegmentMode, type Segmented } from "./chart-segments";
+import {
+  valueScale, type AxisTitles, type ValueAxis, type ValueScale,
+} from "./chart-display";
 import { arcPath, percentLabel, wedges } from "./pie-chart";
 
 /**
@@ -88,47 +91,68 @@ const WIDTH = 640;
 const HEIGHT = 260;
 const PAD = { top: 12, right: 12, bottom: 34, left: 48 };
 
-function plotArea() {
+/** The plot inside the chart's frame. A value title takes a strip on the
+ * left and a category title one along the bottom, so a chart with neither is
+ * laid out exactly as it was before titles existed. */
+function plotArea(titles?: AxisTitles) {
+  const left = PAD.left + (titles?.value ? 18 : 0);
+  const bottom = PAD.bottom + (titles?.category ? 16 : 0);
   return {
-    x: PAD.left,
+    x: left,
     y: PAD.top,
-    w: WIDTH - PAD.left - PAD.right,
-    h: HEIGHT - PAD.top - PAD.bottom,
+    w: WIDTH - left - PAD.right,
+    h: HEIGHT - PAD.top - bottom,
   };
 }
 
-/** Axis ticks and the value each maps to. Zero is always included when the
- * data spans it, because a bar chart whose baseline is not zero exaggerates
- * differences — the single most common way a chart lies. */
-function scale(values: number[]) {
-  const max = Math.max(0, ...values);
-  const min = Math.min(0, ...values);
-  const span = max - min || 1;
-  return {
-    min,
-    max,
-    toY: (v: number, area: { y: number; h: number }) =>
-      area.y + area.h - ((v - min) / span) * area.h,
-  };
+type Area = ReturnType<typeof plotArea>;
+
+/** Zero is always included when the axis is calculated, because a bar chart
+ * whose baseline is not zero exaggerates differences — the single most common
+ * way a chart lies. A builder who fixes a bound above zero has chosen that
+ * (p.283), and the bar then starts at the bottom of the axis. */
+const CALCULATED: ValueAxis = { scale: "linear", min: null, max: null };
+
+/** Where a value is drawn, or null when it cannot be (`valueScale`). */
+function yOf(s: ValueScale, value: number, area: { y: number; h: number }): number | null {
+  const at = s.at(value);
+  return at === null ? null : area.y + area.h - at * area.h;
 }
 
-function Axes({ ticks, area, format = niceNumber }: {
-  ticks: number[];
-  area: ReturnType<typeof plotArea>;
+/** Inside the axis's bounds, so worth a label: a value a fixed bound cuts off
+ * would have its number written in the margin, over nothing. */
+function shown(s: ValueScale, value: number): boolean {
+  const at = s.at(value);
+  return at !== null && at >= -1e-9 && at <= 1 + 1e-9;
+}
+
+/** A logarithmic axis's small ticks read as themselves: niceNumber's two
+ * decimals would print 0.001 as "0.00". */
+function tickFormat(axis: ValueAxis): (value: number) => string {
+  return axis.scale === "log"
+    ? (v) => (Math.abs(v) < 1 ? String(Number(v.toPrecision(3))) : niceNumber(v))
+    : niceNumber;
+}
+
+function Axes({ scale: s, area, format = niceNumber }: {
+  scale: ValueScale;
+  area: Area;
   format?: (value: number) => string;
 }) {
-  const s = scale(ticks);
   return (
     <g>
-      {ticks.map((t, i) => {
-        const y = s.toY(t, area);
+      {s.ticks.map((t, i) => {
+        const y = yOf(s, t, area) ?? area.y + area.h;
         return (
           <g key={i}>
             <line
               x1={area.x} x2={area.x + area.w} y1={y} y2={y}
               stroke="var(--line)" strokeWidth={1}
             />
-            <text x={area.x - 6} y={y + 4} textAnchor="end" fontSize={11} fill="var(--ink-soft)">
+            <text
+              data-testid="chart-value-tick"
+              x={area.x - 6} y={y + 4} textAnchor="end" fontSize={11} fill="var(--ink-soft)"
+            >
               {format(t)}
             </text>
           </g>
@@ -138,35 +162,104 @@ function Axes({ ticks, area, format = niceNumber }: {
   );
 }
 
-function gridTicks(values: number[], count = 4): number[] {
-  const max = Math.max(0, ...values);
-  const min = Math.min(0, ...values);
-  const span = max - min || 1;
-  return Array.from({ length: count + 1 }, (_, i) => min + (span * i) / count);
+/** p.283's titles: the value axis's up the left edge and the categorical
+ * axis's along the bottom, or the other way round on a horizontal bar chart,
+ * whose values run along the bottom. */
+function AxisTitleMarks({ titles, area, horizontal = false, belowY = HEIGHT - 4 }: {
+  titles?: AxisTitles;
+  area: { x: number; y: number; w: number; h: number };
+  horizontal?: boolean;
+  /** Above a segmented chart's legend, which has the bottom edge. */
+  belowY?: number;
+}) {
+  if (!titles) return null;
+  const left = horizontal ? titles.category : titles.value;
+  const below = horizontal ? titles.value : titles.category;
+  const kind = (isValue: boolean) => (isValue ? "chart-value-title" : "chart-category-title");
+  return (
+    <>
+      {left && (
+        <text
+          data-testid={kind(!horizontal)}
+          transform={`translate(12, ${area.y + area.h / 2}) rotate(-90)`}
+          textAnchor="middle"
+          fontSize={11}
+          fill="var(--ink-soft)"
+        >
+          {left}
+        </text>
+      )}
+      {below && (
+        <text
+          data-testid={kind(horizontal)}
+          x={area.x + area.w / 2}
+          y={belowY}
+          textAnchor="middle"
+          fontSize={11}
+          fill="var(--ink-soft)"
+        >
+          {below}
+        </text>
+      )}
+    </>
+  );
 }
 
-/** p.281's Labels and p.284's orientation (§468). */
+/** The marks, cut at the plot's edges when a bound is fixed: a bar taller
+ * than the maximum stops at it rather than running over the title. A nested
+ * viewport rather than a clipPath, whose own rect would be one more `rect` in
+ * every count of a chart's bars. Nothing is cut on a calculated axis, where
+ * nothing overflows and a dot on the top line would lose its upper half. */
+function Plot({ area, axis, children }: {
+  area: { x: number; y: number; w: number; h: number };
+  axis: ValueAxis;
+  children: React.ReactNode;
+}) {
+  if (axis.min === null && axis.max === null) return <>{children}</>;
+  return (
+    <svg
+      data-testid="chart-plot-clip"
+      x={area.x} y={area.y} width={area.w} height={area.h}
+      viewBox={`${area.x} ${area.y} ${area.w} ${area.h}`}
+      overflow="hidden"
+    >
+      {children}
+    </svg>
+  );
+}
+
+/** p.281's Labels and p.284's orientation (§468), and p.283's value axis and
+ * titles (§536). */
 export interface ChartDisplay {
   horizontal?: boolean;
   labels?: boolean;
+  axis?: ValueAxis;
+  titles?: AxisTitles;
+}
+
+interface Drawn {
+  points: ChartPoint[];
+  drill?: Drill;
+  labels?: boolean;
+  axis: ValueAxis;
+  titles?: AxisTitles;
 }
 
 /** p.284's horizontal bar chart: categories down the left, values along the
  * bottom. The same bars and the same drill-down as the vertical one, turned. */
-function HorizontalBarChart({ points, drill, labels }: {
-  points: ChartPoint[];
-  drill?: Drill;
-  labels?: boolean;
-}) {
-  const area = { x: 110, y: PAD.top, w: WIDTH - 110 - 40, h: HEIGHT - PAD.top - 24 };
-  const values = points.map((p) => p.value);
-  const ticks = gridTicks(values);
-  const min = Math.min(0, ...values);
-  const span = Math.max(0, ...values) - min || 1;
-  const toX = (v: number) => area.x + ((v - min) / span) * area.w;
+function HorizontalBarChart({ points, drill, labels, axis, titles }: Drawn) {
+  const left = 110 + (titles?.category ? 14 : 0);
+  const below = titles?.value ? 16 : 0;
+  const area = { x: left, y: PAD.top, w: WIDTH - left - 40, h: HEIGHT - PAD.top - 24 - below };
+  const s = valueScale(points.map((p) => p.value), axis);
+  const format = tickFormat(axis);
+  const toX = (v: number) => {
+    const at = s.at(v);
+    return at === null ? null : area.x + at * area.w;
+  };
   const slot = area.h / Math.max(points.length, 1);
   const barHeight = Math.max(2, slot * 0.62);
-  const zeroX = toX(0);
+  const baseX = area.x + s.base * area.w;
   return (
     <svg
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
@@ -174,33 +267,45 @@ function HorizontalBarChart({ points, drill, labels }: {
       aria-label="Horizontal bar chart"
       style={{ width: "100%" }}
     >
-      {ticks.map((t, i) => (
-        <g key={i}>
-          <line
-            x1={toX(t)} x2={toX(t)} y1={area.y} y2={area.y + area.h}
-            stroke="var(--line)" strokeWidth={1}
-          />
-          <text x={toX(t)} y={HEIGHT - 8} textAnchor="middle" fontSize={11} fill="var(--ink-soft)">
-            {niceNumber(t)}
-          </text>
-        </g>
-      ))}
+      {s.ticks.map((t, i) => {
+        const x = toX(t) ?? area.x;
+        return (
+          <g key={i}>
+            <line
+              x1={x} x2={x} y1={area.y} y2={area.y + area.h}
+              stroke="var(--line)" strokeWidth={1}
+            />
+            <text
+              data-testid="chart-value-tick"
+              x={x} y={HEIGHT - 8 - below} textAnchor="middle" fontSize={11}
+              fill="var(--ink-soft)"
+            >
+              {format(t)}
+            </text>
+          </g>
+        );
+      })}
+      <AxisTitleMarks titles={titles} area={area} horizontal />
       {points.map((p, i) => {
         const x = toX(p.value);
         const y = area.y + slot * i + (slot - barHeight) / 2;
         return (
           <g key={i}>
-            <rect
-              x={Math.min(x, zeroX)}
-              y={y}
-              width={Math.max(1, Math.abs(x - zeroX))}
-              height={barHeight}
-              fill={PALETTE[i % PALETTE.length]}
-              opacity={dim(drill, p.label)}
-              {...markProps(drill, p.label)}
-            >
-              <title>{`${p.label}: ${p.value}`}</title>
-            </rect>
+            {x !== null && (
+              <Plot area={area} axis={axis}>
+                <rect
+                  x={Math.min(x, baseX)}
+                  y={y}
+                  width={Math.max(1, Math.abs(x - baseX))}
+                  height={barHeight}
+                  fill={PALETTE[i % PALETTE.length]}
+                  opacity={dim(drill, p.label)}
+                  {...markProps(drill, p.label)}
+                >
+                  <title>{`${p.label}: ${p.value}`}</title>
+                </rect>
+              </Plot>
+            )}
             <text
               x={area.x - 6}
               y={y + barHeight / 2 + 4}
@@ -210,10 +315,10 @@ function HorizontalBarChart({ points, drill, labels }: {
             >
               {shortLabel(p.label, 16)}
             </text>
-            {labels && (
+            {labels && x !== null && shown(s, p.value) && (
               <text
                 data-testid="chart-value-label"
-                x={Math.max(x, zeroX) + 4}
+                x={Math.max(x, baseX) + 4}
                 y={y + barHeight / 2 + 4}
                 fontSize={11}
                 fill="var(--ink)"
@@ -228,50 +333,51 @@ function HorizontalBarChart({ points, drill, labels }: {
   );
 }
 
-function BarChart({ points, drill, labels }: {
-  points: ChartPoint[];
-  drill?: Drill;
-  labels?: boolean;
-}) {
-  const area = plotArea();
-  const values = points.map((p) => p.value);
-  const s = scale(values);
+function BarChart({ points, drill, labels, axis, titles }: Drawn) {
+  const area = plotArea(titles);
+  const s = valueScale(points.map((p) => p.value), axis);
   const slot = area.w / Math.max(points.length, 1);
   const barWidth = Math.max(2, slot * 0.62);
-  const zeroY = s.toY(0, area);
+  const baseY = area.y + area.h - s.base * area.h;
+  const labelY = HEIGHT - 12 - (titles?.category ? 16 : 0);
   return (
     <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="Bar chart" style={{ width: "100%" }}>
-      <Axes ticks={gridTicks(values)} area={area} />
+      <Axes scale={s} area={area} format={tickFormat(axis)} />
+      <AxisTitleMarks titles={titles} area={area} />
       {points.map((p, i) => {
-        const y = s.toY(p.value, area);
+        const y = yOf(s, p.value, area);
         const x = area.x + slot * i + (slot - barWidth) / 2;
         return (
           <g key={i}>
-            <rect
-              x={x}
-              y={Math.min(y, zeroY)}
-              width={barWidth}
-              height={Math.max(1, Math.abs(zeroY - y))}
-              fill={PALETTE[i % PALETTE.length]}
-              opacity={dim(drill, p.label)}
-              {...markProps(drill, p.label)}
-            >
-              <title>{`${p.label}: ${p.value}`}</title>
-            </rect>
+            {y !== null && (
+              <Plot area={area} axis={axis}>
+                <rect
+                  x={x}
+                  y={Math.min(y, baseY)}
+                  width={barWidth}
+                  height={Math.max(1, Math.abs(baseY - y))}
+                  fill={PALETTE[i % PALETTE.length]}
+                  opacity={dim(drill, p.label)}
+                  {...markProps(drill, p.label)}
+                >
+                  <title>{`${p.label}: ${p.value}`}</title>
+                </rect>
+              </Plot>
+            )}
             <text
               x={x + barWidth / 2}
-              y={HEIGHT - 12}
+              y={labelY}
               textAnchor="middle"
               fontSize={11}
               fill="var(--ink-soft)"
             >
               {shortLabel(p.label, Math.max(4, Math.floor(slot / 7)))}
             </text>
-            {labels && (
+            {labels && y !== null && shown(s, p.value) && (
               <text
                 data-testid="chart-value-label"
                 x={x + barWidth / 2}
-                y={Math.min(y, zeroY) - 4}
+                y={Math.min(y, baseY) - 4}
                 textAnchor="middle"
                 fontSize={11}
                 fill="var(--ink)"
@@ -286,58 +392,73 @@ function BarChart({ points, drill, labels }: {
   );
 }
 
-function LineChart({ points, drill, labels }: {
-  points: ChartPoint[];
-  drill?: Drill;
-  labels?: boolean;
-}) {
-  const area = plotArea();
-  const values = points.map((p) => p.value);
-  const s = scale(values);
+function LineChart({ points, drill, labels, axis, titles }: Drawn) {
+  const area = plotArea(titles);
+  const s = valueScale(points.map((p) => p.value), axis);
   const step = points.length > 1 ? area.w / (points.length - 1) : 0;
-  const path = points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${area.x + step * i} ${s.toY(p.value, area)}`)
-    .join(" ");
+  // A value a logarithmic axis cannot draw breaks the line rather than
+  // joining its neighbours across it, which would claim a reading between.
+  let path = "";
+  let open = false;
+  points.forEach((p, i) => {
+    const y = yOf(s, p.value, area);
+    if (y === null) {
+      open = false;
+      return;
+    }
+    path += `${open ? " L" : `${path ? " " : ""}M`} ${area.x + step * i} ${y}`;
+    open = true;
+  });
+  const labelY = HEIGHT - 12 - (titles?.category ? 16 : 0);
   // Every nth label only: a line chart with 200 points cannot show 200 of them.
   const labelEvery = Math.max(1, Math.ceil(points.length / 8));
   return (
     <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="Line chart" style={{ width: "100%" }}>
-      <Axes ticks={gridTicks(values)} area={area} />
-      <path d={path} fill="none" stroke={PALETTE[0]} strokeWidth={2} />
-      {points.map((p, i) => (
-        <circle
-          key={i}
-          cx={area.x + step * i}
-          cy={s.toY(p.value, area)}
-          // A 2.5px dot is not a click target. Bigger when there is something
-          // to click, rather than asking for a steady hand.
-          r={drill ? 5 : 2.5}
-          fill={PALETTE[0]}
-          opacity={dim(drill, p.label)}
-          {...markProps(drill, p.label)}
-        >
-          <title>{`${p.label}: ${p.value}`}</title>
-        </circle>
-      ))}
-      {labels && points.map((p, i) => (
-        <text
-          key={`v${i}`}
-          data-testid="chart-value-label"
-          x={area.x + step * i}
-          y={s.toY(p.value, area) - 8}
-          textAnchor="middle"
-          fontSize={11}
-          fill="var(--ink)"
-        >
-          {niceNumber(p.value)}
-        </text>
-      ))}
+      <Axes scale={s} area={area} format={tickFormat(axis)} />
+      <AxisTitleMarks titles={titles} area={area} />
+      <Plot area={area} axis={axis}>
+        <path d={path} fill="none" stroke={PALETTE[0]} strokeWidth={2} />
+        {points.map((p, i) => {
+          const y = yOf(s, p.value, area);
+          return y === null ? null : (
+            <circle
+              key={i}
+              cx={area.x + step * i}
+              cy={y}
+              // A 2.5px dot is not a click target. Bigger when there is
+              // something to click, rather than asking for a steady hand.
+              r={drill ? 5 : 2.5}
+              fill={PALETTE[0]}
+              opacity={dim(drill, p.label)}
+              {...markProps(drill, p.label)}
+            >
+              <title>{`${p.label}: ${p.value}`}</title>
+            </circle>
+          );
+        })}
+      </Plot>
+      {labels && points.map((p, i) => {
+        const y = yOf(s, p.value, area);
+        return y === null || !shown(s, p.value) ? null : (
+          <text
+            key={`v${i}`}
+            data-testid="chart-value-label"
+            x={area.x + step * i}
+            y={y - 8}
+            textAnchor="middle"
+            fontSize={11}
+            fill="var(--ink)"
+          >
+            {niceNumber(p.value)}
+          </text>
+        );
+      })}
       {points.map((p, i) =>
         i % labelEvery === 0 ? (
           <text
             key={`l${i}`}
             x={area.x + step * i}
-            y={HEIGHT - 12}
+            y={labelY}
             textAnchor="middle"
             fontSize={11}
             fill="var(--ink-soft)"
@@ -350,10 +471,9 @@ function LineChart({ points, drill, labels }: {
   );
 }
 
-function ScatterChart({ points }: { points: ChartPoint[] }) {
-  const area = plotArea();
-  const values = points.map((p) => p.value);
-  const s = scale(values);
+function ScatterChart({ points, axis, titles }: Drawn) {
+  const area = plotArea(titles);
+  const s = valueScale(points.map((p) => p.value), axis);
   // The dimension is the x axis. It is numeric when it can be and ordinal
   // otherwise, because a scatter of two categorical columns is a grid of dots
   // that says nothing - and pretending otherwise would draw it anyway.
@@ -364,17 +484,21 @@ function ScatterChart({ points }: { points: ChartPoint[] }) {
   const xSpan = xMax - xMin || 1;
   return (
     <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="Scatter chart" style={{ width: "100%" }}>
-      <Axes ticks={gridTicks(values)} area={area} />
-      {points.map((p, i) => {
-        const x = area.x + (((numericX ? Number(p.label) : i) - xMin) / xSpan) * area.w;
-        return (
-          <circle key={i} cx={x} cy={s.toY(p.value, area)} r={3} fill={PALETTE[0]} fillOpacity={0.65}>
-            <title>{`${p.label}: ${p.value}`}</title>
-          </circle>
-        );
-      })}
+      <Axes scale={s} area={area} format={tickFormat(axis)} />
+      <AxisTitleMarks titles={titles} area={area} />
+      <Plot area={area} axis={axis}>
+        {points.map((p, i) => {
+          const x = area.x + (((numericX ? Number(p.label) : i) - xMin) / xSpan) * area.w;
+          const y = yOf(s, p.value, area);
+          return y === null ? null : (
+            <circle key={i} cx={x} cy={y} r={3} fill={PALETTE[0]} fillOpacity={0.65}>
+              <title>{`${p.label}: ${p.value}`}</title>
+            </circle>
+          );
+        })}
+      </Plot>
       {!numericX && (
-        <text x={area.x} y={HEIGHT - 12} fontSize={11} fill="var(--ink-soft)">
+        <text x={area.x} y={HEIGHT - 12 - (titles?.category ? 16 : 0)} fontSize={11} fill="var(--ink-soft)">
           {points.length} points (x is ordinal — the dimension is not numeric)
         </text>
       )}
@@ -510,20 +634,24 @@ export function PieChart({
  * that clause does not name.
  */
 export function SegmentedBarChart({
-  data, mode, drill, showLegend = true,
+  data, mode, drill, showLegend = true, titles,
 }: {
   data: Segmented;
   mode: SegmentMode;
   drill?: Drill;
   showLegend?: boolean;
+  titles?: AxisTitles;
 }) {
   // Six entries to a row, and as many rows as the segments need: the
   // cross-tab returns up to twelve columns.
   const legendRows = showLegend ? Math.ceil(data.segments.length / 6) : 0;
   const legendHeight = legendRows > 0 ? legendRows * 16 + 6 : 0;
-  const area = { ...plotArea(), h: plotArea().h - legendHeight };
+  const area = { ...plotArea(titles), h: plotArea(titles).h - legendHeight };
   const { bars, max } = segmentLayout(data, mode);
-  const s = scale([0, max]);
+  // Calculated, always: a stack's height is the sum of its segments, which a
+  // logarithmic axis would not show, and a percentage's bound is 100%, not a
+  // number a builder types (§536).
+  const s = valueScale([0, max], CALCULATED);
   const slot = area.w / Math.max(data.categories.length, 1);
   const barWidth = Math.max(2, slot * 0.72);
   const percent = mode === "percentage";
@@ -535,15 +663,16 @@ export function SegmentedBarChart({
       style={{ width: "100%" }}
     >
       <Axes
-        ticks={gridTicks([0, max])}
+        scale={s}
         area={area}
         format={percent ? (v) => `${Math.round(v * 100)}%` : niceNumber}
       />
+      <AxisTitleMarks titles={titles} area={area} belowY={area.y + area.h + 30} />
       {bars.map((bar, i) => {
         const category = data.categories[bar.category] ?? "";
         const segment = data.segments[bar.segment] ?? "";
-        const top = s.toY(bar.to, area);
-        const bottom = s.toY(bar.from, area);
+        const top = yOf(s, bar.to, area) ?? area.y;
+        const bottom = yOf(s, bar.from, area) ?? area.y + area.h;
         const x = area.x + slot * bar.category + (slot - barWidth) / 2 + barWidth * bar.offset;
         return (
           <rect
@@ -604,17 +733,32 @@ export function Chart({
   if (points.length === 0) {
     return <p className="canvas-widget-empty">No rows match — nothing to chart.</p>;
   }
-  if (kind === "line") return <LineChart points={points} drill={drill} labels={display.labels} />;
-  if (kind === "pie") return <PieChart points={points} drill={drill} />;
+  const axis = display.axis ?? CALCULATED;
+  const drawn = { points, drill, labels: display.labels, axis, titles: display.titles };
+  const s = valueScale(points.map((p) => p.value), axis);
+  let chart: React.ReactNode;
+  if (kind === "line") chart = <LineChart {...drawn} />;
+  else if (kind === "pie") return <PieChart points={points} drill={drill} />;
   // Scatter takes no drill-down: its label is an X *coordinate*, so clicking a
   // point would narrow to one exact value of a continuous axis — almost never
   // the question somebody is asking. Left out rather than wired to something
   // that technically works.
-  if (kind === "scatter") return <ScatterChart points={points} />;
-  if (display.horizontal) {
-    return <HorizontalBarChart points={points} drill={drill} labels={display.labels} />;
-  }
-  return <BarChart points={points} drill={drill} labels={display.labels} />;
+  else if (kind === "scatter") chart = <ScatterChart {...drawn} drill={undefined} />;
+  else if (display.horizontal) chart = <HorizontalBarChart {...drawn} />;
+  else chart = <BarChart {...drawn} />;
+  return (
+    <>
+      {chart}
+      {/* Said rather than dropped in silence: a logarithm has no zero, and a
+          chart that quietly lost a bar reads as a category with no data. */}
+      {s.undrawn > 0 && (
+        <p className="canvas-widget-empty" data-testid="chart-undrawn">
+          {s.undrawn === 1 ? "1 value is" : `${s.undrawn} values are`} zero or below, which
+          a logarithmic axis cannot draw.
+        </p>
+      )}
+    </>
+  );
 }
 
 /** Rows come back from the query endpoint as `[label, value]` pairs of
