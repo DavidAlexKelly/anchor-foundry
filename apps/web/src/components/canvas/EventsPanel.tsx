@@ -213,9 +213,15 @@ export interface TriggerCandidate {
   id: string;
   label: string;
   widget: string;
-  /** A Menu or Two-part button's items (p.483; §462), each a click of its own. */
+  /** A Menu or Two-part button's items (p.483; §462), each a click of its own.
+   * `twoPart` is any widget whose own trigger stands beside its items. */
   buttonType?: "menu" | "twoPart";
   items?: { id: string; label: string }[];
+  /** The trigger the items belong to: a click unless said otherwise - a
+   * timeline's layers are row selections (p.349; §616). */
+  itemsOn?: string;
+  /** What the "Which" picker calls the widget's own trigger, beside the items. */
+  noItemLabel?: string;
 }
 
 /** The item a trigger on this widget starts with: a Menu button's first item,
@@ -224,6 +230,8 @@ export interface TriggerCandidate {
  * is its main button. */
 function startingItem(node: TriggerCandidate | undefined, on = "click"): string | undefined {
   // Only a click comes from an item - a table's row selection has none (§613).
+  // A click, not `itemsOn`: the one widget whose items are something else, a
+  // timeline, lists its own trigger beside them and so starts on none (§616).
   return on === "click" && node?.buttonType === "menu" ? node.items?.[0]?.id : undefined;
 }
 
@@ -453,7 +461,7 @@ export function EventsPanel({
                     own. A Two-part button's main button is one more choice; a
                     Menu button's own click only opens the menu, so it is not. */}
                 {node?.buttonType && (node.items?.length ?? 0) > 0
-                  && event.trigger?.on === "click" && (
+                  && event.trigger?.on === (node.itemsOn ?? "click") && (
                   <label className="field">
                     <span className="field-label">Which</span>
                     <select
@@ -468,7 +476,9 @@ export function EventsPanel({
                         });
                       }}
                     >
-                      {node.buttonType === "twoPart" && <option value="">The main button</option>}
+                      {node.buttonType === "twoPart" && (
+                        <option value="">{node.noItemLabel ?? "The main button"}</option>
+                      )}
                       {node.items!.map((i) => (
                         <option key={i.id} value={i.id}>{i.label || i.id}</option>
                       ))}

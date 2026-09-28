@@ -226,6 +226,7 @@ import {
   orderOf as timelineOrderOf, orientationOf as timelineOrientationOf,
   propertyModeOf as timelinePropertyModeOf, showsIcon, sortFor,
   titleModeOf as timelineTitleModeOf, toggleLayer, visibleEvents,
+  newLayerId, selectionItemOf,
   type Layer as TimelineLayer,
 } from "./timeline";
 import {
@@ -9686,7 +9687,6 @@ export function CanvasTimeline({
   const { workspaceId, mode } = useCanvasEnv();
   const { resolved, events: moduleEvents } = useCanvasVariables();
   const { values, set } = useCanvasParameters();
-  const selected = eventsFor(moduleEvents, nodeId, "row_select");
   const eventContext = useEventContext(undefined, useOverlayIds());
 
   const drawn = useMemo(() => timelineLayersOf(layers), [layers]);
@@ -9764,9 +9764,14 @@ export function CanvasTimeline({
   const chosenKeys = keysOf(activeVariable ? values[activeVariable] : undefined);
   const chosen = chosenKeys[0] ?? null;
 
-  const pick = (key: string) => {
+  const pick = (key: string, layer: number) => {
     if (mode !== "run") return;
     if (activeVariable) set(activeVariable, selectionClauses([key]));
+    // p.349's Override selection event (§616): a layer with its own events
+    // fires those *instead of* the widget's, which is the page's "override".
+    // The active object is set either way - it is an output, not an event.
+    const own = selectionItemOf(drawn[layer]!);
+    const selected = eventsFor(moduleEvents, nodeId, "row_select", own);
     if (selected.length > 0) {
       runEvents(selected, { ...eventContext, payload: { key } });
     }
@@ -9849,7 +9854,7 @@ export function CanvasTimeline({
                           : undefined
                       }
                       disabled={mode !== "run"}
-                      onClick={() => pick(event.key)}
+                      onClick={() => pick(event.key, event.layer)}
                     />
                     <div className="canvas-timeline-body">
                       <span className="canvas-timeline-when" data-testid="timeline-when">
@@ -9861,7 +9866,7 @@ export function CanvasTimeline({
                         data-testid={`timeline-title-${event.key}`}
                         style={colour ? { color: colour } : undefined}
                         disabled={mode !== "run"}
-                        onClick={() => pick(event.key)}
+                        onClick={() => pick(event.key, event.layer)}
                       >
                         {event.title}
                       </button>
@@ -10040,6 +10045,21 @@ function TimelineSettings() {
                   <option key={key} value={key}>{name}</option>
                 ))}
               </select>
+              {/* p.349's Selection event override (§616). Switching it on
+                  gives the layer an id if it has none, in the same act, so
+                  there is never an overriding layer an event cannot name. */}
+              <label className="field-check">
+                <input
+                  type="checkbox"
+                  data-testid={`timeline-override-${index}`}
+                  checked={entry.overrideSelection === true}
+                  onChange={(e) => edit(index, {
+                    overrideSelection: e.target.checked,
+                    ...(e.target.checked && !entry.id ? { id: newLayerId(raw) } : {}),
+                  })}
+                />
+                <span>Override selection event</span>
+              </label>
               <button
                 type="button"
                 className="btn quiet"

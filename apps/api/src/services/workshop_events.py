@@ -263,6 +263,11 @@ def collapsible_sections(layout: Any) -> list[str]:
 
 #: p.243's custom right-click menu lives on the Object Table (§613).
 TABLE_WIDGET = "CanvasObjectTable"
+#: p.349's per-layer Override selection event lives on the Timeline (§616).
+TIMELINE_WIDGET = "CanvasTimeline"
+#: The trigger each kind of item belongs to. Everything else's items are
+#: clicks; a timeline's layers are row selections.
+ITEM_TRIGGERS = {"layers": "row_select"}
 #: The Button widget, and p.483's three types of it. `inline` is one button;
 #: `menu` is a button that opens a list of items; `twoPart` is "a primary button
 #: alongside an additional menu of options".
@@ -300,6 +305,15 @@ def button_items(layout: Any) -> dict[str, tuple[str, list[str]]]:
                 [str(i["id"]) for i in items if isinstance(i, dict) and i.get("id")]
                 if props.get("customMenu") else [],
             )
+        if name == TIMELINE_WIDGET and isinstance(props, dict):
+            # p.349 (§616): the layers that override the widget's selection
+            # event, by the id the panel gave each when its override went on.
+            layers = props.get("layers") if isinstance(props.get("layers"), list) else []
+            out[node_id] = ("layers", [
+                str(layer["id"]) for layer in layers
+                if isinstance(layer, dict) and layer.get("id")
+                and layer.get("overrideSelection") is True
+            ])
         # A table falls through here and out: it is not a Button (§613's sweep
         # found a `continue` above could not change an answer).
         if name != BUTTON_WIDGET or not isinstance(props, dict):
@@ -480,14 +494,24 @@ def _parse_item(
         return None
     if not isinstance(item, str) or not item:
         raise EventError(f"event {key!r}: a trigger's item must name one of the button's items")
-    if on != "click":
-        raise EventError(f"event {key!r}: only a click comes from a button's item, not {on!r}")
+    if on not in ("click", "row_select"):
+        raise EventError(
+            f"event {key!r}: only a click comes from a button's item, or a row selection "
+            f"from a timeline's layer - not {on!r}"
+        )
     if menus is not None:
         entry = menus.get(node)
         if entry is None:
             raise EventError(
                 f"event {key!r} fires from item {item!r} of {node!r}, which has no items - "
-                "only a Menu or Two-part button does, or a table's right-click menu"
+                "only a Menu or Two-part button does, or a table's right-click menu, "
+                "or a timeline's overriding layers"
+            )
+        wanted = ITEM_TRIGGERS.get(entry[0], "click")
+        if on != wanted:
+            raise EventError(
+                f"event {key!r} fires on {on!r} from item {item!r} of {node!r}, whose items "
+                f"are {wanted!r} triggers"
             )
         if item not in entry[1]:
             # Named against the items that are there: the usual cause is an
