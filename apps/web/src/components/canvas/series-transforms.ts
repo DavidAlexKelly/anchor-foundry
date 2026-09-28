@@ -12,7 +12,7 @@
  * vocabularies are held to the server's by `test_time_series_transforms.py`.
  */
 
-export const TRANSFORM_KINDS = ["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula"] as const;
+export const TRANSFORM_KINDS = ["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample"] as const;
 export type TransformKind = (typeof TRANSFORM_KINDS)[number];
 export const WINDOW_AGGREGATES = ["sum", "avg", "min", "max", "count", "stddev"] as const;
 export type WindowAggregate = (typeof WINDOW_AGGREGATES)[number];
@@ -33,6 +33,17 @@ export const MAX_FORMULA = 200;
  * and then build formulas using variable references to these inputs". Each
  * is a time series set variable, named in the formula; the server's caps. */
 export const MAX_FORMULA_INPUTS = 4;
+/** p.393's *Filter time series* (§648): each reading compared with a number,
+ * and the points that match kept or removed. */
+export const FILTER_OPERATORS = ["gt", "gte", "lt", "lte", "eq", "neq"] as const;
+export type FilterOperator = (typeof FILTER_OPERATORS)[number];
+export const FILTER_WORDS: Record<FilterOperator, string> = {
+  gt: "above", gte: "at least", lt: "below", lte: "at most", eq: "equal to", neq: "not equal to",
+};
+/** p.393's *Sample* (§648): the reading at or before each step, or the line
+ * between the readings either side. */
+export const SAMPLE_METHODS = ["previous", "linear"] as const;
+export type SampleMethod = (typeof SAMPLE_METHODS)[number];
 /** The names offered, in order: the series itself is `x`. */
 const INPUT_NAMES = "yzabcdefghijklmnopqrstuvw".split("");
 export const MAX_SPAN = 100_000;
@@ -47,6 +58,8 @@ export type SeriesTransform =
   | { kind: "integral"; unit: TimeUnit; method: IntegrationMethod }
   | { kind: "shift"; by: number; unit: TimeUnit }
   | { kind: "range"; start: string | null; end: string | null }
+  | { kind: "filter"; op: FilterOperator; value: number; keep: boolean }
+  | { kind: "sample"; every: number; unit: TimeUnit; method: SampleMethod }
   | { kind: "formula"; expression: string;
       /** §561: the other inputs by name - a variable's id where the variable
        * is edited, and that variable resolved where a widget reads it. */
@@ -62,6 +75,8 @@ export const KIND_LABELS: Record<TransformKind, string> = {
   shift: "Time shift",
   range: "Time range",
   formula: "Formula",
+  filter: "Filter",
+  sample: "Sample",
 };
 
 /** A new transform of `kind`, ready to use: p.584's own examples where it
@@ -89,6 +104,10 @@ export function blankTransform(kind: TransformKind): SeriesTransform {
       // p.586's own example: "scales the input time series by a factor of
       // two, and adds five to the result".
       return { kind, expression: "x * 2 + 5" };
+    case "filter":
+      return { kind, op: "gt", value: 0, keep: true };
+    case "sample":
+      return { kind, every: 1, unit: "hour", method: "previous" };
   }
 }
 
@@ -123,6 +142,10 @@ export function transformText(t: SeriesTransform): string {
       return t.start ? `from ${t.start}` : `until ${t.end}`;
     case "formula":
       return `${["x", ...Object.keys(t.inputs ?? {})].join(", ")} → ${t.expression.trim()}`;
+    case "filter":
+      return `${t.keep ? "only" : "without"} readings ${FILTER_WORDS[t.op]} ${t.value}`;
+    case "sample":
+      return `sampled every ${units(t.every, t.unit)}${t.method === "linear" ? ", interpolated" : ""}`;
   }
 }
 
@@ -142,6 +165,11 @@ export function transformProblem(t: SeriesTransform): string | null {
     case "rolling":
       return whole(t.window) && t.window >= 1 && t.window <= MAX_SPAN
         ? null : `The window must be a whole number from 1 to ${MAX_SPAN.toLocaleString("en-US")}.`;
+    case "sample":
+      return whole(t.every) && t.every >= 1 && t.every <= MAX_SPAN
+        ? null : `The step must be a whole number from 1 to ${MAX_SPAN.toLocaleString("en-US")}.`;
+    case "filter":
+      return Number.isFinite(t.value) ? null : "A filter compares with a number.";
     case "shift":
       return whole(t.by) && t.by !== 0 && Math.abs(t.by) <= MAX_SPAN
         ? null

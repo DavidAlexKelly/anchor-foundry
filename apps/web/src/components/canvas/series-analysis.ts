@@ -28,7 +28,8 @@ import { KIND_LABELS, type SeriesTransform, type TransformKind } from "./series-
 
 /** The derived plot types this widget offers, as the source names them. */
 export const PLOT_TYPES: TransformKind[] = [
-  "cumulative", "rolling", "periodic", "derivative", "integral", "shift", "formula",
+  "cumulative", "rolling", "periodic", "derivative", "integral", "shift", "formula", "filter",
+  "sample",
 ];
 export const PLOT_LABELS: Partial<Record<TransformKind, string>> = {
   cumulative: "Cumulative aggregate",
@@ -38,6 +39,9 @@ export const PLOT_LABELS: Partial<Record<TransformKind, string>> = {
   integral: "Integral",
   shift: "Shift time series",
   formula: "Formula time series",
+  // §648: p.393's two more.
+  filter: "Filter time series",
+  sample: "Sample",
 };
 /** Roots are read one object each; more than this is a table, not an analysis. */
 export const MAX_ROOTS = 10;

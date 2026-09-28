@@ -218,7 +218,7 @@ def test_the_cap_comes_after_the_transforms() -> None:
     ([{"kind": "cumulative", "aggregate": "sum"}] * 11, "a series takes at most 10 transforms"),
     (["cumulative"], "transform 1: must be an object"),
     ([{"kind": "smooth"}],
-     "transform 1: the kind must be one of cumulative, periodic, rolling, derivative, integral, shift, range, formula"),
+     "transform 1: the kind must be one of cumulative, periodic, rolling, derivative, integral, shift, range, formula, filter, sample"),
     ([{"kind": "cumulative", "aggregate": "median"}],
      "transform 1: the aggregate must be one of sum, avg, min, max, count, stddev"),
     ([{"kind": "rolling", "aggregate": "sum", "window": 0, "unit": "day"}],
@@ -306,7 +306,7 @@ def test_a_series_variable_refuses_a_transform_that_could_not_run() -> None:
                                                    "transforms": [{"kind": "smooth"}]}}},
         })
     assert str(caught.value) == ("variable 'v_series': transform 1: the kind must be one of "
-                                 "cumulative, periodic, rolling, derivative, integral, shift, range, formula")
+                                 "cumulative, periodic, rolling, derivative, integral, shift, range, formula, filter, sample")
 
 
 def test_the_points_endpoints_apply_transforms(client, fx, ontology, instance) -> None:
@@ -355,6 +355,9 @@ def test_the_browser_offers_what_the_server_takes() -> None:
     assert f"export const MAX_FORMULA = {ts.MAX_FORMULA};" in source
     assert f"export const MAX_FORMULA_INPUTS = {ts.MAX_FORMULA_INPUTS};" in source
     assert f"export const MAX_SPAN = {ts.MAX_SPAN:_};" in source
+    # §648's two.
+    assert f"export const FILTER_OPERATORS = [{listed(ts.FILTER_OPERATORS)}] as const;" in source
+    assert f"export const SAMPLE_METHODS = [{listed(ts.SAMPLE_METHODS)}] as const;" in source
 
 
 # ---- §532: p.586's formula ---------------------------------------------------------
@@ -433,3 +436,106 @@ def test_a_formula_without_an_expression_is_refused() -> None:
     with pytest.raises(ValueError, match="transform 1: a formula needs an expression"):
         ts.parse_transforms([{"kind": "formula"}])
     assert ts.parse_transforms([formula("  x * 2  ")]) == [formula("x * 2")]
+
+
+# ---- p.393's Filter time series and Sample (§648) -----------------------------------
+@pytest.mark.parametrize("op, value, keep, expected", [
+    ("gt", 3, True, [6, 10]),
+    ("gte", 3, True, [3, 6, 10]),
+    ("lt", 6, True, [1, 3]),
+    ("lte", 6, True, [1, 3, 6]),
+    ("eq", 6, True, [6]),
+    ("neq", 6, True, [1, 3, 10]),
+    ("gt", 3, False, [1, 3]),
+    ("eq", 6.0, False, [1, 3, 10]),
+])
+def test_a_filter_keeps_or_removes_what_matches(op, value, keep, expected) -> None:
+    """p.393: "Keep or remove points in a time series based on a time range or
+    mathematical condition." The time range is `range`; this is the condition."""
+    assert values([{"kind": "filter", "op": op, "value": value, "keep": keep}]) == expected
+
+
+def test_a_filter_keeps_by_default_and_drops_a_gap_either_way() -> None:
+    gappy = ROWS + [("S1", "2026-01-06 00:00:00", None)]
+    assert values([{"kind": "filter", "op": "gt", "value": 5}], rows=gappy) == [6, 10]
+    assert values([{"kind": "filter", "op": "gt", "value": 5, "keep": False}], rows=gappy) == [1, 3]
+
+
+def test_a_sample_takes_the_reading_at_or_before_each_step() -> None:
+    """p.393: "Resample a time series at a constant frequency to fill gaps".
+    The 3rd has no reading, so it takes the 2nd's."""
+    assert run([{"kind": "sample", "every": 1, "unit": "day"}]) == [
+        (day(1), 1.0), (day(2), 3.0), (day(3), 3.0), (day(4), 6.0), (day(5), 10.0)]
+
+
+def test_a_linear_sample_draws_the_line_between_readings() -> None:
+    assert run([{"kind": "sample", "every": 12, "unit": "hour", "method": "linear"}]) == [
+        (day(1), 1.0), (day(1, 12), 2.0), (day(2), 3.0), (day(2, 12), 3.75), (day(3), 4.5),
+        (day(3, 12), 5.25), (day(4), 6.0), (day(4, 12), 8.0), (day(5), 10.0)]
+
+
+def test_a_sample_fills_a_gap_and_changes_the_rate() -> None:
+    gappy = ROWS[:2] + [("S1", "2026-01-03 00:00:00", None)] + ROWS[2:]
+    # Every other day: the 3rd has no reading, so it takes the 2nd's.
+    assert values([{"kind": "sample", "every": 2, "unit": "day"}], rows=gappy) == [1, 3, 10]
+
+
+def test_a_sample_is_bounded_inside_the_query() -> None:
+    """A step of a second over four days would be 345,601 samples; the grid
+    stops at MAX_SAMPLES rather than being built and then capped."""
+    got = run([{"kind": "sample", "every": 1, "unit": "second"}], limit=ts.MAX_POINTS)
+    assert len(got) == ts.MAX_POINTS
+    sql = ts.points_sql(key_column="sensor", timestamp_column="taken", value_column="reading",
+                        series_id="S1", interval="none", aggregate="avg",
+                        transforms=ts.parse_transforms([{"kind": "sample", "every": 1,
+                                                          "unit": "second"}]))
+    assert f"INTERVAL ({ts.MAX_SAMPLES - 1}) SECOND" in sql
+
+
+def test_a_page_of_series_is_filtered_and_sampled_each_on_its_own() -> None:
+    con = duckdb.connect()
+    try:
+        con.execute("CREATE TABLE dataset (sensor VARCHAR, taken TIMESTAMP, reading DOUBLE)")
+        con.executemany("INSERT INTO dataset VALUES (?, ?, ?)", ROWS + [
+            ("S2", "2026-01-05 00:00:00", 2000.0)])
+        for transforms, expected in (
+            ([{"kind": "filter", "op": "gte", "value": 6}],
+             {"S1": [6.0, 10.0], "S2": [1000.0, 2000.0]}),
+            ([{"kind": "sample", "every": 1, "unit": "day"}],
+             {"S1": [1.0, 3.0, 3.0, 6.0, 10.0], "S2": [1000.0, 1000.0, 2000.0]}),
+            ([{"kind": "sample", "every": 1, "unit": "day", "method": "linear"}],
+             {"S1": [1.0, 3.0, 4.5, 6.0, 10.0], "S2": [1000.0, 1500.0, 2000.0]}),
+        ):
+            sql = ts.points_for_many_sql(
+                key_column="sensor", timestamp_column="taken", value_column="reading",
+                series_ids=["S1", "S2"], interval="none", aggregate="avg",
+                transforms=ts.parse_transforms(transforms))
+            got: dict[str, list[float]] = {}
+            for series, _, value in con.execute(sql).fetchall():
+                got.setdefault(series, []).append(value)
+            assert got == expected, transforms
+    finally:
+        con.close()
+
+
+@pytest.mark.parametrize("raw, said", [
+    ({"kind": "filter", "op": "near", "value": 1}, "the comparison must be one of"),
+    ({"kind": "filter", "op": "gt", "value": "1"}, "compares with a number"),
+    ({"kind": "filter", "op": "gt", "value": True}, "compares with a number"),
+    ({"kind": "filter", "op": "gt", "value": float("inf")}, "compares with a number"),
+    ({"kind": "filter", "op": "gt", "value": 1, "keep": "yes"}, "keep is true"),
+    ({"kind": "sample", "every": 0, "unit": "day"}, "the step must be from 1"),
+    ({"kind": "sample", "every": 1, "unit": "fortnight"}, "the unit must be one of"),
+    ({"kind": "sample", "every": 1, "unit": "day", "method": "cubic"}, "the method must be one of"),
+])
+def test_a_filter_or_sample_that_says_too_little_is_refused(raw, said) -> None:
+    with pytest.raises(ValueError) as caught:
+        ts.parse_transforms([raw])
+    assert said in str(caught.value)
+
+
+def test_a_filter_and_a_sample_parse_with_their_defaults() -> None:
+    assert ts.parse_transforms([{"kind": "filter", "op": "lt", "value": 2}]) == [
+        {"kind": "filter", "op": "lt", "value": 2.0, "keep": True}]
+    assert ts.parse_transforms([{"kind": "sample", "every": 3, "unit": "hour"}]) == [
+        {"kind": "sample", "every": 3, "unit": "hour", "method": "previous"}]
