@@ -441,6 +441,12 @@ export type WorkshopTransform =
    * freeze a copy, and narrowing the base afterwards would leave this set
    * reading it as it was. */
   | "traverse_set"
+  /** p.450's "union of multiple object sets of different object types"
+   * (§686). Inputs are two to ten set variables, one per object type; it
+   * resolves to `{union: [...]}`, each part an ordinary set over one type
+   * (`components/canvas/union-set.ts`).
+   * `narrow_set` and `filter_set` narrow every part. */
+  | "union_set"
   /** The time series one property holds, on the object a viewer picked
    * (p.76, p.582). Input is `[objectVariable]`; config carries the property
    * and, optionally, `interval` and `aggregate`. Resolves to a

@@ -1,0 +1,68 @@
+/** p.450's union of object sets of different types, as a widget reads it (§686).
+ *
+ * > "You can use a variable to store a union of multiple object sets of
+ * > different object types and pass it to the Filter List widget." (p.450)
+ *
+ * > "Combine multiple object types: This setting only affects tables
+ * > displaying multiple object types. When disabled, each object type will be
+ * > displayed within its own tab." (p.225)
+ *
+ * A `union_set` variable resolves to `{union: [definition, ...]}`: each part an
+ * ordinary set over one type, which is what every read here is over. So the
+ * Object Table reads a union a tab at a time, and each tab is a set it
+ * already knows how to draw.
+ *
+ * **A selection names its type.** A key is a key only within its own type, so
+ * "S1" picked in the Staff tab would otherwise narrow the Sites part to
+ * whichever site is also "S1". The server's `narrow_set` reads the type clause
+ * (§457's, from a drop) against every part, and a tab reads back only the
+ * selection its own type wrote.
+ */
+
+import { OBJECT_TYPE_CLAUSE } from "./drag-payload";
+import type { Clause } from "./object-table-selection";
+
+/** The server's `object_sets.UNION`; a test there reads it out of this file. */
+export const UNION = "union";
+
+export interface SetPart {
+  object_type_id: string;
+  filters?: { property: string; op?: string; value: unknown }[];
+}
+
+/** A union's parts, or `null` for anything that is not one - a set over one
+ * type included, since a definition naming a type is that type's. */
+export function unionParts(definition: unknown): SetPart[] | null {
+  if (!definition || typeof definition !== "object") return null;
+  const raw = definition as Record<string, unknown>;
+  if (raw.object_type_id || !Array.isArray(raw[UNION])) return null;
+  const parts = (raw[UNION] as unknown[]).filter(
+    (p): p is SetPart =>
+      !!p && typeof p === "object" && typeof (p as SetPart).object_type_id === "string",
+  );
+  return parts;
+}
+
+/** Which tab is showing: the one asked for, or the last when a union shrank
+ * under it. Never negative, so an empty union shows no tab rather than
+ * reading index -1. */
+export function tabIndex(requested: number, count: number): number {
+  return Math.max(0, Math.min(requested, count - 1));
+}
+
+/** A selection as a union tab writes it: its type first, then the keys. With
+ * no type (a table over one set) it is the selection unchanged. */
+export function typedSelection(clauses: Clause[], typeId: string | null): Clause[] {
+  return typeId ? [{ property: OBJECT_TYPE_CLAUSE, op: "eq", value: typeId }, ...clauses] : clauses;
+}
+
+/** A selection as this tab reads it back: the clauses, unless they name
+ * another type, in which case none of their keys are this tab's. */
+export function selectionIn(raw: unknown, typeId: string | null): unknown {
+  if (!typeId || !Array.isArray(raw)) return raw;
+  const other = raw.some(
+    (c) => !!c && typeof c === "object"
+      && (c as Clause).property === OBJECT_TYPE_CLAUSE && (c as Clause).value !== typeId,
+  );
+  return other ? [] : raw;
+}

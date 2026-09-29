@@ -1893,6 +1893,11 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   display: grid; gap: 8px; padding: 8px;
   border-left: 2px solid var(--brass); background: var(--surface-2);
 }
+/* §686's union: a list of sets to tick, as one field. */
+.vars-union { display: grid; gap: 4px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.vars-union legend { padding: 0; margin-bottom: 2px; font-size: 12px; }
+.vars-union .check { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.vars-union .check input { width: auto; padding: 0; }
 .btn.danger { color: var(--danger); }
 
 /* ---- Numeric input (p.468, decision 0011) --------------------------------- */

@@ -255,6 +255,13 @@ const SET_TRANSFORMS: WorkshopTransform[] = ["filter_set", "narrow_set"];
  * "Narrowed by" list would put "follow a link" among two ways of filtering. */
 const TRAVERSE: WorkshopTransform = "traverse_set";
 
+/** The fourth (§686): p.450's "union of multiple object sets of different
+ * object types", one set per type, read a type at a time. */
+const UNION_SET: WorkshopTransform = "union_set";
+
+/** The server's `MAX_UNION_PARTS`. */
+const MAX_UNION_PARTS = 10;
+
 /** The service's `CAST_TARGETS`: p.138-139's casts, the last four §569's. */
 const CAST_TARGETS = ["string", "number", "boolean", "date", "timestamp", "geopoint", "geoshape"] as const;
 
@@ -1577,6 +1584,8 @@ function ObjectSetEditor({
   const transform = variable.derivation?.transform ?? SET_TRANSFORMS[0]!;
   const byClauses = transform === "narrow_set";
   const traversing = transform === TRAVERSE;
+  const joining = transform === UNION_SET;
+  const joined = variable.derivation?.inputs ?? [];
   // Link types are workspace-wide, and which ones apply depends on the *base*
   // set's type - which is a variable reference, so the answer is only known
   // once one is chosen. Fetched whole and filtered here rather than asked for
@@ -1620,7 +1629,7 @@ function ObjectSetEditor({
       <label>
         This set
         <select
-          value={derived ? (traversing ? "followed" : "narrowed") : "type"}
+          value={derived ? (traversing ? "followed" : joining ? "joined" : "narrowed") : "type"}
           disabled={readOnly}
           data-testid="set-source"
           onChange={(e) => {
@@ -1629,6 +1638,12 @@ function ObjectSetEditor({
               onChange({
                 ...rest,
                 derivation: { transform: SET_TRANSFORMS[0]!, inputs: [], config: { op: "eq" } },
+              });
+            } else if (e.target.value === "joined") {
+              const { object_set: _dropped, ...rest } = variable;
+              onChange({
+                ...rest,
+                derivation: { transform: UNION_SET, inputs: [], config: {} },
               });
             } else if (e.target.value === "followed") {
               const { object_set: _dropped, ...rest } = variable;
@@ -1645,6 +1660,7 @@ function ObjectSetEditor({
           <option value="type">Draws from an object type</option>
           <option value="narrowed">Is another set, narrowed</option>
           <option value="followed">Follows a link from another set</option>
+          <option value="joined">Joins sets of different object types</option>
         </select>
       </label>
 
@@ -1664,6 +1680,34 @@ function ObjectSetEditor({
             }
           />
         </label>
+      ) : joining ? (
+        <fieldset className="vars-union" data-testid="union-parts">
+          <legend>Sets to join</legend>
+          {otherSets.map((v) => (
+            <label key={v.id} className="check">
+              <input
+                type="checkbox"
+                checked={joined.includes(v.id)}
+                disabled={readOnly || (!joined.includes(v.id) && joined.length >= MAX_UNION_PARTS)}
+                onChange={(e) =>
+                  // In the order they were ticked, which is the order of the
+                  // table's tabs.
+                  setDerivation({
+                    inputs: e.target.checked
+                      ? [...joined, v.id]
+                      : joined.filter((id) => id !== v.id),
+                  })
+                }
+              />
+              {v.label}
+            </label>
+          ))}
+          <span className="field-hint">
+            {joined.length < 2
+              ? "Pick two or more sets, each of a different object type."
+              : "One set per object type. A filter narrows every set it can; a table shows each type in its own tab."}
+          </span>
+        </fieldset>
       ) : traversing ? (
         <>
           <label>

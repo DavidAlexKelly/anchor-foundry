@@ -113,6 +113,12 @@ TRANSFORMS = (
     "filter_value",  # one property's chosen value, out of a filter's clauses
     "object_series",  # the time series a property holds, on the object picked
     "traverse_set",   # follow a link from one object set to another
+    # > "You can use a variable to store a union of multiple object sets of
+    # > different object types and pass it to the Filter List widget." (p.450)
+    #
+    # §686: sets of different types, held side by side as `{"union": [...]}`.
+    # A narrowing narrows every part; see `_union_set`.
+    "union_set",
     # > "Extract struct field: Returns a struct field value given a struct and
     # > field ID." (p.143)
     #
@@ -164,6 +170,9 @@ MAX_EMBED_DEPTH = 3
 
 MAX_VARIABLES = 200
 MAX_CONCAT_PARTS = 20
+#: The most sets one union joins (§686). One per object type, and a table
+#: draws each as a tab (p.225), so ten is already a row of tabs few screens fit.
+MAX_UNION_PARTS = 10
 
 # An external ID is a *stable* name for a variable, and the one mechanism behind
 # three features Foundry describes separately: embedding, URL initialisation and
@@ -894,6 +903,7 @@ def parse(
     _refuse_unknown_inputs(variables)
     _refuse_bad_filter_refs(variables)
     _refuse_non_series_inputs(variables)
+    _refuse_non_set_parts(variables)
     _refuse_bad_aggregations(variables, property_types)
     _refuse_cycles(variables)
     return variables
@@ -940,6 +950,25 @@ def _refuse_bad_aggregations(
                 )
             except ValueError as exc:
                 raise VariableError(f"variable {variable.label!r}: {exc}") from None
+
+
+def _refuse_non_set_parts(variables: dict[str, Variable]) -> None:
+    """A union (§686) is an object set, of object sets."""
+    for variable in variables.values():
+        d = variable.derivation
+        if d is None or d.transform != "union_set":
+            continue
+        if variable.kind != "object_set":
+            raise VariableError(
+                f"variable {variable.label!r}: a union of object sets is an object set, "
+                f"not a {variable.kind}"
+            )
+        for ref in d.inputs:
+            if variables[ref].kind != "object_set":
+                raise VariableError(
+                    f"variable {variable.label!r}: {variables[ref].label!r} is not an "
+                    "object set, so a union cannot join it"
+                )
 
 
 def _refuse_non_series_inputs(variables: dict[str, Variable]) -> None:
@@ -1675,6 +1704,13 @@ def _check_arity(vid: str, d: Derivation) -> None:
         # link types are - at evaluation, by the route (`_resolve_traversal`).
         # A document does not carry the ontology, and a check here would be
         # this module guessing at it.
+    elif d.transform == "union_set":
+        if not 2 <= len(d.inputs) <= MAX_UNION_PARTS:
+            raise VariableError(
+                f"variable {vid!r}: union_set joins from 2 to {MAX_UNION_PARTS} object sets"
+            )
+        if len(set(d.inputs)) != len(d.inputs):
+            raise VariableError(f"variable {vid!r}: union_set names one set twice")
     elif d.transform == "narrow_set":
         # No property or operator here on purpose: which properties a Filter
         # List narrows on is what the *viewer* chooses, so it is part of the
@@ -1956,6 +1992,11 @@ def _apply(
     d = variable.derivation
     assert d is not None
     if d.transform == "object_set_aggregation":
+        if _is_union(inputs[0]):
+            raise VariableError(
+                f"{variable.label!r} aggregates a union of several object types; "
+                "aggregate one of the sets it joins"
+            )
         return _aggregate(inputs[0], d.config, aggregates, wanted)
     if d.transform == "concat":
         separator = str(d.config.get("separator") or "")
@@ -2022,7 +2063,7 @@ def _apply(
     if d.transform == "is_not_empty":
         return not _empty(inputs[0])
     if d.transform == "filter_set":
-        return _filter_set(variable, inputs[0], inputs[1], d.config)
+        return _filter_set(variable, inputs[0], inputs[1], d.config, property_types)
     if d.transform == "narrow_set":
         return _narrow_set(variable, inputs[0], inputs[1], property_types)
     if d.transform == "object_property":
@@ -2036,6 +2077,8 @@ def _apply(
                               dict(zip(d.inputs[1:], inputs[1:])))
     if d.transform == "traverse_set":
         return _traverse_set(variable, inputs[0], d.config)
+    if d.transform == "union_set":
+        return _union_set(variable, inputs)
     raise VariableError(f"unknown transform {d.transform!r}")  # pragma: no cover
 
 
@@ -2073,7 +2116,8 @@ def _aggregate(
 
 
 def _filter_set(
-    variable: Variable, base: Any, value: Any, config: dict[str, Any]
+    variable: Variable, base: Any, value: Any, config: dict[str, Any],
+    property_types: "dict[str, dict[str, str]] | None" = None,
 ) -> dict[str, Any]:
     """Narrow an object set by a value another variable holds - Foundry's
     Filter List driving an Object Table, expressed as a derivation.
@@ -2088,11 +2132,21 @@ def _filter_set(
     is a declared variable that simply has no value yet, which is an ordinary
     state with an obvious meaning.
     """
+    unset = value is None or value == "" or (isinstance(value, (list, tuple)) and not value)
+    if _is_union(base):
+        # Every part, as p.450 says of the Filter List's output: "all object
+        # types instances will be filtered". A part whose type has no such
+        # property keeps nothing, for `_narrow_set`'s reason.
+        return {UNION: [
+            _nothing(part) if not unset and _lacks(part, [config["property"]], property_types)
+            else _filter_set(variable, part, value, config)
+            for part in base[UNION]
+        ]}
     if not isinstance(base, dict) or "object_type_id" not in base:
         raise VariableError(
             f"{variable.label!r} filters something that is not an object set"
         )
-    if value is None or value == "" or (isinstance(value, (list, tuple)) and not value):
+    if unset:
         return dict(base)
     filters = list(base.get("filters") or [])
     filters.append(
@@ -2336,6 +2390,28 @@ def _narrow_set(
     """
     from . import object_sets
 
+    if _is_union(base):
+        # **Every part, each by the clauses its type can mean** (§686). p.449:
+        # "Filter outputs can be used to filter object sets of different
+        # object types so long as the property IDs match", and a property's id
+        # here is its api name. A clause on a property one type does not have
+        # is p.450's "single property": the other types keep nothing, since
+        # none of their objects has the value asked for - the answer a filter
+        # on a missing property gives a single set, stated rather than left to
+        # a store, and the answer that lets an ordered clause on one type's
+        # date narrow the rest instead of being refused against them.
+        #
+        # Clauses that are not a list are refused by the first part's own
+        # narrowing, in the sentence a single set gets.
+        if clauses is None or clauses == "" or clauses == []:
+            return {UNION: [dict(part) for part in base[UNION]]}
+        named = [c.get("property") for c in clauses if isinstance(c, dict)] \
+            if isinstance(clauses, list) else []
+        return {UNION: [
+            _nothing(part) if _lacks(part, named, property_types)
+            else _narrow_set(variable, part, clauses, property_types)
+            for part in base[UNION]
+        ]}
     if not isinstance(base, dict) or "object_type_id" not in base:
         raise VariableError(f"{variable.label!r} filters something that is not an object set")
     if clauses is None or clauses == "" or clauses == []:
@@ -2348,10 +2424,7 @@ def _narrow_set(
         return isinstance(c, dict) and c.get("property") == OBJECT_TYPE_CLAUSE
 
     if any(c.get("value") != base["object_type_id"] for c in clauses if names_type(c)):
-        return {**base, "filters": [
-            *(base.get("filters") or []),
-            {"property": object_sets.PRIMARY_KEY_FILTER, "op": "in", "value": []},
-        ]}
+        return _nothing(base)
     clauses = [c for c in clauses if not names_type(c)]
     combined = {**base, "filters": [*(base.get("filters") or []), *clauses]}
     try:
@@ -2383,6 +2456,11 @@ def _traverse_set(
     definition is complete on its own; the route refuses one that disagrees
     with the link rather than quietly following it somewhere else.
     """
+    if _is_union(base):
+        raise VariableError(
+            f"{variable.label!r} follows a link from a union of several object types; "
+            "a link starts from one type, so follow it from one of the sets the union joins"
+        )
     if not isinstance(base, dict) or "object_type_id" not in base:
         raise VariableError(
             f"{variable.label!r} follows a link from something that is not an object set"
@@ -2392,6 +2470,78 @@ def _traverse_set(
         "filters": [],
         "via": {"link_type_id": str(config["link_type_id"]), "base": dict(base)},
     }
+
+
+UNION = "union"  # `object_sets.UNION`; a test holds the two together
+
+
+def _is_union(value: Any) -> bool:
+    return (isinstance(value, dict) and isinstance(value.get(UNION), list)
+            and "object_type_id" not in value)
+
+
+def _nothing(part: dict[str, Any]) -> dict[str, Any]:
+    """This set, narrowed to no objects: `in []` on the key, the empty set both
+    stores already answer."""
+    from . import object_sets
+
+    return {**part, "filters": [
+        *(part.get("filters") or []),
+        {"property": object_sets.PRIMARY_KEY_FILTER, "op": "in", "value": []},
+    ]}
+
+
+def _lacks(
+    part: dict[str, Any], properties: list[Any],
+    property_types: "dict[str, dict[str, str]] | None",
+) -> bool:
+    """Whether a union's part is over a type that declares none of the
+    property named. `$`-names (the key, the type) belong to every type. Without
+    the ontology nothing can be said to be missing, so nothing is."""
+    if property_types is None:
+        return False
+    declared = property_types.get(str(part.get("object_type_id")), {})
+    return any(isinstance(p, str) and not p.startswith("$") and p not in declared
+               for p in properties)
+
+
+def _union_set(variable: Variable, inputs: list[Any]) -> dict[str, Any]:
+    """p.450's "union of multiple object sets of different object types" (§686).
+
+    **Side by side, not merged.** Each part stays an ordinary definition over
+    one type, because a set here is one type's objects narrowed, and every
+    store read is over one type. So a union is read part by part: the Object
+    Table draws a tab per part (p.225), and a narrowing narrows every part.
+
+    **One set per type**, and a second set of a type already joined is
+    refused. p.450's union is of sets "of different object types", and joining
+    two sets of one type would need an *or* between their filters, which no
+    set here can express - so a union that accepted it would have to pick one,
+    or show the type twice. A union joined into a union is flattened, so the
+    rule holds however the variables were built.
+    """
+    parts: list[dict[str, Any]] = []
+    for value in inputs:
+        if _is_union(value):
+            parts.extend(dict(part) for part in value[UNION])
+        elif isinstance(value, dict) and "object_type_id" in value:
+            parts.append(dict(value))
+        else:
+            raise VariableError(
+                f"{variable.label!r} joins something that is not an object set"
+            )
+    types = [str(part["object_type_id"]) for part in parts]
+    if len(set(types)) != len(types):
+        raise VariableError(
+            f"{variable.label!r} joins two sets of one object type. A union holds "
+            "sets of different object types (p.450); narrow one set instead"
+        )
+    if len(parts) > MAX_UNION_PARTS:
+        raise VariableError(
+            f"{variable.label!r} joins {len(parts)} object sets; a union holds at most "
+            f"{MAX_UNION_PARTS}"
+        )
+    return {UNION: parts}
 
 
 def _text(value: Any) -> str:

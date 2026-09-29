@@ -3486,8 +3486,10 @@ def test_the_builder_offers_every_transform_the_server_accepts() -> None:
         f"entry's label, and found {catalogue.get('concat')!r}"
     )
     # Offered from their own lists, one kind of variable each.
-    elsewhere = set(re.findall(r'"(filter_set|narrow_set|traverse_set|object_series)"', source))
-    assert elsewhere == {"filter_set", "narrow_set", "traverse_set", "object_series"}, (
+    elsewhere = set(re.findall(
+        r'"(filter_set|narrow_set|traverse_set|union_set|object_series)"', source))
+    assert elsewhere == {"filter_set", "narrow_set", "traverse_set", "union_set",
+                         "object_series"}, (
         "the set and series transforms are no longer offered from their own "
         f"lists: found {sorted(elsewhere)}"
     )

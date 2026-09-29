@@ -55,6 +55,7 @@ import {
 import {
   autoSelectKey, hasSelection, keysOf, selectionClauses, toggle as toggleKey,
 } from "./object-table-selection";
+import { selectionIn, tabIndex, typedSelection, unionParts } from "./union-set";
 import {
   MAX_LAYERS, layerColorOf, layerOpacityOf, layerPoints, layerVisibleOf, layersOf, withLayerSetting,
   withNewLayer, withoutLayer, type MapLayer,
@@ -6202,7 +6203,21 @@ export function CanvasObjectTable({
   const eventContext = useEventContext(undefined, useOverlayIds());
   const filterValue = useCanvasParameter(filterParameter);
   const searchValue = useCanvasParameter(searchParameter);
-  const setDefinition = useCanvasVariable(objectSetVariable);
+  // p.450's union (§686): each type in its own tab (p.225), and each tab an
+  // ordinary set, so everything below reads the tab's part as it would read
+  // a set over one type. Which tab is runtime state, like the page.
+  const boundSet = useCanvasVariable(objectSetVariable);
+  const parts = unionParts(boundSet);
+  const [tabRequested, setTab] = useState(0);
+  const tab = parts ? tabIndex(tabRequested, parts.length) : 0;
+  const setDefinition = parts ? parts[tab] ?? null : boundSet;
+  const tabType = parts ? parts[tab]?.object_type_id ?? null : null;
+  const tabTypes = useQueries({
+    queries: (parts ?? []).map((part) => ({
+      queryKey: ["object-type", part.object_type_id],
+      queryFn: () => objApi.getType(workspaceId, part.object_type_id),
+    })),
+  });
   const {
     pending: variablesPending, events: moduleEvents, declared: moduleVariables,
     resolved: variableValues,
@@ -6217,8 +6232,11 @@ export function CanvasObjectTable({
   const { set: setParameter } = useCanvasParameters();
   const activeRaw = useCanvasParameter(activeVariable);
   const selectedRaw = useCanvasParameter(selectedVariable);
-  const activeKeys = keysOf(activeRaw);
-  const selectedKeys = keysOf(selectedRaw);
+  // A union tab reads back only what its own type wrote (`union-set.ts`).
+  const activeKeys = keysOf(selectionIn(activeRaw, tabType));
+  const selectedKeys = keysOf(selectionIn(selectedRaw, tabType));
+  const selection = (keys: readonly string[]) =>
+    typedSelection(selectionClauses(keys), tabType);
   // **Stated, not merely empty.** A variable this widget has never written
   // holds no clauses at all, and no clauses means *no narrowing* - so an
   // "empty" active object would hand every downstream widget the whole table.
@@ -6311,12 +6329,18 @@ export function CanvasObjectTable({
   // `null` is "no list, every property"; a list the variable emptied by naming
   // only columns this table does not have is an empty list, and shows none -
   // the variable said which, and none of them is here.
-  const listed: string[] | null = columnsVariable
+  const listedAll: string[] | null = columnsVariable
     ? visibleColumns(
       configured.length ? configured : all.map((p) => p.api_name),
       variableValues[columnsVariable],
     )
     : configured.length ? configured : null;
+  // In a union's tab, columns configured for the other types are not this
+  // one's, and a tab with none of its own shows every property rather than
+  // rows with no cells (§686).
+  const listed = parts && !columnsVariable && listedAll && all.length > 0
+    && !listedAll.some((name) => all.some((p) => p.api_name === name))
+    ? null : listedAll;
   // p.222's Configure columns (§612): a viewer chooses among what the table
   // offers, and the choice is theirs - kept in their browser per widget and
   // type, never in the shared document. The builder always sees the table as
@@ -6495,7 +6519,7 @@ export function CanvasObjectTable({
   }, [rowMenu]);
 
   const chooseActive = (key: string) => {
-    if (activeVariable) setParameter(activeVariable, selectionClauses([key]));
+    if (activeVariable) setParameter(activeVariable, selection([key]));
   };
 
   // p.224's auto-selection, in an effect because it is a *write* — doing it
@@ -6507,12 +6531,12 @@ export function CanvasObjectTable({
   useEffect(() => {
     if (!activeVariable) return;
     if (autoKey) {
-      setParameter(activeVariable, selectionClauses([autoKey]));
+      setParameter(activeVariable, selection([autoKey]));
       return;
     }
     // p.224's "results in an empty active object at load time", written down
     // rather than left unsaid - see `activeStated` above.
-    if (!activeStated) setParameter(activeVariable, selectionClauses([]));
+    if (!activeStated) setParameter(activeVariable, selection([]));
     // `setParameter` is stable for the life of the provider; listing it would
     // re-run this on every render of every widget in the module.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6523,7 +6547,7 @@ export function CanvasObjectTable({
     // if the Enable multi-select toggle is set to true" - so an unbound or
     // single-select table leaves it alone entirely.
     if (!multiSelect || !selectedVariable || selectedStated) return;
-    setParameter(selectedVariable, selectionClauses([]));
+    setParameter(selectedVariable, selection([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [multiSelect, selectedVariable, selectedStated]);
 
@@ -6617,6 +6641,35 @@ export function CanvasObjectTable({
       }}
       className="canvas-block"
     >
+      {/* p.225: "When disabled, each object type will be displayed within its
+          own tab" (§686). The section's tabstrip, roles and keys included. */}
+      {parts && parts.length > 0 && (
+        <div className="canvas-tabstrip" role="tablist" aria-label="Object types">
+          {parts.map((part, i) => (
+            <button
+              key={part.object_type_id}
+              type="button"
+              role="tab"
+              aria-selected={i === tab}
+              tabIndex={i === tab ? 0 : -1}
+              className={`canvas-tabstrip-tab${i === tab ? " on" : ""}`}
+              data-testid="object-table-tab"
+              onClick={() => setTab(i)}
+              onKeyDown={(event) => {
+                const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+                if (!step) return;
+                event.preventDefault();
+                const next = (tab + step + parts.length) % parts.length;
+                setTab(next);
+                const strip = event.currentTarget.parentElement;
+                (strip?.children[next] as HTMLElement | undefined)?.focus();
+              }}
+            >
+              {tabTypes[i]?.data?.display_name ?? "…"}
+            </button>
+          ))}
+        </div>
+      )}
       {!usingSet && !objectTypeId && (
         <p className="canvas-widget-empty">Object table - pick an object type in Settings</p>
       )}
@@ -6696,7 +6749,7 @@ export function CanvasObjectTable({
                           (r) => selectedKeys.includes(r.primary_key),
                         )}
                         onChange={(e) =>
-                          setParameter(selectedVariable, selectionClauses(
+                          setParameter(selectedVariable, selection(
                             // **This page, not the whole set.** Checking a box
                             // that selects rows nobody has seen is a promise
                             // the widget cannot keep: it only has the page it
@@ -6780,7 +6833,7 @@ export function CanvasObjectTable({
                       // right-clicked object": set on the right-click, so an
                       // item's events read a variable already settled.
                       if (rightClickedVariable) {
-                        setParameter(rightClickedVariable, selectionClauses([instance.primary_key]));
+                        setParameter(rightClickedVariable, selection([instance.primary_key]));
                       }
                     } : undefined}
                     onClick={
@@ -6828,7 +6881,7 @@ export function CanvasObjectTable({
                           // as a side effect of ticking a checkbox.
                           onClick={(e) => e.stopPropagation()}
                           onChange={() =>
-                            setParameter(selectedVariable, selectionClauses(
+                            setParameter(selectedVariable, selection(
                               toggleKey(selectedKeys, instance.primary_key),
                             ))}
                         />
