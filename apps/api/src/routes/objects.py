@@ -4197,7 +4197,7 @@ async def clear_series(
         )
 
 
-def _series_transforms(raw: str | None) -> list[dict[str, Any]]:
+def _series_transforms(raw: str | None, *, inputs: str = "none") -> list[dict[str, Any]]:
     """`workshop` p.583's time series transforms (§524), as the query string
     carries them: a JSON list, checked before any of it becomes SQL."""
     if raw is None or raw == "":
@@ -4206,7 +4206,46 @@ def _series_transforms(raw: str | None) -> list[dict[str, Any]]:
         decoded = json.loads(raw)
     except ValueError:
         raise ValueError("transforms must be a JSON list") from None
-    return time_series_service.parse_transforms(decoded)
+    return time_series_service.parse_transforms(decoded, inputs=inputs)
+
+
+async def _resolve_formula_inputs(
+    conn: Any, prefix: str, transforms: list[dict[str, Any]], tables: dict[str, str],
+) -> None:
+    """Each of a formula's other inputs (§561), read the way this endpoint
+    reads its own series: the object through the instance store, as the reader
+    can see it, and the series id as the object's own value for the property.
+    Each becomes the spec `points_sql` reads, in place; `tables` collects the
+    datasets to load, by location, one table each. The series' own dataset is
+    one of them when an input is in it too, loaded a second time: reusing
+    `dataset` for it survived the sweep as equivalent."""
+    for transform in transforms:
+        for name, ref in (transform.get("inputs") or {}).items():
+            instance = await instance_store.store_for(conn).get_instance(
+                search_prefix=prefix, object_type_id=UUID(ref["object_type_id"]),
+                instance_id=ref["instance_id"],
+            )
+            if instance is None:
+                raise ValueError(f"input {name}: that object does not exist or you cannot see it")
+            series = await time_series_service.series_for_source(
+                conn, UUID(str(instance["source_id"])), ref["property"]
+            )
+            if series is None:
+                raise ValueError(f"input {name}: {ref['property']!r} is not a time series on that object")
+            location = str(series["s3_location"])
+            table = tables.setdefault(location, f"input_{len(tables) + 1}")
+            await _resolve_formula_inputs(conn, prefix, ref["transforms"], tables)
+            series_id = (_jsonb(instance["properties"]) or {}).get(ref["property"])
+            transform["inputs"][name] = {
+                **ref,
+                "table": table,
+                "key_column": str(series["key_column"]),
+                "timestamp_column": str(series["timestamp_column"]),
+                "value_column": str(series["value_column"]),
+                # An object with no series id has no readings: every point of
+                # the formula is a gap, the same as before an input's first.
+                "series_id": "" if series_id is None else str(series_id),
+            }
 
 
 @project_router.get(
@@ -4309,6 +4348,11 @@ async def instance_series_points(
         )
         if series is None:
             raise NotFoundError("time series")
+        # §561: a time series set's formula may read other series, each
+        # resolved here, under the reader's own access.
+        chain = _series_transforms(transforms, inputs="references")
+        input_tables: dict[str, str] = {}
+        await _resolve_formula_inputs(conn, prefix, chain, input_tables)
 
     properties = _jsonb(instance["properties"]) or {}
     series_id = properties.get(property_api_name)
@@ -4329,12 +4373,17 @@ async def instance_series_points(
         interval=interval,
         aggregate=aggregate,
         limit=limit,
-        transforms=_series_transforms(transforms),
+        transforms=chain,
     )
     local_path = await anyio.to_thread.run_sync(
         storage.local_path, str(series["s3_location"])
     )
-    result = await anyio.to_thread.run_sync(engine.query, local_path, sql)
+    tables = {
+        table: await anyio.to_thread.run_sync(storage.local_path, location)
+        for location, table in input_tables.items()
+    }
+    result = await anyio.to_thread.run_sync(
+        engine.query, local_path, sql, engine.MAX_RESULT_ROWS, tables)
     return SeriesPoints(
         property_api_name=property_api_name,
         series_id=str(series_id),

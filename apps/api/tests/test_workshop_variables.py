@@ -2253,8 +2253,15 @@ def test_an_object_with_no_id_or_type_cannot_be_asked_for_a_series() -> None:
             wv.evaluate(series_module(), {"v_object": broken})
 
 
-def test_object_series_needs_one_input_and_a_property() -> None:
-    with pytest.raises(wv.VariableError, match="exactly one input"):
+def test_object_series_needs_its_object_and_a_property() -> None:
+    with pytest.raises(wv.VariableError, match="object_series needs an input"):
+        wv.parse({
+            "v_x": var("v_x", kind="time_series_set", derivation={
+                "transform": "object_series", "inputs": [],
+                "config": {"property": "readings"}}),
+        })
+    # A second input is a series a formula names (§561), and this one names none.
+    with pytest.raises(wv.VariableError, match="then each series its formulas name"):
         wv.parse({
             "v_a": var("v_a", kind="single_object"),
             "v_b": var("v_b", kind="single_object"),
