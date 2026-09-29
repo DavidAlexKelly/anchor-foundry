@@ -55,6 +55,8 @@ Foundry describes Functions as logic "executed on the server side in an isolated
 
 **Decision required.** Either accept that these specific widget features stay unimplemented and mark them so, or bring a minimal Functions runtime into scope: a TypeScript or Python function, registered against the ontology, callable from a widget. The specs below assume **the minimal runtime**, and every line that depends on it is tagged `[fn]` so the decision can be reversed by grep.
 
+**The options are written up in `docs/decisions/0018-functions-runtime.md`**, which is proposed and not yet decided. Decision 0004 rules out running a function beside the API's credentials, and the isolated runner it built starts a Fargate task per call, which is too slow for a table column. The choice is between declining these features, SQL functions run inline in DuckDB, and a warm isolated runner service. Until the owner decides, the `[fn]` rows stay ○.
+
 ---
 
 ## The one structural difference we did not choose
