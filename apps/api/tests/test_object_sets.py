@@ -47,6 +47,13 @@ ROWS = [
     ("3", {"region": "south", "status": "open", "capacity": 40}),
     ("4", {"region": "south", "status": "open", "capacity": 7}),
     ("5", {"region": "east", "status": "open", "capacity": "n/a"}),
+    # Two words, so a prefix means the start of the *value*: "west" is the
+    # start of a word in it and must not match (§543 found OpenSearch's
+    # phrase_prefix matching any word, where Postgres anchors at the start).
+    # Lower case, because the cross-tab tests break count ties by value, and a
+    # capital sorts differently under the database's collation (CI's en_US)
+    # than under Python's code points; the other rows' filters cover case.
+    ("9", {"region": "north west", "status": "on hold", "capacity": "12"}),
 ]
 
 # What the ontology declares for the type these rows belong to.
@@ -78,6 +85,22 @@ CASES = [
     # nothing the reference semantics do.
     {"filters": [{"property": "region", "op": "in", "value": []}]},
     {"filters": [{"property": "status", "op": "starts_with", "value": "clos"}]},
+    {"filters": [{"property": "region", "op": "starts_with", "value": "west"}]},
+    {"filters": [{"property": "region", "op": "starts_with", "value": "north w"}]},
+    {"filters": [{"property": "status", "op": "starts_with", "value": "HOLD"}]},
+    # p.452's advanced keyword syntax (§543): the same prefix terms, combined.
+    {"filters": [{"property": "region", "op": "keyword_query", "value": "north OR sou"}]},
+    {"filters": [{"property": "region", "op": "keyword_query", "value": "NOT north"}]},
+    {"filters": [{"property": "region", "op": "keyword_query",
+                  "value": '(nor OR eas) AND NOT "north w"'}]},
+    {"filters": [{"property": "region", "op": "keyword_query", "value": "west OR sOUTH"}]},
+    {"filters": [{"property": "status", "op": "keyword_query", "value": "open closed"}]},
+    {"filters": [{"property": "capacity", "op": "keyword_query", "value": "1 OR 2"}]},
+    {"filters": [{"property": "status", "op": "keyword_query", "value": '"on h" OR NOT o'}]},
+    # `_` is a LIKE wildcard, and "n/a" must not start with "n_a".
+    {"filters": [{"property": "capacity", "op": "keyword_query", "value": "n_a OR 7"}]},
+    # A value must be there to match, NOT included: no row has an owner.
+    {"filters": [{"property": "owner", "op": "keyword_query", "value": "NOT x"}]},
     {
         "filters": [
             {"property": "region", "op": "eq", "value": "south"},
@@ -289,6 +312,7 @@ def test_the_browsers_copy_of_the_orderable_types_has_not_drifted() -> None:
         ("UNIVERSAL_OPERATORS", "OPERATORS"),
         ("ORDERED_OPERATORS", "ORDERED_OPERATORS"),
         ("GEO_OPERATORS", "GEO_OPERATORS"),
+        ("QUERY_OPERATORS", "QUERY_OPERATORS"),
     ],
 )
 def test_the_browsers_copy_of_the_operators_has_not_drifted(
@@ -2722,9 +2746,9 @@ def test_a_row_total_is_the_whole_row_not_the_part_inside_the_grid(
     assert len(body["columns"]) == 1
     assert body["columns_truncated"] is True
     assert body["rows_truncated"] is False
-    assert body["column_distinct_total"] == 2
+    assert body["column_distinct_total"] == 3
     counted = {a["value"]: a["count"] for a in body["rows"]}
-    assert counted == {"north": 2, "south": 2, "east": 1}, "whole rows"
+    assert counted == {"north": 2, "south": 2, "east": 1, "north west": 1}, "whole rows"
     assert sum(sum(row) for row in body["cells"]) < sum(counted.values()), (
         "and the grid accounts for less than the set, which is the point"
     )

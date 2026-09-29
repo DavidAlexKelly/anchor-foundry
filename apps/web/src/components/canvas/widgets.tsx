@@ -227,6 +227,7 @@ import {
   visibleFilters, withKeyword, withRange, withValues, withoutFilter,
   type Clause, type DayRange, type FilterSpec,
 } from "./filter-list";
+import { keywordQueryProblem } from "./keyword-query";
 import {
   MAX_DRAGGED_OBJECTS, OBJECT_MEDIA_TYPE, OBJECT_SET_MEDIA_TYPE, carriesPayload, collectKeys,
   droppedClauses, objectPayload, objectSetPayload,
@@ -821,6 +822,47 @@ export function CanvasFilterList({
  * property's values from `/object-sets/group` against the **unfiltered** input
  * set: counts recomputed against the narrowed set would read 0 for every value
  * but the ones already picked, which says nothing about picking another. */
+/**
+ * p.452's advanced keyword search in a Filter List (§543): AND, OR, NOT,
+ * quotations and brackets over the plain search's prefix terms.
+ *
+ * **Only a query that parses is applied.** The box keeps what is typed, and
+ * a half-typed `(north OR` says what is wrong under it while the last query
+ * that parsed stays applied - rather than being sent, refused, and shown as
+ * an error by every widget reading the set.
+ */
+function AdvancedKeyword({ label, applied, onApply }: {
+  label: string;
+  applied: string;
+  onApply: (text: string) => void;
+}) {
+  const [draft, setDraft] = useState(applied);
+  const problem = draft.trim() ? keywordQueryProblem(draft) : null;
+  return (
+    <>
+      <input
+        type="search"
+        aria-label={label}
+        data-testid="filter-keyword-advanced"
+        placeholder='north OR (south AND NOT "south east")'
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          if (!e.target.value.trim() || keywordQueryProblem(e.target.value) === null) {
+            onApply(e.target.value);
+          }
+        }}
+      />
+      {problem && (
+        <p className="field-hint" role="status" data-testid="filter-keyword-problem">
+          {problem.charAt(0).toUpperCase() + problem.slice(1)}.
+          {applied.trim() ? ` Still applied: ${applied}` : ""}
+        </p>
+      )}
+    </>
+  );
+}
+
 function FilterListFilter({
   workspaceId,
   definition,
@@ -967,7 +1009,7 @@ function FilterListFilter({
         </>
       )}
 
-      {component === "keyword" && (
+      {component === "keyword" && spec.syntax !== "advanced" && (
         <input
           type="search"
           aria-label={label}
@@ -976,6 +1018,14 @@ function FilterListFilter({
           onChange={(e) => onWrite(
             withKeyword(clauses, property, e.target.value), e.target.value,
             !!e.target.value.trim())}
+        />
+      )}
+      {component === "keyword" && spec.syntax === "advanced" && (
+        <AdvancedKeyword
+          label={label}
+          applied={keywordOf(clauses, property)}
+          onApply={(text) => onWrite(
+            withKeyword(clauses, property, text, true), text, !!text.trim())}
         />
       )}
 
@@ -1228,6 +1278,23 @@ function FilterListSettings() {
                   <option key={c} value={c}>{FILTER_COMPONENT_LABELS[c]}</option>
                 ))}
               </select>
+              {/* p.452: "any keyword search filter component will have the
+                  advanced syntax as an option in the dropdown UI". */}
+              {spec.component === "keyword" && (
+                <select
+                  aria-label="Search type"
+                  data-testid={`filter-syntax-${spec.id}`}
+                  value={spec.syntax ?? "simple"}
+                  onChange={(e) => writeFilters(specs.map((f) => {
+                    if (f.id !== spec.id) return f;
+                    const { syntax: _old, ...rest } = f;
+                    return e.target.value === "advanced" ? { ...rest, syntax: "advanced" } : rest;
+                  }))}
+                >
+                  <option value="simple">Starts with</option>
+                  <option value="advanced">Advanced syntax</option>
+                </select>
+              )}
               <button
                 type="button"
                 className="btn quiet"

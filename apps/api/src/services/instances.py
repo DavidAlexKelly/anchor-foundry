@@ -744,6 +744,14 @@ def _set_predicate(
             params[val] = bound.isoformat() if hasattr(bound, "isoformat") else bound
         elif f.op in object_sets.GEO_OPERATORS:
             where.append(_within_box_sql(prop, val, f.value, params))
+        elif f.op in object_sets.QUERY_OPERATORS:
+            # p.452's advanced syntax (§543): the parsed tree as SQL, each term
+            # the anchored ILIKE `starts_with` is. A value must be there to
+            # match, NOT included, and needs no guard here: with no value every
+            # term is `NULL ILIKE`, so the whole condition is NULL whatever
+            # joins the terms, and NULL keeps the row out. (An `IS NOT NULL`
+            # written in front was the mutation sweep's equivalent code.)
+            where.append(_query_sql(f.value, extract, val, params))
         else:  # pragma: no cover - object_sets.parse refuses anything else
             raise ValueError(f"unsupported object-set operator {f.op!r}")
 
@@ -1071,6 +1079,21 @@ def _filter_text(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def _query_sql(node: Any, extract: str, name: str, params: dict[str, Any]) -> str:
+    """p.452's advanced keyword query (§543) as a SQL condition, one bound
+    parameter per term, named after the filter's so two filters cannot
+    collide."""
+    if isinstance(node, object_sets.QueryTerm):
+        key = f"{name}_{sum(1 for k in params if k.startswith(f'{name}_'))}"
+        params[key] = f"{_escape_like(node.text)}%"
+        return f"{extract} ILIKE :{key}"
+    if isinstance(node, object_sets.QueryNot):
+        return f"NOT {_query_sql(node.operand, extract, name, params)}"
+    joiner = " AND " if isinstance(node, object_sets.QueryAnd) else " OR "
+    return "(" + joiner.join(_query_sql(part, extract, name, params)
+                             for part in node.operands) + ")"
 
 
 def _escape_like(term: str) -> str:
