@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { segmentLayout, segmentModeOf, segmentedFrom } from "./chart-segments";
+import {
+  legendEntryAt, legendInset, segmentLayout, segmentLegendPositionOf, segmentModeOf, segmentName, segmentedFrom,
+} from "./chart-segments";
 
 const data = segmentedFrom({
   rows: [{ value: "north" }, { value: "south" }, { value: "east" }],
@@ -51,5 +53,51 @@ describe("segmentLayout (p.282's Segment overrides)", () => {
     expect(segmentModeOf("percentage")).toBe("percentage");
     expect(segmentModeOf("pie")).toBe("stacked");
     expect(segmentModeOf(undefined)).toBe("stacked");
+  });
+});
+
+describe("the segmented legend (p.284's positions, p.282's display override)", () => {
+  const frame = { width: 640, height: 260 };
+  const plot = { x: 48, y: 12 };
+
+  it("is at the bottom unless placed", () => {
+    expect(segmentLegendPositionOf(undefined)).toBe("bottom");
+    expect(segmentLegendPositionOf("toString")).toBe("bottom");
+    expect(segmentLegendPositionOf("left")).toBe("left");
+    expect(segmentLegendPositionOf("top")).toBe("top");
+  });
+
+  it("takes the edge it is on: a row of six per 16px, or a 120px column", () => {
+    expect(legendInset(3, "bottom")).toEqual({ top: 0, right: 0, bottom: 22, left: 0 });
+    expect(legendInset(7, "bottom").bottom).toBe(38);
+    expect(legendInset(6, "top")).toEqual({ top: 22, right: 0, bottom: 0, left: 0 });
+    expect(legendInset(12, "left")).toEqual({ top: 0, right: 0, bottom: 0, left: 120 });
+    expect(legendInset(2, "right")).toEqual({ top: 0, right: 120, bottom: 0, left: 0 });
+    expect(legendInset(0, "left")).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
+  });
+
+  it("lays rows left to right from the legend's top", () => {
+    // Bottom, two rows: the first row sits a row above the last.
+    expect(legendEntryAt(0, 7, "bottom", plot, frame)).toEqual({ x: 48, y: 238 });
+    expect(legendEntryAt(5, 7, "bottom", plot, frame)).toEqual({ x: 48 + 5 * 96, y: 238 });
+    expect(legendEntryAt(6, 7, "bottom", plot, frame)).toEqual({ x: 48, y: 254 });
+    expect(legendEntryAt(0, 2, "bottom", plot, frame)).toEqual({ x: 48, y: 254 });
+    expect(legendEntryAt(7, 8, "top", plot, frame)).toEqual({ x: 48 + 96, y: 30 });
+    expect(legendEntryAt(1, 3, "left", plot, frame)).toEqual({ x: 8, y: 38 });
+    expect(legendEntryAt(2, 3, "right", plot, frame)).toEqual({ x: 528, y: 54 });
+  });
+
+  it("names a segment by its override, else its value", () => {
+    const names = { north: "Northern sites", south: "  ", east: 3 };
+    expect(segmentName("north", names)).toBe("Northern sites");
+    expect(segmentName("south", names)).toBe("south");
+    expect(segmentName("east", names)).toBe("east");
+    expect(segmentName("west", names)).toBe("west");
+    expect(segmentName("toString", {})).toBe("toString");
+    expect(segmentName("north", null)).toBe("north");
+    expect(segmentName("north", ["Northern"])).toBe("north");
+    // An array is not a set of names, even where a value reads as its index.
+    expect(segmentName("0", ["Zero"])).toBe("0");
+    expect(segmentName("north", { north: " Up north " })).toBe("Up north");
   });
 });

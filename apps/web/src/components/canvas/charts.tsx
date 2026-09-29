@@ -1,6 +1,9 @@
 "use client";
 
-import { segmentLayout, type SegmentMode, type Segmented } from "./chart-segments";
+import {
+  legendEntryAt, legendInset, segmentLayout, segmentName, type SegmentLegendPosition,
+  type SegmentMode, type Segmented,
+} from "./chart-segments";
 import {
   valueScale, type AxisTitles, type ValueAxis, type ValueScale,
 } from "./chart-display";
@@ -165,12 +168,16 @@ function Axes({ scale: s, area, format = niceNumber }: {
 /** p.283's titles: the value axis's up the left edge and the categorical
  * axis's along the bottom, or the other way round on a horizontal bar chart,
  * whose values run along the bottom. */
-function AxisTitleMarks({ titles, area, horizontal = false, belowY = HEIGHT - 4 }: {
+function AxisTitleMarks({
+  titles, area, horizontal = false, belowY = HEIGHT - 4, leftX = 12,
+}: {
   titles?: AxisTitles;
   area: { x: number; y: number; w: number; h: number };
   horizontal?: boolean;
   /** Above a segmented chart's legend, which has the bottom edge. */
   belowY?: number;
+  /** Beside a segmented chart's legend, when it has the left edge. */
+  leftX?: number;
 }) {
   if (!titles) return null;
   const left = horizontal ? titles.category : titles.value;
@@ -181,7 +188,7 @@ function AxisTitleMarks({ titles, area, horizontal = false, belowY = HEIGHT - 4 
       {left && (
         <text
           data-testid={kind(!horizontal)}
-          transform={`translate(12, ${area.y + area.h / 2}) rotate(-90)`}
+          transform={`translate(${leftX}, ${area.y + area.h / 2}) rotate(-90)`}
           textAnchor="middle"
           fontSize={11}
           fill="var(--ink-soft)"
@@ -669,6 +676,7 @@ export function PieChart({
  */
 export function SegmentedBarChart({
   data, mode, drill, showLegend = true, titles, valueText, categoryText,
+  legend = "bottom", names,
 }: {
   data: Segmented;
   mode: SegmentMode;
@@ -678,12 +686,21 @@ export function SegmentedBarChart({
   /** p.283's numerical formatting (§538). A percentage axis keeps its own. */
   valueText?: (value: number) => string;
   categoryText?: (label: string) => string;
+  /** p.284's legend position and p.282's display overrides (§539). */
+  legend?: SegmentLegendPosition;
+  names?: unknown;
 }) {
-  // Six entries to a row, and as many rows as the segments need: the
-  // cross-tab returns up to twelve columns.
-  const legendRows = showLegend ? Math.ceil(data.segments.length / 6) : 0;
-  const legendHeight = legendRows > 0 ? legendRows * 16 + 6 : 0;
-  const area = { ...plotArea(titles), h: plotArea(titles).h - legendHeight };
+  // Six entries to a row above or below, a column beside: the cross-tab
+  // returns up to twelve columns. The plot gives up whichever edge it takes.
+  const inset = legendInset(showLegend ? data.segments.length : 0, legend);
+  const frame = plotArea(titles);
+  const area = {
+    x: frame.x + inset.left,
+    y: frame.y + inset.top,
+    w: frame.w - inset.left - inset.right,
+    h: frame.h - inset.top - inset.bottom,
+  };
+  const beside = legend === "left" || legend === "right";
   const { bars, max } = segmentLayout(data, mode);
   // Calculated, always: a stack's height is the sum of its segments, which a
   // logarithmic axis would not show, and a percentage's bound is 100%, not a
@@ -704,7 +721,12 @@ export function SegmentedBarChart({
         area={area}
         format={percent ? (v) => `${Math.round(v * 100)}%` : valueText ?? niceNumber}
       />
-      <AxisTitleMarks titles={titles} area={area} belowY={area.y + area.h + 30} />
+      <AxisTitleMarks
+        titles={titles}
+        area={area}
+        belowY={area.y + area.h + 30}
+        leftX={12 + inset.left}
+      />
       {bars.map((bar, i) => {
         const category = data.categories[bar.category] ?? "";
         const segment = data.segments[bar.segment] ?? "";
@@ -725,7 +747,7 @@ export function SegmentedBarChart({
             opacity={dim(drill, category)}
             {...markProps(drill, category)}
           >
-            <title>{`${category} · ${segment}: ${bar.value}`}</title>
+            <title>{`${category} · ${segmentName(segment, names)}: ${bar.value}`}</title>
           </rect>
         );
       })}
@@ -742,17 +764,23 @@ export function SegmentedBarChart({
             Math.max(4, Math.floor(slot / 7)))}
         </text>
       ))}
-      {showLegend && data.segments.map((segment, i) => (
-        <g
-          key={`k${i}`}
-          data-testid="chart-legend-entry"
-          transform={`translate(${area.x + (i % 6) * 96}, ${
-            HEIGHT - 6 - (legendRows - 1 - Math.floor(i / 6)) * 16})`}
-        >
-          <rect width={10} height={10} y={-9} fill={PALETTE[i % PALETTE.length]} />
-          <text x={15} fontSize={11} fill="var(--ink)">{shortLabel(segment, 12)}</text>
-        </g>
-      ))}
+      {showLegend && data.segments.map((segment, i) => {
+        const at = legendEntryAt(i, data.segments.length, legend, area,
+          { width: WIDTH, height: HEIGHT });
+        return (
+          <g
+            key={`k${i}`}
+            data-testid="chart-legend-entry"
+            data-segment={segment}
+            transform={`translate(${at.x}, ${at.y})`}
+          >
+            <rect width={10} height={10} y={-9} fill={PALETTE[i % PALETTE.length]} />
+            <text x={15} fontSize={11} fill="var(--ink)">
+              {shortLabel(segmentName(segment, names), beside ? 15 : 12)}
+            </text>
+          </g>
+        );
+      })}
     </svg>
   );
 }

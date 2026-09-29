@@ -636,3 +636,84 @@ def test_the_panel_sets_an_axis_format(page, api, sites) -> None:
     props = mod.definition()["layout"]["chart"]["props"]
     assert props["valueFormat"]["notation"] == "compact", props
     assert props["categoryFormat"]["kind"] == "number", props
+
+
+# ---- p.284's legend position and p.282's display override (§539) ----------
+
+def legend_box(page, name: str) -> dict:
+    return box(page.locator(f"[data-testid='chart-legend-entry'][data-segment='{name}']"))
+
+
+@pytest.mark.parametrize("position", [None, "top", "left", "right"])
+def test_the_legend_takes_the_side_it_is_given(page, api, sites, position) -> None:
+    mod = build(api, sites, f"Chart XY legend {position}", {
+        "segmentBy": "region", "showValueTitle": True,
+        **({"legendPosition": position} if position else {})})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-legend-entry")).to_have_count(3)
+    key = legend_box(page, "north")
+    marks = page.get_by_test_id("chart-segment")
+    bars = [box(marks.nth(i)) for i in range(marks.count())]
+    left = min(b["x"] for b in bars)
+    right = max(b["x"] + b["width"] for b in bars)
+    top = min(b["y"] for b in bars)
+    bottom = max(b["y"] + b["height"] for b in bars)
+    where = position or "bottom"
+    if where == "bottom":
+        assert key["y"] > bottom, (key, bottom)
+    elif where == "top":
+        assert key["y"] + key["height"] < top, (key, top)
+    elif where == "left":
+        assert key["x"] + key["width"] < left, (key, left)
+        # One column: the entries stand under each other.
+        assert abs(legend_box(page, "south")["x"] - key["x"]) < 1
+        # The value axis's title stands clear of it, beside the axis.
+        title = box(page.get_by_test_id("chart-value-title"))
+        assert key["x"] + key["width"] < title["x"] < left, (key, title, left)
+    else:
+        assert key["x"] > right, (key, right)
+
+
+def test_a_hidden_legend_gives_its_edge_back(page, api, sites) -> None:
+    def lowest(name: str, props: dict) -> float:
+        open_module(page, build(api, sites, name, {"segmentBy": "region", **props}))
+        marks = page.get_by_test_id("chart-segment")
+        expect(marks).to_have_count(3)
+        return max(box(marks.nth(i))["y"] + box(marks.nth(i))["height"] for i in range(3))
+
+    shown = lowest("Chart XY legend shown", {})
+    hidden = lowest("Chart XY legend hidden", {"showLegend": False})
+    expect(page.get_by_test_id("chart-legend-entry")).to_have_count(0)
+    # The plot runs down into the row the legend would have had.
+    assert hidden > shown + 10, (shown, hidden)
+
+
+def test_a_segment_is_named_by_its_override(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY segment names", {
+        "segmentBy": "region", "segmentNames": {"north": "Northern", "south": "  "}})
+    open_module(page, mod)
+    expect(page.locator("[data-testid='chart-legend-entry'][data-segment='north']")).to_have_text(
+        "Northern")
+    expect(page.locator("[data-testid='chart-legend-entry'][data-segment='south']")).to_have_text(
+        "south")
+    expect(segment(page, "open", "north").locator("title")).to_have_text("open · Northern: 2")
+
+
+def test_the_panel_places_the_legend_and_names_a_segment(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY legend panel", {"segmentBy": "region"})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    page.get_by_test_id("chart-legend-position").select_option("right")
+    names = page.get_by_test_id("chart-segment-name")
+    # The set's own values of the Segment by property, most common first.
+    expect(names).to_have_count(3)
+    assert names.nth(0).get_attribute("data-segment") == "north"
+    page.locator("[data-testid='chart-segment-name'][data-segment='east']").fill("Eastern")
+    save(page)
+    props = mod.definition()["layout"]["chart"]["props"]
+    assert (props["legendPosition"], props["segmentNames"]) == ("right", {"east": "Eastern"}), props
+    page.locator("[data-testid='chart-segment-name'][data-segment='east']").fill("")
+    page.get_by_role("button", name="Save", exact=True).click()
+    eventually(lambda: mod.definition()["layout"]["chart"]["props"].get("segmentNames"),
+               lambda got: got == {}, what="an emptied name removed")

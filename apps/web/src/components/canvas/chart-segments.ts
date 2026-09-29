@@ -106,3 +106,77 @@ export function segmentLayout(data: Segmented, mode: SegmentMode): {
   });
   return { bars, max };
 }
+
+/**
+ * p.284's legend **Positioning options** and p.282's **Display override**, on
+ * the segmented chart's legend (§539).
+ *
+ * > "Show legend: Toggles display of a legend of chart series' titles and
+ * > series' colors. Positioning options: When "Show legend" is enabled,
+ * > controls the positioning of the legend within the chart." (p.284)
+ * >
+ * > "Display override: Optional. Overrides the legend display name of the
+ * > current series. For segmented charts, overrides the legend display name
+ * > of a single segment." (p.282)
+ *
+ * p.284 does not list the positions; these are the four p.310 gives the Pie
+ * Chart's legend, which is the same idea on the page next door.
+ */
+export const SEGMENT_LEGEND_POSITIONS = {
+  bottom: "Bottom", top: "Top", left: "Left", right: "Right",
+} as const;
+export type SegmentLegendPosition = keyof typeof SEGMENT_LEGEND_POSITIONS;
+
+/** Bottom unless set: where every segmented chart's legend was before. */
+export function segmentLegendPositionOf(raw: unknown): SegmentLegendPosition {
+  return typeof raw === "string" && Object.hasOwn(SEGMENT_LEGEND_POSITIONS, raw)
+    ? (raw as SegmentLegendPosition) : "bottom";
+}
+
+/** Entries to a row above or below the plot; a side legend is one column. */
+export const LEGEND_PER_ROW = 6;
+export const LEGEND_ROW = 16;
+export const LEGEND_ENTRY_WIDTH = 96;
+export const LEGEND_SIDE_WIDTH = 120;
+
+export interface Inset { top: number; right: number; bottom: number; left: number }
+
+/** How much of the chart's frame the legend takes, on which side. */
+export function legendInset(count: number, position: SegmentLegendPosition): Inset {
+  const inset = { top: 0, right: 0, bottom: 0, left: 0 };
+  if (count === 0) return inset;
+  if (position === "left" || position === "right") {
+    inset[position] = LEGEND_SIDE_WIDTH;
+  } else {
+    inset[position] = Math.ceil(count / LEGEND_PER_ROW) * LEGEND_ROW + 6;
+  }
+  return inset;
+}
+
+/** Where the `index`th entry's swatch baseline sits. Rows fill left to right
+ * from the top of the legend; a side legend is a column from the plot's top. */
+export function legendEntryAt(
+  index: number, count: number, position: SegmentLegendPosition,
+  plot: { x: number; y: number }, frame: { width: number; height: number },
+): { x: number; y: number } {
+  if (position === "left" || position === "right") {
+    return {
+      x: position === "left" ? 8 : frame.width - LEGEND_SIDE_WIDTH + 8,
+      y: plot.y + 10 + index * LEGEND_ROW,
+    };
+  }
+  const rows = Math.ceil(count / LEGEND_PER_ROW);
+  const row = Math.floor(index / LEGEND_PER_ROW);
+  const top = position === "top" ? 14 : frame.height - 6 - (rows - 1) * LEGEND_ROW;
+  return { x: plot.x + (index % LEGEND_PER_ROW) * LEGEND_ENTRY_WIDTH, y: top + row * LEGEND_ROW };
+}
+
+/** A segment's name in the legend and its tooltip: its override when it has
+ * one, else its value. A blank override is none, as a blank axis title is. */
+export function segmentName(value: string, names: unknown): string {
+  if (typeof names !== "object" || names === null || Array.isArray(names)) return value;
+  // Anything inherited ("toString") is a function, never a string, so the
+  // type check is all the own-property check there needs to be.
+  const own = (names as Record<string, unknown>)[value];
+  return typeof own === "string" && own.trim() !== "" ? own.trim() : value;
+}
