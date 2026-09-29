@@ -50,7 +50,10 @@ ROWS = [
     # Two words, so a prefix means the start of the *value*: "west" is the
     # start of a word in it and must not match (§543 found OpenSearch's
     # phrase_prefix matching any word, where Postgres anchors at the start).
-    ("9", {"region": "North West", "status": "on hold", "capacity": "12"}),
+    # Lower case, because the cross-tab tests break count ties by value, and a
+    # capital sorts differently under the database's collation (CI's en_US)
+    # than under Python's code points; the other rows' filters cover case.
+    ("9", {"region": "north west", "status": "on hold", "capacity": "12"}),
 ]
 
 # What the ontology declares for the type these rows belong to.
@@ -2745,7 +2748,7 @@ def test_a_row_total_is_the_whole_row_not_the_part_inside_the_grid(
     assert body["rows_truncated"] is False
     assert body["column_distinct_total"] == 3
     counted = {a["value"]: a["count"] for a in body["rows"]}
-    assert counted == {"north": 2, "south": 2, "east": 1, "North West": 1}, "whole rows"
+    assert counted == {"north": 2, "south": 2, "east": 1, "north west": 1}, "whole rows"
     assert sum(sum(row) for row in body["cells"]) < sum(counted.values()), (
         "and the grid accounts for less than the set, which is the point"
     )
