@@ -225,6 +225,7 @@ import {
   timelineIntervalOf, withBucket,
   keywordOf, layoutOf, newFilterId, pillSummary, rangeOf, toggleValue, valuesOf, viewerFilterId,
   visibleFilters, withKeyword, withRange, withValues, withoutFilter,
+  hasLinkOf, linkedClausesOf, withHasLink, withLinked,
   type Clause, type DayRange, type FilterSpec,
 } from "./filter-list";
 import { keywordQueryProblem } from "./keyword-query";
@@ -761,7 +762,16 @@ export function CanvasFilterList({
       ))}
     </select>
   ) : null;
-  const filterOf = (spec: FilterSpec) => (
+  const filterOf = (spec: FilterSpec) => spec.link ? (
+    <LinkedFilterListFilter
+      key={spec.id}
+      workspaceId={workspaceId}
+      spec={spec}
+      clauses={clauses}
+      onWrite={(next, value, on) => write(next, spec.property || spec.link!, value, on)}
+      onRemove={editable ? () => remove(spec) : undefined}
+    />
+  ) : (
     <FilterListFilter
       key={spec.id}
       workspaceId={workspaceId}
@@ -789,7 +799,8 @@ export function CanvasFilterList({
         // configuration UI." Closed, a pill says what it applies.
         <div className="canvas-filter-pills" ref={pillsRef}>
           {specs.map((spec) => {
-            const label = labelOf(spec.property);
+            // A linked filter's property is the linked type's (§545).
+            const label = spec.link ? spec.property || "Has link" : labelOf(spec.property);
             const summary = pillSummary(spec, clauses);
             const open = openPill === spec.id;
             return (
@@ -860,6 +871,70 @@ function AdvancedKeyword({ label, applied, onApply }: {
         </p>
       )}
     </>
+  );
+}
+
+/**
+ * p.451's filter on a link (§545): p.451's Has link, or one of the linked
+ * type's properties drawn as any other filter is - over the linked type's own
+ * objects, and writing into its link's `has_link` clause (`withLinked`).
+ */
+function LinkedFilterListFilter({ workspaceId, spec, clauses, onWrite, onRemove }: {
+  workspaceId: string;
+  spec: FilterSpec;
+  clauses: Clause[];
+  onWrite: (next: Clause[], value: string, on: boolean) => void;
+  onRemove?: () => void;
+}) {
+  const link = spec.link!;
+  const far = useQuery({
+    queryKey: ["object-type", spec.linkTo],
+    queryFn: () => objApi.getType(workspaceId, spec.linkTo!),
+    enabled: !!spec.linkTo,
+  });
+  const farName = far.data?.display_name ?? "linked object";
+  const propertyLabel = far.data?.properties.find((p) => p.api_name === spec.property)
+    ?.display_name || spec.property;
+  if (!spec.property) {
+    const on = hasLinkOf(clauses, link);
+    return (
+      <fieldset className="canvas-filter-group" data-testid={`filter-${spec.id}`}>
+        <legend>{farName}</legend>
+        {onRemove && (
+          <button
+            type="button"
+            className="canvas-filter-remove"
+            aria-label={`Remove the ${farName} filter`}
+            onClick={onRemove}
+          >
+            ×
+          </button>
+        )}
+        <label className="canvas-toggle">
+          <input
+            type="checkbox"
+            data-testid={`filter-has-link-${spec.id}`}
+            checked={on}
+            onChange={(e) =>
+              onWrite(withHasLink(clauses, link, e.target.checked), link, e.target.checked)}
+          />
+          <span>Has a linked {farName}</span>
+        </label>
+      </fieldset>
+    );
+  }
+  return (
+    <FilterListFilter
+      workspaceId={workspaceId}
+      // The linked type's objects, unfiltered, as a plain filter's values
+      // come from the input set before anything narrows it.
+      definition={spec.linkTo ? { object_type_id: spec.linkTo, filters: [] } : undefined}
+      spec={{ ...spec, link: undefined }}
+      label={`${farName} · ${propertyLabel}`}
+      clauses={linkedClausesOf(clauses, link)}
+      onWrite={(next, value, on) => onWrite(withLinked(clauses, link, next), value, on)}
+      onRemove={onRemove}
+    />
   );
 }
 
@@ -1201,6 +1276,35 @@ function FilterListSettings() {
     setProp((p: { filters: FilterSpec[] | null }) => (p.filters = next));
   const dataTypeOf = (property: string) =>
     typeProperties.find((p) => p.api_name === property)?.data_type;
+  // p.451's "Filter on a link section of the Add filter... dropdown" (§545):
+  // each link this set's type is an end of, once per end, as a traversal
+  // offers them - a self-link can be followed either way.
+  const linkTypes = useQuery({
+    queryKey: ["link-types", workspaceId],
+    queryFn: () => objApi.listLinkTypes(workspaceId),
+  });
+  const hops = (linkTypes.data ?? []).flatMap((link) => {
+    const out: { key: string; id: string; toType: string; label: string }[] = [];
+    if (link.from_object_type_id === typeId) {
+      out.push({ key: `${link.id}:to`, id: link.id, toType: link.to_object_type_id,
+        label: `${link.to_side_name || link.display_name} → ${link.to_display_name}` });
+    }
+    if (link.to_object_type_id === typeId) {
+      out.push({ key: `${link.id}:from`, id: link.id, toType: link.from_object_type_id,
+        label: `${link.from_side_name || link.display_name} → ${link.from_display_name}` });
+    }
+    return out;
+  });
+  // The linked types' properties, for a linked filter's property picker.
+  const farTypes = [...new Set(specs.map((f) => f.linkTo).filter((t): t is string => !!t))];
+  const farResults = useQueries({
+    queries: farTypes.map((id) => ({
+      queryKey: ["object-type", id],
+      queryFn: () => objApi.getType(workspaceId, id),
+    })),
+  });
+  const farProperties = (id: string | undefined) =>
+    farResults[farTypes.indexOf(id ?? "")]?.data?.properties ?? [];
 
   // p.65-67's worked example, in p.65's order: the Object Set that populates
   // the widget, the filter options that set makes answerable, then the Filter
@@ -1244,6 +1348,59 @@ function FilterListSettings() {
       <fieldset className="field" data-testid="filter-list-filters">
         <legend className="field-label">Filters</legend>
         {specs.map((spec) => {
+          if (spec.link) {
+            const props = farProperties(spec.linkTo);
+            const farType = (p: string) => props.find((x) => x.api_name === p)?.data_type;
+            const allowedHere = componentsFor(farType(spec.property));
+            return (
+              <div key={spec.id} className="row-actions" style={{ marginBottom: 6 }}>
+                <span className="field-hint">
+                  {hops.find((h) => h.id === spec.link && h.toType === spec.linkTo)?.label
+                    ?? "Link"}
+                </span>
+                <select
+                  aria-label="Linked property"
+                  data-testid={`filter-linked-property-${spec.id}`}
+                  value={spec.property}
+                  onChange={(e) => {
+                    const property = e.target.value;
+                    const component = componentsFor(farType(property)).includes(spec.component)
+                      ? spec.component : "histogram";
+                    writeFilters(specs.map((f) => f.id === spec.id
+                      ? { ...f, property, component } : f));
+                  }}
+                >
+                  <option value="">Has link</option>
+                  {props.map((p) => (
+                    <option key={p.api_name} value={p.api_name}>
+                      {p.display_name || p.api_name}
+                    </option>
+                  ))}
+                </select>
+                {spec.property && (
+                  <select
+                    aria-label="Filter component"
+                    data-testid={`filter-component-${spec.id}`}
+                    value={spec.component}
+                    onChange={(e) => writeFilters(specs.map((f) => f.id === spec.id
+                      ? { ...f, component: componentOf(e.target.value) } : f))}
+                  >
+                    {allowedHere.map((c) => (
+                      <option key={c} value={c}>{FILTER_COMPONENT_LABELS[c]}</option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  type="button"
+                  className="btn quiet"
+                  aria-label="Remove the linked filter"
+                  onClick={() => writeFilters(specs.filter((f) => f.id !== spec.id))}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          }
           const allowed = componentsFor(dataTypeOf(spec.property));
           return (
             <div key={spec.id} className="row-actions" style={{ marginBottom: 6 }}>
@@ -1314,15 +1471,26 @@ function FilterListSettings() {
           value=""
           onChange={(e) => {
             if (!e.target.value) return;
-            writeFilters([...specs, {
-              id: newFilterId(specs), property: e.target.value, component: "histogram",
-            }]);
+            const hop = hops.find((h) => `link:${h.key}` === e.target.value);
+            // A link starts as p.451's Has link; a property of the linked
+            // type is picked on its row.
+            writeFilters([...specs, hop
+              ? { id: newFilterId(specs), property: "", component: "histogram",
+                  link: hop.id, linkTo: hop.toType }
+              : { id: newFilterId(specs), property: e.target.value, component: "histogram" }]);
           }}
         >
           <option value="">Add filter…</option>
           {typeProperties.map((p) => (
             <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
           ))}
+          {hops.length > 0 && (
+            <optgroup label="Filter on a link">
+              {hops.map((h) => (
+                <option key={h.key} value={`link:${h.key}`}>{h.label}</option>
+              ))}
+            </optgroup>
+          )}
         </select>
       </fieldset>
       <label className="field">

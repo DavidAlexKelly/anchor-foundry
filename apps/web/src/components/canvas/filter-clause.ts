@@ -57,6 +57,7 @@ export const OPERATOR_LABELS: Record<string, string> = {
   lte: "is at most",
   within_box: "is inside the area",
   keyword_query: "matches",
+  has_link: "has a link",
 };
 
 /** `object_sets.GEO_OPERATORS`, named so a pill can *describe* one.
@@ -75,6 +76,12 @@ export const GEO_OPERATORS: readonly string[] = ["within_box"];
  * keyword filter set to advanced syntax, and - like a box - described by a
  * pill rather than offered by its editor, which has no query to build it in. */
 export const QUERY_OPERATORS: readonly string[] = ["keyword_query"];
+
+/** `object_sets.LINK_OPERATORS`: p.451's filter on linked objects (§545),
+ * whose property is the link type's id and whose value is the linked type's
+ * own filters. Written by a Filter List's linked filters, and described by a
+ * pill - which names the link by its id, having no ontology to hand. */
+export const LINK_OPERATORS: readonly string[] = ["has_link"];
 
 /** Which operators a property of this declared type may be filtered with.
  *
@@ -162,6 +169,13 @@ export function clausesOf(raw: unknown): Clause[] {
 export function valueLabel(clause: Clause): string {
   const { value } = clause;
   if (Array.isArray(value)) return value.map((v) => String(v)).join(", ");
+  if (clause.op === "has_link") {
+    // The linked type's own filters, counted: naming them would need its
+    // ontology, which a pill does not have.
+    const n = Array.isArray((value as { filters?: unknown } | null)?.filters)
+      ? (value as { filters: unknown[] }).filters.length : 0;
+    return n === 0 ? "" : `matching ${n} filter${n === 1 ? "" : "s"}`;
+  }
   if (value && typeof value === "object") {
     const box = value as Record<string, unknown>;
     const edges = ["north", "south", "east", "west"];

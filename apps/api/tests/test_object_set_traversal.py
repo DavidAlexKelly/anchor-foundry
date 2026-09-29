@@ -272,7 +272,8 @@ def linked(client: TestClient, fx: Fixture) -> dict:
         )
         assert synced.status_code == 200 and synced.json()["ok"], synced.text
 
-    upload(f"customers_{tag}", b"id,region\nC1,north\nC2,south\n",
+    # C3 has no orders, so p.451's Has link has someone to leave out (§545).
+    upload(f"customers_{tag}", b"id,region\nC1,north\nC2,south\nC3,east\n",
            customer_type, {"region": "region"})
     upload(f"orders_{tag}",
            b"id,customer_id,total,placed\nO1,C1,10,2024-01-10\nO2,C1,20,2024-02-10\n"
@@ -448,3 +449,93 @@ def test_a_hop_that_does_not_join_is_refused_by_a_count_too(client, fx, linked) 
     r = client.post(f"{wbase(fx)}/object-sets/aggregate", headers=hdr(fx.editor_sub),
                     json={"definition": wrong, "aggregation": "count"})
     assert r.status_code == 422, r.text
+
+
+# ---- p.451's filters on linked objects (§545) --------------------------------
+def with_link(linked: dict, type_key: str, filters: list | None = None) -> dict:
+    return {"object_type_id": linked[type_key], "filters": [
+        {"property": linked["link"], "op": "has_link", "value": {"filters": filters or []}}]}
+
+
+def keys_of(client, fx, definition) -> list[str]:
+    answer = evaluate(client, fx, definition)
+    assert answer["status"] == 200, answer
+    return sorted(i["primary_key"] for i in answer["body"]["instances"])
+
+
+def test_has_link_keeps_the_objects_with_a_link(client, fx, linked) -> None:
+    """p.451's own example, "all Tasks that have a link to Person": here the
+    customers who have placed an order. C3 has none."""
+    assert keys_of(client, fx, with_link(linked, "customer_type")) == ["C1", "C2"]
+
+
+def test_a_linked_filter_narrows_by_the_linked_objects(client, fx, linked) -> None:
+    # The customers with an order over 15: C1's 20 and C2's 30, not C1's 10 alone.
+    over = [{"property": "total", "op": "gt", "value": 15}]
+    assert keys_of(client, fx, with_link(linked, "customer_type", over)) == ["C1", "C2"]
+    only_ten = [{"property": "total", "op": "eq", "value": "10"}]
+    assert keys_of(client, fx, with_link(linked, "customer_type", only_ten)) == ["C1"]
+
+
+def test_a_linked_filter_works_from_the_other_end(client, fx, linked) -> None:
+    """From orders, the link's far end is the customer's primary key."""
+    north = [{"property": "region", "op": "eq", "value": "north"}]
+    assert keys_of(client, fx, with_link(linked, "order_type", north)) == ["O1", "O2"]
+
+
+def test_a_linked_filter_combines_with_the_others(client, fx, linked) -> None:
+    definition = with_link(linked, "customer_type")
+    definition["filters"].append({"property": "region", "op": "eq", "value": "south"})
+    assert keys_of(client, fx, definition) == ["C2"]
+
+
+def test_linked_objects_that_match_nothing_leave_nothing(client, fx, linked) -> None:
+    none = [{"property": "total", "op": "eq", "value": "999"}]
+    assert keys_of(client, fx, with_link(linked, "customer_type", none)) == []
+    body = post(client, fx, "aggregate", {
+        "definition": with_link(linked, "customer_type", none), "aggregation": "count"})
+    assert body["value"] == 0, body
+
+
+def test_every_reading_of_a_set_resolves_its_linked_filters(client, fx, linked) -> None:
+    body = post(client, fx, "group", {
+        "definition": with_link(linked, "customer_type"), "property": "region"})
+    assert sorted(g["value"] for g in body["groups"]) == ["north", "south"], body
+
+
+@pytest.mark.parametrize("filters, says", [
+    ([{"property": "not-a-uuid", "op": "has_link", "value": {}}], "by id"),
+    ([{"property": str(uuid.uuid4()), "op": "has_link", "value": "x"}], "filters"),
+    ([{"property": str(uuid.uuid4()), "op": "has_link",
+       "value": {"filters": [{"property": str(uuid.uuid4()), "op": "has_link", "value": {}}]}}],
+     "cannot itself follow a link"),
+    ([{"property": str(uuid.uuid4()), "op": "has_link", "value": {"filters": [
+        {"property": "x", "op": "eq", "value": "y"}] * (object_sets.MAX_FILTERS + 1)}}],
+     "at most"),
+])
+def test_a_linked_filter_is_refused_when_malformed(filters, says) -> None:
+    with pytest.raises(ValueError, match=says):
+        object_sets.parse(a_set(filters=filters))
+
+
+def test_a_link_that_does_not_touch_the_type_is_refused(client, fx, linked) -> None:
+    definition = {"object_type_id": linked["customer_type"], "filters": [
+        {"property": str(uuid.uuid4()), "op": "has_link", "value": {}}]}
+    answer = evaluate(client, fx, definition)
+    assert answer["status"] == 422, answer
+    assert "does not touch" in answer["body"]["detail"], answer
+
+
+def test_a_hop_and_a_linked_filter_hold_together(client, fx, linked) -> None:
+    """The customers of orders O2 and O3 (C1 and C2), of whom the one with an
+    order of exactly 10: C1. The hop is resolved and then the link."""
+    definition = {
+        "object_type_id": linked["customer_type"],
+        "via": {"link_type_id": linked["link"], "base": {
+            "object_type_id": linked["order_type"],
+            "filters": [{"property": object_sets.PRIMARY_KEY_FILTER, "op": "in",
+                         "value": ["O2", "O3"]}]}},
+        "filters": [{"property": linked["link"], "op": "has_link", "value": {"filters": [
+            {"property": "total", "op": "eq", "value": "10"}]}}],
+    }
+    assert keys_of(client, fx, definition) == ["C1"]

@@ -290,3 +290,13 @@ describe("which clauses a text box can edit at all", () => {
     })).toBe(false);
   });
 });
+
+describe("a filter on linked objects, as a pill reads it (p.451, §545)", () => {
+  it("says it has a link, and how many filters the linked objects meet", () => {
+    const has = { property: "link-1", op: "has_link", value: { filters: [] } };
+    expect(describeClause(has, [])).toBe("link-1 has a link");
+    expect(valueLabel({ ...has, value: { filters: [{}] } })).toBe("matching 1 filter");
+    expect(valueLabel({ ...has, value: { filters: [{}, {}] } })).toBe("matching 2 filters");
+    expect(valueLabel({ ...has, value: null })).toBe("");
+  });
+});

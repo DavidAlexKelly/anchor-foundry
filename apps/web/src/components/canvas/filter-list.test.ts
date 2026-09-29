@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  axisEnds, barWidth, bucketLabel, componentOf, isBucketChosen, isPeriodChosen,
-  numberRangeSummary, periodLabel, periodOf, timelineIntervalOf, withBucket, componentsFor, defaultComponentFor, filtersOf, keywordOf, layoutOf,
-  newFilterId, pillSummary, rangeOf, shiftDay, toggleValue, valuesOf, viewerFilterId,
-  visibleFilters, withKeyword, withRange, withValues, withoutFilter,
+  axisEnds, barWidth, bucketLabel, componentOf, componentsFor, defaultComponentFor, filtersOf,
+  hasLinkOf, isBucketChosen, isPeriodChosen, keywordOf, layoutOf, linkedClausesOf, newFilterId,
+  numberRangeSummary, periodLabel, periodOf, pillSummary, rangeOf, shiftDay, timelineIntervalOf,
+  toggleValue, valuesOf, viewerFilterId, visibleFilters, withBucket, withHasLink, withKeyword,
+  withLinked, withRange, withValues, withoutFilter,
 } from "./filter-list";
 
 describe("filtersOf", () => {
@@ -315,6 +316,67 @@ describe("the advanced keyword search (p.452, §543)", () => {
     expect(withKeyword(advanced, "region", "sou")).toEqual([
       { property: "status", op: "eq", value: "open" },
       { property: "region", op: "starts_with", value: "sou" },
+    ]);
+  });
+});
+
+describe("filters on linked objects (p.451, §545)", () => {
+  const LINK = "link-1";
+  const kept = { property: "status", op: "eq", value: "open" };
+
+  it("keeps a filter's link, and only with the type it reaches", () => {
+    expect(filtersOf([
+      { id: "f_1", property: "", component: "histogram", link: LINK, linkTo: "t2" },
+      { id: "f_2", property: "title", component: "keyword", link: LINK, linkTo: "t2" },
+      { id: "f_3", property: "", component: "histogram", link: LINK },
+      { id: "f_4", property: "name", component: "keyword", link: LINK },
+    ], "")).toEqual([
+      { id: "f_1", property: "", component: "histogram", link: LINK, linkTo: "t2" },
+      { id: "f_2", property: "title", component: "keyword", link: LINK, linkTo: "t2" },
+      { id: "f_4", property: "name", component: "keyword" },
+    ]);
+  });
+
+  it("writes Has link as its own clause, beside the rest", () => {
+    const on = withHasLink([kept], LINK, true);
+    expect(on).toEqual([kept, { property: LINK, op: "has_link", value: { filters: [] } }]);
+    expect(hasLinkOf(on, LINK)).toBe(true);
+    expect(hasLinkOf(on, "other")).toBe(false);
+    expect(withHasLink(on, LINK, false)).toEqual([kept]);
+  });
+
+  it("puts the linked type's values in one clause, apart from Has link", () => {
+    const far = [{ property: "title", op: "starts_with", value: "Ada" }];
+    const both = withLinked(withHasLink([kept], LINK, true), LINK, far);
+    expect(both).toEqual([
+      kept,
+      { property: LINK, op: "has_link", value: { filters: [] } },
+      { property: LINK, op: "has_link", value: { filters: far } },
+    ]);
+    expect(linkedClausesOf(both, LINK)).toEqual(far);
+    expect(hasLinkOf(both, LINK)).toBe(true);
+    // Clearing the values keeps a Has link somebody ticked.
+    expect(withLinked(both, LINK, [])).toEqual([
+      kept, { property: LINK, op: "has_link", value: { filters: [] } },
+    ]);
+    expect(hasLinkOf(withLinked([kept], LINK, far), LINK)).toBe(false);
+  });
+
+  it("removes and summarises a linked filter inside its link", () => {
+    const far = [{ property: "title", op: "starts_with", value: "Ada" }];
+    const clauses = withLinked(withHasLink([kept], LINK, true), LINK, far);
+    const keyword = { id: "f_2", property: "title", component: "keyword" as const,
+      link: LINK, linkTo: "t2" };
+    const has = { id: "f_1", property: "", component: "histogram" as const,
+      link: LINK, linkTo: "t2" };
+    expect(pillSummary(keyword, clauses)).toBe("starts with “Ada”");
+    expect(pillSummary(has, clauses)).toBe("has a link");
+    expect(pillSummary(has, [kept])).toBe("");
+    expect(withoutFilter(clauses, keyword)).toEqual([
+      kept, { property: LINK, op: "has_link", value: { filters: [] } },
+    ]);
+    expect(withoutFilter(clauses, has)).toEqual([
+      kept, { property: LINK, op: "has_link", value: { filters: far } },
     ]);
   });
 });
