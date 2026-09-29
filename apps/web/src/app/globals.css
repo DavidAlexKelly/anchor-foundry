@@ -2456,6 +2456,10 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 /* Capped: a filter list is a column of choices, and stretching one across a
    whole page leaves each count marooned a foot from its label. */
 .canvas-filter-group { border: 0; padding: 0; margin: 0 0 12px; max-width: 320px; }
+
+/* p.451's Grouped display for linked filters (§546). */
+.canvas-filter-link-group { border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; margin-bottom: 8px; }
+.canvas-filter-link-group > summary { cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .canvas-filter-group legend {
   font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--ink-soft); padding: 0 0 4px;

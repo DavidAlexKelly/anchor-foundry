@@ -143,3 +143,71 @@ def test_the_panel_adds_a_filter_on_a_link(page, api, world) -> None:
     save(page)
     filters = mod.definition()["layout"]["fl"]["props"]["filters"]
     assert filters == [linked(world, "title", "keyword")], filters
+
+
+# ---- p.451's display options (§546) -----------------------------------------
+
+def build_shown(api, world, name: str, filters: list[dict], **props) -> Module:
+    mod = build(api, world, name, filters)
+    definition = mod.definition()
+    definition["layout"]["fl"]["props"].update(props)
+    mod.define(definition)
+    return mod
+
+
+def test_grouped_linked_filters_sit_in_a_section_with_their_count(page, api, world) -> None:
+    mod = build_shown(api, world, "Links grouped",
+                      [linked(world), linked(world, "title", "keyword", fid="f_2")],
+                      linkDisplay="grouped")
+    open_module(page, mod)
+    group = page.get_by_test_id("filter-link-group")
+    expect(group).to_have_count(1)
+    # Both of the link's filters in it, and the linked issues counted: four,
+    # every issue being linked to somebody in the set.
+    expect(group.get_by_test_id("filter-has-link-f_1")).to_be_visible()
+    expect(group.get_by_role("searchbox")).to_be_visible()
+    expect(group.get_by_test_id("filter-link-count")).to_have_text("4")
+    group.get_by_test_id("filter-has-link-f_1").check()
+    rows_are(page, ["E1", "E2"], "the people with an issue")
+
+
+def test_the_count_is_of_the_objects_linked_to_the_set(page, api, world) -> None:
+    """Over Ada alone, her two issues - not the four the linked type holds."""
+    mod = build_shown(api, world, "Links grouped Ada", [linked(world)], linkDisplay="grouped")
+    definition = mod.definition()
+    definition["variables"]["v_all"]["object_set"]["filters"] = [
+        {"property": "name", "op": "eq", "value": "Ada"}]
+    mod.define(definition)
+    open_module(page, mod)
+    expect(page.get_by_test_id("filter-link-count")).to_have_text("2")
+
+
+def test_a_collapsed_group_starts_closed(page, api, world) -> None:
+    mod = build_shown(api, world, "Links collapsed", [linked(world)],
+                      linkDisplay="grouped", collapseLinked=True)
+    open_module(page, mod)
+    group = page.get_by_test_id("filter-link-group")
+    expect(group).not_to_have_attribute("open", "")
+    expect(page.get_by_test_id("filter-has-link-f_1")).not_to_be_visible()
+    group.locator("summary").click()
+    expect(page.get_by_test_id("filter-has-link-f_1")).to_be_visible()
+
+
+def test_inline_linked_filters_have_no_section(page, api, world) -> None:
+    mod = build_shown(api, world, "Links inline", [linked(world)])
+    open_module(page, mod)
+    expect(page.get_by_test_id("filter-has-link-f_1")).to_be_visible()
+    expect(page.get_by_test_id("filter-link-group")).to_have_count(0)
+
+
+def test_the_panel_groups_and_collapses_linked_filters(page, api, world) -> None:
+    mod = build(api, world, "Links display panel", [linked(world)])
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="People").first.click()
+    expect(page.get_by_test_id("filter-collapse-linked")).to_have_count(0)
+    page.get_by_test_id("filter-link-display").select_option("grouped")
+    page.get_by_test_id("filter-collapse-linked").check()
+    save(page)
+    props = mod.definition()["layout"]["fl"]["props"]
+    assert (props["linkDisplay"], props["collapseLinked"]) == ("grouped", True), props
