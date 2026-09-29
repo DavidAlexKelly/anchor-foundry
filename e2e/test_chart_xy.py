@@ -1276,10 +1276,72 @@ def test_one_axis_unless_asked_and_unless_a_series_is_on_the_right(page, api, si
     eventually(lambda: value_ticks(page), lambda got: got[-1:] == ["90"], what="one axis")
     expect(page.get_by_test_id("chart-right-tick")).to_have_count(0)
     mod = build(api, sites, "Chart XY all left", {
-        "series": [{**SUM_SERIES[0], "axis": "left"}], "multipleAxes": True})
+        "series": [{**SUM_SERIES[0], "axis": "left"}], "multipleAxes": True,
+        # A right axis's settings with no right axis say nothing (§691).
+        "rightMinBound": 100, "rightMaxBound": 50})
     open_module(page, mod)
     eventually(lambda: value_ticks(page), lambda got: got[-1:] == ["90"], what="all on the left")
     expect(page.get_by_test_id("chart-right-tick")).to_have_count(0)
+    expect(page.get_by_test_id("chart-right-axis-problem")).to_have_count(0)
+
+
+def test_the_right_axis_has_its_own_title_format_and_bounds(page, api, sites) -> None:
+    """p.283: multiple value axes are "configured on a per series basis" (§691).
+    The right axis is titled by its own series' aggregation, and takes its own
+    number format and, for lines, its own bounds, leaving the left as it was."""
+    mod = build(api, sites, "Chart XY right axis", {
+        "series": SUM_SERIES, "multipleAxes": True, "showRightTitle": True,
+        "showValueTitle": True, "rightValueFormat": MONEY})
+    open_module(page, mod)
+    eventually(lambda: right_ticks(page), lambda got: got[-1:] == ["$90"], what="money right")
+    assert value_ticks(page)[-1] == "3", value_ticks(page)
+    expect(page.get_by_test_id("chart-right-title")).to_have_text("Sum of capacity")
+    expect(page.get_by_test_id("chart-value-title")).to_have_text("Count, Sum of capacity")
+    assert_inside(page, "Segmented bar chart")
+    frame = box(page.locator("svg[aria-label='Segmented bar chart']"))
+    title = box(page.get_by_test_id("chart-right-title"))
+    assert title["x"] + title["width"] <= frame["x"] + frame["width"] + 0.5, (title, frame)
+    mod = build(api, sites, "Chart XY right bounds", {
+        "kind": "line", "series": SUM_SERIES, "multipleAxes": True, "showRightTitle": True,
+        "rightTitle": "Capacity", "rightMaxBound": 200, "rightValueFormat": MONEY})
+    open_module(page, mod)
+    eventually(lambda: right_ticks(page), lambda got: got[-1:] == ["$200"], what="a fixed top")
+    assert value_ticks(page)[-1] == "3", value_ticks(page)
+    expect(page.get_by_test_id("chart-right-title")).to_have_text("Capacity")
+    assert_inside(page, "Multi-series line chart")
+    # A right bound cuts the plot at its edge, as a left one does.
+    mod = build(api, sites, "Chart XY right cut", {
+        "kind": "line", "series": SUM_SERIES, "multipleAxes": True, "rightMaxBound": 50})
+    open_module(page, mod)
+    eventually(lambda: right_ticks(page), lambda got: got[-1:] == ["50"], what="a low top")
+    expect(page.get_by_test_id("chart-plot-clip")).to_have_count(1)
+    # A bound that cannot be is said, and the axis calculated.
+    mod = build(api, sites, "Chart XY right backwards", {
+        "kind": "line", "series": SUM_SERIES, "multipleAxes": True,
+        "rightMinBound": 100, "rightMaxBound": 50})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-right-axis-problem")).to_contain_text(
+        "The minimum bound must be below the maximum bound.")
+    eventually(lambda: right_ticks(page), lambda got: got[-1:] == ["90"], what="calculated")
+
+
+def test_the_panel_sets_the_right_axis(page, api, sites) -> None:
+    mod = build(api, sites, "Chart XY right panel", {"series": SUM_SERIES})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    expect(page.get_by_test_id("chart-right-axis")).to_have_count(0)
+    page.get_by_test_id("chart-multiple-axes").check()
+    page.get_by_test_id("chart-show-right-title").check()
+    title = page.get_by_test_id("chart-right-title-input")
+    expect(title).to_have_attribute("placeholder", "Sum of capacity")
+    title.fill("Capacity")
+    page.get_by_test_id("chart-right-scale-type").select_option("log")
+    page.get_by_test_id("chart-right-max-bound").fill("1000")
+    save(page)
+    props = mod.definition()["layout"]["chart"]["props"]
+    assert (props["showRightTitle"], props["rightTitle"], props["rightScaleType"],
+            props["rightMaxBound"]) == (True, "Capacity", "log", 1000), props
 
 
 def test_the_panel_puts_a_series_on_an_axis(page, api, sites) -> None:
