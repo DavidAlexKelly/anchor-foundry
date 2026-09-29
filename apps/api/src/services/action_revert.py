@@ -148,6 +148,27 @@ def subject_removed(run: dict[str, Any]) -> bool:
     return any(e.get("kind") == "remove" and e.get("subject") for e in effects_of(run))
 
 
+def links_refusal(links: list[dict[str, Any]], present: list[bool]) -> str | None:
+    """Why the links this run made or removed in a join table cannot be put
+    back (§553), or `None`. `present` is whether each is in its join table now.
+
+    p.156's rule again, for a link: one the run made must still be there, and
+    one it removed still gone, or the undo would reverse somebody else's
+    later decision about it."""
+    for link, now in zip(links, present):
+        if link.get("made") and not now:
+            return (
+                "A link this action made has been removed since, so there is no "
+                "longer anything of it to undo."
+            )
+        if not link.get("made") and now:
+            return (
+                "A link this action removed has been made again since, so undoing "
+                "it would undo that one."
+            )
+    return None
+
+
 def effects_refusal(
     effects: list[dict[str, Any]], current: list[dict[str, Any] | None],
 ) -> str | None:

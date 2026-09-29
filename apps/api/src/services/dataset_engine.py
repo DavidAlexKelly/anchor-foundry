@@ -1028,6 +1028,87 @@ def write_rows(
         con.close()
 
 
+def has_pair(parquet_path: str, from_column: str, to_column: str, pair: tuple[str, str]) -> bool:
+    """Whether a join table holds this link now (§553), compared as text as
+    `join_keys` reads one - what an undo asks before it reverses a link."""
+    con = duckdb.connect()
+    try:
+        try:
+            a, b = _quote_column(from_column), _quote_column(to_column)
+            (count,) = con.execute(
+                f"SELECT count(*) FROM read_parquet({parquet_path!r}) "
+                f"WHERE CAST({a} AS VARCHAR) = ? AND CAST({b} AS VARCHAR) = ?",
+                list(pair),
+            ).fetchone()
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+        return bool(count)
+    finally:
+        con.close()
+
+
+def write_pairs(
+    parquet_path: str,
+    from_column: str,
+    to_column: str,
+    add: list[tuple[str, str]],
+    remove: list[tuple[str, str]],
+    dest_path: str,
+) -> tuple[list[ColumnSchema], int, list[tuple[str, str]], list[tuple[str, str]]]:
+    """Write links into a join table (§553; `action-types` p.20's "Create
+    link(s)" and "Delete link"), as **one** file, for decision 0008's reason.
+
+    Returns the schema, the row count, and **the pairs that actually changed**:
+    a link made that was already there, or removed that was not, changed
+    nothing, and recording it as a change would give an undo something to put
+    back that never happened. Removals are applied before additions, so a
+    submission that removes and re-makes one link leaves it made.
+
+    Keys compare as text, as `join_keys` reads them; a pair is written into the
+    columns' own types, and a key that will not convert is refused.
+    """
+    con = duckdb.connect()
+    try:
+        try:
+            con.execute(f"CREATE TABLE t AS SELECT * FROM read_parquet({parquet_path!r})")
+            a, b = _quote_column(from_column), _quote_column(to_column)
+            # A row with an empty side reads as ("None", …), a pair no key
+            # made or removed here is spelled as - so it is never touched,
+            # and a filter for it survived the sweep as equivalent.
+            existing = {
+                (str(f), str(t)) for f, t in con.execute(
+                    f"SELECT CAST({a} AS VARCHAR), CAST({b} AS VARCHAR) FROM t"
+                ).fetchall()
+            }
+            after = (existing - set(remove)) | set(add)
+            removed = sorted(existing - after)
+            added = sorted(after - existing)
+            for f, t in removed:
+                con.execute(
+                    f"DELETE FROM t WHERE CAST({a} AS VARCHAR) = ? AND CAST({b} AS VARCHAR) = ?",
+                    [f, t],
+                )
+            for f, t in added:
+                try:
+                    con.execute(f"INSERT INTO t ({a}, {b}) VALUES (?, ?)", [f, t])
+                except duckdb.Error as exc:
+                    detail = next(
+                        (line.strip() for line in str(exc).splitlines()[1:] if line.strip()),
+                        _clean(exc),
+                    )
+                    raise DatasetEngineError(f"could not add a link: {detail}") from exc
+            described = con.execute("DESCRIBE t").fetchall()
+            schema = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
+            row_count = int(con.execute("SELECT count(*) FROM t").fetchone()[0])
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            con.execute(f"COPY t TO '{dest_path}' (FORMAT parquet)")
+            return schema, row_count, added, removed
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+    finally:
+        con.close()
+
+
 def write_back_row(
     parquet_path: str,
     primary_key_column: str,
