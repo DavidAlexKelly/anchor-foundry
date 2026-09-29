@@ -2358,6 +2358,12 @@ def _object_series(
 #: test pins the two together the way `PRIMARY_KEY_FILTER` is pinned.
 OBJECT_TYPE_CLAUSE = "$object_type"
 
+#: Objects of several types, as `[object type, key]` pairs (§689): a combined
+#: table's selection (`workshop` p.225), where a key alone could be either of
+#: two objects. `_narrow_set` reads it as this set's own keys among the pairs.
+#: The browser writes the same string (`union-set.ts`).
+OBJECTS_CLAUSE = "$objects"
+
 
 def _narrow_set(
     variable: Variable, base: Any, clauses: Any,
@@ -2425,13 +2431,30 @@ def _narrow_set(
 
     if any(c.get("value") != base["object_type_id"] for c in clauses if names_type(c)):
         return _nothing(base)
-    clauses = [c for c in clauses if not names_type(c)]
+    clauses = [_own_keys(variable, c, str(base["object_type_id"])) for c in clauses
+               if not names_type(c)]
     combined = {**base, "filters": [*(base.get("filters") or []), *clauses]}
     try:
         object_sets.parse(combined, property_types=_types_for(combined, property_types))
     except ValueError as exc:
         raise VariableError(f"{variable.label!r}: {exc}") from exc
     return combined
+
+
+def _own_keys(variable: Variable, clause: Any, type_id: str) -> Any:
+    """An `OBJECTS_CLAUSE`, as the keys it names of this type; any other
+    clause as it is."""
+    from . import object_sets
+
+    if not isinstance(clause, dict) or clause.get("property") != OBJECTS_CLAUSE:
+        return clause
+    pairs = clause.get("value")
+    if clause.get("op") != "in" or not isinstance(pairs, list) or not all(
+            isinstance(pair, list) and len(pair) == 2 for pair in pairs):
+        raise VariableError(
+            f"{variable.label!r}: {OBJECTS_CLAUSE} is `in` a list of [object type, key] pairs")
+    return {"property": object_sets.PRIMARY_KEY_FILTER, "op": "in",
+            "value": [str(key) for kind, key in pairs if str(kind) == type_id]}
 
 
 def _traverse_set(

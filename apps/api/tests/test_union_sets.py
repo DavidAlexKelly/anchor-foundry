@@ -275,3 +275,49 @@ def test_the_browser_reads_a_union_by_the_same_key() -> None:
     with open(path, encoding="utf-8") as handle:
         found = re.search(r'export const UNION = "([^"]+)";', handle.read())
     assert found and found.group(1) == object_sets.UNION
+
+
+# ---- several types' objects, as a combined table selects them (§689) ---------
+def test_a_selection_of_several_types_narrows_each_to_its_own() -> None:
+    """Two objects share the key "K1": the site one of them, the staff member
+    the other. Each part keeps its own."""
+    raw = document(v_filter=var("v_filter", kind="object_set_filter", label="Filter"),
+                   v_narrowed=narrowed())
+    picked = [{"property": "$objects", "op": "in", "value": [[SITES, "K1"], [STAFF, "K9"]]},
+              {"property": "$primary_key", "op": "in", "value": ["K1", "K9"]}]
+    sites, staff = resolve(raw, {"v_filter": picked})["v_narrowed"]["union"]
+    both = {"property": "$primary_key", "op": "in", "value": ["K1", "K9"]}
+    assert sites["filters"][-2:] == [{"property": "$primary_key", "op": "in", "value": ["K1"]},
+                                     both]
+    assert staff["filters"] == [{"property": "$primary_key", "op": "in", "value": ["K9"]}, both]
+
+
+def test_a_set_of_one_type_reads_the_pairs_too() -> None:
+    raw = document(v_filter=var("v_filter", kind="object_set_filter", label="Filter"),
+                   v_narrowed=narrowed(of="v_staff"))
+    picked = [{"property": "$objects", "op": "in", "value": [[SITES, "K1"]]}]
+    assert resolve(raw, {"v_filter": picked})["v_narrowed"]["filters"] == [
+        {"property": "$primary_key", "op": "in", "value": []}]
+
+
+@pytest.mark.parametrize("clause", [
+    {"property": "$objects", "op": "eq", "value": [[SITES, "K1"]]},
+    {"property": "$objects", "op": "in", "value": [SITES, "K1"]},
+    {"property": "$objects", "op": "in", "value": "K1"},
+    {"property": "$objects", "op": "in", "value": [[SITES, "K1", "extra"]]},
+])
+def test_pairs_that_are_not_pairs_are_refused(clause) -> None:
+    raw = document(v_filter=var("v_filter", kind="object_set_filter", label="Filter"),
+                   v_narrowed=narrowed())
+    with pytest.raises(wv.VariableError, match=r"\[object type, key\] pairs"):
+        resolve(raw, {"v_filter": [clause]})
+
+
+def test_the_browser_writes_the_same_pairs_clause() -> None:
+    import re
+
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "web", "src", "components",
+                        "canvas", "union-set.ts")
+    with open(path, encoding="utf-8") as handle:
+        found = re.search(r'export const OBJECTS_CLAUSE = "([^"]+)";', handle.read())
+    assert found and found.group(1) == wv.OBJECTS_CLAUSE
