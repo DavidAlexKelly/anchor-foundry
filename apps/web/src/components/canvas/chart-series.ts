@@ -27,7 +27,11 @@ export interface SeriesSpec {
   measure: string | null;
   /** p.282's display override, or "" for the default. */
   name: string;
+  /** p.283's value axis for this series, when the chart has two (§542). */
+  axis: AxisSide;
 }
+
+export type AxisSide = "left" | "right";
 
 /** A bar's worth of series is plenty: past it the groups are slivers. */
 export const MAX_SERIES = 6;
@@ -43,6 +47,7 @@ export function seriesOf(raw: unknown): SeriesSpec[] {
       aggregate: aggregationOf(s.aggregate),
       measure: typeof s.measure === "string" && s.measure !== "" ? s.measure : null,
       name: typeof s.name === "string" ? s.name : "",
+      axis: s.axis === "left" ? "left" : "right",
     }));
 }
 
@@ -81,4 +86,23 @@ export function mergeSeries(
     values: categories.map((category) =>
       all.map((series) => series.find((p) => p.label === category)?.value ?? NaN)),
   };
+}
+
+/**
+ * p.283's **Use multiple value axes** (§542).
+ *
+ * > "Use multiple value axes: Only available if multiple chart series have
+ * > been configured and allows value axes to be configured on a per series
+ * > basis. This can be helpful when different series on a chart have
+ * > substantially different value scales." (p.283)
+ *
+ * Which axis each series is drawn against, the first series' included. The
+ * first is always on the left, which is the axis every other setting (scale,
+ * bounds, title, format) describes; a further series is on the right unless
+ * it says left, since a second axis nobody is drawn against is not one. With
+ * the option off, or one series, everything is on the left.
+ */
+export function axisSides(specs: readonly SeriesSpec[], twoAxes: boolean): AxisSide[] {
+  if (!twoAxes || specs.length === 0) return ["left", ...specs.map((): AxisSide => "left")];
+  return ["left", ...specs.map((s) => s.axis)];
 }

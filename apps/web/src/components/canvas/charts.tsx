@@ -4,6 +4,7 @@ import {
   legendEntryAt, legendInset, segmentLayout, segmentName, type SegmentLegendPosition,
   type SegmentMode, type Segmented,
 } from "./chart-segments";
+import type { AxisSide } from "./chart-series";
 import {
   valueScale, type AxisTitles, type ValueAxis, type ValueScale,
 } from "./chart-display";
@@ -163,6 +164,45 @@ function Axes({ scale: s, area, format = niceNumber }: {
       })}
     </g>
   );
+}
+
+/** p.283's second value axis (§542): its ticks down the right edge, and no
+ * grid lines of its own, which would be a second grid over the first. */
+function RightAxis({ scale: s, area, format = niceNumber }: {
+  scale: ValueScale;
+  area: Area;
+  format?: (value: number) => string;
+}) {
+  return (
+    <g>
+      <line
+        x1={area.x + area.w} x2={area.x + area.w} y1={area.y} y2={area.y + area.h}
+        stroke="var(--line)" strokeWidth={1}
+      />
+      {s.ticks.map((t, i) => (
+        <text
+          key={i}
+          data-testid="chart-right-tick"
+          x={area.x + area.w + 6}
+          y={(yOf(s, t, area) ?? area.y + area.h) + 4}
+          textAnchor="start"
+          fontSize={11}
+          fill="var(--ink-soft)"
+        >
+          {format(t)}
+        </text>
+      ))}
+    </g>
+  );
+}
+
+/** The width a right-hand axis's numbers take from the plot. */
+const RIGHT_AXIS = 44;
+
+/** A legend entry's words: the series' name, and which axis it is read
+ * against when there are two. */
+function sideLabel(name: string, side: AxisSide | undefined): string {
+  return side === "right" ? `${name} (right)` : name;
 }
 
 /** p.283's titles: the value axis's up the left edge and the categorical
@@ -676,10 +716,12 @@ export function PieChart({
  */
 export function SegmentedBarChart({
   data, mode, drill, showLegend = true, titles, valueText, categoryText,
-  legend = "bottom", names,
+  legend = "bottom", names, sides,
 }: {
   data: Segmented;
   mode: SegmentMode;
+  /** p.283's second value axis for grouped series (§542). */
+  sides?: AxisSide[];
   drill?: Drill;
   showLegend?: boolean;
   titles?: AxisTitles;
@@ -702,10 +744,18 @@ export function SegmentedBarChart({
   };
   const beside = legend === "left" || legend === "right";
   const { bars, max } = segmentLayout(data, mode);
+  // A second axis only for bars side by side: a stack adds its parts, and
+  // parts read against two axes do not add.
+  const twoAxes = mode === "grouped" && (sides?.includes("right") ?? false);
+  if (twoAxes) area.w -= RIGHT_AXIS;
+  const sideOf = (segment: number) => (twoAxes ? sides?.[segment] ?? "left" : "left");
+  const tallest = (side: AxisSide) =>
+    Math.max(0, ...bars.filter((b) => sideOf(b.segment) === side).map((b) => b.to));
   // Calculated, always: a stack's height is the sum of its segments, which a
   // logarithmic axis would not show, and a percentage's bound is 100%, not a
   // number a builder types (§536).
-  const s = valueScale([0, max], CALCULATED);
+  const s = valueScale([0, twoAxes ? tallest("left") : max], CALCULATED);
+  const right = valueScale([0, tallest("right")], CALCULATED);
   const slot = area.w / Math.max(data.categories.length, 1);
   const barWidth = Math.max(2, slot * 0.72);
   const percent = mode === "percentage";
@@ -721,6 +771,7 @@ export function SegmentedBarChart({
         area={area}
         format={percent ? (v) => `${Math.round(v * 100)}%` : valueText ?? niceNumber}
       />
+      {twoAxes && <RightAxis scale={right} area={area} format={valueText ?? niceNumber} />}
       <AxisTitleMarks
         titles={titles}
         area={area}
@@ -730,8 +781,9 @@ export function SegmentedBarChart({
       {bars.map((bar, i) => {
         const category = data.categories[bar.category] ?? "";
         const segment = data.segments[bar.segment] ?? "";
-        const top = yOf(s, bar.to, area) ?? area.y;
-        const bottom = yOf(s, bar.from, area) ?? area.y + area.h;
+        const scale = sideOf(bar.segment) === "right" ? right : s;
+        const top = yOf(scale, bar.to, area) ?? area.y;
+        const bottom = yOf(scale, bar.from, area) ?? area.y + area.h;
         const x = area.x + slot * bar.category + (slot - barWidth) / 2 + barWidth * bar.offset;
         return (
           <rect
@@ -774,10 +826,11 @@ export function SegmentedBarChart({
             data-segment={segment}
             transform={`translate(${at.x}, ${at.y})`}
           >
-            <title>{segmentName(segment, names)}</title>
+            <title>{sideLabel(segmentName(segment, names), twoAxes ? sides?.[i] : undefined)}</title>
             <rect width={10} height={10} y={-9} fill={PALETTE[i % PALETTE.length]} />
             <text x={15} fontSize={11} fill="var(--ink)">
-              {shortLabel(segmentName(segment, names), beside ? 15 : 12)}
+              {shortLabel(sideLabel(segmentName(segment, names), twoAxes ? sides?.[i] : undefined),
+                beside ? 15 : 12)}
             </text>
           </g>
         );
@@ -793,10 +846,12 @@ export function SegmentedBarChart({
  */
 export function MultiLineChart({
   data, drill, axis = CALCULATED, nulls = "ignored", showLegend = true,
-  legend = "bottom", titles, valueText, categoryText,
+  legend = "bottom", titles, valueText, categoryText, sides,
 }: {
   data: Segmented;
   drill?: Drill;
+  /** p.283's second value axis (§542): which side each series is read on. */
+  sides?: AxisSide[];
   axis?: ValueAxis;
   nulls?: "ignored" | "gap" | "zeroes";
   showLegend?: boolean;
@@ -814,7 +869,15 @@ export function MultiLineChart({
     h: frame.h - inset.top - inset.bottom,
   };
   const valueOf = (v: number) => (Number.isNaN(v) && nulls === "zeroes" ? 0 : v);
-  const s = valueScale(data.values.flat().map(valueOf), axis);
+  // Two axes when a series is read on the right: the left one is the axis
+  // the panel's scale and bounds describe, and the right one is calculated.
+  const twoAxes = sides?.includes("right") ?? false;
+  if (twoAxes) area.w -= RIGHT_AXIS;
+  const on = (side: AxisSide) => data.values.flatMap((row) =>
+    row.filter((_, series) => (sides?.[series] ?? "left") === side)).map(valueOf);
+  const s = valueScale(on("left"), axis);
+  const right = valueScale(on("right"), CALCULATED);
+  const scaleOf = (series: number) => (sides?.[series] === "right" ? right : s);
   const step = data.categories.length > 1 ? area.w / (data.categories.length - 1) : 0;
   const labelEvery = Math.max(1, Math.ceil(data.categories.length / 8));
   const lines = data.segments.map((_, series) => {
@@ -824,7 +887,7 @@ export function MultiLineChart({
     const dots: { x: number; y: number; category: string; value: number }[] = [];
     data.categories.forEach((category, i) => {
       const value = valueOf(data.values[i]?.[series] ?? NaN);
-      const y = yOf(s, value, area);
+      const y = yOf(scaleOf(series), value, area);
       if (y === null) {
         if (nulls === "gap") open = false;
         return;
@@ -844,6 +907,7 @@ export function MultiLineChart({
       style={{ width: "100%" }}
     >
       <Axes scale={s} area={area} format={valueText ?? tickFormat(axis)} />
+      {twoAxes && <RightAxis scale={right} area={area} format={valueText ?? niceNumber} />}
       <AxisTitleMarks
         titles={titles}
         area={area}
@@ -897,10 +961,11 @@ export function MultiLineChart({
             transform={`translate(${at.x}, ${at.y})`}
           >
             {/* The whole name, where the entry had to shorten it. */}
-            <title>{name}</title>
+            <title>{sideLabel(name, twoAxes ? sides?.[i] : undefined)}</title>
             <rect width={10} height={10} y={-9} fill={PALETTE[i % PALETTE.length]} />
             <text x={15} fontSize={11} fill="var(--ink)">
-              {shortLabel(name, legend === "left" || legend === "right" ? 15 : 12)}
+              {shortLabel(sideLabel(name, twoAxes ? sides?.[i] : undefined),
+                legend === "left" || legend === "right" ? 15 : 12)}
             </text>
           </g>
         );
