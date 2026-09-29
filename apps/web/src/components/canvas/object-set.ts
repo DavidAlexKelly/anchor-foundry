@@ -43,10 +43,12 @@ export interface SetPage {
 export function useSetPage(
   workspaceId: string,
   definition: unknown,
-  { pageSize, sort, variablesPending }: {
+  { pageSize, sort, variablesPending, omit }: {
     pageSize: number;
     sort?: string | string[];
     variablesPending: boolean;
+    /** Properties the widget loads on demand rather than with the page (§693). */
+    omit?: readonly string[];
   },
 ): SetPage {
   const [offset, setOffset] = useState(0);
@@ -63,9 +65,11 @@ export function useSetPage(
     // compares by identity in a query key, so a fresh one each render would
     // refetch every time.
     queryKey: ["canvas-object-set", key, pageSize, offset,
-               Array.isArray(sort) ? sort.join(",") : sort ?? null],
+               Array.isArray(sort) ? sort.join(",") : sort ?? null, (omit ?? []).join(",")],
     queryFn: () =>
-      objApi.evaluateObjectSet(workspaceId, definition, { limit: pageSize, offset, sort }),
+      objApi.evaluateObjectSet(workspaceId, definition, {
+        limit: pageSize, offset, sort, ...(omit?.length ? { omit: [...omit] } : {}),
+      }),
     // Not until the definition has resolved: asking the server to evaluate
     // `undefined` would render "0 objects", which is an answer this does not
     // have yet.

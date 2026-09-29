@@ -5031,6 +5031,17 @@ class ObjectSetIn(BaseModel):
     # caller wanting one ordering should still send, and decision 0002 says a
     # document does not change when you open it.
     sort: str | list[str] | None = None
+    #: Properties to leave out of every row (§693; `workshop` p.266, p.595):
+    #: "Some large properties, such as Geoshape and Vector, are not loaded by
+    #: default to improve performance", and a reader shows them "on demand".
+    #: Names, not types, so the caller says exactly what it will not draw.
+    omit: list[str] = Field(default_factory=list, max_length=100)
+
+
+def _properties_of(row: dict[str, Any], omit: list[str]) -> dict[str, Any]:
+    """A row's properties, less the ones its reader loads on demand."""
+    properties = _jsonb(row["properties"])
+    return {k: v for k, v in properties.items() if k not in omit}
 
 
 class ObjectSetOut(BaseModel):
@@ -6225,7 +6236,8 @@ async def evaluate_object_set(
                 conn, access.workspace_id, body.definition, sort=body.sort,
                 limit=body.limit, offset=body.offset)
         return ObjectSetOut(
-            instances=[InstanceOut(**{**r, "properties": _jsonb(r["properties"])}) for r in rows],
+            instances=[InstanceOut(**{**r, "properties": _properties_of(r, body.omit)})
+                       for r in rows],
             total=total, limit=body.limit, offset=body.offset)
     # **The id first, then the ontology, then the rest of the definition.** An
     # ordered comparison is validated against the declared property types
@@ -6261,7 +6273,8 @@ async def evaluate_object_set(
             sort=sort,
         )
     return ObjectSetOut(
-        instances=[InstanceOut(**{**r, "properties": _jsonb(r["properties"])}) for r in rows],
+        instances=[InstanceOut(**{**r, "properties": _properties_of(r, body.omit)})
+                   for r in rows],
         total=total,
         limit=body.limit,
         offset=body.offset,
