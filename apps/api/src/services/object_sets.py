@@ -710,8 +710,15 @@ UNION_REFUSAL = (
 )
 
 
+def is_union(definition: Any) -> bool:
+    """Whether a definition is a union rather than a set over one type. One
+    naming a type is that type's, whatever else it carries."""
+    return (isinstance(definition, dict) and UNION in definition
+            and not definition.get("object_type_id"))
+
+
 def _refuse_union(definition: dict[str, Any]) -> None:
-    if UNION in definition and not definition.get("object_type_id"):
+    if is_union(definition):
         raise ValueError(UNION_REFUSAL)
 
 

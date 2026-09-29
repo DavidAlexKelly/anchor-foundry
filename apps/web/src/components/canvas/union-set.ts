@@ -66,3 +66,33 @@ export function selectionIn(raw: unknown, typeId: string | null): unknown {
   );
   return other ? [] : raw;
 }
+
+/** p.450's two kinds of filter over a union (§687).
+ *
+ * > "Common property: The properties that the different object types have in
+ * > common. The properties must have the same property ID to be matched
+ * > together… Single property: A unique property that exists on only one of
+ * > the object types." (p.450)
+ *
+ * A property's id here is its api name. **A property some types share and
+ * others lack is neither**, and p.450 offers only the two. A single property
+ * is named with its type, since a filter's label is all a viewer has to tell
+ * whose it is. Each keeps the first type's property otherwise, in that type's
+ * order.
+ *
+ * **Nothing until every type has loaded** (`undefined` for one that has not):
+ * over some of the types, a property only they share would be offered as
+ * common and taken back a moment later. */
+export function unionProperties<P extends { api_name: string; display_name: string }>(
+  loading: readonly ({ displayName: string; properties: readonly P[] } | undefined)[],
+): { common: P[]; single: P[] } {
+  if (loading.some((t) => !t)) return { common: [], single: [] };
+  const types = loading as readonly { displayName: string; properties: readonly P[] }[];
+  const holders = (name: string) =>
+    types.filter((t) => t.properties.some((p) => p.api_name === name)).length;
+  const common = (types[0]?.properties ?? []).filter((p) => holders(p.api_name) === types.length);
+  const single = types.flatMap((t) => t.properties
+    .filter((p) => types.length > 1 && holders(p.api_name) === 1)
+    .map((p) => ({ ...p, display_name: `${p.display_name || p.api_name} (${t.displayName})` })));
+  return { common, single };
+}

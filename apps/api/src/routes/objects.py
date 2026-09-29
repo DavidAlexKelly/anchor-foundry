@@ -52,6 +52,7 @@ from ..services import derived_properties
 from ..services import derived_values
 from ..services import object_sets
 from ..services import object_set_eval
+from ..services import union_reads
 from ..services import link_backing
 from ..services import link_join_tables
 from ..services import object_views as object_views_service
@@ -5129,7 +5130,18 @@ async def group_object_set(
     ones over a second property, or (§615) how many distinct values of it. A pie's slices are sized by this, which is why
     the ordering follows it - the top 20 of 300 has to be the twenty largest
     slices rather than the twenty most populous.
+
+    **A union (§687) is grouped by count**, each part that has the property
+    asked and the answers added up (`union_reads.group`).
     """
+    if object_sets.is_union(body.definition):
+        async with user_connection(access.auth.user_id) as conn:
+            shown, distinct_total, truncated = await union_reads.group(
+                conn, access.workspace_id, body.definition, body.property, body.limit,
+                body.aggregation)
+        return ObjectSetGroupOut(
+            groups=[{"value": value, "count": count, "metric": None} for value, count in shown],
+            distinct_total=distinct_total, truncated=truncated)
     type_id = object_sets.object_type_id_of(body.definition)
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.get_type(conn, access.workspace_id, type_id)
@@ -5207,7 +5219,20 @@ async def distribution_object_set(
     (`object_sets.bucket_filters`) rather than a histogram aggregation on each
     store, which makes it `buckets + 3` counts - and makes "which bar is 40 in"
     a question the cross-store tests already answer, instead of a second one.
+
+    A union (§687) is bucketed on one range, the whole union's
+    (`union_reads.distribution`).
     """
+    if object_sets.is_union(body.definition):
+        async with user_connection(access.auth.user_id) as conn:
+            answer = await union_reads.distribution(
+                conn, access.workspace_id, body.definition, body.property, body.buckets)
+        union_buckets = [ObjectSetDistributionBucket(
+            low=bucket.low, high=bucket.high, closed=bucket.closed, count=n)
+            for bucket, n in answer.buckets]
+        return ObjectSetDistributionOut(
+            buckets=union_buckets, integer=answer.integer, total=answer.total,
+            missing=answer.total - sum(b.count for b in union_buckets))
     type_id = object_sets.object_type_id_of(body.definition)
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.get_type(conn, access.workspace_id, type_id)
@@ -5418,6 +5443,16 @@ async def time_series_object_set(
     first and last populated bucket rather than "the last 30 days", so the same
     saved app does not draw a different picture tomorrow.
     """
+    if object_sets.is_union(body.definition):
+        # §687: each part at one interval, added up (`union_reads.time_series`).
+        interval = object_sets.parse_interval(body.interval)
+        async with user_connection(access.auth.user_id) as conn:
+            filled, candidate, total = await union_reads.time_series(
+                conn, access.workspace_id, body.definition, body.property, interval)
+        return ObjectSetTimeSeriesOut(
+            points=[ObjectSetTimePoint(start=start, count=count) for start, count in filled],
+            interval=candidate, total=total,
+            missing=total - sum(count for _, count in filled))
     # **The ontology first, then the definition**, as `/aggregate` has done
     # since §221. This parsed without the declared types, so a set narrowed by
     # a Filter List's date range - `gte`, `lt` - was refused here while every

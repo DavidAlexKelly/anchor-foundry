@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { keysOf, selectionClauses } from "./object-table-selection";
-import { UNION, selectionIn, tabIndex, typedSelection, unionParts } from "./union-set";
+import {
+  UNION, selectionIn, tabIndex, typedSelection, unionParts, unionProperties,
+} from "./union-set";
 
 /** p.450's union, as the Object Table reads it (§686). */
 
@@ -60,5 +62,35 @@ describe("a selection in a union's tab", () => {
     expect(selectionIn(written, null)).toBe(written);
     expect(selectionIn("junk", "t-sites")).toBe("junk");
     expect(selectionIn([null, 3, written[1]], "t-sites")).toEqual([null, 3, written[1]]);
+  });
+});
+
+describe("the properties a union can be filtered on", () => {
+  const prop = (api_name: string, display_name = "") => ({ api_name, display_name });
+  const sites = { displayName: "Sites", properties: [prop("region", "Region"), prop("size"), prop("name")] };
+  const staff = { displayName: "Staff", properties: [prop("name", "Name"), prop("grade"), prop("region")] };
+  const vans = { displayName: "Vans", properties: [prop("region"), prop("grade", "Grade")] };
+
+  it("are p.450's common ones, in the first type's order, and single ones named with their type", () => {
+    const { common, single } = unionProperties([sites, staff]);
+    expect(common).toEqual([prop("region", "Region"), prop("name")]);
+    expect(single).toEqual([prop("size", "size (Sites)"), prop("grade", "grade (Staff)")]);
+  });
+
+  it("leave out a property some types share and another lacks", () => {
+    const { common, single } = unionProperties([sites, staff, vans]);
+    expect(common.map((p) => p.api_name)).toEqual(["region"]);
+    // `grade` is Staff's and the Vans', `name` the Sites' and the Staff's.
+    expect(single.map((p) => p.api_name)).toEqual(["size"]);
+  });
+
+  it("are none until every type has loaded", () => {
+    expect(unionProperties([sites, undefined])).toEqual({ common: [], single: [] });
+    expect(unionProperties([undefined, staff])).toEqual({ common: [], single: [] });
+  });
+
+  it("are one type's own, all common, for a union of one", () => {
+    expect(unionProperties([sites])).toEqual({ common: sites.properties, single: [] });
+    expect(unionProperties([])).toEqual({ common: [], single: [] });
   });
 });
