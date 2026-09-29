@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   FORMULA_FUNCTIONS, INTEGRATION_METHODS, KIND_LABELS, MAX_FORMULA, MAX_SPAN, WINDOW_TYPES, MAX_TRANSFORMS, TIME_UNITS, TRANSFORM_KINDS, WINDOW_AGGREGATES,
-  blankTransform, transformProblem, transformText, transformsProblem, transformsText, withKind,
+  blankTransform, readableTransforms, transformProblem, transformText, transformsByColumn,
+  transformsProblem, transformsText, withColumnTransforms, withKind,
   type SeriesTransform,
 } from "./series-transforms";
 
@@ -118,5 +119,29 @@ describe("what is wrong with one", () => {
     expect(transformsProblem(Array.from({ length: 10 }, () => blankTransform("derivative")))).toBeNull();
     expect(transformsProblem(Array.from({ length: 11 }, () => blankTransform("derivative"))))
       .toBe("A series takes at most 10 transforms.");
+  });
+});
+
+describe("an Object Table's transforms by column (§555)", () => {
+  const sum = { kind: "cumulative", aggregate: "sum" } as SeriesTransform;
+  const broken = { kind: "formula", expression: "" } as SeriesTransform;
+
+  it("reads the stored map defensively", () => {
+    expect(transformsByColumn({ readings: [sum], other: "x", empty: [] }))
+      .toEqual({ readings: [sum] });
+    expect(transformsByColumn(null)).toEqual({});
+    expect(transformsByColumn([sum])).toEqual({});
+  });
+
+  it("reads a column through its chain only while the chain has no problem", () => {
+    expect(readableTransforms({ readings: [sum] }, "readings")).toEqual([sum]);
+    expect(readableTransforms({ readings: [sum, broken] }, "readings")).toEqual([]);
+    expect(readableTransforms({ readings: [sum] }, "other")).toEqual([]);
+  });
+
+  it("replaces one column's chain, and drops an emptied one", () => {
+    expect(withColumnTransforms({ a: [sum] }, "b", [sum])).toEqual({ a: [sum], b: [sum] });
+    expect(withColumnTransforms({ a: [sum] }, "a", [])).toBeNull();
+    expect(withColumnTransforms({ a: [sum], b: [sum] }, "a", [])).toEqual({ b: [sum] });
   });
 });

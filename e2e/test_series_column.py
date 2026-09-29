@@ -19,7 +19,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import eventually, open_module
+from conftest import eventually, open_builder, open_module, save, settled
 
 SENSORS = b"id,name\nS1,North sensor\nS2,South sensor\nS3,Patchy sensor\n"
 # S1 rises to 40; S2 is flat at 900 (a flat series is the one that divides by a
@@ -90,6 +90,7 @@ def module(api):
         "POST", f"{mod.base}/object-type-sources/{source['id']}/sync", {},
     )
     assert synced["upserted"] == 3, synced
+    mod.sensor_type = type_id
 
     mod.define({
         "format": 2,
@@ -189,3 +190,55 @@ def test_a_flat_series_still_draws_a_line(page, module):
     # Flat means the same y at both ends.
     ys = [float(part.split(" ")[1]) for part in d.replace("M", "").split("L")]
     assert len(set(ys)) == 1, d
+
+
+# ---- p.583's transforms on the column (§555) --------------------------------
+
+def with_transforms(api, module, name: str, transforms):
+    mod = Module(api, name, beside=module)
+    mod.define({
+        "format": 2,
+        "layout": layout({"tbl": {"resolvedName": "CanvasObjectTable", "props": {
+            "objectSetVariable": "v_all", "columns": "name,readings", "pageSize": 25,
+            "seriesTransforms": transforms}}}),
+        "variables": {"v_all": {"id": "v_all", "kind": "object_set", "label": "All",
+                                "object_set": object_set(module.sensor_type)}},
+        "events": {},
+    })
+    return mod
+
+
+def test_a_transformed_column_shows_each_rows_new_series(page, api, module):
+    """p.583: "different time series transforms are applied to the … property
+    to generate new time series". A running total, per row: North's latest is
+    the sum of its four readings, and South's of its own two - not of both."""
+    open_module(page, with_transforms(api, module, "Series cumulative",
+                                      {"readings": [{"kind": "cumulative",
+                                                     "aggregate": "sum"}]}))
+    eventually(lambda: page.get_by_test_id("series-latest").count(),
+               lambda n: n == 3, what="a latest value per row")
+    expect(row_for(page, "North sensor").get_by_test_id("series-latest")).to_have_text("100")
+    expect(row_for(page, "South sensor").get_by_test_id("series-latest")).to_have_text("1,800")
+
+
+def test_a_half_written_chain_leaves_the_plain_series(page, api, module):
+    """The panel names a chain's problem; until it is fixed the column draws
+    the series itself rather than an error."""
+    open_module(page, with_transforms(api, module, "Series broken",
+                                      {"readings": [{"kind": "formula", "expression": ""}]}))
+    eventually(lambda: page.get_by_test_id("series-latest").count(),
+               lambda n: n == 3, what="a latest value per row")
+    expect(row_for(page, "North sensor").get_by_test_id("series-latest")).to_have_text("40")
+
+
+def test_the_panel_edits_a_columns_transforms(page, api, module):
+    mod = with_transforms(api, module, "Series panel", None)
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Object table").first.click()
+    chain = page.get_by_test_id("series-chain-readings")
+    chain.get_by_label("Add a transform").select_option("cumulative")
+    save(page)
+    eventually(lambda: mod.definition()["layout"]["tbl"]["props"].get("seriesTransforms"),
+               lambda got: bool(got) and got["readings"][0]["kind"] == "cumulative",
+               what="the column's chain, saved")

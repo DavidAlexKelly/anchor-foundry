@@ -165,3 +165,37 @@ export function transformsProblem(transforms: SeriesTransform[]): string | null 
 export function withKind(t: SeriesTransform, kind: TransformKind): SeriesTransform {
   return t.kind === kind ? t : blankTransform(kind);
 }
+
+/** An Object Table's transforms, by time series column (§555; p.583's table
+ * with "different time series transforms … applied"). Read defensively: a
+ * stored prop is whatever a document holds, and a column's chain that is not
+ * a list is no chain. */
+export function transformsByColumn(raw: unknown): Record<string, SeriesTransform[]> {
+  // An array is an object too, and its entries are never chains (a check for
+  // it survived the sweep as equivalent): each index holds a transform.
+  if (!raw || typeof raw !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(raw as Record<string, unknown>)
+      .filter((entry): entry is [string, SeriesTransform[]] =>
+        Array.isArray(entry[1]) && entry[1].length > 0),
+  );
+}
+
+/** The chain the column is read through: none while it has a problem, so a
+ * half-edited transform leaves the column drawing its plain series rather
+ * than an error the panel is already naming. */
+export function readableTransforms(raw: unknown, column: string): SeriesTransform[] {
+  const chain = transformsByColumn(raw)[column] ?? [];
+  return transformsProblem(chain) ? [] : chain;
+}
+
+/** The map with one column's chain replaced, or dropped when emptied - so
+ * "has this column got transforms" has one answer, as for its formats. */
+export function withColumnTransforms(
+  raw: unknown, column: string, chain: SeriesTransform[],
+): Record<string, SeriesTransform[]> | null {
+  const next = { ...transformsByColumn(raw) };
+  if (chain.length) next[column] = chain;
+  else delete next[column];
+  return Object.keys(next).length ? next : null;
+}

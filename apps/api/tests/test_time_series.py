@@ -1008,3 +1008,140 @@ def test_a_time_series_has_no_track(
         headers=hdr(fx.viewer_sub),
     )
     assert r.status_code == 404, r.text
+
+
+# ---- p.583's transforms on a table's series (§555) ---------------------------
+#
+# p.583's own example is an Object Table "configured to display two
+# visualizations for each time series" with transforms applied - a page of
+# rows, each row's series transformed on its own. S2's one reading shares its
+# instant with S1's first, so a window that was not partitioned by series
+# would fold one sensor into the other on every kind below.
+
+@pytest.mark.parametrize("transform, s1, s2", [
+    ({"kind": "cumulative", "aggregate": "sum"}, [10, 30, 60], [99]),
+    ({"kind": "rolling", "aggregate": "sum", "window": 1, "unit": "day"}, [10, 30, 60], [99]),
+    ({"kind": "derivative", "unit": "hour"}, [10 / 6, 10 / 18], []),
+    ({"kind": "integral", "unit": "hour", "method": "left"}, [0, 60, 420], [0]),
+    ({"kind": "integral", "unit": "hour", "method": "linear"}, [0, 90, 540], [0]),
+    ({"kind": "periodic", "aggregate": "sum", "window": 1, "unit": "day"}, [30, 30], [99]),
+    ({"kind": "formula", "expression": "x * 2 + 5"}, [25, 45, 65], [203]),
+    ({"kind": "shift", "by": 1, "unit": "hour"}, [10, 20, 30], [99]),
+    ({"kind": "range", "start": "2026-01-01T03:00:00"}, [20, 30], []),
+])
+def test_each_rows_series_is_transformed_on_its_own(
+    client: TestClient, fx: Fixture, ontology: dict, transform: dict, s1: list, s2: list,
+) -> None:
+    assert declare(client, fx, ontology).status_code == 200
+    synced(client, fx, ontology)
+    r = series_points(client, fx, ontology, transforms=[transform])
+    assert r.status_code == 200, r.text
+    rows = {row["primary_key"]: row for row in r.json()["rows"]}
+    assert [p["value"] for p in rows["S1"]["points"]] == pytest.approx(s1)
+    assert [p["value"] for p in rows["S2"]["points"]] == pytest.approx(s2)
+
+
+def test_a_shifted_series_is_moved_in_time(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    assert declare(client, fx, ontology).status_code == 200
+    synced(client, fx, ontology)
+    r = series_points(client, fx, ontology, transforms=[{"kind": "shift", "by": 1, "unit": "hour"}])
+    rows = {row["primary_key"]: row for row in r.json()["rows"]}
+    assert rows["S2"]["points"][0]["at"].startswith("2026-01-01T01:00:00")
+
+
+def test_a_chain_on_a_bucketed_page_reads_the_buckets(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """The bucket first, then the chain, as on a variable (§524): S1's two
+    first-day readings average to 15, and the running total is over buckets."""
+    assert declare(client, fx, ontology).status_code == 200
+    synced(client, fx, ontology)
+    r = series_points(client, fx, ontology, interval="day", aggregate="avg",
+                      transforms=[{"kind": "cumulative", "aggregate": "sum"}])
+    rows = {row["primary_key"]: row for row in r.json()["rows"]}
+    assert [p["value"] for p in rows["S1"]["points"]] == [15, 45]
+    assert [p["value"] for p in rows["S2"]["points"]] == [99]
+
+
+def test_the_allowance_is_taken_after_the_chain(
+    client: TestClient, fx: Fixture, ontology: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A running total over the latest readings is a different series: with an
+    allowance of one point, S1's last total is still sixty."""
+    from src.services import time_series as ts
+    assert declare(client, fx, ontology).status_code == 200
+    synced(client, fx, ontology)
+    monkeypatch.setattr(ts, "SPARK_POINTS", 1)
+    original = ts.points_for_many_sql
+    monkeypatch.setattr(ts, "points_for_many_sql",
+                        lambda **kw: original(**{**kw, "per_series": 1}))
+    r = series_points(client, fx, ontology, transforms=[{"kind": "cumulative", "aggregate": "sum"}])
+    rows = {row["primary_key"]: row for row in r.json()["rows"]}
+    assert [p["value"] for p in rows["S1"]["points"]] == [60]
+
+
+def test_a_bad_transform_is_refused_before_anything_is_read(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    r = series_points(client, fx, ontology, transforms=[{"kind": "cumulative"}])
+    assert r.status_code == 422 and "transform 1" in r.json()["detail"], r.text
+
+
+# ---- a page transformed is each series transformed (§555) --------------------
+
+INTERLEAVED = [
+    ("S1", "2026-01-01T00:00:00", 10.0), ("S2", "2026-01-01T06:00:00", 5.0),
+    ("S1", "2026-01-01T12:00:00", 20.0), ("S2", "2026-01-01T18:00:00", 7.0),
+    ("S1", "2026-01-02T00:00:00", 30.0), ("S2", "2026-01-02T06:00:00", 1.0),
+    ("S1", "2026-01-02T12:00:00", 25.0),
+]
+
+EVERY_KIND = [
+    {"kind": "cumulative", "aggregate": "sum"},
+    {"kind": "rolling", "aggregate": "avg", "window": 1, "unit": "day"},
+    {"kind": "derivative", "unit": "hour"},
+    {"kind": "integral", "unit": "hour", "method": "linear"},
+    {"kind": "integral", "unit": "hour", "method": "left"},
+    {"kind": "integral", "unit": "hour", "method": "right"},
+    {"kind": "periodic", "aggregate": "max", "window": 12, "unit": "hour"},
+    {"kind": "shift", "by": -2, "unit": "hour"},
+    {"kind": "formula", "expression": "x * x - 1"},
+    {"kind": "range", "start": "2026-01-01T10:00:00", "end": "2026-01-02T03:00:00"},
+]
+
+
+@pytest.fixture(scope="module")
+def interleaved(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Two series whose readings alternate in time, so any window, lag or
+    allowance that is not per series takes a neighbour's point."""
+    import duckdb
+    path = str(tmp_path_factory.mktemp("interleaved") / "points.parquet")
+    rows = ", ".join(f"('{k}', TIMESTAMP '{at}', {v})" for k, at, v in INTERLEAVED)
+    duckdb.sql(f"COPY (SELECT * FROM (VALUES {rows}) t(sensor, taken_at, reading)) "
+               f"TO '{path}' (FORMAT parquet)")
+    return path
+
+
+@pytest.mark.parametrize("transform", EVERY_KIND, ids=lambda t: f"{t['kind']}-{t.get('method', '')}")
+@pytest.mark.parametrize("per_series", [2, 100])
+def test_a_page_transformed_is_each_series_transformed_alone(
+    interleaved: str, transform: dict, per_series: int
+) -> None:
+    from src.services import dataset_engine as engine
+    from src.services import time_series as ts
+    chain = ts.parse_transforms([transform])
+    columns = {"key_column": "sensor", "timestamp_column": "taken_at", "value_column": "reading"}
+    many = engine.query(interleaved, ts.points_for_many_sql(
+        **columns, series_ids=["S1", "S2"], interval="none", aggregate="avg",
+        per_series=per_series, transforms=chain))
+    got: dict[str, list] = {}
+    for series, at, value in many.rows:
+        got.setdefault(series, []).append((at, value))
+    for series in ("S1", "S2"):
+        alone = engine.query(interleaved, ts.points_sql(
+            **columns, series_id=series, interval="none", aggregate="avg", transforms=chain))
+        expected = [(at, value) for at, value in alone.rows][-per_series:]
+        assert [at for at, _ in got.get(series, [])] == [at for at, _ in expected], series
+        assert [v for _, v in got.get(series, [])] == pytest.approx([v for _, v in expected]), series

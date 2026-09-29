@@ -260,7 +260,10 @@ import { SeriesCell } from "./SeriesCell";
 import { Sparkline } from "./Sparkline";
 import { useSeriesPoints, type SeriesRef } from "./series-points";
 import { ChartExport } from "./ChartExport";
-import { transformsText } from "./series-transforms";
+import {
+  readableTransforms, transformsByColumn, transformsText, withColumnTransforms,
+} from "./series-transforms";
+import { SeriesTransformsEditor } from "./SeriesTransformsEditor";
 import { outputClauses } from "./action-output";
 import {
   collapsedInitially, columnsOf as sectionColumnsOf, conditionKey, formLayout,
@@ -4590,6 +4593,7 @@ export function CanvasObjectTable({
   inlineEditOneClick = false,
   seriesFormats = null,
   seriesRules = null,
+  seriesTransforms = null,
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
@@ -4615,6 +4619,9 @@ export function CanvasObjectTable({
    * keyed by property API name. §158's rules, comparing the latest value
    * rather than a stored property - see `conditional-formats.ts`. */
   seriesRules?: unknown;
+  /** p.583's time series transforms, by column (§555): each row's series read
+   * through the column's chain. */
+  seriesTransforms?: unknown;
   /** One of the server's `object_sets.SORTS`, **or a property sort** — `name`
    * or `-name` for a property whose declared type has an order both stores
    * agree on (§221's `ORDERABLE_TYPES`), which §231 gave this panel.
@@ -4802,10 +4809,14 @@ export function CanvasObjectTable({
   // would be a second read, and no widget in the corpus has one. When one
   // does, this becomes a loop rather than a different shape.
   const seriesProperty = properties.find((p) => p.data_type === "time_series");
+  // p.583's transforms on the column (§555), each row's series on its own.
+  const seriesChain = seriesProperty
+    ? readableTransforms(seriesTransforms, seriesProperty.api_name) : [];
   const seriesPage = useQuery({
     queryKey: ["canvas-series-points", JSON.stringify(setDefinition ?? null),
                effectiveTypeId, seriesProperty?.api_name, pageSize, offset,
-               Array.isArray(sortRequest) ? sortRequest.join(",") : sortRequest ?? null],
+               Array.isArray(sortRequest) ? sortRequest.join(",") : sortRequest ?? null,
+               JSON.stringify(seriesChain)],
     queryFn: () => objApi.objectSetSeriesPoints(
       workspaceId,
       // The explore path has no object set of its own, so the type *is* the
@@ -4813,7 +4824,7 @@ export function CanvasObjectTable({
       // an unfiltered type is what that path is showing.
       usingSet ? setDefinition : { object_type_id: effectiveTypeId, filters: [] },
       seriesProperty!.api_name,
-      { limit: pageSize, offset, sort: sortRequest },
+      { limit: pageSize, offset, sort: sortRequest, transforms: seriesChain },
     ),
     enabled: !!seriesProperty && !!effectiveTypeId && (!usingSet || !!setDefinition),
     placeholderData: (previous) => previous,
@@ -5755,7 +5766,7 @@ function ObjectTableSettings() {
     lines, valueWrap, frozenColumns, emptyMode, emptyMessage,
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
     inlineEditAction, inlineEditMapping, inlineEditButtonText,
-    inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules,
+    inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules, seriesTransforms,
     actions: { setProp },
   } = useNode((node) => ({
     objectTypeId: node.data.props.objectTypeId,
@@ -5787,6 +5798,7 @@ function ObjectTableSettings() {
     inlineEditOneClick: node.data.props.inlineEditOneClick,
     seriesFormats: node.data.props.seriesFormats,
     seriesRules: node.data.props.seriesRules,
+    seriesTransforms: node.data.props.seriesTransforms,
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   // **`array`, not `object_set`.** p.224 calls these outputs object sets and
@@ -6009,6 +6021,20 @@ function ObjectTableSettings() {
             })
           }
         />
+      ))}
+      {/* p.583's transforms (§555), per series column: "different time series
+          transforms are applied … to generate new time series". */}
+      {seriesColumns.map((name) => (
+        <div key={`transforms-${name}`} className="field" data-testid={`series-chain-${name}`}>
+          <span className="field-label">Series {name}</span>
+          <SeriesTransformsEditor
+            transforms={transformsByColumn(seriesTransforms)[name] ?? []}
+            readOnly={false}
+            onChange={(next) => setProp((p: { seriesTransforms: unknown }) => {
+              p.seriesTransforms = withColumnTransforms(p.seriesTransforms, name, next);
+            })}
+          />
+        </div>
       ))}
       {/* p.241: "the toggle to Enable inline editing will appear within the
           Column configuration section below the Columns list". */}
@@ -6272,7 +6298,7 @@ CanvasObjectTable.craft = {
     narrowHeaders: false, formatFillsCell: false,
     inlineEditAction: null, inlineEditMapping: null, inlineEditButtonText: "",
     inlineEditByDefault: false, inlineEditOneClick: false,
-    seriesFormats: null, seriesRules: null,
+    seriesFormats: null, seriesRules: null, seriesTransforms: null,
   },
   related: { settings: ObjectTableSettings },
 };

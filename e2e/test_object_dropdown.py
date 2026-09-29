@@ -111,17 +111,16 @@ def open_list(page):
     expect(page.get_by_test_id("dropdown-search")).to_be_visible()
 
 
-def option_titles(page) -> list[str]:
-    titles = page.locator(".canvas-dropdown-title")
-    return [(titles.nth(i).text_content() or "").strip() for i in range(titles.count())]
-
-
 def expect_titles(page, expected: list[str]) -> None:
     """Assert the option titles **through a wait**: `count()` and
     `text_content()` do not retry, so reading them straight after a click asks
-    the page before it has re-rendered (§202)."""
-    expect(options(page)).to_have_count(len(expected))
-    assert option_titles(page) == expected, option_titles(page)
+    the page before it has re-rendered (§202).
+
+    **The whole list, retried** - not the count and then one read. A sorted
+    list arrives after the store's page, and the rows are redrawn in their new
+    order with the count unchanged, so waiting on the count and reading once
+    caught a CI run halfway through that redraw: "Bravo Yard" twice."""
+    expect(page.locator(".canvas-dropdown-title")).to_have_text(expected)
 
 
 def test_it_lists_the_objects_by_their_title(page, api, sites) -> None:

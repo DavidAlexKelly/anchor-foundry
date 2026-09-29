@@ -1397,6 +1397,8 @@ export const objects = {
     opts: {
       limit?: number; offset?: number; sort?: string | string[];
       interval?: string; aggregate?: string;
+      /** p.583's transforms, each row's series through them (§555). */
+      transforms?: unknown[];
     } = {},
   ) =>
     request<{
