@@ -21,6 +21,7 @@ whether the rest matters:
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from playwright.sync_api import expect
@@ -84,7 +85,7 @@ def property_row(page, api_name: str) -> int:
     """Which numbered property row holds this property — the dialog labels its
     controls by position, and the fixture's column order is not this file's to
     assume."""
-    names = page.get_by_role("textbox", name="Property")
+    names = page.get_by_role("textbox", name=re.compile(r"^Property \d+ name$"))
     for index in range(names.count()):
         box = page.get_by_role("textbox", name=f"Property {index + 1} name")
         if box.input_value() == api_name:

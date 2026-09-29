@@ -26,6 +26,7 @@ What a geometry is, and which ones are refused, is
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from playwright.sync_api import expect
@@ -77,7 +78,7 @@ def open_type_editor(page, module) -> None:
 
 
 def property_row(page, api_name: str) -> int:
-    names = page.get_by_role("textbox", name="Property")
+    names = page.get_by_role("textbox", name=re.compile(r"^Property \d+ name$"))
     for index in range(names.count()):
         box = page.get_by_role("textbox", name=f"Property {index + 1} name")
         if box.input_value() == api_name:
