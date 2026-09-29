@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import action_metrics
+from ..services import action_log
 from ..services import action_revert
 from ..services import object_edits
 from ..services import action_choices as choices_service
@@ -43,7 +44,7 @@ from ..services import actions as actions_service
 from ..services import audit
 from ..services import dataset_engine as engine
 from ..services import datasets as dataset_service
-from ..lib.errors import ConflictError, NotFoundError
+from ..lib.errors import ConflictError, ForbiddenError, NotFoundError
 from ..services import instance_store
 from ..services import interfaces as interfaces_service
 from ..services import notification_store
@@ -209,6 +210,11 @@ class ActionTypeOut(BaseModel):
     #: draw the toggle in the state it is actually in — a switch that always
     #: renders on is §214's control that looks like it works.
     allow_revert: bool = True
+    #: p.168's action type version, and the action log this type writes to
+    #: (§554; db 0116) - null until one is turned on.
+    version: int = 1
+    log_object_type_id: UUID | None = None
+    log_link_type_id: UUID | None = None
     # **Derived from the rules, not stored** - migration 0044 dropped the
     # column. Kept on the wire because the object-type screens and the
     # Workshop `run_action` editor both ask "which properties does this action
@@ -1485,6 +1491,54 @@ def _revert_effects(
             "after": {**row["before"], **modification["properties"]},
         })
     return effects
+
+
+class ActionLogOut(BaseModel):
+    log_object_type_id: UUID
+    log_link_type_id: UUID
+
+
+@project_router.post(
+    "/{action_type_id}/log", response_model=ActionLogOut, status_code=status.HTTP_201_CREATED
+)
+async def enable_action_log(
+    action_type_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ActionLogOut:
+    """Turn on p.167's action log for an action type (§554): a `[LOG]` object
+    type over a dataset in this project, and its link to the objects each
+    submission edits.
+
+    **Project editor for the datasets, workspace editor for the ontology**:
+    the log is two datasets here and an object type and a link type in the
+    workspace, and each is refused to anyone who could not have made it by
+    hand."""
+    if access.workspace_role not in ("editor", "admin"):
+        raise ForbiddenError("an action log adds an object type, which needs a workspace editor")
+    storage = _dataset_storage()
+    async with user_connection(access.auth.user_id) as conn:
+        action_type = await actions_service.get_action_type(
+            conn, access.workspace_id, action_type_id
+        )
+        made = await action_log.enable(
+            conn, storage, workspace_id=access.workspace_id, project_id=access.project_id,
+            action_type=action_type, by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="action_type.enable_log",
+            resource_type="action_type",
+            resource_id=action_type_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"log_object_type_id": str(made["log_object_type_id"])},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ActionLogOut(**made)
 
 
 @project_router.post("/{action_type_id}/runs/{run_id}/undo", response_model=UndoResult)
@@ -2818,6 +2872,42 @@ async def execute_action(
                 table["add" if pair["kind"] == "create_link" else "remove"].append(
                     (here, there) if pair["subject_end"] == "from" else (there, here)
                 )
+            # p.167's action log (§554): where this submission's log entry and
+            # its links to the edited objects go. Read now, so an action whose
+            # log the person applying it cannot write is refused before anything
+            # is written - p.167: "users need the appropriate permissions for
+            # the action log object type".
+            log_source: dict[str, Any] | None = None
+            log_edits: dict[str, Any] | None = None
+            if action_type.get("log_object_type_id"):
+                log_source = await fetch_one(conn, """
+                    SELECT s.id, s.dataset_id, s.primary_key_column, s.column_mappings,
+                           d.s3_location
+                      FROM object_type_sources s JOIN datasets d ON d.id = s.dataset_id
+                     WHERE s.object_type_id = :tid
+                     ORDER BY s.created_at LIMIT 1
+                """, {"tid": str(action_type["log_object_type_id"])})
+                log_link = link_types.get(str(action_type.get("log_link_type_id")))
+                edits_at = log_link and log_link.get("join_dataset_id") and await fetch_one(
+                    conn, "SELECT s3_location FROM datasets WHERE id = :id",
+                    {"id": str(log_link["join_dataset_id"])},
+                )
+                # Only the log's own source is asked about: its join table was
+                # made beside it, in the same project, so a reader who can see
+                # one can see the other.
+                if log_source is None:
+                    raise ForbiddenError(
+                        "this action is logged into an action log you cannot write, so "
+                        "it cannot be applied"
+                    )
+                if edits_at:
+                    log_edits = {
+                        "dataset_id": str(log_link["join_dataset_id"]),
+                        "s3_location": str(edits_at["s3_location"]),
+                        "from_column": str(log_link["join_from_column"]),
+                        "to_column": str(log_link["join_to_column"]),
+                        "to_type_id": str(log_link["to_object_type_id"]),
+                    }
             run_id = await actions_service.open_run(
                 conn,
                 action_type_id=action_type_id,
@@ -2913,6 +3003,36 @@ async def execute_action(
                     entry(sources_by_type[type_id])["appends"].extend(rows)
             for removal in removals:
                 entry(removal["source"])["deletes"].append(removal["primary_key"])
+            # p.167's log entry (§554): one row for this submission, and a pair
+            # per edited object of the type the log links to - in this commit,
+            # so a submission and its record cannot disagree.
+            log_row: dict[str, Any] | None = None
+            if log_source is not None:
+                edited = action_log.edited_objects(
+                    subject=(object_type_id, str(instance["primary_key"])) if values else None,
+                    others=[
+                        *((m["object_type_id"], modification_rows[
+                            (m["object_type_id"], m["instance_id"])]["primary_key"])
+                          for m in modifications),
+                        *((c["object_type_id"], str(c["primary_key"])) for c in creations),
+                        *((r["object_type_id"], str(r["primary_key"])) for r in removals),
+                    ],
+                )
+                log_row = action_log.log_row(
+                    run_id=run_id, action_type=action_type, user_id=access.auth.user_id,
+                    at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    edited=[key for _type, key in edited], bound=bound,
+                    columns=set(_parse_json(log_source["column_mappings"])),
+                )
+                entry(dict(log_source))["appends"].append(log_row)
+                if log_edits is not None:
+                    table = join_tables.setdefault(log_edits["dataset_id"], {
+                        **log_edits, "add": [], "remove": [],
+                    })
+                    table["add"] += [
+                        (str(run_id), key) for type_id, key in edited
+                        if type_id == log_edits["to_type_id"]
+                    ]
 
             staged_all = []
             async with user_connection(access.auth.user_id) as conn:
@@ -2991,6 +3111,16 @@ async def execute_action(
                         object_type_id=UUID(modification["object_type_id"]),
                         instance_id=modification["instance_id"],
                         properties=modification["properties"],
+                    )
+                if log_row is not None and log_source is not None:
+                    # The log entry findable at once, as a created object is.
+                    log_type = UUID(str(action_type["log_object_type_id"]))
+                    await instance_store.store_for(conn).upsert_instances(
+                        search_prefix=prefix, object_type_id=log_type,
+                        source_id=UUID(str(log_source["id"])),
+                        rows=[(str(run_id), action_log.properties_of(log_row))],
+                        synced_at=datetime.now(timezone.utc),
+                        declared=await ontology_service.list_properties(conn, log_type),
                     )
                 if removals:
                     # The dataset is the record and the index is a projection

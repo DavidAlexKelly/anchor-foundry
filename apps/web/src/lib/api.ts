@@ -2500,6 +2500,13 @@ export const actions = {
    * A run reached through the wrong action type is not found rather than
    * quietly undone — the caller has asked about a pairing that does not
    * exist, and the id they guessed belongs to somebody else's action. */
+  /** p.167's action log (§554): a `[LOG]` object type over a dataset in this
+   * project, linked to what each submission edits. */
+  enableLog: (wid: string, pid: string, actionTypeId: string) =>
+    request<{ log_object_type_id: string; log_link_type_id: string }>(
+      `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/log`,
+      { method: "POST" },
+    ),
   undo: (wid: string, pid: string, actionTypeId: string, runId: string) =>
     request<import("./types").ActionUndoResult>(
       `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/runs/${runId}/undo`,
