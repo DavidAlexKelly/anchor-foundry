@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   LINK_MODES, MAX_DEFAULT_EXPAND, chosenOf, defaultExpandOf, initiallyExpanded, labelFor,
-  linkKey, modeOf, objectViewHref, previewProperties, sortOf, sortedLinkQuery, titleOf,
-  toggleExpanded, visibleLinks,
+  linkKey, modeOf, objectViewHref, previewOf, previewProperties, sortOf, sortedLinkQuery,
+  titleOf, toggleExpanded, visibleLinks,
 } from "./links-widget";
 
 /** p.268-272's Links widget. */
@@ -264,5 +264,33 @@ describe("p.272's Sort linked object by (§548)", () => {
       .toMatchObject({ filters: [{ value: "7" }] });
     expect(sortedLinkQuery(group, undefined)).toBeNull();
     expect(sortedLinkQuery({ ...group, matched_value: null }, "tenure")).toBeNull();
+  });
+});
+
+describe("p.272's Display properties in object preview (§549)", () => {
+  const props = [
+    { api_name: "a", visibility: "normal" }, { api_name: "b", visibility: "prominent" },
+    { api_name: "c", visibility: "hidden" },
+  ];
+
+  it("shows the specified properties, in the order named, in place of the prominent", () => {
+    expect(previewProperties(props, ["c", "a", "gone"]).map((p) => p.api_name))
+      .toEqual(["c", "a"]);
+    expect(previewProperties(props, []).map((p) => p.api_name)).toEqual(["b"]);
+    expect(previewProperties(props, undefined).map((p) => p.api_name)).toEqual(["b"]);
+  });
+
+  it("keeps a chosen link's named properties, and only names", () => {
+    expect(chosenOf([
+      { key: "a:outbound", preview: ["floor", 3, ""] },
+      { key: "b:outbound", preview: [] },
+      { key: "c:outbound", preview: "floor" },
+      { key: "d:outbound", preview: [3, ""] },
+    ])).toEqual([
+      { key: "a:outbound", preview: ["floor"] }, { key: "b:outbound" }, { key: "c:outbound" },
+      { key: "d:outbound" },
+    ]);
+    expect(previewOf([{ key: "a:outbound", preview: ["x"] }], "a:outbound")).toEqual(["x"]);
+    expect(previewOf([{ key: "a:outbound" }], "a:outbound")).toBeUndefined();
   });
 });

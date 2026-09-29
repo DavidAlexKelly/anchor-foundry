@@ -50,6 +50,9 @@ export interface ChosenLink {
   key: string;
   label?: string;
   sort?: string;
+  /** p.272's Display properties in object preview (§549): the linked type's
+   * properties its preview shows in place of the prominent ones. */
+  preview?: string[];
 }
 
 /** The identity of one row: **the type and the end**, not the type.
@@ -74,11 +77,14 @@ export function chosenOf(raw: unknown): ChosenLink[] {
     if (!entry || typeof entry !== "object") continue;
     const item = entry as Partial<ChosenLink>;
     if (typeof item.key !== "string" || !item.key) continue;
+    const named = Array.isArray(item.preview)
+      ? item.preview.filter((p): p is string => typeof p === "string" && !!p) : [];
     out.push({
       key: item.key,
       ...(typeof item.label === "string" && item.label.trim() ? { label: item.label } : {}),
       ...(typeof item.sort === "string" && item.sort.replace(/^-/, "")
         ? { sort: item.sort } : {}),
+      ...(named.length ? { preview: named } : {}),
     });
   }
   return out;
@@ -162,11 +168,24 @@ export function titleOf(
 }
 
 /** p.271's default preview: the type's prominent properties, in the type's
- * order, and never its hidden ones. */
+ * order, and never its hidden ones - or p.272's specified ones for a link
+ * that names them (§549), in the order it names them. A name the type no
+ * longer has is dropped rather than drawn as a row with nothing in it. */
 export function previewProperties<P extends { api_name: string; visibility?: string }>(
   properties: readonly P[],
+  specified?: readonly string[],
 ): P[] {
+  if (specified && specified.length) {
+    return specified
+      .map((name) => properties.find((p) => p.api_name === name))
+      .filter((p): p is P => !!p);
+  }
   return properties.filter((p) => p.visibility === "prominent");
+}
+
+/** The properties a chosen link's preview specifies, if it does. */
+export function previewOf(chosen: readonly ChosenLink[], key: string): string[] | undefined {
+  return chosen.find((c) => c.key === key)?.preview;
 }
 
 /** Where a linked object's Object View opens: the Object Explorer with it

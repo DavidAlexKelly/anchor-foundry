@@ -13,7 +13,6 @@ points at.
 """
 from __future__ import annotations
 
-import time
 import uuid
 
 from playwright.sync_api import expect
@@ -174,16 +173,25 @@ def test_no_star_is_drawn_until_the_answer_is_known(page, api) -> None:
     mod.api.call("PUT", f"/workspaces/{mod.workspace_id}/resource-favourites",
                  {"resource_id": made["resource_id"], "label": made["name"]})
 
-    def slowly(route):
-        time.sleep(2)
-        route.continue_()
-
-    page.route("**/resource-favourites/**", slowly)
+    # **Held, not slowed.** This used to sleep two seconds in the handler and
+    # then let the request through. A sync handler sleeps on the test's own
+    # thread, so when the request arrived while the toolbar wait below was
+    # running, the two seconds were spent inside that wait and the answer was
+    # released the moment it returned - and CI's star was drawn before the
+    # check for its absence ran. Holding the request until the check is made
+    # takes the clock out of it.
+    held = []
+    page.route("**/resource-favourites/**", lambda route: held.append(route))
     page.goto(f"{WEB_BASE}/r/{made['resource_id']}")
-    # The bar is up — the shell rendered — and the star is not on it yet.
+    # The bar is up — the shell rendered — and the question has been asked.
     expect(page.locator(".app-toolbar")).to_be_visible(timeout=30000)
+    eventually(lambda: (page.wait_for_timeout(50), len(held))[1], lambda n: n > 0,
+               what="the star's question to reach the server")
+    # Asked and not answered: the star is not on the bar yet.
     expect(star(page)).to_have_count(0)
 
+    for route in held:
+        route.continue_()
     page.unroute("**/resource-favourites/**")
     eventually(lambda: starred(page), lambda yes: yes,
                what="the star to arrive already filled in")
