@@ -794,6 +794,17 @@ export const datasets = {
       `/workspaces/${wid}/projects/${pid}/datasets/${did}`,
       { method: "PATCH", body: JSON.stringify(input) },
     ),
+  /** p.200's Generate join table (§562): an empty dataset in this project
+   * with a column for each type's primary key, for a many-to-many link. */
+  generateJoinTable: (
+    wid: string,
+    pid: string,
+    input: { from_type_id: string; to_type_id: string; name: string },
+  ) =>
+    request<{ dataset: import("./types").Dataset; from_column: string; to_column: string }>(
+      `/workspaces/${wid}/projects/${pid}/datasets/join-table`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   fork: (
     wid: string,
     pid: string,

@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime as dt
 import decimal
 import os
+import tempfile
 from dataclasses import dataclass
 from typing import Any
 
@@ -804,6 +805,26 @@ def query(
         return TabularResult(columns=columns, rows=rows, total_rows=len(rows), truncated=truncated)
     finally:
         con.close()
+
+
+def empty_parquet(columns: list[tuple[str, str]]) -> bytes:
+    """A Parquet file with these columns - name and DuckDB type - and no rows:
+    a dataset something can map, or write to, before it holds anything (the
+    action log, §554; a generated join table, §562). The names are the
+    caller's, never a user's: each is built from an api name, a letter then
+    letters, digits and underscores, which DuckDB reads the same unquoted
+    (quoting them survived the sweep as equivalent)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = os.path.join(tmp, "data.parquet")
+        con = duckdb.connect()
+        try:
+            definition = ", ".join(f"{name} {kind}" for name, kind in columns)
+            con.execute(f"CREATE TABLE t ({definition})")
+            con.execute(f"COPY t TO '{dest}' (FORMAT parquet)")
+        finally:
+            con.close()
+        with open(dest, "rb") as handle:
+            return handle.read()
 
 
 def export_csv(parquet_path: str, dest_path: str) -> None:

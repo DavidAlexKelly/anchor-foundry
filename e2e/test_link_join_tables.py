@@ -1,10 +1,10 @@
 """A many-to-many link backed by a join table dataset, defined in the dialog
-and followed from an object (§552; `object-link-types` p.35, p.197).
+and followed from an object (§552; `object-link-types` p.200, p.197).
 
     "Join table dataset: For "many-to-many" cardinality link types. This option
      allows you to use a join table dataset to back the link." (p.197)
 
-p.35's own example: flight F2 was flown by two aircraft, which no foreign key
+p.200's own example: flight F2 was flown by two aircraft, which no foreign key
 can say. The API's half - the checks, both directions, set hops and filters -
 is `apps/api/tests/test_link_join_tables.py`. What needs a browser is the
 dialog offering the join table only where p.197 does, reading its columns off
@@ -58,7 +58,7 @@ def test_the_dialog_backs_a_many_to_many_link_with_a_join_table(page, api, world
     from_column = page.get_by_test_id("link-join-from-column")
     expect(from_column.locator("option[value='aircraft']")).to_be_attached()
     from_column.select_option("flight")
-    # p.35: "A column can only be mapped to one primary key."
+    # p.200: "A column can only be mapped to one primary key."
     page.get_by_test_id("link-join-to-column").select_option("flight")
     expect(dialog.get_by_text("Each end needs its own column.")).to_be_visible()
     expect(dialog.get_by_role("button", name="Create link type")).to_be_disabled()

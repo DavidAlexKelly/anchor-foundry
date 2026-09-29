@@ -6,7 +6,7 @@
  *
  * > "Select a dataset that contains columns matching the primary keys for both
  * > selected object types. A column can only be mapped to one primary key."
- * > (p.35)
+ * > (p.200)
  *
  * The server checks all of this (`ontology._normalise_join_table`); the form
  * checks it first so the Save button says why it is off rather than sending a

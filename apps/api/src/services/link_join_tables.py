@@ -1,5 +1,5 @@
 """Following a many-to-many link through its join table (§552; db 0115;
-`object-link-types` p.35, p.197).
+`object-link-types` p.200, p.197).
 
     "Join table dataset: For "many-to-many" cardinality link types. This option
      allows you to use a join table dataset to back the link." (p.197)
@@ -27,6 +27,43 @@ from ..lib.db import fetch_one
 from . import dataset_engine as engine
 from . import object_sets
 from . import storage
+
+
+def generated_columns(from_type: dict[str, Any], to_type: dict[str, Any]) -> tuple[str, str]:
+    """A generated join table's two columns (§562): each end's primary key,
+    named for its type - `flight_key` and `aircraft_key` - and for its end as
+    well when both ends are one type, since p.200's "a column can only be
+    mapped to one primary key" needs two columns to map."""
+    near, far = str(from_type["api_name"]), str(to_type["api_name"])
+    if near == far:
+        return f"from_{near}_key", f"to_{far}_key"
+    return f"{near}_key", f"{far}_key"
+
+
+async def generate(
+    conn: Any, storage_gateway: Any, *, workspace_id: Any, project_id: Any,
+    from_type: dict[str, Any], to_type: dict[str, Any], name: str, by: Any,
+) -> dict[str, Any]:
+    """p.200's Generate join table: "a dataset with the correct schema based
+    on the primary keys of the two object types you have selected". Empty,
+    so the link it backs starts with no pairs and gains them as actions write
+    them (§553) or a build replaces it.
+
+    The keys are text whatever the primary keys' types are: `follow` and
+    `engine.write_pairs` compare them as text, so a column typed otherwise
+    would be one more thing to cast and nothing to gain."""
+    from . import datasets as ds_service
+
+    near, far = generated_columns(from_type, to_type)
+    dataset_id = await ds_service.create_empty(
+        conn, storage_gateway, workspace_id=workspace_id, project_id=project_id,
+        name=name,
+        description=(f"Which {from_type['display_name']} is linked to which "
+                     f"{to_type['display_name']}: one row per link."),
+        columns=[(near, "VARCHAR"), (far, "VARCHAR")], origin="join_table",
+        produced_by_kind="join_table", produced_by_id=None, by=by,
+    )
+    return {"dataset_id": dataset_id, "from_column": near, "to_column": far}
 
 
 def reversed_join(join: dict[str, Any]) -> dict[str, Any]:

@@ -797,6 +797,52 @@ async def commit_versions(
     return committed
 
 
+async def free_name(conn: AsyncConnection, project_id: UUID, wanted: str) -> str:
+    """`wanted`, or `wanted 2`, `wanted 3`, … - the first whose slug this
+    project does not hold yet, for a dataset the platform names itself."""
+    for n in range(1, 100):
+        name = wanted if n == 1 else f"{wanted} {n}"
+        taken = await fetch_one(
+            conn, "SELECT 1 AS x FROM datasets WHERE project_id = :pid AND slug = :s",
+            {"pid": str(project_id), "s": slugify(name)},
+        )
+        if taken is None:
+            return name
+    raise ValueError(f"no free name for a dataset called {wanted!r}")
+
+
+async def create_empty(
+    conn: AsyncConnection, storage: StorageGateway, *, workspace_id: UUID, project_id: UUID,
+    name: str, description: str, columns: list[tuple[str, str]], origin: str,
+    produced_by_kind: str, produced_by_id: UUID | None, by: UUID,
+) -> UUID:
+    """A dataset with these columns and no rows, at version 1 - what a source
+    can map, or an action write to, before anything has happened. Named
+    `name`, or the first free name after it."""
+    from anyio import to_thread
+
+    from .dataset_engine import empty_parquet
+
+    parquet = await to_thread.run_sync(empty_parquet, columns)
+    dataset_id = uuid4()
+    name = await free_name(conn, project_id, name)
+    prefix = await workspace_s3_prefix(conn, workspace_id)
+    await conn.execute(_text("""
+        INSERT INTO datasets (id, project_id, workspace_id, name, slug, description, origin,
+                              s3_location, current_version, created_by)
+        VALUES (:id, :pid, :wid, :name, :slug, :descr, CAST(:origin AS dataset_origin), :loc, 0, :by)
+    """), {"id": str(dataset_id), "pid": str(project_id), "wid": str(workspace_id),
+           "name": name, "slug": slugify(name), "descr": description, "origin": origin,
+           "loc": storage_prefix(prefix, dataset_id), "by": str(by)})
+    await add_version(
+        conn, storage, dataset_id=dataset_id, workspace_id=workspace_id,
+        parquet_bytes=parquet, schema=[ColumnSchema(name=n, data_type=t) for n, t in columns],
+        row_count=0, produced_by_kind=produced_by_kind, produced_by_id=produced_by_id,
+        created_by=by,
+    )
+    return dataset_id
+
+
 async def add_version(
     conn: AsyncConnection,
     storage: StorageGateway,

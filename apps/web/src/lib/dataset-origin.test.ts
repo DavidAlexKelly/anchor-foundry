@@ -32,12 +32,14 @@ describe("madeByText", () => {
 describe("kindText", () => {
   it("has a phrase for every producer the API writes", () => {
     expect(Object.fromEntries(
-      ["model", "sync", "action", "listener", "action_batch", "fork", "rollback", "reparse", "upload", "other"]
+      ["model", "sync", "action", "listener", "action_batch", "fork", "rollback", "reparse", "upload",
+       "action_log", "join_table", "other"]
         .map((k) => [k, kindText(k)]),
     )).toEqual({
       model: "A transform", sync: "A sync", action: "An action", listener: "A listener",
       action_batch: "A batch of actions", fork: "A branch", rollback: "A rollback",
-      reparse: "A re-parse", upload: "An upload", other: "other",
+      reparse: "A re-parse", upload: "An upload", action_log: "An action log",
+      join_table: "A generated join table", other: "other",
     });
   });
 

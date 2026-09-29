@@ -10,7 +10,7 @@
 export type DatasetOrigin = {
   version_number: number;
   /** `produced_by_kind`: model, sync, action, action_batch, fork, rollback,
-   *  upload or reparse. */
+   *  upload, reparse, action_log or join_table. */
   kind: string;
   made_at: string;
   tool: { kind: string; name: string; resource_id: string | null } | null;
@@ -39,6 +39,9 @@ export function kindText(kind: string): string {
     case "rollback": return "A rollback";
     case "reparse": return "A re-parse";
     case "upload": return "An upload";
+    // §554's log and §562's join table are made empty, by the platform.
+    case "action_log": return "An action log";
+    case "join_table": return "A generated join table";
     default: return kind;
   }
 }
