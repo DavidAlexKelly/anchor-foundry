@@ -2986,6 +2986,9 @@ export interface SourceSyncResult {
 export interface ObjectInstance {
   id: string;
   primary_key: string;
+  /** Which type this object is: what tells the rows of a union's page apart
+   * (§688). A read of one type is of the type its caller named. */
+  object_type_id?: string | null;
   properties: Record<string, unknown>;
   /** The reduced value of each array property that declares a reducer
    * (Foundry `object-link-types` p.131–133; db 0088), keyed by property

@@ -56,7 +56,7 @@ import {
   autoSelectKey, hasSelection, keysOf, selectionClauses, toggle as toggleKey,
 } from "./object-table-selection";
 import {
-  selectionIn, tabIndex, typedSelection, unionParts, unionProperties,
+  selectedType, selectionIn, tabIndex, typedSelection, unionParts, unionProperties,
 } from "./union-set";
 import {
   MAX_LAYERS, layerColorOf, layerOpacityOf, layerPoints, layerVisibleOf, layersOf, withLayerSetting,
@@ -156,7 +156,7 @@ import { moved as movedColumn, storageKey as columnsKey, storedChoice, toggled a
   viewerColumnsOf } from "./viewer-columns";
 import { DerivedValue } from "@/components/derived-value";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
-import type { ConditionalRule, ObjectInstance } from "@/lib/types";
+import type { ConditionalRule, ObjectInstance, ObjectTypeDetail } from "@/lib/types";
 import { latest as latestOf } from "./sparkline";
 import {
   // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
@@ -739,12 +739,13 @@ function useSetProperties(workspaceId: string, definition: unknown) {
       queryFn: () => objApi.getType(workspaceId, id),
     })),
   });
+  const loaded = types.map((t) => t.data);
   if (!parts) {
-    return { typeId, properties: types[0]?.data?.properties ?? [], union: null };
+    return { typeId, properties: types[0]?.data?.properties ?? [], union: null, loaded };
   }
-  const union = unionProperties(types.map((t) =>
-    t.data ? { displayName: t.data.display_name, properties: t.data.properties } : undefined));
-  return { typeId, properties: [...union.common, ...union.single], union };
+  const union = unionProperties(loaded.map((t) =>
+    t ? { displayName: t.display_name, properties: t.properties } : undefined));
+  return { typeId, properties: [...union.common, ...union.single], union, loaded };
 }
 
 /** A property picker's options: flat for one type, and for a union in p.450's
@@ -11440,13 +11441,11 @@ CanvasIframe.craft = {
  * turn out to be the same question about the same variable shape, and writing
  * a second answer to it would have been a second thing to keep in step.
  *
- * **Not built, and named rather than approximated**: p.455's "data on one or
- * multiple object types", which needs an object set spanning types and is the
- * same ○ as the Object Table's; p.455's conditional and numerical formatting
- * *configured in the Ontology Manager* is in fact drawn — `PropertyValue` does
- * it — but the sort in p.458 is a single property here, because p.458's own
- * "only shared properties can be sorted on" is about the multi-type case that
- * does not exist yet.
+ * p.455's "data on one or multiple object types" is §688's: over a union of
+ * sets (§686) the list is every type's objects in one order, and p.458's "only
+ * shared properties can be sorted on" is the union's common properties. p.455's
+ * conditional and numerical formatting *configured in the Ontology Manager* is
+ * drawn by `PropertyValue`.
  */
 export function CanvasObjectDropdown({
   objectSetVariable = null,
@@ -11493,31 +11492,38 @@ export function CanvasObjectDropdown({
   // it. `useSetPage` reads `object_type_id` off the same definition — it never
   // needed the response for it — so this costs no request the panel and the
   // other widgets over this set are not already sharing by query key.
-  const typeId =
-    (setDefinition as { object_type_id?: string } | undefined)?.object_type_id ?? null;
-  const type = useQuery({
-    queryKey: ["object-type", typeId],
-    queryFn: () => objApi.getType(workspaceId, typeId!),
-    enabled: !!typeId,
-  });
-  const declared = type.data?.properties ?? [];
-  const setPage = useSetPage(workspaceId, setDefinition, {
+  //
+  // p.455's "one or multiple object types" (§688): over a union the page is
+  // every type's objects in one order, each row naming its type, and each is
+  // drawn by its own type's title and properties. p.458: "If multiple object
+  // types exist in the object set, only shared properties can be sorted on",
+  // so a union sorts and searches by its common properties.
+  const { union, loaded, properties: offered } = useSetProperties(workspaceId, setDefinition);
+  const types = loaded.flatMap((t) => (t ? [t] : []));
+  const ready = loaded.length > 0 && loaded.every((t) => !!t);
+  const declared = union ? union.common : offered;
+  const typeOf = (row: ObjectInstance) =>
+    union ? types.find((t) => t.id === row.object_type_id) : types[0];
+  // **Not read until the types are**, because the sort is theirs to decide
+  // (§688): a page asked for sooner comes back in another order, and p.457's
+  // auto-selection takes its first object and keeps it once the right order
+  // arrives - a dropdown sorted by rank opening on whichever object the
+  // default put first. The set reads as resolving until then.
+  const setPage = useSetPage(workspaceId, ready ? setDefinition : null, {
     pageSize: DROPDOWN_PAGE_LIMIT,
-    // `undefined` rather than `declared` until the read lands: an empty list
-    // reads as "this type orders nothing" and would send the fallback, which is
-    // a different ordering from the one that is about to arrive.
-    sort: dropdownSortOf(sortProperty, type.data ? declared : undefined),
+    sort: dropdownSortOf(sortProperty, declared),
     variablesPending,
   });
-  const titleProperty = declared.find((p) => p.id === type.data?.title_property_id);
+  const titleOf = (type: ObjectTypeDetail | undefined) =>
+    type?.properties.find((p) => p.id === type.title_property_id)?.api_name ?? null;
   const shownNames = propertyListOf(properties);
   const searchable = searchProperties({
     mode: searchMode,
     all: declared,
     // The title is on screen too, and p.458 says search runs on what is
     // displayed — a picker whose search ignored the words it is showing would
-    // be the most surprising thing on the page.
-    shown: [...(titleProperty ? [titleProperty.api_name] : []), ...shownNames],
+    // be the most surprising thing on the page. Every type's, over a union.
+    shown: [...types.flatMap((t) => titleOf(t) ?? []), ...shownNames],
     specific: searchPropertyNames,
   });
 
@@ -11525,7 +11531,13 @@ export function CanvasObjectDropdown({
   const options = rows.filter((row) => matchesQuery(row.properties, query, searchable));
   const keys = keysOf(selectedRaw);
   const chosenKey = keys[0] ?? null;
-  const chosen = rows.find((row) => row.primary_key === chosenKey);
+  // Over a union a key is one type's, and the selection says which.
+  const chosenType = union ? selectedType(selectedRaw) : null;
+  const chosen = rows.find((row) => row.primary_key === chosenKey
+    && (!union || row.object_type_id === chosenType));
+  const selectionOf = (row: ObjectInstance | undefined) => typedSelection(
+    selectionClauses(row ? [row.primary_key] : []),
+    union && row ? String(row.object_type_id ?? "") : null);
   const allowNone = allowNoSelectionOf(allowNoSelection);
 
   // p.457's Allow no selection, off, is p.224's auto-selection: pick the first
@@ -11538,19 +11550,17 @@ export function CanvasObjectDropdown({
   useEffect(() => {
     if (!selectedVariable) return;
     if (autoKey) {
-      setParameter(selectedVariable, selectionClauses([autoKey]));
+      setParameter(selectedVariable, selectionOf(rows[0]));
       return;
     }
     if (!stated) setParameter(selectedVariable, selectionClauses([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoKey, selectedVariable, stated]);
 
-  const pick = (key: string | null) => {
+  const pick = (row: ObjectInstance | null) => {
     setOpen(false);
     setQuery("");
-    if (selectedVariable) {
-      setParameter(selectedVariable, selectionClauses(key ? [key] : []));
-    }
+    if (selectedVariable) setParameter(selectedVariable, selectionOf(row ?? undefined));
   };
 
   const note = truncationNote(setPage.total, rows.length);
@@ -11581,8 +11591,7 @@ export function CanvasObjectDropdown({
               {setPage.unresolved
                 ? "Resolving the object set…"
                 : chosen
-                  ? optionTitleOf(chosen.properties, titleProperty?.api_name ?? null,
-                                  chosen.primary_key)
+                  ? optionTitleOf(chosen.properties, titleOf(typeOf(chosen)), chosen.primary_key)
                   : "Select an object..."}
             </span>
             <span className="canvas-dropdown-caret" aria-hidden>▾</span>
@@ -11620,17 +11629,21 @@ export function CanvasObjectDropdown({
                     type="button"
                     key={row.id}
                     role="option"
-                    aria-selected={row.primary_key === chosenKey}
+                    aria-selected={row === chosen}
                     className="canvas-dropdown-option"
                     data-testid="dropdown-option"
-                    onClick={() => pick(row.primary_key)}
+                    onClick={() => pick(row)}
                   >
                     <span className="canvas-dropdown-title">
-                      {optionTitleOf(row.properties, titleProperty?.api_name ?? null,
-                                     row.primary_key)}
+                      {optionTitleOf(row.properties, titleOf(typeOf(row)), row.primary_key)}
                     </span>
+                    {union && (
+                      <span className="canvas-dropdown-detail" data-testid="dropdown-type">
+                        {typeOf(row)?.display_name}
+                      </span>
+                    )}
                     {visibleProperties({
-                      all: declared, chosen: properties,
+                      all: typeOf(row)?.properties ?? [], chosen: properties,
                       values: row.properties, hideNull: hideNullOf(hideNull),
                     }).map((p) => (
                       <span className="canvas-dropdown-detail" key={p.api_name}
@@ -11679,13 +11692,10 @@ function ObjectDropdownSettings() {
   const { declared, resolved } = useCanvasVariables();
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   const bound = objectSetVariable ? resolved[objectSetVariable] : undefined;
-  const typeId = (bound as { object_type_id?: string } | undefined)?.object_type_id ?? null;
-  const type = useQuery({
-    queryKey: ["object-type", typeId],
-    queryFn: () => objApi.getType(workspaceId, typeId!),
-    enabled: !!typeId,
-  });
-  const names = (type.data?.properties ?? []).map((p) => p.api_name).join(", ");
+  // A union's properties are p.450's common and single ones, and it sorts by
+  // the common alone (p.458, §688).
+  const { properties: offered, union } = useSetProperties(workspaceId, bound);
+  const names = offered.map((p) => p.api_name).join(", ");
 
   return (
     <WidgetSetup
@@ -11779,7 +11789,7 @@ function ObjectDropdownSettings() {
         label="Sort items by"
         testId="dropdown-sort"
         value={sortProperty}
-        properties={type.data?.properties ?? []}
+        properties={union ? union.common : offered}
         onChange={(sort) =>
           setProp((p: { sortProperty: string }) => (p.sortProperty = sort))}
       />

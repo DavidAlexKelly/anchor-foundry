@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { keysOf, selectionClauses } from "./object-table-selection";
 import {
-  UNION, selectionIn, tabIndex, typedSelection, unionParts, unionProperties,
+  UNION, selectedType, selectionIn, tabIndex, typedSelection, unionParts, unionProperties,
 } from "./union-set";
 
 /** p.450's union, as the Object Table reads it (§686). */
@@ -92,5 +92,18 @@ describe("the properties a union can be filtered on", () => {
   it("are one type's own, all common, for a union of one", () => {
     expect(unionProperties([sites])).toEqual({ common: sites.properties, single: [] });
     expect(unionProperties([])).toEqual({ common: [], single: [] });
+  });
+});
+
+describe("the type a selection names", () => {
+  it("is its type clause's, or none", () => {
+    expect(selectedType(typedSelection(selectionClauses(["K1"]), "t-staff"))).toBe("t-staff");
+    expect(selectedType(selectionClauses(["K1"]))).toBeNull();
+    // Wherever in the list it is.
+    expect(selectedType([...selectionClauses(["K1"]),
+                         { property: "$object_type", op: "eq", value: "t-sites" }])).toBe("t-sites");
+    expect(selectedType([null, { property: "$object_type", op: "eq", value: 4 }])).toBeNull();
+    expect(selectedType("t-staff")).toBeNull();
+    expect(selectedType(undefined)).toBeNull();
   });
 });
