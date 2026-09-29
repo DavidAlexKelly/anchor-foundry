@@ -266,6 +266,10 @@ import {
 import { SeriesTransformsEditor } from "./SeriesTransformsEditor";
 import { outputClauses } from "./action-output";
 import {
+  actionItemsOf, activeIndexOf, menuLabelOf, moreActionsOf, withAddedAction, withMoreAction,
+  withoutMoreAction,
+} from "./action-menu";
+import {
   collapsedInitially, columnsOf as sectionColumnsOf, conditionKey, formLayout,
   hasConditions, labelOf as parameterLabel,
   requiredElsewhere, unreachableNote, type FormParameter, type FormSection,
@@ -13901,15 +13905,20 @@ function ActionFormSection({
 }
 
 export function CanvasActionForm({
-  actionTypeId = null,
+  actionTypeId: firstActionTypeId = null,
   subjectVariable = null,
-  title = "",
+  title: firstTitle = "",
   hideHeader = false,
-  parameterDefaults = {},
+  parameterDefaults: firstDefaults = {},
   invalidState = "disabled",
   outputVariable = null,
+  actions: moreActions = [],
 }: {
   actionTypeId?: string | null;
+  /** p.512's "Add item": the further actions, each with its own action,
+   * title and defaults (§556, `action-menu.ts`). With any, the form has a
+   * selection menu upfront. */
+  actions?: unknown;
   /** p.512's "Set custom Action title". */
   title?: string;
   /** p.513's Hide header. */
@@ -13949,6 +13958,18 @@ export function CanvasActionForm({
     | { id?: string; primary_key?: unknown; properties?: Record<string, unknown> }
     | undefined;
   const { set: setParameter } = useCanvasParameters();
+
+  // p.512's selection menu (§556): the item showing decides the action, its
+  // title and its defaults; everything else below is the one form it was.
+  const items = actionItemsOf(
+    { actionTypeId: firstActionTypeId, title: firstTitle, parameterDefaults: firstDefaults },
+    moreActions,
+  );
+  const [activeItem, setActiveItem] = useState(0);
+  const item = items[activeIndexOf(activeItem, items.length)];
+  const actionTypeId = item?.actionTypeId ?? null;
+  const title = item?.title ?? "";
+  const parameterDefaults = item?.parameterDefaults ?? {};
 
   const actionTypesQ = useQuery({
     queryKey: ["action-types", workspaceId],
@@ -14027,7 +14048,9 @@ export function CanvasActionForm({
   const chosen = subjectVariable
     ? subject
     : choosable.find((i) => i.id === picked);
-  const chosenKey = String(chosen?.id ?? "");
+  // With the action: another item is another form, so switching re-seeds it
+  // even on the same object (§556).
+  const chosenKey = `${actionTypeId ?? ""}:${String(chosen?.id ?? "")}`;
   const [seeded, setSeeded] = useState<string | null>(null);
   // Which fields the reader has actually typed in. **The only thing that keeps
   // p.45's overridden default from overwriting somebody's work** (§329): an
@@ -14518,6 +14541,24 @@ export function CanvasActionForm({
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {items.length > 1 && (
+        // p.512: "users will see a selection menu upfront".
+        <label className="field">
+          <span className="field-label">Action</span>
+          <select
+            aria-label="Choose an action"
+            data-testid="action-form-menu"
+            value={activeIndexOf(activeItem, items.length)}
+            onChange={(e) => setActiveItem(Number(e.target.value))}
+          >
+            {items.map((it, i) => (
+              <option key={`${it.actionTypeId}-${i}`} value={i}>
+                {menuLabelOf(it, actionTypesQ.data ?? [])}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {!actionType && <p className="canvas-widget-empty">Action form - pick an action in Settings</p>}
       {actionType && !visibleForm && (
         // p.513's `hidden`. Said rather than drawn as nothing, because a
@@ -14633,9 +14674,11 @@ function ActionFormSettings() {
     hideHeader,
     invalidState,
     outputVariable,
+    moreActions,
     actions: { setProp },
   } = useNode((node) => ({
     actionTypeId: node.data.props.actionTypeId,
+    moreActions: node.data.props.actions,
     subjectVariable: node.data.props.subjectVariable,
     title: node.data.props.title,
     hideHeader: node.data.props.hideHeader,
@@ -14683,6 +14726,55 @@ function ActionFormSettings() {
           ))}
         </select>
       </label>
+      {/* p.512's "Select Add item to include multiple actions, each requiring
+          individual configuration" (§556). With any, the form opens on a
+          selection menu. */}
+      {moreActionsOf(moreActions).map((more, index) => (
+        <div key={index} className="field" data-testid={`action-form-more-${index}`}>
+          <span className="field-label">Action {index + 2}</span>
+          <select
+            aria-label={`Action ${index + 2}`}
+            value={more.actionTypeId ?? ""}
+            onChange={(e) => setProp((p: { actions: unknown }) => {
+              p.actions = withMoreAction(p.actions, index, { actionTypeId: e.target.value || null });
+            })}
+          >
+            <option value="">Choose…</option>
+            {list.data?.map((a) => (
+              <option key={a.id} value={a.id}>{a.display_name}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            aria-label={`Action ${index + 2} title`}
+            value={more.title}
+            placeholder="the action's own name"
+            onChange={(e) => setProp((p: { actions: unknown }) => {
+              p.actions = withMoreAction(p.actions, index, { title: e.target.value });
+            })}
+          />
+          <button
+            type="button"
+            className="btn quiet"
+            aria-label={`Remove action ${index + 2}`}
+            onClick={() => setProp((p: { actions: unknown }) => {
+              p.actions = withoutMoreAction(p.actions, index);
+            })}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="btn quiet"
+        data-testid="action-form-add-item"
+        onClick={() => setProp((p: { actions: unknown }) => {
+          p.actions = withAddedAction(p.actions);
+        })}
+      >
+        Add item
+      </button>
       </>}
       configuration={<>
       <label className="field">
@@ -14776,7 +14868,7 @@ CanvasActionForm.craft = {
   displayName: "Action form",
   props: {
     actionTypeId: null, subjectVariable: null, title: "", hideHeader: false,
-    parameterDefaults: {}, invalidState: "disabled", outputVariable: null,
+    parameterDefaults: {}, invalidState: "disabled", outputVariable: null, actions: [],
   },
   related: { settings: ActionFormSettings },
 };

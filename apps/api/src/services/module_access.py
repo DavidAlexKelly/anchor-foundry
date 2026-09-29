@@ -96,6 +96,19 @@ def _ids_named(node: Any, key_name: str, out: set[str]) -> None:
             _ids_named(item, key_name, out)
 
 
+def further_actions(props: dict[str, Any]) -> list[str]:
+    """The action ids in an Inline Action's `actions` list (p.512's "Add item";
+    §556) - beside its own `actionTypeId`, which no walk over a single key
+    reaches into a list for."""
+    # No list check: whatever else `actions` could hold, its members are not
+    # dicts (a check for it survived the sweep as equivalent).
+    return [
+        str(entry["actionTypeId"]) for entry in props.get("actions") or []
+        if isinstance(entry, dict) and isinstance(entry.get("actionTypeId"), str)
+        and entry["actionTypeId"]
+    ]
+
+
 def referenced(definition: Any) -> dict[str, list[str]]:
     """Every ontology resource this module names, by kind.
 
@@ -126,6 +139,9 @@ def referenced(definition: Any) -> dict[str, list[str]]:
             value = props.get(key)
             if isinstance(value, str) and value:
                 action_types.add(value)
+        # p.512's further actions in one Inline Action (§556), each in a list.
+        for entry in further_actions(props):
+            action_types.add(entry)
         # **Half a string** (p.272, §272). The Links widget stores its chosen
         # links as `"<link type id>:<direction>"`, because a self-link occupies
         # both ends and the id alone names two different rows. No walk over

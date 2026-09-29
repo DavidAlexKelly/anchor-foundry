@@ -38,6 +38,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all
+from . import module_access
 
 #: p.188's "7 days, 30 days, or 90 days. The default is 30."
 PERIODS = (7, 30, 90)
@@ -75,6 +76,9 @@ def module_actions(document: Any) -> dict[str, list[dict[str, str]]]:
             props = node.get("props") if isinstance(node, dict) else None
             if isinstance(props, dict):
                 note(props.get(ACTION_PROP), str(node_id), "widget")
+                # p.512's further actions in the same widget (§556).
+                for further in module_access.further_actions(props):
+                    note(further, str(node_id), "widget")
 
     events = document.get("events") if isinstance(document, dict) else None
     if isinstance(events, dict):
