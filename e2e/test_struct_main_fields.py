@@ -93,3 +93,23 @@ def test_the_fields_dialog_designates_a_main_field(page, api, module) -> None:
     save_type(page)
     eventually(lambda: [f.get("main", False) for f in properties(api, module)["address"]["struct_fields"]],
                lambda got: got == [False, True, True], what="the main fields saved")
+
+
+def test_the_fields_are_reordered_without_a_rename_warning(page, api, module) -> None:
+    """p.169: "reorder them for clarity by clicking and dragging a field's
+    panel" (§676) - here a button each way. A moved field keeps its name, so
+    p.158's rename warning stays away."""
+    open_type_editor(page, module)
+    index = property_row(page, "address")
+    page.get_by_role("button", name=f"Property {index} fields").click()
+    expect(page.get_by_test_id("struct-field-rows")).to_be_visible()
+    before = [f["api_name"] for f in properties(api, module)["address"]["struct_fields"]]
+    expect(page.get_by_role("button", name="Move field 1 up", exact=True)).to_be_disabled()
+    expect(page.get_by_role("button", name=f"Move field {len(before)} down", exact=True)).to_be_disabled()
+    page.get_by_role("button", name=f"Move field {len(before)} up", exact=True).click()
+    expect(page.get_by_test_id("struct-rename-warning")).to_have_count(0)
+    page.get_by_test_id("struct-save").click()
+    save_type(page)
+    expected = before[:-2] + [before[-1], before[-2]]
+    eventually(lambda: [f["api_name"] for f in properties(api, module)["address"]["struct_fields"]],
+               lambda got: got == expected, what="the new order saved")

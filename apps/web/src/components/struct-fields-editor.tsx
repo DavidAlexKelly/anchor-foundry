@@ -34,9 +34,13 @@ import { Dialog } from "@/components/dialog";
 import {
   FIELD_TYPES,
   blankField,
+  draftsOf,
+  fieldsOf,
+  moved,
   problem,
   renamedFields,
   toFieldApiName,
+  type DraftField,
 } from "@/lib/struct-fields";
 import type { PropertyDataType, StructField } from "@/lib/types";
 
@@ -53,16 +57,15 @@ export function StructFieldsEditor({
   value: StructField[] | null | undefined;
   onSave: (next: StructField[]) => void;
 }) {
-  // **Seeded once, from what was open when the dialog mounted.** `value` is
-  // also what `renamed` compares against, and re-reading it on every render
-  // would compare the draft with itself — the warning would never appear.
-  const [saved] = useState<StructField[]>(value ?? []);
-  const [fields, setFields] = useState<StructField[]>(
+  // **Seeded once, from what was open when the dialog mounted**, each row
+  // carrying the name it came in with, which is what `renamed` compares
+  // against (§676) - so a row moved by p.169's reorder is not a rename.
+  const [fields, setFields] = useState<DraftField[]>(
     // p.149 requires at least one field, so a struct being declared for the
     // first time opens on a row rather than on an empty list and a button. The
     // first thing to do is name a field; making somebody click Add to find
     // that out is a step that teaches nothing.
-    value && value.length > 0 ? value.map((f) => ({ ...f })) : [blankField()],
+    value && value.length > 0 ? draftsOf(value) : [blankField()],
   );
 
   // **Functional, every one of them, and the removal is why.** A handler that
@@ -77,7 +80,7 @@ export function StructFieldsEditor({
     );
 
   const missing = problem(fields);
-  const renamed = renamedFields(saved, fields);
+  const renamed = renamedFields(fields);
 
   return (
     <Dialog open={open} wide title={`Struct fields · ${propertyName}`} onClose={onClose}>
@@ -169,7 +172,29 @@ export function StructFieldsEditor({
                   onChange={(e) => patch(index, { main: e.target.checked ? true : undefined })}
                 />
               </td>
-              <td>
+              <td style={{ whiteSpace: "nowrap" }}>
+                {/* p.169: "reorder them for clarity" (§676). Buttons rather than
+                    a drag, which a keyboard can do too. */}
+                <button
+                  type="button"
+                  className="btn quiet"
+                  style={{ padding: "3px 7px", fontSize: 12 }}
+                  aria-label={`Move field ${index + 1} up`}
+                  disabled={index === 0}
+                  onClick={() => setFields((current) => moved(current, index, -1))}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="btn quiet"
+                  style={{ padding: "3px 7px", fontSize: 12 }}
+                  aria-label={`Move field ${index + 1} down`}
+                  disabled={index === fields.length - 1}
+                  onClick={() => setFields((current) => moved(current, index, 1))}
+                >
+                  ↓
+                </button>
                 <button
                   type="button"
                   className="btn"
@@ -229,7 +254,7 @@ export function StructFieldsEditor({
             // than test). The other two boxes take free text and are trimmed
             // where a trailing space is a real thing to type.
             onSave(
-              fields.map((f) => ({
+              fieldsOf(fields).map((f) => ({
                 ...f,
                 display_name: f.display_name.trim(),
                 description: f.description.trim(),

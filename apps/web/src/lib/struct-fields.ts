@@ -97,22 +97,40 @@ export function problem(fields: StructField[]): string | null {
  * next sync**. Same warning, different mechanism, and the mechanism is what
  * makes it actionable — the fix is a sync, and saying so is the point.
  *
- * Matched **by position**, because that is the only identity a row in this
- * dialog has: a field is not addressable by the name being edited, and the
- * list is short and hand-ordered. A field added or removed shifts the
- * comparison, which is why an added row (no previous name) is not a rename.
+ * Matched **by the row's own origin** (§676), the name it was opened with
+ * and carries in `was`. It used to be matched by position, which was right
+ * while rows could only be added and removed at the end; once p.169's
+ * reordering moved them, a field moved up would have read as renamed to its
+ * neighbour. An added row has no origin, so it is never a rename.
  */
-export function renamedFields(
-  before: StructField[] | null | undefined,
-  after: StructField[],
-): string[] {
-  const previous = before ?? [];
+export function renamedFields(after: readonly DraftField[]): string[] {
   const out: string[] = [];
-  for (const [index, field] of after.entries()) {
-    const was = previous[index]?.api_name;
-    const now = field.api_name;
-    if (was && now && was !== now) out.push(was);
+  for (const field of after) {
+    if (field.was && field.api_name && field.was !== field.api_name) out.push(field.was);
   }
+  return out;
+}
+
+/** A dialog row: the field, and the name it was opened with (§676). */
+export type DraftField = StructField & { was?: string };
+
+/** The rows a dialog opens on, each knowing the name it came in with. */
+export function draftsOf(fields: readonly StructField[]): DraftField[] {
+  return fields.map((f) => ({ ...f, was: f.api_name }));
+}
+
+/** The declaration a dialog saves: the rows without their origins. */
+export function fieldsOf(drafts: readonly DraftField[]): StructField[] {
+  return drafts.map(({ was: _, ...f }) => f);
+}
+
+/** p.169's reorder (§676): one row a place up (-1) or down (+1); unchanged at
+ * either end. */
+export function moved<T>(rows: readonly T[], index: number, by: -1 | 1): T[] {
+  const to = index + by;
+  if (index < 0 || index >= rows.length || to < 0 || to >= rows.length) return [...rows];
+  const out = [...rows];
+  [out[index], out[to]] = [out[to]!, out[index]!];
   return out;
 }
 
