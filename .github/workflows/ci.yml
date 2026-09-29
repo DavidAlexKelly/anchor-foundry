@@ -177,8 +177,23 @@ jobs:
   # The browser suite needs the whole stack, so it is its own job rather than a
   # step on one of the above: a failure here means something a viewer would
   # see, and reading that off a job whose name is "api" helps nobody.
-  browser:
+  #
+  # **Four shards, each with its own stack** (§696). One runner took about
+  # eighty minutes for the suite, and every pull request waited on it. The
+  # files are dealt round-robin by `check.sh e2e` from E2E_SHARD, so each shard
+  # is a quarter of the suite on a database and a dev server of its own, and
+  # nothing one shard writes can be read by another. `browser` below is the
+  # one check that says whether all four passed, under the name this job has
+  # always had, so a rule requiring that check still finds it.
+  browser-shard:
+    name: browser shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
+    strategy:
+      # Every shard runs to the end: a failure in one says nothing about the
+      # others, and stopping them would hide the rest of what is red.
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     services:
       postgres:
         image: postgres:16
@@ -243,6 +258,8 @@ jobs:
       - name: Bring the stack up
         run: scripts/dev-up.sh
       - run: scripts/check.sh e2e
+        env:
+          E2E_SHARD: ${{ matrix.shard }}/4
       - name: Server logs on failure
         if: failure()
         # **`-n 40`, not `-n 100`, and not `-100`.** Two bugs in one line,
@@ -275,7 +292,18 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-failures
+          name: e2e-failures-${{ matrix.shard }}
           path: /tmp/anchor-e2e-failures
           if-no-files-found: ignore
           retention-days: 7
+
+  # The four shards as one answer, under the browser job's old name. `always()`
+  # so a failed shard still reaches here and turns this red, rather than
+  # skipping it: a skipped check reads as a pass to anything that only asks
+  # whether it failed.
+  browser:
+    needs: browser-shard
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.browser-shard.result }}" = success

@@ -132,7 +132,26 @@ run_unit()  { ( cd "$ROOT/apps/web" && npm test --silent ); }
 # a handful of bytes and answer the first question anybody asks about a slow
 # run. It prints on success too, which is the point: the report that tells you
 # a test is drifting towards a timeout is the green one, not the red one.
-run_e2e()   { ( cd "$ROOT/e2e" && "$PYTHON" -m pytest -q -ra --durations=15 ); }
+#
+# **E2E_SHARD=i/n runs one shard of the suite** (§696): the files dealt
+# round-robin in name order, so shard i of n takes every n-th file from the
+# i-th. CI runs four on four runners, each with a stack of its own. Unset, it
+# is the whole suite, as it always was. A shard that is not `i/n` with
+# 0 <= i < n is refused rather than read as "no files", which pytest would take
+# as every file and report as the whole suite passing four times.
+e2e_files() {
+  [ -z "${E2E_SHARD:-}" ] && return 0
+  local i="${E2E_SHARD%/*}" n="${E2E_SHARD#*/}"
+  if ! [[ "$i" =~ ^[0-9]+$ && "$n" =~ ^[0-9]+$ ]] || [ "$n" -eq 0 ] || [ "$i" -ge "$n" ]; then
+    echo "E2E_SHARD must be i/n with 0 <= i < n, not '$E2E_SHARD'" >&2
+    return 1
+  fi
+  ls test_*.py | LC_ALL=C sort | awk -v i="$i" -v n="$n" '(NR - 1) % n == i'
+}
+run_e2e() {
+  ( cd "$ROOT/e2e" && files="$(e2e_files)" \
+      && "$PYTHON" -m pytest -q -ra --durations=15 $files )
+}
 
 case "$WHICH" in
   api)    step "API tests" run_api ;;
