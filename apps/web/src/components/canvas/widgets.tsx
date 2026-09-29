@@ -341,7 +341,8 @@ import {
 } from "./chart-display";
 import { MapCanvas, toLatLon, type MapPoint, type MapShape } from "./map";
 import {
-  extentOf, positionAt, selectedTimeOf, selectedTimeText, trackShape,
+  extentOf, nextPlayback, pauseCrossed, pausesOf, positionAt, selectedTimeOf, selectedTimeText,
+  timeLabel, timelineSpan, trackShape, windowOf, withinWindow, type TimeFormat,
 } from "./map-tracks";
 // Aliased on §211's rule: `areaOf` is also §537's chart area option.
 import { areaOf as mapAreaOf, withArea as withMapArea } from "./map-area";
@@ -11988,6 +11989,13 @@ export function CanvasMap({
   trackProperty = null,
   enableTimeline = false,
   selectedTimeVariable = null,
+  windowStartVariable = null,
+  windowEndVariable = null,
+  timeZone = "utc",
+  timeFormat = "local",
+  playingVariable = null,
+  playbackPositionVariable = null,
+  autoPauseVariable = null,
 }: {
   source?: "objects" | "dataset";
   /** An `object_set` variable to plot (roadmap 1.5). When set, this map reads
@@ -12021,6 +12029,18 @@ export function CanvasMap({
   enableTimeline?: boolean;
   /** p.303's Selected time: a timestamp or date variable, read and written. */
   selectedTimeVariable?: string | null;
+  /** p.303's Time window, as two timestamp or date variables (§558). */
+  windowStartVariable?: string | null;
+  windowEndVariable?: string | null;
+  /** p.303's Time zone, and for Local its Time format. */
+  timeZone?: string;
+  timeFormat?: string;
+  /** p.303's Playback state (a boolean variable), Playback position (a
+   * number variable written with the time in milliseconds) and Auto pause at
+   * (a timestamp array variable). */
+  playingVariable?: string | null;
+  playbackPositionVariable?: string | null;
+  autoPauseVariable?: string | null;
 }) {
   const {
     id: nodeId,
@@ -12058,9 +12078,19 @@ export function CanvasMap({
       { limit: Math.min(limit, 200) }),
     enabled: tracking && !!setDefinition,
   });
+  // p.303's Time window (§558): the tracks as they were inside it.
+  const windowStartWritten = useCanvasParameter(windowStartVariable);
+  const windowStartResolved = useCanvasVariable(windowStartVariable);
+  const windowEndWritten = useCanvasParameter(windowEndVariable);
+  const windowEndResolved = useCanvasVariable(windowEndVariable);
+  const timeWindow = windowOf(
+    windowStartWritten !== undefined ? windowStartWritten : windowStartResolved,
+    windowEndWritten !== undefined ? windowEndWritten : windowEndResolved,
+  );
   const tracksByKey = React.useMemo(() => new Map(
-    (tracksPage.data?.rows ?? []).map((row) => [row.primary_key, row.points])),
-  [tracksPage.data]);
+    (tracksPage.data?.rows ?? []).map((row) => [row.primary_key, withinWindow(row.points, timeWindow)])),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [tracksPage.data, timeWindow.start, timeWindow.end]);
   const writtenTime = useCanvasParameter(selectedTimeVariable);
   const resolvedTime = useCanvasVariable(selectedTimeVariable);
   const [ownTime, setOwnTime] = useState<number | null>(null);
@@ -12070,7 +12100,24 @@ export function CanvasMap({
   const selectTime = (ms: number | null) => {
     if (selectedTimeVariable) setParameter(selectedTimeVariable, ms === null ? null : selectedTimeText(ms));
     else setOwnTime(ms);
+    // p.303's Playback position: "the current playback time (in
+    // milliseconds) as a numeric variable".
+    if (playbackPositionVariable && ms !== null) setParameter(playbackPositionVariable, ms);
   };
+  // p.303's Playback state: a boolean variable's when one is bound.
+  const playingWritten = useCanvasParameter(playingVariable);
+  const playingResolved = useCanvasVariable(playingVariable);
+  const [ownPlaying, setOwnPlaying] = useState(false);
+  const playing = playingVariable
+    ? (playingWritten !== undefined ? playingWritten : playingResolved) === true
+    : ownPlaying;
+  const setPlaying = (next: boolean) => {
+    if (playingVariable) setParameter(playingVariable, next);
+    else setOwnPlaying(next);
+  };
+  const pauseWritten = useCanvasParameter(autoPauseVariable);
+  const pauseResolved = useCanvasVariable(autoPauseVariable);
+  const pauses = pausesOf(pauseWritten !== undefined ? pauseWritten : pauseResolved);
 
   const usesProperty = !!filterProperty && filterValue !== undefined && filterValue !== null
     && filterValue !== "";
@@ -12170,7 +12217,24 @@ export function CanvasMap({
         }] : [];
       })
     : [];
-  const timeExtent = tracking ? extentOf([...tracksByKey.values()]) : null;
+  const timeSpan = tracking ? timelineSpan(extentOf([...tracksByKey.values()]), timeWindow) : null;
+  // Playback: a step a tenth of a second, stopping at the end or at the
+  // first auto-pause time it crosses. The latest values are read through a
+  // ref, so the timer is not restarted on every step it causes.
+  const playback = React.useRef({ selectedTime, timeSpan, pauses, selectTime, setPlaying });
+  playback.current = { selectedTime, timeSpan, pauses, selectTime, setPlaying };
+  React.useEffect(() => {
+    if (!playing) return;
+    const timer = window.setInterval(() => {
+      const now = playback.current;
+      if (!now.timeSpan) return;
+      const next = nextPlayback(now.selectedTime, now.timeSpan);
+      const pause = pauseCrossed(now.selectedTime, next.time, now.pauses);
+      now.selectTime(pause ?? next.time);
+      if (pause !== null || next.done) now.setPlaying(false);
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [playing]);
 
   const needs =
     source === "objects"
@@ -12242,12 +12306,16 @@ export function CanvasMap({
           }
         />
       )}
-      {!needs && query.data && tracking && enableTimeline && timeExtent && (
+      {!needs && query.data && tracking && enableTimeline && timeSpan && (
         <MapTimeline
-          start={timeExtent.start}
-          end={timeExtent.end}
+          start={timeSpan.start}
+          end={timeSpan.end}
           selected={selectedTime}
           onSelect={selectTime}
+          playing={playing}
+          onPlaying={setPlaying}
+          label={(ms) => timeLabel(ms, timeZone === "local" ? "local" : "utc",
+            (["12", "24"].includes(timeFormat) ? timeFormat : "local") as TimeFormat)}
         />
       )}
     </div>
@@ -12256,11 +12324,21 @@ export function CanvasMap({
 
 /** p.303's timeline panel under the map (§557): a cursor over the tracks'
  * span, and p.303's "View latest" to let it go. */
-function MapTimeline({ start, end, selected, onSelect }: {
+function MapTimeline({ start, end, selected, onSelect, playing, onPlaying, label }: {
   start: number; end: number; selected: number | null; onSelect: (ms: number | null) => void;
+  playing: boolean; onPlaying: (next: boolean) => void; label: (ms: number) => string;
 }) {
   return (
     <div className="row-actions" data-testid="map-timeline" style={{ gap: 8, marginTop: 6 }}>
+      <button
+        type="button"
+        className="btn quiet"
+        data-testid="map-timeline-play"
+        aria-pressed={playing}
+        onClick={() => onPlaying(!playing)}
+      >
+        {playing ? "Pause" : "Play"}
+      </button>
       <input
         type="range"
         aria-label="Selected time"
@@ -12273,7 +12351,7 @@ function MapTimeline({ start, end, selected, onSelect }: {
         style={{ flex: 1 }}
       />
       <span className="slug" data-testid="map-timeline-time">
-        {selected === null ? "Latest" : new Date(selected).toISOString().replace(".000Z", "Z")}
+        {selected === null ? "Latest" : label(selected)}
       </span>
       <button
         type="button"
@@ -12295,8 +12373,17 @@ function MapSettings() {
     locationColumn, latColumn, lonColumn, labelColumn,
     filterProperty, filterColumn, filterOperator, filterParameter, searchParameter,
     objectSetVariable, areaVariable, trackProperty, enableTimeline, selectedTimeVariable,
+    windowStartVariable, windowEndVariable, timeZone, timeFormat, playingVariable,
+    playbackPositionVariable, autoPauseVariable,
     actions: { setProp },
   } = useNode((node) => ({
+    windowStartVariable: node.data.props.windowStartVariable,
+    windowEndVariable: node.data.props.windowEndVariable,
+    timeZone: node.data.props.timeZone,
+    timeFormat: node.data.props.timeFormat,
+    playingVariable: node.data.props.playingVariable,
+    playbackPositionVariable: node.data.props.playbackPositionVariable,
+    autoPauseVariable: node.data.props.autoPauseVariable,
     areaVariable: node.data.props.areaVariable,
     trackProperty: node.data.props.trackProperty,
     enableTimeline: node.data.props.enableTimeline,
@@ -12584,6 +12671,55 @@ function MapSettings() {
                         .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
                     </select>
                   </label>
+                  {/* The rest of p.303's time configuration (§558). */}
+                  {([
+                    ["windowStartVariable", "Time window from", windowStartVariable, ["timestamp", "date"]],
+                    ["windowEndVariable", "Time window to", windowEndVariable, ["timestamp", "date"]],
+                    ["playingVariable", "Playback state", playingVariable, ["boolean"]],
+                    ["playbackPositionVariable", "Playback position", playbackPositionVariable, ["number"]],
+                    ["autoPauseVariable", "Auto pause at", autoPauseVariable, ["array"]],
+                  ] as const).map(([prop, label, value, kinds]) => (
+                    <label key={prop} className="field">
+                      <span className="field-label">{label}</span>
+                      <select
+                        data-testid={`map-${prop}`}
+                        value={value || ""}
+                        onChange={(e) => setProp((p: Record<string, unknown>) => {
+                          p[prop] = e.target.value || null;
+                        })}
+                      >
+                        <option value="">Not bound</option>
+                        {Object.values(declared)
+                          .filter((v) => (kinds as readonly string[]).includes(v.kind) && !v.derivation)
+                          .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                      </select>
+                    </label>
+                  ))}
+                  <label className="field">
+                    <span className="field-label">Time zone</span>
+                    <select
+                      data-testid="map-time-zone"
+                      value={timeZone === "local" ? "local" : "utc"}
+                      onChange={(e) => setProp((p: { timeZone: string }) => (p.timeZone = e.target.value))}
+                    >
+                      <option value="utc">UTC</option>
+                      <option value="local">Local</option>
+                    </select>
+                  </label>
+                  {timeZone === "local" && (
+                    <label className="field">
+                      <span className="field-label">Time format</span>
+                      <select
+                        data-testid="map-time-format"
+                        value={timeFormat || "local"}
+                        onChange={(e) => setProp((p: { timeFormat: string }) => (p.timeFormat = e.target.value))}
+                      >
+                        <option value="local">Local</option>
+                        <option value="12">12-hour</option>
+                        <option value="24">24-hour</option>
+                      </select>
+                    </label>
+                  )}
                 </>
               )}
             </>
@@ -12709,6 +12845,8 @@ CanvasMap.craft = {
     filterProperty: null, filterColumn: null, filterOperator: "equals",
     filterParameter: null, searchParameter: null, limit: 500, areaVariable: null,
     trackProperty: null, enableTimeline: false, selectedTimeVariable: null,
+    windowStartVariable: null, windowEndVariable: null, timeZone: "utc", timeFormat: "local",
+    playingVariable: null, playbackPositionVariable: null, autoPauseVariable: null,
   },
   related: { settings: MapSettings },
 };

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  extentOf, instantOf, positionAt, selectedTimeOf, selectedTimeText, trackShape,
+  extentOf, instantOf, nextPlayback, pauseCrossed, pausesOf, positionAt, selectedTimeOf,
+  selectedTimeText, timeLabel, timelineSpan, trackShape, windowOf, withinWindow,
 } from "./map-tracks";
 
 const track = [
@@ -47,5 +48,52 @@ describe("p.303's timeline over tracks (§557)", () => {
     expect(extentOf([track, [{ at: "2025-12-31T23:00:00", lat: 0, lon: 0 }]]))
       .toEqual({ start: hour(0) - 3_600_000, end: hour(2) });
     expect(extentOf([[], []])).toBeNull();
+  });
+});
+
+describe("the rest of p.303's time configuration (§558)", () => {
+  it("reads a window from two variables, either end open", () => {
+    expect(windowOf("2026-01-01T01:00:00Z", "")).toEqual({ start: hour(1), end: null });
+    expect(windowOf(null, "2026-01-01")).toEqual({ start: null, end: hour(0) });
+  });
+
+  it("keeps a track's fixes inside the window, ends included", () => {
+    expect(withinWindow(track, { start: hour(1), end: null })).toEqual(track.slice(1));
+    expect(withinWindow(track, { start: null, end: hour(1) })).toEqual(track.slice(0, 2));
+    expect(withinWindow(track, { start: null, end: null })).toEqual(track);
+  });
+
+  it("spans the window where it says and the tracks where it does not", () => {
+    const extent = { start: hour(0), end: hour(2) };
+    expect(timelineSpan(extent, { start: hour(1), end: null })).toEqual({ start: hour(1), end: hour(2) });
+    expect(timelineSpan(null, { start: hour(1), end: hour(3) })).toEqual({ start: hour(1), end: hour(3) });
+    expect(timelineSpan(null, { start: hour(1), end: null })).toBeNull();
+    expect(timelineSpan(extent, { start: hour(3), end: hour(1) })).toBeNull();
+  });
+
+  it("plays across the span in steps, from the start, and stops at the end", () => {
+    const span = { start: 0, end: 2000 };
+    expect(nextPlayback(null, span)).toEqual({ time: 10, done: false });
+    expect(nextPlayback(1000, span)).toEqual({ time: 1010, done: false });
+    expect(nextPlayback(1995, span)).toEqual({ time: 2000, done: true });
+    // From the end, playing again starts over.
+    expect(nextPlayback(2000, span)).toEqual({ time: 10, done: false });
+    expect(nextPlayback(null, { start: 5, end: 5 })).toEqual({ time: 5, done: true });
+  });
+
+  it("pauses at the first auto-pause time a step crosses", () => {
+    expect(pauseCrossed(100, 200, [150, 180, 300])).toBe(150);
+    expect(pauseCrossed(100, 200, [100])).toBeNull();
+    expect(pauseCrossed(100, 200, [200])).toBe(200);
+    expect(pauseCrossed(null, 50, [0, 60])).toBe(0);
+    expect(pausesOf(["2026-01-01T01:00:00Z", "nope", 3])).toEqual([hour(1)]);
+    expect(pausesOf("2026-01-01")).toEqual([]);
+  });
+
+  it("labels the time in UTC as stored, or in the reader's zone and format", () => {
+    expect(timeLabel(hour(1))).toBe("2026-01-01T01:00:00Z");
+    expect(timeLabel(hour(1), "local", "24")).not.toMatch(/AM|PM/);
+    expect(timeLabel(hour(1) + 12 * 3_600_000, "local", "12")).toMatch(/AM|PM/);
+    expect(timeLabel(hour(1), "local", "local")).not.toBe("2026-01-01T01:00:00Z");
   });
 });

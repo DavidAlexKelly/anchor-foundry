@@ -378,6 +378,13 @@ REFERENCE_PROPS = (
     # p.303's Selected time on the Map (§557): a timestamp or date variable
     # the timeline reads and writes, as a picker does its `name`.
     "selectedTimeVariable",
+    # The rest of p.303's time configuration (§558): the window's two ends and
+    # the pause times are read; the playback state and position are written.
+    "windowStartVariable",
+    "windowEndVariable",
+    "playingVariable",
+    "playbackPositionVariable",
+    "autoPauseVariable",
     "name",
 )
 

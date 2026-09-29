@@ -128,3 +128,92 @@ def test_the_panel_sets_the_track_and_the_timeline(page, api, fleet) -> None:
                lambda p: (p.get("trackProperty"), p.get("enableTimeline"),
                           p.get("selectedTimeVariable")) == ("trail", True, "v_time"),
                what="the track, the timeline and the selected time, saved")
+
+
+# ---- the rest of p.303's time configuration (§558) --------------------------
+
+def build_timed(api, fleet, name: str, variables: dict, **props) -> Module:
+    mod = Module(api, name, beside=fleet)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "mp": {"resolvedName": "CanvasMap", "props": {
+                "source": "objects", "objectSetVariable": "v_all", "labelProperty": "name",
+                "trackProperty": "trail", "enableTimeline": True, **props}},
+            "echo": {"resolvedName": "CanvasText", "props": {
+                "tag": "p", "text": "position {{v_pos}} playing {{v_play}}"}},
+        }),
+        "variables": {
+            "v_all": {"id": "v_all", "kind": "object_set", "label": "Vehicles",
+                      "object_set": object_set(fleet.vehicle_type)},
+            "v_pos": {"id": "v_pos", "kind": "number", "label": "Position"},
+            "v_play": {"id": "v_play", "kind": "boolean", "label": "Playing", "default": False},
+            **variables,
+        },
+        "events": {},
+    })
+    return mod
+
+
+def test_a_time_window_shows_only_what_happened_in_it(page, api, fleet) -> None:
+    """From half past one: V2's two fixes are inside and drawn as its line;
+    V1's are all before, so V1 has no position in the window at all. The
+    timeline starts where the window does, not at the first fix inside it."""
+    open_module(page, build_timed(api, fleet, "Tracks window", {
+        "v_from": {"id": "v_from", "kind": "timestamp", "label": "From",
+                   "default": "2026-01-01T01:30:00Z"}}, windowStartVariable="v_from"))
+    expect(pin(page, "Van two")).to_have_count(1, timeout=20000)
+    expect(pin(page, "Van one")).to_have_count(0)
+    expect(page.locator("svg[aria-label='Map'] path", has=page.locator("title"))).to_have_count(1)
+    expect(page.get_by_test_id("map-timeline-slider")).to_have_attribute(
+        "min", str(1767231000000))
+
+
+def test_playback_runs_to_an_auto_pause_and_says_where_it_is(page, api, fleet) -> None:
+    """Play from the start; the timeline stops itself at one o'clock, writes
+    that time as the playback position, and the playback state goes false."""
+    open_module(page, build_timed(api, fleet, "Tracks playback", {
+        "v_pauses": {"id": "v_pauses", "kind": "array", "label": "Pauses",
+                     "default": ["2026-01-01T01:00:00Z"]}},
+        playingVariable="v_play", playbackPositionVariable="v_pos",
+        autoPauseVariable="v_pauses"))
+    play = page.get_by_test_id("map-timeline-play")
+    expect(play).to_have_text("Play", timeout=20000)
+    play.click()
+    expect(play).to_have_text("Pause")
+    expect(page.get_by_test_id("map-timeline-time")).to_have_text(
+        "2026-01-01T01:00:00Z", timeout=30000)
+    expect(play).to_have_text("Play")
+    expect(page.locator("p", has_text="position")).to_contain_text(
+        "position 1767229200000 playing false")
+    # V2 has not started by one o'clock.
+    expect(pin(page, "Van two")).to_have_count(0)
+
+
+def test_a_local_time_zone_labels_the_time_for_the_reader(page, api, fleet) -> None:
+    open_module(page, build(api, fleet, "Tracks local", selectedTimeVariable="v_time",
+                            timeZone="local", timeFormat="12"))
+    expect(page.get_by_test_id("map-timeline-time")).to_contain_text("M", timeout=20000)
+    expect(page.get_by_test_id("map-timeline-time")).not_to_have_text("2026-01-01T00:30:00Z")
+
+
+def test_the_panel_binds_the_rest_of_the_time_configuration(page, api, fleet) -> None:
+    mod = build_timed(api, fleet, "Tracks panel two", {
+        "v_from": {"id": "v_from", "kind": "timestamp", "label": "From"},
+        "v_pauses": {"id": "v_pauses", "kind": "array", "label": "Pauses"}})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Map").first.click()
+    page.get_by_test_id("map-windowStartVariable").select_option("v_from")
+    page.get_by_test_id("map-playingVariable").select_option("v_play")
+    page.get_by_test_id("map-playbackPositionVariable").select_option("v_pos")
+    page.get_by_test_id("map-autoPauseVariable").select_option("v_pauses")
+    page.get_by_test_id("map-time-zone").select_option("local")
+    page.get_by_test_id("map-time-format").select_option("24")
+    save(page)
+    eventually(lambda: mod.definition()["layout"]["mp"]["props"],
+               lambda p: (p.get("windowStartVariable"), p.get("playingVariable"),
+                          p.get("playbackPositionVariable"), p.get("autoPauseVariable"),
+                          p.get("timeZone"), p.get("timeFormat"))
+               == ("v_from", "v_play", "v_pos", "v_pauses", "local", "24"),
+               what="the time configuration, saved")

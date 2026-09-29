@@ -72,3 +72,79 @@ export function extentOf(tracks: readonly (readonly TrackPoint[])[]): { start: n
 export function selectedTimeText(ms: number): string {
   return new Date(ms).toISOString();
 }
+
+// ---- the rest of p.303's time configuration (§558) --------------------------
+
+export interface TimeWindow {
+  start: number | null;
+  end: number | null;
+}
+
+/** p.303's "Time window: Control the time window using two Workshop variables
+ * of type Timestamp or Date." Either end may be open. */
+export function windowOf(start: unknown, end: unknown): TimeWindow {
+  return { start: selectedTimeOf(start), end: selectedTimeOf(end) };
+}
+
+/** A track's fixes inside the window: the map shows where things were then. */
+export function withinWindow(points: readonly TrackPoint[], window: TimeWindow): TrackPoint[] {
+  return points.filter((p) => {
+    const at = instantOf(p.at);
+    return (window.start === null || at >= window.start) && (window.end === null || at <= window.end);
+  });
+}
+
+/** The span the timeline covers: the window where it says, the tracks where
+ * it does not. None while there is nothing to span. */
+export function timelineSpan(
+  extent: { start: number; end: number } | null, window: TimeWindow,
+): { start: number; end: number } | null {
+  const start = window.start ?? extent?.start ?? null;
+  const end = window.end ?? extent?.end ?? null;
+  return start !== null && end !== null && start <= end ? { start, end } : null;
+}
+
+/** Playback crosses a span in this many steps: about twenty seconds at one a
+ * tenth of a second, whatever the span. */
+export const PLAYBACK_STEPS = 200;
+
+/** The next playback time, and whether it has reached the end. From no time
+ * at all it starts at the beginning. */
+export function nextPlayback(
+  current: number | null, span: { start: number; end: number },
+): { time: number; done: boolean } {
+  // No floor under the step: a span of no length ends on its first step
+  // either way (a floor survived the sweep as equivalent).
+  const step = (span.end - span.start) / PLAYBACK_STEPS;
+  const from = current === null || current >= span.end ? span.start : current;
+  const next = Math.min(span.end, from + step);
+  return { time: next, done: next >= span.end };
+}
+
+/** p.303's "Auto pause at: Use a timestamp array variable to automatically
+ * pause playback at specific times": the first pause this step crosses, where
+ * playback stops. */
+export function pauseCrossed(from: number | null, to: number, pauses: readonly number[]): number | null {
+  const crossed = pauses.filter((p) => (from === null || p > from) && p <= to);
+  return crossed.length ? Math.min(...crossed) : null;
+}
+
+/** The pause times an array variable holds, unreadable ones left out. */
+export function pausesOf(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.map(selectedTimeOf).filter((t): t is number => t !== null)
+    : [];
+}
+
+export type TimeZone = "utc" | "local";
+export type TimeFormat = "local" | "12" | "24";
+
+/** p.303's "Time zone: Local or UTC", and for Local its "Time format of
+ * 12-hour, 24-hour, or Local". UTC is ISO, as the selected time is stored. */
+export function timeLabel(ms: number, zone: TimeZone = "utc", format: TimeFormat = "local"): string {
+  if (zone !== "local") return new Date(ms).toISOString().replace(".000Z", "Z");
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium", timeStyle: "medium",
+    ...(format === "local" ? {} : { hour12: format === "12" }),
+  }).format(new Date(ms));
+}
