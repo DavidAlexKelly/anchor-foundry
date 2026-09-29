@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  LINK_MODES, MAX_DEFAULT_EXPAND,
-  chosenOf, defaultExpandOf, initiallyExpanded, labelFor, linkKey, modeOf,
-  toggleExpanded, visibleLinks,
+  LINK_MODES, MAX_DEFAULT_EXPAND, chosenOf, defaultExpandOf, initiallyExpanded, labelFor,
+  linkKey, modeOf, objectViewHref, previewProperties, titleOf, toggleExpanded, visibleLinks,
 } from "./links-widget";
 
 /** p.268-272's Links widget. */
@@ -210,5 +209,32 @@ describe("opening and closing a row", () => {
     toggleExpanded(open, "b");
     toggleExpanded(open, "a");
     expect(open).toEqual(["a"]);
+  });
+});
+
+describe("p.271's linked objects configuration (§547)", () => {
+  it("titles an object by its title property, else its key", () => {
+    const item = { primary_key: "I1", properties: { title: "Printer jam", blank: "  " } };
+    expect(titleOf(item, "title")).toBe("Printer jam");
+    expect(titleOf(item, "blank")).toBe("I1");
+    expect(titleOf(item, "absent")).toBe("I1");
+    expect(titleOf(item, null)).toBe("I1");
+    expect(titleOf({ primary_key: "I2", properties: { n: 0 } }, "n")).toBe("0");
+  });
+
+  it("previews the prominent properties, in the type's order", () => {
+    const props = [
+      { api_name: "a", visibility: "normal" }, { api_name: "b", visibility: "prominent" },
+      { api_name: "c", visibility: "hidden" }, { api_name: "d", visibility: "prominent" },
+      { api_name: "e" },
+    ];
+    expect(previewProperties(props).map((p) => p.api_name)).toEqual(["b", "d"]);
+  });
+
+  it("opens an object in the Explorer the way the Explorer links to one", () => {
+    const type = "11111111-1111-1111-1111-111111111111";
+    const id = "22222222-2222-2222-2222-222222222222";
+    expect(objectViewHref("acme", type, id))
+      .toBe(`/acme/explore?object=${type}%3A${id}`);
   });
 });

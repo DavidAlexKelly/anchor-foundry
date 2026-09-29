@@ -24,6 +24,8 @@
  * look wrong.
  */
 
+import { OBJECT_PARAM, encodeObject } from "../../lib/object-links";
+
 export interface LinkGroup {
   link_type_id: string;
   direction: string;
@@ -130,4 +132,42 @@ export function initiallyExpanded(
 /** Open or close one row, keeping the order stable so React does not remount. */
 export function toggleExpanded(open: readonly string[], key: string): string[] {
   return open.includes(key) ? open.filter((k) => k !== key) : [...open, key];
+}
+
+/**
+ * p.271's linked objects configuration (§547).
+ *
+ * > "Enable exploration on link types: At each link type level, enable a
+ * > button to allow viewing the link type in Object Explorer. Enable open
+ * > object view on linked objects: For each linked object, enable a button to
+ * > allow opening the linked object's Object View in Object Explorer. Enable
+ * > object preview on hover: When hovering over on the title of a linked
+ * > object, preview the linked object's properties. By default, the popover
+ * > includes the linked object's prominent properties …" (p.271)
+ */
+
+/** A linked object's title: its type's title property, or its key when that
+ * is empty - a blank row would be a link to nothing anybody can name. */
+export function titleOf(
+  item: { primary_key: string; properties: Record<string, unknown> },
+  titleProperty: string | null | undefined,
+): string {
+  const value = titleProperty ? item.properties[titleProperty] : undefined;
+  return value === null || value === undefined || String(value).trim() === ""
+    ? item.primary_key : String(value);
+}
+
+/** p.271's default preview: the type's prominent properties, in the type's
+ * order, and never its hidden ones. */
+export function previewProperties<P extends { api_name: string; visibility?: string }>(
+  properties: readonly P[],
+): P[] {
+  return properties.filter((p) => p.visibility === "prominent");
+}
+
+/** Where a linked object's Object View opens: the Object Explorer with it
+ * open, which is the link the Explorer itself writes (§309). */
+export function objectViewHref(workspaceSlug: string, typeId: string, instanceId: string): string {
+  const params = new URLSearchParams({ [OBJECT_PARAM]: encodeObject({ typeId, instanceId }) });
+  return `/${workspaceSlug}/explore?${params.toString()}`;
 }

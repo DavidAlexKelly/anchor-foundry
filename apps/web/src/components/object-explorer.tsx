@@ -251,13 +251,19 @@ export function ObjectExplorer({
   // type that fell off the page would take its `hidden_properties` with it,
   // and the column list below would then draw a property p.111 says to hide.
   // Its own query rather than a wider page: the answer is exactly these ids.
+  //
+  // **And the open object's type**, for the same reason: a link to an object
+  // names its type by id, and that type is on the page of types only by luck.
+  // Without it an object linked from elsewhere (§547's Links widget) never
+  // opened in a workspace of more types than one page holds.
+  const wanted = [...new Set([...criteria.typeIds, ...(openRef ? [openRef.typeId] : [])])].sort();
   const chosen = useQuery({
-    queryKey: ["object-types-by-id", workspaceId, [...criteria.typeIds].sort()],
+    queryKey: ["object-types-by-id", workspaceId, wanted],
     queryFn: () =>
       objApi.listTypes(workspaceId, undefined, {
-        ids: criteria.typeIds, limit: 200,
+        ids: wanted, limit: 200,
       }),
-    enabled: !!workspaceId && criteria.typeIds.length > 0,
+    enabled: !!workspaceId && wanted.length > 0,
   });
   const byId = new Map(
     [...(chosen.data?.items ?? []), ...(types.data?.items ?? [])].map((t) => [t.id, t]),
