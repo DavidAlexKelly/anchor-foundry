@@ -38,9 +38,13 @@ FORM_FACTORS = ("full", "panel")
 
 _COLUMNS = (
     "v.id, v.workspace_id, v.object_type_id, v.canvas_app_id, "
-    "CAST(v.form_factor AS text) AS form_factor, v.subject_variable, "
+    "CAST(v.form_factor AS text) AS form_factor, v.subject_variable, v.title, "
     "v.created_at, v.updated_at"
 )
+
+#: How many tabs one full view may have (§695): db 0135's positions 1-19
+#: after the view's own module.
+MAX_TABS = 20
 
 
 def _json(value: Any) -> Any:
@@ -94,7 +98,29 @@ async def get_view(
         """,
         {"wid": str(workspace_id), "tid": str(object_type_id), "ff": form_factor},
     )
-    return dict(row) if row else None
+    if row is None:
+        return None
+    return {**dict(row), "tabs": await _tabs(conn, dict(row))}
+
+
+async def _tabs(conn: AsyncConnection, view: dict[str, Any]) -> list[dict[str, Any]]:
+    """p.35's tabs, in order (§695): the view's own module first, under the
+    view's id, then db 0135's rows. A title left blank is the module's name."""
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT t.id, t.title, t.canvas_app_id, t.subject_variable, a.name AS canvas_app_name
+          FROM object_view_tabs t
+          JOIN canvas_apps a ON a.id = t.canvas_app_id
+         WHERE t.view_id = :vid
+         ORDER BY t.position
+        """,
+        {"vid": str(view["id"])},
+    )
+    first = {"id": view["id"], "title": view.get("title") or view["canvas_app_name"],
+             "canvas_app_id": view["canvas_app_id"], "canvas_app_name": view["canvas_app_name"],
+             "subject_variable": view["subject_variable"]}
+    return [first, *(dict(r) for r in rows)]
 
 
 async def list_views(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str, Any]]:
@@ -139,6 +165,35 @@ async def set_view(
     """
     if form_factor not in FORM_FACTORS:
         raise ValueError(f"unknown object view form factor {form_factor!r}")
+    app = await _checked_module(conn, workspace_id, canvas_app_id, subject_variable)
+
+    row = await fetch_one(
+        conn,
+        f"""
+        INSERT INTO object_type_views
+            (workspace_id, object_type_id, canvas_app_id, form_factor,
+             subject_variable, created_by)
+        VALUES (:wid, :tid, :aid, CAST(:ff AS object_view_form_factor), :sv, :by)
+        ON CONFLICT (object_type_id, form_factor) DO UPDATE
+            SET canvas_app_id = EXCLUDED.canvas_app_id,
+                subject_variable = EXCLUDED.subject_variable
+        RETURNING {_COLUMNS.replace('v.', '')}
+        """,
+        {
+            "wid": str(workspace_id), "tid": str(object_type_id),
+            "aid": str(canvas_app_id), "ff": form_factor,
+            "sv": subject_variable, "by": str(created_by) if created_by else None,
+        },
+    )
+    assert row is not None
+    view = {**dict(row), "canvas_app_name": app["name"], "publish_scope": app["publish_scope"]}
+    return {**view, "tabs": await _tabs(conn, view)}
+
+
+async def _checked_module(
+    conn: AsyncConnection, workspace_id: UUID, canvas_app_id: UUID, subject_variable: str,
+) -> dict[str, Any]:
+    """A module a view or a tab may point at, or a refusal in a sentence."""
     app = await fetch_one(
         conn,
         """
@@ -162,27 +217,61 @@ async def set_view(
             f"{subject_variable!r} is not a single-object variable of this module - "
             "an object view needs one to receive the object being viewed"
         )
+    return dict(app)
 
-    row = await fetch_one(
+
+async def set_tabs(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    object_type_id: UUID,
+    tabs: list[dict[str, Any]],
+    *,
+    created_by: UUID | None = None,
+) -> dict[str, Any]:
+    """p.35's gear dialog (§695): "add, reorder, rename, and delete Object View
+    tabs", as one list saved whole. The first is the view's own module, and
+    each is checked as a view's module is. A full view only: p.35's tabs are
+    the full form factor's, and a panel is one module (p.41).
+
+    From 1 to `MAX_TABS` tabs, which the route's body model bounds: a check
+    here too was equivalent under the §695 sweep and was removed."""
+    for tab in tabs:
+        await _checked_module(conn, workspace_id, UUID(str(tab["canvas_app_id"])),
+                              str(tab["subject_variable"]))
+    first, *rest = tabs
+    if any(not str(tab.get("title") or "").strip() for tab in rest):
+        raise ValueError("a tab after the first needs a title - the first's may be its module's name")
+    await set_view(conn, workspace_id, object_type_id,
+                   canvas_app_id=UUID(str(first["canvas_app_id"])),
+                   subject_variable=str(first["subject_variable"]), created_by=created_by)
+    view = await fetch_one(
         conn,
-        f"""
-        INSERT INTO object_type_views
-            (workspace_id, object_type_id, canvas_app_id, form_factor,
-             subject_variable, created_by)
-        VALUES (:wid, :tid, :aid, CAST(:ff AS object_view_form_factor), :sv, :by)
-        ON CONFLICT (object_type_id, form_factor) DO UPDATE
-            SET canvas_app_id = EXCLUDED.canvas_app_id,
-                subject_variable = EXCLUDED.subject_variable
-        RETURNING {_COLUMNS.replace('v.', '')}
+        """
+        UPDATE object_type_views SET title = :title
+         WHERE workspace_id = :wid AND object_type_id = :tid AND form_factor = 'full'
+        RETURNING id
         """,
-        {
-            "wid": str(workspace_id), "tid": str(object_type_id),
-            "aid": str(canvas_app_id), "ff": form_factor,
-            "sv": subject_variable, "by": str(created_by) if created_by else None,
-        },
+        {"title": str(first.get("title") or "").strip(), "wid": str(workspace_id),
+         "tid": str(object_type_id)},
     )
-    assert row is not None
-    return {**dict(row), "canvas_app_name": app["name"], "publish_scope": app["publish_scope"]}
+    assert view is not None
+    await conn.execute(text("DELETE FROM object_view_tabs WHERE view_id = :vid"),
+                       {"vid": str(view["id"])})
+    for position, tab in enumerate(rest, start=1):
+        await conn.execute(
+            text(
+                """
+                INSERT INTO object_view_tabs
+                    (view_id, position, title, canvas_app_id, subject_variable)
+                VALUES (:vid, :pos, :title, :aid, :sv)
+                """
+            ),
+            {"vid": str(view["id"]), "pos": position, "title": str(tab["title"]).strip(),
+             "aid": str(tab["canvas_app_id"]), "sv": str(tab["subject_variable"])},
+        )
+    got = await get_view(conn, workspace_id, object_type_id)
+    assert got is not None
+    return got
 
 
 async def clear_view(

@@ -2776,8 +2776,22 @@ export interface ObjectView {
   /** `full` (p.3, comprehensive) or `panel` (p.4, for embedding). */
   form_factor: string;
   subject_variable: string;
+  /** The first tab's title (§695); blank is the module's name. */
+  title: string;
+  /** `object-views` p.35's tabs in order, the view's own module first. */
+  tabs: ObjectViewTab[];
   created_at: string;
   updated_at: string;
+}
+
+/** One of `object-views` p.35's tabs: "Each tab corresponds to a single
+ * workshop module." The first tab's id is the view's own (§695). */
+export interface ObjectViewTab {
+  id: string;
+  title: string;
+  canvas_app_id: string;
+  canvas_app_name: string;
+  subject_variable: string;
 }
 
 export interface ObjectTypeImpact {

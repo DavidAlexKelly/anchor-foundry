@@ -1873,6 +1873,16 @@ export const objects = {
       `/workspaces/${wid}/object-types/${typeId}/view`,
       { method: "PUT", body: JSON.stringify(input) },
     ),
+  /** `object-views` p.35's gear dialog (§695): the full view's tabs saved
+   * whole, the first being the view's own module. */
+  setViewTabs: (
+    wid: string, typeId: string,
+    tabs: { title: string; canvas_app_id: string; subject_variable: string }[],
+  ) =>
+    request<import("./types").ObjectView>(
+      `/workspaces/${wid}/object-types/${typeId}/view/tabs`,
+      { method: "PUT", body: JSON.stringify({ tabs }) },
+    ),
   clearView: (wid: string, typeId: string, formFactor = "full") =>
     request<void>(
       `/workspaces/${wid}/object-types/${typeId}/view?form_factor=${formFactor}`,
