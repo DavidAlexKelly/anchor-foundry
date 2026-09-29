@@ -74,6 +74,7 @@ import {
   savedColoursOf,
   stateSavingOf,
   translationsOf,
+  kioskOf,
   variablesOf,
 } from "@/lib/workshop-module";
 import {
@@ -490,6 +491,7 @@ function ActionBar({
   pageSelection,
   stateSaving,
   translations,
+  kiosk,
   autoRefresh,
   derivedProperties,
   savedColours,
@@ -525,6 +527,8 @@ function ActionBar({
    * to travel with it or a save would drop every translation a builder
    * entered. */
   translations: NonNullable<import("@/lib/types").WorkshopModule["translations"]>;
+  /** p.610's Kiosk Mode toggle (§684), carried in the save like the rest. */
+  kiosk: boolean;
   onView: (version: number) => void;
   onReverted: () => void;
   /** The version this Save wrote, told to the builder before the refetch it
@@ -554,6 +558,7 @@ function ActionBar({
           pageSelection,
           stateSaving,
           translations,
+          kiosk: { enabled: kiosk },
           autoRefresh,
           derivedProperties,
           savedColours,
@@ -784,6 +789,8 @@ function Toolbox({
   autoRefresh,
   onAutoRefreshChange,
   translations,
+  kiosk,
+  onKioskChange,
   onTranslationsChange,
   derivedProperties,
   onDerivedPropertiesChange,
@@ -816,6 +823,8 @@ function Toolbox({
   ) => void;
   translations: NonNullable<import("@/lib/types").WorkshopModule["translations"]>;
   onTranslationsChange: (next: NonNullable<import("@/lib/types").WorkshopModule["translations"]>) => void;
+  kiosk: boolean;
+  onKioskChange: (next: boolean) => void;
 }) {
   // p.168 declares a derived property *per object type*, so the panel needs
   // the types this module actually reads and each one's properties — an
@@ -871,6 +880,8 @@ function Toolbox({
         derivableTypes={derivableTypes}
         translations={translations}
         onTranslationsChange={onTranslationsChange}
+        kiosk={kiosk}
+        onKioskChange={onKioskChange}
       />
       {/* p.213 reaches Used colors "by navigating to a module's Settings tab
           in edit mode", and this column is that tab: it is where the module's
@@ -1044,6 +1055,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // is the Settings panel's and the tables are written through the API until
   // p.209's Translations tab exists.
   const [translations, setTranslations] = useState(() => translationsOf(undefined));
+  const [kiosk, setKiosk] = useState(false);
   // p.211's preview: the language being previewed and the document as it
   // stood when preview opened. Held together because a snapshot without a
   // language is nothing to translate it with, and a language without a
@@ -1068,6 +1080,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     setPageSelection(pageSelectionOf(appQuery.data.definition));
     setStateSaving(stateSavingOf(appQuery.data.definition));
     setTranslations(translationsOf(appQuery.data.definition));
+    setKiosk(kioskOf(appQuery.data.definition));
     setAutoRefresh(autoRefreshSettings(autoRefreshOf(appQuery.data.definition)));
     setDerivedProperties(
       (derivedPropertiesOf(appQuery.data.definition) as typeof derivedProperties) ?? {},
@@ -1172,6 +1185,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           pageSelection={pageSelection}
           stateSaving={stateSaving}
           translations={translations}
+          kiosk={kiosk}
           autoRefresh={autoRefresh.enabled ? autoRefresh : undefined}
           derivedProperties={derivedProperties}
           savedColours={savedColours}
@@ -1204,6 +1218,8 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           onSavedColoursChange={setSavedColours}
           translations={translations}
           onTranslationsChange={setTranslations}
+          kiosk={kiosk}
+          onKioskChange={setKiosk}
           onPreview={(language, snapshot) => setPreviewing({ language, snapshot })}
           actions={actionCandidates}
           modules={moduleCandidates}
@@ -1244,6 +1260,8 @@ function CanvasBody({
   savedColours,
   onSavedColoursChange,
   translations,
+  kiosk,
+  onKioskChange,
   onTranslationsChange,
   onPreview,
   actions,
@@ -1278,6 +1296,8 @@ function CanvasBody({
   ) => void;
   translations: NonNullable<import("@/lib/types").WorkshopModule["translations"]>;
   onTranslationsChange: (next: NonNullable<import("@/lib/types").WorkshopModule["translations"]>) => void;
+  kiosk: boolean;
+  onKioskChange: (next: boolean) => void;
   /** p.211's preview. Serialised **inside** the Editor, because that is the
    * only place the live document exists - the builder's unsaved tree is
    * Craft's node map, and nothing above this component has it.
@@ -1458,6 +1478,8 @@ function CanvasBody({
           onAutoRefreshChange={onAutoRefreshChange}
           translations={translations}
           onTranslationsChange={onTranslationsChange}
+          kiosk={kiosk}
+          onKioskChange={onKioskChange}
           derivedProperties={derivedProperties}
           onDerivedPropertiesChange={onDerivedPropertiesChange}
           savedColours={savedColours}

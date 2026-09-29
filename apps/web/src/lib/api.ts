@@ -25,16 +25,36 @@ export class ApiError extends Error {
  * authenticated by a cookie the browser attached automatically. */
 const SESSION_HEADERS = { "X-Anchor-Session": "1" };
 
+/** A kiosk session's credential (§684; `workshop` p.610), when this tab is
+ * showing one. Sent as a bearer token, which the API reads before the cookie,
+ * so every request the kiosk page makes is the session's rather than the
+ * signed-in person's. Module state rather than a React context because every
+ * widget's fetch comes through here and none of them should have to know. */
+let kioskToken: string | null = null;
+
+export function setKioskToken(token: string | null): void {
+  kioskToken = token;
+}
+
+function credentialHeaders(): Record<string, string> {
+  return kioskToken ? { ...SESSION_HEADERS, Authorization: `Bearer ${kioskToken}` } : SESSION_HEADERS;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
     credentials: "same-origin",
     headers: {
       ...(init?.headers ?? {}),
-      ...SESSION_HEADERS,
+      ...credentialHeaders(),
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
     },
   });
+  if (res.status === 401 && kioskToken) {
+    // A kiosk that has been ended says so where it stands; it is not the
+    // person at the screen who signed out, so it does not send them to log in.
+    throw new ApiError(401, "This kiosk session has ended.");
+  }
   if (res.status === 401) {
     clearSignedIn();
     if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
@@ -69,7 +89,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 async function requestText(path: string): Promise<string> {
   const res = await fetch(`/api${path}`, {
     credentials: "same-origin",
-    headers: { ...SESSION_HEADERS },
+    headers: credentialHeaders(),
   });
   if (!res.ok) {
     let detail = res.statusText;
@@ -90,7 +110,7 @@ async function requestForm<T>(path: string, form: FormData): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method: "POST",
     credentials: "same-origin",
-    headers: SESSION_HEADERS,
+    headers: credentialHeaders(),
     body: form,
   });
   if (!res.ok) {
@@ -112,6 +132,17 @@ export const api = {
   me: () => request<Me>("/auth/me"),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
   org: () => request<Org>("/org"),
+  /** p.610-611's Control Panel settings for kiosk mode (§684). */
+  kioskModules: () => request<import("./types").KioskModule[]>("/org/kiosk/modules"),
+  kioskCandidates: () =>
+    request<{ app_id: string; name: string; workspace_name: string }[]>("/org/kiosk/candidates"),
+  allowKiosk: (appId: string) => request<void>(`/org/kiosk/modules/${appId}`, { method: "PUT" }),
+  disallowKiosk: (appId: string) => request<void>(`/org/kiosk/modules/${appId}`, { method: "DELETE" }),
+  kioskSessions: () => request<import("./types").KioskSessionRow[]>("/org/kiosk/sessions"),
+  endKioskSession: (id: string) => request<void>(`/org/kiosk/sessions/${id}/end`, { method: "POST" }),
+  /** The session this tab's kiosk credential is, and p.610's Exit kiosk mode. */
+  kioskCurrent: () => request<import("./types").KioskCurrent>("/kiosk/current"),
+  exitKiosk: () => request<void>("/kiosk/end", { method: "POST" }),
   /** Every user in the organisation, or — with `groupIds` — only those in the
    * named groups (p.478's group filter, §234).
    *
@@ -886,7 +917,7 @@ export const datasets = {
 export async function downloadFile(url: string, filename: string): Promise<void> {
   const res = await fetch(url, {
     credentials: "same-origin",
-    headers: SESSION_HEADERS,
+    headers: credentialHeaders(),
   });
   if (!res.ok) throw new ApiError(res.status, "download failed");
   const blob = await res.blob();
@@ -2305,7 +2336,7 @@ export const objects = {
     const res = await fetch(
       `/api/workspaces/${wid}/attachments/download?key=${encodeURIComponent(key)}` +
         `&disposition=inline&content_type=${encodeURIComponent(contentType)}`,
-      { credentials: "same-origin", headers: SESSION_HEADERS },
+      { credentials: "same-origin", headers: credentialHeaders() },
     );
     if (!res.ok) throw new ApiError(res.status, res.statusText);
     return res.blob();
@@ -2952,6 +2983,13 @@ export const canvas = {
     ),
   listPublished: (wid: string) =>
     request<import("./types").CanvasApp[]>(`/workspaces/${wid}/published-canvas-apps`),
+  /** p.610's modal: whether this module launches in kiosk mode, and what a
+   * session would see (§684). */
+  kioskAvailability: (wid: string, appId: string) =>
+    request<import("./types").KioskAvailability>(`/workspaces/${wid}/published-canvas-apps/${appId}/kiosk`),
+  launchKiosk: (wid: string, appId: string) =>
+    request<import("./types").KioskLaunched>(
+      `/workspaces/${wid}/published-canvas-apps/${appId}/kiosk-sessions`, { method: "POST" }),
   getPublished: (wid: string, appId: string) =>
     request<import("./types").CanvasAppDetail>(`/workspaces/${wid}/published-canvas-apps/${appId}`),
   /** p.166's `/dev/`: the app as its author last **saved** it (§314).

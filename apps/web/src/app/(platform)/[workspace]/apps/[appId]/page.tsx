@@ -21,18 +21,14 @@
  * widgets say what they could not read rather than rendering empty.
  */
 
-import { Editor, Frame, useEditor } from "@craftjs/core";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { canvas as canvasApi, resources as resourcesApi } from "@/lib/api";
 import { FavouriteStar } from "@/components/application-shell";
 import { favouriteAllowed } from "@/components/canvas/module-header";
-import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
-import { VariableBridge } from "@/components/canvas/VariableBridge";
-import { CANVAS_RESOLVER } from "@/components/canvas/widgets";
-import { CanvasNode } from "@/components/canvas/SettingsPanel";
-import { seedFromQuery } from "@/components/canvas/pure";
+import { PublishedModule } from "@/components/canvas/published-module";
+import { KioskLauncher } from "@/components/canvas/kiosk-launcher";
 import { useModuleTitle } from "@/components/canvas/module-title";
 import {
   VERSION_PARAM,
@@ -42,26 +38,9 @@ import {
   versionNote,
 } from "@/lib/app-version";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
-import {
-  eventsOf, pageSelectionOf, routingOf, savedColoursOf, stateSavingOf, variablesOf,
-} from "@/lib/workshop-module";
 import { readerLayout } from "@/components/canvas/reader-layout";
 import { RedactBanner } from "@/components/canvas/RedactBanner";
 import { redactHref, redactOn } from "@/components/canvas/redact";
-
-/** Craft.js's `enabled` option is what makes a node draggable, selectable and
- * editable. `<Editor enabled={false}>` is the documented way to render a
- * definition read-only, and this route never offers a way back - a viewer
- * here has no save endpoint to call even if they found the toggle. */
-function ReadOnlyFrame({ definition }: { definition: Record<string, unknown> }) {
-  const { enabled } = useEditor((state) => ({ enabled: state.options.enabled }));
-  if (enabled) return null;
-  return (
-    <div className="canvas-frame-area">
-      <Frame data={JSON.stringify(definition)} />
-    </div>
-  );
-}
 
 export default function PublishedAppPage() {
   const params = useParams<{ workspace: string; appId: string }>();
@@ -165,7 +144,12 @@ export default function PublishedAppPage() {
             module as a resource at `/r/{id}`, where the star is the one every
             application's header carries (§436). What p.47 adds is the star
             *here*, and a document's say over whether it is offered. */}
-        {favouriteAllowed(definition) && <ModuleStar resourceId={app.data.resource_id} />}
+        <div className="app-toolbar">
+          {favouriteAllowed(definition) && <ModuleStar resourceId={app.data.resource_id} />}
+          {/* p.610: "The Open kiosk button will appear in the top right corner
+              of the module" - drawn only when it can be launched (§684). */}
+          {version !== "saved" && <KioskLauncher workspaceId={workspace!.id} appId={app.data.id} />}
+        </div>
       </div>
       {/* p.166 calls this "for testing purposes", so somebody who arrived on a
           hand-edited link has to be told that what they are looking at is not
@@ -199,46 +183,12 @@ export default function PublishedAppPage() {
           <p>It has been published, but nothing has been placed on it yet.</p>
         </div>
       ) : (
-        <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
-          <CanvasEnvProvider
-            value={{
-              workspaceId: workspace!.id, projectId: app.data.project_id, mode: "run",
-              // p.214's Saved colors. A viewer resolves `saved:c1` the same way
-              // the builder does or every referencing widget renders nothing —
-              // which is the one failure a palette must not have, because it
-              // only appears on the route nobody is looking at while building.
-              savedColours: savedColoursOf(app.data.definition),
-            }}
-          >
-            {/* Interface variables seeded from the URL (Foundry p.165) - the
-                same external IDs an embedding module maps. */}
-            <CanvasParameterProvider
-              seed={seedFromQuery(variablesOf(app.data.definition), search)}
-            >
-              <VariableBridge
-                workspaceId={workspace!.id}
-                projectId={app.data.project_id}
-                appId={app.data.id}
-                declared={variablesOf(app.data.definition)}
-                events={eventsOf(app.data.definition)}
-                published
-                routing={routingOf(app.data.definition)}
-                layout={definition}
-                // p.188: layout views are recorded in View mode only. This
-                // route is a running module; the builder's Preview is not,
-                // because an author looking at their own work is not a view.
-                countViews
-                // p.75's lazy rule (§392). Always on here: this route is a
-                // running module, where exactly one page is on screen.
-                lazy
-                pageSelection={pageSelectionOf(app.data.definition) || undefined}
-                stateSaving={stateSavingOf(app.data.definition)}
-              >
-                <ReadOnlyFrame definition={definition} />
-              </VariableBridge>
-            </CanvasParameterProvider>
-          </CanvasEnvProvider>
-        </Editor>
+        <PublishedModule
+          workspaceId={workspace!.id}
+          app={app.data}
+          definition={definition}
+          search={new URLSearchParams(search.toString())}
+        />
       )}
     </main>
   );

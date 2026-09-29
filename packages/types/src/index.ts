@@ -343,6 +343,9 @@ export interface WorkshopModule {
    * that two identical strings cannot be translated differently; that is the
    * standard i18n trade and the standard answer (reword one) applies. */
   translations?: WorkshopTranslations;
+  /** p.610's Kiosk Mode toggle, under Advanced functionalities (§684). One
+   *  half of what launching needs: the organisation's allowlist is the other. */
+  kiosk?: { enabled: boolean };
 }
 
 export interface WorkshopTranslations {
@@ -2020,6 +2023,60 @@ export type ValueConstraint =
    * what somebody writing `^[a-z]+@example\.com$` means. */
   | { kind: "regex"; pattern: string; substring?: boolean }
   | { kind: "uuid" };
+
+/** Kiosk mode (§684; `workshop` p.610-612). */
+export interface KioskScopeEntry {
+  id: string;
+  /** Blank when the launcher cannot see it: in scope, and missing on screen. */
+  name: string;
+}
+
+export interface KioskAvailability {
+  available: boolean;
+  /** Why not, when not. */
+  reason: string | null;
+  version_number: number | null;
+  /** p.610's "Content in scope". */
+  scope: Record<"object_types" | "link_types" | "action_types" | "apps", KioskScopeEntry[]>;
+}
+
+export interface KioskLaunched {
+  session_id: string;
+  /** Shown once: the server keeps only its hash. */
+  token: string;
+  expires_at: string;
+  app_id: string;
+  project_id: string;
+}
+
+export interface KioskCurrent {
+  session_id: string;
+  workspace_id: string;
+  workspace_slug: string;
+  project_id: string;
+  app_id: string;
+}
+
+export interface KioskModule {
+  app_id: string;
+  name: string | null;
+  project_id: string | null;
+  added_at: string;
+}
+
+export interface KioskSessionRow {
+  id: string;
+  app_id: string;
+  app_name: string | null;
+  workspace_id: string;
+  version_number: number;
+  launched_by: string;
+  launched_by_name: string | null;
+  created_at: string;
+  expires_at: string;
+  ended_at: string | null;
+  active: boolean;
+}
 
 /** One saved change to the ontology (§683; `ontology-manager` p.8): the
  * audit log's record of it, named. */

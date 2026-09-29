@@ -264,6 +264,8 @@ export function LayoutPanel({
   onStateSavingChange,
   translations,
   onTranslationsChange,
+  kiosk,
+  onKioskChange,
   autoRefresh,
   onAutoRefreshChange,
   objectSetVariables = [],
@@ -311,6 +313,11 @@ export function LayoutPanel({
    * the other two module-wide switches an author sets once. */
   translations?: TranslationSettings;
   onTranslationsChange?: (next: TranslationSettings) => void;
+  /** p.610's Kiosk Mode toggle: "navigating to the Advanced Functionalities
+   * section of the module's Settings panel and enabling the Kiosk Mode
+   * toggle" (§684). */
+  kiosk?: boolean;
+  onKioskChange?: (next: boolean) => void;
   /** Auto-refresh (p.576–580). p.576 puts it here by name — "navigate to the
    * Auto-refresh configuration options toward the bottom of the Settings
    * panel in the Workshop editor" — beside the other module-wide switches. */
@@ -873,6 +880,27 @@ export function LayoutPanel({
                 : `${languageCount} language${languageCount === 1 ? "" : "s"}. `
                   + "A reader whose browser asks for one of them gets it; "
                   + "everyone else gets the module as written."}
+            </p>
+          )}
+        </>
+      )}
+      {onKioskChange && kiosk !== undefined && (
+        <>
+          <label className="vars-toggle">
+            <input
+              type="checkbox"
+              checked={kiosk}
+              data-testid="kiosk-toggle"
+              onChange={(e) => onKioskChange(e.target.checked)}
+            />
+            Kiosk mode
+          </label>
+          {kiosk && (
+            <p className="canvas-widget-empty" data-testid="kiosk-state">
+              {/* p.610: both halves are needed, and this is only one. */}
+              Once published, and once an administrator has added this module
+              to the organisation&apos;s kiosk allowlist, its builders can open
+              it as a long-lived, read-only session from view mode.
             </p>
           )}
         </>

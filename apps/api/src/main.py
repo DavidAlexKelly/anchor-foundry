@@ -31,6 +31,7 @@ from .routes import actions as action_routes
 from .routes import auth as auth_routes
 from .routes import bootstrap as bootstrap_routes
 from .routes import canvas as canvas_routes
+from .routes import kiosk as kiosk_routes
 from .routes import series_analyses as series_analysis_routes
 from .routes import code as code_routes
 from .routes import connections as connection_routes
@@ -207,6 +208,9 @@ def create_app() -> FastAPI:
     app.include_router(action_routes.project_router, prefix=prefix)
     app.include_router(canvas_routes.router, prefix=prefix)
     app.include_router(canvas_routes.published_router, prefix=prefix)
+    app.include_router(kiosk_routes.org_router, prefix=prefix)
+    app.include_router(kiosk_routes.module_router, prefix=prefix)
+    app.include_router(kiosk_routes.session_router, prefix=prefix)
     app.include_router(code_routes.router, prefix=prefix)
     app.include_router(notification_routes.router, prefix=prefix)
     app.include_router(export_routes.router, prefix=prefix)
