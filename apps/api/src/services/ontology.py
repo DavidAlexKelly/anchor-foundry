@@ -504,7 +504,18 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
         prop["effective_value_type_id"] = full["value_type_id"]
         del prop["own_value_type_id"]
         out.append(shared_properties.resolve(prop, shared))
+    # §681: a nested or elements constraint names other value types, and the
+    # rule each applies is theirs as it is now (p.230) - so it is read here,
+    # beside the constraint, where every caller that enforces one gets it.
+    held = [_json_or_none(p.get("value_constraint")) for p in out]
+    for prop, constraint in zip(out, await value_types.resolve_constraints(conn, held)):
+        if constraint is not None:
+            prop["value_constraint"] = constraint
     return out
+
+
+def _json_or_none(raw: Any) -> Any:
+    return json.loads(raw) if isinstance(raw, str) else raw
 
 
 async def reducers_for(

@@ -48,6 +48,11 @@ function CreateValueTypeDialog({
   const [baseType, setBaseType] = useState<PropertyDataType>("string");
   const [constraint, setConstraint] = useState<ValueConstraint | null>(null);
   const queryClient = useQueryClient();
+  // What an array's items or a struct's fields may be held to (§681).
+  const existing = useQuery({
+    queryKey: ["value-types", workspaceId],
+    queryFn: () => objApi.listValueTypes(workspaceId),
+  });
 
   const save = useMutation({
     mutationFn: () =>
@@ -116,6 +121,7 @@ function CreateValueTypeDialog({
         baseType={baseType}
         value={constraint}
         onChange={setConstraint}
+        valueTypes={existing.data ?? []}
       />
       <Field
         label="Example value"
@@ -170,6 +176,10 @@ function NewVersionDialog({
     queryKey: ["value-type-versions", workspaceId, valueType.id],
     queryFn: () => objApi.valueTypeVersions(workspaceId, valueType.id),
   });
+  const existing = useQuery({
+    queryKey: ["value-types", workspaceId],
+    queryFn: () => objApi.listValueTypes(workspaceId),
+  });
 
   const save = useMutation({
     mutationFn: () =>
@@ -196,6 +206,7 @@ function NewVersionDialog({
         baseType={valueType.base_type}
         value={constraint}
         onChange={setConstraint}
+        valueTypes={existing.data ?? []}
       />
       {save.isError && (
         <p className="field-hint" data-testid="vt-version-error">

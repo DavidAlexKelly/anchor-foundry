@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ValueType } from "@/lib/types";
 import {
-  constraintProblem, kindsFor, offerableTo, optionLabel, rangeLabel,
+  constraintProblem, kindsFor, offerableTo, optionLabel, rangeLabel, referable,
 } from "./value-type";
 
 function valueType(over: Partial<ValueType> = {}): ValueType {
@@ -181,5 +181,41 @@ describe("optionLabel", () => {
     expect(optionLabel(valueType())).toBe(
       "Email address — matches [a-z]+@example\\.com",
     );
+  });
+});
+
+describe("arrays and structs (§681, p.234)", () => {
+  it("offers size, uniqueness and items for an array, and fields for a struct", () => {
+    expect(kindsFor("array")).toEqual(["range", "unique", "nested"]);
+    expect(kindsFor("struct")).toEqual(["elements"]);
+    expect(rangeLabel("array")).toBe("Size");
+  });
+
+  it("holds items and fields to scalar value types only", () => {
+    const kinds = ["string", "integer", "float", "boolean", "date", "timestamp",
+      "array", "struct", "geopoint"] as const;
+    const types = kinds.map((base_type) => valueType({ id: base_type, base_type }));
+    expect(referable(types).map((t) => t.id)).toEqual(
+      ["string", "integer", "float", "boolean", "date", "timestamp"]);
+  });
+
+  it("names what is missing before Save", () => {
+    expect(constraintProblem({ kind: "range", minimum: -1 }, "array")).toBe(
+      "A size cannot be negative.");
+    expect(constraintProblem({ kind: "range", minimum: 0, maximum: 3 }, "array")).toBeNull();
+    expect(constraintProblem({ kind: "unique" }, "array")).toBeNull();
+    expect(constraintProblem({ kind: "unique" }, "string")).toBe(
+      "A unique constraint does not apply to a string value type.");
+    expect(constraintProblem({ kind: "nested", value_type: "" }, "array")).toBe(
+      "Choose the value type every item must be.");
+    expect(constraintProblem({ kind: "nested", value_type: "vt1" }, "array")).toBeNull();
+    expect(constraintProblem({ kind: "elements", fields: {} }, "struct")).toBe(
+      "Name at least one field and its value type.");
+    expect(constraintProblem({ kind: "elements", fields: { Email: "vt1" } }, "struct")).toBe(
+      '"Email" is not a struct field identifier.');
+    expect(constraintProblem({ kind: "elements", fields: { email: "" } }, "struct")).toBe(
+      "Choose the value type for email.");
+    expect(constraintProblem({ kind: "elements", fields: { email: "vt1", code: "vt2" } },
+      "struct")).toBeNull();
   });
 });

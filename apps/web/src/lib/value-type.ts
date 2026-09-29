@@ -23,9 +23,15 @@ import type { PropertyDataType, ValueConstraint, ValueType } from "@/lib/types";
  * refuses. */
 export const ENUM_TYPES: PropertyDataType[] = ["string", "integer", "float", "boolean"];
 export const RANGE_TYPES: PropertyDataType[] = [
-  "integer", "float", "date", "timestamp", "string",
+  "integer", "float", "date", "timestamp", "string", "array",
 ];
 export const STRING_ONLY: PropertyDataType[] = ["string"];
+/** What a nested or elements constraint may name (§681): a scalar value type,
+ * as `value_constraints.REFERENCE_TYPES` has it. */
+export const REFERENCE_TYPES: PropertyDataType[] = [
+  "string", "integer", "float", "boolean", "date", "timestamp",
+];
+const FIELD_RE = /^[a-z][a-z0-9_]{0,99}$/;
 
 export type ConstraintKind = ValueConstraint["kind"];
 
@@ -38,7 +44,16 @@ export function kindsFor(baseType: PropertyDataType): ConstraintKind[] {
   if (ENUM_TYPES.includes(baseType)) out.push("enum");
   if (RANGE_TYPES.includes(baseType)) out.push("range");
   if (STRING_ONLY.includes(baseType)) out.push("regex", "uuid");
+  // p.234's array and struct constraints (§681).
+  if (baseType === "array") out.push("unique", "nested");
+  if (baseType === "struct") out.push("elements");
   return out;
+}
+
+/** The value types an array's items or a struct's fields may be held to
+ * (§681): the scalar ones. */
+export function referable(types: ValueType[]): ValueType[] {
+  return types.filter((t) => REFERENCE_TYPES.includes(t.base_type));
 }
 
 /** What a range's bounds mean for this base type.
@@ -47,6 +62,7 @@ export function kindsFor(baseType: PropertyDataType): ConstraintKind[] {
  * form that said "Minimum" for both would be describing two different things
  * with one word, and the string case is the surprising one. */
 export function rangeLabel(baseType: PropertyDataType): string {
+  if (baseType === "array") return "Size";
   return baseType === "string" ? "Length" : "Value";
 }
 
@@ -76,6 +92,9 @@ export function constraintProblem(
     if (baseType === "string" && typeof minimum === "number" && minimum < 0) {
       return "A length cannot be negative.";
     }
+    if (baseType === "array" && typeof minimum === "number" && minimum < 0) {
+      return "A size cannot be negative.";
+    }
     if (minimum !== undefined && maximum !== undefined && !above(maximum, minimum)) {
       return "The minimum is above the maximum, so nothing could satisfy it.";
     }
@@ -89,6 +108,18 @@ export function constraintProblem(
       // The browser's own engine, which is not the one that will run it — so
       // this catches a typo early and the server still has the final word.
       return "That pattern is not a valid regular expression.";
+    }
+    return null;
+  }
+  if (constraint.kind === "nested") {
+    return constraint.value_type ? null : "Choose the value type every item must be.";
+  }
+  if (constraint.kind === "elements") {
+    const entries = Object.entries(constraint.fields);
+    if (!entries.length) return "Name at least one field and its value type.";
+    for (const [field, ref] of entries) {
+      if (!FIELD_RE.test(field)) return `"${field}" is not a struct field identifier.`;
+      if (!ref) return `Choose the value type for ${field}.`;
     }
     return null;
   }

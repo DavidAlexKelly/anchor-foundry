@@ -21,16 +21,23 @@
 import { useState } from "react";
 import { Field } from "@/components/dialog";
 import {
-  constraintProblem, kindsFor, rangeLabel, type ConstraintKind,
+  constraintProblem, kindsFor, rangeLabel, referable, type ConstraintKind,
 } from "@/lib/value-type";
-import type { PropertyDataType, ValueConstraint } from "@/lib/types";
+import type { PropertyDataType, ValueConstraint, ValueType } from "@/lib/types";
 
 const KIND_LABELS: Record<ConstraintKind, string> = {
   enum: "One of a fixed list",
   range: "Within a range",
   regex: "Matches a pattern",
   uuid: "Is a UUID",
+  unique: "No item twice",
+  nested: "Every item is a value type",
+  elements: "Fields are value types",
 };
+
+/** p.234's struct element constraints, as rows while they are being typed:
+ * a record would lose a half-typed field name, or two rows naming one. */
+type ElementRow = { field: string; ref: string };
 
 /** The bounds are text in the form whatever the base type: a date is typed as
  * `2026-01-31`, and a number typed into a number input still arrives as a
@@ -51,8 +58,11 @@ export function ValueConstraintEditor({
   noneLabel = "No constraint",
   hint = "Optional — p.224. A value type carries meaning even with no rule.",
   label = "Constraint",
+  valueTypes = [],
 }: {
   baseType: PropertyDataType;
+  /** What a nested or elements constraint may name (§681). */
+  valueTypes?: ValueType[];
   value: ValueConstraint | null;
   onChange: (next: ValueConstraint | null) => void;
   /** What "no constraint" is called: an action parameter's is p.8's "User
@@ -73,6 +83,12 @@ export function ValueConstraintEditor({
   const [maxText, setMaxText] = useState(
     value?.kind === "range" && value.maximum !== undefined ? String(value.maximum) : "",
   );
+  const [rows, setRows] = useState<ElementRow[]>(
+    value?.kind === "elements"
+      ? Object.entries(value.fields).map(([field, ref]) => ({ field, ref }))
+      : [],
+  );
+  const choices = referable(valueTypes);
 
   if (!kinds.length) {
     return (
@@ -88,7 +104,21 @@ export function ValueConstraintEditor({
     if (kind === "enum") return onChange({ kind: "enum", values: [] });
     if (kind === "range") return onChange({ kind: "range" });
     if (kind === "regex") return onChange({ kind: "regex", pattern: "" });
+    if (kind === "unique") return onChange({ kind: "unique" });
+    if (kind === "nested") return onChange({ kind: "nested", value_type: "" });
+    if (kind === "elements") {
+      setRows([{ field: "", ref: "" }]);
+      return onChange({ kind: "elements", fields: { "": "" } });
+    }
     onChange({ kind: "uuid" });
+  }
+
+  function setElements(next: ElementRow[]) {
+    setRows(next);
+    onChange({
+      kind: "elements",
+      fields: Object.fromEntries(next.map((r) => [r.field.trim(), r.ref])),
+    });
   }
 
   function setRange(min: string, max: string) {
@@ -99,7 +129,11 @@ export function ValueConstraintEditor({
     });
   }
 
-  const problem = constraintProblem(value, baseType);
+  const names = rows.map((r) => r.field.trim());
+  const twice = names.find((n, i) => n && names.indexOf(n) !== i);
+  const problem = value?.kind === "elements" && twice
+    ? `That names ${twice} twice.`
+    : constraintProblem(value, baseType);
 
   return (
     <div>
@@ -170,7 +204,9 @@ export function ValueConstraintEditor({
             hint={
               baseType === "string"
                 ? "p.233: a string's range bounds how many characters it has."
-                : "Leave blank for no lower bound."
+                : baseType === "array"
+                  ? "p.234: an array's range bounds how many items it has."
+                  : "Leave blank for no lower bound."
             }
           >
             <input
@@ -217,6 +253,73 @@ export function ValueConstraintEditor({
             Pass if it matches anywhere in the value (p.233)
           </label>
         </>
+      )}
+
+      {value?.kind === "nested" && (
+        <Field
+          label="Each item is"
+          hint="p.234: a value type every item must satisfy. Its newest version applies."
+        >
+          <select
+            data-testid="constraint-nested"
+            aria-label="Each item is"
+            value={value.value_type}
+            onChange={(e) => onChange({ kind: "nested", value_type: e.target.value })}
+          >
+            <option value="">Choose a value type…</option>
+            {choices.map((t) => (
+              <option key={t.id} value={t.id}>{t.display_name} ({t.base_type})</option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      {value?.kind === "elements" && (
+        <Field
+          label="Fields"
+          hint="p.234: each struct field named here must satisfy its value type."
+        >
+          <div data-testid="constraint-elements">
+            {rows.map((row, i) => (
+              <div key={i} className="row-actions" style={{ marginBottom: 6 }}>
+                <input
+                  type="text"
+                  aria-label={`Field ${i + 1}`}
+                  placeholder="field_id"
+                  value={row.field}
+                  onChange={(e) => setElements(rows.map((r, j) =>
+                    j === i ? { ...r, field: e.target.value } : r))}
+                />
+                <select
+                  aria-label={`Value type for field ${i + 1}`}
+                  value={row.ref}
+                  onChange={(e) => setElements(rows.map((r, j) =>
+                    j === i ? { ...r, ref: e.target.value } : r))}
+                >
+                  <option value="">Choose a value type…</option>
+                  {choices.map((t) => (
+                    <option key={t.id} value={t.id}>{t.display_name} ({t.base_type})</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn quiet"
+                  aria-label={`Remove field ${i + 1}`}
+                  onClick={() => setElements(rows.filter((_, j) => j !== i))}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="btn quiet"
+              onClick={() => setElements([...rows, { field: "", ref: "" }])}
+            >
+              Add field
+            </button>
+          </div>
+        </Field>
       )}
 
       {problem && (

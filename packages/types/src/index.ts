@@ -1999,15 +1999,23 @@ export interface SharedProperty {
   updated_at: string;
 }
 
-/** What a value type allows (Foundry `object-link-types` p.233).
+/** What a value type allows (Foundry `object-link-types` p.233-234).
  *
- * Only the four kinds this platform builds. `rid` is Foundry-specific — our
- * resource ids are UUIDs, so `uuid` is the same check under one name — and
- * array and struct constraints have no base type here to carry them. */
+ * Every kind but `rid`, which is Foundry-specific — our resource ids are
+ * UUIDs, so `uuid` is the same check under one name. */
 export type ValueConstraint =
   | { kind: "enum"; values: (string | number | boolean)[]; case_sensitive?: boolean }
-  /** On numbers and temporals directly; on a *string's length* (p.233). */
+  /** On numbers and temporals directly; on a *string's length* (p.233) and
+   * an *array's size* (p.234). */
   | { kind: "range"; minimum?: number | string; maximum?: number | string }
+  /** p.234's array uniqueness (§681). */
+  | { kind: "unique" }
+  /** p.234's nested constraint: the value type, by id, every item must
+   * satisfy (§681). */
+  | { kind: "nested"; value_type: string }
+  /** p.234's struct element constraints: field identifier to value type id
+   * (§681). */
+  | { kind: "elements"; fields: Record<string, string> }
   /** `substring` is p.233's opt-in; anchored is the default, because that is
    * what somebody writing `^[a-z]+@example\.com$` means. */
   | { kind: "regex"; pattern: string; substring?: boolean }
