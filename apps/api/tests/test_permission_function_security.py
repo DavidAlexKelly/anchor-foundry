@@ -46,7 +46,9 @@ RESOLVERS = (
 
 #: Reads settings and no tables, so there is nothing for a policy to filter -
 #: named rather than merely absent, so "is this list complete" has an answer.
-SETTING_ONLY = ("rls_current_user_id", "rls_worker_for_workspace")
+#: `rls_kiosk_allows` (db 0134) compares a row's id with the kiosk session's
+#: scope, which `user_connection` puts in settings (§684).
+SETTING_ONLY = ("rls_current_user_id", "rls_worker_for_workspace", "rls_kiosk_allows")
 
 #: Reads *neither* a table nor a setting: it dispatches to the resolvers above,
 #: which are `SECURITY DEFINER` and do the reading. Its own list rather than a
@@ -90,7 +92,7 @@ def test_a_definer_function_pins_its_search_path(functions, name: str) -> None:
     )
 
 
-def test_the_two_setting_only_helpers_are_still_setting_only(functions) -> None:
+def test_the_setting_only_helpers_are_still_setting_only(functions) -> None:
     """They are exempt because they touch no table. If one grows a query, this
     list is where the exemption stops being true — and the assertion below is
     what makes somebody look."""
