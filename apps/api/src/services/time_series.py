@@ -843,3 +843,42 @@ def track_sql(
         f"SELECT {ts} AS at, CAST({point} AS VARCHAR) AS point FROM dataset "
         f"WHERE {clause} ORDER BY at LIMIT {capped}"
     )
+
+
+#: How many positions a map draws per track (§557): enough for a breadcrumb
+#: trail to have its shape, few enough that a page of tracks stays one read.
+TRACK_POINTS = 500
+
+
+def tracks_for_many_sql(
+    *,
+    key_column: str,
+    timestamp_column: str,
+    point_column: str,
+    series_ids: "Sequence[str]",
+    per_series: int = TRACK_POINTS,
+) -> str:
+    """`track_sql` for a page of tracks at once (§557; `workshop` p.303's map
+    timeline over the objects on a map).
+
+    `points_for_many_sql`'s shape, for its reasons: one query rather than one
+    per object, the allowance **per track** with a window rather than a LIMIT
+    over all of them, the **latest** positions kept and put back in time
+    order. And `track_sql`'s: raw positions, no bucket and no aggregate, the
+    point column returned as text for `_coerce_geopoint` to read.
+    """
+    if not series_ids:
+        raise ValueError("no tracks to read")
+    if len(series_ids) > MAX_SERIES:
+        raise ValueError(f"too many tracks: {len(series_ids)} (max {MAX_SERIES})")
+    key, ts, point = _quote(key_column), _quote(timestamp_column), _quote(point_column)
+    wanted = ", ".join(_literal(s) for s in dict.fromkeys(series_ids))
+    series_key = f"CAST({key} AS VARCHAR)"
+    capped = max(1, min(per_series, MAX_POINTS))
+    return (
+        f"SELECT series, at, point FROM (SELECT {series_key} AS series, {ts} AS at, "
+        f"CAST({point} AS VARCHAR) AS point, "
+        f"row_number() OVER (PARTITION BY {series_key} ORDER BY {ts} DESC) AS rn "
+        f"FROM dataset WHERE {series_key} IN ({wanted})) WHERE rn <= {capped} "
+        "ORDER BY series, at"
+    )

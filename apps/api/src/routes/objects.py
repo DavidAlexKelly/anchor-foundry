@@ -5194,6 +5194,24 @@ class ObjectSetSeriesOut(BaseModel):
     partial history and should be able to say so."""
 
 
+class ObjectSetTracksIn(ObjectSetIn):
+    property_api_name: str
+
+
+class TrackForKey(BaseModel):
+    """One row's track, keyed the way a map keys its pins (§557)."""
+    primary_key: str
+    series_id: str
+    points: list[TrackPoint]
+    unreadable: int
+
+
+class ObjectSetTracksOut(BaseModel):
+    property_api_name: str
+    rows: list[TrackForKey]
+    truncated: bool
+
+
 class FreshnessIn(BaseModel):
     object_type_ids: list[UUID]
 
@@ -5417,6 +5435,93 @@ async def object_set_series_points(
         interval=body.interval,
         aggregate=body.aggregate,
         rows=out,
+        truncated=truncated,
+    )
+
+
+@router.post("/object-sets/tracks", response_model=ObjectSetTracksOut)
+async def object_set_tracks(
+    body: ObjectSetTracksIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ObjectSetTracksOut:
+    """Every visible object's track, in one read (§557; `workshop` p.303).
+
+    `object_set_series_points`' counterpart for a geotemporal property, as
+    `instance_series_track` is `instance_series_points`': the same page of
+    rows re-evaluated from the set, so the tracks read are exactly those of
+    objects this caller can see; keyed by primary key; every row with a
+    series id answered for, positions or none. And the track's rules: raw
+    positions, no aggregate, an unreadable position counted rather than
+    hidden - per row, since a map draws each track on its own.
+    """
+    type_id = object_sets.object_type_id_of(body.definition)
+    storage = _dataset_storage()
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        property_types = await _declared_types(conn, type_id)
+        definition = object_sets.parse(body.definition, property_types=property_types)
+        sort = object_sets.parse_sorts(body.sort, property_types=property_types)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        filters, empty = await _resolve_traversal(
+            conn, store, prefix, access.workspace_id, definition
+        )
+        rows: list[dict[str, Any]] = []
+        if not empty:
+            rows, _ = await store.evaluate_object_set(
+                search_prefix=prefix, object_type_id=definition.object_type_id,
+                filters=filters, limit=body.limit, offset=body.offset, sort=sort,
+            )
+        by_series: dict[str, list[str]] = {}
+        for row in rows:
+            value = (_jsonb(row["properties"]) or {}).get(body.property_api_name)
+            if value is None or str(value).strip() == "":
+                continue
+            by_series.setdefault(str(value), []).append(str(row["primary_key"]))
+        mappings = [
+            m for m in (
+                await time_series_service.series_for_type(
+                    conn, definition.object_type_id, body.property_api_name
+                ) if by_series else []
+            )
+            # A position column: a value column is a `time_series`, and its
+            # readings are not places (the single track's 404, said per row).
+            if m.get("point_column")
+        ]
+
+    truncated = False
+    found: dict[str, list[TrackPoint]] = {}
+    bad: dict[str, int] = {}
+    for series in mappings:
+        sql = time_series_service.tracks_for_many_sql(
+            key_column=str(series["key_column"]),
+            timestamp_column=str(series["timestamp_column"]),
+            point_column=str(series["point_column"]),
+            series_ids=list(by_series),
+        )
+        local_path = await anyio.to_thread.run_sync(
+            storage.local_path, str(series["s3_location"])
+        )
+        result = await anyio.to_thread.run_sync(engine.query, local_path, sql)
+        truncated = truncated or result.truncated
+        for series_id, at, raw in result.rows:
+            try:
+                place = property_values.coerce_property_value("geopoint", raw)
+            except property_values.PropertyValueError:
+                place = None
+            if place is None:
+                bad[str(series_id)] = bad.get(str(series_id), 0) + 1
+                continue
+            found.setdefault(str(series_id), []).append(
+                TrackPoint(at=at, lat=place["lat"], lon=place["lon"]))
+
+    return ObjectSetTracksOut(
+        property_api_name=body.property_api_name,
+        rows=[
+            TrackForKey(primary_key=key, series_id=series_id,
+                        points=found.get(series_id, []), unreadable=bad.get(series_id, 0))
+            for series_id, keys in by_series.items() for key in keys
+        ],
         truncated=truncated,
     )
 

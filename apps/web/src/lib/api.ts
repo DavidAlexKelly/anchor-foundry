@@ -1411,6 +1411,23 @@ export const objects = {
       method: "POST",
       body: JSON.stringify({ definition, property_api_name: property, ...opts }),
     }),
+  /** A page of objects' geotemporal tracks, in one read (§557): for the
+   * Map's breadcrumbs and its timeline. */
+  objectSetTracks: (
+    wid: string,
+    definition: unknown,
+    property: string,
+    opts: { limit?: number; offset?: number; sort?: string | string[] } = {},
+  ) =>
+    request<{
+      property_api_name: string;
+      rows: { primary_key: string; series_id: string;
+              points: { at: string; lat: number; lon: number }[]; unreadable: number }[];
+      truncated: boolean;
+    }>(`/workspaces/${wid}/object-sets/tracks`, {
+      method: "POST",
+      body: JSON.stringify({ definition, property_api_name: property, ...opts }),
+    }),
   /** When each of these object types last changed (workshop p.576; §408).
    *
    * The watching half of auto-refresh. A watermark rather than a feed, because

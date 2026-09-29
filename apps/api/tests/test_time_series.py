@@ -1145,3 +1145,93 @@ def test_a_page_transformed_is_each_series_transformed_alone(
         expected = [(at, value) for at, value in alone.rows][-per_series:]
         assert [at for at, _ in got.get(series, [])] == [at for at, _ in expected], series
         assert [v for _, v in got.get(series, [])] == pytest.approx([v for _, v in expected]), series
+
+
+# ---- a page of tracks, one read (§557; `workshop` p.303) ---------------------
+
+def page_of_tracks(client: TestClient, fx: Fixture, type_id: str, prop: str):
+    return client.post(
+        f"{wbase(fx)}/object-sets/tracks", headers=hdr(fx.viewer_sub),
+        json={"definition": {"object_type_id": type_id, "filters": []},
+              "property_api_name": prop, "limit": 50},
+    )
+
+
+def test_one_read_returns_every_objects_track(
+    client: TestClient, fx: Fixture, tracked: dict
+) -> None:
+    """The map's page of vehicles, each with its own positions in time order,
+    and V1's unreadable fix counted against V1 alone."""
+    assert map_track(client, fx, tracked).status_code == 200
+    one_vehicle(client, fx, tracked, "V1")
+    r = page_of_tracks(client, fx, tracked["type_id"], "trail")
+    assert r.status_code == 200, r.text
+    rows = {row["primary_key"]: row for row in r.json()["rows"]}
+    assert [(p["lat"], p["lon"]) for p in rows["V1"]["points"]] == [(51.5, -0.12), (52.5, -1.12)]
+    assert (rows["V1"]["unreadable"], rows["V2"]["unreadable"]) == (1, 0)
+    assert [(p["lat"], p["lon"]) for p in rows["V2"]["points"]] == [(10.0, 10.0)]
+
+
+def test_a_time_series_is_no_track_in_a_page_either(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """A value column holds readings, not places: every row answered for, and
+    none with a position."""
+    assert declare(client, fx, ontology).status_code == 200
+    synced(client, fx, ontology)
+    r = page_of_tracks(client, fx, ontology["type_id"], "readings")
+    assert r.status_code == 200, r.text
+    rows = r.json()["rows"]
+    assert {row["primary_key"] for row in rows} == {"S1", "S2"}
+    assert all(row["points"] == [] for row in rows)
+
+
+def test_each_track_keeps_its_own_latest_positions(tmp_path) -> None:
+    """The allowance is per track and takes the newest: two vehicles whose
+    fixes interleave, each keeping its last two."""
+    import duckdb
+    from src.services import dataset_engine as engine
+    from src.services import time_series as ts
+    path = str(tmp_path / "fixes.parquet")
+    duckdb.sql(
+        "COPY (SELECT * FROM (VALUES "
+        "('V1', TIMESTAMP '2026-01-01 00:00', '1,1'), ('V2', TIMESTAMP '2026-01-01 01:00', '5,5'), "
+        "('V1', TIMESTAMP '2026-01-01 02:00', '2,2'), ('V2', TIMESTAMP '2026-01-01 03:00', '6,6'), "
+        "('V1', TIMESTAMP '2026-01-01 04:00', '3,3')) t(v, at, p)) "
+        f"TO '{path}' (FORMAT parquet)")
+    result = engine.query(path, ts.tracks_for_many_sql(
+        key_column="v", timestamp_column="at", point_column="p",
+        series_ids=["V1", "V2", "V1"], per_series=2))
+    assert [(s, p) for s, _at, p in result.rows] == [
+        ("V1", "2,2"), ("V1", "3,3"), ("V2", "5,5"), ("V2", "6,6")]
+
+
+def test_a_page_of_tracks_is_bounded() -> None:
+    from src.services import time_series as ts
+    kw = {"key_column": "v", "timestamp_column": "at", "point_column": "p"}
+    with pytest.raises(ValueError, match="no tracks"):
+        ts.tracks_for_many_sql(**kw, series_ids=[])
+    with pytest.raises(ValueError, match="too many tracks"):
+        ts.tracks_for_many_sql(**kw, series_ids=[str(i) for i in range(ts.MAX_SERIES + 1)])
+    assert f"rn <= {ts.MAX_POINTS}" in ts.tracks_for_many_sql(
+        **kw, series_ids=["V1"], per_series=ts.MAX_POINTS + 10)
+
+
+def test_an_object_with_no_track_is_not_asked_about(
+    client: TestClient, fx: Fixture, tracked: dict
+) -> None:
+    """A row with no series id has no track to read, and no row back - rather
+    than one asked for under the id "None"."""
+    import psycopg
+    admin = os.environ.get(
+        "TEST_ADMIN_DSN", "postgresql://platform:devpass@localhost:5432/platform?sslmode=disable")
+    assert map_track(client, fx, tracked).status_code == 200
+    one_vehicle(client, fx, tracked, "V1")
+    with psycopg.connect(admin, autocommit=True) as db:
+        db.execute("UPDATE object_instances SET properties = properties - 'trail' "
+                   "WHERE object_type_id = %s AND primary_key = 'V2'", (tracked["type_id"],))
+    try:
+        rows = page_of_tracks(client, fx, tracked["type_id"], "trail").json()["rows"]
+        assert [row["primary_key"] for row in rows] == ["V1"], rows
+    finally:
+        one_vehicle(client, fx, tracked, "V1")

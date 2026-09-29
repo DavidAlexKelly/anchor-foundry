@@ -266,6 +266,9 @@ export const REFERENCE_PROPS = [
   // p.302's area drawn on the Map, as a `within_box` clause (§550). A write.
   // See the API's copy.
   "areaVariable",
+  // p.303's Selected time on the Map (§557), read and written. See the API's
+  // copy.
+  "selectedTimeVariable",
   "name",
 ] as const;
 

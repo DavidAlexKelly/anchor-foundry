@@ -75,6 +75,8 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   endVariable: "write",
   // p.302: the Map writes the area drawn on it (§550).
   areaVariable: "write",
+  // p.303: the Map's timeline writes the selected time, as a picker does.
+  selectedTimeVariable: "write",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",

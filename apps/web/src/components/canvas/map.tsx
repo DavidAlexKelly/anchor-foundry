@@ -195,6 +195,7 @@ export function MapCanvas({
   points,
   shapes = [],
   unplaceable = 0,
+  notYet = 0,
   total,
   atLimit = false,
   onSelect,
@@ -208,6 +209,9 @@ export function MapCanvas({
   shapes?: MapShape[];
   /** Rows whose location could not be read. Reported, never hidden. */
   unplaceable?: number;
+  /** Tracked objects with no fix yet at the selected time (§557) - not
+   * unplaceable, only not anywhere yet. */
+  notYet?: number;
   /** Matching rows, when the source knows how many there are. A map that
    * plots the first page of a larger answer looks exactly like a map of the
    * whole answer, which is the one thing it must not do silently. */
@@ -537,7 +541,8 @@ export function MapCanvas({
               : `, ${offscreen.toLocaleString()} of them outside the view`
             : ""}
           {unplaceable > 0 ? `, ${unplaceable.toLocaleString()} without a usable location` : ""}
-          {total !== undefined && total > points.length + unplaceable
+          {notYet > 0 ? `, ${notYet.toLocaleString()} with no position yet at this time` : ""}
+          {total !== undefined && total > points.length + unplaceable + notYet
             ? `, of ${total.toLocaleString()} matching`
             : atLimit
               ? ", and possibly more beyond the widget's limit"
