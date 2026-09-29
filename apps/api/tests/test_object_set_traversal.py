@@ -236,7 +236,8 @@ def linked(client: TestClient, fx: Fixture) -> dict:
         json={"api_name": f"ord_{tag}", "display_name": f"Ord {tag}",
               "properties": [
                   {"api_name": "customer_id", "data_type": "string"},
-                  {"api_name": "total", "data_type": "string"},
+                  {"api_name": "total", "data_type": "integer"},
+                  {"api_name": "placed", "data_type": "date"},
               ]},
     )
     assert orders.status_code == 201, orders.text
@@ -274,8 +275,9 @@ def linked(client: TestClient, fx: Fixture) -> dict:
     upload(f"customers_{tag}", b"id,region\nC1,north\nC2,south\n",
            customer_type, {"region": "region"})
     upload(f"orders_{tag}",
-           b"id,customer_id,total\nO1,C1,10\nO2,C1,20\nO3,C2,30\n",
-           order_type, {"customer_id": "customer_id", "total": "total"})
+           b"id,customer_id,total,placed\nO1,C1,10,2024-01-10\nO2,C1,20,2024-02-10\n"
+           b"O3,C2,30,2024-03-10\n",
+           order_type, {"customer_id": "customer_id", "total": "total", "placed": "placed"})
     return {"customer_type": customer_type, "order_type": order_type,
             "link": link.json()["id"]}
 
@@ -373,3 +375,76 @@ def test_a_traversal_landing_on_another_type_is_refused(client, fx, linked) -> N
                 "base": {"object_type_id": linked["customer_type"]}},
     })
     assert answer["status"] == 422, answer
+
+
+# ---- every reading of a set honours its hop -----------------------------------
+def northern_orders(linked: dict) -> dict:
+    return {
+        "object_type_id": linked["order_type"],
+        "via": {"link_type_id": linked["link"], "base": {
+            "object_type_id": linked["customer_type"],
+            "filters": [{"property": "region", "op": "eq", "value": "north"}]}},
+    }
+
+
+def test_a_count_of_a_traversed_set_counts_the_linked_objects(client, fx, linked) -> None:
+    r = client.post(f"{wbase(fx)}/object-sets/aggregate", headers=hdr(fx.editor_sub),
+                    json={"definition": northern_orders(linked), "aggregation": "count"})
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] == 2, r.json()
+
+
+def test_a_grouping_of_a_traversed_set_groups_the_linked_objects(client, fx, linked) -> None:
+    r = client.post(f"{wbase(fx)}/object-sets/group", headers=hdr(fx.editor_sub),
+                    json={"definition": northern_orders(linked), "property": "customer_id"})
+    assert r.status_code == 200, r.text
+    assert [(g["value"], g["count"]) for g in r.json()["groups"]] == [("C1", 2)], r.json()
+
+
+def post(client, fx, route: str, body: dict) -> dict:
+    r = client.post(f"{wbase(fx)}/object-sets/{route}", headers=hdr(fx.editor_sub), json=body)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_distribution_of_a_traversed_set_spans_the_linked_objects(client, fx, linked) -> None:
+    # The northern orders total 10 and 20; C2's 30 is not among them.
+    body = post(client, fx, "distribution",
+                {"definition": northern_orders(linked), "property": "total", "buckets": 2})
+    assert body["total"] == 2, body
+    assert (body["buckets"][0]["low"], body["buckets"][-1]["high"]) == (10, 21), body
+    assert sum(b["count"] for b in body["buckets"]) == 2, body
+
+
+def test_a_cross_tab_of_a_traversed_set_crosses_the_linked_objects(client, fx, linked) -> None:
+    body = post(client, fx, "cross-tab", {
+        "definition": northern_orders(linked),
+        "row_property": "customer_id", "column_property": "total"})
+    assert [r["value"] for r in body["rows"]] == ["C1"], body
+    assert sorted(c["value"] for c in body["columns"]) == ["10", "20"], body
+
+
+def test_a_time_series_of_a_traversed_set_counts_the_linked_objects(client, fx, linked) -> None:
+    body = post(client, fx, "time-series", {
+        "definition": northern_orders(linked), "interval": "month", "property": "placed"})
+    assert sum(p["count"] for p in body["points"]) == 2, body
+
+
+def test_a_set_linked_to_nothing_reads_as_nothing_everywhere(client, fx, linked) -> None:
+    """The base matches no customer, so the set holds no orders - and every
+    reading says so in its own empty, rather than reading the type unfiltered
+    (decision 0002's silent widening)."""
+    nobody = northern_orders(linked)
+    nobody["via"]["base"]["filters"] = [{"property": "region", "op": "eq", "value": "west"}]
+    assert post(client, fx, "aggregate", {"definition": nobody, "aggregation": "count"})[
+        "value"] == 0
+    assert post(client, fx, "group", {"definition": nobody, "property": "customer_id"})[
+        "groups"] == []
+
+
+def test_a_hop_that_does_not_join_is_refused_by_a_count_too(client, fx, linked) -> None:
+    wrong = northern_orders(linked)
+    wrong["via"]["base"]["object_type_id"] = linked["order_type"]
+    r = client.post(f"{wbase(fx)}/object-sets/aggregate", headers=hdr(fx.editor_sub),
+                    json={"definition": wrong, "aggregation": "count"})
+    assert r.status_code == 422, r.text

@@ -123,3 +123,35 @@ async def resolve_traversal(
     if joined is None:
         return definition.filters, True
     return (joined, *definition.filters), False
+
+
+# `in []` on the primary key: the empty set, which both stores already answer
+# as nothing (`object_sets.parse`, where an empty `in` is allowed for exactly
+# this direction). Only ever built here.
+NOTHING = object_sets.Filter(property=object_sets.PRIMARY_KEY_FILTER, op="in", value=[])
+
+
+async def members_filters(
+    conn: Any,
+    store: Any,
+    prefix: str,
+    workspace_id: UUID,
+    definition: "object_sets.ObjectSet",
+) -> tuple[Any, ...]:
+    """The filters that say which objects a set holds, **its hop included**
+    (§544).
+
+    For every reading of a set that is not a page of it - a count, a grouping,
+    a distribution, a cross-tab, a time series. Those routes read
+    `definition.filters` and never resolved `via`, so a Metric Card or a chart
+    over a set reached by following a link counted the *whole* far type: the
+    orders of every customer where the variable held the northern customers'.
+    Evaluation resolved the hop and nothing else did.
+
+    A set that links to nothing becomes `NOTHING` rather than a separate
+    "empty" flag, so each route gives its own natural empty answer (a count
+    of 0, no groups, no buckets) without a branch per route that could be
+    forgotten the way the hop was.
+    """
+    filters, empty = await resolve_traversal(conn, store, prefix, workspace_id, definition)
+    return (NOTHING,) if empty else filters

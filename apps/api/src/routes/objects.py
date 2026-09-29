@@ -4524,10 +4524,11 @@ async def aggregate_object_set(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
             ) from exc
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
-        value = await instance_store.store_for(conn).aggregate_object_set(
+        store = instance_store.store_for(conn)
+        value = await store.aggregate_object_set(
             search_prefix=prefix,
             object_type_id=definition.object_type_id,
-            filters=definition.filters,
+            filters=await _members(conn, store, prefix, access.workspace_id, definition),
             aggregation=aggregation,
         )
     return ObjectSetAggregateOut(
@@ -4592,10 +4593,11 @@ async def group_object_set(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
             ) from exc
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
-        buckets, distinct_total = await instance_store.store_for(conn).group_object_set(
+        store = instance_store.store_for(conn)
+        buckets, distinct_total = await store.group_object_set(
             search_prefix=prefix,
             object_type_id=definition.object_type_id,
-            filters=definition.filters,
+            filters=await _members(conn, store, prefix, access.workspace_id, definition),
             property_name=body.property,
             limit=body.limit,
             # Passed whatever it is: a `count` carries no property and no
@@ -4672,12 +4674,13 @@ async def distribution_object_set(
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         store = instance_store.store_for(conn)
         shared = {"search_prefix": prefix, "object_type_id": definition.object_type_id}
+        members = await _members(conn, store, prefix, access.workspace_id, definition)
         low = await store.aggregate_object_set(
-            **shared, filters=definition.filters, aggregation=smallest)
+            **shared, filters=members, aggregation=smallest)
         high = await store.aggregate_object_set(
-            **shared, filters=definition.filters, aggregation=largest)
+            **shared, filters=members, aggregation=largest)
         total = await store.aggregate_object_set(
-            **shared, filters=definition.filters, aggregation="count", property_name=None)
+            **shared, filters=members, aggregation="count", property_name=None)
         integer = data_type == "integer"
         # No number anywhere in the set is no bars, not one bar of nothing.
         buckets = [] if low is None or high is None else object_sets.distribution_buckets(
@@ -4686,7 +4689,7 @@ async def distribution_object_set(
         for bucket in buckets:
             n = await store.aggregate_object_set(
                 **shared,
-                filters=(*definition.filters,
+                filters=(*members,
                          *object_sets.bucket_filters(body.property, data_type, bucket)),
                 aggregation="count", property_name=None,
             )
@@ -4772,7 +4775,7 @@ async def cross_tab_object_set(
         shared = {
             "search_prefix": prefix,
             "object_type_id": definition.object_type_id,
-            "filters": definition.filters,
+            "filters": await _members(conn, store, prefix, access.workspace_id, definition),
         }
         row_buckets, row_distinct = await store.group_object_set(
             **shared, property_name=row_property, limit=body.row_limit
@@ -4885,7 +4888,7 @@ async def time_series_object_set(
         shared = {
             "search_prefix": prefix,
             "object_type_id": definition.object_type_id,
-            "filters": definition.filters,
+            "filters": await _members(conn, store, prefix, access.workspace_id, definition),
         }
         total = await store.aggregate_object_set(
             **shared, aggregation="count", property_name=None
@@ -4929,6 +4932,10 @@ async def time_series_object_set(
 # call sites below read as they did.
 _declared_types = object_set_eval.declared_types
 _resolve_traversal = object_set_eval.resolve_traversal
+# §544: every reading of a set that is not a page of it. A hop that does not
+# join is a ValueError, which `main`'s handler answers 422 as it does for the
+# evaluation route beside these.
+_members = object_set_eval.members_filters
 
 
 def _empty_for(aggregate: str | None) -> Any:
