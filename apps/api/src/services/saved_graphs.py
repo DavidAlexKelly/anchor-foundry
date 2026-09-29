@@ -56,7 +56,11 @@ FOCUS_HINT = (
 #: `test_saved_graphs.py` reads that file and asserts the two say the same
 #: thing. That test is the reason this is safe to write twice.
 COLOURINGS = ("status", "out_of_date", "health", "kind", "origin", "repository", "permissions",
-              "rows", "built", "duration", "none")
+              "rows", "built", "duration", "custom", "none")
+
+#: p.38's Custom color palette (§682), by name. Mirrored from `PAINTS` in
+#: `node-colouring.ts` and pinned by the same cross-file test.
+PAINTS = ("teal", "brass", "red", "green", "amber")
 
 #: p.11's arrangements, as the browser offers them (§424). Mirrored from
 #: `apps/web/src/lib/graph-layout.ts` and pinned by the same cross-file test
@@ -94,7 +98,7 @@ def parse(view: Any) -> dict[str, Any]:
         raise GraphViewError("a saved graph's view must be an object")
 
     known = {"focus", "column", "selected", "query", "kinds", "colouring", "layout",
-             "positions"}
+             "positions", "paints"}
     # **No `view_as`, and that is a decision rather than an omission** (§422).
     # p.82's dropdown names a colleague, and a saved graph or a shared link
     # carrying "as seen by Alice" is a claim about a person travelling further
@@ -218,6 +222,23 @@ def parse(view: Any) -> dict[str, Any]:
             placed[node] = {"x": place["x"], "y": place["y"]}
         if placed:
             out["positions"] = placed
+
+    paints = view.get("paints")
+    if paints is not None:
+        # p.38's Custom color (§682): the colour somebody gave each card, by
+        # name from the palette, bounded like the moves.
+        if not isinstance(paints, dict):
+            raise GraphViewError("paints must map node ids to colours")
+        if len(paints) > MAX_SELECTED:
+            raise GraphViewError(f"a saved graph colours at most {MAX_SELECTED} nodes")
+        for node, paint in paints.items():
+            if not NODE_ID.fullmatch(node):
+                raise GraphViewError(f"{node!r} is not a node id")
+            if paint not in PAINTS:
+                raise GraphViewError(
+                    f"{node}: {paint!r} is not a colour ({', '.join(PAINTS)})")
+        if paints:
+            out["paints"] = dict(paints)
 
     return out
 

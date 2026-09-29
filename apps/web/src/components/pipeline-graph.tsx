@@ -20,7 +20,7 @@ import {
   durationLabel, emptyReason, placeOf, timelineFor,
 } from "@/lib/build-timeline";
 import {
-  COLOURINGS, type Swatch, colouringIn, legendFor, scaleFor, swatchFor,
+  COLOURINGS, PAINTS, type Swatch, colouringIn, legendFor, painted, paintsIn, scaleFor, swatchFor,
 } from "@/lib/node-colouring";
 import { svgFilename, svgFor } from "@/lib/graph-svg";
 import { GraphInspector, type InspectFrom } from "@/components/graph-inspector";
@@ -457,6 +457,8 @@ export function PipelineGraphView({
   const [layout, setLayout] = useState(() => layoutIn(initialView));
   // p.11's cards moved by hand (§606), laid over `layout`.
   const [moves, setMoves] = useState<Moves>(() => movesIn(initialView));
+  // p.38's custom colours (§682), by node.
+  const [paints, setPaints] = useState<Record<string, string>>(() => paintsIn(initialView));
   // The card being dragged: which, from where, and where the pointer started.
   // `moved` is set once the pointer has gone far enough to be a drag, so the
   // click that ends the gesture is not also read as selecting the card.
@@ -499,13 +501,16 @@ export function PipelineGraphView({
           id: n.id,
           layer: n.layer,
           position: n.position,
-          group: swatchFor({ ...n, access: graph.access?.[n.id] ?? null }, colouring, scale)?.key,
+          group: swatchFor(
+            { ...n, access: graph.access?.[n.id] ?? null, paint: paints[n.id] ?? null },
+            colouring, scale,
+          )?.key,
         })),
         layout,
       ),
       moves,
     ),
-    [graph.nodes, graph.access, colouring, scale, layout, moves],
+    [graph.nodes, graph.access, paints, colouring, scale, layout, moves],
   );
 
   // **Reported after the render that changed it, not during.** Calling a
@@ -515,9 +520,9 @@ export function PipelineGraphView({
   report.current = onViewChange;
   useEffect(() => {
     report.current?.(viewOf({
-      selected, column, query, kinds, colouring, layout, positions: moves,
+      selected, column, query, kinds, colouring, layout, positions: moves, paints,
     }));
-  }, [selected, column, query, kinds, colouring, layout, moves]);
+  }, [selected, column, query, kinds, colouring, layout, moves, paints]);
 
   // p.12's SVG export. **The picture is of the graph as it looks**, so it is
   // built at the moment of the click from the same state the cards are drawn
@@ -534,7 +539,10 @@ export function PipelineGraphView({
         graph.nodes
           .map((n) => [
             n.id,
-            swatchFor({ ...n, access: graph.access?.[n.id] ?? null }, colouring, scale)?.token,
+            swatchFor(
+              { ...n, access: graph.access?.[n.id] ?? null, paint: paints[n.id] ?? null },
+              colouring, scale,
+            )?.token,
           ])
           .filter((pair): pair is [string, string] => pair[1] !== undefined),
       ),
@@ -598,11 +606,13 @@ export function PipelineGraphView({
   // graph re-renders on every pan frame, and this walks every node.
   const legend = useMemo(
     () => legendFor(
-      graph.nodes.map((n) => ({ ...n, access: graph.access?.[n.id] ?? null })),
+      graph.nodes.map((n) => ({
+        ...n, access: graph.access?.[n.id] ?? null, paint: paints[n.id] ?? null,
+      })),
       colouring,
       now,
     ),
-    [graph.nodes, graph.access, colouring, now],
+    [graph.nodes, graph.access, paints, colouring, now],
   );
   // p.11's other half (§417): "you can either search for the name of the node
   // or column names in datasets". The index is `graph.columns`, which §353
@@ -991,6 +1001,39 @@ export function PipelineGraphView({
             </option>
           ))}
         </select>
+        {/* p.38's Custom color: "select nodes and assign them a color by
+            clicking on the Color button" (§682). Offered once something is
+            selected, since it colours the selection; choosing a colour shows
+            the custom colouring, or the colour would be given and not seen. */}
+        {selected.length > 0 && (
+          <select
+            data-testid="graph-paint"
+            aria-label="Colour the selected nodes"
+            value=""
+            // Always showing the placeholder, so choosing it is never a change
+            // and every change is a colour or "clear".
+            onChange={(e) => {
+              const choice = e.target.value;
+              setPaints((was) => painted(was, selected, choice === "clear" ? null : choice));
+              setColouring("custom");
+            }}
+            style={{
+              padding: "5px 8px",
+              border: "1px solid var(--line-strong)",
+              borderRadius: "var(--radius)",
+              font: "inherit",
+              fontSize: 13,
+              background: "var(--panel)",
+              color: "var(--ink)",
+            }}
+          >
+            <option value="">Colour…</option>
+            {PAINTS.map((paint) => (
+              <option key={paint.key} value={paint.key}>{paint.label}</option>
+            ))}
+            <option value="clear">No colour</option>
+          </select>
+        )}
         {/* p.82's *View as*, beside the colouring it answers for rather than
             in a panel of its own — the two are one question ("what can Alice
             see"), and a dropdown a screen away from the colours it changes is
@@ -1322,7 +1365,7 @@ export function PipelineGraphView({
                 // the person named under *View as*; every other colouring
                 // reads the node alone (§422).
                 swatch={swatchFor(
-                  { ...n, access: graph.access?.[n.id] ?? null },
+                  { ...n, access: graph.access?.[n.id] ?? null, paint: paints[n.id] ?? null },
                   colouring,
                   scale,
                 )}

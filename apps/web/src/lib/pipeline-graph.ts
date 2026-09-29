@@ -457,6 +457,10 @@ export interface GraphView {
    *  the layout's reason: a graph tidied before sharing it is the picture
    *  being sent. Narrowed by `movesIn`. */
   positions?: Record<string, { x: number; y: number }>;
+  /** p.38's custom colours (§682), node to `PAINTS` name. In the view for the
+   *  moves' reason: colouring cards by hand is a picture being made to send.
+   *  Narrowed by `paintsIn`. */
+  paints?: Record<string, string>;
 }
 
 /** The kinds this graph draws, which is what a stored filter may name. */
@@ -523,6 +527,7 @@ export function viewOf(state: {
   layout: string;
   /** Optional so the callers that predate §606 need not name it. */
   positions?: Readonly<Record<string, { x: number; y: number }>>;
+  paints?: Readonly<Record<string, string>>;
 }): GraphView {
   const view: GraphView = {};
   if (state.selected.length > 0) view.selected = [...state.selected];
@@ -542,5 +547,6 @@ export function viewOf(state: {
   if (state.positions && Object.keys(state.positions).length > 0) {
     view.positions = { ...state.positions };
   }
+  if (state.paints && Object.keys(state.paints).length > 0) view.paints = { ...state.paints };
   return view;
 }

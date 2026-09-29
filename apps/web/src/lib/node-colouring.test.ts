@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   COLOURINGS, DEFAULT_COLOURING, type ColourableNode, colouringIn, legendFor, swatchFor, RAMP, ageText, quantityOf, quarterLabel, quarterOf, scaleFor, CATEGORICAL,
+  PAINTS, painted, paintsIn,
 } from "./node-colouring";
 
 /** A node the graph could actually draw: every field the server sends, set.
@@ -467,5 +468,48 @@ describe("p.38's Repository colouring (§677)", () => {
   it("lists the repositories by name, then what no repository wrote", () => {
     expect(legendFor(graph, "repository").map((e) => [e.label, e.count])).toEqual([
       ["Analytics", 1], ["pipelines", 2], ["Not from a repository", 2]]);
+  });
+});
+
+describe("p.38's Custom color (§682)", () => {
+  it("draws a node in the colour it was given, and the rest quietly", () => {
+    expect(swatchFor(dataset({ paint: "red" }), "custom")).toEqual(
+      { key: "paint:red", label: "Red", token: "var(--danger)" });
+    const none = swatchFor(dataset(), "custom");
+    expect(none).toEqual({ key: "unpainted", label: "No colour given", token: "var(--line)" });
+    // A colour this build does not have is no colour, not a blank card.
+    expect(swatchFor(dataset({ paint: "purple" }), "custom")).toEqual(none);
+  });
+
+  it("offers colours both themes carry, each named once", () => {
+    expect(PAINTS.map((p) => p.key)).toEqual(["teal", "brass", "red", "green", "amber"]);
+    for (const paint of PAINTS) expect(paint.token).toMatch(/^var\(--[a-z]+\)$/);
+    expect(COLOURINGS.map((c) => c.id).slice(-2)).toEqual(["custom", "none"]);
+  });
+
+  it("keys the palette in its own order, then what nobody coloured", () => {
+    const graph = [
+      dataset(), dataset({ paint: "amber" }), dataset({ paint: "teal" }),
+      dataset({ paint: "amber" }), dataset({ paint: "brass" }),
+      dataset({ paint: "red" }), dataset({ paint: "green" }),
+    ];
+    expect(legendFor(graph, "custom").map((e) => [e.label, e.count])).toEqual([
+      ["Teal", 1], ["Brass", 1], ["Red", 1], ["Green", 1], ["Amber", 2], ["No colour given", 1]]);
+  });
+
+  it("reads a stored view's colours, keeping the palette's", () => {
+    expect(paintsIn({ paints: { "dataset:1": "red", "dataset:2": "purple", "dataset:3": 7 } }))
+      .toEqual({ "dataset:1": "red" });
+    expect(paintsIn({ paints: "red" })).toEqual({});
+    expect(paintsIn({})).toEqual({});
+    expect(paintsIn(undefined)).toEqual({});
+  });
+
+  it("colours the selection, or clears it, leaving the rest", () => {
+    const was = { "dataset:1": "red", "dataset:2": "teal" };
+    expect(painted(was, ["dataset:2", "dataset:3"], "green")).toEqual(
+      { "dataset:1": "red", "dataset:2": "green", "dataset:3": "green" });
+    expect(painted(was, ["dataset:1"], null)).toEqual({ "dataset:2": "teal" });
+    expect(was).toEqual({ "dataset:1": "red", "dataset:2": "teal" });
   });
 });
