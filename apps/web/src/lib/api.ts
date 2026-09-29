@@ -2082,6 +2082,15 @@ export const objects = {
     ),
 
   /** Value types (`object-link-types` p.222–234). */
+  /** p.8's saved changes, newest first (§683). */
+  ontologyHistory: (wid: string, opts: { resourceId?: string; limit?: number; before?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.resourceId) q.set("resource_id", opts.resourceId);
+    if (opts.limit) q.set("limit", String(opts.limit));
+    if (opts.before) q.set("before", String(opts.before));
+    return request<import("./types").OntologyChange[]>(
+      `/workspaces/${wid}/ontology-history${q.size ? `?${q}` : ""}`);
+  },
   listValueTypes: (wid: string) =>
     request<import("./types").ValueType[]>(`/workspaces/${wid}/value-types`),
   createValueType: (wid: string, input: ValueTypeInput) =>

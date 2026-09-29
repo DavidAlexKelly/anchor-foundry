@@ -2021,6 +2021,22 @@ export type ValueConstraint =
   | { kind: "regex"; pattern: string; substring?: boolean }
   | { kind: "uuid" };
 
+/** One saved change to the ontology (§683; `ontology-manager` p.8): the
+ * audit log's record of it, named. */
+export interface OntologyChange {
+  id: number;
+  /** `<kind>.<verb>`, e.g. `object_type.update`. */
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  /** What it is called now, or what the record called it if it has gone. */
+  resource_name: string | null;
+  metadata: Record<string, unknown>;
+  user_id: string | null;
+  user_name: string | null;
+  created_at: string;
+}
+
 /** A reusable constraint with meaning attached (Foundry `object-link-types`
  * p.222–234) — "an email value type that has a regular expression constraint
  * to ensure any property that uses the value type represents a valid email

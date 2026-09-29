@@ -17,6 +17,7 @@ import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ActionOverviewDialog } from "@/components/action-overview-dialog";
 import { ObjectViewEditor } from "@/components/object-view-editor";
 import { InterfacesPanel } from "@/components/interfaces-panel";
+import { OntologyHistoryPanel } from "@/components/ontology-history-panel";
 import { OntologySearch } from "@/components/ontology-search";
 import {
   ISSUE_FILTER_OPTIONS,
@@ -2005,6 +2006,10 @@ export default function ObjectsPage() {
               </tbody>
             </table>
           )}
+
+          {/* p.8's History: every saved change to this ontology, last, as
+              the record of what everything above has been through (§683). */}
+          <OntologyHistoryPanel workspaceId={workspace!.id} />
         </>
       )}
 
