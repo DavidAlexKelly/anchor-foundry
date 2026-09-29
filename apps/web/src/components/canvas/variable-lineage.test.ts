@@ -44,6 +44,7 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   // p.568: a drop zone writes what was dropped on it.
   dropVariable: "write",
   endVariable: "write",
+  areaVariable: "write",
   variable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",

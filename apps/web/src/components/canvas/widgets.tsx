@@ -333,6 +333,8 @@ import {
   orientationOf, sortPoints, valueAxisOf, valueText, withMissing,
 } from "./chart-display";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
+// Aliased on §211's rule: `areaOf` is also §537's chart area option.
+import { areaOf as mapAreaOf, withArea as withMapArea } from "./map-area";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { conditionalStyle, cssFor } from "@/lib/conditional-format";
 
@@ -11948,6 +11950,7 @@ export function CanvasMap({
   filterParameter = null,
   searchParameter = null,
   limit = 500,
+  areaVariable = null,
 }: {
   source?: "objects" | "dataset";
   /** An `object_set` variable to plot (roadmap 1.5). When set, this map reads
@@ -11970,6 +11973,10 @@ export function CanvasMap({
   filterParameter?: string | null;
   searchParameter?: string | null;
   limit?: number;
+  /** p.302's shape-based selection (§550): the array a drawn area is written
+   * into as a `within_box` on the location property, for a `narrow_set` to
+   * read (`map-area.ts`). */
+  areaVariable?: string | null;
 }) {
   const {
     id: nodeId,
@@ -11977,6 +11984,14 @@ export function CanvasMap({
   } = useNode();
   const { workspaceId, projectId } = useCanvasEnv();
   const filterValue = useCanvasParameter(filterParameter);
+  const { set: setParameter } = useCanvasParameters();
+  // Read back from the variable it writes, as a Filter List's clauses are:
+  // the area on the map is the one the document holds.
+  const areaWritten = useCanvasParameter(areaVariable);
+  const areaResolved = useCanvasVariable(areaVariable);
+  const areaClauses = clausesOf(areaWritten !== undefined ? areaWritten : areaResolved);
+  const selectsArea = source === "objects" && !!objectSetVariable && !!areaVariable
+    && !!locationProperty;
   const searchValue = useCanvasParameter(searchParameter);
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
@@ -12098,6 +12113,10 @@ export function CanvasMap({
       {!needs && query.data && (
         <MapCanvas
           points={points}
+          area={selectsArea ? mapAreaOf(areaClauses, locationProperty!) : null}
+          onArea={selectsArea
+            ? (box) => setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, box))
+            : undefined}
           unplaceable={unplaceable}
           total={
             source === "objects"
@@ -12141,9 +12160,10 @@ function MapSettings() {
     source, objectTypeId, locationProperty, labelProperty, datasetId,
     locationColumn, latColumn, lonColumn, labelColumn,
     filterProperty, filterColumn, filterOperator, filterParameter, searchParameter,
-    objectSetVariable,
+    objectSetVariable, areaVariable,
     actions: { setProp },
   } = useNode((node) => ({
+    areaVariable: node.data.props.areaVariable,
     source: node.data.props.source,
     objectTypeId: node.data.props.objectTypeId,
     locationProperty: node.data.props.locationProperty,
@@ -12358,6 +12378,27 @@ function MapSettings() {
               }
             />
           </label>
+          {/* p.302's shape-based selection (§550): where a drawn area goes,
+              for a narrowed set to read - offered over an object set, whose
+              objects are what an area can select. */}
+          {objectSetVariable && (
+            <label className="field">
+              <span className="field-label">Area selection writes to</span>
+              <select
+                data-testid="map-area-variable"
+                value={areaVariable || ""}
+                onChange={(e) => setProp((p: { areaVariable: string | null }) =>
+                  (p.areaVariable = e.target.value || null))}
+              >
+                <option value="">No area selection</option>
+                {Object.values(declared).filter((v) => v.kind === "array" && !v.derivation)
+                  .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
+              <span className="field-hint">
+                An array a narrowed set reads: dragging an area selects the objects in it
+              </span>
+            </label>
+          )}
         </>
       ) : (
         <>
@@ -12477,7 +12518,7 @@ CanvasMap.craft = {
     objectSetVariable: null, objectTypeId: null, locationProperty: null, labelProperty: null,
     datasetId: null, locationColumn: null, latColumn: null, lonColumn: null, labelColumn: null,
     filterProperty: null, filterColumn: null, filterOperator: "equals",
-    filterParameter: null, searchParameter: null, limit: 500,
+    filterParameter: null, searchParameter: null, limit: 500, areaVariable: null,
   },
   related: { settings: MapSettings },
 };

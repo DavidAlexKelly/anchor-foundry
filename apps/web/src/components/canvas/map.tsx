@@ -22,6 +22,7 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { WORLD_OUTLINE } from "./basemap";
 import { boundsOf, onScreen, pathsFor } from "./map-shapes";
+import { boxBetween, boxRect, isDrag, lonLatAt, type Box } from "./map-area";
 
 export interface MapPoint {
   id: string;
@@ -197,6 +198,8 @@ export function MapCanvas({
   total,
   atLimit = false,
   onSelect,
+  area = null,
+  onArea,
 }: {
   points: MapPoint[];
   /** p.11's geoshapes, drawn **under** the pins: a pin is a thing to click
@@ -213,9 +216,20 @@ export function MapCanvas({
    * for — true even when nothing can say how many more. */
   atLimit?: boolean;
   onSelect?: (point: MapPoint) => void;
+  /** p.302's shape-based selection (§550): the area selected, drawn on the
+   * map, and where a newly drawn one goes. Without `onArea` there is no
+   * Select area tool - a map with nowhere to write the area has no use for
+   * one. */
+  area?: Box | null;
+  onArea?: (box: Box | null) => void;
 }) {
   const [view, setView] = useState<MapView | null>(null);
   const [panning, setPanning] = useState(false);
+  // Select area is a mode, as a drawing tool in a toolbar is: a drag pans the
+  // map until it is chosen, and draws a rectangle once.
+  const [selecting, setSelecting] = useState(false);
+  const [sketch, setSketch] = useState<{ a: { x: number; y: number }; b: { x: number; y: number } }
+    | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drag = useRef<{ px: number; py: number; view: MapView } | null>(null);
 
@@ -306,6 +320,45 @@ export function MapCanvas({
     };
   }, [panning]);
 
+  // The rectangle being drawn, on the window for panning's reason above.
+  const drawing = sketch !== null;
+  const sketchRef = useRef(sketch);
+  sketchRef.current = sketch;
+  React.useEffect(() => {
+    if (!drawing) return;
+    const noDrag = (e: Event) => e.preventDefault();
+    document.addEventListener("dragstart", noDrag, true);
+    const at = (e: MouseEvent) => {
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (!rect) return null;
+      return {
+        x: ((e.clientX - rect.left) / rect.width) * WIDTH,
+        y: ((e.clientY - rect.top) / rect.height) * HEIGHT,
+      };
+    };
+    const onMove = (e: MouseEvent) => {
+      const b = at(e);
+      if (b) setSketch((prev) => (prev ? { ...prev, b } : prev));
+    };
+    const onUp = (e: MouseEvent) => {
+      const done = sketchRef.current;
+      const b = at(e) ?? done?.b;
+      setSketch(null);
+      setSelecting(false);
+      if (!done || !b || !isDrag(done.a, b)) return;
+      const frame = { width: WIDTH, height: HEIGHT };
+      onArea?.(boxBetween(
+        lonLatAt(done.a.x, done.a.y, current, frame), lonLatAt(b.x, b.y, current, frame)));
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("dragstart", noDrag, true);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [drawing, current, onArea]);
+
   const svgPoint = (e: React.MouseEvent | React.WheelEvent) => {
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return { x: WIDTH / 2, y: HEIGHT / 2 };
@@ -324,13 +377,19 @@ export function MapCanvas({
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         role="img"
         aria-label="Map"
-        style={{ width: "100%", touchAction: "none", cursor: panning ? "grabbing" : "grab" }}
+        style={{ width: "100%", touchAction: "none",
+          cursor: selecting ? "crosshair" : panning ? "grabbing" : "grab" }}
         onMouseDown={(e) => {
           // The widget's own Craft.js drag connector sits on the block around
           // this SVG, and in the editor it would otherwise pick the map up and
           // carry it across the canvas the moment somebody tried to pan.
           // Panning wins inside the map; the block's border still drags it.
           e.stopPropagation();
+          if (selecting) {
+            const a = svgPoint(e);
+            setSketch({ a, b: a });
+            return;
+          }
           drag.current = { px: e.clientX, py: e.clientY, view: current };
           setPanning(true);
         }}
@@ -382,6 +441,23 @@ export function MapCanvas({
             )),
           )}
         </g>
+        {/* p.302's selected area, and the one being drawn. Under the pins, as
+            the shapes are, so a pin inside it stays a thing to click. */}
+        {area && (() => {
+          const r = boxRect(area, current, { width: WIDTH, height: HEIGHT });
+          return (
+            <rect data-testid="map-area" x={r.x} y={r.y} width={r.width} height={r.height}
+              fill="var(--accent-wash)" fillOpacity={0.35} stroke="var(--accent)"
+              strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
+          );
+        })()}
+        {sketch && (
+          <rect data-testid="map-area-sketch"
+            x={Math.min(sketch.a.x, sketch.b.x)} y={Math.min(sketch.a.y, sketch.b.y)}
+            width={Math.abs(sketch.a.x - sketch.b.x)} height={Math.abs(sketch.a.y - sketch.b.y)}
+            fill="none" stroke="var(--accent)" strokeDasharray="4 3"
+            style={{ pointerEvents: "none" }} />
+        )}
         {placed.map((group) => {
           const only = group.members.length === 1 ? group.members[0] : undefined;
           return only ? (
@@ -431,6 +507,21 @@ export function MapCanvas({
         <button type="button" onClick={() => zoomBy(1 / 1.6)} aria-label="Zoom in">+</button>
         <button type="button" onClick={() => zoomBy(1.6)} aria-label="Zoom out">−</button>
         <button type="button" onClick={() => setView(null)}>Fit to data</button>
+        {onArea && (
+          <button
+            type="button"
+            data-testid="map-select-area"
+            aria-pressed={selecting}
+            onClick={() => setSelecting(!selecting)}
+          >
+            Select area
+          </button>
+        )}
+        {onArea && area && (
+          <button type="button" data-testid="map-clear-area" onClick={() => onArea(null)}>
+            Clear area
+          </button>
+        )}
         <span className="canvas-map-note">
           {points.length.toLocaleString()} placed
           {shapes.length > 0 ? `, ${shapes.length.toLocaleString()} shape${
