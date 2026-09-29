@@ -275,6 +275,8 @@ export const REFERENCE_PROPS = [
   "playingVariable",
   "playbackPositionVariable",
   "autoPauseVariable",
+  // p.300's layer visibility on the Map (§559). See the API's copy.
+  "layerVisibleVariable",
   "name",
 ] as const;
 

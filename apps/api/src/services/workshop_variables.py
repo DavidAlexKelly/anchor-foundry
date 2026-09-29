@@ -385,6 +385,9 @@ REFERENCE_PROPS = (
     "playingVariable",
     "playbackPositionVariable",
     "autoPauseVariable",
+    # p.300's layer on the Map (§559): the boolean its visibility reads. Its
+    # Selected objects is `selectedVariable`, already listed for the table.
+    "layerVisibleVariable",
     "name",
 )
 

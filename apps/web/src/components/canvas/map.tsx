@@ -201,6 +201,10 @@ export function MapCanvas({
   onSelect,
   area = null,
   onArea,
+  color = null,
+  opacity = 1,
+  selectedKeys,
+  layerLabel = "",
 }: {
   points: MapPoint[];
   /** p.11's geoshapes, drawn **under** the pins: a pin is a thing to click
@@ -226,7 +230,15 @@ export function MapCanvas({
    * one. */
   area?: Box | null;
   onArea?: (box: Box | null) => void;
+  /** p.300's layer Style (§559): its colour and opacity. */
+  color?: string | null;
+  opacity?: number;
+  /** p.300's Selected objects: the primary keys drawn as selected. */
+  selectedKeys?: ReadonlySet<string>;
+  /** p.300's layer Label, which the caption leads with. */
+  layerLabel?: string;
 }) {
+  const fill = color ?? "var(--accent, #2f6f4f)";
   const [view, setView] = useState<MapView | null>(null);
   const [panning, setPanning] = useState(false);
   // Select area is a mode, as a drawing tool in a toolbar is: a drag pans the
@@ -433,10 +445,11 @@ export function MapCanvas({
                 key={`${shape.id}:${i}`}
                 data-testid={`map-shape-${shape.id}`}
                 d={path.d}
-                fill={path.filled ? "var(--accent-wash)" : "none"}
-                fillOpacity={path.filled ? 0.55 : undefined}
+                fill={path.filled ? (color ?? "var(--accent-wash)") : "none"}
+                fillOpacity={path.filled ? 0.55 * opacity : undefined}
                 fillRule="evenodd"
-                stroke="var(--accent)"
+                stroke={color ?? "var(--accent)"}
+                strokeOpacity={opacity}
                 strokeWidth={1.5}
                 vectorEffect="non-scaling-stroke"
               >
@@ -464,15 +477,18 @@ export function MapCanvas({
         )}
         {placed.map((group) => {
           const only = group.members.length === 1 ? group.members[0] : undefined;
+          const chosen = !!only && !!selectedKeys?.has(String(only.instance?.primary_key));
           return only ? (
             <circle
               key={group.key}
               cx={group.x}
               cy={group.y}
-              r={5}
-              fill="var(--accent, #2f6f4f)"
-              stroke="#fff"
-              strokeWidth={1.5}
+              r={chosen ? 7 : 5}
+              fill={fill}
+              fillOpacity={opacity}
+              stroke={chosen ? "var(--ink, #16232f)" : "#fff"}
+              strokeWidth={chosen ? 2.5 : 1.5}
+              data-selected={chosen ? "true" : undefined}
               style={{ cursor: onSelect ? "pointer" : "inherit" }}
               onClick={() => onSelect?.(only)}
             >
@@ -484,8 +500,8 @@ export function MapCanvas({
                 cx={group.x}
                 cy={group.y}
                 r={Math.min(20, 8 + Math.sqrt(group.members.length) * 2)}
-                fill="var(--accent, #2f6f4f)"
-                fillOpacity={0.82}
+                fill={fill}
+                fillOpacity={0.82 * opacity}
                 stroke="#fff"
                 strokeWidth={1.5}
               />
@@ -527,7 +543,9 @@ export function MapCanvas({
           </button>
         )}
         <span className="canvas-map-note">
+          {layerLabel ? `${layerLabel}: ` : ""}
           {points.length.toLocaleString()} placed
+          {selectedKeys && selectedKeys.size > 0 ? `, ${selectedKeys.size.toLocaleString()} selected` : ""}
           {shapes.length > 0 ? `, ${shapes.length.toLocaleString()} shape${
             shapes.length === 1 ? "" : "s"}` : ""}
           {shapesOff > 0 ? `, ${shapesOff.toLocaleString()} outside the view` : ""}

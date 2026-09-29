@@ -55,6 +55,7 @@ import {
 import {
   autoSelectKey, hasSelection, keysOf, selectionClauses, toggle as toggleKey,
 } from "./object-table-selection";
+import { layerColorOf, layerOpacityOf, layerVisibleOf } from "./map-layer";
 import {
   DEFAULT_LINES, EMPTY_MODES, MAX_LINES, cellStyle, emptyMessageOf, emptyModeOf,
   fillsCellOf, fitColumnsOf, frozenOf, linesOf, narrowHeadersOf, noValueOf,
@@ -11996,6 +11997,13 @@ export function CanvasMap({
   playingVariable = null,
   playbackPositionVariable = null,
   autoPauseVariable = null,
+  layerLabel = "",
+  selectedVariable = null,
+  layerVisible = true,
+  layerVisibleVariable = null,
+  lockLayer = false,
+  layerColor = null,
+  layerOpacity = 1,
 }: {
   source?: "objects" | "dataset";
   /** An `object_set` variable to plot (roadmap 1.5). When set, this map reads
@@ -12041,6 +12049,17 @@ export function CanvasMap({
   playingVariable?: string | null;
   playbackPositionVariable?: string | null;
   autoPauseVariable?: string | null;
+  /** p.300's layer settings (§559, `map-layer.ts`): its Label; its Selected
+   * objects, an array variable of clauses, read and written; its Layer
+   * visibility, static or from a boolean variable; Lock layer; and Style's
+   * colour and opacity. */
+  layerLabel?: string;
+  selectedVariable?: string | null;
+  layerVisible?: boolean;
+  layerVisibleVariable?: string | null;
+  lockLayer?: boolean;
+  layerColor?: string | null;
+  layerOpacity?: number;
 }) {
   const {
     id: nodeId,
@@ -12118,6 +12137,29 @@ export function CanvasMap({
   const pauseWritten = useCanvasParameter(autoPauseVariable);
   const pauseResolved = useCanvasVariable(autoPauseVariable);
   const pauses = pausesOf(pauseWritten !== undefined ? pauseWritten : pauseResolved);
+  // p.300's Selected objects (§559): the clause list in its variable is the
+  // selection, as for the Object Table - "bidirectional", so anything that
+  // writes it moves the selection here.
+  const selectedWritten = useCanvasParameter(selectedVariable);
+  const selectedResolved = useCanvasVariable(selectedVariable);
+  const selectedClauses = selectedWritten !== undefined ? selectedWritten : selectedResolved;
+  const selectedKeys = new Set(keysOf(selectedClauses));
+  const visibleWritten = useCanvasParameter(layerVisibleVariable);
+  const visibleResolved = useCanvasVariable(layerVisibleVariable);
+  const layerShown = layerVisibleOf(layerVisible,
+    visibleWritten !== undefined ? visibleWritten : visibleResolved, !!layerVisibleVariable);
+  // Written as "none selected" once, so a set narrowed by it is empty rather
+  // than everything until somebody clicks - the Object Table's rule (§207).
+  // Only once the variable has resolved: a default the document gives it is
+  // a selection already, and written over before it arrived it would be lost.
+  const selectionStated = hasSelection(selectedWritten) || hasSelection(selectedResolved);
+  React.useEffect(() => {
+    if (selectedVariable && !variablesPending && selectedResolved !== undefined
+        && !selectionStated) {
+      setParameter(selectedVariable, selectionClauses([]));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVariable, variablesPending, selectedResolved === undefined, selectionStated]);
 
   const usesProperty = !!filterProperty && filterValue !== undefined && filterValue !== null
     && filterValue !== "";
@@ -12266,8 +12308,12 @@ export function CanvasMap({
       )}
       {!needs && query.data && (
         <MapCanvas
-          points={points}
-          shapes={trackShapes}
+          points={layerShown ? points : []}
+          shapes={layerShown ? trackShapes : []}
+          color={layerColorOf(layerColor)}
+          opacity={layerOpacityOf(layerOpacity)}
+          selectedKeys={selectedVariable ? selectedKeys : undefined}
+          layerLabel={layerLabel}
           area={selectsArea ? mapAreaOf(areaClauses, locationProperty!) : null}
           onArea={selectsArea
             ? (box) => setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, box))
@@ -12283,9 +12329,16 @@ export function CanvasMap({
             source === "dataset" && (datasetRows.data?.rows.length ?? 0) >= (limit ?? 500)
           }
           onSelect={
-            pinEvents.length > 0
-              ? (point) =>
-                  runEvents(pinEvents, {
+            // p.300: "Objects in locked layers cannot be selected by users".
+            lockLayer ? undefined
+            : selectedVariable || pinEvents.length > 0
+              ? (point) => {
+                  if (selectedVariable && point.instance) {
+                    setParameter(selectedVariable, selectionClauses(
+                      toggleKey([...selectedKeys], String(point.instance.primary_key))));
+                  }
+                  if (pinEvents.length > 0) {
+                    runEvents(pinEvents, {
                     ...eventContext,
                     payload: {
                       primary_key: point.instance?.primary_key,
@@ -12301,7 +12354,9 @@ export function CanvasMap({
                           properties: point.instance.properties,
                         }
                       : undefined,
-                  })
+                  });
+                  }
+                }
               : undefined
           }
         />
@@ -12374,9 +12429,17 @@ function MapSettings() {
     filterProperty, filterColumn, filterOperator, filterParameter, searchParameter,
     objectSetVariable, areaVariable, trackProperty, enableTimeline, selectedTimeVariable,
     windowStartVariable, windowEndVariable, timeZone, timeFormat, playingVariable,
-    playbackPositionVariable, autoPauseVariable,
+    playbackPositionVariable, autoPauseVariable, layerLabel, selectedVariable, layerVisible,
+    layerVisibleVariable, lockLayer, layerColor, layerOpacity,
     actions: { setProp },
   } = useNode((node) => ({
+    layerLabel: node.data.props.layerLabel,
+    selectedVariable: node.data.props.selectedVariable,
+    layerVisible: node.data.props.layerVisible,
+    layerVisibleVariable: node.data.props.layerVisibleVariable,
+    lockLayer: node.data.props.lockLayer,
+    layerColor: node.data.props.layerColor,
+    layerOpacity: node.data.props.layerOpacity,
     windowStartVariable: node.data.props.windowStartVariable,
     windowEndVariable: node.data.props.windowEndVariable,
     timeZone: node.data.props.timeZone,
@@ -12623,6 +12686,81 @@ function MapSettings() {
               </span>
             </label>
           )}
+          {/* p.300's layer settings (§559), for the map's one object layer. */}
+          {objectSetVariable && (
+            <div className="field" data-testid="map-layer-settings">
+              <span className="field-label">Layer</span>
+              <input
+                type="text"
+                aria-label="Layer label"
+                data-testid="map-layer-label"
+                value={layerLabel ?? ""}
+                placeholder="Label"
+                onChange={(e) => setProp((p: { layerLabel: string }) => (p.layerLabel = e.target.value))}
+              />
+              <select
+                aria-label="Selected objects"
+                data-testid="map-selected-variable"
+                value={selectedVariable || ""}
+                onChange={(e) => setProp((p: { selectedVariable: string | null }) =>
+                  (p.selectedVariable = e.target.value || null))}
+              >
+                <option value="">No selected objects</option>
+                {Object.values(declared).filter((v) => v.kind === "array" && !v.derivation)
+                  .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
+              <label className="field canvas-toggle">
+                <input
+                  type="checkbox"
+                  data-testid="map-layer-visible"
+                  checked={layerVisible !== false}
+                  onChange={(e) => setProp((p: { layerVisible: boolean }) =>
+                    (p.layerVisible = e.target.checked))}
+                />
+                <span className="field-label">Layer visible</span>
+              </label>
+              <select
+                aria-label="Layer visibility variable"
+                data-testid="map-layer-visible-variable"
+                value={layerVisibleVariable || ""}
+                onChange={(e) => setProp((p: { layerVisibleVariable: string | null }) =>
+                  (p.layerVisibleVariable = e.target.value || null))}
+              >
+                <option value="">Visibility: the setting above</option>
+                {Object.values(declared).filter((v) => v.kind === "boolean")
+                  .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
+              <label className="field canvas-toggle">
+                <input
+                  type="checkbox"
+                  data-testid="map-lock-layer"
+                  checked={!!lockLayer}
+                  onChange={(e) => setProp((p: { lockLayer: boolean }) =>
+                    (p.lockLayer = e.target.checked))}
+                />
+                <span className="field-label">Lock layer</span>
+              </label>
+              <input
+                type="color"
+                aria-label="Layer colour"
+                data-testid="map-layer-color"
+                value={layerColorOf(layerColor) ?? "#14646e"}
+                onChange={(e) => setProp((p: { layerColor: string | null }) =>
+                  (p.layerColor = e.target.value))}
+              />
+              <input
+                type="number"
+                aria-label="Layer opacity"
+                data-testid="map-layer-opacity"
+                min={0.1}
+                max={1}
+                step={0.1}
+                value={layerOpacityOf(layerOpacity)}
+                onChange={(e) => setProp((p: { layerOpacity: number }) =>
+                  (p.layerOpacity = layerOpacityOf(e.target.value)))}
+              />
+            </div>
+          )}
           {/* §557: tracks and p.303's timeline, over an object set. */}
           {objectSetVariable && (
             <>
@@ -12847,6 +12985,8 @@ CanvasMap.craft = {
     trackProperty: null, enableTimeline: false, selectedTimeVariable: null,
     windowStartVariable: null, windowEndVariable: null, timeZone: "utc", timeFormat: "local",
     playingVariable: null, playbackPositionVariable: null, autoPauseVariable: null,
+    layerLabel: "", selectedVariable: null, layerVisible: true, layerVisibleVariable: null,
+    lockLayer: false, layerColor: null, layerOpacity: 1,
   },
   related: { settings: MapSettings },
 };
