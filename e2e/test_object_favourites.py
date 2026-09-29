@@ -72,8 +72,12 @@ def open_explorer(page, module) -> None:
 
 
 def open_first_object(page, module) -> None:
+    """Open Ely - by its row, not by position. The Explorer's page has no
+    order both stores promise for two objects that tie on everything it sorts
+    by, and a CI run drew Wells first, which failed every test here that
+    asserts Ely's shortcut."""
     open_explorer(page, module)
-    page.locator("tbody tr").first.get_by_role("button", name="Explore").click()
+    page.locator("tbody tr", has_text="Ely").get_by_role("button", name="Explore").click()
     expect(page.get_by_test_id("standard-object-view")).to_be_visible(timeout=30000)
     page.wait_for_url(re.compile(r"object="), timeout=30000)
 
