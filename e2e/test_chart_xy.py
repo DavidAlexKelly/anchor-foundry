@@ -717,3 +717,27 @@ def test_the_panel_places_the_legend_and_names_a_segment(page, api, sites) -> No
     page.get_by_role("button", name="Save", exact=True).click()
     eventually(lambda: mod.definition()["layout"]["chart"]["props"].get("segmentNames"),
                lambda got: got == {}, what="an emptied name removed")
+
+
+
+# ---- p.283's Sort by on a segmented chart (§540) ----------------------------
+
+@pytest.mark.parametrize("sort, expected", [
+    # The cross-tab's own order: the most objects first.
+    (None, ["open", "closed"]),
+    ("keyAsc", ["closed", "open"]),
+    ("valueAsc", ["closed", "open"]),
+    ("valueDesc", ["open", "closed"]),
+])
+def test_a_segmented_chart_s_bars_are_in_the_order_asked_for(
+        page, api, sites, sort, expected) -> None:
+    mod = build(api, sites, f"Chart XY segmented sort {sort}", {
+        "segmentBy": "region", **({"sort": sort} if sort else {})})
+    open_module(page, mod)
+    marks = page.get_by_test_id("chart-segment")
+    expect(marks).to_have_count(3)
+    lefts: dict[str, float] = {}
+    for i in range(3):
+        category = marks.nth(i).get_attribute("data-category") or ""
+        lefts[category] = min(lefts.get(category, 1e9), box(marks.nth(i))["x"])
+    assert sorted(lefts, key=lefts.__getitem__) == expected, lefts

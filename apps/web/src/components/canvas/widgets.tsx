@@ -301,6 +301,7 @@ import {
 import { Chart, PieChart, SegmentedBarChart, toPoints } from "./charts";
 import {
   SEGMENT_LEGEND_POSITIONS, SEGMENT_MODES, segmentLegendPositionOf, segmentModeOf, segmentedFrom,
+  sortSegmented,
 } from "./chart-segments";
 import { useAttachmentUrl } from "./use-attachment-url";
 import { HEADER_STYLES, headerStyleOf, paddingTarget, styleTarget } from "./section-header";
@@ -12201,7 +12202,7 @@ export function CanvasChart({
           ? <p className="canvas-widget-empty">No rows match — nothing to chart.</p>
           : (
             <SegmentedBarChart
-              data={segmentedFrom(crossTab.data)}
+              data={sortSegmented(segmentedFrom(crossTab.data), chartSortOf(sort))}
               mode={segmentModeOf(segmentMode)}
               showLegend={showLegend !== false}
               titles={titles}
