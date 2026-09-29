@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   LINK_MODES, MAX_DEFAULT_EXPAND, chosenOf, defaultExpandOf, initiallyExpanded, labelFor,
-  linkKey, modeOf, objectViewHref, previewProperties, titleOf, toggleExpanded, visibleLinks,
+  linkKey, modeOf, objectViewHref, previewProperties, sortOf, sortedLinkQuery, titleOf,
+  toggleExpanded, visibleLinks,
 } from "./links-widget";
 
 /** p.268-272's Links widget. */
@@ -236,5 +237,32 @@ describe("p.271's linked objects configuration (§547)", () => {
     const id = "22222222-2222-2222-2222-222222222222";
     expect(objectViewHref("acme", type, id))
       .toBe(`/acme/explore?object=${type}%3A${id}`);
+  });
+});
+
+describe("p.272's Sort linked object by (§548)", () => {
+  it("keeps a chosen link's sort, and only a real one", () => {
+    expect(chosenOf([
+      { key: "a:outbound", sort: "-tenure" },
+      { key: "b:inbound", sort: "-" },
+      { key: "c:inbound", sort: 3, label: "  " },
+    ])).toEqual([
+      { key: "a:outbound", sort: "-tenure" }, { key: "b:inbound" }, { key: "c:inbound" },
+    ]);
+    expect(sortOf([{ key: "a:outbound", sort: "tenure" }], "a:outbound")).toBe("tenure");
+    expect(sortOf([{ key: "a:outbound" }], "a:outbound")).toBeUndefined();
+  });
+
+  it("asks for a sorted link as the set it is: the far type matching this object", () => {
+    const group = { far_type_id: "t2", far_property: "manager_id", matched_value: "P1" };
+    expect(sortedLinkQuery(group, "-tenure")).toEqual({
+      definition: { object_type_id: "t2",
+        filters: [{ property: "manager_id", op: "eq", value: "P1" }] },
+      sort: "-tenure",
+    });
+    expect(sortedLinkQuery({ ...group, matched_value: 7 }, "x")?.definition)
+      .toMatchObject({ filters: [{ value: "7" }] });
+    expect(sortedLinkQuery(group, undefined)).toBeNull();
+    expect(sortedLinkQuery({ ...group, matched_value: null }, "tenure")).toBeNull();
   });
 });

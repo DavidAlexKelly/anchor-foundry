@@ -43,10 +43,13 @@ export function modeOf(raw: unknown): string {
   return raw === "specify" ? "specify" : "all";
 }
 
-/** One configured link: which end of which type, and p.272's label override. */
+/** One configured link: which end of which type, p.272's label override, and
+ * p.272's **Sort linked object by** (§548) - the server's own sort string, a
+ * property name with a leading `-` for descending. */
 export interface ChosenLink {
   key: string;
   label?: string;
+  sort?: string;
 }
 
 /** The identity of one row: **the type and the end**, not the type.
@@ -71,11 +74,12 @@ export function chosenOf(raw: unknown): ChosenLink[] {
     if (!entry || typeof entry !== "object") continue;
     const item = entry as Partial<ChosenLink>;
     if (typeof item.key !== "string" || !item.key) continue;
-    out.push(
-      typeof item.label === "string" && item.label.trim()
-        ? { key: item.key, label: item.label }
-        : { key: item.key },
-    );
+    out.push({
+      key: item.key,
+      ...(typeof item.label === "string" && item.label.trim() ? { label: item.label } : {}),
+      ...(typeof item.sort === "string" && item.sort.replace(/^-/, "")
+        ? { sort: item.sort } : {}),
+    });
   }
   return out;
 }
@@ -170,4 +174,43 @@ export function previewProperties<P extends { api_name: string; visibility?: str
 export function objectViewHref(workspaceSlug: string, typeId: string, instanceId: string): string {
   const params = new URLSearchParams({ [OBJECT_PARAM]: encodeObject({ typeId, instanceId }) });
   return `/${workspaceSlug}/explore?${params.toString()}`;
+}
+
+/**
+ * p.272's **Sort linked object by** (§548).
+ *
+ * > "Sort linked object by: Once a link type is chosen, a property and sorting
+ * > direction can be configured." (p.272)
+ *
+ * The traversal that draws every link returns each one's first page in the
+ * store's own order, and reordering *that page* would sort the first ten of
+ * the link and claim to have sorted the link. So a sorted link asks for its
+ * first page again, sorted, as the set it is: the far type where the far
+ * property is this object's value - the Explorer's own reading of a link
+ * (`linkSubsetHref`). The server orders by the property's declared type, and
+ * refuses text, whose order the two stores do not agree on.
+ *
+ * Null when the link names nothing to match, as it then has no objects.
+ */
+export function sortedLinkQuery(
+  group: { far_type_id: string; far_property: string; matched_value: unknown },
+  sort: string | undefined,
+): { definition: unknown; sort: string } | null {
+  if (!sort || group.matched_value === null || group.matched_value === undefined) return null;
+  return {
+    definition: {
+      object_type_id: group.far_type_id,
+      filters: [{ property: group.far_property, op: "eq", value: String(group.matched_value) }],
+    },
+    sort,
+  };
+}
+
+/** A link's first page, as the instance-links read returns it
+ * (`routes/objects.LINK_PREVIEW_LIMIT`), so a sorted link shows as many. */
+export const LINK_PAGE = 10;
+
+/** The sort a chosen link carries, for its row in the panel. */
+export function sortOf(chosen: readonly ChosenLink[], key: string): string | undefined {
+  return chosen.find((c) => c.key === key)?.sort;
 }
