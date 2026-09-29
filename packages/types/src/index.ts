@@ -2642,6 +2642,13 @@ export interface LinkType {
    */
   from_property: string | null;
   to_property: string | null;
+  /** p.197's join table dataset, for a many-to-many link, in place of the
+   * pair (§552; db 0115): the dataset whose rows are the linked pairs, and
+   * the column holding each end's primary key. The columns outlive a deleted
+   * dataset, which leaves the link untraversable. */
+  join_dataset_id?: string | null;
+  join_from_column?: string | null;
+  join_to_column?: string | null;
   /** Per-side labels (`object-link-types` p.192) — what this link is called
    * when read from each end ("placed by" one way, "orders" the other). Null
    * falls back to `display_name`, which is what every link had before sides
@@ -2678,6 +2685,9 @@ export interface TypeLink {
   far_type_display_name: string;
   near_property: string;
   far_property: string;
+  /** Followed through p.197's join table (§552): both ends are primary keys,
+   * and the pairs are rows of a dataset rather than a value either holds. */
+  join_table?: boolean;
 }
 
 /**
@@ -2699,6 +2709,13 @@ export interface LinkedInstances {
   far_type_display_name: string;
   near_property: string;
   far_property: string;
+  /** Followed through p.197's join table (§552): `matched_value` is this
+   * object's own key, which the far objects do not hold - so "all of them" is
+   * a traversal, never a match on `far_property`. */
+  join_table?: boolean;
+  /** Why this one link could not be followed from here - a join table the
+   * reader cannot see, or one whose column has gone. */
+  problem?: string | null;
   /** The value read off this instance and matched against far_property. */
   matched_value: unknown;
   total: number;

@@ -50,6 +50,7 @@ from ..services import instance_store
 from ..services import derived_properties
 from ..services import object_sets
 from ..services import object_set_eval
+from ..services import link_join_tables
 from ..services import object_views as object_views_service
 from ..services import instances as instances_service
 from ..services import object_searches as searches_service
@@ -303,6 +304,12 @@ class LinkTypeOut(BaseModel):
     # is a valid ontology statement that cannot yet be traversed (db 0027).
     from_property: str | None = None
     to_property: str | None = None
+    # p.197's join table dataset, in place of the pair (§552; db 0115): the
+    # dataset whose rows are the linked pairs, and the column holding each
+    # end's primary key. The columns outlive a deleted dataset.
+    join_dataset_id: UUID | None = None
+    join_from_column: str | None = None
+    join_to_column: str | None = None
     # Per-side labels (Foundry `object-link-types` p.192). NULL falls back to
     # `display_name`, which is what every link type had before sides could be
     # named separately.
@@ -321,7 +328,17 @@ class LinkTypeOut(BaseModel):
 _JOIN_PROPERTY = r"^([a-z][a-z0-9_]{0,99}|\$primary_key)?$"
 
 
-class LinkTypeCreate(BaseModel):
+class _JoinTable(BaseModel):
+    """p.197's join table dataset, for a many-to-many link (§552). Column
+    names are a dataset's, from a file's header, so any text: the service
+    checks them against the dataset's schema."""
+
+    join_dataset_id: UUID | None = None
+    join_from_column: str | None = Field(default=None, max_length=300)
+    join_to_column: str | None = Field(default=None, max_length=300)
+
+
+class LinkTypeCreate(_JoinTable):
     api_name: str = Field(min_length=1, max_length=100)
     display_name: str = Field(min_length=1, max_length=200)
     from_type_id: UUID
@@ -341,7 +358,7 @@ class LinkTypeCreate(BaseModel):
     )
 
 
-class LinkJoinUpdate(BaseModel):
+class LinkJoinUpdate(_JoinTable):
     """The join and the side names - see ontology.set_link_join for why an
     endpoint or cardinality change is a different link type, not an edit."""
 
@@ -3502,6 +3519,9 @@ async def create_link_type(
             to_property=body.to_property,
             from_side_name=body.from_side_name,
             to_side_name=body.to_side_name,
+            join_dataset_id=body.join_dataset_id,
+            join_from_column=body.join_from_column,
+            join_to_column=body.join_to_column,
         )
         from_type = await ontology_service.get_type(conn, access.workspace_id, body.from_type_id)
         to_type = await ontology_service.get_type(conn, access.workspace_id, body.to_type_id)
@@ -3543,6 +3563,9 @@ async def update_link_join(
             from_side_name=body.from_side_name,
             to_side_name=body.to_side_name,
             status=body.status,
+            join_dataset_id=body.join_dataset_id,
+            join_from_column=body.join_from_column,
+            join_to_column=body.join_to_column,
         )
         await audit.record(
             conn,
@@ -3578,6 +3601,14 @@ class LinkedInstances(BaseModel):
     far_type_display_name: str
     near_property: str
     far_property: str
+    # Followed through p.197's join table rather than a property pair (§552):
+    # `matched_value` is this object's key, which the far objects do not hold,
+    # so a caller asking for "all of them" must traverse rather than match.
+    join_table: bool = False
+    # Why this link could not be followed from here - a join table the reader
+    # cannot see, or one whose column has gone. One unfollowable link says so
+    # in its own group rather than failing the object's every other link.
+    problem: str | None = None
     matched_value: Any | None
     total: int
     items: list[InstanceOut]
@@ -3607,6 +3638,7 @@ class TypeLink(BaseModel):
     far_type_display_name: str
     near_property: str
     far_property: str
+    join_table: bool = False
 
 
 @router.get("/object-types/{type_id}/links", response_model=list[TypeLink])
@@ -3636,6 +3668,7 @@ async def type_links(
             far_type_display_name=str(link["far_type_display_name"]),
             near_property=str(link["near_property"]),
             far_property=str(link["far_property"]),
+            join_table=link.get("join") is not None,
         )
         for link in links
     ]
@@ -3688,14 +3721,31 @@ async def instance_links(
                 if near == ontology_service.PRIMARY_KEY_REF
                 else properties.get(near)
             )
-            rows, total = await store.find_by_property(
-                search_prefix=prefix,
-                object_type_id=UUID(str(link["far_type_id"])),
-                property_name=None if far == ontology_service.PRIMARY_KEY_REF else far,
-                value=value,
-                limit=limit,
-                offset=0,
-            )
+            problem: str | None = None
+            if link.get("join"):
+                # p.197's join table (§552): this object's key, through its
+                # pairs, to the far objects' keys.
+                try:
+                    keys = await link_join_tables.follow(conn, link["join"], [value])
+                    joined = object_sets.join_filter(far_property=far, values=keys)
+                except ValueError as exc:
+                    problem, joined = str(exc), None
+                rows, total = [], 0
+                if joined is not None:
+                    rows, total = await store.evaluate_object_set(
+                        search_prefix=prefix,
+                        object_type_id=UUID(str(link["far_type_id"])),
+                        filters=(joined,), limit=limit, offset=0, sort="key_asc",
+                    )
+            else:
+                rows, total = await store.find_by_property(
+                    search_prefix=prefix,
+                    object_type_id=UUID(str(link["far_type_id"])),
+                    property_name=None if far == ontology_service.PRIMARY_KEY_REF else far,
+                    value=value,
+                    limit=limit,
+                    offset=0,
+                )
             groups.append(LinkedInstances(
                 link_type_id=UUID(str(link["id"])),
                 api_name=str(link["api_name"]),
@@ -3707,6 +3757,8 @@ async def instance_links(
                 far_type_display_name=str(link["far_type_display_name"]),
                 near_property=near,
                 far_property=far,
+                join_table=link.get("join") is not None,
+                problem=problem,
                 matched_value=value,
                 total=total,
                 items=[

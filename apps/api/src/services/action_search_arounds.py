@@ -300,8 +300,9 @@ def check_source(
                 "does not touch the object type this walk has reached"
             )
         far, _outbound = reached
-        if not link.get("from_property") or not link.get("to_property"):
-            # A link type can be defined and not traversable (db 0027). There is
+        if not link.get("from_property") and not link.get("join_dataset_id"):
+            # A link type can be defined and not traversable (db 0027) - joined
+            # on neither a property pair nor a join table (§552). There is
             # nothing to follow, so there is nothing to offer.
             raise ValueError(
                 f"{name!r}: hop {index} follows {link['display_name']!r}, which "

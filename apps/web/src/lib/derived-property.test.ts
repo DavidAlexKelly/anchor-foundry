@@ -104,6 +104,10 @@ describe("hopsFrom", () => {
     expect(hopsFrom([UNJOINED], DEPARTMENT)).toEqual([]);
   });
 
+  it("offers a link joined through p.197's join table (§552)", () => {
+    expect(hopsFrom([{ ...UNJOINED, join_dataset_id: "d1" }], DEPARTMENT)).toHaveLength(1);
+  });
+
   it("leaves out links that do not touch this type", () => {
     expect(hopsFrom([ASSIGNED], DEPARTMENT)).toEqual([]);
   });

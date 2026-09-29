@@ -72,7 +72,8 @@ export function reachesMany(
 export function hopsFrom(links: LinkType[], typeId: string): Hop[] {
   const out: Hop[] = [];
   for (const link of links) {
-    if (!link.from_property || !link.to_property) continue;
+    // Joined on a pair or through p.197's join table (§552), or not followable.
+    if (!(link.from_property && link.to_property) && !link.join_dataset_id) continue;
     if (link.from_object_type_id === typeId) {
       out.push({
         link_type_id: link.id,

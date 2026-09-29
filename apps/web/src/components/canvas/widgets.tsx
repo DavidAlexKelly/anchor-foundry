@@ -6869,7 +6869,8 @@ export function CanvasLinksWidget({
   // there is none to ask for, whatever an older configuration left behind.
   const specifying = linkModeOf(linkMode) === "specify";
   const sortedAsks = visible.map((g) =>
-    specifying ? sortedLinkQuery(g, linkSortOf(chosen, linkKey(g))) : null);
+    specifying ? sortedLinkQuery(g, linkSortOf(chosen, linkKey(g)), setPage.typeId ?? undefined)
+      : null);
   const sortedPages = useQueries({
     queries: sortedAsks.map((ask) => ({
       queryKey: ["canvas-links-sorted", JSON.stringify(ask)],

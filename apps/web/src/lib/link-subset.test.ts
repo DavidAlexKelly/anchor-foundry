@@ -49,6 +49,13 @@ describe("linkSubsetHref", () => {
     expect(linkSubsetHref("acme", { ...GROUP, matched_value: undefined })).toBeNull();
   });
 
+  it("has no Explorer URL for a link through a join table (§552)", () => {
+    // `matched_value` is this object's own key, which the far objects do not
+    // hold: a match on it would open the wrong objects, or none.
+    expect(linkSubsetHref("acme", { ...GROUP, join_table: true })).toBeNull();
+    expect(linkSubsetHref("acme", { ...GROUP, join_table: false })).not.toBeNull();
+  });
+
   // There is deliberately no case for "the link type has no join": the
   // instance-links endpoint returns only traversable links, so `far_property`
   // is a plain string and a guard for it would be a branch no test could

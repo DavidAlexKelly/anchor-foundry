@@ -254,7 +254,8 @@ describe("p.272's Sort linked object by (§548)", () => {
   });
 
   it("asks for a sorted link as the set it is: the far type matching this object", () => {
-    const group = { far_type_id: "t2", far_property: "manager_id", matched_value: "P1" };
+    const group = { link_type_id: "l1", far_type_id: "t2", far_property: "manager_id",
+      matched_value: "P1" };
     expect(sortedLinkQuery(group, "-tenure")).toEqual({
       definition: { object_type_id: "t2",
         filters: [{ property: "manager_id", op: "eq", value: "P1" }] },
@@ -264,6 +265,19 @@ describe("p.272's Sort linked object by (§548)", () => {
       .toMatchObject({ filters: [{ value: "7" }] });
     expect(sortedLinkQuery(group, undefined)).toBeNull();
     expect(sortedLinkQuery({ ...group, matched_value: null }, "tenure")).toBeNull();
+  });
+
+  it("asks for a link through a join table as a hop from this one object (§552)", () => {
+    // The far objects do not hold this object's key - the join table's rows
+    // do - so a match on `far_property` would find nothing, or the wrong ones.
+    const group = { link_type_id: "l1", far_type_id: "t2", far_property: "$primary_key",
+      matched_value: "A1", join_table: true };
+    expect(sortedLinkQuery(group, "-tenure", "t1")).toEqual({
+      definition: { object_type_id: "t2", via: { link_type_id: "l1", base: {
+        object_type_id: "t1", filters: [{ property: "$primary_key", op: "eq", value: "A1" }] } } },
+      sort: "-tenure",
+    });
+    expect(sortedLinkQuery(group, "-tenure")).toBeNull();
   });
 });
 

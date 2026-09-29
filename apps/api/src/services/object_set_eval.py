@@ -32,6 +32,7 @@ import json
 from typing import Any
 from uuid import UUID
 
+from . import link_join_tables
 from . import object_sets
 from . import ontology as ontology_service
 
@@ -120,6 +121,9 @@ async def resolve_traversal(
         else _jsonb(row["properties"]).get(near)
         for row in members
     ]
+    if link.get("join"):
+        # p.197's join table (§552): the members' keys, through its pairs.
+        values = await link_join_tables.follow(conn, link["join"], values)
     joined = object_sets.join_filter(far_property=str(link["far_property"]), values=values)
     if joined is None:
         return definition.filters, True
@@ -184,6 +188,11 @@ async def resolve_links(
             else _jsonb(row["properties"]).get(far_property)
             for row in members
         ]
+        if link.get("join"):
+            # Back through the join table, far keys to this side's (§552).
+            values = await link_join_tables.follow(
+                conn, link_join_tables.reversed_join(link["join"]), values
+            )
         joined = object_sets.join_filter(far_property=str(link["near_property"]), values=values)
         if joined is None:
             return filters, True

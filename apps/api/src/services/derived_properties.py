@@ -328,9 +328,10 @@ def _chain(
                 "type this chain has reached"
             )
         far, outbound = reached
-        if not link.get("from_property") or not link.get("to_property"):
-            # A link type can be defined and not traversable (db 0027). There
-            # is nothing to follow, so there is nothing to derive.
+        if not link.get("from_property") and not link.get("join_dataset_id"):
+            # A link type can be defined and not traversable (db 0027) - joined
+            # on neither a property pair nor a join table (§552). There is
+            # nothing to follow, so there is nothing to derive.
             raise DerivationError(
                 f"{where}: {link['display_name']!r} has no join, so nothing "
                 "can be followed along it"

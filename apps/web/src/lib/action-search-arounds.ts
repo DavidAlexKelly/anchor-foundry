@@ -36,6 +36,8 @@ export interface LinkType {
   to_object_type_id: string;
   from_property?: string | null;
   to_property?: string | null;
+  /** p.197's join table (§552) - a link followed through one is traversable. */
+  join_dataset_id?: string | null;
 }
 
 /** Which object type this link reaches from `here`, or `null` when it does not
@@ -62,7 +64,7 @@ export function reaches(link: LinkType, here: string): string | null {
  * picks and the server refuses with a sentence about a column pair.
  */
 export function traversable(link: LinkType): boolean {
-  return !!(link.from_property && link.to_property);
+  return !!(link.from_property && link.to_property) || !!link.join_dataset_id;
 }
 
 /** Where the walk has arrived after these hops, starting from `startType`.

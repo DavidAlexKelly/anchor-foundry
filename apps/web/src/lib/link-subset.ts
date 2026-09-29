@@ -35,9 +35,13 @@ import type { LinkedInstances } from "@/lib/types";
  */
 export function linkSubsetHref(
   workspaceSlug: string,
-  group: Pick<LinkedInstances, "far_type_id" | "far_property" | "matched_value">,
+  group: Pick<LinkedInstances, "far_type_id" | "far_property" | "matched_value" | "join_table">,
 ): string | null {
   if (group.matched_value === null || group.matched_value === undefined) return null;
+  // A link through p.197's join table (§552) is not a property match - the
+  // far objects do not hold this object's key - and the Explorer's URL can
+  // only say a match. No link rather than one to the wrong objects.
+  if (group.join_table) return null;
   const params = new URLSearchParams({
     type: group.far_type_id,
     property: group.far_property,
