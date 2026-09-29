@@ -9,6 +9,7 @@
 import {
   FILTER_OPERATORS, FILTER_WORDS, SAMPLE_METHODS, type FilterOperator, type SampleMethod,
   COMBINE_AGGREGATES, COMBINE_WORDS, type CombineAggregate,
+  DSP_FAMILIES, DSP_WORDS, MAX_ATTENUATION, MAX_DSP_ORDER, MAX_RIPPLE, type DspFamily,
   FORMULA_FUNCTIONS, INTEGRATION_METHODS, KIND_LABELS, MAX_FORMULA, MAX_FORMULA_INPUTS, MAX_TRANSFORMS, TIME_UNITS,
   TRANSFORM_KINDS, WINDOW_AGGREGATES, WINDOW_TYPES, blankTransform, transformsProblem, withInput, withKind,
   withoutInput,
@@ -83,7 +84,8 @@ export function SeriesTransformsEditor({
             />
           )}
           {t.kind !== "cumulative" && t.kind !== "range" && t.kind !== "formula" && t.kind !== "filter"
-            && t.kind !== "combine" && t.kind !== "linear_aggregate" && t.kind !== "event_statistics" && (
+            && t.kind !== "combine" && t.kind !== "linear_aggregate" && t.kind !== "event_statistics"
+            && t.kind !== "dsp" && (
             <select
               aria-label={`Transform ${index + 1} unit`}
               value={t.unit}
@@ -140,6 +142,64 @@ export function SeriesTransformsEditor({
                 <option key={m} value={m}>{m === "previous" ? "the reading before" : "interpolated"}</option>
               ))}
             </select>
+          )}
+          {t.kind === "dsp" && (
+            // p.393's DSP filter (§685): the family, how steep, where it cuts,
+            // and the one setting that shapes that family.
+            <>
+              <select
+                aria-label={`Transform ${index + 1} filter`}
+                value={t.family}
+                disabled={readOnly}
+                onChange={(e) => {
+                  const family = e.target.value as DspFamily;
+                  const { ripple: _r, attenuation: _a, ...rest } = t;
+                  set(index, {
+                    ...rest, family,
+                    ...(family === "chebyshev" ? { ripple: 1 } : {}),
+                    ...(family === "inverse_chebyshev" ? { attenuation: 40 } : {}),
+                  });
+                }}
+              >
+                {DSP_FAMILIES.map((f) => <option key={f} value={f}>{DSP_WORDS[f]}</option>)}
+              </select>
+              <input
+                type="number" min={1} max={MAX_DSP_ORDER}
+                aria-label={`Transform ${index + 1} order`}
+                title="Higher orders cut more steeply"
+                value={Number.isFinite(t.order) ? t.order : ""}
+                readOnly={readOnly}
+                onChange={(e) => set(index, { ...t, order: Number(e.target.value) })}
+              />
+              <input
+                type="number" min={0} max={1} step={0.01}
+                aria-label={`Transform ${index + 1} cut-off`}
+                title="A fraction of the Nyquist frequency of the readings, taken one after another; sample an uneven series first"
+                value={Number.isFinite(t.cutoff) ? t.cutoff : ""}
+                readOnly={readOnly}
+                onChange={(e) => set(index, { ...t, cutoff: Number(e.target.value) })}
+              />
+              {t.family === "chebyshev" && (
+                <input
+                  type="number" min={0} max={MAX_RIPPLE} step={0.1}
+                  aria-label={`Transform ${index + 1} ripple`}
+                  title="Passband ripple, in dB"
+                  value={Number.isFinite(t.ripple) ? t.ripple : ""}
+                  readOnly={readOnly}
+                  onChange={(e) => set(index, { ...t, ripple: Number(e.target.value) })}
+                />
+              )}
+              {t.family === "inverse_chebyshev" && (
+                <input
+                  type="number" min={0} max={MAX_ATTENUATION}
+                  aria-label={`Transform ${index + 1} attenuation`}
+                  title="Stopband attenuation, in dB"
+                  value={Number.isFinite(t.attenuation) ? t.attenuation : ""}
+                  readOnly={readOnly}
+                  onChange={(e) => set(index, { ...t, attenuation: Number(e.target.value) })}
+                />
+              )}
+            </>
           )}
           {t.kind === "filter" && (
             <>

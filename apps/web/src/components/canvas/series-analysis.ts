@@ -36,7 +36,7 @@ export type PlotType = TransformKind | "bollinger";
 /** The derived plot types this widget offers, as the source names them, in
  * p.393's order. */
 export const PLOT_TYPES: PlotType[] = [
-  "bollinger", "combine", "linear_aggregate", "cumulative", "rolling", "periodic", "derivative", "integral", "shift",
+  "bollinger", "combine", "linear_aggregate", "cumulative", "rolling", "periodic", "derivative", "dsp", "integral", "shift",
   "event_statistics", "formula", "filter", "sample",
 ];
 export const PLOT_LABELS: Partial<Record<PlotType, string>> = {
@@ -54,6 +54,8 @@ export const PLOT_LABELS: Partial<Record<PlotType, string>> = {
   // §648: p.393's two more.
   filter: "Filter time series",
   sample: "Sample",
+  // §685: p.393's own name for it.
+  dsp: "DSP filter",
 };
 /** Roots are read one object each; more than this is a table, not an analysis. */
 export const MAX_ROOTS = 10;

@@ -11,7 +11,7 @@ import {
 
 describe("the vocabulary", () => {
   it("is p.583-586's, as the server takes it", () => {
-    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine", "event_statistics", "linear_aggregate"]);
+    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine", "event_statistics", "linear_aggregate", "dsp"]);
     expect([...FORMULA_FUNCTIONS]).toEqual(["abs", "sqrt", "ln", "log10", "exp", "floor", "ceil", "round"]);
     expect(MAX_FORMULA).toBe(200);
     expect([...WINDOW_TYPES]).toEqual(["start", "end"]);
@@ -282,5 +282,44 @@ describe("p.393's Event statistics (§652)", () => {
     expect(transformProblem(stats({ e: "v1" }, Number.NaN))).toBe("The events are found by comparing with a number.");
     expect(transformProblem(stats({ e: "v1" }))).toBeNull();
     expect(seriesInputs([stats({ e: "v9" })])).toEqual(["v9"]);
+  });
+});
+
+describe("p.393's DSP filter (§685)", () => {
+  const dsp = (over: Partial<Extract<SeriesTransform, { kind: "dsp" }>> = {}): SeriesTransform =>
+    ({ kind: "dsp", family: "butterworth", order: 2, cutoff: 0.1, ...over });
+
+  it("starts as a gentle Butterworth", () => {
+    expect(blankTransform("dsp")).toEqual(dsp());
+    expect(KIND_LABELS.dsp).toBe("DSP filter");
+  });
+
+  it("says what it is", () => {
+    expect(transformText(dsp())).toBe("Butterworth low-pass, order 2, cut-off 0.1 of Nyquist");
+    expect(transformText(dsp({ family: "chebyshev", ripple: 0.5 })))
+      .toBe("Chebyshev low-pass, order 2, cut-off 0.1 of Nyquist, 0.5 dB ripple");
+    expect(transformText(dsp({ family: "inverse_chebyshev" })))
+      .toBe("inverse Chebyshev low-pass, order 2, cut-off 0.1 of Nyquist, 40 dB down");
+  });
+
+  it("names what cannot be designed before Save", () => {
+    expect(transformProblem(dsp())).toBeNull();
+    expect(transformProblem(dsp({ order: 0 }))).toBe("The order must be a whole number from 1 to 8.");
+    expect(transformProblem(dsp({ order: 9 }))).toBe("The order must be a whole number from 1 to 8.");
+    expect(transformProblem(dsp({ order: 2.5 }))).toBe("The order must be a whole number from 1 to 8.");
+    expect(transformProblem(dsp({ order: 8 }))).toBeNull();
+    for (const cutoff of [0, 1, Number.NaN]) {
+      expect(transformProblem(dsp({ cutoff })))
+        .toBe("The cut-off is a fraction of the Nyquist frequency, between 0 and 1.");
+    }
+    expect(transformProblem(dsp({ family: "chebyshev", ripple: 0 })))
+      .toBe("The ripple must be above 0 and at most 20 dB.");
+    expect(transformProblem(dsp({ family: "chebyshev", ripple: 20 }))).toBeNull();
+    expect(transformProblem(dsp({ family: "chebyshev" }))).toBeNull();
+    expect(transformProblem(dsp({ family: "inverse_chebyshev", attenuation: 121 })))
+      .toBe("The attenuation must be above 0 and at most 120 dB.");
+    expect(transformProblem(dsp({ family: "inverse_chebyshev", attenuation: 120 }))).toBeNull();
+    // A setting another family would use is not this one's problem.
+    expect(transformProblem(dsp({ ripple: 0 }))).toBeNull();
   });
 });

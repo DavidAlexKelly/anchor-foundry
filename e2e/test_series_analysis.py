@@ -947,3 +947,31 @@ def test_the_panel_sets_the_autoload_options(page, api, module) -> None:
     save(page)
     props = mod.definition()["layout"]["tsa"]["props"]
     assert (props["outputVariable"], props["autoloadVariable"], props["keepOnLoad"]) == ("v_out", "v_rids", True)
+
+
+def test_a_dsp_filter_smooths_towards_the_middle(page, api, module) -> None:
+    """p.393's DSP filter (§685). North's four readings rise 10 to 40; a
+    low-pass filter keeps their middle (a symmetric smoothing of a straight
+    line leaves its mean at 25) and pulls the ends in, which is what reducing
+    noise does to a series this short."""
+    open_module(page, build(api, module, "Analysis dsp"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_label("New plot").select_option("dsp")
+    page.get_by_label("Input plot").select_option(label="North sensor")
+    expect(page.get_by_label("Transform 1 ripple")).to_have_count(0)
+    page.get_by_label("Transform 1 filter").select_option("chebyshev")
+    expect(page.get_by_label("Transform 1 ripple")).to_have_value("1")
+    page.get_by_label("Transform 1 filter").select_option("butterworth")
+    page.get_by_label("Transform 1 cut-off").fill("0.2")
+    page.get_by_role("button", name="Add plot").click()
+    smoothed = "DSP filter of North sensor"
+    expect(stat(page, smoothed, "mean")).to_have_text("25")
+    low = float(stat(page, smoothed, "min").inner_text())
+    high = float(stat(page, smoothed, "max").inner_text())
+    # Pulled in from both ends by the same amount: a zero-phase filter does
+    # not lag, so a line is smoothed symmetrically about its middle.
+    assert 10 < low < 25 < high < 40, (low, high)
+    assert abs(low + high - 50) < 0.01, (low, high)
+    # And by how much the cut-off says: at 0.2 of Nyquist the ends move to
+    # 21.088 and 28.912 (at the default 0.1 they would be 23.746 and 26.254).
+    assert (low, high) == (21.088, 28.912), (low, high)
