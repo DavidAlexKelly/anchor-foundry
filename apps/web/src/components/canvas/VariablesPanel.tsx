@@ -27,6 +27,7 @@
 
 import { SeriesTransformsEditor } from "./SeriesTransformsEditor";
 import { MAX_PRECISION, ROUNDINGS, isMath, mathArity, mathSlotLabel, precisionOf } from "./variable-math";
+import { DATE_ARITY, dateSlotLabels, isDateMath, takesDirection, unitsFor } from "./variable-dates";
 import { seriesDerivationInputs, type SeriesTransform } from "./series-transforms";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEditor } from "@craftjs/core";
@@ -174,6 +175,22 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   { value: "less_or_equal", label: "Numbers: less than or equal to", arity: "two or more" },
   { value: "greater_than", label: "Numbers: greater than", arity: "two or more" },
   { value: "greater_or_equal", label: "Numbers: greater than or equal to", arity: "two or more" },
+  // p.140's date/time math and p.140-141's date and time comparisons (§565).
+  { value: "relative_date", label: "Dates: relative date", arity: "two" },
+  { value: "relative_time", label: "Times: relative time", arity: "two" },
+  { value: "between_dates", label: "Dates: between dates", arity: "two" },
+  { value: "between_times", label: "Times: between times", arity: "two" },
+  { value: "current_date", label: "Dates: current date", arity: "none" },
+  { value: "date_is_on_or_after", label: "Dates: is on or after", arity: "two" },
+  { value: "date_is_after", label: "Dates: is after", arity: "two" },
+  { value: "date_is_on_or_before", label: "Dates: is on or before", arity: "two" },
+  { value: "date_is_before", label: "Dates: is before", arity: "two" },
+  { value: "date_is_equal", label: "Dates: is equal", arity: "two" },
+  { value: "time_is_on_or_after", label: "Times: is on or after", arity: "two" },
+  { value: "time_is_after", label: "Times: is after", arity: "two" },
+  { value: "time_is_on_or_before", label: "Times: is on or before", arity: "two" },
+  { value: "time_is_before", label: "Times: is before", arity: "two" },
+  { value: "time_is_equal", label: "Times: is equal", arity: "two" },
 ];
 
 /** Offered on `time_series_set` variables, and the only thing offered there -
@@ -206,6 +223,7 @@ const CAST_TARGETS = ["string", "number", "boolean"] as const;
  * number of slots instead of a free-form list the server will reject. */
 function arityOf(transform: WorkshopTransform): number | "many" {
   if (isMath(transform)) return mathArity(transform);
+  if (isDateMath(transform)) return DATE_ARITY[transform] ?? 2;
   if (transform === "concat") return "many";
   if (transform === "if_else") return 3;
   if (transform === "filter_set") return 2;
@@ -214,6 +232,7 @@ function arityOf(transform: WorkshopTransform): number | "many" {
 
 function slotLabels(transform: WorkshopTransform): string[] {
   if (isMath(transform)) return [mathSlotLabel(transform, 0), mathSlotLabel(transform, 1)];
+  if (isDateMath(transform)) return dateSlotLabels(transform);
   if (transform === "if_else") return ["Condition", "Then", "Else"];
   if (transform === "filter_set") return ["Set to narrow", "Filter value from"];
   if (transform === "cast") return ["Value"];
@@ -1097,6 +1116,39 @@ function DerivationEditor({
             }}
           />
           <span className="field-hint">negative rounds to tens, hundreds…</span>
+        </label>
+      )}
+
+      {/* p.140's units, and its "add or subtract" (§565). */}
+      {unitsFor(derivation.transform) && (
+        <label>
+          In
+          <select
+            data-testid="date-unit"
+            value={String(derivation.config?.unit ?? "days")}
+            disabled={readOnly}
+            onChange={(e) =>
+              onChange({ ...derivation, config: { ...derivation.config, unit: e.target.value } })}
+          >
+            {unitsFor(derivation.transform)!.map((unit) => (
+              <option key={unit} value={unit}>{unit}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {takesDirection(derivation.transform) && (
+        <label>
+          Direction
+          <select
+            data-testid="date-direction"
+            value={String(derivation.config?.direction ?? "add")}
+            disabled={readOnly}
+            onChange={(e) =>
+              onChange({ ...derivation, config: { ...derivation.config, direction: e.target.value } })}
+          >
+            <option value="add">add</option>
+            <option value="subtract">subtract</option>
+          </select>
         </label>
       )}
 
