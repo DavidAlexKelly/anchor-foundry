@@ -26,6 +26,7 @@
  */
 
 import { SeriesTransformsEditor } from "./SeriesTransformsEditor";
+import { MAX_PRECISION, ROUNDINGS, isMath, mathArity, mathSlotLabel, precisionOf } from "./variable-math";
 import { seriesDerivationInputs, type SeriesTransform } from "./series-transforms";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEditor } from "@craftjs/core";
@@ -155,6 +156,24 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   // so this is not one option among many for a struct variable, it is the only
   // door out of one.
   { value: "extract_struct_field", label: "A field of a struct", arity: "one" },
+  // p.140's math operations and p.141's numeric comparisons (§564).
+  { value: "add", label: "Math: add", arity: "one or more" },
+  { value: "subtract", label: "Math: subtract", arity: "two or more" },
+  { value: "multiply", label: "Math: multiply", arity: "one or more" },
+  { value: "divide", label: "Math: divide", arity: "two" },
+  { value: "absolute", label: "Math: absolute", arity: "one" },
+  { value: "negate", label: "Math: negate", arity: "one" },
+  { value: "round_up", label: "Math: round up (ceil)", arity: "one" },
+  { value: "round_down", label: "Math: round down (floor)", arity: "one" },
+  { value: "round_nearest", label: "Math: round nearest", arity: "one" },
+  { value: "max", label: "Math: max", arity: "one or more" },
+  { value: "min", label: "Math: min", arity: "one or more" },
+  { value: "equal_to", label: "Numbers: equal to", arity: "two or more" },
+  { value: "not_equal_to", label: "Numbers: not equal to", arity: "two or more" },
+  { value: "less_than", label: "Numbers: less than", arity: "two or more" },
+  { value: "less_or_equal", label: "Numbers: less than or equal to", arity: "two or more" },
+  { value: "greater_than", label: "Numbers: greater than", arity: "two or more" },
+  { value: "greater_or_equal", label: "Numbers: greater than or equal to", arity: "two or more" },
 ];
 
 /** Offered on `time_series_set` variables, and the only thing offered there -
@@ -186,6 +205,7 @@ const CAST_TARGETS = ["string", "number", "boolean"] as const;
 /** How many inputs each transform takes, so the editor can render the right
  * number of slots instead of a free-form list the server will reject. */
 function arityOf(transform: WorkshopTransform): number | "many" {
+  if (isMath(transform)) return mathArity(transform);
   if (transform === "concat") return "many";
   if (transform === "if_else") return 3;
   if (transform === "filter_set") return 2;
@@ -193,6 +213,7 @@ function arityOf(transform: WorkshopTransform): number | "many" {
 }
 
 function slotLabels(transform: WorkshopTransform): string[] {
+  if (isMath(transform)) return [mathSlotLabel(transform, 0), mathSlotLabel(transform, 1)];
   if (transform === "if_else") return ["Condition", "Then", "Else"];
   if (transform === "filter_set") return ["Set to narrow", "Filter value from"];
   if (transform === "cast") return ["Value"];
@@ -1026,7 +1047,8 @@ function DerivationEditor({
 
       {slots.map((value, index) => (
         <label key={index}>
-          {arity === "many" ? `Part ${index + 1}` : slotLabels(derivation.transform)[index]}
+          {isMath(derivation.transform) ? mathSlotLabel(derivation.transform, index)
+            : arity === "many" ? `Part ${index + 1}` : slotLabels(derivation.transform)[index]}
           <select
             value={value}
             disabled={readOnly}
@@ -1053,6 +1075,28 @@ function DerivationEditor({
               onChange({ ...derivation, config: { ...derivation.config, separator: e.target.value } })
             }
           />
+        </label>
+      )}
+
+      {/* p.140's "rounded … to a specified precision" (§564). */}
+      {ROUNDINGS.has(derivation.transform) && (
+        <label>
+          Decimal places
+          <input
+            type="number"
+            data-testid="math-precision"
+            defaultValue={String(derivation.config?.precision ?? 0)}
+            readOnly={readOnly}
+            min={-MAX_PRECISION}
+            max={MAX_PRECISION}
+            onChange={(e) => {
+              const precision = precisionOf(e.target.value);
+              if (precision !== null) {
+                onChange({ ...derivation, config: { ...derivation.config, precision } });
+              }
+            }}
+          />
+          <span className="field-hint">negative rounds to tens, hundreds…</span>
         </label>
       )}
 

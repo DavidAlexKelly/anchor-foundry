@@ -443,6 +443,13 @@ export type WorkshopTransform =
    * transformation operations cannot use structs as a whole, so individual
    * struct fields must be extracted for use". */
   | "extract_struct_field"
+  /** p.140-141's math operations and numeric comparisons (§564), evaluated by
+   * `services/variable_math.py`. Inputs are the operands in order; the three
+   * roundings carry a `precision` in their config. */
+  | "add" | "subtract" | "multiply" | "divide" | "absolute" | "negate"
+  | "round_up" | "round_down" | "round_nearest" | "max" | "min"
+  | "equal_to" | "not_equal_to" | "less_than" | "less_or_equal" | "greater_than"
+  | "greater_or_equal"
 
 /** What a `time_series_set` variable resolves to: the whole question, and no
  * data. Decision 0009 keeps points in the dataset they arrived in, so a
