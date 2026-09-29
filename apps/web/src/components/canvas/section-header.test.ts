@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { headerStyleOf, paddingTarget, styleTarget } from "./section-header";
+import { headerCount, headerStyleOf, paddingTarget, styleTarget } from "./section-header";
 
 describe("section header (p.58)", () => {
   it("is block unless it says otherwise", () => {
@@ -26,5 +26,17 @@ describe("where the padding goes", () => {
     expect(paddingTarget(true, "floating")).toBe("body");
     expect(paddingTarget(true, "contained")).toBe("section");
     expect(paddingTarget(false, "block")).toBe("section");
+  });
+
+  it("puts the first widgets in the header, and none without one (p.14)", () => {
+    expect(headerCount(2, 5, true)).toBe(2);
+    expect(headerCount(2, 5, false)).toBe(0);
+    // More than there are, or nonsense, clamps rather than inventing widgets.
+    expect(headerCount(9, 3, true)).toBe(3);
+    expect(headerCount(-1, 3, true)).toBe(0);
+    expect(headerCount(1.8, 3, true)).toBe(1);
+    expect(headerCount("2", 3, true)).toBe(0);
+    expect(headerCount(Number.NaN, 3, true)).toBe(0);
+    expect(headerCount(undefined, 3, true)).toBe(0);
   });
 });
