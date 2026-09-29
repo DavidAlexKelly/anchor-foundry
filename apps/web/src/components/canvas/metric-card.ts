@@ -405,10 +405,11 @@ export function metricLabelOf(metric: Pick<ExtraMetric, "label" | "aggregation">
 // ---- §534: p.592's time-series baseline ----------------------------------------------
 /** p.592's baseline types. Static is §526's; Time series is "a time series
  * summarizer to generate a unique baseline value for every series … the
- * value of the most recent observation". Numeric property needs the object's
- * own properties, which the card does not read. */
+ * value of the most recent observation"; Numeric property (§563) is "a
+ * numeric property of the object type feeding the widget" - for the card,
+ * the object its series belongs to. */
 export const BASELINE_KINDS: Record<string, string> = {
-  none: "No baseline", static: "Static", series: "From the series",
+  none: "No baseline", static: "Static", property: "Numeric property", series: "From the series",
 };
 /** p.586's summarizers a line can be read by. */
 export const BASELINE_SUMMARIES: Record<string, string> = {

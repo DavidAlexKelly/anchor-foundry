@@ -258,6 +258,9 @@ import { readerLayout } from "./reader-layout";
 import { PALETTE as WIDGET_LIST } from "./widget-list";
 import { MarkdownView } from "../markdown-view";
 import { SeriesCell } from "./SeriesCell";
+import {
+  COLUMN_BASELINE_KINDS, baselineFor, baselinesByColumn, withColumnBaseline, type ColumnBaseline,
+} from "./series-baselines";
 import { Sparkline } from "./Sparkline";
 import { useSeriesPoints, type SeriesRef } from "./series-points";
 import { ChartExport } from "./ChartExport";
@@ -4603,6 +4606,7 @@ export function CanvasObjectTable({
   seriesFormats = null,
   seriesRules = null,
   seriesTransforms = null,
+  seriesBaselines = null,
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
@@ -4631,6 +4635,9 @@ export function CanvasObjectTable({
   /** p.583's time series transforms, by column (§555): each row's series read
    * through the column's chain. */
   seriesTransforms?: unknown;
+  /** p.592-593's baselines (§563), by series column: static, the row's own
+   * numeric property, or the series summarised. `series-baselines.ts`. */
+  seriesBaselines?: unknown;
   /** One of the server's `object_sets.SORTS`, **or a property sort** — `name`
    * or `-name` for a property whose declared type has an order both stores
    * agree on (§221's `ORDERABLE_TYPES`), which §231 gave this panel.
@@ -4821,6 +4828,7 @@ export function CanvasObjectTable({
   // p.583's transforms on the column (§555), each row's series on its own.
   const seriesChain = seriesProperty
     ? readableTransforms(seriesTransforms, seriesProperty.api_name) : [];
+  const columnBaselines = baselinesByColumn(seriesBaselines);
   const seriesPage = useQuery({
     queryKey: ["canvas-series-points", JSON.stringify(setDefinition ?? null),
                effectiveTypeId, seriesProperty?.api_name, pageSize, offset,
@@ -5269,6 +5277,13 @@ export function CanvasObjectTable({
                                   SERIES_SUBJECT,
                                   latestOf(seriesByKey.get(instance.primary_key) ?? []),
                                   { pending: seriesPage.isPending },
+                                )}
+                                // p.592-593: this row's baseline (§563).
+                                baseline={baselineFor(
+                                  columnBaselines[p.api_name],
+                                  instance.properties,
+                                  (seriesByKey.get(instance.primary_key) ?? [])
+                                    .map((point) => point.value as number),
                                 )}
                               />
                             ) : (
@@ -5775,7 +5790,7 @@ function ObjectTableSettings() {
     lines, valueWrap, frozenColumns, emptyMode, emptyMessage,
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
     inlineEditAction, inlineEditMapping, inlineEditButtonText,
-    inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules, seriesTransforms,
+    inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules, seriesTransforms, seriesBaselines,
     actions: { setProp },
   } = useNode((node) => ({
     objectTypeId: node.data.props.objectTypeId,
@@ -5808,6 +5823,7 @@ function ObjectTableSettings() {
     seriesFormats: node.data.props.seriesFormats,
     seriesRules: node.data.props.seriesRules,
     seriesTransforms: node.data.props.seriesTransforms,
+    seriesBaselines: node.data.props.seriesBaselines,
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   // **`array`, not `object_set`.** p.224 calls these outputs object sets and
@@ -6045,6 +6061,72 @@ function ObjectTableSettings() {
           />
         </div>
       ))}
+      {/* p.592-593's baselines (§563), per series column. */}
+      {seriesColumns.map((name) => {
+        const current = baselinesByColumn(seriesBaselines)[name] ?? null;
+        const set = (next: ColumnBaseline | null) =>
+          setProp((p: { seriesBaselines: unknown }) => {
+            p.seriesBaselines = withColumnBaseline(p.seriesBaselines, name, next);
+          });
+        const numeric = (detail.data?.properties ?? [])
+          .filter((prop) => prop.data_type === "integer" || prop.data_type === "float");
+        return (
+          <div key={`baseline-${name}`} className="field" data-testid={`series-baseline-${name}`}>
+            <span className="field-label">Baseline for {name}</span>
+            <select
+              aria-label={`Baseline for ${name}`}
+              value={current?.kind ?? "none"}
+              onChange={(e) => set(
+                e.target.value === "static" ? { kind: "static", value: 0 }
+                  : e.target.value === "property" && numeric[0]
+                    ? { kind: "property", property: numeric[0].api_name }
+                    : e.target.value === "series" ? { kind: "series", summary: "last" }
+                      : null)}
+            >
+              {Object.entries(COLUMN_BASELINE_KINDS).map(([kind, label]) => (
+                <option key={kind} value={kind} disabled={kind === "property" && !numeric.length}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            {current?.kind === "static" && (
+              <input
+                type="number"
+                aria-label={`Baseline value for ${name}`}
+                value={current.value}
+                onChange={(e) => {
+                  const value = Number(e.target.value);
+                  if (e.target.value !== "" && Number.isFinite(value)) set({ kind: "static", value });
+                }}
+              />
+            )}
+            {current?.kind === "property" && (
+              <select
+                aria-label={`Baseline property for ${name}`}
+                value={current.property}
+                onChange={(e) => set({ kind: "property", property: e.target.value })}
+              >
+                {numeric.map((prop) => (
+                  <option key={prop.api_name} value={prop.api_name}>
+                    {prop.display_name || prop.api_name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {current?.kind === "series" && (
+              <select
+                aria-label={`Baseline summary for ${name}`}
+                value={current.summary}
+                onChange={(e) => set({ kind: "series", summary: e.target.value })}
+              >
+                {Object.entries(BASELINE_SUMMARIES).map(([how, label]) => (
+                  <option key={how} value={how}>{label}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        );
+      })}
       {/* p.241: "the toggle to Enable inline editing will appear within the
           Column configuration section below the Columns list". */}
       <InlineEditField
@@ -6307,7 +6389,7 @@ CanvasObjectTable.craft = {
     narrowHeaders: false, formatFillsCell: false,
     inlineEditAction: null, inlineEditMapping: null, inlineEditButtonText: "",
     inlineEditByDefault: false, inlineEditOneClick: false,
-    seriesFormats: null, seriesRules: null, seriesTransforms: null,
+    seriesFormats: null, seriesRules: null, seriesTransforms: null, seriesBaselines: null,
   },
   related: { settings: ObjectTableSettings },
 };
@@ -15537,6 +15619,7 @@ export function CanvasMetricCard({
   sparkAhead = null,
   sparkAheadUnit = "day",
   baselineKind = null,
+  baselineProperty = null,
   baselineSummary = "last",
   layoutStyle = "card",
   direction = "horizontal",
@@ -15551,6 +15634,9 @@ export function CanvasMetricCard({
   /** p.592's baseline type (§534), and the summary a series baseline takes. */
   baselineKind?: string | null;
   baselineSummary?: string;
+  /** p.593's Numeric property baseline (§563): a property of the series'
+   * own object. */
+  baselineProperty?: string | null;
   /** p.325's group (§533): the metrics after this card's own first one. */
   metrics?: unknown;
   /** p.326's layout style, and its direction and template. */
@@ -15638,11 +15724,22 @@ export function CanvasMetricCard({
   const info = metricDescriptionOf(description);
   // p.592's baseline: a typed value, or the series' own summary (§534).
   const kindOfBaseline = baselineKindOf(baselineKind, baseline);
+  // §563: p.593's numeric property, read off the object the series is of -
+  // "the object type feeding the widget", for a card whose line is one
+  // object's series.
+  const baselineObject = useQuery({
+    queryKey: ["metric-baseline-object", spark.ref?.object_type_id, spark.ref?.instance_id],
+    queryFn: () => objApi.getInstance(workspaceId, spark.ref!.object_type_id, spark.ref!.instance_id),
+    enabled: kindOfBaseline === "property" && !!baselineProperty && !!spark.ref,
+  });
   const baselineValue = kindOfBaseline === "static"
     ? metricBaselineOf(baseline)
     : kindOfBaseline === "series"
       ? summarise((spark.points ?? []).map((p) => p.value as number), baselineSummary)
-      : null;
+      : kindOfBaseline === "property"
+        ? baselineFor({ kind: "property", property: String(baselineProperty ?? "") },
+            baselineObject.data?.properties ?? {}, [])
+        : null;
   const sparkMissing = metricSparkEmptyReason(showVisualization, seriesVariable);
 
   // `null` while the setting is unfinished - an aggregation whose property has
@@ -15974,7 +16071,7 @@ function MetricCardSettings() {
     valueRules, size, description, sparkRange, sparkStart, sparkEnd, baseline,
     showSecondary, secondaryLabel, secondaryAggregation, secondaryProperty, secondaryFormat,
     metrics, layoutStyle, direction, template,
-    sparkAgo, sparkAgoUnit, sparkAhead, sparkAheadUnit, baselineKind, baselineSummary,
+    sparkAgo, sparkAgoUnit, sparkAhead, sparkAheadUnit, baselineKind, baselineSummary, baselineProperty,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -16007,6 +16104,7 @@ function MetricCardSettings() {
     sparkAheadUnit: node.data.props.sparkAheadUnit,
     baselineKind: node.data.props.baselineKind,
     baselineSummary: node.data.props.baselineSummary,
+    baselineProperty: node.data.props.baselineProperty,
   }));
   const kindOfBaseline = baselineKindOf(baselineKind, baseline);
   const extras = extraMetricsOf(metrics);
@@ -16495,6 +16593,22 @@ function MetricCardSettings() {
               <span className="field-hint">p.592: e.g. &quot;the most recent observation in the time series&quot;.</span>
             </label>
           )}
+          {kindOfBaseline === "property" && (
+            <label className="field">
+              <span className="field-label">Baseline property</span>
+              <input
+                data-testid="metric-spark-baseline-property"
+                value={(baselineProperty as string | null) ?? ""}
+                placeholder="e.g. capacity"
+                onChange={(e) => setProp((p: { baselineProperty: string | null }) =>
+                  (p.baselineProperty = e.target.value || null))}
+              />
+              <span className="field-hint">
+                p.593: a numeric property of the object the series is of. Typed, since which
+                type that is depends on the variable&apos;s object.
+              </span>
+            </label>
+          )}
         </>
       )}
       </>}
@@ -16515,7 +16629,7 @@ CanvasMetricCard.craft = {
     secondaryProperty: null, secondaryFormat: null,
     metrics: [], layoutStyle: "card", direction: "horizontal", template: "stacked",
     sparkAgo: null, sparkAgoUnit: "week", sparkAhead: null, sparkAheadUnit: "day",
-    baselineKind: null, baselineSummary: "last",
+    baselineKind: null, baselineSummary: "last", baselineProperty: null,
   },
   related: { settings: MetricCardSettings },
 };

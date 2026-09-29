@@ -82,6 +82,7 @@ export function Sparkline({
           strokeDasharray="2 2"
           vectorEffect="non-scaling-stroke"
           data-testid={`${testId}-baseline`}
+          data-value={baseline ?? undefined}
         />
       )}
     </svg>

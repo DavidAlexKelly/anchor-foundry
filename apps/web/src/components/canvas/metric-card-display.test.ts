@@ -222,7 +222,7 @@ describe("the relative range and the series baseline (§534)", () => {
 
   it("reads the baseline's kind, with a bare number as a static one", async () => {
     const { BASELINE_KINDS, baselineKindOf } = await import("./metric-card");
-    expect(Object.keys(BASELINE_KINDS)).toEqual(["none", "static", "series"]);
+    expect(Object.keys(BASELINE_KINDS)).toEqual(["none", "static", "property", "series"]);
     expect(baselineKindOf("series", null)).toBe("series");
     expect(baselineKindOf(null, 25)).toBe("static");
     expect(baselineKindOf(undefined, null)).toBe("none");
