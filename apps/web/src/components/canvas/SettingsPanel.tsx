@@ -3,7 +3,7 @@
 import { useEditor, useNode } from "@craftjs/core";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import {
-  DEFAULT_MOUNT, DEFAULT_UNMOUNT, DISPLAY_NOTE, MOUNTS, UNMOUNTS, keptOffLayout, mayKeep,
+  DEFAULT_MOUNT, DEFAULT_UNMOUNT, DISPLAY_NOTE, MOUNTS, UNMOUNTS, effectiveDisplay, keptOffLayout, mayKeep,
   mountOf, placeholderHeight, shows, unmountOf, watches,
 } from "./display-optimization";
 import { useOnScreen } from "./object-set";
@@ -446,16 +446,21 @@ export function displayStyle(display: DisplayConfig | undefined): React.CSSPrope
  * something on it is kept mounted - see `keptOffLayout`. */
 export const OffLayout = createContext(false);
 
+/** Whether the nodes below are in a module a Loop layout repeats (§679):
+ * p.181's "display optimization settings are not supported in loop layouts".
+ * Set by `CanvasLoopSection` around each repeated module. */
+export const InLoop = createContext(false);
+
 export function CanvasNode({ render }: { render: React.ReactElement }) {
   const { id, display } = useNode((node) => ({
     display: (node.data.custom as { display?: DisplayConfig } | undefined)?.display,
   }));
   const { mode } = useCanvasEnv();
   const offLayout = useContext(OffLayout);
+  const inLoop = useContext(InLoop);
   const { query } = useEditor();
   const style = displayStyle(display);
-  const mount = mountOf(display?.mount);
-  const unmount = unmountOf(display?.unmount);
+  const { mount, unmount } = effectiveDisplay(display, inLoop);
   // **Run mode only.** In the builder a widget that vanished when it scrolled
   // away would be one the canvas cannot show and the layout tree selects into
   // nothing - and p.182's own instructions for configuring this start "in edit
@@ -492,6 +497,9 @@ export function CanvasNode({ render }: { render: React.ReactElement }) {
 
   if (mode === "run" && offLayout
       && !keptOffLayout({ mount, unmount, mounted })
+      // In a loop nothing is kept (§679). A container `holdsKept` still counts
+      // for an eager child there renders hidden and empty - nothing a reader
+      // sees, so a guard for it survived the sweep as equivalent.
       && !holdsKept(query, id)) {
     // A closed page's node, as closed pages always were: not mounted. The
     // same element either way for a node that is kept, so React keeps it.

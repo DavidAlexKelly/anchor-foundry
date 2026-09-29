@@ -82,7 +82,8 @@ export const DEFAULT_UNMOUNT = "default";
  * same words. */
 export const DISPLAY_NOTE = "Eagerly mount and Never unmount keep a widget "
   + "across page switches, at the cost of memory while its page is closed. "
-  + "Tabs and collapsed sections already keep their widgets mounted.";
+  + "Tabs and collapsed sections already keep their widgets mounted. "
+  + "In a module repeated by a Loop layout, the defaults apply.";
 
 function oneOf(raw: unknown, allowed: Record<string, string>, fallback: string): string {
   const value = String(raw ?? "");
@@ -97,6 +98,16 @@ export function mountOf(raw: unknown): string {
 
 export function unmountOf(raw: unknown): string {
   return oneOf(raw, UNMOUNTS, DEFAULT_UNMOUNT);
+}
+
+/** p.181 (§679): "Note that display optimization settings are not supported
+ * in loop layouts." A widget in a module a Loop layout repeats mounts and
+ * unmounts as p.182's defaults say, whatever it was set to. */
+export function effectiveDisplay(
+  display: { mount?: unknown; unmount?: unknown } | undefined, inLoop: boolean,
+): { mount: string; unmount: string } {
+  if (inLoop) return { mount: DEFAULT_MOUNT, unmount: DEFAULT_UNMOUNT };
+  return { mount: mountOf(display?.mount), unmount: unmountOf(display?.unmount) };
 }
 
 /**

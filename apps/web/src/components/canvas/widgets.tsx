@@ -372,7 +372,7 @@ import { filterKey, isWaiting, waitingNote } from "@/lib/action-filters";
 import { interfaceQuery } from "./routing";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
-import { CanvasNode, OffLayout, holdsKept } from "./SettingsPanel";
+import { CanvasNode, InLoop, OffLayout, holdsKept } from "./SettingsPanel";
 import {
   CanvasHeaderCollapsedContext,
   CanvasParameterProvider,
@@ -15255,9 +15255,14 @@ export function CanvasLoopSection({
                   layout={layout}
                   lazy={mode === "run"}
                 >
-                  <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
-                    <Frame data={JSON.stringify(layout)} />
-                  </Editor>
+                  {/* p.181 (§679): display optimization is not supported in a
+                      loop layout, so the repeated module's widgets take the
+                      defaults. */}
+                  <InLoop.Provider value={true}>
+                    <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
+                      <Frame data={JSON.stringify(layout)} />
+                    </Editor>
+                  </InLoop.Provider>
                 </VariableBridge>
               </CanvasParameterProvider>
             </div>
