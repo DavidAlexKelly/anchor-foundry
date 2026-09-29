@@ -39,6 +39,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { canvas as canvasApi, objects as objApi } from "@/lib/api";
 import { CommentsButton } from "@/components/comments-panel";
+import { StandardPanelView } from "@/components/object-panels";
 import { canShowStar, starGlyph, starLabel } from "@/lib/favourites";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
@@ -242,10 +243,15 @@ export function ObjectView({
   canComment = false,
   canEdit = false,
   dragIcon = false,
+  formFactor = "full",
 }: {
   workspaceId: string;
   typeId: string;
   instance: ObjectInstance;
+  /** Workshop p.261's Form factor (§694): the panel reads the type's
+   * configured *panel* view, and its standard view is p.41's default panel -
+   * the prominent properties - rather than the full page. */
+  formFactor?: "full" | "panel";
   /** Whether this reader may add to p.137's conversation (§322). The panel
    * opens either way — cooperation is worth reading even when you cannot join
    * it — and the composer is what is absent, with a sentence in its place
@@ -273,8 +279,8 @@ export function ObjectView({
   // and "not asked yet" must not look the same to a reader who then sees a
   // button appear under their cursor.
   const view = useQuery({
-    queryKey: ["object-view", workspaceId, typeId],
-    queryFn: () => objApi.getView(workspaceId, typeId),
+    queryKey: ["object-view", workspaceId, typeId, formFactor],
+    queryFn: () => objApi.getView(workspaceId, typeId, formFactor),
   });
   // Seeded rather than derived, so a reader's click survives every refetch on
   // the page — and re-seeded when the builder changes the setting, which is the
@@ -364,6 +370,13 @@ export function ObjectView({
           subjectVariable={configured.subject_variable}
           typeId={typeId}
           instance={shown}
+        />
+      ) : formFactor === "panel" ? (
+        <StandardPanelView
+          workspaceId={workspaceId}
+          typeId={typeId}
+          instance={shown}
+          hideHeader={hideHeader}
         />
       ) : (
         <StandardObjectView
