@@ -85,6 +85,10 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   autoPauseVariable: "read",
   // p.300: the Map's layer shows as this variable says (§559).
   layerVisibleVariable: "read",
+  // p.304 (§560): the sets fitted are read; the bounds are written as it moves.
+  autoZoomSetVariable: "read",
+  followSetVariable: "read",
+  boundsVariable: "write",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",

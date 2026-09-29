@@ -277,6 +277,10 @@ export const REFERENCE_PROPS = [
   "autoPauseVariable",
   // p.300's layer visibility on the Map (§559). See the API's copy.
   "layerVisibleVariable",
+  // p.304's viewport on the Map (§560). See the API's copy.
+  "autoZoomSetVariable",
+  "followSetVariable",
+  "boundsVariable",
   "name",
 ] as const;
 

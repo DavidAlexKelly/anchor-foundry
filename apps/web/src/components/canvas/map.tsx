@@ -19,9 +19,10 @@
  * data" look identical otherwise.
  */
 
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WORLD_OUTLINE } from "./basemap";
 import { boundsOf, onScreen, pathsFor } from "./map-shapes";
+import { allInside, boundsText, sameView, viewOfBounds } from "./map-view";
 import { boxBetween, boxRect, isDrag, lonLatAt, type Box } from "./map-area";
 
 export interface MapPoint {
@@ -37,7 +38,7 @@ export interface MapPoint {
 
 const WIDTH = 640;
 const HEIGHT = 340;
-const ASPECT = HEIGHT / WIDTH;
+export const ASPECT = HEIGHT / WIDTH;
 /** Screen-space cell for clustering. About two pin diameters: closer than
  * this and the pins are a blob rather than a count. */
 const CELL_PX = 30;
@@ -205,6 +206,10 @@ export function MapCanvas({
   opacity = 1,
   selectedKeys,
   layerLabel = "",
+  focus = null,
+  bounds,
+  onBounds,
+  legend = null,
 }: {
   points: MapPoint[];
   /** p.11's geoshapes, drawn **under** the pins: a pin is a thing to click
@@ -237,6 +242,20 @@ export function MapCanvas({
   selectedKeys?: ReadonlySet<string>;
   /** p.300's layer Label, which the caption leads with. */
   layerLabel?: string;
+  /** p.304's Viewport auto zoom (§560): the points to fit, re-fitted whenever
+   * `key` changes - unless `outsideOnly` and they are all in view already. */
+  focus?: { key: string; points: readonly { lat: number; lon: number }[]; outsideOnly: boolean } | null;
+  /** p.304's Viewport bounds: the view as GeoJSON text, read from a variable
+   * and written back as the viewer moves. */
+  bounds?: unknown;
+  onBounds?: (text: string) => void;
+  /** p.304's Legend panel: its entries, whether it opens collapsed, and its
+   * size. */
+  legend?: {
+    entries: { label: string; color: string; count: number; kind: "points" | "track" }[];
+    collapsed: boolean;
+    compact: boolean;
+  } | null;
 }) {
   const fill = color ?? "var(--accent, #2f6f4f)";
   const [view, setView] = useState<MapView | null>(null);
@@ -269,6 +288,30 @@ export function MapCanvas({
     }),
   ]), [points, shapes]);
   const current = view ?? fitted;
+
+  // p.304's Viewport auto zoom (§560). Keyed, so a target that has not changed
+  // does not snap back a view the reader has moved.
+  const focusKey = focus?.key ?? null;
+  const currentRef = useRef(current);
+  currentRef.current = current;
+  useEffect(() => {
+    if (!focus || focus.points.length === 0) return;
+    if (focus.outsideOnly && allInside(focus.points, currentRef.current, ASPECT)) return;
+    setView(fitView(focus.points.map((p, i) => ({ id: String(i), label: "", ...p }))));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey]);
+  // p.304's Viewport bounds, both ways: a view the variable names is taken,
+  // and the view taken is written back - compared, so the echo moves nothing.
+  useEffect(() => {
+    const wanted = viewOfBounds(bounds, ASPECT);
+    if (wanted && !sameView(wanted, currentRef.current, ASPECT)) setView(clampView(wanted));
+  }, [bounds]);
+  useEffect(() => {
+    if (!onBounds) return;
+    const text = boundsText(current, ASPECT);
+    if (text !== bounds) onBounds(text);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current.x, current.y, current.w]);
   const { placed, offscreen } = useMemo(() => clusterPoints(points, current), [points, current]);
   const drawn = useMemo(
     () => shapes.map((shape) => ({
@@ -523,6 +566,35 @@ export function MapCanvas({
           );
         })}
       </svg>
+      {/* p.304's Legend panel (§560): the layer and its tracks, each with its
+          colour and how many are drawn. A disclosure, so "collapse by
+          default" is a starting state the reader can change. */}
+      {legend && legend.entries.length > 0 && (
+        <details
+          className="card"
+          data-testid="map-legend"
+          data-size={legend.compact ? "compact" : "full"}
+          open={!legend.collapsed}
+          style={{ padding: legend.compact ? "2px 8px" : "6px 10px", marginTop: 6,
+                   fontSize: legend.compact ? 11.5 : 13 }}
+        >
+          <summary>Legend</summary>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {legend.entries.map((entry) => (
+              <li key={`${entry.kind}:${entry.label}`} data-testid="map-legend-entry"
+                  className="row-actions" style={{ gap: 6 }}>
+                <svg width={16} height={10} aria-hidden="true">
+                  {entry.kind === "track"
+                    ? <line x1={1} y1={5} x2={15} y2={5} stroke={entry.color} strokeWidth={2} />
+                    : <circle cx={8} cy={5} r={4} fill={entry.color} />}
+                </svg>
+                <span>{entry.label}</span>
+                {!legend.compact && <span className="slug">{entry.count.toLocaleString()}</span>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       <div className="canvas-map-bar">
         <button type="button" onClick={() => zoomBy(1 / 1.6)} aria-label="Zoom in">+</button>
         <button type="button" onClick={() => zoomBy(1.6)} aria-label="Zoom out">−</button>

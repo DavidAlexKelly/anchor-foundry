@@ -12004,6 +12004,15 @@ export function CanvasMap({
   lockLayer = false,
   layerColor = null,
   layerOpacity = 1,
+  showLegend = false,
+  legendCollapsed = false,
+  legendSize = "full",
+  showSelectionPanel = false,
+  autoZoom = "default",
+  autoZoomSetVariable = null,
+  autoZoomOutsideOnly = false,
+  boundsVariable = null,
+  followSetVariable = null,
 }: {
   source?: "objects" | "dataset";
   /** An `object_set` variable to plot (roadmap 1.5). When set, this map reads
@@ -12060,6 +12069,20 @@ export function CanvasMap({
   lockLayer?: boolean;
   layerColor?: string | null;
   layerOpacity?: number;
+  /** p.304's interface options (§560, `map-view.ts`): the Legend panel, its
+   * starting state and size; the Selection panel; Viewport auto zoom (all
+   * objects, or an object set's, optionally only when they are out of view);
+   * Viewport bounds, a GeoJSON string variable read and written; and
+   * Viewport follow object set. */
+  showLegend?: boolean;
+  legendCollapsed?: boolean;
+  legendSize?: string;
+  showSelectionPanel?: boolean;
+  autoZoom?: string;
+  autoZoomSetVariable?: string | null;
+  autoZoomOutsideOnly?: boolean;
+  boundsVariable?: string | null;
+  followSetVariable?: string | null;
 }) {
   const {
     id: nodeId,
@@ -12260,6 +12283,40 @@ export function CanvasMap({
       })
     : [];
   const timeSpan = tracking ? timelineSpan(extentOf([...tracksByKey.values()]), timeWindow) : null;
+  // p.304's viewport (§560). The objects to fit: an object set followed, or
+  // the auto-zoom target - all the objects, or an object set's - each as the
+  // pins it has on this map.
+  const targetSetVariable = followSetVariable
+    ?? (autoZoom === "set" ? autoZoomSetVariable : null);
+  const targetDefinition = useCanvasVariable(targetSetVariable);
+  const targetSet = useQuery({
+    queryKey: ["canvas-map-target", JSON.stringify(targetDefinition ?? null)],
+    queryFn: () => objApi.evaluateObjectSet(workspaceId, targetDefinition, { limit: 200 }),
+    enabled: !!targetSetVariable && !!targetDefinition,
+  });
+  const targetKeys = targetSetVariable
+    ? new Set((targetSet.data?.instances ?? []).map((i) => String(i.primary_key)))
+    : null;
+  const targetPoints = targetKeys
+    ? points.filter((p) => targetKeys.has(String(p.instance?.primary_key)))
+    : autoZoom === "all" ? points : [];
+  const focus = targetPoints.length
+    ? {
+        key: JSON.stringify(targetPoints.map((p) => [p.id, p.lat, p.lon])),
+        points: targetPoints,
+        outsideOnly: !followSetVariable && !!autoZoomOutsideOnly,
+      }
+    : null;
+  const boundsWritten = useCanvasParameter(boundsVariable);
+  const boundsResolved = useCanvasVariable(boundsVariable);
+  // The set's type, for the Selection panel's details: each property by its
+  // own name and drawn as its own type.
+  const setTypeId = (setDefinition as { object_type_id?: string } | undefined)?.object_type_id;
+  const setType = useQuery({
+    queryKey: ["object-type", setTypeId],
+    queryFn: () => objApi.getType(workspaceId, setTypeId!),
+    enabled: showSelectionPanel && !!setTypeId,
+  });
   // Playback: a step a tenth of a second, stopping at the end or at the
   // first auto-pause time it crosses. The latest values are read through a
   // ref, so the timer is not restarted on every step it causes.
@@ -12314,6 +12371,23 @@ export function CanvasMap({
           opacity={layerOpacityOf(layerOpacity)}
           selectedKeys={selectedVariable ? selectedKeys : undefined}
           layerLabel={layerLabel}
+          focus={focus}
+          bounds={boundsVariable
+            ? (boundsWritten !== undefined ? boundsWritten : boundsResolved) : undefined}
+          onBounds={boundsVariable
+            ? (text) => setParameter(boundsVariable, text) : undefined}
+          legend={showLegend ? {
+            collapsed: !!legendCollapsed,
+            compact: legendSize === "compact",
+            entries: [
+              ...(layerShown ? [{ label: layerLabel || "Objects", kind: "points" as const,
+                color: layerColorOf(layerColor) ?? "var(--accent, #14646e)",
+                count: points.length }] : []),
+              ...(layerShown && trackShapes.length ? [{ label: `${layerLabel || "Objects"} tracks`,
+                kind: "track" as const, color: layerColorOf(layerColor) ?? "var(--accent, #14646e)",
+                count: trackShapes.length }] : []),
+            ],
+          } : null}
           area={selectsArea ? mapAreaOf(areaClauses, locationProperty!) : null}
           onArea={selectsArea
             ? (box) => setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, box))
@@ -12361,6 +12435,43 @@ export function CanvasMap({
           }
         />
       )}
+      {/* p.304's Selection panel (§560): the selected objects, or the one
+          selected object's details. */}
+      {!needs && query.data && showSelectionPanel && selectedVariable && (() => {
+        const chosen = (setPage.data?.instances ?? [])
+          .filter((i) => selectedKeys.has(String(i.primary_key)));
+        const nameOf = (i: { primary_key: unknown; properties: Record<string, unknown> }) => {
+          const label = labelProperty ? i.properties[labelProperty] : null;
+          return label === null || label === undefined ? String(i.primary_key) : String(label);
+        };
+        return (
+          <div className="card" data-testid="map-selection-panel" style={{ marginTop: 6, padding: "6px 10px" }}>
+            {chosen.length === 0 ? (
+              <span className="canvas-widget-empty">No objects selected</span>
+            ) : chosen.length === 1 ? (
+              <dl data-testid="map-selection-details" style={{ margin: 0 }}>
+                <dt><strong>{nameOf(chosen[0]!)}</strong></dt>
+                {(setType.data?.properties ?? []).map((p) => (
+                  <dd key={p.api_name} style={{ margin: 0 }} data-testid="map-selection-property">
+                    {p.display_name || p.api_name}:{" "}
+                    <PropertyValue
+                      workspaceId={workspaceId}
+                      dataType={p.data_type}
+                      valueFormat={p.value_format}
+                      structFields={p.struct_fields}
+                      value={chosen[0]!.properties[p.api_name]}
+                    />
+                  </dd>
+                ))}
+              </dl>
+            ) : (
+              <ul data-testid="map-selection-list" style={{ margin: 0, paddingLeft: 18 }}>
+                {chosen.map((i) => <li key={String(i.primary_key)}>{nameOf(i)}</li>)}
+              </ul>
+            )}
+          </div>
+        );
+      })()}
       {!needs && query.data && tracking && enableTimeline && timeSpan && (
         <MapTimeline
           start={timeSpan.start}
@@ -12431,8 +12542,19 @@ function MapSettings() {
     windowStartVariable, windowEndVariable, timeZone, timeFormat, playingVariable,
     playbackPositionVariable, autoPauseVariable, layerLabel, selectedVariable, layerVisible,
     layerVisibleVariable, lockLayer, layerColor, layerOpacity,
+    showLegend, legendCollapsed, legendSize, showSelectionPanel, autoZoom, autoZoomSetVariable,
+    autoZoomOutsideOnly, boundsVariable, followSetVariable,
     actions: { setProp },
   } = useNode((node) => ({
+    showLegend: node.data.props.showLegend,
+    legendCollapsed: node.data.props.legendCollapsed,
+    legendSize: node.data.props.legendSize,
+    showSelectionPanel: node.data.props.showSelectionPanel,
+    autoZoom: node.data.props.autoZoom,
+    autoZoomSetVariable: node.data.props.autoZoomSetVariable,
+    autoZoomOutsideOnly: node.data.props.autoZoomOutsideOnly,
+    boundsVariable: node.data.props.boundsVariable,
+    followSetVariable: node.data.props.followSetVariable,
     layerLabel: node.data.props.layerLabel,
     selectedVariable: node.data.props.selectedVariable,
     layerVisible: node.data.props.layerVisible,
@@ -12761,6 +12883,68 @@ function MapSettings() {
               />
             </div>
           )}
+          {/* p.304's interface options (§560). */}
+          {objectSetVariable && (
+            <div className="field" data-testid="map-interface-settings">
+              <span className="field-label">Interface</span>
+              {([
+                ["showLegend", "Legend", showLegend],
+                ["legendCollapsed", "Collapse legend panel", legendCollapsed],
+                ["showSelectionPanel", "Show selection panel", showSelectionPanel],
+                ["autoZoomOutsideOnly", "Auto zoom only if outside the viewport", autoZoomOutsideOnly],
+              ] as const).map(([prop, label, value]) => (
+                <label key={prop} className="field canvas-toggle">
+                  <input
+                    type="checkbox"
+                    data-testid={`map-${prop}`}
+                    checked={!!value}
+                    onChange={(e) => setProp((p: Record<string, unknown>) => {
+                      p[prop] = e.target.checked;
+                    })}
+                  />
+                  <span className="field-label">{label}</span>
+                </label>
+              ))}
+              <select
+                aria-label="Legend panel size"
+                data-testid="map-legendSize"
+                value={legendSize === "compact" ? "compact" : "full"}
+                onChange={(e) => setProp((p: { legendSize: string }) => (p.legendSize = e.target.value))}
+              >
+                <option value="full">Legend: full size</option>
+                <option value="compact">Legend: compact</option>
+              </select>
+              <select
+                aria-label="Viewport auto zoom"
+                data-testid="map-autoZoom"
+                value={autoZoom === "all" || autoZoom === "set" ? autoZoom : "default"}
+                onChange={(e) => setProp((p: { autoZoom: string }) => (p.autoZoom = e.target.value))}
+              >
+                <option value="default">Auto zoom: fit once, then the reader&apos;s</option>
+                <option value="all">Auto zoom: all objects</option>
+                <option value="set">Auto zoom: an object set</option>
+              </select>
+              {([
+                ["autoZoomSetVariable", "Auto zoom object set", autoZoomSetVariable, "object_set"],
+                ["followSetVariable", "Viewport follow object set", followSetVariable, "object_set"],
+                ["boundsVariable", "Viewport bounds", boundsVariable, "string"],
+              ] as const).map(([prop, label, value, kind]) => (
+                <select
+                  key={prop}
+                  aria-label={label}
+                  data-testid={`map-${prop}`}
+                  value={value || ""}
+                  onChange={(e) => setProp((p: Record<string, unknown>) => {
+                    p[prop] = e.target.value || null;
+                  })}
+                >
+                  <option value="">{label}: none</option>
+                  {Object.values(declared).filter((v) => v.kind === kind)
+                    .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                </select>
+              ))}
+            </div>
+          )}
           {/* §557: tracks and p.303's timeline, over an object set. */}
           {objectSetVariable && (
             <>
@@ -12987,6 +13171,9 @@ CanvasMap.craft = {
     playingVariable: null, playbackPositionVariable: null, autoPauseVariable: null,
     layerLabel: "", selectedVariable: null, layerVisible: true, layerVisibleVariable: null,
     lockLayer: false, layerColor: null, layerOpacity: 1,
+    showLegend: false, legendCollapsed: false, legendSize: "full", showSelectionPanel: false,
+    autoZoom: "default", autoZoomSetVariable: null, autoZoomOutsideOnly: false,
+    boundsVariable: null, followSetVariable: null,
   },
   related: { settings: MapSettings },
 };

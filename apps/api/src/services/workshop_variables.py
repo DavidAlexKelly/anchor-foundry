@@ -388,6 +388,11 @@ REFERENCE_PROPS = (
     # p.300's layer on the Map (§559): the boolean its visibility reads. Its
     # Selected objects is `selectedVariable`, already listed for the table.
     "layerVisibleVariable",
+    # p.304's viewport on the Map (§560): two object sets it reads, and the
+    # bounds string it reads and writes.
+    "autoZoomSetVariable",
+    "followSetVariable",
+    "boundsVariable",
     "name",
 )
 
