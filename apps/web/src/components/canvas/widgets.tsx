@@ -406,7 +406,7 @@ import {
 } from "./charts";
 import {
   MAX_SERIES, axisSides, drillClauses, drilledLabel as drilledOn, layerKinds, mergeSeries,
-  seriesName as seriesNameOf, seriesOf, seriesRequests, seriesSource,
+  canSegment, layeredGrid, segmentsLayer, seriesName as seriesNameOf, seriesOf, seriesRequests, seriesSource,
 } from "./chart-series";
 import {
   SEGMENT_LEGEND_POSITIONS, SEGMENT_MODES, segmentLegendPositionOf, segmentModeOf, segmentedFrom,
@@ -17741,8 +17741,13 @@ export function CanvasChart({
   // aggregation - and, as p.280's layers (§625), its own set grouped by its
   // own property when it names one. A series still being filled in asks
   // nothing and is left out.
-  const extras = usingSet && !segmenting && (drawnKind === "bar" || drawnKind === "line")
+  // A segmented bar chart keeps its layers since §678: each stands beside the
+  // chart's own, split by its own Segment by where it has one. A segmented
+  // line chart is one layer, a line per segment (§601).
+  const extras = usingSet && (drawnKind === "bar" || (!segmenting && drawnKind === "line"))
     ? seriesOf(series) : [];
+  const extraSegmented = extras.map((spec) =>
+    segmentsLayer(spec, drawnKind === "line" ? "line" : "bar"));
   const extraAsks = seriesRequests(extras);
   const extraSources = extras.map((spec) => seriesSource(
     spec, { objectSetVariable: objectSetVariable ?? null, dimension: dimension ?? null },
@@ -17756,35 +17761,60 @@ export function CanvasChart({
       ],
       queryFn: () => objApi.groupObjectSet(
         workspaceId, extraSources[i]!.definition, extraSources[i]!.dimension, extraAsks[i]!),
-      enabled: !!extraSources[i] && !!extraAsks[i],
+      enabled: !!extraSources[i] && !!extraAsks[i] && !extraSegmented[i],
+    })),
+  });
+  // p.282's Segment by on a layer (§678): its categories by its segments.
+  const extraGrids = useQueries({
+    queries: extras.map((spec, i) => ({
+      queryKey: [
+        "canvas-chart-segments", JSON.stringify(extraSources[i]?.definition ?? null),
+        extraSources[i]?.dimension ?? null, spec.segmentBy,
+      ],
+      queryFn: () => objApi.crossTabObjectSet(
+        workspaceId, extraSources[i]!.definition, extraSources[i]!.dimension, spec.segmentBy!),
+      enabled: !!extraSources[i] && !!extraSegmented[i],
     })),
   });
   const drawnExtras = extras.flatMap((spec, i) => {
     const data = extraResults[i]?.data;
+    const grid = extraGrids[i]?.data;
     const request = extraAsks[i];
     const source = extraSources[i];
-    if (!request || !data || !source) return [];
+    if (!request || !source || (extraSegmented[i] ? !grid : !data)) return [];
     return [{
       spec,
       source,
       name: seriesNameOf(spec, source.key !== objectSetVariable
         ? declared[source.key]?.label ?? source.key : undefined),
-      points: data.groups.map((g) => ({
+      points: (data?.groups ?? []).map((g) => ({
         label: g.value,
         value: request.aggregation !== "count" ? Number(g.metric ?? 0) : g.count,
       })),
+      grid: extraSegmented[i] && grid ? segmentedFrom(grid) : undefined,
     }];
   });
   const firstName = (typeof seriesName === "string" ? seriesName.trim() : "")
     || defaultValueTitle(kind ?? "bar", aggregate, measure);
-  const multi = drawnExtras.length > 0 && points !== null
+  // §678: layers side by side, each segmented one stacked by its segments -
+  // the chart's own, when it segments, and any layer with its own Segment by.
+  const firstGrid = segmenting && crossTab.data && crossTab.data.rows.length > 0
+    ? sortSegmented(segmentedFrom(crossTab.data), chartSortOf(sort)) : null;
+  const layered = drawnExtras.length > 0 && (segmenting ? !!firstGrid : points !== null)
+    && (segmenting || drawnExtras.some((e) => e.grid))
+    ? layeredGrid([
+        firstGrid ? { name: firstName, grid: firstGrid, segmentNames } : { name: firstName, points: points! },
+        ...drawnExtras.map((e) => (e.grid ? { name: e.name, grid: e.grid } : { name: e.name, points: e.points })),
+      ])
+    : null;
+  const multi = !layered && drawnExtras.length > 0 && points !== null
     ? mergeSeries(points, drawnExtras.map((e) => e.points),
       [firstName, ...drawnExtras.map((e) => e.name)])
     : null;
   // Only a series that asked is waited for: a disabled query stays pending.
   // p.282's Selection as filter per layer (§628): a series naming its own
   // variable narrows it on its own property; the rest narrow the chart's.
-  const drills = multi ? [chartDrill, ...drawnExtras.map(({ spec, source }) => {
+  const layerDrills = multi || layered ? [chartDrill, ...drawnExtras.map(({ spec, source }) => {
     const variable = spec.drilldownVariable;
     if (!variable) return chartDrill;
     const selected = drilledOn(parameterValues[variable], source.dimension);
@@ -17794,14 +17824,18 @@ export function CanvasChart({
         setParameter(variable, drillClauses(source.dimension, label, selected)),
     };
   })] : undefined;
+  // A layered chart's columns are its layers' segments: each takes its layer's.
+  const drills = layered ? layered.stacks.map((layer) => layerDrills![layer]) : layerDrills;
   // p.280's Layer type (§626): a chart whose series are drawn as both bars
   // and lines is drawn as bars with the lines across them.
   const kinds = layerKinds(drawnKind === "line" ? "line" : "bar",
     drawnExtras.map((e) => e.spec));
   const mixed = kinds.includes("bar") && kinds.includes("line");
-  const extrasPending = extraResults.some(
-    (r, i) => !!extraAsks[i] && !!extraSources[i] && r.isPending);
+  const extrasPending = extras.some((_, i) => !!extraAsks[i] && !!extraSources[i]
+    && (extraSegmented[i] ? extraGrids[i]?.isPending : extraResults[i]?.isPending));
   const sides = axisSides(drawnExtras.map((e) => e.spec), multipleAxes === true);
+  const columnKinds = layered ? layered.stacks.map((layer) => kinds[layer]!) : kinds;
+  const columnSides = layered ? layered.stacks.map((layer) => sides[layer]!) : sides;
 
   // p.283's value axis and titles. A problem with the bounds is said and the
   // chart drawn on calculated ones, rather than on an axis running backwards.
@@ -17815,6 +17849,7 @@ export function CanvasChart({
       // p.283: "the aggregation type(s) used within the chart's series".
       : { category: dimension,
           value: multi ? multi.segments.join(", ")
+            : layered ? [firstName, ...drawnExtras.map((e) => e.name)].join(", ")
             : defaultValueTitle(kind ?? "bar", aggregate, measure) },
   );
 
@@ -17851,7 +17886,7 @@ export function CanvasChart({
       )}
       {/* Only the series path swaps an empty chart for a sentence; the other
           two are left exactly as they were. */}
-      {segmenting && crossTab.data && (
+      {segmenting && crossTab.data && !layered && (
         crossTab.data.rows.length === 0
           ? <p className="canvas-widget-empty">No rows match — nothing to chart.</p>
           : kind === "line" ? (
@@ -17910,6 +17945,25 @@ export function CanvasChart({
           drill={chartDrill}
         />
       )}
+      {layered && (
+        <SegmentedBarChart
+          // §678: each layer a group in the category's slot, a segmented one
+          // stacked by its segments. A line layer runs across them.
+          data={mixed ? layered.data : { ...layered.data, values: layered.data.values.map((row) =>
+            row.map((v) => (Number.isNaN(v) ? 0 : v))) }}
+          mode="grouped"
+          stacks={layered.stacks}
+          kinds={mixed ? columnKinds : undefined}
+          drills={drills}
+          sides={columnSides}
+          showLegend={showLegend !== false}
+          titles={titles}
+          legend={segmentLegendPositionOf(legendPosition)}
+          valueText={valueText(valueFormat) ?? undefined}
+          categoryText={categoryText(categoryFormat) ?? undefined}
+          drill={chartDrill}
+        />
+      )}
       {multi && drawnKind === "line" && !mixed && (
         <MultiLineChart
           data={multi}
@@ -17926,7 +17980,7 @@ export function CanvasChart({
         />
       )}
       {extrasPending && <p className="canvas-widget-empty">Loading the other series…</p>}
-      {!multi && !segmenting && points && !(usingSeries && points.length === 0) && (
+      {!multi && !layered && !segmenting && points && !(usingSeries && points.length === 0) && (
         <Chart
           /* p.281: "If the data input is a time series set, only the Line
              Chart option is supported." */
@@ -18338,7 +18392,10 @@ function ChartSettings() {
       )}
       {objectSetVariable && !seriesVariable && ((kind || "bar") === "bar" || kind === "line") && (
         <ChartSeriesFields
-          segmented={!!segmentBy && ((kind || "bar") === "bar" || kind === "line")}
+          // §678: a segmented *bar* chart keeps its series, each beside it; a
+          // segmented line chart is one layer, a line per segment.
+          segmented={!!segmentBy && kind === "line"}
+          chartKind={kind === "line" ? "line" : "bar"}
           series={series}
           firstName={typeof seriesName === "string" ? seriesName : ""}
           firstDefault={defaultValueTitle(kind || "bar", aggregate, measure)}
@@ -18361,7 +18418,10 @@ function ChartSettings() {
             <select
               value={segmentBy || ""}
               data-testid="chart-segment-by"
-              disabled={(aggregate || "count") !== "count" || seriesOf(series).length > 0}
+              // §678: a bar chart may segment and keep its series; a line
+              // chart's segments are its lines, so it has one series or the
+              // other.
+              disabled={(aggregate || "count") !== "count" || (kind === "line" && seriesOf(series).length > 0)}
               onChange={(e) =>
                 setProp((p: { segmentBy: string | null }) => (p.segmentBy = e.target.value || null))}
             >
@@ -18373,8 +18433,8 @@ function ChartSettings() {
             {(aggregate || "count") !== "count" && (
               <span className="field-hint">Segments count objects - set Measure to a count</span>
             )}
-            {seriesOf(series).length > 0 && (
-              <span className="field-hint">A chart with several series is not segmented</span>
+            {kind === "line" && seriesOf(series).length > 0 && (
+              <span className="field-hint">A line chart with several series is not segmented</span>
             )}
           </label>
           {segmentBy && (
@@ -18485,8 +18545,10 @@ function ChartSettings() {
  * panel. The Measure above is the first series; these are the rest. */
 function ChartSeriesFields({
   segmented, series, firstName, firstDefault, numbers, names, showLegend, legend, twoAxes,
-  sets, chartSet, clauses, setProp,
+  sets, chartSet, clauses, setProp, chartKind = "bar",
 }: {
+  /** The chart's own type, which a series naming none is drawn as (§626). */
+  chartKind?: "bar" | "line";
   /** p.282's Selection as filter per layer (§628): the array variables a
    * series may write its selection into. */
   clauses: { id: string; label: string }[];
@@ -18539,7 +18601,7 @@ function ChartSeriesFields({
   if (segmented) {
     return (
       <p className="field-hint" data-testid="chart-series-segmented">
-        A segmented chart has one series: its segments are what the legend names.
+        A segmented line chart has one series: its segments are what the legend names.
       </p>
     );
   }
@@ -18562,7 +18624,7 @@ function ChartSeriesFields({
               // Another set's properties are another type's: what was picked
               // for the old one is let go.
               (j === i ? { ...s, objectSetVariable: e.target.value || null, dimension: null,
-                           measure: null } : s)))}
+                           measure: null, segmentBy: null } : s)))}
           >
             <option value="">The chart&apos;s set</option>
             {sets.filter((v) => v.id !== chartSet).map((v) => (
@@ -18630,6 +18692,20 @@ function ChartSeriesFields({
               <option value="right">Right axis</option>
             </select>
           )}
+          {/* p.282's Segment by on a layer (§678): a bar series that counts,
+              which is what a segment is. */}
+          {canSegment(spec, chartKind) && (
+            <select
+              aria-label={`Series ${i + 2} segment by`}
+              data-testid="chart-series-segment"
+              value={spec.segmentBy ?? ""}
+              onChange={(e) => write(specs.map((s, j) =>
+                (j === i ? { ...s, segmentBy: e.target.value || null } : s)))}
+            >
+              <option value="">No segments</option>
+              {seriesNames.map((n) => <option key={n} value={n}>Segment by {n}</option>)}
+            </select>
+          )}
           <select
             aria-label={`Series ${i + 2} selection filter`}
             data-testid="chart-series-drill"
@@ -18670,7 +18746,7 @@ function ChartSeriesFields({
         onClick={() =>
           write([...specs, { aggregate: "count", measure: null, name: "", axis: "right",
                              objectSetVariable: null, dimension: null, kind: null,
-                             drilldownVariable: null }])}
+                             drilldownVariable: null, segmentBy: null }])}
       >
         Add a series
       </button>

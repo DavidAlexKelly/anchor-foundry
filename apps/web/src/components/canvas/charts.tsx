@@ -717,10 +717,13 @@ export function PieChart({
  */
 export function SegmentedBarChart({
   data, mode, drill, showLegend = true, titles, valueText, categoryText,
-  legend = "bottom", names, sides, kinds, drills,
+  legend = "bottom", names, sides, kinds, drills, stacks,
 }: {
   data: Segmented;
   mode: SegmentMode;
+  /** p.282's Segment by on a layer (§678): the layer each column belongs to,
+   * so a layer's segments stack while the layers stand side by side. */
+  stacks?: number[];
   /** p.282's Selection as filter per layer (§628): a series' own drill-down,
    * by its place in the legend, where it has one; `drill` otherwise. */
   drills?: (Drill | undefined)[];
@@ -761,7 +764,7 @@ export function SegmentedBarChart({
     : data;
   const barAt = layered ? layered.barAt : data.segments.map((_, i) => i);
   const lineAt = layered ? layered.lineAt : [];
-  const { bars, max } = segmentLayout(barData, mode);
+  const { bars, max } = segmentLayout(barData, mode, stacks ? barAt.map((i) => stacks[i]!) : undefined);
   // A second axis only for bars side by side: a stack adds its parts, and
   // parts read against two axes do not add.
   const twoAxes = mode === "grouped" && (sides?.includes("right") ?? false);

@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_SERIES, axisSides, drillClauses, drilledLabel, layerKinds, mergeSeries, seriesName,
-  seriesOf, seriesRequests, seriesSource, splitLayers, type SeriesSpec,
+  MAX_SERIES, axisSides, drillClauses, drilledLabel, layerKinds, mergeSeries, seriesName, seriesOf, seriesRequests, seriesSource, splitLayers, type SeriesSpec, canSegment, layeredGrid, segmentsLayer,
 } from "./chart-series";
 
 const ON_CHART = { objectSetVariable: null, dimension: null, kind: null,
-  drilldownVariable: null };
+  drilldownVariable: null, segmentBy: null };
 
 describe("seriesOf (p.281's multiple series)", () => {
   it("reads what a saved chart holds, and nothing else", () => {
@@ -193,3 +192,34 @@ describe("axisSides (p.283's Use multiple value axes)", () => {
 function spec(over: Partial<SeriesSpec>): SeriesSpec {
   return { aggregate: "count", measure: null, name: "", axis: "right", ...ON_CHART, ...over };
 }
+
+describe("p.282's Segment by on a layer (§678)", () => {
+  it("segments a bar layer that counts, and nothing else", () => {
+    expect(segmentsLayer(spec({ segmentBy: "region" }), "bar")).toBe(true);
+    expect(segmentsLayer(spec({ segmentBy: null }), "bar")).toBe(false);
+    expect(segmentsLayer(spec({ segmentBy: "region", aggregate: "sum" }), "bar")).toBe(false);
+    expect(segmentsLayer(spec({ segmentBy: "region" }), "line")).toBe(false);
+    expect(segmentsLayer(spec({ segmentBy: "region", kind: "bar" }), "line")).toBe(true);
+    expect(segmentsLayer(spec({ segmentBy: "region", kind: "line" }), "bar")).toBe(false);
+    expect(canSegment(spec({}), "bar")).toBe(true);
+    expect(seriesOf([{ segmentBy: "region" }, { segmentBy: "" }]).map((s) => s.segmentBy))
+      .toEqual(["region", null]);
+  });
+
+  it("lays layers side by side, each segmented one as a column per segment", () => {
+    const { data, stacks } = layeredGrid([
+      { name: "Sites", grid: { categories: ["a", "b"], segments: ["north", "south"],
+        values: [[1, 2], [3, 0]] }, segmentNames: { north: "N" } },
+      { name: "Ports", points: [{ label: "b", value: 5 }, { label: "c", value: 6 }] },
+      { name: "Docks", grid: { categories: ["c"], segments: ["x"], values: [[7]] } },
+    ]);
+    expect(data.categories).toEqual(["a", "b", "c"]);
+    expect(data.segments).toEqual(["Sites · N", "Sites · south", "Ports", "Docks · x"]);
+    expect(stacks).toEqual([0, 0, 1, 2]);
+    expect(data.values).toEqual([
+      [1, 2, NaN, NaN],
+      [3, 0, 5, NaN],
+      [NaN, NaN, 6, 7],
+    ]);
+  });
+});
