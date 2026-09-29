@@ -1573,6 +1573,9 @@ export interface PipelineNode {
   is_focus: boolean;
   slug: string | null;
   origin: string | null;
+  /** p.38's Repository colouring (§677): the code repository a model was
+   * written in, or that of the model writing a dataset. */
+  repository_name: string | null;
   row_count: number | null;
   current_version: number | null;
   health_status: string | null;

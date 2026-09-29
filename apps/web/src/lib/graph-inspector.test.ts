@@ -7,7 +7,7 @@ import type { PipelineGraph, PipelineNode, TabularResult } from "./types";
 
 const node = (over: Partial<PipelineNode> & Pick<PipelineNode, "id" | "kind">): PipelineNode => ({
   resource_id: "r", name: "n", layer: 0, position: 0, in_cycle: false, is_focus: false,
-  slug: null, origin: null, row_count: null, current_version: null, health_status: null,
+  slug: null, origin: null, repository_name: null, row_count: null, current_version: null, health_status: null,
   language: null, trigger_mode: null, last_run_status: null, last_run_at: null,
   updated_at: null, built_at: null, build_started_at: null, build_finished_at: null, out_of_date: false, out_of_date_reason: null,
   ...over,

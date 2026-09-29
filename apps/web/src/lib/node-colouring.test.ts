@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  COLOURINGS, DEFAULT_COLOURING, type ColourableNode, colouringIn, legendFor,
-  swatchFor, RAMP, ageText, quantityOf, quarterLabel, quarterOf, scaleFor,
+  COLOURINGS, DEFAULT_COLOURING, type ColourableNode, colouringIn, legendFor, swatchFor, RAMP, ageText, quantityOf, quarterLabel, quarterOf, scaleFor, CATEGORICAL,
 } from "./node-colouring";
 
 /** A node the graph could actually draw: every field the server sends, set.
@@ -10,7 +9,7 @@ import {
  *  produces, and a test over one of those proves nothing about the graph. */
 function node(kind: string, over: Partial<ColourableNode> = {}): ColourableNode {
   return {
-    kind, origin: null, health_status: null, last_run_status: null,
+    kind, origin: null, repository_name: null, health_status: null, last_run_status: null,
     out_of_date: false, out_of_date_reason: null, row_count: null, built_at: null,
     build_started_at: null, build_finished_at: null, ...over,
   };
@@ -430,5 +429,43 @@ describe("p.39's build duration (§623)", () => {
     expect(quarterLabel("duration", 0, [])).toBe("Any length");
     expect(legendFor(nodes, "duration", 0).map((e) => e.key)).toEqual(
       ["q3", "q2", "q1", "q0", "none"]);
+  });
+});
+
+describe("p.38's Repository colouring (§677)", () => {
+  const graph = [
+    node("model", { repository_name: "pipelines" }),
+    node("dataset", { repository_name: "pipelines" }),
+    node("model", { repository_name: "Analytics" }),
+    node("dataset", { origin: "upload" }),
+    node("object_type"),
+  ];
+
+  it("is offered, after the resource overview", () => {
+    const ids = COLOURINGS.map((c) => c.id);
+    expect(ids.indexOf("repository")).toBe(ids.indexOf("origin") + 1);
+  });
+
+  it("colours each repository by its place among the graph's, by name", () => {
+    const scale = scaleFor(graph, "repository");
+    expect(scale?.repositories).toEqual(["Analytics", "pipelines"]);
+    expect(swatchFor(graph[0]!, "repository", scale)).toEqual(
+      { key: "repo:pipelines", label: "pipelines", token: CATEGORICAL[1] });
+    expect(swatchFor(graph[2]!, "repository", scale)?.token).toBe(CATEGORICAL[0]);
+    expect(swatchFor(graph[3]!, "repository", scale)).toEqual(
+      { key: "none", label: "Not from a repository", token: "var(--line)" });
+  });
+
+  it("reuses the colours past the palette, and names each in the legend", () => {
+    const many = Array.from({ length: CATEGORICAL.length + 1 }, (_, n) =>
+      node("model", { repository_name: `r${String(n).padStart(2, "0")}` }));
+    const scale = scaleFor(many, "repository");
+    expect(swatchFor(many[CATEGORICAL.length]!, "repository", scale)?.token).toBe(CATEGORICAL[0]);
+    expect(legendFor(many, "repository")).toHaveLength(CATEGORICAL.length + 1);
+  });
+
+  it("lists the repositories by name, then what no repository wrote", () => {
+    expect(legendFor(graph, "repository").map((e) => [e.label, e.count])).toEqual([
+      ["Analytics", 1], ["pipelines", 2], ["Not from a repository", 2]]);
   });
 });
