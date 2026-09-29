@@ -1364,6 +1364,91 @@ class UndoResult(BaseModel):
     dataset_version: int | None
 
 
+async def _by_key(store: Any, prefix: str, type_id: UUID, primary_key: str) -> dict[str, Any] | None:
+    """One object by its primary key, or None when there is none (§551)."""
+    rows, _ = await store.find_by_property(
+        search_prefix=prefix, object_type_id=type_id, property_name=None,
+        value=primary_key, limit=1, offset=0,
+    )
+    return dict(rows[0]) if rows else None
+
+
+async def _write_context(conn: Any, project_id: UUID, source_id: UUID) -> dict[str, Any]:
+    """What writing one source's rows needs: the source, its columns by
+    property, and its properties' types (§551)."""
+    source = await ontology_service.get_source(conn, project_id, source_id)
+    properties = await ontology_service.list_properties(conn, UUID(str(source["object_type_id"])))
+    mappings: dict[str, str] = _parse_json(source["column_mappings"])
+    return {
+        "source": source,
+        "columns": {prop: col for col, prop in mappings.items()},
+        "types": {p["api_name"]: p["data_type"] for p in properties},
+        "edit_only": {p["api_name"] for p in properties if p.get("edit_only")},
+    }
+
+
+def _columns(context: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
+    """Properties as one source's columns. **Edit-only properties are not in
+    them** - they have no column (p.113) - and are restored in the index alone,
+    which is the whole of what "edit-only" means on the way back as on the way
+    out."""
+    return {
+        context["columns"][prop]: ontology_service.column_value(
+            context["types"].get(prop, "string"), value
+        )
+        for prop, value in values.items()
+        if prop not in context["edit_only"] and prop in context["columns"]
+    }
+
+
+def _revert_effects(
+    *,
+    creations: list[dict[str, Any]],
+    removals: list[dict[str, Any]],
+    modifications: list[dict[str, Any]],
+    modification_rows: dict[tuple[str, str], dict[str, Any]],
+    sources_by_type: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Everything a run wrote besides its subject, with what an undo needs to
+    put each back (db 0114; §551): a created object's key and properties, a
+    deleted one's properties, a changed one's before and after.
+    """
+    effects: list[dict[str, Any]] = [
+        {
+            "kind": "create",
+            "object_type_id": creation["object_type_id"],
+            "source_id": str(sources_by_type[creation["object_type_id"]]["id"]),
+            "primary_key": creation["primary_key"],
+            "properties": creation["properties"],
+        }
+        for creation in creations
+    ]
+    effects += [
+        {
+            "kind": "remove",
+            "object_type_id": removal["object_type_id"],
+            "source_id": str(removal["source"]["id"]),
+            "primary_key": removal["primary_key"],
+            "properties": removal["before"],
+            # The subject's own deletion names no instance of its own.
+            "subject": "instance_id" not in removal,
+        }
+        for removal in removals
+    ]
+    for modification in modifications:
+        row = modification_rows[(modification["object_type_id"], modification["instance_id"])]
+        effects.append({
+            "kind": "modify",
+            "object_type_id": modification["object_type_id"],
+            "instance_id": modification["instance_id"],
+            "source_id": str(row["source"]["id"]),
+            "primary_key": row["primary_key"],
+            "before": row["before"],
+            "after": {**row["before"], **modification["properties"]},
+        })
+    return effects
+
+
 @project_router.post("/{action_type_id}/runs/{run_id}/undo", response_model=UndoResult)
 async def undo_action(
     action_type_id: UUID,
@@ -1436,16 +1521,30 @@ async def undo_action(
             # request being malformed or the caller being unauthorised — and
             # most of them were false a minute earlier.
             raise ConflictError(refused)
-        assert instance is not None
-        source = await ontology_service.get_source(
-            conn, access.project_id, UUID(str(instance["source_id"]))
+        # p.156's revert of everything else the run wrote (§551): each object
+        # must still be as the run left it, by the same whole-object rule the
+        # subject is held to.
+        effects = action_revert.effects_of(run)
+        store = instance_store.store_for(conn)
+        currents = [
+            await _by_key(store, prefix, UUID(e["object_type_id"]), str(e["primary_key"]))
+            for e in effects
+        ]
+        refused = action_revert.effects_refusal(
+            effects, [_parse_json(c["properties"]) if c else None for c in currents]
         )
-        properties = await ontology_service.list_properties(conn, object_type_id)
-        property_types = {p["api_name"]: p["data_type"] for p in properties}
-        struct_fields = ontology_service.struct_fields_of(properties)
-        edit_only = {
-            p["api_name"] for p in properties if p.get("edit_only")
-        }
+        if refused:
+            raise ConflictError(refused)
+        removed_subject = next(
+            (e for e in effects if e.get("kind") == "remove" and e.get("subject")), None
+        )
+        source = await ontology_service.get_source(
+            conn, access.project_id,
+            UUID(str(instance["source_id"] if instance else removed_subject["source_id"])),
+        )
+        contexts: dict[str, dict[str, Any]] = {}
+        for source_id in {str(source["id"]), *(str(e["source_id"]) for e in effects)}:
+            contexts[source_id] = await _write_context(conn, access.project_id, UUID(source_id))
         previous = _parse_json(run["previous_properties"])
         undo_run_id = await actions_service.open_run(
             conn,
@@ -1468,64 +1567,117 @@ async def undo_action(
     ok, error = True, None
     dataset_version: int | None = None
     try:
-        column_mappings: dict[str, str] = _parse_json(source["column_mappings"])
-        reverse_map = {prop: col for col, prop in column_mappings.items()}
-        # The dataset copy gets the flat form, and **edit-only properties are
-        # not in it** — they have no column (p.113), so there is nothing to
-        # write. They are still restored in the index below, which is the whole
-        # of what "edit-only" means in this path, on the way back as on the way
-        # out.
-        column_updates = {
-            reverse_map[prop]: ontology_service.column_value(
-                property_types.get(prop, "string"), value
+        # **One version per dataset, as the apply wrote them** (decision 0008):
+        # the subject put back, what the run created deleted, what it deleted
+        # written back, and what it changed restored - the inverse of the
+        # apply's own plan, so a failure between two writes cannot leave half
+        # an undo.
+        plan: dict[str, dict[str, Any]] = {}
+
+        def entry(source_id: str) -> dict[str, Any]:
+            context = contexts[source_id]
+            return plan.setdefault(
+                str(context["source"]["dataset_id"]),
+                {"context": context, "updates": [], "appends": [], "deletes": []},
             )
-            for prop, value in previous.items()
-            if prop not in edit_only and prop in reverse_map
-        }
-        work_path = await anyio.to_thread.run_sync(
-            storage.local_path, str(source["s3_location"])
-        )
-        async with user_connection(access.auth.user_id) as conn:
-            with tempfile.TemporaryDirectory() as tmp:
-                dest = os.path.join(tmp, "out.parquet")
-                work_schema, work_rows = await anyio.to_thread.run_sync(
-                    engine.write_rows,
-                    work_path,
-                    str(source["primary_key_column"]),
-                    [(str(instance["primary_key"]), column_updates)],
-                    [],
-                    dest,
-                    [],
+
+        # A subject the run deleted has no `instance`; the effects write it back.
+        if instance is not None:
+            entry(str(source["id"]))["updates"].append(
+                (str(instance["primary_key"]), _columns(contexts[str(source["id"])], previous))
+            )
+        for effect in effects:
+            work = entry(str(effect["source_id"]))
+            if effect["kind"] == "create":
+                work["deletes"].append(str(effect["primary_key"]))
+            elif effect["kind"] == "remove":
+                context = contexts[str(effect["source_id"])]
+                work["appends"].append({
+                    str(context["source"]["primary_key_column"]): str(effect["primary_key"]),
+                    **_columns(context, effect["properties"]),
+                })
+            else:
+                work["updates"].append(
+                    (str(effect["primary_key"]),
+                     _columns(contexts[str(effect["source_id"])], effect["before"]))
                 )
-                with open(dest, "rb") as handle:
-                    work_bytes = handle.read()
-            staged = await dataset_service.stage_version(
-                conn, storage,
-                dataset_id=UUID(str(source["dataset_id"])),
-                workspace_id=access.workspace_id,
-                parquet_bytes=work_bytes,
-                schema=work_schema,
-                row_count=work_rows,
-                produced_by_kind="action",
-                produced_by_id=undo_run_id,
-                created_by=access.auth.user_id,
-            )
-            committed = await dataset_service.commit_versions(conn, [staged])
+        async with user_connection(access.auth.user_id) as conn:
+            staged_all = []
+            for dataset_key, work in plan.items():
+                work_source = work["context"]["source"]
+                work_path = await anyio.to_thread.run_sync(
+                    storage.local_path, str(work_source["s3_location"])
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    dest = os.path.join(tmp, "out.parquet")
+                    work_schema, work_rows = await anyio.to_thread.run_sync(
+                        engine.write_rows,
+                        work_path,
+                        str(work_source["primary_key_column"]),
+                        work["updates"],
+                        work["appends"],
+                        dest,
+                        work["deletes"],
+                    )
+                    with open(dest, "rb") as handle:
+                        work_bytes = handle.read()
+                staged_all.append(await dataset_service.stage_version(
+                    conn, storage,
+                    dataset_id=UUID(dataset_key),
+                    workspace_id=access.workspace_id,
+                    parquet_bytes=work_bytes,
+                    schema=work_schema,
+                    row_count=work_rows,
+                    produced_by_kind="action",
+                    produced_by_id=undo_run_id,
+                    created_by=access.auth.user_id,
+                ))
+            committed = await dataset_service.commit_versions(conn, staged_all)
             dataset_version = int(
                 committed.get(str(source["dataset_id"]), {"current_version": 0})[
                     "current_version"
                 ]
             ) or None
             # The index after the record, the order decision 0008 gives: a
-            # failure here leaves an object whose stored properties are stale
+            # failure here leaves objects whose stored properties are stale
             # until the next sync, rather than a dataset that disagrees with
             # itself.
-            await instance_store.store_for(conn).update_properties(
-                search_prefix=prefix,
-                object_type_id=object_type_id,
-                instance_id=str(run["instance_id"]),
-                properties=previous,
-            )
+            store = instance_store.store_for(conn)
+            if removed_subject is None:
+                await store.update_properties(
+                    search_prefix=prefix,
+                    object_type_id=object_type_id,
+                    instance_id=str(run["instance_id"]),
+                    properties=previous,
+                )
+            for effect in effects:
+                type_id = UUID(effect["object_type_id"])
+                if effect["kind"] == "create":
+                    await store.delete_instances(
+                        search_prefix=prefix, object_type_id=type_id,
+                        source_id=UUID(str(effect["source_id"])),
+                        primary_keys=[str(effect["primary_key"])],
+                    )
+                elif effect["kind"] == "remove":
+                    await store.upsert_instances(
+                        search_prefix=prefix, object_type_id=type_id,
+                        source_id=UUID(str(effect["source_id"])),
+                        rows=[(str(effect["primary_key"]), effect["properties"])],
+                        synced_at=datetime.now(timezone.utc),
+                        declared=await ontology_service.list_properties(conn, type_id),
+                    )
+                else:
+                    # `before` merged back is the whole restore: a run can only
+                    # change another object's mapped properties (an edit-only
+                    # one is refused), and a synced object carries every mapped
+                    # one, so there is no key the run added for a merge to leave
+                    # behind. (Setting each of `after`'s keys back one by one
+                    # survived the sweep as equivalent.)
+                    await store.update_properties(
+                        search_prefix=prefix, object_type_id=type_id,
+                        instance_id=str(effect["instance_id"]),
+                        properties=effect["before"],
+                    )
     except DatasetEngineError as exc:
         ok, error = False, str(exc)
 
@@ -1533,21 +1685,36 @@ async def undo_action(
         await actions_service.close_run(
             conn, undo_run_id, ok=ok, dataset_version=dataset_version, error=error
         )
-        restored = await instance_store.store_for(conn).get_instance(
-            search_prefix=prefix, object_type_id=object_type_id,
-            instance_id=str(run["instance_id"]),
+        # A subject the run deleted is written back under its key, which is
+        # the handle that survives; its instance id is the store's to assign.
+        subject_key = str(instance["primary_key"] if instance else removed_subject["primary_key"])
+        restored = await _by_key(
+            instance_store.store_for(conn), prefix, object_type_id, subject_key,
         ) or instance
         if ok:
             # An undo is an edit like any other in p.402's trail - "even if
             # the corresponding ontology edits are reverted" the record of the
-            # edit stays, and this is the record of the revert beside it.
-            await object_edits.record(
-                conn, workspace_id=access.workspace_id, object_type_id=object_type_id,
-                primary_key=str(instance["primary_key"]), action_run_id=undo_run_id,
+            # edit stays, and this is the record of the revert beside it: of
+            # every object the undo wrote, as the apply records every object it
+            # wrote (§551). What the run created is deleted, what it deleted is
+            # created, what it changed goes from its after back to its before.
+            edits = object_edits.EditRecorder(
+                conn, workspace_id=access.workspace_id, action_run_id=undo_run_id,
                 edited_by=access.auth.user_id,
-                before=_parse_json(instance["properties"]),
-                after=_parse_json(restored["properties"]),
             )
+            if instance is not None and restored is not None:
+                await edits.record(
+                    object_type_id, subject_key,
+                    _parse_json(instance["properties"]), _parse_json(restored["properties"]),
+                )
+            for effect in effects:
+                type_id, key = UUID(effect["object_type_id"]), str(effect["primary_key"])
+                if effect["kind"] == "create":
+                    await edits.record(type_id, key, effect["properties"], None)
+                elif effect["kind"] == "remove":
+                    await edits.record(type_id, key, None, effect["properties"])
+                else:
+                    await edits.record(type_id, key, effect["after"], effect["before"])
         await audit.record(
             conn,
             organisation_id=access.auth.organisation_id,
@@ -2778,16 +2945,17 @@ async def execute_action(
                         action_run_id=run_id,
                         content=notice["content"],
                     )
-            updated_instance = await instance_store.store_for(conn).get_instance(
+            fresh_instance = await instance_store.store_for(conn).get_instance(
                 search_prefix=prefix, object_type_id=object_type_id,
                 instance_id=str(body.instance_id),
-            ) or instance
+            )
+            updated_instance = fresh_instance or instance
             # **p.154's Undo needs what the object was, recorded here or nowhere**
             # (§319). Once the dataset version is committed the appended rows look
             # like every other row, so nothing later can reconstruct the before —
-            # and `unsupported_reason` is the same argument for the objects this
-            # run created, deleted or touched besides its subject, which no reader
-            # of `action_runs` could count afterwards.
+            # and the same argument holds for the objects this run created,
+            # deleted or touched besides its subject (§551), which no reader of
+            # `action_runs` could reconstruct afterwards.
             #
             # Recorded only for a successful run: a failed one changed nothing, and
             # a "before" beside a failure would invite an undo of an edit that did
@@ -2797,10 +2965,13 @@ async def execute_action(
                     conn, run_id,
                     previous_properties=_parse_json(instance["properties"]),
                     applied_properties=_parse_json(updated_instance["properties"]),
-                    unsupported=action_revert.unsupported_reason(
-                        creations=len(creations),
-                        removals=len(removals),
-                        other_modifications=len(modifications),
+                    # p.156's revert of a delete, and of everything else this
+                    # run wrote besides its subject (§551): each object, with
+                    # what putting it back needs.
+                    effects=_revert_effects(
+                        creations=creations, removals=removals,
+                        modifications=modifications, modification_rows=modification_rows,
+                        sources_by_type=sources_by_type,
                     ),
                 )
                 # p.402's edit history (§470): every object this run changed,
@@ -2889,7 +3060,10 @@ async def execute_action(
                     run_row,
                     action_type=run_row,
                     actor_id=str(access.auth.user_id),
-                    current_properties=_parse_json(updated_instance["properties"]),
+                    # The subject as it is: gone, if this run deleted it (§551).
+                    current_properties=(
+                        _parse_json(fresh_instance["properties"]) if fresh_instance else None
+                    ),
                 )
             else:
                 undo_refusal = "This action did not succeed, so there is nothing to undo."
