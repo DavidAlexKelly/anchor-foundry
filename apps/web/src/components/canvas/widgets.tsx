@@ -146,6 +146,8 @@ import {
 } from "./derived-columns";
 import { derivedCell } from "@/lib/derived-values";
 import { unknownColumns, visibleColumns } from "./column-visibility";
+import { moved as movedColumn, storageKey as columnsKey, storedChoice, toggled as toggledColumn,
+  viewerColumnsOf } from "./viewer-columns";
 import { DerivedValue } from "@/components/derived-value";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import type { ConditionalRule } from "@/lib/types";
@@ -5378,6 +5380,7 @@ export function CanvasObjectTable({
   inlineEditByDefault = false,
   inlineEditOneClick = false,
   exportCsv = false,
+  hideColumnConfig = false,
   seriesFormats = null,
   seriesRules = null,
   seriesTransforms = null,
@@ -5475,6 +5478,8 @@ export function CanvasObjectTable({
   inlineEditOneClick?: boolean;
   /** p.223's "Enable export to CSV": from a row's right-click menu (§611). */
   exportCsv?: boolean;
+  /** p.225's "Hide column configuration": no viewer-side Configure columns (§612). */
+  hideColumnConfig?: boolean;
 }) {
   const {
     id: nodeId,
@@ -5597,8 +5602,51 @@ export function CanvasObjectTable({
       variableValues[columnsVariable],
     )
     : configured.length ? configured : null;
-  const properties = listed
-    ? listed.map((name) => all.find((p) => p.api_name === name)).filter((p) => !!p)
+  // p.222's Configure columns (§612): a viewer chooses among what the table
+  // offers, and the choice is theirs - kept in their browser per widget and
+  // type, never in the shared document. The builder always sees the table as
+  // configured, which is what it is building.
+  const offeredColumns = listed ?? all.map((p) => p.api_name);
+  const viewerConfigures = mode === "run" && !hideColumnConfig;
+  const choiceKey = columnsKey(nodeId, effectiveTypeId ? String(effectiveTypeId) : null);
+  const [viewerChoice, setViewerChoiceState] = useState<string[] | null>(null);
+  useEffect(() => {
+    try {
+      setViewerChoiceState(storedChoice(window.localStorage.getItem(choiceKey)));
+    } catch {
+      setViewerChoiceState(null);
+    }
+  }, [choiceKey]);
+  const setViewerChoice = (next: string[] | null) => {
+    setViewerChoiceState(next);
+    try {
+      if (next) window.localStorage.setItem(choiceKey, JSON.stringify(next));
+      else window.localStorage.removeItem(choiceKey);
+    } catch {
+      // Storage refused (a private window): the choice lasts the visit.
+    }
+  };
+  const [configuringColumns, setConfiguringColumns] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!configuringColumns) return;
+    const close = () => setConfiguringColumns(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [configuringColumns]);
+  const shownColumns = viewerConfigures && viewerChoice
+    ? viewerColumnsOf(offeredColumns, viewerChoice)
+    : listed;
+  const properties = shownColumns
+    ? shownColumns.map((name) => all.find((p) => p.api_name === name)).filter((p) => !!p)
     : all;
 
   // p.170's calculated columns for whichever type this table is showing.
@@ -5612,8 +5660,8 @@ export function CanvasObjectTable({
     () => columnsFor(derivedColumns, String(effectiveTypeId ?? "")),
     [derivedColumns, effectiveTypeId],
   );
-  const derived = listed
-    ? listed.map((name) => declaredDerived.find((c) => c.api_name === name))
+  const derived = shownColumns
+    ? shownColumns.map((name) => declaredDerived.find((c) => c.api_name === name))
         .filter((c) => !!c)
     : [];
 
@@ -5669,7 +5717,7 @@ export function CanvasObjectTable({
   // p.170 lets it reference an aggregation, and an expression over a value
   // the table never fetched is a column of blanks.
   const derivedWanted = derivedInputs(
-    listed ?? properties.map((p) => p.api_name), all, declaredDerived,
+    shownColumns ?? properties.map((p) => p.api_name), all, declaredDerived,
   );
   const needsDerived = derivedWanted.properties.length > 0
     || Object.keys(derivedWanted.derivations).length > 0;
@@ -5941,7 +5989,27 @@ export function CanvasObjectTable({
                       />
                     </th>
                   )}
-                  <th style={stick(leading)}>Key</th>
+                  <th style={stick(leading)}>
+                    Key
+                    {/* p.222: "selecting Configure columns from the arrow next
+                        to a column header". */}
+                    {viewerConfigures && (
+                      <button
+                        type="button"
+                        className="canvas-column-menu"
+                        data-testid="table-configure-columns"
+                        aria-label="Configure columns"
+                        title="Configure columns"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          const box = e.currentTarget.getBoundingClientRect();
+                          setConfiguringColumns(
+                            configuringColumns ? null : { x: box.left, y: box.bottom + 4 },
+                          );
+                        }}
+                      />
+                    )}
+                  </th>
                   {properties.map((p, column) => (
                     <th key={p.api_name} style={stick(column + 1 + leading)}>
                       {p.display_name || p.api_name}
@@ -6234,6 +6302,72 @@ export function CanvasObjectTable({
               </tbody>
             </table>
           </div>
+          {configuringColumns && (
+            <div
+              className="explore-menu canvas-columns-panel"
+              role="dialog"
+              aria-label="Configure columns"
+              data-testid="table-columns-panel"
+              style={{ position: "fixed", left: configuringColumns.x, top: configuringColumns.y }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              {(() => {
+                const current = viewerColumnsOf(offeredColumns, viewerChoice);
+                const rest = offeredColumns.filter((name) => !current.includes(name));
+                const labelOf = (name: string) =>
+                  all.find((p) => p.api_name === name)?.display_name
+                  || declaredDerived.find((c) => c.api_name === name)?.display_name
+                  || name;
+                return [...current, ...rest].map((name) => {
+                  const on = current.includes(name);
+                  return (
+                    <div key={name} className="canvas-columns-row"
+                      data-testid={`table-column-${name}`}>
+                      <label className="field-check">
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          // The last column stays: a table of keys alone is
+                          // one a viewer cannot find their way back from.
+                          disabled={on && current.length === 1}
+                          onChange={() =>
+                            setViewerChoice(toggledColumn(offeredColumns, viewerChoice, name))}
+                        />
+                        <span>{labelOf(name)}</span>
+                      </label>
+                      {on && (
+                        <span className="row-actions">
+                          <button type="button" className="btn quiet"
+                            aria-label={`Move ${labelOf(name)} left`}
+                            data-testid={`table-column-${name}-up`}
+                            onClick={() => setViewerChoice(
+                              movedColumn(offeredColumns, viewerChoice, name, -1))}>
+                            ↑
+                          </button>
+                          <button type="button" className="btn quiet"
+                            aria-label={`Move ${labelOf(name)} right`}
+                            data-testid={`table-column-${name}-down`}
+                            onClick={() => setViewerChoice(
+                              movedColumn(offeredColumns, viewerChoice, name, 1))}>
+                            ↓
+                          </button>
+                        </span>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
+              <button
+                type="button"
+                className="btn quiet"
+                data-testid="table-columns-reset"
+                disabled={!viewerChoice}
+                onClick={() => setViewerChoice(null)}
+              >
+                Reset to the table&rsquo;s columns
+              </button>
+            </div>
+          )}
           {rowMenu && (
             <div
               className="explore-menu canvas-row-menu"
@@ -6768,9 +6902,10 @@ function ObjectTableSettings() {
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
     inlineEditAction, inlineEditMapping, inlineEditVariables, inlineEditButtonText,
     inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules, seriesTransforms, seriesBaselines,
-    columnsVariable, exportCsv,
+    columnsVariable, exportCsv, hideColumnConfig,
     actions: { setProp },
   } = useNode((node) => ({
+    hideColumnConfig: node.data.props.hideColumnConfig,
     columnsVariable: node.data.props.columnsVariable,
     exportCsv: node.data.props.exportCsv,
     objectTypeId: node.data.props.objectTypeId,
@@ -7204,6 +7339,21 @@ function ObjectTableSettings() {
           </span>
         </>
       )}
+      {/* p.225's Hide column configuration (§612). */}
+      <label className="field-check">
+        <input
+          type="checkbox"
+          data-testid="table-hide-column-config"
+          checked={!!hideColumnConfig}
+          onChange={(e) =>
+            setProp((p: { hideColumnConfig: boolean }) => (p.hideColumnConfig = e.target.checked))}
+        />
+        <span>Hide column configuration</span>
+      </label>
+      <span className="field-hint">
+        p.222: without this, a reader can choose which of the table&rsquo;s columns to see and
+        in what order, from the arrow beside the Key header. Their choice stays in their browser.
+      </span>
       {/* p.223's Right-click menu (§611). */}
       <label className="field-check">
         <input
@@ -7432,7 +7582,7 @@ CanvasObjectTable.craft = {
     inlineEditButtonText: "",
     inlineEditByDefault: false, inlineEditOneClick: false,
     seriesFormats: null, seriesRules: null, seriesTransforms: null, seriesBaselines: null,
-    columnsVariable: null, exportCsv: false,
+    columnsVariable: null, exportCsv: false, hideColumnConfig: false,
   },
   related: { settings: ObjectTableSettings },
 };
