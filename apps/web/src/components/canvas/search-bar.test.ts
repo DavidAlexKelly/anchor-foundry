@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_MENU, availableProperties, placeholderOf, propertyScopeOf, searchMenu, suggestionDefinition,
-  suggestionsOf, type Property,
+  MAX_MENU, availableLinks, availableProperties, describeLinked, linkMenu, linkScopeOf,
+  placeholderOf, propertyScopeOf, searchMenu, suggestionDefinition, suggestionsOf,
+  withLinkedFilter, type Link, type Property,
 } from "./search-bar";
 
 const properties: Property[] = [
@@ -64,8 +65,8 @@ describe("what the menu offers for what is typed (§577)", () => {
     expect(searchMenu("CAP_MW", named, { keyword: false }).map((m) => m.label)).toEqual(["Capacity"]);
     const menu = searchMenu("OPEN", properties, { keyword: false });
     expect(menu).toEqual([{ kind: "property", property: "opened", label: "opened" }]);
-    expect(searchMenu("code", properties, { keyword: false }).map((m) => m.property))
-      .toEqual(["secret"]);
+    expect(searchMenu("code", properties, { keyword: false }).map((m) => m.label))
+      .toEqual(["Secret code"]);
     expect(searchMenu("zzz", properties, { keyword: false })).toEqual([]);
   });
 
@@ -127,5 +128,82 @@ describe("where the suggestions are read from (§577)", () => {
     expect(suggestionDefinition(set, "region", "  ")).toBe(set);
     expect(suggestionDefinition(null, "region", "so")).toBeNull();
     expect(suggestionDefinition("x", "region", "so")).toBe("x");
+  });
+});
+
+describe("links in the bar (§578)", () => {
+  const links: Link[] = [
+    { link_type_id: "L1", side_name: "Inspections", far_type_id: "T2",
+      far_type_display_name: "Inspection" },
+    { link_type_id: "L2", side_name: "Owner", far_type_id: "T3", far_type_display_name: "Company" },
+  ];
+
+  it("offers every link unless p.473 says a list or none", () => {
+    expect(linkScopeOf(undefined)).toBe("all");
+    expect(linkScopeOf("toString")).toBe("all");
+    expect(linkScopeOf("none")).toBe("none");
+    expect(linkScopeOf("custom")).toBe("custom");
+    expect(availableLinks(links, "all")).toEqual(links);
+    expect(availableLinks(links, "none")).toEqual([]);
+    expect(availableLinks(links, "custom", ["L2"])).toEqual([links[1]]);
+    expect(availableLinks(links, "custom")).toEqual([]);
+  });
+
+  it("lists the links after the properties, by either of their names", () => {
+    expect(searchMenu("", [], { keyword: true }, links)).toEqual([
+      { kind: "link", link: "L1", label: "Inspections (Inspection)" },
+      { kind: "link", link: "L2", label: "Owner (Company)" },
+    ]);
+    expect(searchMenu("comp", [], { keyword: false }, links).map((m) => m.label))
+      .toEqual(["Owner (Company)"]);
+    expect(searchMenu("INSP", [], { keyword: false }, links).map((m) => m.label))
+      .toEqual(["Inspections (Inspection)"]);
+    expect(searchMenu("owner", [], { keyword: false }, links).map((m) => m.label))
+      .toEqual(["Owner (Company)"]);
+    const menu = searchMenu("re", properties, { keyword: false }, links);
+    expect(menu.map((m) => m.kind)).toEqual(["property", "property"]);
+  });
+
+  it("offers has-any first, then the linked type's properties", () => {
+    const far: Property[] = [
+      { api_name: "status", display_name: "Status", data_type: "string" },
+      { api_name: "score", data_type: "integer" },
+    ];
+    expect(linkMenu("", links[0]!, far)).toEqual([
+      { kind: "has_link", label: "Has any Inspections" },
+      { kind: "far_property", property: "status", label: "Status" },
+      { kind: "far_property", property: "score", label: "score" },
+    ]);
+    expect(linkMenu(" STAT ", links[0]!, far)).toEqual([
+      { kind: "has_link", label: "Has any Inspections" },
+      { kind: "far_property", property: "status", label: "Status" },
+    ]);
+    const many = Array.from({ length: 30 }, (_, n) => ({ api_name: `p${n}` }));
+    expect(linkMenu("", links[0]!, many)).toHaveLength(MAX_MENU);
+  });
+
+  it("gathers a link's filters into its one clause", () => {
+    const kept = { property: "region", op: "eq", value: "north" };
+    const one = withLinkedFilter([kept], "L1", { property: "status", op: "eq", value: "open" });
+    expect(one).toEqual([kept, { property: "L1", op: "has_link",
+      value: { filters: [{ property: "status", op: "eq", value: "open" }] } }]);
+    const two = withLinkedFilter(one, "L1", { property: "score", op: "gte", value: 3 });
+    expect(two).toEqual([kept, { property: "L1", op: "has_link", value: { filters: [
+      { property: "status", op: "eq", value: "open" }, { property: "score", op: "gte", value: 3 }] } }]);
+  });
+
+  it("names a link's pill in the link's words", () => {
+    expect(describeLinked({ property: "L1", op: "has_link", value: { filters: [] } }, links))
+      .toBe("Has Inspections");
+    expect(describeLinked({ property: "L1", op: "has_link", value: { filters: [
+      { property: "status", op: "eq", value: "open" },
+      { property: "score", op: "gte", value: 3 }] } }, links))
+      .toBe("Has Inspections where status is open and score is at least 3");
+    expect(describeLinked({ property: "L9", op: "has_link", value: {} }, links)).toBeNull();
+    expect(describeLinked({ property: "region", op: "eq", value: "x" }, links)).toBeNull();
+    // Only a link's own clause: another on a property that happens to share
+    // a link's id is not one.
+    expect(describeLinked({ property: "L1", op: "eq", value: "x" }, links)).toBeNull();
+    expect(describeLinked({ property: "L2", op: "has_link", value: null }, links)).toBe("Has Owner");
   });
 });
