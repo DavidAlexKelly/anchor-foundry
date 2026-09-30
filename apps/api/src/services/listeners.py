@@ -45,10 +45,13 @@ RATE_PER_SECOND = 100
 #: nothing to check, for a sender that signs nothing: the endpoint's random
 #: path is then the only secret, and the screen says so.
 VERIFICATIONS = ("none", "basic", "header_secret", "hmac_sha256", "hmac_sha256_base64",
-                 "slack_v0", "stripe_v1", "query_token")
+                 "slack_v0", "stripe_v1", "query_token",
+                 # §591: the three further schemes p.262's named listeners sign with.
+                 "pagerduty_v1", "zendesk", "airtable")
 
 #: The schemes that read a named header, which is then stored and redacted.
-HEADER_SCHEMES = ("header_secret", "hmac_sha256", "hmac_sha256_base64", "slack_v0", "stripe_v1")
+HEADER_SCHEMES = ("header_secret", "hmac_sha256", "hmac_sha256_base64", "slack_v0", "stripe_v1",
+                  "pagerduty_v1", "zendesk", "airtable")
 
 #: How stale a signed timestamp may be (Slack and Stripe both sign one, and
 #: both say five minutes), so a captured request cannot be replayed later.
@@ -72,6 +75,19 @@ LISTENER_TYPES: dict[str, dict[str, Any]] = {
     # p.274: "enter your shared secret into the URL field as a query parameter
     # after the listener endpoint URL. Example: ?token=<YOUR_TOKEN>".
     "pubsub": {"label": "Google Cloud Pub/Sub", "schemes": {"query_token": None}},
+    # §591, more of p.262's table, each with the scheme its sender documents
+    # (p.265: "the security protocols laid out by those external systems").
+    # Bitbucket and Meta sign as GitHub does, a hex HMAC-SHA256 of the body.
+    "bitbucket": {"label": "Bitbucket", "schemes": {"hmac_sha256": "X-Hub-Signature"}},
+    "meta": {"label": "Meta", "schemes": {"hmac_sha256": "X-Hub-Signature-256"}},
+    # Event Grid delivers a shared key in `aeg-sas-key`.
+    "azure_event_grid": {"label": "Azure Event Grid",
+                         "schemes": {"header_secret": "aeg-sas-key"}},
+    # Jotform signs nothing, so its address carries a token or nothing does.
+    "jotform": {"label": "Jotform", "schemes": {"query_token": None, "none": None}},
+    "pagerduty": {"label": "PagerDuty", "schemes": {"pagerduty_v1": "X-PagerDuty-Signature"}},
+    "zendesk": {"label": "Zendesk", "schemes": {"zendesk": "X-Zendesk-Webhook-Signature"}},
+    "airtable": {"label": "Airtable", "schemes": {"airtable": "X-Airtable-Content-MAC"}},
 }
 
 #: Headers never stored, because they are how a sender authenticates. p.265:
@@ -110,6 +126,13 @@ def check_configuration(verification: str, header: str | None, secret: str | Non
             else f"{verification} verification reads the endpoint's query string, so it takes no header")
     if verification == "basic" and ":" not in secret:
         raise ListenerError("basic verification's secret is username:password")
+    if verification == "airtable":
+        # Airtable hands out the MAC secret base64-encoded, and signs with the
+        # bytes it encodes.
+        try:
+            base64.b64decode(secret, validate=True)
+        except binascii.Error as exc:
+            raise ListenerError("an Airtable MAC secret is the base64 Airtable gave") from exc
 
 
 def resolve(listener_type: str, verification: str | None, header: str | None,
@@ -135,6 +158,19 @@ def resolve(listener_type: str, verification: str | None, header: str | None,
         header = fixed
     check_configuration(chosen, header, secret)
     return chosen, header
+
+
+def _iso_signed_at(stamp: str, now: float) -> bool:
+    """`_signed_at` for a timestamp written as ISO 8601, as Zendesk sends it
+    (`...Z`, which `fromisoformat` reads as UTC from Python 3.11). One with
+    no zone says no moment at all, so it is refused rather than guessed."""
+    try:
+        when = datetime.fromisoformat(stamp)
+    except ValueError:
+        return False
+    if when.tzinfo is None:
+        return False
+    return abs(now - when.timestamp()) <= TOLERANCE_SECONDS
 
 
 def _signed_at(stamp: str, now: float) -> bool:
@@ -194,6 +230,25 @@ def verify(verification: str, header: str | None, secret: str | None,
                             hashlib.sha256).hexdigest()
         return any(hmac.compare_digest(v.encode(), expected.encode())
                    for k, v in parts if k.strip() == "v1")
+    if verification == "pagerduty_v1":
+        # `v1=<hex>,v1=<hex>`: one signature per secret the webhook has, any of
+        # which will do, each a hex HMAC-SHA256 of the body.
+        expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        return any(hmac.compare_digest(part.strip()[3:].encode(), expected.encode())
+                   for part in given.split(",") if part.strip().startswith("v1="))
+    if verification == "zendesk":
+        # base64 HMAC-SHA256 of `{timestamp}{body}`, the timestamp beside it in
+        # ISO 8601, so a stale one is a replay.
+        stamp = headers.get("x-zendesk-webhook-signature-timestamp", "")
+        if not _iso_signed_at(stamp, now):
+            return False
+        digest = hmac.new(secret.encode(), stamp.encode() + body, hashlib.sha256).digest()
+        return hmac.compare_digest(given.encode(), base64.b64encode(digest))
+    if verification == "airtable":
+        # `hmac-sha256=<hex>`, keyed with the bytes the base64 secret encodes.
+        key = base64.b64decode(secret)
+        expected = "hmac-sha256=" + hmac.new(key, body, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(given.encode(), expected.encode())
     # hmac_sha256: a hex digest of the body, with or without GitHub's
     # `sha256=` prefix.
     if given.lower().startswith("sha256="):

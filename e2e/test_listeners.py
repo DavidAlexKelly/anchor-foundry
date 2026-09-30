@@ -180,6 +180,42 @@ def test_a_named_sender_asks_only_for_its_secret(page, api) -> None:
 
 
 
+def test_airtable_asks_for_its_base64_secret_and_signs_with_its_bytes(page, api) -> None:
+    """§591, p.262's Airtable: its MAC secret is handed out base64-encoded,
+    so the form says so before the server would, and a request Airtable
+    signs with the bytes it encodes is taken."""
+    import base64
+    import hashlib
+    import hmac
+
+    mod = Module(api, "Listeners airtable")
+    open_connections(page, mod)
+    name = f"Bases {mod.tag}"
+    page.get_by_test_id("listener-new").click()
+    page.get_by_test_id("listener-name").fill(name)
+    page.get_by_test_id("listener-type").select_option("airtable")
+    expect(page.get_by_test_id("listener-verification")).to_have_value("airtable")
+    page.get_by_test_id("listener-secret").fill("not base64!")
+    expect(page.get_by_test_id("listener-problem")).to_have_text(
+        "Airtable's MAC secret is the base64 text Airtable gave.")
+    expect(page.get_by_test_id("listener-create")).to_be_disabled()
+    key = b"\x00airtable\xfe"
+    page.get_by_test_id("listener-secret").fill(base64.b64encode(key).decode())
+    expect(page.get_by_test_id("listener-problem")).to_have_count(0)
+    page.get_by_test_id("listener-create").click()
+
+    listener = card(page, name)
+    expect(listener.get_by_test_id("listener-verification-text")).to_have_text(
+        "Verification: Airtable · Airtable MAC secret (X-Airtable-Content-MAC)", timeout=15000)
+    listener.get_by_test_id("listener-toggle").click()
+    expect(listener.get_by_test_id("listener-status")).to_contain_text("Running")
+    url = listener.get_by_test_id("listener-url").inner_text()
+    body = b'{"base": {"id": "app1"}}'
+    mac = "hmac-sha256=" + hmac.new(key, body, hashlib.sha256).hexdigest()
+    assert post(url, body, {"X-Airtable-Content-MAC": mac}) == 200
+    assert post(url, body) == 401
+
+
 def test_archiving_now_makes_the_backing_dataset(page, api) -> None:
     """§519, p.264: "Every few minutes, the listener event stream will archive
     into a backing dataset. This dataset can be used like any other dataset".
