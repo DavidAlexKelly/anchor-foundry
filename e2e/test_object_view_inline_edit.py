@@ -123,3 +123,28 @@ def test_the_workshop_object_view_widget_edits_in_a_running_module(page, api, va
     expect(view.locator('tr[data-property="site"]')).to_contain_text("east")
     eventually(stored(api, valves), lambda v: v.get("site") == "east",
                what="the edit saved to the object")
+
+
+def test_an_enumerated_parameter_is_a_dropdown_in_place(page, api, valves) -> None:
+    """p.241's in-cell dropdown, in the same control's other home (§597)."""
+    got = api.call("GET", f"/workspaces/{valves.workspace_id}/object-types/"
+                          f"{valves.object_type_id}")
+    action_id = next(p["inline_action_type_id"] for p in got["properties"]
+                     if p["api_name"] == "site")
+    api.call("PUT", f"/workspaces/{valves.workspace_id}/action-types/{action_id}/definition", {
+        "parameters": [
+            {"api_name": "status", "display_name": "Status", "data_type": "string"},
+            {"api_name": "site", "display_name": "Site", "data_type": "string",
+             "value_constraint": {"kind": "enum", "values": ["north", "south", "west"]}}],
+        "rules": [{"kind": "modify_object", "config": {"property": p, "parameter": p}}
+                  for p in ("status", "site")],
+        "criteria": []})
+    open_object(page, valves)
+    view = page.get_by_test_id("standard-object-view")
+    view.get_by_role("button", name="Edit Site").click()
+    choice = view.get_by_test_id("property-inline-edit").locator("select")
+    expect(choice.locator("option")).to_contain_text(["north", "south", "west"])
+    choice.select_option("west")
+    view.get_by_role("button", name="Save").click()
+    eventually(stored(api, valves), lambda v: v.get("site") == "west",
+               what="the chosen option saved")

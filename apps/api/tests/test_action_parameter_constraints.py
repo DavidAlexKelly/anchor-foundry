@@ -273,6 +273,24 @@ def test_p8s_action_writes_only_its_options(client, fx, ticket):
     assert done.json()["instance"]["properties"]["priority"] == "P0"
 
 
+def test_p241_an_inline_edit_batch_is_held_to_the_constraint(client, fx, ticket):
+    """Workshop p.241: "If a parameter or action has validation criteria …
+    these validation criteria will be enforced" - by the batch route an
+    Object Table's inline edits submit through, whole or not at all (§597)."""
+    action = make_action(client, fx, ticket)
+    assert define(client, fx, action, [param("priority", value_constraint=PRIORITIES)],
+                  [writes("priority", "priority")]).status_code == 200
+    r = client.post(f"{abase(fx)}/{action}/execute-batch", headers=hdr(fx.editor_sub),
+                    json={"edits": [{"instance_id": ticket["instance_id"],
+                                     "values": {"priority": "P7"}}]})
+    assert r.status_code == 422, r.text
+    assert "'priority': 'P7' is not one of P0, P1, P2" in r.text
+    r = client.post(f"{abase(fx)}/{action}/execute-batch", headers=hdr(fx.editor_sub),
+                    json={"edits": [{"instance_id": ticket["instance_id"],
+                                     "values": {"priority": "P1"}}]})
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+
+
 def test_check_says_so_before_submitting(client, fx, ticket):
     """Workshop p.513's check runs `bind_parameters`, so it answers too."""
     action = make_action(client, fx, ticket)
