@@ -95,7 +95,9 @@ def one_type(tag: str, **over) -> dict:
              # db 0088, for the line above's reason — the same test caught this
              # column the same way, which is the contract working twice.
              "reducers": None,
-             "status": "experimental", "deprecation": None},
+             "status": "experimental", "deprecation": None,
+             # §594, for the same test's reason again.
+             "inline_action": None},
         ],
         **over,
     }

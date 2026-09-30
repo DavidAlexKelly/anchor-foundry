@@ -368,6 +368,7 @@ import {
   withArea as withMapArea, withDrawTool,
 } from "./map-area";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
+import { PropertyInlineEdit } from "@/components/property-inline-edit";
 import {
   constraintNote, fieldChoices, fieldNotes, multipleChoice,
 } from "@/lib/parameter-constraint";
@@ -7460,12 +7461,14 @@ CanvasObjectSetTitle.craft = {
  * is the fetch — one object out of a set, plus the type that says what its
  * properties are called and how to draw each one.
  *
+ * **p.266's inline editing** (§594): a property whose inline action is set in
+ * the Ontology Manager, and which that action still backs, can be edited in
+ * place in a running module - one submission of the action for one object,
+ * whose other parameters keep the object's values (`action-types` p.135).
+ *
  * **Not built, and named rather than approximated**: p.265's "Load data from
- * scenario" (there are no Scenarios here), p.266's security markings (no
- * markings), and p.266's **inline editing**, which it says is configured "by
- * configuring an inline action for the property in the Ontology Manager" - that
- * is `workshop.md`'s build-order item 6, and a Property List that offered an
- * edit no action backs would be a control that does nothing.
+ * scenario" (there are no Scenarios here) and p.266's security markings (no
+ * markings).
  */
 export function CanvasPropertyList({
   objectSetVariable = null,
@@ -7485,7 +7488,7 @@ export function CanvasPropertyList({
   const {
     connectors: { connect, drag },
   } = useNode();
-  const { workspaceId } = useCanvasEnv();
+  const { workspaceId, projectId, mode } = useCanvasEnv();
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending } = useCanvasVariables();
 
@@ -7542,6 +7545,18 @@ export function CanvasPropertyList({
                   style={conditionalStyle(p.conditional_format, instance.properties)}
                   value={instance.properties[p.api_name]}
                 />
+                {mode === "run" && p.inline_action_type_id && (
+                  <PropertyInlineEdit
+                    workspaceId={workspaceId}
+                    projectId={projectId}
+                    property={p}
+                    instanceId={instance.id}
+                    value={instance.properties[p.api_name] ?? null}
+                    // Every reader of the object in the module, as the
+                    // Object Table's save refreshes.
+                    refreshKeys={[["canvas-object-table"], ["canvas-object-set"]]}
+                  />
+                )}
               </dd>
             </div>
           ))}

@@ -1919,6 +1919,10 @@ export interface ObjectTypeProperty {
   value_constraint: ValueConstraint | null;
   status: OntologyStatus;
   deprecation: Deprecation | null;
+  /** The action an edit in place submits (`workshop` p.266; §594; db 0126).
+   * Null when the property is not editable in place. Whether the action still
+   * writes it is re-read where it is used (`property-inline-action.ts`). */
+  inline_action_type_id?: string | null;
 }
 
 /** One property definition used by several object types (Foundry
