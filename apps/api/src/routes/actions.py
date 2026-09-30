@@ -2178,6 +2178,51 @@ async def _run_webhooks(
     return outputs, failure
 
 
+async def _log_targets(
+    conn, action_type: dict, link_types: dict
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Where a submission's log entry and its links to the edited objects go
+    (§554), or `(None, None)` for an action with no log. Shared by a single
+    submission and a batch of inline edits (§587), which are each p.167's
+    "submitting an action".
+
+    Refuses before anything is written when the log cannot be written - p.167:
+    "users need the appropriate permissions for the action log object type".
+    """
+    log_source: dict[str, Any] | None = None
+    log_edits: dict[str, Any] | None = None
+    if action_type.get("log_object_type_id"):
+        log_source = await fetch_one(conn, """
+            SELECT s.id, s.dataset_id, s.primary_key_column, s.column_mappings,
+                   d.s3_location
+              FROM object_type_sources s JOIN datasets d ON d.id = s.dataset_id
+             WHERE s.object_type_id = :tid
+             ORDER BY s.created_at LIMIT 1
+        """, {"tid": str(action_type["log_object_type_id"])})
+        log_link = link_types.get(str(action_type.get("log_link_type_id")))
+        edits_at = log_link and log_link.get("join_dataset_id") and await fetch_one(
+            conn, "SELECT s3_location FROM datasets WHERE id = :id",
+            {"id": str(log_link["join_dataset_id"])},
+        )
+        # Only the log's own source is asked about: its join table was
+        # made beside it, in the same project, so a reader who can see
+        # one can see the other.
+        if log_source is None:
+            raise ForbiddenError(
+                "this action is logged into an action log you cannot write, so "
+                "it cannot be applied"
+            )
+        if edits_at:
+            log_edits = {
+                "dataset_id": str(log_link["join_dataset_id"]),
+                "s3_location": str(edits_at["s3_location"]),
+                "from_column": str(log_link["join_from_column"]),
+                "to_column": str(log_link["join_to_column"]),
+                "to_type_id": str(log_link["to_object_type_id"]),
+            }
+    return log_source, log_edits
+
+
 async def _pre_edit_objects(
     conn,
     *,
@@ -3038,37 +3083,7 @@ async def execute_action(
             # log the person applying it cannot write is refused before anything
             # is written - p.167: "users need the appropriate permissions for
             # the action log object type".
-            log_source: dict[str, Any] | None = None
-            log_edits: dict[str, Any] | None = None
-            if action_type.get("log_object_type_id"):
-                log_source = await fetch_one(conn, """
-                    SELECT s.id, s.dataset_id, s.primary_key_column, s.column_mappings,
-                           d.s3_location
-                      FROM object_type_sources s JOIN datasets d ON d.id = s.dataset_id
-                     WHERE s.object_type_id = :tid
-                     ORDER BY s.created_at LIMIT 1
-                """, {"tid": str(action_type["log_object_type_id"])})
-                log_link = link_types.get(str(action_type.get("log_link_type_id")))
-                edits_at = log_link and log_link.get("join_dataset_id") and await fetch_one(
-                    conn, "SELECT s3_location FROM datasets WHERE id = :id",
-                    {"id": str(log_link["join_dataset_id"])},
-                )
-                # Only the log's own source is asked about: its join table was
-                # made beside it, in the same project, so a reader who can see
-                # one can see the other.
-                if log_source is None:
-                    raise ForbiddenError(
-                        "this action is logged into an action log you cannot write, so "
-                        "it cannot be applied"
-                    )
-                if edits_at:
-                    log_edits = {
-                        "dataset_id": str(log_link["join_dataset_id"]),
-                        "s3_location": str(edits_at["s3_location"]),
-                        "from_column": str(log_link["join_from_column"]),
-                        "to_column": str(log_link["join_to_column"]),
-                        "to_type_id": str(log_link["to_object_type_id"]),
-                    }
+            log_source, log_edits = await _log_targets(conn, action_type, link_types)
             run_id = await actions_service.open_run(
                 conn,
                 action_type_id=action_type_id,
@@ -3654,6 +3669,16 @@ async def execute_batch(
         constrained = ontology_service.constrained_properties(properties)
         user = await actions_service.criteria_user(conn, access.auth.user_id)
         link_types = await actions_service.link_types_for(conn, access.workspace_id)
+        # p.167's action log (§587): each edit in a batch is a submission of
+        # the action - p.135's inline edits are actions "validated and
+        # submitted in bulk" - so each gets its own entry, written in the
+        # batch's one commit. Refused here, before anything is written, when
+        # the log cannot be.
+        log_source, log_edits = await _log_targets(conn, action_type, link_types)
+        log_actor = (
+            await _user_card(conn, access.auth.user_id)
+            if log_source is not None and action_type.get("log_summary") else None
+        )
 
         # Two instances of one type can come from different mappings, so the
         # source is a per-row lookup - cached, because a table's rows usually
@@ -3724,6 +3749,12 @@ async def execute_batch(
                 "source": source,
                 "values": values,
                 "before": stored,
+                "bound": bound,
+                # The objects as they were, for this edit's log entry (§586).
+                "pre_edit": await _pre_edit_objects(
+                    conn, action_type=action_type, bound=bound, subject=stored,
+                    object_type_id=object_type_id, prefix=prefix,
+                ) if log_source is not None else {},
                 # Edit-only properties have no column by definition (p.113), so
                 # they reach the instance store below and nothing else.
                 "column_updates": {
@@ -3748,6 +3779,22 @@ async def execute_batch(
                 submitted_values=row["values"],
                 batch_id=batch_id,
             )
+            if log_source is not None:
+                row["log_row"] = action_log.log_row(
+                    run_id=row["run_id"], action_type=action_type,
+                    user_id=access.auth.user_id,
+                    at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    # p.168's edited objects: this row's, when it changed it.
+                    edited=[row["primary_key"]] if row["values"] else [],
+                    bound=row["bound"],
+                    columns=set(_parse_json(log_source["column_mappings"])),
+                    extra=action_log.extra_columns(
+                        summary=action_type.get("log_summary"),
+                        references=_parse_json(
+                            action_type.get("log_reference_properties")) or {},
+                        values=row["bound"], objects=row["pre_edit"], actor=log_actor,
+                    ),
+                )
 
     ok, error = True, None
     dataset_versions: dict[str, int] = {}
@@ -3760,15 +3807,22 @@ async def execute_batch(
         for row in planned:
             entry = plan.setdefault(
                 str(row["source"]["dataset_id"]),
-                {"source": row["source"], "updates": []},
+                {"source": row["source"], "updates": [], "appends": []},
             )
             if row["column_updates"]:
                 entry["updates"].append((row["primary_key"], row["column_updates"]))
+        # The log's entries, appended to its dataset in the same commit
+        # (§587), so the batch and its record cannot disagree.
+        if log_source is not None:
+            plan.setdefault(
+                str(log_source["dataset_id"]),
+                {"source": dict(log_source), "updates": [], "appends": []},
+            )["appends"].extend(row["log_row"] for row in planned)
 
         staged_all = []
         async with user_connection(access.auth.user_id) as conn:
             for dataset_key, work in plan.items():
-                if not work["updates"]:
+                if not work["updates"] and not work["appends"]:
                     # Every row this dataset carries wrote edit-only properties
                     # only (p.113). Staging a version identical to the one
                     # before it would be a lineage entry for a file that did
@@ -3785,7 +3839,7 @@ async def execute_batch(
                         work_path,
                         str(work_source["primary_key_column"]),
                         work["updates"],
-                        [],
+                        work["appends"],
                         dest,
                         [],
                     )
@@ -3807,9 +3861,31 @@ async def execute_batch(
                         created_by=access.auth.user_id,
                     )
                 )
+            # p.167's "automatically linked to all edited objects" (§587): a
+            # pair per entry and the object it edited, in the log's join table.
+            if log_edits is not None and log_edits["to_type_id"] == str(object_type_id):
+                staged, _changes = await _write_pairs(
+                    conn, storage, access, batch_id, log_edits["dataset_id"], log_edits,
+                    add=[(str(row["run_id"]), row["primary_key"])
+                         for row in planned if row["values"]],
+                    remove=[],
+                )
+                if staged is not None:
+                    staged_all.append(staged)
             committed = await dataset_service.commit_versions(conn, staged_all)
             for dataset_key, record in committed.items():
                 dataset_versions[str(dataset_key)] = int(record["current_version"])
+            if log_source is not None:
+                # The entries findable at once, as a single submission's is.
+                log_type = UUID(str(action_type["log_object_type_id"]))
+                await instance_store.store_for(conn).upsert_instances(
+                    search_prefix=prefix, object_type_id=log_type,
+                    source_id=UUID(str(log_source["id"])),
+                    rows=[(str(row["run_id"]), action_log.properties_of(row["log_row"]))
+                          for row in planned],
+                    synced_at=datetime.now(timezone.utc),
+                    declared=await ontology_service.list_properties(conn, log_type),
+                )
             for row in planned:
                 if not row["values"]:
                     continue
