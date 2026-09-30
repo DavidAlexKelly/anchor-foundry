@@ -1671,14 +1671,24 @@ def test_a_struct_is_neither_routable_nor_savable() -> None:
                              interface=True, url_behavior="always")})
 
 
-def test_an_array_of_structs_is_still_refused_and_the_reason_has_moved_on() -> None:
-    """p.132 lists struct arrays among the loopable types and this platform
-    does not loop over them yet - but the refusal used to say the *model* was
-    missing, and as of §247 it is not. §213's rule: when a change makes
-    something newly expressible, the sentences that said it was impossible are
-    the ones to go and read."""
-    with pytest.raises(wv.VariableError, match=r"does not loop over them yet"):
-        wv.parse({"v_a": var("v_a", kind="array", label="A", element="struct")})
+def test_an_array_of_structs_is_an_array_a_loop_can_iterate() -> None:
+    """p.132 lists struct arrays among the loopable types. Refused until §570,
+    first for want of a struct kind and then, after §247 built one, for want
+    of the loop handing an entry to it; now it is an ordinary element."""
+    parsed = wv.parse({"v_a": var("v_a", kind="array", label="A", element="struct",
+                                  default='[{"name": "Kit"}]')})
+    assert parsed["v_a"].element == "struct"
+    # The panel's typed JSON is the list it spells.
+    assert parsed["v_a"].default == [{"name": "Kit"}]
+    # Other text is left as it is, as before.
+    assert wv.parse({"v_b": var("v_b", kind="array", label="B", default="a, b")})["v_b"].default \
+        == "a, b"
+
+
+def test_an_array_of_structs_cannot_be_in_the_url() -> None:
+    with pytest.raises(wv.VariableError, match="an array of structs and cannot be in the URL"):
+        wv.parse({"v_a": {"id": "v_a", "kind": "array", "label": "A", "element": "struct",
+                          "external_id": "a", "interface": {}, "url_behavior": "always"}})
 
 
 def test_an_aggregation_over_a_set_is_still_refused_and_says_why() -> None:
@@ -3451,16 +3461,9 @@ def test_an_array_may_carry_no_element_at_all() -> None:
     assert wv.parse({"v_a": {"id": "v_a", "kind": "array", "label": "A"}})["v_a"].element is None
 
 
-def test_a_struct_element_is_refused_with_its_own_reason() -> None:
-    """p.132 lists struct arrays, so somebody reading the spec will try it -
-    and "expected one of string, number…" would read as the spec being wrong
-    rather than as this platform being behind."""
-    with pytest.raises(wv.VariableError, match="does not loop over them yet"):
-        wv.parse({"v_a": {"id": "v_a", "kind": "array", "label": "A", "element": "struct"}})
-
-
 def test_an_unknown_element_is_refused() -> None:
-    with pytest.raises(wv.VariableError, match="expected one of"):
+    with pytest.raises(wv.VariableError, match="expected one of string, number, boolean, date, "
+                                              "timestamp, struct"):
         wv.parse({"v_a": {"id": "v_a", "kind": "array", "label": "A", "element": "widget"}})
 
 
@@ -4123,3 +4126,12 @@ def test_an_events_reads_survive_whatever_a_document_holds() -> None:
         assert got <= {"v_a"}, events
     nested = {"e": {"trigger": {"node": "btn"}, "effects": [{"config": {"xs": [["v_a"]]}}]}}
     assert wv.displayed(_event_layout(), variables, {"btn"}, events=nested) == {"v_a"}
+
+
+def test_the_builder_offers_every_array_element_the_server_takes() -> None:
+    import re
+
+    source = _variables_panel_source()
+    line = re.search(r"const ARRAY_ELEMENTS = \[(.*?)\] as const;", source)
+    assert line, "ARRAY_ELEMENTS not found in VariablesPanel.tsx"
+    assert re.findall(r'"([^"]+)"', line.group(1)) == list(wv.ELEMENTS)
