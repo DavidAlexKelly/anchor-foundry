@@ -1,7 +1,8 @@
 "use client";
 
 import {
-  legendEntryAt, legendInset, segmentLayout, segmentName, type SegmentLegendPosition,
+  legendEntryAt, legendInset, segmentLayout, segmentName, stackSegments,
+  type SegmentLegendPosition,
   type SegmentMode, type Segmented,
 } from "./chart-segments";
 import type { AxisSide } from "./chart-series";
@@ -845,10 +846,13 @@ export function SegmentedBarChart({
  * no value for a category follows p.282's null display, as a single line does.
  */
 export function MultiLineChart({
-  data, drill, axis = CALCULATED, nulls = "ignored", showLegend = true,
-  legend = "bottom", titles, valueText, categoryText, sides,
+  data: given, drill, axis = CALCULATED, nulls = "ignored", showLegend = true,
+  legend = "bottom", titles, valueText, categoryText, sides, fill = "line",
 }: {
   data: Segmented;
+  /** p.281's Area options (§601): shade beneath each line, or stack the
+   * segments so each band is one segment's values. */
+  fill?: "line" | "area" | "stacked";
   drill?: Drill;
   /** p.283's second value axis (§542): which side each series is read on. */
   sides?: AxisSide[];
@@ -860,6 +864,9 @@ export function MultiLineChart({
   valueText?: (value: number) => string;
   categoryText?: (label: string) => string;
 }) {
+  // Stacked draws each line at the running total; the dots still say each
+  // segment's own value.
+  const data = fill === "stacked" ? stackSegments(given) : given;
   const inset = legendInset(showLegend ? data.segments.length : 0, legend);
   const frame = plotArea(titles);
   const area = {
@@ -895,9 +902,23 @@ export function MultiLineChart({
       const x = area.x + step * i;
       path += `${path ? " " : ""}${open ? "L" : "M"} ${x} ${y}`;
       open = true;
-      dots.push({ x, y, category, value });
+      dots.push({ x, y, category, value: given.values[i]?.[series] ?? value });
     });
     return { path, dots };
+  });
+  // p.281: Area shades each line down to the axis's base; Stacked shades the
+  // band between a segment's line and the one below it, the first down to
+  // the base.
+  const baseY = area.y + area.h - s.base * area.h;
+  const bands = fill === "line" ? [] : lines.map((line, series) => {
+    const first = line.dots[0];
+    const last = line.dots[line.dots.length - 1];
+    if (!first || !last) return "";
+    const below = fill === "stacked" && series > 0 ? lines[series - 1]!.dots : [];
+    const floor = below.length > 0
+      ? [...below].reverse().map((d) => `${d.x} ${d.y}`)
+      : [`${last.x} ${baseY}`, `${first.x} ${baseY}`];
+    return `M ${line.dots.map((d) => `${d.x} ${d.y}`).join(" L ")} L ${floor.join(" L ")} Z`;
   });
   return (
     <svg
@@ -915,6 +936,17 @@ export function MultiLineChart({
         leftX={12 + inset.left}
       />
       <Plot area={area} axis={axis}>
+        {bands.map((band, series) => band && (
+          <path
+            key={`b${series}`}
+            data-testid="chart-series-area"
+            data-series={data.segments[series]}
+            d={band}
+            fill={PALETTE[series % PALETTE.length]}
+            fillOpacity={fill === "stacked" ? 0.45 : 0.18}
+            stroke="none"
+          />
+        ))}
         {lines.map((line, series) => (
           <g key={series} data-testid="chart-series-line" data-series={data.segments[series]}>
             <path
