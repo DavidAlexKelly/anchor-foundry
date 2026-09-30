@@ -1,7 +1,7 @@
 /** p.11's Layout menu, and the hit test that has to agree with it (§424). */
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_LAYOUT, GAP_X, GAP_Y, LAYOUTS, NODE_H, NODE_W, PAD, canvasOf, dragTo, layoutIn,
+  DEFAULT_LAYOUT, GAP_X, GAP_Y, LAYOUTS, NODE_H, NODE_W, PAD, canvasOf, dragTo, layoutIn, panTo, ZOOM_MARGIN,
   layoutOf, movesIn, nodesInRect, withMoves, type PlacedNode,
 } from "./graph-layout";
 
@@ -323,5 +323,13 @@ describe("p.11's cards moved by hand (§606)", () => {
         nothing: null,
       },
     })).toEqual({ good: { x: 1, y: 2 } });
+  });
+});
+
+describe("panTo", () => {
+  it("brings a card to the corner, a margin in (§614)", () => {
+    expect(ZOOM_MARGIN).toBe(40);
+    expect(panTo({ x: 500, y: 120 })).toEqual({ x: -460, y: -80 });
+    expect(panTo({ x: 0, y: 0 })).toEqual({ x: 40, y: 40 });
   });
 });

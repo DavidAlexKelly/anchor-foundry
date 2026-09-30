@@ -1187,6 +1187,14 @@ export const models = {
     request<import("./types").GraphViewer[]>(
       `/workspaces/${wid}/projects/${pid}/pipeline/viewers`,
     ),
+  /** p.10's Related artifacts for the selected nodes (§614). */
+  relatedArtifacts: (wid: string, pid: string, nodes: readonly string[]) => {
+    const query = new URLSearchParams();
+    for (const node of nodes) query.append("node", node);
+    return request<import("./related-artifacts").RelatedArtifact[]>(
+      `/workspaces/${wid}/projects/${pid}/pipeline/related?${query.toString()}`,
+    );
+  },
 };
 
 export interface PropertyInput {

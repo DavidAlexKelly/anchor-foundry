@@ -273,6 +273,17 @@ export function dragTo(start: Place, dx: number, dy: number, zoom: number): Plac
   };
 }
 
+/** How far in from the graph's corner a card is brought when zoomed to. */
+export const ZOOM_MARGIN = 40;
+
+/** The pan that brings a card to the graph's top left corner at full size:
+ * p.30's "zoom in on the related dataset" (§614). The corner rather than the
+ * middle because the corner is the one place known to be on screen whatever
+ * size the panel is drawn at. */
+export function panTo(place: Place): Place {
+  return { x: ZOOM_MARGIN - place.x, y: ZOOM_MARGIN - place.y };
+}
+
 /** The moves a stored view holds, keeping only well-formed ones - a view is
  *  read at the other end of a save, where a later build may have written it
  *  (`layoutIn`'s reason). */
