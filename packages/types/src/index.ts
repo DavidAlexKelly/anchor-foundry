@@ -461,6 +461,11 @@ export type WorkshopTransform =
    * `services/variable_checks.py`. */
   | "string_is" | "string_is_not" | "string_contains" | "string_does_not_contain"
   | "string_starts_with" | "string_ends_with" | "is_true" | "is_false" | "is_null" | "is_not_null"
+  /** p.142-143's array operations and checks (§567), evaluated by
+   * `services/variable_arrays.py`. Get and Update element at carry an
+   * `index` in their config. */
+  | "array_compose" | "array_intersection" | "array_update_element" | "array_get_element"
+  | "array_length" | "array_contains" | "array_does_not_contain" | "array_is_subset_of"
 
 /** What a `time_series_set` variable resolves to: the whole question, and no
  * data. Decision 0009 keeps points in the dataset they arrived in, so a

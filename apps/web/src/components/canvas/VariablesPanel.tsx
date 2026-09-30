@@ -29,6 +29,7 @@ import { SeriesTransformsEditor } from "./SeriesTransformsEditor";
 import { MAX_PRECISION, ROUNDINGS, isMath, mathArity, mathSlotLabel, precisionOf } from "./variable-math";
 import { DATE_ARITY, dateSlotLabels, isDateMath, takesDirection, unitsFor } from "./variable-dates";
 import { checkArity, checkSlotLabel, isCheck } from "./variable-checks";
+import { INDEXED, arrayArity, arraySlotLabel, indexOf, isArrayOp } from "./variable-arrays";
 import { seriesDerivationInputs, type SeriesTransform } from "./series-transforms";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEditor } from "@craftjs/core";
@@ -203,6 +204,16 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   { value: "is_false", label: "Is false (NOT)", arity: "one" },
   { value: "is_null", label: "Is null", arity: "one" },
   { value: "is_not_null", label: "Is not null", arity: "one" },
+  // p.142-143's array operations and checks (§567). p.143's Is null and Is
+  // not null on an array are, by its own note, Is empty and Is not empty.
+  { value: "array_compose", label: "Arrays: compose", arity: "one or more" },
+  { value: "array_intersection", label: "Arrays: intersection", arity: "one or more" },
+  { value: "array_update_element", label: "Arrays: update element at", arity: "two" },
+  { value: "array_get_element", label: "Arrays: get element at", arity: "one" },
+  { value: "array_length", label: "Arrays: length", arity: "one" },
+  { value: "array_contains", label: "Arrays: contains", arity: "two or more" },
+  { value: "array_does_not_contain", label: "Arrays: does not contain", arity: "two or more" },
+  { value: "array_is_subset_of", label: "Arrays: is subset of", arity: "two" },
 ];
 
 /** Offered on `time_series_set` variables, and the only thing offered there -
@@ -237,6 +248,7 @@ function arityOf(transform: WorkshopTransform): number | "many" {
   if (isMath(transform)) return mathArity(transform);
   if (isDateMath(transform)) return DATE_ARITY[transform] ?? 2;
   if (isCheck(transform)) return checkArity(transform);
+  if (isArrayOp(transform)) return arrayArity(transform);
   if (transform === "concat") return "many";
   if (transform === "if_else") return 3;
   if (transform === "filter_set") return 2;
@@ -1081,6 +1093,7 @@ function DerivationEditor({
         <label key={index}>
           {isMath(derivation.transform) ? mathSlotLabel(derivation.transform, index)
             : isCheck(derivation.transform) ? checkSlotLabel(derivation.transform, index)
+            : isArrayOp(derivation.transform) ? arraySlotLabel(derivation.transform, index)
             : arity === "many" ? `Part ${index + 1}` : slotLabels(derivation.transform)[index]}
           <select
             value={value}
@@ -1130,6 +1143,25 @@ function DerivationEditor({
             }}
           />
           <span className="field-hint">negative rounds to tens, hundreds…</span>
+        </label>
+      )}
+
+      {/* p.142-143's "specified index" (§567). */}
+      {INDEXED.has(derivation.transform) && (
+        <label>
+          Index
+          <input
+            type="number"
+            data-testid="array-index"
+            min={0}
+            defaultValue={String(derivation.config?.index ?? 0)}
+            readOnly={readOnly}
+            onChange={(e) => {
+              const index = indexOf(e.target.value);
+              if (index !== null) onChange({ ...derivation, config: { ...derivation.config, index } });
+            }}
+          />
+          <span className="field-hint">counting from 0</span>
         </label>
       )}
 
