@@ -23,6 +23,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { WORLD_OUTLINE } from "./basemap";
 import { boundsOf, onScreen, pathsFor } from "./map-shapes";
 import { allInside, boundsText, sameView, viewOfBounds } from "./map-view";
+import { measureLabels, type PerimeterMode } from "./map-measure";
 import {
   DRAWN_OPACITY, DRAW_TOOLS, MAX_POLYGON_POINTS, MIN_DRAG_PX, boxBetween, boxRect, circleBetween, circlePath, closes, isCircle,
   isDrag, isPolygon, lonLatAt, polygonPoints, type Area, type DrawTool,
@@ -208,6 +209,7 @@ export function MapCanvas({
   drawTools = DRAW_TOOLS,
   drawnColor = null,
   drawnOpacity = DRAWN_OPACITY,
+  measure = null,
   color = null,
   opacity = 1,
   selectedKeys,
@@ -246,6 +248,9 @@ export function MapCanvas({
   /** p.301's Drawn shape colors and opacity: null for the theme's accent. */
   drawnColor?: string | null;
   drawnOpacity?: number;
+  /** p.302's Enable measurements (§575): the drawn shape's perimeter, as
+   * segments or a total, and its area. Null for none. */
+  measure?: { perimeter: PerimeterMode | null; area: boolean } | null;
   /** p.300's layer Style (§559): its colour and opacity. */
   color?: string | null;
   opacity?: number;
@@ -571,6 +576,15 @@ export function MapCanvas({
               strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
           );
         })()}
+        {area && measure && (measure.perimeter || measure.area)
+          && measureLabels(area, measure, current, { width: WIDTH, height: HEIGHT }).map((l, n) => (
+            <text key={`${l.kind}-${n}`} data-testid="map-measure" data-kind={l.kind}
+              x={l.x} y={l.y} textAnchor="middle" dominantBaseline="middle" fontSize={11}
+              fill="var(--fg, #1d2327)" stroke="var(--bg, #fff)" strokeWidth={3}
+              paintOrder="stroke" style={{ pointerEvents: "none" }}>
+              {l.text}
+            </text>
+          ))}
         {outline && outline.length > 0 && (
           <polyline data-testid="map-outline-sketch"
             points={outline.map((c) => `${c.x},${c.y}`).join(" ")}
