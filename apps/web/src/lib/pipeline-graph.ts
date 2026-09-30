@@ -63,11 +63,17 @@ export function nodePath(
  * Returns `""` for a node that is current, which is most of them.
  */
 export function outOfDateNote(
-  node: Pick<PipelineNode, "out_of_date" | "out_of_date_reason">,
+  node: Pick<PipelineNode, "out_of_date" | "out_of_date_reason" | "source_behind">,
 ): string {
   if (!node.out_of_date) return "";
   if (node.out_of_date_reason === "upstream_is_out_of_date") {
     return "an upstream is out of date";
+  }
+  // p.51's third question (§583): the source has not delivered.
+  if (node.out_of_date_reason === "source_is_behind") {
+    return node.source_behind === "overdue"
+      ? "a scheduled sync from its source has not run"
+      : "its latest sync from its source failed";
   }
   // Anything else out of date is the direct case. Not keyed on the exact
   // string: a reason this build has not heard of still means *something* is

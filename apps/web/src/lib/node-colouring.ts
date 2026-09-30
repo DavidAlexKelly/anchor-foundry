@@ -147,9 +147,15 @@ function statusSwatch(node: ColourableNode): Swatch {
 }
 
 function outOfDateSwatch(node: ColourableNode): Swatch {
-  // p.39 names exactly these two and this platform stores exactly these two
-  // (§352) — the mapping is one-to-one rather than an interpretation.
+  // p.39 names two, "out of date with a parent" and "with an ancestor", and
+  // this platform stores those two (§352) — one-to-one rather than an
+  // interpretation. §583 adds p.51's third, a source that has not delivered,
+  // which p.39's list does not name and is the more urgent: no rebuild fixes it.
   if (!node.out_of_date) return { key: "current", label: "Up to date", token: GOOD };
+  // p.51's third (§583): its source has not delivered, which no rebuild fixes.
+  if (node.out_of_date_reason === "source_is_behind") {
+    return { key: "source", label: "Out of date with its source", token: BAD };
+  }
   if (node.out_of_date_reason === "input_is_newer") {
     return { key: "parent", label: "Out of date with a parent", token: BAD };
   }
@@ -266,7 +272,7 @@ export interface LegendEntry extends Swatch {
  * than being dropped. */
 const LEGEND_ORDER: Record<string, readonly string[]> = {
   status: ["failed", "stale", "warn", "ok", "unknown"],
-  out_of_date: ["parent", "ancestor", "stale", "current"],
+  out_of_date: ["source", "parent", "ancestor", "stale", "current"],
   health: ["fail", "warn", "pass", "none"],
   kind: ["dataset", "model", "object_type", "connection", "unknown"],
   origin: ["upload", "model_output", "sync", "none"],
