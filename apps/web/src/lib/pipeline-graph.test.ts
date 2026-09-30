@@ -374,6 +374,15 @@ describe("the view a graph is saved or shared at (p.12, §360)", () => {
     // **Omitted, not empty.** A view carrying `query: ""` and `selected: []`
     // saves as a filter nobody set and reopens looking deliberate.
     expect(viewOf({ selected: [], column: null, query: "", kinds: [], colouring: "status", layout: "level" })).toEqual({});
+    // §606: moved cards are part of the view, and none moved is no record.
+    expect(viewOf({
+      selected: [], column: null, query: "", kinds: [], colouring: "status", layout: "level",
+      positions: { "dataset:x": { x: 1, y: 2 } },
+    })).toEqual({ positions: { "dataset:x": { x: 1, y: 2 } } });
+    expect(viewOf({
+      selected: [], column: null, query: "", kinds: [], colouring: "status", layout: "level",
+      positions: {},
+    })).toEqual({});
   });
 
   it("treats a blank search as no search", () => {

@@ -12,7 +12,8 @@ import {
   GRAPH_KINDS, columnsIn, foundByColumn, inverted, isDrag, kindsIn, outOfDateNote, relatives, search, toggleSelected, type GraphView, viewOf,
 } from "@/lib/pipeline-graph";
 import {
-  LAYOUTS, NODE_H, NODE_W, layoutIn, layoutOf, nodesInRect, type Place,
+  LAYOUTS, NODE_H, NODE_W, dragTo, layoutIn, layoutOf, movesIn, nodesInRect, withMoves,
+  type Moves, type Place,
   type Rect,
 } from "@/lib/graph-layout";
 import {
@@ -86,6 +87,7 @@ function NodeCard({
   dimmed = false,
   review,
   onSelect,
+  onGrab,
 }: {
   node: PipelineNode;
   /** Where this card goes, under the layout in force (§424). Passed in rather
@@ -117,10 +119,13 @@ function NodeCard({
    *  at once" — the modifier is read here rather than in the handler because
    *  only the event knows it. */
   onSelect: (additive: boolean) => void;
+  /** The press that may become p.11's drag (§606). */
+  onGrab?: (e: React.MouseEvent) => void;
 }) {
   return (
     <button
       type="button"
+      onMouseDown={onGrab}
       onClick={(e) => onSelect(e.ctrlKey || e.metaKey)}
       title={node.name}
       style={{
@@ -449,6 +454,15 @@ export function PipelineGraphView({
   // `colouringIn` does: a `<select>` showing an option the graph is not using
   // is two controls disagreeing about one piece of state.
   const [layout, setLayout] = useState(() => layoutIn(initialView));
+  // p.11's cards moved by hand (§606), laid over `layout`.
+  const [moves, setMoves] = useState<Moves>(() => movesIn(initialView));
+  // The card being dragged: which, from where, and where the pointer started.
+  // `moved` is set once the pointer has gone far enough to be a drag, so the
+  // click that ends the gesture is not also read as selecting the card.
+  const cardDrag = useRef<
+    { id: string; from: Place; x: number; y: number; moved: boolean } | null
+  >(null);
+  const justDragged = useRef(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
@@ -466,16 +480,19 @@ export function PipelineGraphView({
   // one it was drawn over, and nothing on the screen says which copy is wrong
   // (§191, §424).
   const canvas = useMemo(
-    () => layoutOf(
-      graph.nodes.map((n) => ({
-        id: n.id,
-        layer: n.layer,
-        position: n.position,
-        group: swatchFor({ ...n, access: graph.access?.[n.id] ?? null }, colouring)?.key,
-      })),
-      layout,
+    () => withMoves(
+      layoutOf(
+        graph.nodes.map((n) => ({
+          id: n.id,
+          layer: n.layer,
+          position: n.position,
+          group: swatchFor({ ...n, access: graph.access?.[n.id] ?? null }, colouring)?.key,
+        })),
+        layout,
+      ),
+      moves,
     ),
-    [graph.nodes, graph.access, colouring, layout],
+    [graph.nodes, graph.access, colouring, layout, moves],
   );
 
   // **Reported after the render that changed it, not during.** Calling a
@@ -484,8 +501,10 @@ export function PipelineGraphView({
   const report = useRef(onViewChange);
   report.current = onViewChange;
   useEffect(() => {
-    report.current?.(viewOf({ selected, column, query, kinds, colouring, layout }));
-  }, [selected, column, query, kinds, colouring, layout]);
+    report.current?.(viewOf({
+      selected, column, query, kinds, colouring, layout, positions: moves,
+    }));
+  }, [selected, column, query, kinds, colouring, layout, moves]);
 
   // p.12's SVG export. **The picture is of the graph as it looks**, so it is
   // built at the moment of the click from the same state the cards are drawn
@@ -604,6 +623,10 @@ export function PipelineGraphView({
     const from = marqueeFrom.current;
     marqueeFrom.current = null;
     drag.current = null;
+    // A card that was dragged keeps where it was dropped (the move is already
+    // in state); the click the release produces is swallowed by the card.
+    justDragged.current = cardDrag.current?.moved ?? false;
+    cardDrag.current = null;
     setMarquee(null);
     // A press that barely moved is a click, and the card underneath has its
     // own handler — see `isDrag` for why letting both run would unselect the
@@ -1005,7 +1028,13 @@ export function PipelineGraphView({
           id="graph-layout"
           data-testid="graph-layout"
           value={layout}
-          onChange={(e) => setLayout(e.target.value)}
+          onChange={(e) => {
+            // Choosing an arrangement is p.11's automatic layout, so it lays
+            // out every card - moves made under another arrangement would sit
+            // on top of this one at positions that meant something there.
+            setLayout(e.target.value);
+            setMoves({});
+          }}
           style={{
             padding: "5px 8px",
             border: "1px solid var(--line-strong)",
@@ -1023,6 +1052,21 @@ export function PipelineGraphView({
             </option>
           ))}
         </select>
+        {/* p.11: "Layout all nodes applies automatic layout for all the nodes
+            on the graphs" - the way back from cards moved by hand (§606).
+            Offered only when something has been moved, since otherwise it
+            would lay out a graph that is already laid out. */}
+        {Object.keys(moves).length > 0 && (
+          <button
+            type="button"
+            className="chip"
+            data-testid="graph-layout-all"
+            onClick={() => setMoves({})}
+            title="p.11: put every card back where the layout draws it"
+          >
+            Layout all nodes
+          </button>
+        )}
         {/* p.12's third save-and-share mechanism: "Export graph to SVG —
             generates a static image of your lineage graph" (§423). Beside the
             graph tools rather than with Save and the share link, because it
@@ -1140,6 +1184,15 @@ export function PipelineGraphView({
             drag.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
           }}
           onMouseMove={(e) => {
+            const card = cardDrag.current;
+            if (card) {
+              const dx = e.clientX - card.x;
+              const dy = e.clientY - card.y;
+              if (!card.moved && !isDrag({ x1: 0, y1: 0, x2: dx, y2: dy })) return;
+              card.moved = true;
+              setMoves((current) => ({ ...current, [card.id]: dragTo(card.from, dx, dy, zoom) }));
+              return;
+            }
             const from = marqueeFrom.current;
             if (from) {
               const at = canvasPoint(e);
@@ -1271,9 +1324,31 @@ export function PipelineGraphView({
                   (lit.size > 0 && !lit.has(n.id)) ||
                   (matched.size > 0 && !matched.has(n.id))
                 }
-                onSelect={(additive) =>
-                  setSelected((current) => toggleSelected(current, n.id, additive))
-                }
+                onSelect={(additive) => {
+                  if (justDragged.current) {
+                    justDragged.current = false;
+                    return;
+                  }
+                  setSelected((current) => toggleSelected(current, n.id, additive));
+                }}
+                // p.11: a card is moved by dragging it. Not with the drag
+                // rectangle's tool or Shift held, which are §354's selection
+                // gesture and start from wherever the pointer is.
+                //
+                // The press still reaches the viewport, which starts a pan as
+                // it would anywhere; the move handler serves the card first
+                // and returns, so the pan never moves. §606's sweep found a
+                // `stopPropagation` here could not change what happens.
+                onGrab={tool === "select" ? undefined : (e) => {
+                  if (e.shiftKey) return;
+                  cardDrag.current = {
+                    id: n.id,
+                    from: canvas.at.get(n.id) ?? { x: 0, y: 0 },
+                    x: e.clientX,
+                    y: e.clientY,
+                    moved: false,
+                  };
+                }}
               />
             ))}
           </div>

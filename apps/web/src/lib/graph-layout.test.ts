@@ -1,8 +1,8 @@
 /** p.11's Layout menu, and the hit test that has to agree with it (§424). */
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_LAYOUT, GAP_X, GAP_Y, LAYOUTS, NODE_H, NODE_W, PAD, layoutIn,
-  layoutOf, nodesInRect, type PlacedNode,
+  DEFAULT_LAYOUT, GAP_X, GAP_Y, LAYOUTS, NODE_H, NODE_W, PAD, canvasOf, dragTo, layoutIn,
+  layoutOf, movesIn, nodesInRect, withMoves, type PlacedNode,
 } from "./graph-layout";
 
 const node = (
@@ -275,5 +275,53 @@ describe("selecting several nodes (p.7, p.54, §354)", () => {
     expect(nodesInRect([...nodes, node("ghost", 0, 0)], {
       x1: 0, y1: 0, x2: 1000, y2: 1000,
     }, level(nodes))).toEqual(["a"]);
+  });
+});
+
+
+describe("p.11's cards moved by hand (§606)", () => {
+  const nodes = [node("a", 0, 0), node("b", 1, 0), node("c", 1, 1)];
+
+  it("moves the cards that were moved and leaves the rest where the layout put them", () => {
+    const auto = layoutOf(nodes, "level");
+    const moved = withMoves(auto, { b: { x: 900, y: 40 } });
+    expect(moved.at.get("b")).toEqual({ x: 900, y: 40 });
+    expect(moved.at.get("a")).toEqual(auto.at.get("a"));
+    expect(moved.at.get("c")).toEqual(auto.at.get("c"));
+  });
+
+  it("grows the canvas to hold a card dragged past its edge", () => {
+    const moved = withMoves(layoutOf(nodes, "level"), { c: { x: 2000, y: 1500 } });
+    expect(moved.width).toBe(2000 + NODE_W + GAP_X);
+    expect({ width: moved.width, height: moved.height }).toEqual(canvasOf(moved.at));
+  });
+
+  it("ignores a move for a node this graph does not draw", () => {
+    const moved = withMoves(layoutOf(nodes, "level"), { gone: { x: 5000, y: 5000 } });
+    expect([...moved.at.keys()]).toEqual(["a", "b", "c"]);
+    expect(moved.width).toBeLessThan(5000);
+  });
+
+  it("lands a dragged card by canvas pixels, whole, and never off the canvas", () => {
+    expect(dragTo({ x: 100, y: 100 }, 50, -20, 1)).toEqual({ x: 150, y: 80 });
+    // At half zoom a pointer moving 50 screen pixels moves the card 100.
+    expect(dragTo({ x: 100, y: 100 }, 50, 50, 0.5)).toEqual({ x: 200, y: 200 });
+    expect(dragTo({ x: 10, y: 10 }, 0.4, 0.6, 1)).toEqual({ x: 10, y: 11 });
+    expect(dragTo({ x: 10, y: 10 }, -500, -500, 1)).toEqual({ x: 0, y: 0 });
+  });
+
+  it("reads back only well-formed moves from a stored view", () => {
+    expect(movesIn(undefined)).toEqual({});
+    expect(movesIn({ positions: [1, 2] })).toEqual({});
+    expect(movesIn({
+      positions: {
+        good: { x: 1, y: 2 },
+        text: { x: "1", y: 2 },
+        negative: { x: -1, y: 2 },
+        infinite: { x: Infinity, y: 2 },
+        missing: { x: 1 },
+        nothing: null,
+      },
+    })).toEqual({ good: { x: 1, y: 2 } });
   });
 });

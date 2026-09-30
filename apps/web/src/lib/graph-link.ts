@@ -41,6 +41,11 @@ export function toParams(view: GraphView): Change {
     sel: view.selected && view.selected.length > 0 ? view.selected : undefined,
     colour: view.colouring,
     layout: view.layout,
+    // p.11's moved cards (§606), one `pos` per card as `<node>@<x>,<y>`: a
+    // node id has no `@` in it, so the last one splits it from its place.
+    pos: view.positions && Object.keys(view.positions).length > 0
+      ? Object.entries(view.positions).map(([id, at]) => `${id}@${at.x},${at.y}`)
+      : undefined,
   };
 }
 
@@ -72,5 +77,16 @@ export function fromParams(params: URLSearchParams): GraphView {
   if (colouring) view.colouring = colouring;
   const layout = params.get("layout");
   if (layout) view.layout = layout;
+  // Read as written, and a part that is not a place is skipped rather than
+  // the link refused - `movesIn` narrows what the graph draws from it.
+  const positions: Record<string, { x: number; y: number }> = {};
+  for (const entry of params.getAll("pos")) {
+    const at = entry.lastIndexOf("@");
+    const [x, y] = entry.slice(at + 1).split(",").map(Number);
+    if (at > 0 && Number.isFinite(x) && Number.isFinite(y)) {
+      positions[entry.slice(0, at)] = { x: x!, y: y! };
+    }
+  }
+  if (Object.keys(positions).length > 0) view.positions = positions;
   return view;
 }
