@@ -56,6 +56,7 @@ def bind_parameters(
     parameters: list[dict[str, Any]],
     user: dict[str, Any] | None = None,
     form_order: list[str] | None = None,
+    struct_fields: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """What the caller supplied, checked against what the action declares.
 
@@ -123,10 +124,16 @@ def bind_parameters(
             raise ValueError(f"{name!r} is required by this action")
     # p.8 and p.71's constraints (§584), against the parameters as p.45's
     # overrides left them, so a block's constraint is the one that applies.
+    # p.71-72's struct fields (§585) take `struct_fields`, the fields each
+    # struct parameter writes, because a field's type is the property's and
+    # not stored beside its constraint.
+    from .action_constraints import field_violation as _field_violation
     from .action_constraints import violation as _constraint_violation
 
     for name, value in bound.items():
-        why = _constraint_violation(declared[name], value)
+        why = _constraint_violation(declared[name], value) or _field_violation(
+            declared[name], value, (struct_fields or {}).get(name)
+        )
         if why:
             raise ValueError(f"{name!r}: {why}")
     return bound
@@ -1347,7 +1354,8 @@ def seed_from_instance(
 _PARAMETER_COLUMNS = (
     "id, action_type_id, api_name, display_name, data_type, array_of, required, "
     "default_value, hidden, sort_order, object_type_id, interface_id, "
-    "dropdown_filters, dropdown_search_around, options_from, value_constraint"
+    "dropdown_filters, dropdown_search_around, options_from, value_constraint, "
+    "field_constraints"
 )
 
 
@@ -3588,7 +3596,15 @@ async def set_definition(
     # here beside p.45's other one because both read the override blocks.
     from .action_constraints import check_parameters as check_constraints_of
 
-    check_constraints_of(parameters)
+    check_constraints_of(
+        parameters,
+        # p.71's field constraints are read against the fields each struct
+        # parameter writes (§450's derivation, §585). Only asked for when some
+        # parameter has one, since it is a workspace-wide read.
+        struct_fields_for_parameters(
+            rules, await struct_fields_by_type(conn, workspace_id), str(subject_id),
+        ) if any(p.get("field_constraints") for p in parameters) else {},
+    )
     declared_names = {str(p.get("api_name", "")) for p in parameters}
     # One read per object type rather than per parameter that mentions it: an
     # action with four parameters offering the same type asked four times.
@@ -3785,13 +3801,13 @@ async def set_definition(
                      default_value, hidden, sort_order, section_id, object_type_id,
                      interface_id,
                      dropdown_filters, dropdown_search_around, options_from,
-                     value_constraint)
+                     value_constraint, field_constraints)
                 VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type),
                         CAST(:array_of AS action_parameter_type), :required,
                         CAST(:default AS jsonb), :hidden, :ord, :section,
                         CAST(:otype AS uuid), CAST(:iface AS uuid), CAST(:filters AS jsonb),
                         CAST(:around AS jsonb), CAST(:options AS jsonb),
-                        CAST(:constraint AS jsonb))
+                        CAST(:constraint AS jsonb), CAST(:fields AS jsonb))
                 """
             ),
             {
@@ -3850,6 +3866,8 @@ async def set_definition(
                     json.dumps(parameter["value_constraint"])
                     if parameter.get("value_constraint") else None
                 ),
+                # p.71's per-field constraints (db 0120), `{}` for none.
+                "fields": json.dumps(parameter.get("field_constraints") or {}),
             },
         )
     # p.43-46's override blocks, written with the parameter that owns them

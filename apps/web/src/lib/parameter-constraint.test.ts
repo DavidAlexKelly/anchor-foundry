@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CONSTRAINABLE, constraintBaseType, constraintNote, multipleChoice,
+  CONSTRAINABLE, constraintBaseType, constraintNote, fieldChoices, fieldNotes, isStructParameter,
+  multipleChoice,
 } from "./parameter-constraint";
 import type { ValueConstraint } from "@/lib/types";
 
@@ -52,5 +53,44 @@ describe("the note under a constrained box (§584)", () => {
     expect(constraintNote({ data_type: "string", value_constraint: PRIORITIES,
       constraint_summary: "one of P0, P1, P2" })).toBe("");
     expect(constraintNote({ data_type: "string", value_constraint: SUMMARY })).toBe("");
+  });
+});
+
+describe("p.71-72's struct fields (§585)", () => {
+  const fields = [
+    { api_name: "summary", display_name: "Summary" },
+    { api_name: "kind", display_name: " " },
+    { api_name: "hours", display_name: "Hours" },
+  ];
+  const resolution = {
+    struct_fields: fields,
+    field_constraints: {
+      summary: SUMMARY,
+      kind: { kind: "enum", values: ["fix", "wontfix"] } as ValueConstraint,
+    },
+    field_constraint_summaries: { summary: "between 10 and 500", kind: "one of fix, wontfix" },
+  };
+
+  it("offers a dropdown for each multiple-choice field", () => {
+    expect(fieldChoices(resolution)).toEqual({ kind: ["fix", "wontfix"] });
+    expect(fieldChoices({ field_constraints: { summary: SUMMARY } })).toBeNull();
+    expect(fieldChoices({})).toBeNull();
+  });
+
+  it("says the others by the field's label", () => {
+    expect(fieldNotes(resolution)).toEqual(["Summary: between 10 and 500."]);
+    // A blank label is the api_name, as the form draws it.
+    expect(fieldNotes({ ...resolution, field_constraints: { kind: SUMMARY } }))
+      .toEqual(["kind: one of fix, wontfix."]);
+    expect(fieldNotes({ field_constraints: { summary: SUMMARY } })).toEqual([]);
+  });
+});
+
+describe("which parameters have fields to constrain (§585)", () => {
+  it("is a struct, or a list of them", () => {
+    expect(isStructParameter({ data_type: "struct" })).toBe(true);
+    expect(isStructParameter({ data_type: "array", array_of: "struct" })).toBe(true);
+    expect(isStructParameter({ data_type: "array", array_of: "string" })).toBe(false);
+    expect(isStructParameter({ data_type: "string" })).toBe(false);
   });
 });

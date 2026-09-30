@@ -53,3 +53,39 @@ export function constraintNote(
   if (!summary) return "";
   return parameter.data_type === "array" ? `Each item: ${summary}.` : `Allowed: ${summary}.`;
 }
+
+/** p.71-72's struct fields (§585): each field's options, for the fields whose
+ * constraint is p.8's multiple choice, or null when none is. */
+export function fieldChoices(parameter: {
+  field_constraints?: Record<string, ValueConstraint> | null;
+}): Record<string, unknown[]> | null {
+  const out: Record<string, unknown[]> = {};
+  for (const [field, constraint] of Object.entries(parameter.field_constraints ?? {})) {
+    if (constraint?.kind === "enum") out[field] = constraint.values;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** What the form says under a struct for its other constrained fields, one
+ * line each, named by the field's label. A dropdown field says it already. */
+export function fieldNotes(parameter: {
+  field_constraints?: Record<string, ValueConstraint> | null;
+  field_constraint_summaries?: Record<string, string> | null;
+  struct_fields?: { api_name: string; display_name?: string }[] | null;
+}): string[] {
+  const labels = new Map(
+    (parameter.struct_fields ?? []).map((f) => [f.api_name, f.display_name?.trim() || f.api_name]),
+  );
+  return Object.entries(parameter.field_constraints ?? {})
+    .filter(([field, constraint]) =>
+      constraint?.kind !== "enum" && parameter.field_constraint_summaries?.[field])
+    .map(([field]) =>
+      `${labels.get(field) ?? field}: ${parameter.field_constraint_summaries?.[field]}.`);
+}
+
+/** Whether a parameter is p.66's struct, or a list of them, whose fields take
+ * constraints of their own (p.71, §585). */
+export function isStructParameter(parameter: Constrainable): boolean {
+  return parameter.data_type === "struct"
+    || (parameter.data_type === "array" && parameter.array_of === "struct");
+}

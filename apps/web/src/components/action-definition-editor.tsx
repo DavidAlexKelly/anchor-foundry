@@ -82,7 +82,7 @@ import {
 } from "@/lib/action-sections";
 import type { ActionType } from "@/lib/types";
 import { DEFAULT_ELEMENT, ELEMENT_TYPES } from "@/lib/array-property";
-import { constraintBaseType } from "@/lib/parameter-constraint";
+import { constraintBaseType, isStructParameter } from "@/lib/parameter-constraint";
 import { ValueConstraintEditor } from "@/components/value-constraint-editor";
 
 /** `action_parameter_type` (migration 0044): the ontology's property types
@@ -634,6 +634,8 @@ export function ActionDefinitionEditor({
       overrides: p.overrides ?? [],
       // p.8's constraint (§584). Loaded for the reason above.
       value_constraint: p.value_constraint ?? null,
+      // p.71's per-field constraints (§585). Loaded for the same reason.
+      field_constraints: p.field_constraints ?? {},
     })),
   );
   const [rules, setRules] = useState<Rule[]>(
@@ -861,6 +863,7 @@ export function ActionDefinitionEditor({
                     // A constraint was written against the old type (§584):
                     // P0-P2 mean nothing to a date, and the save would refuse it.
                     value_constraint: null,
+                    field_constraints: {},
                   })}
                 >
                   {PARAMETER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -871,6 +874,7 @@ export function ActionDefinitionEditor({
                     aria-label={`Parameter ${i + 1} element type`}
                     onChange={(e) => patchParameter(i, {
                       array_of: e.target.value, value_constraint: null,
+                      field_constraints: {},
                     })}
                   >
                     {PARAMETER_ELEMENTS.map((t) => <option key={t} value={t}>of {t}</option>)}
@@ -1437,7 +1441,7 @@ export function ActionDefinitionEditor({
           length. A value type's constraint (p.233), so one editor and one set
           of words serve both; the server checks it where the submission is
           bound, after p.45's overrides. */}
-      {parameters.some((p) => constraintBaseType(p)) && (
+      {parameters.some((p) => constraintBaseType(p) || isStructParameter(p)) && (
         <>
           <h3 className="field-label" style={{ marginTop: 24 }}>Constraints</h3>
           <p className="field-hint">
@@ -1448,6 +1452,44 @@ export function ActionDefinitionEditor({
           </p>
           <div data-testid="parameter-constraints">
             {parameters.map((p, i) => {
+              if (isStructParameter(p)) {
+                // p.71-72: "Constraints can be configured individually for
+                // struct parameter fields" (§585). The fields are the
+                // property's the rule writes (§450), which the server derives,
+                // so a struct nothing writes yet has none to offer.
+                const fields = action.parameters
+                  .find((saved) => saved.api_name === p.api_name)?.struct_fields ?? null;
+                return (
+                  <div key={`${i}:${p.data_type}:${p.array_of ?? ""}`}
+                       data-parameter-constraint={p.api_name} style={{ marginBottom: 8 }}>
+                    {!fields?.length ? (
+                      <p className="field-hint" data-testid="struct-fields-unsaved">
+                        {p.display_name || p.api_name}&rsquo;s fields are the struct
+                        property its rule writes. Save a rule writing one, then
+                        reopen this to constrain them.
+                      </p>
+                    ) : fields.map((field) => !constraintBaseType(field) ? null : (
+                      <div key={field.api_name} data-field-constraint={field.api_name}>
+                        <ValueConstraintEditor
+                          baseType={constraintBaseType(field)!}
+                          value={p.field_constraints?.[field.api_name] ?? null}
+                          onChange={(next) => {
+                            const rest = { ...(p.field_constraints ?? {}) };
+                            delete rest[field.api_name];
+                            patchParameter(i, {
+                              field_constraints: next ? { ...rest, [field.api_name]: next } : rest,
+                            });
+                          }}
+                          label={`Constraint on ${p.display_name || p.api_name}: ${
+                            field.display_name?.trim() || field.api_name}`}
+                          noneLabel="User input"
+                          hint=""
+                        />
+                      </div>
+                    ))}
+                  </div>
+                );
+              }
               const baseType = constraintBaseType(p);
               if (!baseType) return null;
               return (

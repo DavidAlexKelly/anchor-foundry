@@ -376,6 +376,7 @@ export function PropertyInput({
   structFields,
   arrayOf = null,
   choices = null,
+  fieldChoices = null,
 }: {
   workspaceId: string;
   dataType: PropertyDataType | undefined;
@@ -401,6 +402,9 @@ export function PropertyInput({
   /** `action-types` p.8's multiple choice (§584): the only values this may
    * take, drawn as a dropdown. On an array it is each item's. */
   choices?: unknown[] | null;
+  /** p.71-72's per-field multiple choice on a struct (§585): each field's
+   * options, by field. On an array of structs it is each item's. */
+  fieldChoices?: Record<string, unknown[]> | null;
 }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -429,6 +433,7 @@ export function PropertyInput({
               dataType={arrayOf as PropertyDataType}
               structFields={structFields}
               choices={choices}
+              fieldChoices={fieldChoices}
               value={item}
               label={`${label} ${index + 1}`}
               onChange={(next) => onChange(withItem(items, index, next))}
@@ -555,6 +560,7 @@ export function PropertyInput({
             <PropertyInput
               workspaceId={workspaceId}
               dataType={field.data_type as PropertyDataType}
+              choices={fieldChoices?.[field.api_name] ?? null}
               value={current[field.api_name] ?? null}
               label={fieldLabel(label, field)}
               onChange={(next) => onChange(setField(value, field.api_name, next))}

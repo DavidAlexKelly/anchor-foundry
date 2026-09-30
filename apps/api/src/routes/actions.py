@@ -179,6 +179,10 @@ class ActionParameterOut(BaseModel):
     #: The constraint in one line, in the words the refusal uses, so the form
     #: can say what is allowed without a second reading of the shape.
     constraint_summary: str = ""
+    #: p.71-72's per-field constraints on a struct parameter (§585), and each
+    #: in one line, as `constraint_summary` is for the parameter's own.
+    field_constraints: dict[str, Any] = Field(default_factory=dict)
+    field_constraint_summaries: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _summarise(self) -> "ActionParameterOut":
@@ -188,6 +192,10 @@ class ActionParameterOut(BaseModel):
             value_constraints.describe(self.value_constraint)
             if self.value_constraint else ""
         )
+        self.field_constraint_summaries = {
+            field: value_constraints.describe(constraint)
+            for field, constraint in (self.field_constraints or {}).items()
+        }
         return self
 
 
@@ -443,6 +451,17 @@ async def _struct_fields_by_action(
         )
         for row in needed
     }
+
+
+async def _parameter_fields(
+    access: Any, action_type: dict[str, Any]
+) -> dict[str, Any]:
+    """`{parameter: its fields}` for one action's struct parameters, which is
+    what p.71-72's field constraints are read against when a submission is
+    bound (§585). Empty, without a read, for an action with none."""
+    return (await _struct_fields_by_action(access, [action_type])).get(
+        str(action_type["id"])
+    ) or {}
 
 
 def _action_type_out(
@@ -710,6 +729,10 @@ class ActionParameterIn(BaseModel):
     #: p.8 and p.71's constraint (§584): `{kind, ...}` in a value type's shape.
     #: `None` is p.8's "User input".
     value_constraint: dict[str, Any] | None = None
+    #: p.71-72's per-field constraints on a struct parameter (§585):
+    #: `{field: constraint}`, each read against the field's type. A field set
+    #: to null is p.8's User input, as the parameter's own is, and is dropped.
+    field_constraints: dict[str, dict[str, Any] | None] = Field(default_factory=dict)
 
 
 class ActionRuleIn(BaseModel):
@@ -1941,10 +1964,11 @@ async def check_action(
         # endpoint exists: asking "would this be refused" against a different
         # set of parameters than the one that decides is worse than not asking.
         order = await _form_order(conn, action_type)
+    fields = await _parameter_fields(access, action_type)
     try:
         bound = actions_service.bind_parameters(
             body.values, parameters=action_type["parameters"],
-            user=user, form_order=order,
+            user=user, form_order=order, struct_fields=fields,
         )
         actions_service.check_criteria(
             bound, criteria=action_type["criteria"], user=user
@@ -2388,6 +2412,8 @@ async def execute_action(
                     parameters=action_type["parameters"],
                     user=await actions_service.criteria_user(conn, access.auth.user_id),
                     form_order=await _form_order(conn, action_type),
+                    # p.71-72's field constraints (§585).
+                    struct_fields=await _parameter_fields(access, action_type),
                 )
                 # p.34: "The value selected is **also validated** before the
                 # action is executed" (§330). The dropdown offering only
@@ -3547,6 +3573,7 @@ async def execute_batch(
         # of one submission (§329).
         editor = await actions_service.criteria_user(conn, access.auth.user_id)
         edit_order = await _form_order(conn, action_type)
+        edit_fields = await _parameter_fields(access, action_type)
         planned: list[dict[str, Any]] = []
         for edit in body.edits:
             instance = await instance_store.store_for(conn).get_instance(
@@ -3568,6 +3595,7 @@ async def execute_batch(
                 parameters=action_type["parameters"],
                 user=editor,
                 form_order=edit_order,
+                struct_fields=edit_fields,
             )
             actions_service.check_criteria(
                 bound, criteria=action_type["criteria"], user=user
