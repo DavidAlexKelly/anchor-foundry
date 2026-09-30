@@ -73,6 +73,7 @@ def _record_synced_dataset(
     parquet_bytes: bytes,
     schema: list[engine.ColumnSchema],
     row_count: int,
+    cursor_value: str | None = None,
 ) -> "tuple[UUID, dict | None]":
     """Create-or-version the connection's managed sync dataset. Same shape
     as jobs/model_runs.py's _record_output, with origin='sync' and
@@ -80,7 +81,11 @@ def _record_synced_dataset(
 
     Returns (dataset id, schema_changes) - the drift against the version this
     one replaces, or None for a first version or an unchanged schema
-    (migration 0018)."""
+    (migration 0018).
+
+    `cursor_value` is where an incremental sync had got to (migration 0127,
+    §607), recorded on the version so a rollback to it can put the
+    connection's cursor back with the data."""
     schema_json = json.dumps([c.as_dict() for c in schema])
     ws_prefix = _workspace_s3_prefix(cur, workspace_id)
 
@@ -142,10 +147,11 @@ def _record_synced_dataset(
             """
             INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                           table_schema, row_count, produced_by_kind,
-                                          produced_by_id)
-            VALUES (%s, %s, %s, %s, %s, 'sync', %s)
+                                          produced_by_id, sync_cursor_value)
+            VALUES (%s, %s, %s, %s, %s, 'sync', %s, %s)
             """,
-            (str(dataset_id), version, parquet_key, schema_json, row_count, str(connection_id)),
+            (str(dataset_id), version, parquet_key, schema_json, row_count, str(connection_id),
+             cursor_value),
         )
     except psycopg.Error as exc:
         raise (engine.schema_policy_error(exc) or exc) from exc
@@ -294,6 +300,7 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                             dataset_id=UUID(str(dataset_id)) if dataset_id else None,
                             project_id=UUID(str(project_id)), workspace_id=UUID(str(workspace_id)),
                             parquet_bytes=parquet_bytes, schema=schema, row_count=rows_synced,
+                            cursor_value=new_cursor_value if mode == "incremental" else None,
                         )
                     cur.execute(
                         "INSERT INTO sync_runs (connection_id, dataset_id, mode, source_table, "

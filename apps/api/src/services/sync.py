@@ -48,7 +48,6 @@ from ..lib.errors import ConflictError
 from . import dataset_engine as engine
 from . import datasets as ds_service
 from .connectors import Extract, get_connector
-from .secrets import SecretsGateway
 from .storage import StorageGateway
 
 MAX_SYNC_BYTES = 200 * 1024 * 1024  # flag: worker/Athena path beyond this
@@ -151,7 +150,6 @@ async def find_existing_sync_dataset(
 async def run_full_sync(
     conn: AsyncConnection,
     storage: StorageGateway,
-    secrets: SecretsGateway,
     *,
     connection_row: dict[str, Any],
     workspace_id: UUID,
@@ -468,14 +466,18 @@ async def run_incremental_sync(
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                       table_schema, row_count, produced_by_kind,
-                                      produced_by_id, created_by)
-        VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, 'sync', :cid, :by)
+                                      produced_by_id, created_by, sync_cursor_value)
+        VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, 'sync', :cid, :by,
+                :cursor)
         RETURNING id
         """,
         {
             "did": str(dataset_id), "version": version, "key": parquet_key,
             "schema": schema_json, "rows": row_count,
             "cid": str(connection_row["id"]), "by": str(requested_by),
+            # Where this run got to (migration 0127, §607): what a rollback to
+            # this version puts the connection's cursor back to.
+            "cursor": new_cursor_value,
         },
     )
     from sqlalchemy import text as _text2
