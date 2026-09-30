@@ -353,8 +353,13 @@ export function LinkExplorerDialog({
   start,
   onClose,
   canComment = false,
+  canEdit = false,
 }: {
   workspaceId: string;
+  /** Whether this reader may edit a property in place (§595; `action-types`
+   * p.135). False by default for `canComment`'s reason: a caller with no
+   * notion of a role gets no editor rather than one that 403s. */
+  canEdit?: boolean;
   /** Whether this reader may add to p.137's conversation (§322). p.137 puts
    * commenting in the Object Explorer, which is what reaches this dialog —
    * and `false` by default so the two callers that have no notion of a role
@@ -432,6 +437,7 @@ export function LinkExplorerDialog({
         typeId={here.typeId}
         instance={here.instance}
         canComment={canComment}
+        canEdit={canEdit}
       />
 
       <h3 className="sov-section">Linked objects</h3>

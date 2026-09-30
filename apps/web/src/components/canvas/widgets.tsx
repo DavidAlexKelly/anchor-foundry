@@ -8298,6 +8298,10 @@ export function CanvasObjectViewWidget({
             hideHeader={hideHeaderOf(hideHeader)}
             // p.570: in a running module the header's icon is a drag zone.
             dragIcon={mode === "run"}
+            // §595, `action-types` p.135's "native Object View widgets": a
+            // property with an inline action is edited in place, in a running
+            // module only. Who may write is the server's to refuse.
+            canEdit={mode === "run"}
           />
         </div>
       )}
