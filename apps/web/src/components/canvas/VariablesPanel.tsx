@@ -1286,19 +1286,36 @@ function DerivationEditor({
             />
             <span className="field-hint">yyyy, MM or MMM, dd, HH or hh with a, mm, ss; empty reads ISO</span>
           </label>
-          <label>
-            Time zone
+          {/* p.138-139's "the user's local timezone" (§596): `local`, which
+              the server reads as the zone the viewer's browser sends. */}
+          <label className="check">
             <input
-              data-testid="cast-timezone"
-              value={String(derivation.config?.timezone ?? "")}
-              readOnly={readOnly}
-              placeholder="UTC"
+              type="checkbox"
+              data-testid="cast-local-zone"
+              checked={derivation.config?.timezone === "local"}
+              disabled={readOnly}
               onChange={(e) => onChange({
-                ...derivation, config: { ...derivation.config, timezone: e.target.value || undefined },
+                ...derivation,
+                config: { ...derivation.config, timezone: e.target.checked ? "local" : undefined },
               })}
             />
-            <span className="field-hint">a named zone, such as Europe/Paris</span>
+            The viewer&apos;s local time zone
           </label>
+          {derivation.config?.timezone !== "local" && (
+            <label>
+              Time zone
+              <input
+                data-testid="cast-timezone"
+                value={String(derivation.config?.timezone ?? "")}
+                readOnly={readOnly}
+                placeholder="UTC"
+                onChange={(e) => onChange({
+                  ...derivation, config: { ...derivation.config, timezone: e.target.value || undefined },
+                })}
+              />
+              <span className="field-hint">a named zone, such as Europe/Paris</span>
+            </label>
+          )}
           {/* p.139's time zone "set dynamically using a string reference or
               variable": a second input, which wins over the one typed. */}
           <label>

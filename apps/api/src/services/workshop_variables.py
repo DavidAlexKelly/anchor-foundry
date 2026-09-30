@@ -36,7 +36,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from time import perf_counter
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from . import (
@@ -1657,8 +1659,12 @@ def evaluate(
     property_types: "dict[str, dict[str, str]] | None" = None,
     only: "frozenset[str] | None" = None,
     timings: "dict[str, float] | None" = None,
+    time_zone: str | None = None,
 ) -> dict[str, Any]:
     """Resolve every variable, computing derived ones from their inputs.
+
+    `time_zone` is the viewer's, as the browser names it (§596): what a cast
+    whose zone is p.138-139's "the user's local timezone" reads.
 
     `values` is what the viewer has set - a filter selection, a row click.
     A value supplied for a *derived* variable is ignored rather than honoured:
@@ -1737,6 +1743,7 @@ def evaluate(
     missing held value happens to be "compute" either way.
     """
     resolved: dict[str, Any] = {}
+    local = variable_casts.viewer_zone(time_zone)
     for vid in evaluation_order(variables):
         if only is not None and vid not in only:
             continue
@@ -1766,14 +1773,14 @@ def evaluate(
             if vid in recompute_now:
                 resolved[vid] = _apply(
                     variable, [resolved[i] for i in variable.derivation.inputs],
-                    property_types,
+                    property_types, local,
                 )
             elif held is not None and vid in held:
                 resolved[vid] = held[vid]
             elif fresh:
                 resolved[vid] = _apply(
                     variable, [resolved[i] for i in variable.derivation.inputs],
-                    property_types,
+                    property_types, local,
                 )
             else:
                 resolved[vid] = None
@@ -1821,7 +1828,7 @@ def evaluate(
                 else value
                 for i, value in zip(variable.derivation.inputs, inputs)
             ]
-        resolved[vid] = _apply(variable, inputs, property_types)
+        resolved[vid] = _apply(variable, inputs, property_types, local)
         if timings is not None:
             timings[vid] = (perf_counter() - started) * 1000
     return resolved
@@ -1830,6 +1837,7 @@ def evaluate(
 def _apply(
     variable: Variable, inputs: list[Any],
     property_types: "dict[str, dict[str, str]] | None" = None,
+    local_zone: str | None = None,
 ) -> Any:
     d = variable.derivation
     assert d is not None
@@ -1852,7 +1860,12 @@ def _apply(
             raise VariableError(str(exc)) from None
     if d.transform in variable_dates.ARITY:
         try:
-            return variable_dates.apply(d.transform, list(inputs), d.config, variable.label)
+            # p.140's "Returns the current date": the viewer's today, in the
+            # zone their browser sent (§596), or UTC's with none.
+            today = (datetime.now(ZoneInfo(local_zone)).date()
+                     if d.transform == "current_date" and local_zone else None)
+            return variable_dates.apply(d.transform, list(inputs), d.config, variable.label,
+                                        today=today)
         except variable_dates.DateError as exc:
             raise VariableError(str(exc)) from None
     if d.transform in variable_checks.ARITY:
@@ -1878,6 +1891,10 @@ def _apply(
         if len(inputs) > 1 and inputs[1] not in (None, ""):
             # The zone a variable names wins over one set on the cast.
             config = {**config, "timezone": inputs[1]}
+        if config.get("timezone") == variable_casts.LOCAL:
+            # p.138-139's "the user's local timezone" (§596): the viewer's,
+            # or UTC with none to read.
+            config = {**config, "timezone": local_zone}
         return _cast(inputs[0], str(d.config["to"]), variable.label, config)
     if d.transform == "object_rid":
         try:

@@ -2,6 +2,7 @@
  * process in dev; CloudFront routes it in production). 401 anywhere sends
  * the user back to sign-in - the token is either absent or expired. */
 
+import { viewerZone } from "./viewer-zone";
 import { clearSignedIn, loginHrefFor } from "./auth";
 import type {
   BootstrapFirstOwnerInput, BootstrapFirstOwnerResult, BootstrapStatus,
@@ -2663,6 +2664,8 @@ export const canvas = {
           // everything" too, but sending the field at all reads as an answer.
           ...(visible === undefined ? {} : { visible }),
           ...(profile ? { profile: true } : {}),
+          // p.138-139's "the user's local timezone" (§596).
+          time_zone: viewerZone(),
         }),
       },
     ),
@@ -2724,6 +2727,8 @@ export const canvas = {
           // everything" too, but sending the field at all reads as an answer.
           ...(visible === undefined ? {} : { visible }),
           ...(profile ? { profile: true } : {}),
+          // p.138-139's "the user's local timezone" (§596).
+          time_zone: viewerZone(),
         }),
       },
     ),
