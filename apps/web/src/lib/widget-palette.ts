@@ -70,6 +70,7 @@ export const CATEGORY_OF: Record<string, CategoryId> = {
 
   CanvasFilterList: "filtering",
   CanvasFilterPills: "filtering",
+  CanvasSearchBar: "filtering",
   CanvasProminentTerms: "filtering",
   CanvasSearch: "filtering",
   CanvasUserSelect: "filtering",

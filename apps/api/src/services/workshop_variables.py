@@ -2191,7 +2191,7 @@ EMBEDDING_NODES = ("CanvasEmbeddedModule", "CanvasLoopSection")
 WIDGETS = frozenset({
     "CanvasHeader", "CanvasPage", "CanvasOverlay", "CanvasUnused", "CanvasSection",
     "CanvasTabs", "CanvasButton", "CanvasContainer", "CanvasText", "CanvasFilterList",
-    "CanvasFilterPills", "CanvasUserSelect", "CanvasProminentTerms",
+    "CanvasFilterPills", "CanvasSearchBar", "CanvasUserSelect", "CanvasProminentTerms",
     "CanvasParameterControl", "CanvasNumericInput", "CanvasTextInput",
     "CanvasStringSelector", "CanvasDateTimePicker", "CanvasDateInput", "CanvasMarkdown",
     "CanvasObjectSetTitle", "CanvasPropertyList", "CanvasLinksWidget",

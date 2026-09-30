@@ -31,6 +31,7 @@ export const PALETTE: PaletteEntry[] = [
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
   { key: "CanvasFilterList", label: "Filter list", hint: "Property filters over an object set, with counts" },
   { key: "CanvasFilterPills", label: "Filter pills", hint: "The filters on a set, shown as pills a viewer can remove" },
+  { key: "CanvasSearchBar", label: "Exploration search bar", hint: "Search a set and filter it by its properties, as pills" },
   { key: "CanvasUserSelect", label: "User select", hint: "Pick one or several people from the organisation" },
   { key: "CanvasProminentTerms", label: "Prominent terms", hint: "A curated list of values to filter by, each with its count" },
   { key: "CanvasNumericInput", label: "Numeric input", hint: "A number the viewer types, with units and grouping" },
