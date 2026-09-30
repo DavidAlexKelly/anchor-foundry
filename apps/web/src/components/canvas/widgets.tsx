@@ -266,6 +266,9 @@ import {
 import { readerLayout } from "./reader-layout";
 import { PALETTE as WIDGET_LIST } from "./widget-list";
 import { MarkdownView } from "../markdown-view";
+import {
+  FORMATS, FORMAT_LABELS, applyFormat, autoRows, type MarkdownFormat,
+} from "./markdown-editor";
 import { SeriesCell } from "./SeriesCell";
 import {
   COLUMN_BASELINE_KINDS, baselineFor, baselinesByColumn, withColumnBaseline, type ColumnBaseline,
@@ -3765,12 +3768,15 @@ export function CanvasTextInput({
   placeholder = "",
   format = "line",
   rows = 4,
+  autoSize = true,
 }: {
   name?: string;
   label?: string;
   placeholder?: string;
   format?: string;
   rows?: number;
+  /** p.466's Auto-sizing, for the Markdown format (§582). */
+  autoSize?: boolean;
 }) {
   const {
     id: nodeId,
@@ -3834,12 +3840,105 @@ export function CanvasTextInput({
           Text input - bind a string variable in Settings
         </p>
       ) : (
+        shape.markdown ? (
+          <MarkdownTextEditor
+            label={label}
+            text={text}
+            placeholder={placeholder}
+            autoSize={autoSize !== false}
+            onText={write}
+          />
+        ) : (
         <label className="field" style={{ maxWidth: 420 }}>
           {label && <span className="field-label">{label}</span>}
           {shape.multiline
             ? <textarea {...shared} rows={rowsOf(rows)} />
             : <input type="text" {...shared} />}
         </label>
+        )
+      )}
+    </div>
+  );
+}
+
+/** p.466's Markdown editor (§582): the toolbar writes Markdown around the
+ * selection (`markdown-editor.ts`), and the rich view is the Markdown widget's
+ * own renderer, so it shows exactly what the toolbar wrote.
+ *
+ * **The rich view is a preview, not an editor**, and opens on the raw view:
+ * p.466's "formatted preview with inline editing" needs a rich-text editor
+ * this platform does not have, and a view nobody can type into is not the
+ * one to open on. The toolbar formats the raw text, which is what p.466's
+ * "without needing to know Markdown syntax" asks of it. */
+function MarkdownTextEditor({ label, text, placeholder, autoSize, onText }: {
+  label: string;
+  text: string;
+  placeholder: string;
+  autoSize: boolean;
+  onText: (next: string) => void;
+}) {
+  const [rich, setRich] = useState(false);
+  const area = React.useRef<HTMLTextAreaElement | null>(null);
+  const press = (format: MarkdownFormat) => {
+    const el = area.current;
+    const out = applyFormat(text, el?.selectionStart ?? text.length,
+      el?.selectionEnd ?? text.length, format);
+    onText(out.text);
+    // The selection is put back once the new text has rendered.
+    requestAnimationFrame(() => {
+      area.current?.focus();
+      area.current?.setSelectionRange(out.start, out.end);
+    });
+  };
+  return (
+    <div className="field" data-testid="markdown-editor" style={{ maxWidth: 560 }}>
+      {label && <span className="field-label">{label}</span>}
+      <div className="row-actions" role="toolbar" aria-label="Formatting" style={{ gap: 4 }}>
+        {FORMATS.map((format) => (
+          <button
+            key={format}
+            type="button"
+            className="btn quiet"
+            data-testid={`md-${format}`}
+            aria-label={FORMAT_LABELS[format]}
+            title={rich ? "Switch to Markdown to format" : FORMAT_LABELS[format]}
+            disabled={rich}
+            // Before the textarea loses its selection to the button.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => press(format)}
+          >
+            {FORMAT_LABELS[format]}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="md-view"
+          aria-pressed={rich}
+          onClick={() => setRich(!rich)}
+        >
+          {/* p.466's own words for the two views. Not "Preview", which is the
+              builder's own button a page already has (§582's first test run
+              pressed this one instead). */}
+          {rich ? "Markdown" : "Rich text"}
+        </button>
+      </div>
+      {rich ? (
+        <div data-testid="md-rich" className="canvas-markdown">
+          {text.trim()
+            ? <MarkdownView blocks={parseMarkdown(text, { breaks: true })} align="left" />
+            : <p className="canvas-widget-empty">{placeholder || "Nothing written yet"}</p>}
+        </div>
+      ) : (
+        <textarea
+          ref={area}
+          aria-label={label || "Text input"}
+          data-testid="text-input"
+          value={text}
+          placeholder={placeholder}
+          rows={autoSize ? autoRows(text) : 8}
+          onChange={(e) => onText(e.target.value)}
+        />
       )}
     </div>
   );
@@ -3847,7 +3946,7 @@ export function CanvasTextInput({
 
 function TextInputSettings() {
   const {
-    name, label, placeholder, format, rows,
+    name, label, placeholder, format, rows, autoSize,
     actions: { setProp },
   } = useNode((node) => ({
     name: node.data.props.name,
@@ -3855,6 +3954,7 @@ function TextInputSettings() {
     placeholder: node.data.props.placeholder,
     format: node.data.props.format,
     rows: node.data.props.rows,
+    autoSize: node.data.props.autoSize,
   }));
   const { declared } = useCanvasVariables();
   // p.465's "String value" output.
@@ -3936,6 +4036,17 @@ function TextInputSettings() {
           <span className="field-hint">In rows, so it scales with the viewer&apos;s text</span>
         </label>
       )}
+      {shape.markdown && (
+        <label className="field checkbox">
+          <input
+            type="checkbox"
+            checked={autoSize !== false}
+            data-testid="text-auto-size"
+            onChange={(e) => setProp((p: { autoSize: boolean }) => (p.autoSize = e.target.checked))}
+          />
+          <span className="field-label">Auto-sizing</span>
+        </label>
+      )}
       </>}
     />
   );
@@ -3943,7 +4054,7 @@ function TextInputSettings() {
 
 CanvasTextInput.craft = {
   displayName: "Text input",
-  props: { name: "", label: "", placeholder: "", format: "line", rows: 4 },
+  props: { name: "", label: "", placeholder: "", format: "line", rows: 4, autoSize: true },
   related: { settings: TextInputSettings },
 };
 

@@ -26,13 +26,12 @@
  * complete, with a test that compares it against its subject rather than against
  * a second copy of itself.
  *
- * **Markdown is absent, deliberately.** p.465 lists three formats and p.466
- * describes the third as "a rich text editing experience powered by the same
- * editor used in Notepad" with a formatting toolbar and a raw/rich toggle. That
- * is an editor, not a format flag, and it belongs to the Markdown row in
- * `workshop.md`'s build order. Offering it here as a third option that rendered
- * a plain textarea would be the thing every catalogue in this codebase exists to
- * avoid: a choice that does not do what it says.
+ * **Markdown arrived with its editor (§582)**, and not before: p.466 describes
+ * it as "a rich text editing experience" with a formatting toolbar and a
+ * raw/rich toggle, and offering it as a third option that drew a plain
+ * textarea would have been a choice that does not do what it says. Its
+ * toolbar and views are `markdown-editor.ts`; here it is one more row, with
+ * p.466's Auto-sizing where Text area has p.465's Initial height.
  */
 
 export interface TextFormat {
@@ -43,11 +42,18 @@ export interface TextFormat {
   hasHeight: boolean;
   /** Whether the field is a `<textarea>` rather than an `<input>`. */
   multiline: boolean;
+  /** p.466's Markdown editor: a toolbar, raw and rich views, and Auto-sizing
+   * (§582). */
+  markdown: boolean;
 }
 
 export const TEXT_FORMATS: Record<string, TextFormat> = {
-  line: { label: "Single line", submitsOnEnter: true, hasHeight: false, multiline: false },
-  area: { label: "Text area", submitsOnEnter: false, hasHeight: true, multiline: true },
+  line: { label: "Single line", submitsOnEnter: true, hasHeight: false, multiline: false,
+    markdown: false },
+  area: { label: "Text area", submitsOnEnter: false, hasHeight: true, multiline: true,
+    markdown: false },
+  markdown: { label: "Markdown", submitsOnEnter: false, hasHeight: false, multiline: true,
+    markdown: true },
 };
 
 export type TextFormatName = keyof typeof TEXT_FORMATS;
