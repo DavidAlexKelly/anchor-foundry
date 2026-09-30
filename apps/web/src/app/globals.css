@@ -3782,3 +3782,9 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   border: 1px solid var(--line); border-radius: 6px;
   background: var(--paper);
 }
+
+/* §599: an OpenID Connect source's trust details, under its name. */
+.connection-oidc { margin: 6px 0 0; font-size: 12px; }
+.connection-oidc div { display: flex; gap: 6px; align-items: baseline; }
+.connection-oidc dt { min-width: 64px; color: var(--ink-soft); }
+.connection-oidc dd { margin: 0; overflow-wrap: anywhere; }

@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from croniter import croniter
 from dagster import OpExecutionContext, job, op
 
-from .. import export_runs
+from .. import export_runs, oidc
 from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env
 
@@ -98,7 +98,7 @@ def _run_one(context, platform_db, export_id, workspace_id) -> bool:
                 SELECT e.name, e.kind, e.mode, e.destination, e.last_version,
                        e.schedule, e.connection_id,
                        c.source_type, c.config, c.secret_arn, c.exports_enabled,
-                       d.current_version, d.id
+                       d.current_version, d.id, c.resource_id
                   FROM exports e
                   JOIN connections c ON c.id = e.connection_id
                   JOIN datasets d ON d.id = e.dataset_id
@@ -111,7 +111,7 @@ def _run_one(context, platform_db, export_id, workspace_id) -> bool:
                 return False
             (name, kind, mode, destination, last_version, schedule, connection_id,
              source_type, config, secret_arn, exports_enabled,
-             current_version, dataset_id) = row
+             current_version, dataset_id, resource_id) = row
             # Re-verified after discovery, both halves: the schedule may have
             # been cleared and the source's switch may have been turned off
             # between the enumeration and now.
@@ -157,7 +157,8 @@ def _run_one(context, platform_db, export_id, workspace_id) -> bool:
         "last_version": last_version,
     }
     connection = {"source_type": source_type, "config": _json(config)}
-    secret = _read_secret(secret_arn)
+    # §599, as a scheduled sync does it.
+    secret = oidc.source_credentials(config, resource_id) or _read_secret(secret_arn)
 
     # Three ways this comes back empty and they end in the same place: no
     # version row, a version row with no recorded key, or a key whose bytes are

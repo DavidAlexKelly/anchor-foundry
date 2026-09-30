@@ -35,6 +35,25 @@ export DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://platform_app:devpass@l
 export TEST_ADMIN_DSN="${TEST_ADMIN_DSN:-postgresql://platform:devpass@localhost:5432/platform?sslmode=disable}"
 mkdir -p "$STORAGE_ROOT"
 
+# §599: the platform as an OpenID Connect identity provider (data-connection
+# p.391). A deployment sets both from its own secrets; locally the key is
+# generated once and kept beside the logs, so a token issued before a restart
+# still checks against the key set served after it. The issuer is the web
+# origin, which is the address a browser - and the e2e suite - reaches.
+OIDC_KEY_FILE="$LOG_DIR/oidc-signing-key.pem"
+if [ ! -s "$OIDC_KEY_FILE" ]; then
+  "$PYTHON" -c '
+import sys
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+sys.stdout.write(key.private_bytes(serialization.Encoding.PEM,
+    serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode())
+' > "$OIDC_KEY_FILE"
+fi
+export OIDC_SIGNING_KEY="${OIDC_SIGNING_KEY:-$(cat "$OIDC_KEY_FILE")}"
+export OIDC_ISSUER="${OIDC_ISSUER:-http://localhost:$WEB_PORT/api/oidc}"
+
 # **`setsid` is Linux-only.** macOS has no such command, so a line written as
 # `setsid nohup ... &` there does not start a detached server - it fails with
 # "setsid: command not found", into the log file, and the only thing the user

@@ -1020,6 +1020,9 @@ export interface Connection {
    * offered — "not enabled" and "cannot be a destination" are different
    * sentences, and merging them sends somebody looking for the wrong fix. */
   exports_enabled: boolean;
+  /** §599: for a source that authenticates with OpenID Connect, what its
+   * trust policy names (p.391). Null for any other. */
+  oidc?: { issuer: string | null; audience: string | null; subject: string | null } | null;
   created_at: string;
   updated_at: string;
 }

@@ -101,7 +101,7 @@ async def connection_for(
         conn,
         """
         SELECT c.id, c.name, c.source_type, c.config, c.secret_arn, c.scope,
-               c.workspace_id, c.project_id, c.exports_enabled
+               c.workspace_id, c.project_id, c.exports_enabled, c.resource_id
           FROM connections c
          WHERE c.id = :cid
            AND (c.scope = 'workspace' OR c.project_id = :pid)

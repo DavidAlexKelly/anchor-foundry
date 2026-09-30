@@ -235,3 +235,73 @@ def _make_due(connection_id) -> None:
             "UPDATE connections SET sync_next_run_at = now() - interval '1 minute' WHERE id=%s",
             (connection_id,),
         )
+
+
+def test_a_scheduled_sync_authenticates_with_openid_connect(
+    workspace: dict, s3_config: dict, s3, monkeypatch
+) -> None:
+    """§599, p.391: a scheduled sync is "a workflow in Foundry … required to
+    authenticate with the source system", and it presents the same token an
+    interactive one does - signed with the deployment's key, naming the
+    source - with no credential stored anywhere."""
+    import jwt
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    monkeypatch.setenv("OIDC_ISSUER", "https://platform.example.test/api/oidc")
+    monkeypatch.setenv("OIDC_SIGNING_KEY", key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()).decode())
+    traded: list[dict] = []
+    real_client = boto3.client
+
+    def spying_client(service, **kwargs):
+        made = real_client(service, **kwargs)
+        if service == "sts":
+            original = made.assume_role_with_web_identity
+
+            def assume(**call):
+                traded.append(call)
+                return original(**call)
+            made.assume_role_with_web_identity = assume
+        return made
+    monkeypatch.setattr(boto3, "client", spying_client)
+
+    object_key = f"oidc-{uuid.uuid4().hex[:6]}.csv"
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{object_key}", Body=b"id,val\n1,a\n")
+    role = "arn:aws:iam::123456789012:role/anchor-reader"
+    cid = _create_connection(
+        workspace, {**s3_config, "oidc_role_arn": role, "oidc_audience": "sts.amazonaws.com"},
+        mode="full", dataset_name="s3_oidc", source_type="s3", source_schema="",
+        source_table=object_key,
+    )
+    assert run_due_scheduled_syncs(_ctx()) >= 1
+    row = _connection_row(cid)
+    assert row["status"] == "ok", row["last_error"]
+    import psycopg
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"]) as db:
+        resource = db.execute("SELECT resource_id FROM connections WHERE id = %s",
+                              (cid,)).fetchone()[0]
+    [call] = [c for c in traded if c["RoleArn"] == role]
+    claims = jwt.decode(call["WebIdentityToken"], key.public_key(), algorithms=["RS256"],
+                        audience="sts.amazonaws.com",
+                        issuer="https://platform.example.test/api/oidc")
+    assert claims["sub"] == f"connection.{resource}"
+
+
+def test_an_openid_connect_source_the_deployment_cannot_sign_for_fails_alone(
+    workspace: dict, s3_config: dict, s3, monkeypatch
+) -> None:
+    monkeypatch.delenv("OIDC_ISSUER", raising=False)
+    object_key = f"oidc-{uuid.uuid4().hex[:6]}.csv"
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{object_key}", Body=b"id\n1\n")
+    cid = _create_connection(
+        workspace, {**s3_config, "oidc_role_arn": "arn:aws:iam::123456789012:role/r",
+                    "oidc_audience": "sts.amazonaws.com"},
+        mode="full", dataset_name="s3_oidc_off", source_type="s3", source_schema="",
+        source_table=object_key,
+    )
+    assert run_due_scheduled_syncs(_ctx()) >= 1
+    row = _connection_row(cid)
+    assert row["status"] == "error" and "OIDC_ISSUER" in row["last_error"], row

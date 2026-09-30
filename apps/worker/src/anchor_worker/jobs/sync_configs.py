@@ -32,6 +32,7 @@ from dagster import OpExecutionContext, job, op
 
 from .. import dataset_engine as engine
 from .. import egress
+from .. import oidc
 from ..connectors import ConnectorError, get_connector
 from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env, slugify, storage_prefix
@@ -168,7 +169,7 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                     SELECT project_id, config, secret_arn, sync_mode, sync_schedule,
                            sync_source_schema, sync_source_table, sync_dataset_name,
                            sync_dataset_id, sync_primary_key_column, sync_cursor_column,
-                           sync_last_cursor_value, source_type
+                           sync_last_cursor_value, source_type, resource_id
                       FROM connections WHERE id = %s
                     """,
                     (connection_id,),
@@ -178,7 +179,7 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                     continue  # unscheduled since discovery - re-verified
                 (project_id, config, secret_arn, mode, _schedule, source_schema, source_table,
                  dataset_name, dataset_id, primary_key_column, cursor_column, last_cursor,
-                 source_type) = row
+                 source_type, resource_id) = row
                 # Only the table half is required. An empty source_schema is
                 # legitimate for object storage - it means "at the root of the
                 # connection's configured prefix" - so testing it for
@@ -206,7 +207,9 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
             conn.commit()
 
         ok, error, rows_synced = True, None, 0
-        secret = _read_secret(secret_arn)
+        # §599: a source configured for OpenID Connect is told who it is, to
+        # mint its token when it connects; any other reads what it stored.
+        secret = oidc.source_credentials(config, resource_id) or _read_secret(secret_arn)
         new_cursor_value = last_cursor
         try:
             connector = get_connector(source_type)

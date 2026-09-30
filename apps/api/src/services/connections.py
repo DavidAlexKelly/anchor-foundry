@@ -20,13 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import NotFoundError
-from .connectors import get_connector
+from .connectors import ConnectorConfigError, get_connector
 from .secrets import SecretsGateway
 
 _LIST_COLUMNS = """
     id, workspace_id, project_id, scope, name, source_type, config, sync_mode,
     status, last_tested_at, last_synced_at, last_error, exports_enabled,
-    created_by, created_at, updated_at
+    created_by, created_at, updated_at, resource_id
 """
 
 
@@ -81,6 +81,7 @@ async def create(
 ) -> dict[str, Any]:
     connector = get_connector(source_type)
     clean_config = connector.validate_config(config)
+    _check_oidc(clean_config, secret_values)
 
     import uuid as uuid_mod
 
@@ -132,13 +133,18 @@ async def update(
     existing = await get(conn, workspace_id, project_id, connection_id)
 
     clean_config: dict[str, Any] | None = None
+    oidc_source = False
     if config is not None:
         connector = get_connector(str(existing["source_type"]))
         clean_config = connector.validate_config(config)
+        oidc_source = _check_oidc(clean_config, secret_values)
 
     secret_arn = existing["secret_arn"]
     if secret_values:
         secret_arn = secrets.put_secret(str(connection_id), secret_values)
+    if oidc_source:
+        # A source moved to OpenID Connect keeps no credentials it had (§599).
+        secret_arn = None
 
     row = await fetch_one(
         conn,
@@ -382,10 +388,47 @@ def secret_values_for(
     secrets: SecretsGateway, row: dict[str, Any]
 ) -> dict[str, str]:
     """Resolve credentials for a driver call. Empty dict when the connection
-    was created without credentials (e.g. trust-auth dev databases)."""
+    was created without credentials (e.g. trust-auth dev databases).
+
+    **Or who it is** (§599; p.391): a source configured for OpenID Connect
+    stores nothing, and "every time a workflow in Foundry is required to
+    authenticate with the source system … Foundry will issue an OIDC token
+    with claims that identify the Data Connection source". The connector
+    mints it at the moment it connects (`_web_identity_credentials`), so a
+    failure to is a connector failure on every path that already reports
+    one, and the hour a token lasts starts when it is used."""
+    from . import oidc
+    from .connectors import oidc_audience
+
+    config = row.get("config") or {}
+    if isinstance(config, str):
+        import json
+
+        config = json.loads(config)
+    if oidc_audience(config) is not None:
+        return {"oidc_subject": oidc.subject_for(row["resource_id"])}
     if not row.get("secret_arn"):
         return {}
     return secrets.get_secret(str(row["secret_arn"]))
+
+
+def _check_oidc(config: dict[str, Any], secret_values: dict[str, str] | None) -> bool:
+    """Whether `config` is an OpenID Connect source, refusing one that also
+    brings credentials (it stores none, p.391) or that this deployment could
+    not issue a token for - said now rather than at the first sync."""
+    from . import oidc
+    from .connectors import oidc_audience
+
+    if oidc_audience(config) is None:
+        return False
+    if secret_values:
+        raise ConnectorConfigError(
+            "an OpenID Connect source stores no credentials - it is given a token each time")
+    if not oidc.available():
+        raise ConnectorConfigError(
+            "this platform is not set up to issue OpenID Connect tokens - the deployment "
+            "sets OIDC_ISSUER and an RSA OIDC_SIGNING_KEY")
+    return True
 
 
 def _json(value: dict[str, Any]) -> str:
