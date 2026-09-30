@@ -10,18 +10,34 @@
  */
 
 import { MathError, evaluate, parse, references, type Expr } from "./column-math";
+import type { Derivation } from "@/lib/types";
 
-export interface DerivedColumn {
+/** p.170's Column math: arithmetic over the row's own values. */
+export interface ColumnMathColumn {
   /** The name a column list uses, and what an expression elsewhere would
    * reference. Same shape as a property api name, because it stands in one. */
   api_name: string;
   display_name?: string;
-  /** p.170's kind. Only one is built; the field is here because p.169's is the
-   * other, and a document that has to be migrated to gain a discriminator is
-   * a document that was written without one. */
   kind: "column_math";
   expression: string;
 }
+
+/** p.169's Linked property/aggregation (§605): "Linked property: allows users
+ * to derive a single property from a linked object type… Linked aggregation:
+ * allows users to aggregate linked properties". The same chain an ontology
+ * derived property holds (`object-link-types` p.145-147), held by the module
+ * rather than by the type, and answered by the same server read (§604). */
+export interface LinkedColumn {
+  api_name: string;
+  display_name?: string;
+  kind: "linked";
+  /** Null while being drawn: a column named and not yet built. */
+  derivation: Derivation | null;
+}
+
+/** p.168's two kinds. The field was written as a discriminator with one value
+ * (§411) so that this second one needed no migration. */
+export type DerivedColumn = ColumnMathColumn | LinkedColumn;
 
 /** Only what the rules read, so a caller can pass an ontology property row. */
 export interface KnownProperty {
@@ -47,20 +63,33 @@ export function columnsFor(raw: unknown, objectTypeId: string): DerivedColumn[] 
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     const it = entry as Record<string, unknown>;
     const name = typeof it.api_name === "string" ? it.api_name.trim() : "";
-    const expression = typeof it.expression === "string" ? it.expression : "";
-    if (!name || !expression || it.kind !== "column_math") continue;
+    if (!name) continue;
+    const label = typeof it.display_name === "string" && it.display_name
+      ? { display_name: it.display_name } : {};
+    let column: DerivedColumn;
+    if (it.kind === "column_math") {
+      const expression = typeof it.expression === "string" ? it.expression : "";
+      if (!expression) continue;
+      column = { api_name: name, ...label, kind: "column_math", expression };
+    } else if (it.kind === "linked") {
+      // Only a chain that has at least one link to follow; anything else is a
+      // column somebody named and never built, which draws nothing. One check
+      // covers every malformed shape - an array, a string or a null has no
+      // `links` list - which §605's sweep showed by finding the separate
+      // object check could not change the answer.
+      const d = it.derivation as { links?: unknown } | null | undefined;
+      const links = d?.links;
+      if (!Array.isArray(links) || links.length === 0) continue;
+      column = { api_name: name, ...label, kind: "linked", derivation: d as Derivation };
+    } else {
+      continue;
+    }
     // **A repeat is dropped rather than shadowing.** Two columns with one name
     // is a table where which one you get depends on order, and the second is
     // the one nobody meant.
     if (seen.has(name)) continue;
     seen.add(name);
-    out.push({
-      api_name: name,
-      ...(typeof it.display_name === "string" && it.display_name
-        ? { display_name: it.display_name } : {}),
-      kind: "column_math",
-      expression,
-    });
+    out.push(column);
   }
   return out;
 }
@@ -90,8 +119,15 @@ export function problem(
   } catch (error) {
     return error instanceof MathError ? error.message : "this expression cannot be read";
   }
-  const names = new Set(known.map((p) => p.api_name));
-  const columnMath = new Set(others.map((c) => c.api_name));
+  // p.170: "aggregation type derived properties may be used and referenced"
+  // - which a module's linked column is (§605), as an ontology one is.
+  const names = new Set([
+    ...known.map((p) => p.api_name),
+    ...others.filter((c) => c.kind === "linked").map((c) => c.api_name),
+  ]);
+  const columnMath = new Set(
+    others.filter((c) => c.kind === "column_math").map((c) => c.api_name),
+  );
   for (const ref of references(tree)) {
     if (columnMath.has(ref)) {
       return `${ref} is another calculated column, and p.170 allows only the `
@@ -112,7 +148,7 @@ export function problem(
  * a table page is twenty-five rows and the expression is a dozen tokens, and a
  * cache keyed on a string is a second place for the answer to live. */
 export function valueFor(
-  column: DerivedColumn,
+  column: ColumnMathColumn,
   properties: Record<string, unknown>,
 ): number | null {
   try {
@@ -123,4 +159,56 @@ export function valueFor(
     // belongs, because that is where somebody can act on it.
     return null;
   }
+}
+
+/**
+ * What a table has to ask the server for, to draw the columns it shows (§605).
+ *
+ * Two kinds of value are not on a list read's rows: an ontology derived
+ * property (by name) and a module's linked column (by its derivation). A table
+ * needs each one it **shows**, and each one a column-math column it shows
+ * **references** - p.170 lets an expression use an aggregation, and an
+ * expression over a value the table never fetched is a column of blanks that
+ * looks like data.
+ */
+export function derivedInputs(
+  shown: readonly string[],
+  properties: readonly { api_name: string; derivation?: unknown }[],
+  columns: readonly DerivedColumn[],
+): { properties: string[]; derivations: Record<string, Derivation> } {
+  const wanted = new Set(shown);
+  for (const column of columns) {
+    if (column.kind !== "column_math" || !wanted.has(column.api_name)) continue;
+    try {
+      for (const ref of references(parse(column.expression))) wanted.add(ref);
+    } catch {
+      // An expression this build cannot read references nothing it can use.
+    }
+  }
+  const derivations: Record<string, Derivation> = {};
+  for (const column of columns) {
+    if (column.kind === "linked" && column.derivation && wanted.has(column.api_name)) {
+      derivations[column.api_name] = column.derivation;
+    }
+  }
+  return {
+    properties: properties
+      .filter((p) => !!p.derivation && wanted.has(p.api_name))
+      .map((p) => p.api_name),
+    derivations,
+  };
+}
+
+/** A linked column's chain in a phrase, for the panel's row: what it
+ * aggregates and how far it walks. */
+export function linkedSummary(derivation: Derivation | null): string {
+  if (!derivation) return "not built yet";
+  const hops = derivation.links?.length ?? 0;
+  const walk = `over ${hops} link${hops === 1 ? "" : "s"}`;
+  const what = derivation.aggregate
+    ? derivation.property
+      ? `${derivation.aggregate} of ${derivation.property}`
+      : derivation.aggregate
+    : derivation.property ?? "a value";
+  return `${what} ${walk}`;
 }

@@ -42,3 +42,16 @@ export function derivedCell(
   const row = page.rows.find((r) => r.primary_key === key);
   return { state: "value", value: row?.values[name] ?? null };
 }
+
+/** A value with no property row to format it by - a module's linked column
+ * (§605) - as the cell shows it: a collection as a list, a number in the
+ * reader's locale, and nothing as nothing (`null`, for the table's own empty
+ * text). */
+export function plainValue(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) {
+    return value.length ? value.map((v) => plainValue(v) ?? "").join(", ") : null;
+  }
+  if (typeof value === "number") return value.toLocaleString();
+  return String(value);
+}

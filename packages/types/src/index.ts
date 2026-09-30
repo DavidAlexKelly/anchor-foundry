@@ -268,16 +268,13 @@ export interface WorkshopModule {
    * widget names one of these in its column list, so reverting a version has
    * to take the declaration back with the layout that references it.
    *
-   * Only p.170's **Column math** is built. p.169's linked property /
-   * aggregation is the shape the ontology already has (§161, §406) and
-   * carries that shape's cost — a query per hop, so a single-object read
-   * rather than a column. */
-  derived_properties?: Record<string, {
-    api_name: string;
-    display_name?: string;
-    kind: "column_math";
-    expression: string;
-  }[]>;
+   * p.170's **Column math** (§411) and p.169's **Linked property /
+   * aggregation** (§605) - the chain an ontology derived property holds,
+   * answered for a page of rows by §604's one read per hop. */
+  derived_properties?: Record<string, (
+    | { api_name: string; display_name?: string; kind: "column_math"; expression: string }
+    | { api_name: string; display_name?: string; kind: "linked"; derivation: Derivation | null }
+  )[]>;
   /** p.214's Saved colors: the module-level palette widgets reference (§414).
    *
    * > "Saved colors are defined at the module level… When you edit a saved

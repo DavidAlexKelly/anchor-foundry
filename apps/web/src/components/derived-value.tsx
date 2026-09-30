@@ -7,7 +7,7 @@
  * property's value is. `lib/derived-values.ts` decides which.
  */
 import { PropertyValue } from "@/components/property-value";
-import type { DerivedCell } from "@/lib/derived-values";
+import { plainValue, type DerivedCell } from "@/lib/derived-values";
 import type { ObjectTypeProperty } from "@/lib/types";
 
 export function DerivedValue({
@@ -18,7 +18,9 @@ export function DerivedValue({
   testId,
 }: {
   workspaceId: string;
-  property: ObjectTypeProperty;
+  /** Absent for a module's linked column, which has no property row to be
+   * formatted by and is shown plainly (§605). */
+  property?: ObjectTypeProperty;
   cell: DerivedCell;
   emptyText?: string;
   testId: string;
@@ -30,6 +32,14 @@ export function DerivedValue({
     return (
       <span className="count" data-testid={testId} data-state="error" title={cell.reason}>
         —
+      </span>
+    );
+  }
+  if (!property) {
+    const text = plainValue(cell.value);
+    return (
+      <span data-testid={testId} data-state="value" className={text === null ? "soft" : undefined}>
+        {text ?? emptyText}
       </span>
     );
   }

@@ -3,8 +3,10 @@
 import { useEditor } from "@craftjs/core";
 import { useEffect, useRef, useState } from "react";
 import { MIN_SECONDS, type AutoRefresh } from "./auto-refresh";
-import { problem as columnMathProblem } from "./derived-columns";
+import { linkedSummary, problem as columnMathProblem } from "./derived-columns";
 import type { DerivedColumn, KnownProperty } from "./derived-columns";
+import { useCanvasEnv } from "./context";
+import { DerivedPropertyEditor } from "@/components/derived-property-editor";
 
 import type { WorkshopEvent, WorkshopModule, WorkshopVariable } from "@/lib/types";
 import { newEventId, newNodeId, newVariableId } from "@/lib/workshop-module";
@@ -89,6 +91,11 @@ function detailOf(displayName: string, props: Record<string, unknown>): string {
  * The expression is checked as it is typed, against `derived-columns.ts` —
  * the same function the table would refuse on, so a column that shows a
  * sentence here never reaches a reader as a blank.
+ *
+ * **p.169's linked kind is built with the ontology's own chain editor**
+ * (§605): the same walk, a hop at a time from where the chain stands, and the
+ * same aggregations - because the server answers both with one read, and two
+ * editors for one shape would be two chances to disagree about what it may be.
  */
 function DerivedPropertiesField({
   value,
@@ -99,7 +106,10 @@ function DerivedPropertiesField({
   types: { id: string; label: string; properties: KnownProperty[] }[];
   onChange: (next: Record<string, DerivedColumn[]>) => void;
 }) {
+  const { workspaceId } = useCanvasEnv();
   const [typeId, setTypeId] = useState("");
+  // Which linked column's chain is open in the editor, by index.
+  const [building, setBuilding] = useState<number | null>(null);
   const chosen = types.find((t) => t.id === typeId);
   const columns = value[typeId] ?? [];
 
@@ -134,11 +144,13 @@ function DerivedPropertiesField({
       {chosen && (
         <>
           {columns.map((column, index) => {
-            const issue = columnMathProblem(
-              column.expression,
-              chosen.properties,
-              columns.filter((_, i) => i !== index),
-            );
+            const issue = column.kind === "column_math"
+              ? columnMathProblem(
+                column.expression,
+                chosen.properties,
+                columns.filter((_, i) => i !== index),
+              )
+              : column.derivation ? null : "Build the chain this column follows.";
             return (
               <div key={index} className="cf-rule">
                 <input
@@ -148,13 +160,25 @@ function DerivedPropertiesField({
                   onChange={(e) => write(columns.map((c, i) =>
                     (i === index ? { ...c, api_name: e.target.value } : c)))}
                 />
-                <input
-                  data-testid={`derived-expression-${index + 1}`}
-                  placeholder="revenue - cost"
-                  value={column.expression}
-                  onChange={(e) => write(columns.map((c, i) =>
-                    (i === index ? { ...c, expression: e.target.value } : c)))}
-                />
+                {column.kind === "column_math" ? (
+                  <input
+                    data-testid={`derived-expression-${index + 1}`}
+                    placeholder="revenue - cost"
+                    value={column.expression}
+                    onChange={(e) => write(columns.map((c, i) =>
+                      (i === index && c.kind === "column_math"
+                        ? { ...c, expression: e.target.value } : c)))}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="btn quiet"
+                    data-testid={`derived-chain-${index + 1}`}
+                    onClick={() => setBuilding(index)}
+                  >
+                    {linkedSummary(column.derivation)}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="btn"
@@ -171,22 +195,53 @@ function DerivedPropertiesField({
               </div>
             );
           })}
-          <button
-            type="button"
-            className="btn"
-            data-testid="derived-add"
-            onClick={() => write([
-              ...columns,
-              { api_name: "", kind: "column_math", expression: "" },
-            ])}
-          >
-            Add a derived property
-          </button>
+          <div className="row-actions">
+            <button
+              type="button"
+              className="btn"
+              data-testid="derived-add"
+              onClick={() => write([
+                ...columns,
+                { api_name: "", kind: "column_math", expression: "" },
+              ])}
+            >
+              Add column math
+            </button>
+            <button
+              type="button"
+              className="btn"
+              data-testid="derived-add-linked"
+              onClick={() => write([
+                ...columns,
+                { api_name: "", kind: "linked", derivation: null },
+              ])}
+            >
+              Add a linked property
+            </button>
+          </div>
           <span className="field-hint">
-            Arithmetic over this type&rsquo;s own properties (p.170). Name it in a
-            widget&rsquo;s column list to show it. It is calculated for display —
-            filters and sorts do not see it (p.172).
+            Column math is arithmetic over this type&rsquo;s own properties (p.170);
+            a linked property follows links to other objects and takes a value
+            or an aggregation from them (p.169). Name it in a widget&rsquo;s
+            column list to show it. It is calculated for display — filters and
+            sorts do not see it (p.172).
           </span>
+          {building !== null && columns[building]?.kind === "linked" && (
+            <DerivedPropertyEditor
+              open
+              onClose={() => setBuilding(null)}
+              propertyName={columns[building]!.api_name || "this column"}
+              workspaceId={workspaceId}
+              objectTypeId={typeId}
+              value={(columns[building] as { derivation: import("@/lib/types").Derivation | null })
+                .derivation}
+              onSave={(next) => {
+                write(columns.map((c, i) =>
+                  (i === building && c.kind === "linked" ? { ...c, derivation: next } : c)));
+                setBuilding(null);
+              }}
+            />
+          )}
         </>
       )}
     </div>
