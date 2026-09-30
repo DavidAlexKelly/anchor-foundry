@@ -48,6 +48,7 @@ from ..services import property_values
 from ..lib.errors import NotFoundError
 from ..services import instance_store
 from ..services import derived_properties
+from ..services import derived_values
 from ..services import object_sets
 from ..services import object_set_eval
 from ..services import link_join_tables
@@ -5192,11 +5193,10 @@ async def _with_derived(
 
     **Single reads only, and that is a deliberate line.** Each derived property
     costs a query per hop, so doing this for a page of a table would be a
-    silent N+1 on every list in the product. p.143's own examples are all
-    object-shaped - "this department's average salary", "this project's lead
-    engineer" - so the object view is where the answer is worth paying for.
-    A table showing a derived column needs the chain pushed into the *set*
-    read, the way §402 pushed a page of time series into one query.
+    silent N+1 on every list in the product. A table asks
+    `derived_values_for_page` instead (§604), which pushes the chain into the
+    set read - one read per hop for the whole page - and is held to this
+    function's answers row by row.
 
     **Not the typed-index work**, which this said until §410 and which §406
     finished: the arithmetic aggregations it was waiting on are answered now,
@@ -5217,6 +5217,106 @@ async def _with_derived(
             derivation=_jsonb(prop["derivation"]),
         )
     return {**row, "properties": values}
+
+
+#: A page of a table, and no more: the rows are the ones somebody is looking
+#: at, and the bound keeps one request one page (§604).
+MAX_DERIVED_KEYS = 200
+
+
+class DerivedValuesIn(BaseModel):
+    """The rows a table is showing, by primary key, and which derived
+    properties to fill in for them (§604)."""
+
+    keys: list[str] = Field(max_length=MAX_DERIVED_KEYS)
+    properties: list[str] = Field(min_length=1)
+
+
+class DerivedValuesRow(BaseModel):
+    primary_key: str
+    values: dict[str, Any]
+
+
+class DerivedValuesOut(BaseModel):
+    rows: list[DerivedValuesRow]
+    #: A property the page could not be answered for, with the sentence the
+    #: column shows in place of its values - one property's chain reaching
+    #: too far does not blank the others.
+    errors: dict[str, str]
+
+
+@router.post("/object-types/{type_id}/derived-values", response_model=DerivedValuesOut)
+async def derived_values_for_page(
+    type_id: UUID,
+    body: DerivedValuesIn,
+    application: str = APPLICATION_QUERY,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> DerivedValuesOut:
+    """p.143's derived properties for a page of rows, one read per hop (§604).
+
+    `_with_derived` answers one object and says why it stopped there: a chain
+    per row is a read per row per hop. This is the page's version, the chain
+    pushed into the set read (`derived_values` says how, and what makes its
+    answer the single read's answer).
+
+    **It takes keys, and re-reads them.** The keys are values the caller
+    already holds - the rows of the table it drew - and the objects are read
+    again through the caller's own connection, so a key for an object this
+    caller cannot see answers nothing rather than a value. A key the page no
+    longer has (deleted since) is simply absent from the rows.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        declared = {
+            str(p["api_name"]): p for p in await ontology_service.list_properties(conn, type_id)
+        }
+        wanted: list[tuple[str, dict[str, Any]]] = []
+        for name in body.properties:
+            prop = declared.get(name)
+            if prop is None or not prop.get("derivation"):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"{name!r} is not a derived property of this object type",
+                )
+            wanted.append((name, _jsonb(prop["derivation"])))
+        await _count_usage(
+            conn, object_type_id=type_id, user_id=access.auth.user_id,
+            application=application, reads=1,
+        )
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        # Neither de-duplicated nor guarded when empty, and §604's sweep is why:
+        # a repeated key only raises the read's limit, and `in` over no keys
+        # reads nothing - the `in` filter answers both cases itself.
+        rows, _ = await store.evaluate_object_set(
+            search_prefix=prefix,
+            object_type_id=type_id,
+            filters=(
+                object_sets.Filter(
+                    property=object_sets.PRIMARY_KEY_FILTER, op="in", value=body.keys
+                ),
+            ),
+            limit=len(body.keys),
+            offset=0,
+            sort="key_asc",
+        )
+        values: dict[str, dict[str, Any]] = {str(r["primary_key"]): {} for r in rows}
+        errors: dict[str, str] = {}
+        for name, derivation in wanted:
+            try:
+                answers = await derived_values.derive_for_rows(
+                    conn, store, prefix, access.workspace_id,
+                    start_type_id=type_id, rows=rows, derivation=derivation,
+                )
+            except ValueError as exc:
+                errors[name] = str(exc)
+                continue
+            for key, value in answers.items():
+                values[key][name] = value
+    return DerivedValuesOut(
+        rows=[DerivedValuesRow(primary_key=k, values=v) for k, v in values.items()],
+        errors=errors,
+    )
 
 
 class ObjectSetSeriesIn(ObjectSetIn):

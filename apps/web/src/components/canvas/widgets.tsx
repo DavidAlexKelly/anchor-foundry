@@ -142,6 +142,8 @@ import {
   strokeFor, subjectProperties,
 } from "./conditional-formats";
 import { columnsFor, problem as columnMathProblem, valueFor } from "./derived-columns";
+import { derivedCell, derivedNames } from "@/lib/derived-values";
+import { DerivedValue } from "@/components/derived-value";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import type { ConditionalRule } from "@/lib/types";
 import { latest as latestOf } from "./sparkline";
@@ -5634,6 +5636,20 @@ export function CanvasObjectTable({
     : { isError: page.isError, isPending: page.isPending };
   const setFilters = setPage.filters;
 
+  // p.143's derived properties among the columns (§604). A list read carries
+  // none - they are calculated from each object's links - so the page asks for
+  // them in one more read, one read per hop for every row at once, and only
+  // when a visible column is one.
+  const derivedWanted = derivedNames(properties);
+  const pageKeys = (rows ?? []).map((r) => r.primary_key);
+  const derivedPage = useQuery({
+    queryKey: ["canvas-derived-values", effectiveTypeId, derivedWanted, pageKeys],
+    queryFn: () => objApi.derivedValues(workspaceId, String(effectiveTypeId), {
+      keys: pageKeys, properties: derivedWanted,
+    }),
+    enabled: derivedWanted.length > 0 && pageKeys.length > 0 && !!effectiveTypeId,
+  });
+
   // Row selection (roadmap 1.3). The widget does not decide what a click
   // *means* - it announces that a row was chosen and hands over the row, and
   // the module's events say what happens. That is the difference between a
@@ -5809,6 +5825,13 @@ export function CanvasObjectTable({
               : ""}
           </p>
           )}
+          {/* A derived column the page reached too far to answer, said once
+              for the column rather than in every one of its cells. */}
+          {Object.entries(derivedPage.data?.errors ?? {}).map(([name, reason]) => (
+            <p key={name} className="field-hint" data-testid={`derived-error-${name}`}>
+              {properties.find((p) => p.api_name === name)?.display_name || name}: {reason}
+            </p>
+          ))}
           <div
             className={[
               "data-grid",
@@ -6074,6 +6097,16 @@ export function CanvasObjectTable({
                                   (seriesByKey.get(instance.primary_key) ?? [])
                                     .map((point) => point.value as number),
                                 )}
+                              />
+                            ) : p.derivation ? (
+                              <DerivedValue
+                                workspaceId={workspaceId}
+                                property={p}
+                                cell={derivedCell(
+                                  derivedPage.data, instance.primary_key, p.api_name,
+                                )}
+                                emptyText={emptyText}
+                                testId={`derived-${instance.primary_key}-${p.api_name}`}
                               />
                             ) : (
                               <PropertyValue
