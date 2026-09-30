@@ -1482,6 +1482,7 @@ async def list_action_types(
                at.api_name, at.display_name, at.description,
                at.status, at.deprecation, at.allow_revert,
                at.version, at.log_object_type_id, at.log_link_type_id,
+               at.log_summary, at.log_reference_properties,
                at.created_at, at.updated_at
           FROM action_types at
           -- **LEFT, and that is db 0101's whole consequence for the reads.**
@@ -1515,6 +1516,7 @@ async def get_action_type(
                at.api_name, at.display_name, at.description,
                at.status, at.deprecation, at.allow_revert,
                at.version, at.log_object_type_id, at.log_link_type_id,
+               at.log_summary, at.log_reference_properties,
                at.created_at, at.updated_at
           FROM action_types at
           -- **LEFT, and that is db 0101's whole consequence for the reads.**

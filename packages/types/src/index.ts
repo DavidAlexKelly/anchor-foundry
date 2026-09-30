@@ -3052,6 +3052,10 @@ export interface ActionType {
    * until a log is turned on. */
   log_object_type_id?: string | null;
   log_link_type_id?: string | null;
+  /** p.168's optional Summary template and the object reference parameters'
+   * properties each log entry keeps (§586; db 0121). */
+  log_summary?: string | null;
+  log_reference_properties?: Record<string, string[]>;
   /** Developmental state (`object-link-types` p.253, which names actions among
    * the kinds that have one). `promoted` is excluded by p.255. **Not capped by
    * the object type** — p.257's cap is about link types and says nothing about

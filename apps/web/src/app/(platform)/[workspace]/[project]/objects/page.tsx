@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
+import { ActionLogDialog } from "@/components/action-log-dialog";
 import {
   actions as actionApi,
   ApiError,
@@ -1246,18 +1247,9 @@ export default function ObjectsPage() {
       queryClient.invalidateQueries({ queryKey: ["action-types", workspace?.id] }),
   });
 
-  // p.167's action log (§554). Everything it makes is listed on this page, so
-  // all of it is re-read.
-  const enableLog = useMutation({
-    mutationFn: (id: string) => actionApi.enableLog(workspace!.id, project!.id, id),
-    onSuccess: async () => {
-      for (const key of ["action-types", "object-types", "link-types"]) {
-        await queryClient.invalidateQueries({ queryKey: [key, workspace?.id] });
-      }
-      await queryClient.invalidateQueries({ queryKey: ["object-sources", project?.id] });
-      await queryClient.invalidateQueries({ queryKey: ["datasets", project?.id] });
-    },
-  });
+  // p.167's action log (§554), turned on through a dialog since §586 gave it
+  // p.168's two optional fields. The dialog re-reads everything it makes.
+  const [loggingAction, setLoggingAction] = useState<ActionType | null>(null);
 
   const canEditOntology = workspace ? workspace.effective_role !== "viewer" : false;
   const canEditSources = project ? project.effective_role !== "viewer" : false;
@@ -1814,22 +1806,32 @@ export default function ObjectsPage() {
                               object of a [LOG] type, once turned on. An
                               interface action has no one type to link it to. */}
                           {a.log_object_type_id ? (
-                            <Link
-                              className="btn quiet"
-                              style={{ padding: "3px 9px", fontSize: 12, marginRight: 6 }}
-                              data-testid={`action-log-${a.api_name}`}
-                              href={`/${params.workspace}/${params.project}/objects/${a.log_object_type_id}`}
-                            >
-                              Action log
-                            </Link>
+                            <>
+                              <Link
+                                className="btn quiet"
+                                style={{ padding: "3px 9px", fontSize: 12, marginRight: 6 }}
+                                data-testid={`action-log-${a.api_name}`}
+                                href={`/${params.workspace}/${params.project}/objects/${a.log_object_type_id}`}
+                              >
+                                Action log
+                              </Link>
+                              {/* p.168's Summary, changeable later (§586). */}
+                              <button
+                                className="btn quiet"
+                                style={{ padding: "3px 9px", fontSize: 12, marginRight: 6 }}
+                                data-testid={`action-log-summary-${a.api_name}`}
+                                onClick={() => setLoggingAction(a)}
+                              >
+                                Log summary
+                              </button>
+                            </>
                           ) : a.object_type_id && canEditSources && (
                             <button
                               className="btn quiet"
                               style={{ padding: "3px 9px", fontSize: 12, marginRight: 6 }}
                               data-testid={`action-log-on-${a.api_name}`}
-                              disabled={enableLog.isPending}
                               title="Record every submission as an object of a [LOG] object type"
-                              onClick={() => enableLog.mutate(a.id)}
+                              onClick={() => setLoggingAction(a)}
                             >
                               Turn on log
                             </button>
@@ -1855,11 +1857,13 @@ export default function ObjectsPage() {
             </table>
           )}
 
-          {enableLog.isError && (
-            <div className="form-error" data-testid="action-log-error">
-              {enableLog.error instanceof ApiError
-                ? enableLog.error.message : "Couldn't turn on the action log."}
-            </div>
+          {loggingAction && workspace && project && (
+            <ActionLogDialog
+              workspaceId={workspace.id}
+              projectId={project.id}
+              action={loggingAction}
+              onClose={() => setLoggingAction(null)}
+            />
           )}
 
           <div className="page-head" style={{ marginTop: 32 }}>

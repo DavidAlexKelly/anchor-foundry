@@ -246,6 +246,10 @@ class ActionTypeOut(BaseModel):
     version: int = 1
     log_object_type_id: UUID | None = None
     log_link_type_id: UUID | None = None
+    #: p.168's optional Summary template and the object reference parameters'
+    #: properties the log keeps (§586; db 0121).
+    log_summary: str | None = None
+    log_reference_properties: dict[str, list[str]] = Field(default_factory=dict)
     # **Derived from the rules, not stored** - migration 0044 dropped the
     # column. Kept on the wire because the object-type screens and the
     # Workshop `run_action` editor both ask "which properties does this action
@@ -1548,6 +1552,26 @@ def _revert_effects(
 class ActionLogOut(BaseModel):
     log_object_type_id: UUID
     log_link_type_id: UUID
+    log_summary: str | None = None
+    log_reference_properties: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class ActionLogIn(BaseModel):
+    """p.168's two optional settings (§586), both optional here too: a log
+    turned on with neither is §554's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: The Summary template, in p.92's triple handlebars.
+    summary: str | None = Field(default=None, max_length=1000)
+    #: `{object parameter: [property]}` whose values each entry keeps.
+    reference_properties: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class ActionLogSummaryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str | None = Field(default=None, max_length=1000)
 
 
 @project_router.post(
@@ -1556,6 +1580,7 @@ class ActionLogOut(BaseModel):
 async def enable_action_log(
     action_type_id: UUID,
     request: Request,
+    body: ActionLogIn | None = None,
     access: ProjectAccess = Depends(require_project_role("editor")),
 ) -> ActionLogOut:
     """Turn on p.167's action log for an action type (§554): a `[LOG]` object
@@ -1576,6 +1601,8 @@ async def enable_action_log(
         made = await action_log.enable(
             conn, storage, workspace_id=access.workspace_id, project_id=access.project_id,
             action_type=action_type, by=access.auth.user_id,
+            summary=body.summary if body else None,
+            references=body.reference_properties if body else None,
         )
         await audit.record(
             conn,
@@ -1591,6 +1618,37 @@ async def enable_action_log(
             user_agent=request.headers.get("user-agent"),
         )
     return ActionLogOut(**made)
+
+
+@router.put("/action-types/{action_type_id}/log/summary", response_model=ActionLogSummaryIn)
+async def set_action_log_summary(
+    action_type_id: UUID,
+    body: ActionLogSummaryIn,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ActionLogSummaryIn:
+    """Write or change p.168's "customizable string to describe the action"
+    (§586). Later submissions use it; entries already made keep theirs."""
+    async with user_connection(access.auth.user_id) as conn:
+        action_type = await actions_service.get_action_type(
+            conn, access.workspace_id, action_type_id
+        )
+        summary = await action_log.set_summary(
+            conn, workspace_id=access.workspace_id, action_type=action_type,
+            summary=body.summary,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="action_type.set_log_summary",
+            resource_type="action_type",
+            resource_id=action_type_id,
+            workspace_id=access.workspace_id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ActionLogSummaryIn(summary=summary)
 
 
 @project_router.post("/{action_type_id}/runs/{run_id}/undo", response_model=UndoResult)
@@ -2120,42 +2178,20 @@ async def _run_webhooks(
     return outputs, failure
 
 
-async def _pending_notifications(
+async def _pre_edit_objects(
     conn,
     *,
     action_type: dict,
-    values: dict,
     bound: dict,
     subject: dict,
     object_type_id: UUID,
-    workspace_id: UUID,
-    actor_id: UUID,
     prefix: str,
-) -> list[dict]:
-    """Every notification this action would send, rendered and permitted.
-
-    Called **before** the write, twice over:
-
-    * p.96's default mode refuses the whole action when a recipient cannot see
-      the data — "no data will be edited and no notifications will be sent" —
-      which is only expressible while nothing has been edited;
-    * p.92 fixes the content to "the state of the Ontology **before** edits of
-      the current Action are applied", and after the write that state is gone.
-
-    Returns `[{user_id, content}]`, one entry per recipient (p.90: "sent to
-    each recipient individually"), with the content rendered for *that* person
-    because `{{{recipient}}}` says their name.
-
-    Raises `NotificationError`, which the caller turns into a refusal.
-    """
-    rules = [
-        r for r in action_type["rules"] if str(r.get("kind")) == "notify"
-    ]
-    if not rules:
-        return []
-
-    # The pre-edit state of every object parameter this action names, read
-    # once each rather than once per rule or once per recipient.
+) -> dict[str, dict]:
+    """`{object parameter: its object's properties}` **as they were before this
+    action's edits**: p.92's rule for a notification's content, and p.167's
+    "state of the world ... at the time of action submission" for the log
+    (§586). Read once each, for both."""
+    # Read once each rather than once per rule or once per recipient.
     types = actions_service.object_parameter_types(
         action_type["rules"], default_object_type_id=object_type_id,
         parameters=action_type["parameters"],
@@ -2184,6 +2220,49 @@ async def _pending_notifications(
     for name, type_id in types.items():
         if name not in objects and str(type_id) == str(object_type_id):
             objects.setdefault(name, subject)
+    return objects
+
+
+async def _pending_notifications(
+    conn,
+    *,
+    action_type: dict,
+    values: dict,
+    bound: dict,
+    subject: dict,
+    object_type_id: UUID,
+    workspace_id: UUID,
+    actor_id: UUID,
+    prefix: str,
+    objects: dict[str, dict] | None = None,
+) -> list[dict]:
+    """Every notification this action would send, rendered and permitted.
+
+    Called **before** the write, twice over:
+
+    * p.96's default mode refuses the whole action when a recipient cannot see
+      the data — "no data will be edited and no notifications will be sent" —
+      which is only expressible while nothing has been edited;
+    * p.92 fixes the content to "the state of the Ontology **before** edits of
+      the current Action are applied", and after the write that state is gone.
+
+    Returns `[{user_id, content}]`, one entry per recipient (p.90: "sent to
+    each recipient individually"), with the content rendered for *that* person
+    because `{{{recipient}}}` says their name.
+
+    Raises `NotificationError`, which the caller turns into a refusal.
+    """
+    rules = [
+        r for r in action_type["rules"] if str(r.get("kind")) == "notify"
+    ]
+    if not rules:
+        return []
+
+    if objects is None:
+        objects = await _pre_edit_objects(
+            conn, action_type=action_type, bound=bound, subject=subject,
+            object_type_id=object_type_id, prefix=prefix,
+        )
 
     actor = await _user_card(conn, actor_id)
     out: list[dict] = []
@@ -2878,9 +2957,27 @@ async def execute_action(
             # Rendering after the write would be the same code producing a
             # different, wrong answer - the kind of difference nothing on screen
             # would show.
+            # Read once, before the write, for the notifications and the log
+            # alike (§586): both are about the objects as they were.
+            pre_edit: dict[str, dict] = {}
+            # The submitter as a log summary's `{{{current_user}}}` names them
+            # (§586), read here while the connection is open.
+            log_actor: dict | None = (
+                await _user_card(conn, access.auth.user_id)
+                if action_type.get("log_summary") else None
+            )
+            if action_type.get("log_object_type_id") or any(
+                str(r.get("kind")) == "notify" for r in action_type["rules"]
+            ):
+                pre_edit = await _pre_edit_objects(
+                    conn, action_type=action_type, bound=bound,
+                    subject=_parse_json(instance["properties"]),
+                    object_type_id=object_type_id, prefix=prefix,
+                )
             notices = await _pending_notifications(
                 conn,
                 action_type=action_type,
+                objects=pre_edit,
                 # **A new dict, not `values` itself.** p.110 lets a notification
                 # read a writeback's outputs, and rendering is the only thing that
                 # may see them: `values` becomes `column_updates` a few lines down,
@@ -3087,6 +3184,14 @@ async def execute_action(
                     at=datetime.now(timezone.utc).replace(tzinfo=None),
                     edited=[key for _type, key in edited], bound=bound,
                     columns=set(_parse_json(log_source["column_mappings"])),
+                    # p.168's Summary and object reference properties (§586),
+                    # from the objects as they were before this write.
+                    extra=action_log.extra_columns(
+                        summary=action_type.get("log_summary"),
+                        references=_parse_json(action_type.get("log_reference_properties")) or {},
+                        values={**bound, **writeback_outputs}, objects=pre_edit,
+                        actor=log_actor,
+                    ),
                 )
                 entry(dict(log_source))["appends"].append(log_row)
                 if log_edits is not None:
