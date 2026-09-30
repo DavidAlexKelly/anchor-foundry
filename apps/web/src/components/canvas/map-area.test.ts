@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  AREA_OP, CIRCLE_OP, EARTH_RADIUS_M, MAX_RADIUS_M, POLYGON_OP, areaOf, boxBetween, boxRect,
+  AREA_OP, CIRCLE_OP, DRAWN_OPACITY, DRAW_TOOLS, EARTH_RADIUS_M, drawToolsOf, drawnOpacityOf,
+  withDrawTool, MAX_RADIUS_M, POLYGON_OP, areaOf, boxBetween, boxRect,
   circleBetween, circlePath, circleRings, closes, distanceM, isCircle, isDrag, isPolygon, lonLatAt,
   polygonPoints, withArea, type Box,
 } from "./map-area";
@@ -195,5 +196,33 @@ describe("a drawn circle (§572)", () => {
     expect(y).toBeGreaterThan(99.8);
     expect(circlePath({ lat: 0, lon: 0, radius: 15_000_000 }, view, frame).match(/M/g))
       .toHaveLength(2);
+  });
+});
+
+describe("p.301's draw options and drawn shape style (§573)", () => {
+  it("offers the tools named, in the toolbar's order, and all three by default", () => {
+    expect(drawToolsOf(undefined)).toEqual([...DRAW_TOOLS]);
+    expect(drawToolsOf(null)).toEqual(["rectangle", "polygon", "circle"]);
+    expect(drawToolsOf(["circle", "rectangle", "line"])).toEqual(["rectangle", "circle"]);
+    expect(drawToolsOf([])).toEqual([]);
+  });
+
+  it("turns one tool on or off, keeping the rest", () => {
+    expect(withDrawTool(null, "rectangle", false)).toEqual(["polygon", "circle"]);
+    expect(withDrawTool(["circle"], "rectangle", true)).toEqual(["rectangle", "circle"]);
+    expect(withDrawTool(["circle"], "circle", false)).toEqual([]);
+    expect(withDrawTool(["circle"], "circle", true)).toEqual(["circle"]);
+  });
+
+  it("holds the fill opacity from 0 to 1, and falls back for nothing", () => {
+    expect(drawnOpacityOf(0.6)).toBe(0.6);
+    expect(drawnOpacityOf("0.6")).toBe(0.6);
+    expect(drawnOpacityOf(0)).toBe(0);
+    expect(drawnOpacityOf(-1)).toBe(0);
+    expect(drawnOpacityOf(3)).toBe(1);
+    expect(drawnOpacityOf("")).toBe(DRAWN_OPACITY);
+    expect(drawnOpacityOf("  ")).toBe(DRAWN_OPACITY);
+    expect(drawnOpacityOf("x")).toBe(DRAWN_OPACITY);
+    expect(drawnOpacityOf(undefined)).toBe(0.35);
   });
 });

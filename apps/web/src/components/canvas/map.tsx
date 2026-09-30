@@ -24,8 +24,8 @@ import { WORLD_OUTLINE } from "./basemap";
 import { boundsOf, onScreen, pathsFor } from "./map-shapes";
 import { allInside, boundsText, sameView, viewOfBounds } from "./map-view";
 import {
-  MAX_POLYGON_POINTS, MIN_DRAG_PX, boxBetween, boxRect, circleBetween, circlePath, closes, isCircle,
-  isDrag, isPolygon, lonLatAt, polygonPoints, type Area,
+  DRAWN_OPACITY, DRAW_TOOLS, MAX_POLYGON_POINTS, MIN_DRAG_PX, boxBetween, boxRect, circleBetween, circlePath, closes, isCircle,
+  isDrag, isPolygon, lonLatAt, polygonPoints, type Area, type DrawTool,
 } from "./map-area";
 
 export interface MapPoint {
@@ -205,6 +205,9 @@ export function MapCanvas({
   onSelect,
   area = null,
   onArea,
+  drawTools = DRAW_TOOLS,
+  drawnColor = null,
+  drawnOpacity = DRAWN_OPACITY,
   color = null,
   opacity = 1,
   selectedKeys,
@@ -238,6 +241,11 @@ export function MapCanvas({
    * one. */
   area?: Area | null;
   onArea?: (area: Area | null) => void;
+  /** p.301's Draw options (§573): the tools offered, all three by default. */
+  drawTools?: readonly DrawTool[];
+  /** p.301's Drawn shape colors and opacity: null for the theme's accent. */
+  drawnColor?: string | null;
+  drawnOpacity?: number;
   /** p.300's layer Style (§559): its colour and opacity. */
   color?: string | null;
   opacity?: number;
@@ -543,27 +551,30 @@ export function MapCanvas({
         {area && isPolygon(area) && (
           <polygon data-testid="map-area" data-shape="polygon"
             points={polygonPoints(area, current, { width: WIDTH, height: HEIGHT })}
-            fill="var(--accent-wash)" fillOpacity={0.35} stroke="var(--accent)"
+            fill={drawnColor ?? "var(--accent-wash)"} fillOpacity={drawnOpacity}
+            stroke={drawnColor ?? "var(--accent)"}
             strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
         )}
         {area && isCircle(area) && (
           <path data-testid="map-area" data-shape="circle" fillRule="evenodd"
             d={circlePath(area, current, { width: WIDTH, height: HEIGHT })}
-            fill="var(--accent-wash)" fillOpacity={0.35} stroke="var(--accent)"
+            fill={drawnColor ?? "var(--accent-wash)"} fillOpacity={drawnOpacity}
+            stroke={drawnColor ?? "var(--accent)"}
             strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
         )}
         {area && !isPolygon(area) && !isCircle(area) && (() => {
           const r = boxRect(area, current, { width: WIDTH, height: HEIGHT });
           return (
             <rect data-testid="map-area" x={r.x} y={r.y} width={r.width} height={r.height}
-              fill="var(--accent-wash)" fillOpacity={0.35} stroke="var(--accent)"
+              fill={drawnColor ?? "var(--accent-wash)"} fillOpacity={drawnOpacity}
+            stroke={drawnColor ?? "var(--accent)"}
               strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
           );
         })()}
         {outline && outline.length > 0 && (
           <polyline data-testid="map-outline-sketch"
             points={outline.map((c) => `${c.x},${c.y}`).join(" ")}
-            fill="none" stroke="var(--accent)" strokeDasharray="4 3"
+            fill="none" stroke={drawnColor ?? "var(--accent)"} strokeDasharray="4 3"
             style={{ pointerEvents: "none" }} />
         )}
         {sketch?.circle && (
@@ -572,14 +583,14 @@ export function MapCanvas({
               lonLatAt(sketch.a.x, sketch.a.y, current, { width: WIDTH, height: HEIGHT }),
               lonLatAt(sketch.b.x, sketch.b.y, current, { width: WIDTH, height: HEIGHT })),
             current, { width: WIDTH, height: HEIGHT })}
-            fill="none" stroke="var(--accent)" strokeDasharray="4 3"
+            fill="none" stroke={drawnColor ?? "var(--accent)"} strokeDasharray="4 3"
             style={{ pointerEvents: "none" }} />
         )}
         {sketch && !sketch.circle && (
           <rect data-testid="map-area-sketch"
             x={Math.min(sketch.a.x, sketch.b.x)} y={Math.min(sketch.a.y, sketch.b.y)}
             width={Math.abs(sketch.a.x - sketch.b.x)} height={Math.abs(sketch.a.y - sketch.b.y)}
-            fill="none" stroke="var(--accent)" strokeDasharray="4 3"
+            fill="none" stroke={drawnColor ?? "var(--accent)"} strokeDasharray="4 3"
             style={{ pointerEvents: "none" }} />
         )}
         {placed.map((group) => {
@@ -663,7 +674,7 @@ export function MapCanvas({
         <button type="button" onClick={() => zoomBy(1 / 1.6)} aria-label="Zoom in">+</button>
         <button type="button" onClick={() => zoomBy(1.6)} aria-label="Zoom out">−</button>
         <button type="button" onClick={() => setView(null)}>Fit to data</button>
-        {onArea && (
+        {onArea && drawTools.includes("rectangle") && (
           <button
             type="button"
             data-testid="map-select-area"
@@ -673,7 +684,7 @@ export function MapCanvas({
             Select area
           </button>
         )}
-        {onArea && (
+        {onArea && drawTools.includes("polygon") && (
           <button
             type="button"
             data-testid="map-draw-shape"
@@ -684,7 +695,7 @@ export function MapCanvas({
             Draw shape
           </button>
         )}
-        {onArea && (
+        {onArea && drawTools.includes("circle") && (
           <button
             type="button"
             data-testid="map-draw-circle"

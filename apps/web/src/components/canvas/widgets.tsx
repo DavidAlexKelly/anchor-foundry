@@ -349,7 +349,10 @@ import {
   timeLabel, timelineSpan, trackShape, windowOf, withinWindow, type TimeFormat,
 } from "./map-tracks";
 // Aliased on §211's rule: `areaOf` is also §537's chart area option.
-import { areaOf as mapAreaOf, withArea as withMapArea } from "./map-area";
+import {
+  DRAWN_OPACITY, DRAW_TOOLS, DRAW_TOOL_LABELS, areaOf as mapAreaOf, drawToolsOf, drawnOpacityOf,
+  withArea as withMapArea, withDrawTool,
+} from "./map-area";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { conditionalStyle, cssFor } from "@/lib/conditional-format";
 
@@ -12086,6 +12089,9 @@ export function CanvasMap({
   lockLayer = false,
   layerColor = null,
   layerOpacity = 1,
+  drawOptions = null,
+  drawnShapeColor = null,
+  drawnShapeOpacity = DRAWN_OPACITY,
   showLegend = false,
   legendCollapsed = false,
   legendSize = "full",
@@ -12122,6 +12128,12 @@ export function CanvasMap({
    * `within_distance` for §571's shape and §572's circle), for a `narrow_set`
    * to read (`map-area.ts`). */
   areaVariable?: string | null;
+  /** p.301's Draw options, Drawn shape colors and Drawn shape opacity
+   * (§573): the drawing tools offered (null for all three), and the colour
+   * and fill opacity of what is drawn. */
+  drawOptions?: string[] | null;
+  drawnShapeColor?: string | null;
+  drawnShapeOpacity?: number;
   /** A `geotemporal_series` property (§557): each object's track drawn as a
    * line, and the object at its position at the selected time. */
   trackProperty?: string | null;
@@ -12472,6 +12484,9 @@ export function CanvasMap({
             ],
           } : null}
           area={selectsArea ? mapAreaOf(areaClauses, locationProperty!) : null}
+          drawTools={drawToolsOf(drawOptions)}
+          drawnColor={layerColorOf(drawnShapeColor)}
+          drawnOpacity={drawnOpacityOf(drawnShapeOpacity)}
           onArea={selectsArea
             ? (box) => setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, box))
             : undefined}
@@ -12625,6 +12640,7 @@ function MapSettings() {
     windowStartVariable, windowEndVariable, timeZone, timeFormat, playingVariable,
     playbackPositionVariable, autoPauseVariable, layerLabel, selectedVariable, layerVisible,
     layerVisibleVariable, lockLayer, layerColor, layerOpacity,
+    drawOptions, drawnShapeColor, drawnShapeOpacity,
     showLegend, legendCollapsed, legendSize, showSelectionPanel, autoZoom, autoZoomSetVariable,
     autoZoomOutsideOnly, boundsVariable, followSetVariable,
     actions: { setProp },
@@ -12645,6 +12661,9 @@ function MapSettings() {
     lockLayer: node.data.props.lockLayer,
     layerColor: node.data.props.layerColor,
     layerOpacity: node.data.props.layerOpacity,
+    drawOptions: node.data.props.drawOptions,
+    drawnShapeColor: node.data.props.drawnShapeColor,
+    drawnShapeOpacity: node.data.props.drawnShapeOpacity,
     windowStartVariable: node.data.props.windowStartVariable,
     windowEndVariable: node.data.props.windowEndVariable,
     timeZone: node.data.props.timeZone,
@@ -12891,6 +12910,43 @@ function MapSettings() {
                 selects the objects in it
               </span>
             </label>
+          )}
+          {/* p.301's Draw options and drawn shape style (§573). */}
+          {objectSetVariable && areaVariable && (
+            <div className="field" data-testid="map-draw-settings">
+              <span className="field-label">Draw options</span>
+              {DRAW_TOOLS.map((tool) => (
+                <label key={tool} className="field canvas-toggle">
+                  <input
+                    type="checkbox"
+                    data-testid={`map-draw-option-${tool}`}
+                    checked={drawToolsOf(drawOptions).includes(tool)}
+                    onChange={(e) => setProp((p: { drawOptions: string[] | null }) =>
+                      (p.drawOptions = withDrawTool(p.drawOptions, tool, e.target.checked)))}
+                  />
+                  <span className="field-label">{DRAW_TOOL_LABELS[tool]}</span>
+                </label>
+              ))}
+              <input
+                type="color"
+                aria-label="Drawn shape colour"
+                data-testid="map-drawn-color"
+                value={layerColorOf(drawnShapeColor) ?? "#14646e"}
+                onChange={(e) => setProp((p: { drawnShapeColor: string | null }) =>
+                  (p.drawnShapeColor = e.target.value))}
+              />
+              <input
+                type="number"
+                aria-label="Drawn shape opacity"
+                data-testid="map-drawn-opacity"
+                min={0}
+                max={1}
+                step={0.05}
+                value={drawnOpacityOf(drawnShapeOpacity)}
+                onChange={(e) => setProp((p: { drawnShapeOpacity: number }) =>
+                  (p.drawnShapeOpacity = drawnOpacityOf(e.target.value)))}
+              />
+            </div>
           )}
           {/* p.300's layer settings (§559), for the map's one object layer. */}
           {objectSetVariable && (
@@ -13255,6 +13311,7 @@ CanvasMap.craft = {
     playingVariable: null, playbackPositionVariable: null, autoPauseVariable: null,
     layerLabel: "", selectedVariable: null, layerVisible: true, layerVisibleVariable: null,
     lockLayer: false, layerColor: null, layerOpacity: 1,
+    drawOptions: null, drawnShapeColor: null, drawnShapeOpacity: DRAWN_OPACITY,
     showLegend: false, legendCollapsed: false, legendSize: "full", showSelectionPanel: false,
     autoZoom: "default", autoZoomSetVariable: null, autoZoomOutsideOnly: false,
     boundsVariable: null, followSetVariable: null,
