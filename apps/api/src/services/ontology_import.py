@@ -722,6 +722,7 @@ def _parameter_for(
         # other save's would be.
         "value_constraint": parameter.get("value_constraint"),
         "field_constraints": parameter.get("field_constraints") or {},
+        "default_from": parameter.get("default_from"),
         **parameter_transfer.to_ids(
             parameter, type_ids=type_ids, link_ids=link_ids,
             where=f"{where}.{parameter.get('api_name')}",

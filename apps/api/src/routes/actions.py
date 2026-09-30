@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import action_metrics
-from ..services import action_log
+from ..services import action_defaults, action_log
 from ..services import action_revert
 from ..services import object_edits
 from ..services import action_choices as choices_service
@@ -183,6 +183,9 @@ class ActionParameterOut(BaseModel):
     #: in one line, as `constraint_summary` is for the parameter's own.
     field_constraints: dict[str, Any] = Field(default_factory=dict)
     field_constraint_summaries: dict[str, str] = Field(default_factory=dict)
+    #: p.29's default from an object (§588). `default_value` is the fixed one,
+    #: and on the effective parameters the resolved one.
+    default_from: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _summarise(self) -> "ActionParameterOut":
@@ -737,6 +740,10 @@ class ActionParameterIn(BaseModel):
     #: `{field: constraint}`, each read against the field's type. A field set
     #: to null is p.8's User input, as the parameter's own is, and is dropped.
     field_constraints: dict[str, dict[str, Any] | None] = Field(default_factory=dict)
+    #: p.27 and p.29's default from an object (§588): `{parameter, property}`
+    #: naming an object reference parameter above this one, and for a struct
+    #: `fields` mapping its fields to the property's (p.69-70).
+    default_from: dict[str, Any] | None = None
 
 
 class ActionRuleIn(BaseModel):
@@ -1177,8 +1184,12 @@ async def effective_action_parameters(
         )
         user = await actions_service.criteria_user(conn, access.auth.user_id)
         order = await _form_order(conn, action_type)
+        # p.29's defaults from an object (§588), resolved for the form here,
+        # where it already asks what its parameters are.
+        with_defaults = await _with_object_defaults(
+            conn, action_type, body.values, workspace_id=access.workspace_id)
     resolved = overrides_service.resolve(
-        action_type["parameters"], values=body.values, user=user, order=order
+        with_defaults, values=body.values, user=user, order=order
     )
     may_edit = _may_edit(access)
     # p.66's struct parameters, with the fields the form needs to draw one
@@ -2023,9 +2034,12 @@ async def check_action(
         # set of parameters than the one that decides is worse than not asking.
         order = await _form_order(conn, action_type)
     fields = await _parameter_fields(access, action_type)
+    async with user_connection(access.auth.user_id) as conn:
+        parameters = await _with_object_defaults(
+            conn, action_type, body.values, workspace_id=access.workspace_id)
     try:
         bound = actions_service.bind_parameters(
-            body.values, parameters=action_type["parameters"],
+            body.values, parameters=parameters,
             user=user, form_order=order, struct_fields=fields,
         )
         actions_service.check_criteria(
@@ -2221,6 +2235,25 @@ async def _log_targets(
                 "to_type_id": str(log_link["to_object_type_id"]),
             }
     return log_source, log_edits
+
+
+async def _with_object_defaults(
+    conn, action_type: dict, values: dict, *, workspace_id: UUID,
+    prefix: str | None = None,
+) -> list[dict]:
+    """The action's parameters with p.29's object defaults read in (§588):
+    each `default_from` resolved from the object its source parameter holds in
+    `values`. The parameters as they are when none has one, without a read."""
+    parameters = action_type["parameters"]
+    if not any(action_defaults.source_of(p) for p in parameters):
+        return parameters
+    if prefix is None:
+        prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
+    objects = await _pre_edit_objects(
+        conn, action_type=action_type, bound=values, subject={},
+        object_type_id=action_type.get("object_type_id"), prefix=prefix,
+    )
+    return action_defaults.resolve(parameters, objects)
 
 
 async def _pre_edit_objects(
@@ -2533,7 +2566,10 @@ async def execute_action(
                 # the parameters above it (§329).
                 bound = actions_service.bind_parameters(
                     body.values,
-                    parameters=action_type["parameters"],
+                    # p.29's defaults from an object (§588), read first.
+                    parameters=await _with_object_defaults(
+                        conn, action_type, body.values,
+                        workspace_id=access.workspace_id, prefix=prefix),
                     user=await actions_service.criteria_user(conn, access.auth.user_id),
                     form_order=await _form_order(conn, action_type),
                     # p.71-72's field constraints (§585).

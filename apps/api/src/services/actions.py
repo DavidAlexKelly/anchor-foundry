@@ -1355,7 +1355,7 @@ _PARAMETER_COLUMNS = (
     "id, action_type_id, api_name, display_name, data_type, array_of, required, "
     "default_value, hidden, sort_order, object_type_id, interface_id, "
     "dropdown_filters, dropdown_search_around, options_from, value_constraint, "
-    "field_constraints"
+    "field_constraints, default_from"
 )
 
 
@@ -3589,11 +3589,11 @@ async def set_definition(
     from . import action_sections as sections_service
     from .action_overrides import check_references
 
-    check_references(
-        parameters,
+    form_sections = (
         sections if sections is not None
-        else await sections_service.list_sections(conn, action_type_id),
+        else await sections_service.list_sections(conn, action_type_id)
     )
+    check_references(parameters, form_sections)
     # p.8, p.45 and p.71's constraints (§584): a pure check over the document,
     # here beside p.45's other one because both read the override blocks.
     from .action_constraints import check_parameters as check_constraints_of
@@ -3607,6 +3607,37 @@ async def set_definition(
             rules, await struct_fields_by_type(conn, workspace_id), str(subject_id),
         ) if any(p.get("field_constraints") for p in parameters) else {},
     )
+    # p.27 and p.29's default from an object, and p.69-70's for a struct's
+    # fields (§588): checked against the form's order (p.29's "placed above")
+    # and the source object's type. Only read when some parameter has one.
+    from . import action_defaults
+    from .action_overrides import form_order as _form_order_of
+
+    if any(action_defaults.source_of(p) for p in parameters):
+        sourced_types = object_parameter_types(
+            rules, default_object_type_id=subject_id, parameters=parameters,
+        )
+        by_type = await struct_fields_by_type(conn, workspace_id)
+        element_types: dict[str, dict[str, str | None]] = {}
+        for type_id in set(sourced_types.values()):
+            try:
+                element_types[str(type_id)] = ontology_service.array_of_of(
+                    await ontology_service.list_properties(conn, UUID(str(type_id)))
+                )
+            except (NotFoundError, ValueError):
+                continue
+        action_defaults.check(
+            parameters,
+            order=_form_order_of(parameters, form_sections),
+            object_types={k: str(v) for k, v in sourced_types.items()},
+            properties_by_type=await properties_by_type(conn, workspace_id),
+            struct_fields_by_type=by_type,
+            parameter_fields=struct_fields_for_parameters(rules, by_type, str(subject_id)),
+            element_types=element_types,
+        )
+    # No `else` clearing each `default_from`: with none set they are all empty
+    # already, and the insert writes an empty one as NULL (a sweep found the
+    # branch changed nothing, §588).
     declared_names = {str(p.get("api_name", "")) for p in parameters}
     # One read per object type rather than per parameter that mentions it: an
     # action with four parameters offering the same type asked four times.
@@ -3803,13 +3834,14 @@ async def set_definition(
                      default_value, hidden, sort_order, section_id, object_type_id,
                      interface_id,
                      dropdown_filters, dropdown_search_around, options_from,
-                     value_constraint, field_constraints)
+                     value_constraint, field_constraints, default_from)
                 VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type),
                         CAST(:array_of AS action_parameter_type), :required,
                         CAST(:default AS jsonb), :hidden, :ord, :section,
                         CAST(:otype AS uuid), CAST(:iface AS uuid), CAST(:filters AS jsonb),
                         CAST(:around AS jsonb), CAST(:options AS jsonb),
-                        CAST(:constraint AS jsonb), CAST(:fields AS jsonb))
+                        CAST(:constraint AS jsonb), CAST(:fields AS jsonb),
+                        CAST(:default_from AS jsonb))
                 """
             ),
             {
@@ -3870,6 +3902,11 @@ async def set_definition(
                 ),
                 # p.71's per-field constraints (db 0120), `{}` for none.
                 "fields": json.dumps(parameter.get("field_constraints") or {}),
+                # p.29 and p.69-70's default from an object (db 0122).
+                "default_from": (
+                    json.dumps(parameter["default_from"])
+                    if parameter.get("default_from") else None
+                ),
             },
         )
     # p.43-46's override blocks, written with the parameter that owns them

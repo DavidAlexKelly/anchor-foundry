@@ -59,6 +59,9 @@ export const SETTABLE = ["hidden", "required", "default", "constraint"] as const
 export function conditionParameters(parameters: ActionParameter[]): string[] {
   const named = new Set<string>();
   for (const parameter of parameters ?? []) {
+    // p.29's default from an object (§588) is resolved by the same round
+    // trip, so the object parameter it reads is watched as a condition is.
+    if (parameter.default_from?.parameter) named.add(parameter.default_from.parameter);
     for (const block of parameter.overrides ?? []) {
       for (const condition of block.conditions ?? []) {
         for (const key of ["left", "right"]) {
@@ -82,7 +85,10 @@ export function conditionParameters(parameters: ActionParameter[]): string[] {
  * required for nobody.
  */
 export function hasOverrides(parameters: ActionParameter[]): boolean {
-  return (parameters ?? []).some((p) => (p.overrides ?? []).length > 0);
+  return (parameters ?? []).some(
+    // Or a default from an object (§588), which the same round trip reads.
+    (p) => (p.overrides ?? []).length > 0 || !!p.default_from,
+  );
 }
 
 /** A stable key over only the values the conditions read. */

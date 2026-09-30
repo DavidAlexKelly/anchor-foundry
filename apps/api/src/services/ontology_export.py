@@ -292,7 +292,8 @@ async def export_ontology(
                dropdown_search_around::text AS dropdown_search_around,
                options_from::text AS options_from,
                value_constraint::text AS value_constraint,
-               field_constraints::text AS field_constraints
+               field_constraints::text AS field_constraints,
+               default_from::text AS default_from
           FROM action_parameters
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -436,6 +437,9 @@ async def export_ontology(
                         # api_name, which the struct property names too.
                         **({"field_constraints": _json(p["field_constraints"])}
                            if _json(p["field_constraints"]) else {}),
+                        # p.29's default from an object (§588): names only.
+                        **({"default_from": _json(p["default_from"])}
+                           if p["default_from"] else {}),
                         # db 0083, 0085 and 0086's three pointing fields, as
                         # api_names (§342). Only the ones this parameter has.
                         **parameter_transfer.to_names(
