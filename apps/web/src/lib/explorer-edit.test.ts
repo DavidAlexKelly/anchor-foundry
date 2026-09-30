@@ -10,10 +10,12 @@
 import { describe, expect, it } from "vitest";
 import type { EditAction } from "../components/canvas/inline-edit";
 import {
-  editableColumns,
+  backingActions,
+  batchesOf,
+  editLimitFor,
   editingUnavailable,
-  editsColumn,
   failureMessage,
+  inlineColumns,
   savedMessage,
   submitLabel,
 } from "./explorer-edit";
@@ -57,6 +59,8 @@ describe("why the Explorer is not offering an editor", () => {
   it("names the type when no action can back an edit", () => {
     const why = editingUnavailable(TICKETS, [], true, ONE_PROJECT);
     expect(why).toContain("Ticket");
+    // p.136's configuration is per property, so that is where it points.
+    expect(why).toContain("No property of Ticket has an inline action");
   });
 
   it("names the projects in a stated order however they arrive", () => {
@@ -120,56 +124,59 @@ describe("why the Explorer is not offering an editor", () => {
   });
 });
 
-describe("which columns take an editor (p.241's automatic mapping)", () => {
-  it("matches a parameter to the column of the same name", () => {
-    expect(editableColumns(action(), ["status", "priority"])).toEqual({
-      status: "status", priority: "priority",
+describe("which columns take an editor (§600, p.136's per-property inline edit)", () => {
+  const writes = (property: string, parameter: string) =>
+    ({ kind: "modify_object", config: { property, parameter } });
+  const actions = [
+    { ...action({ id: "a1" }), object_type_id: "t", rules: [writes("status", "new_status")] },
+    { ...action({ id: "a2", inline_edit_row_limit: 20 }), object_type_id: "t",
+      rules: [writes("priority", "priority"), writes("owner", "who")] },
+    { ...action({ id: "a3", inline_edit_refusals: ["no"] }), object_type_id: "t",
+      rules: [writes("note", "note")] },
+  ];
+  const properties = [
+    { api_name: "status", inline_action_type_id: "a1" },
+    { api_name: "priority", inline_action_type_id: "a2" },
+    { api_name: "owner", inline_action_type_id: "a2" },
+    { api_name: "note", inline_action_type_id: "a3" },
+    { api_name: "title", inline_action_type_id: "a1" },
+    { api_name: "size", inline_action_type_id: null },
+  ];
+
+  it("is each property's own action, through the parameter it writes the property from", () => {
+    expect(inlineColumns(properties, actions,
+      ["status", "priority", "owner", "note", "title", "size", "gone"])).toEqual({
+      status: { actionId: "a1", parameter: "new_status" },
+      priority: { actionId: "a2", parameter: "priority" },
+      owner: { actionId: "a2", parameter: "who" },
     });
-  });
-
-  it("offers nothing for a column the results do not show", () => {
-    expect(editableColumns(action(), ["status"])).toEqual({ status: "status" });
-  });
-
-  it("offers nothing for a parameter whose name matches nothing", () => {
-    expect(editableColumns(action({ parameters: [{ api_name: "new_status" }] }),
+    expect(inlineColumns(properties, actions, ["priority"])).toEqual({
+      priority: { actionId: "a2", parameter: "priority" } });
+    expect(inlineColumns(properties, undefined, ["status"])).toEqual({});
+    expect(inlineColumns([{ api_name: "status", inline_action_type_id: "a9" }], actions,
       ["status"])).toEqual({});
   });
 
-  it("leaves a hidden parameter out even when the name matches", () => {
-    // §324: p.137 makes visibility allowed rather than disqualifying, so a
-    // hidden parameter is a column not offered — and a name match would
-    // otherwise walk it straight onto an editor.
-    expect(editableColumns(action({ inline_edit_hidden_parameters: ["priority"] }),
-      ["status", "priority"])).toEqual({ status: "status" });
+  it("counts the actions behind the columns once each, and caps rows at the smallest", () => {
+    const columns = inlineColumns(properties, actions, ["status", "priority", "owner"]);
+    expect(backingActions(columns, actions).map((a) => a.id)).toEqual(["a1", "a2"]);
+    expect(editLimitFor(backingActions(columns, actions))).toBe(20);
+    expect(editLimitFor([])).toBe(0);
   });
 
-  it("offers nothing at all when no action is chosen", () => {
-    expect(editableColumns(null, ["status"])).toEqual({});
-  });
-});
-
-describe("asking per column, the way a row asks", () => {
-  it("names the parameter that edits this column", () => {
-    expect(editsColumn({ status: "status" }, "status")).toBe("status");
-  });
-
-  it("is null for a column with no editor", () => {
-    expect(editsColumn({ status: "status" }, "priority")).toBeNull();
-  });
-
-  it("picks the same parameter however the mapping was built", () => {
-    // Two parameters onto one column is a configuration nothing prevents, and
-    // an arbitrary winner would draw a different editor for the same document.
-    //
-    // **Both insertion orders, and that is the whole test.** The first version
-    // asserted one object twice and expected "alpha" — which `sort()` and
-    // `reverse()` both answer for keys inserted zulu-then-alpha, so a mutant
-    // swapping them survived. Object key order *is* insertion order, so the
-    // only way to see an ordering rule is to feed it two orders and demand one
-    // answer.
-    expect(editsColumn({ zulu: "status", alpha: "status" }, "status")).toBe("alpha");
-    expect(editsColumn({ alpha: "status", zulu: "status" }, "status")).toBe("alpha");
+  it("submits one batch per action, each row's columns as that action's parameters", () => {
+    const columns = inlineColumns(properties, actions, ["status", "priority", "owner"]);
+    expect(batchesOf({
+      i2: { status: "closed" },
+      i1: { priority: "high", status: "open", owner: "ana", stray: 1 },
+    }, columns)).toEqual([
+      { actionId: "a1", edits: [
+        { instance_id: "i1", values: { new_status: "open" } },
+        { instance_id: "i2", values: { new_status: "closed" } }] },
+      { actionId: "a2", edits: [
+        { instance_id: "i1", values: { priority: "high", who: "ana" } }] },
+    ]);
+    expect(batchesOf({}, columns)).toEqual([]);
   });
 });
 

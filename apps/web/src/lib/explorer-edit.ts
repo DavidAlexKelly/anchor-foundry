@@ -20,7 +20,10 @@
  * two copies of "what is staged and may it be submitted" is the thing this
  * repo has spent several units collapsing.
  */
-import { editableParameters, type EditAction } from "../components/canvas/inline-edit";
+import {
+  UNKNOWN_ROW_LIMIT, rowLimitOf, type EditAction, type Staged,
+} from "../components/canvas/inline-edit";
+import { liveInlineParameter, type InlineAction } from "./property-inline-action";
 
 /**
  * Why the Explorer is not offering to edit these results, if it is not.
@@ -53,7 +56,11 @@ export function editingUnavailable(
     return "You can read these objects but not change them.";
   }
   if (eligible.length === 0) {
-    return `No action on ${onlyType.display_name} can back an inline edit.`;
+    // p.136: "Select a property and navigate to Inline edit in the sidebar"
+    // (§600) - the configuration is per property, so that is where to send
+    // somebody.
+    return `No property of ${onlyType.display_name} has an inline action. ` +
+      "Choose one for a property in the Ontology Manager.";
   }
   if (projects.length === 0) {
     return `${onlyType.display_name} has no dataset behind it, so there is nowhere to write.`;
@@ -83,38 +90,79 @@ export function editingUnavailable(
 }
 
 /**
- * Which of the table's columns take an editor, and through which parameter.
+ * Which of the table's columns take an editor, and through which action and
+ * parameter (§600; `action-types` p.136).
  *
- * p.241's automatic mapping — a parameter edits the column of the same name —
- * is the whole rule here. The Object Table lets a builder correct a mapping by
- * hand because a Workshop module is configured; the Explorer is not configured
- * by anybody, so a name match is all there is, and a parameter matching nothing
- * simply offers no editor.
+ *     "To set up an inline edit action, navigate to the Properties tab of
+ *      your object type … Select a property and navigate to Inline edit …
+ *      Each property can have only one inline edit action type. You can use
+ *      the same action type as an inline edit for multiple properties, or you
+ *      can have separate action types for different properties."
  *
- * Hidden parameters are already out: `editableParameters` drops them (§324),
- * which is a column not offered rather than an action refused.
+ * **The property's own inline action** (§594), not the first eligible action
+ * on the type with its parameters matched to columns by name, which is what
+ * this was before p.136's binding existed. Re-read against the action as it
+ * is now (`liveInlineParameter`), so an action that has stopped writing the
+ * property, or stopped being eligible, draws no editor.
  */
-export function editableColumns(
-  action: EditAction | null | undefined,
+export function inlineColumns(
+  properties: readonly { api_name: string; inline_action_type_id?: string | null }[],
+  actions: readonly InlineAction[] | undefined,
   columns: readonly string[],
-): Record<string, string> {
-  const shown = new Set(columns);
-  const out: Record<string, string> = {};
-  for (const parameter of editableParameters(action)) {
-    if (shown.has(parameter.api_name)) out[parameter.api_name] = parameter.api_name;
+): Record<string, InlineColumn> {
+  const out: Record<string, InlineColumn> = {};
+  for (const column of columns) {
+    const chosen = properties.find((p) => p.api_name === column)?.inline_action_type_id;
+    const action = chosen ? (actions ?? []).find((a) => a.id === chosen) : undefined;
+    const parameter = liveInlineParameter(action, column);
+    if (action && parameter) out[column] = { actionId: action.id, parameter };
   }
   return out;
 }
 
-/** Whether this column has an editor, asked the way a table row asks it. */
-export function editsColumn(
-  mapping: Record<string, string>,
-  column: string,
-): string | null {
-  for (const parameter of Object.keys(mapping).sort()) {
-    if (mapping[parameter] === column) return parameter;
+export interface InlineColumn {
+  actionId: string;
+  parameter: string;
+}
+
+/** The actions the columns edit through, each once. */
+export function backingActions<T extends { id: string }>(
+  columns: Record<string, InlineColumn>, actions: readonly T[] | undefined,
+): T[] {
+  const ids = new Set(Object.values(columns).map((c) => c.actionId));
+  return (actions ?? []).filter((a) => ids.has(a.id));
+}
+
+/** p.242's row cap for a submission several actions may share: the smallest
+ * of theirs, since every row goes into each batch it touches. */
+export function editLimitFor(actions: readonly EditAction[]): number {
+  return actions.length === 0 ? UNKNOWN_ROW_LIMIT : Math.min(...actions.map(rowLimitOf));
+}
+
+/** What Save submits: one batch per action, each row's typed columns as that
+ * action's parameters. Several properties on one action go in one batch, as
+ * p.136's "use the same action type as an inline edit for multiple
+ * properties" means them to. In a stated order, so the same edits are always
+ * submitted the same way. */
+export function batchesOf(
+  staged: Staged, columns: Record<string, InlineColumn>,
+): { actionId: string; edits: { instance_id: string; values: Record<string, unknown> }[] }[] {
+  const byAction = new Map<string, Map<string, Record<string, unknown>>>();
+  for (const instanceId of Object.keys(staged).sort()) {
+    for (const [column, value] of Object.entries(staged[instanceId] ?? {})) {
+      const target = columns[column];
+      if (!target) continue;
+      const rows = byAction.get(target.actionId) ?? new Map();
+      byAction.set(target.actionId, rows);
+      rows.set(instanceId, { ...(rows.get(instanceId) ?? {}), [target.parameter]: value });
+    }
   }
-  return null;
+  return [...byAction.keys()].sort().map((actionId) => ({
+    actionId,
+    edits: [...byAction.get(actionId)!.entries()].map(([instance_id, values]) => ({
+      instance_id, values,
+    })),
+  }));
 }
 
 /**

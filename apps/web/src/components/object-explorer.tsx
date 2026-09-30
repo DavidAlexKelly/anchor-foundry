@@ -57,17 +57,17 @@ import { memberFirst } from "@/lib/object-type-groups";
 import { truncationNote } from "@/lib/type-picker";
 import {
   canStage,
-  eligibleActions,
-  rowLimitOf,
   stage,
   undoRow,
   type Staged,
 } from "@/components/canvas/inline-edit";
 import {
-  editableColumns,
+  backingActions,
+  batchesOf,
+  editLimitFor,
   editingUnavailable,
-  editsColumn,
   failureMessage,
+  inlineColumns,
   savedMessage,
   submitLabel,
 } from "@/lib/explorer-edit";
@@ -417,17 +417,26 @@ export function ObjectExplorer({
     queryFn: () => objApi.editingProjects(workspaceId, onlyType!.id),
     enabled: !!onlyType,
   });
-  const eligible = eligibleActions(editActions.data);
-  const editAction = eligible[0] ?? null;
-  const whyNoEditing = editingUnavailable(
-    onlyType, eligible, canEdit, editProjects.data ?? [],
+  // p.136's per-property inline edit (§600): which property edits through
+  // which action is the type's own configuration, read off its properties.
+  const editType = useQuery({
+    queryKey: ["object-type", onlyType?.id],
+    queryFn: () => objApi.getType(workspaceId, onlyType!.id),
+    enabled: !!onlyType,
+  });
+  const editableFor = inlineColumns(
+    editType.data?.properties ?? [], editActions.data, columns,
   );
-  // Both queries have to have answered before an absence means anything: an
+  const backing = backingActions(editableFor, editActions.data);
+  const whyNoEditing = editingUnavailable(
+    onlyType, backing, canEdit, editProjects.data ?? [],
+  );
+  // Every query has to have answered before an absence means anything: an
   // unresolved `editProjects` looks exactly like a type with no dataset, and
   // §318's rule is that a negative needs a positive beside it.
-  const editingKnown = !onlyType || (!!editActions.data && !!editProjects.data);
-  const editableFor = editableColumns(editAction, columns);
-  const editLimit = rowLimitOf(editAction);
+  const editingKnown = !onlyType
+    || (!!editActions.data && !!editProjects.data && !!editType.data);
+  const editLimit = editLimitFor(backing);
   const client = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [staged, setStaged] = useState<Staged>({});
@@ -435,18 +444,25 @@ export function ObjectExplorer({
   const stagedRows = Object.keys(staged).length;
 
   const save = useMutation({
-    mutationFn: () =>
-      actionApi.executeBatch(
-        workspaceId,
-        (editProjects.data ?? [])[0]!.id,
-        editAction!.id,
-        Object.entries(staged).map(([instance_id, values]) => ({
-          instance_id, values,
-        })),
-        // p.32's fifth write source, labelled so §320's breakdown can tell it
-        // from the Object Table's — the two reach this route identically.
-        "explorer",
-      ),
+    // One batch per action (§600), each whole or nothing as p.138 says, in a
+    // stated order; the first that fails stops the rest and says why.
+    mutationFn: async () => {
+      const saved = new Set<string>();
+      for (const batch of batchesOf(staged, editableFor)) {
+        const result = await actionApi.executeBatch(
+          workspaceId,
+          (editProjects.data ?? [])[0]!.id,
+          batch.actionId,
+          batch.edits,
+          // p.32's fifth write source, labelled so §320's breakdown can tell
+          // it from the Object Table's — the two reach this route identically.
+          "explorer",
+        );
+        if (!result.ok) return result;
+        for (const edit of batch.edits) saved.add(edit.instance_id);
+      }
+      return { ok: true, error: null, batch_id: "", rows: saved.size, dataset_versions: {} };
+    },
     onSuccess: async (result) => {
       if (!result.ok) return;
       const rows = result.rows;
@@ -725,8 +741,8 @@ export function ObjectExplorer({
                         </td>
                         <td className="slug">{i.primary_key}</td>
                         {columns.map((c) => {
-                          const parameter = editing ? editsColumn(editableFor, c) : null;
-                          if (!parameter) {
+                          const target = editing ? editableFor[c] : undefined;
+                          if (!target) {
                             return (
                               <td key={c}>
                                 {/* `String(value)` here rendered every geopoint
@@ -735,7 +751,10 @@ export function ObjectExplorer({
                               </td>
                             );
                           }
-                          const typed = staged[i.id]?.[parameter];
+                          const typed = staged[i.id]?.[c];
+                          const parameter = editActions.data
+                            ?.find((a) => a.id === target.actionId)
+                            ?.parameters?.find((p) => p.api_name === target.parameter);
                           return (
                             <td key={c}>
                               {/* p.242's cap is about **rows**, so a row already
@@ -757,22 +776,10 @@ export function ObjectExplorer({
                                    declaration the binder checks — a cell typed
                                    as the property would disagree with the
                                    check the submission actually faces. */
-                                dataType={
-                                  editAction?.parameters?.find(
-                                    (p) => p.api_name === parameter,
-                                  )?.data_type as never
-                                }
-                                arrayOf={
-                                  editAction?.parameters?.find(
-                                    (p) => p.api_name === parameter,
-                                  )?.array_of
-                                }
+                                dataType={parameter?.data_type as never}
+                                arrayOf={parameter?.array_of}
                                 // p.8's multiple choice (§584).
-                                choices={multipleChoice(
-                                  editAction?.parameters?.find(
-                                    (p) => p.api_name === parameter,
-                                  ) ?? { data_type: "" },
-                                )}
+                                choices={multipleChoice(parameter ?? { data_type: "" })}
                                 value={
                                   (typed !== undefined
                                     ? typed
@@ -781,7 +788,7 @@ export function ObjectExplorer({
                                 label={c}
                                 onChange={(next) =>
                                   setStaged((was) =>
-                                    stage(was, i.id, parameter, next, editLimit),
+                                    stage(was, i.id, c, next, editLimit),
                                   )
                                 }
                               />
