@@ -56,6 +56,7 @@ export const OPERATOR_LABELS: Record<string, string> = {
   lt: "is less than",
   lte: "is at most",
   within_box: "is inside the area",
+  within_polygon: "is inside the drawn shape",
   keyword_query: "matches",
   has_link: "has a link",
 };
@@ -69,7 +70,7 @@ export const OPERATOR_LABELS: Record<string, string> = {
  * already carries one renders as a pill and says so — read-only is the honest
  * state, not a gap.
  */
-export const GEO_OPERATORS: readonly string[] = ["within_box"];
+export const GEO_OPERATORS: readonly string[] = ["within_box", "within_polygon"];
 
 /** `object_sets.QUERY_OPERATORS`: p.452's advanced keyword syntax (§543),
  * whose value is a query over prefix terms. Written by a Filter List's
@@ -182,6 +183,9 @@ export function valueLabel(clause: Clause): string {
     if (edges.every((e) => typeof box[e] === "number")) {
       return `N ${box.north}, S ${box.south}, E ${box.east}, W ${box.west}`;
     }
+    // §571's polygon, by its corners' count: the coordinates themselves are
+    // a shape somebody drew, not something to read.
+    if (Array.isArray(box.points)) return `a shape with ${box.points.length} corners`;
     return "…";
   }
   if (value === null || value === undefined) return "";

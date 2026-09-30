@@ -570,6 +570,29 @@ def _within_box_sql(
     return f"({between_lat} AND {between_lon})"
 
 
+def _within_polygon_sql(
+    prop: str, val: str, polygon: "Any", params: dict[str, Any]
+) -> str:
+    """§571's polygon, as SQL: `object_sets.in_polygon`'s even-odd rule over
+    the polygon's edges, bound as four arrays and unnested, so no corner is
+    interpolated and the query is one shape whatever the polygon's size."""
+    lat = _comparable_sql(f"jsonb_extract_path_text(i.properties, :{prop}, 'lat')", "float")
+    lon = _comparable_sql(f"jsonb_extract_path_text(i.properties, :{prop}, 'lon')", "float")
+    edges = object_sets.polygon_edges(polygon)
+    for n, name in enumerate(("lat1", "lon1", "lat2", "lon2")):
+        params[f"{val}{name}"] = [edge[n] for edge in edges]
+    return (
+        f"({lat} IS NOT NULL AND {lon} IS NOT NULL AND ("
+        f"SELECT count(*) FROM unnest("
+        f"CAST(:{val}lat1 AS double precision[]), CAST(:{val}lon1 AS double precision[]), "
+        f"CAST(:{val}lat2 AS double precision[]), CAST(:{val}lon2 AS double precision[])"
+        f") AS e(lat1, lon1, lat2, lon2) "
+        f"WHERE (e.lat1 > {lat}) <> (e.lat2 > {lat}) "
+        f"AND {lon} < e.lon1 + ({lat} - e.lat1) * (e.lon2 - e.lon1) / (e.lat2 - e.lat1)"
+        f") % 2 = 1)"
+    )
+
+
 def _comparable_sql(extract: str, data_type: str | None) -> str:
     """A stored property, as a value its declared type can be ordered by.
 
@@ -742,6 +765,8 @@ def _set_predicate(
                 f"CAST(:{val} AS {_CAST_FOR[f.data_type]}))"
             )
             params[val] = bound.isoformat() if hasattr(bound, "isoformat") else bound
+        elif f.op == "within_polygon":
+            where.append(_within_polygon_sql(prop, val, f.value, params))
         elif f.op in object_sets.GEO_OPERATORS:
             where.append(_within_box_sql(prop, val, f.value, params))
         elif f.op in object_sets.QUERY_OPERATORS:

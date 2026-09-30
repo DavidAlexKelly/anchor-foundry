@@ -23,7 +23,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { WORLD_OUTLINE } from "./basemap";
 import { boundsOf, onScreen, pathsFor } from "./map-shapes";
 import { allInside, boundsText, sameView, viewOfBounds } from "./map-view";
-import { boxBetween, boxRect, isDrag, lonLatAt, type Box } from "./map-area";
+import {
+  MAX_POLYGON_POINTS, boxBetween, boxRect, closes, isDrag, isPolygon, lonLatAt, polygonPoints,
+  type Area,
+} from "./map-area";
 
 export interface MapPoint {
   id: string;
@@ -233,8 +236,8 @@ export function MapCanvas({
    * map, and where a newly drawn one goes. Without `onArea` there is no
    * Select area tool - a map with nowhere to write the area has no use for
    * one. */
-  area?: Box | null;
-  onArea?: (box: Box | null) => void;
+  area?: Area | null;
+  onArea?: (area: Area | null) => void;
   /** p.300's layer Style (§559): its colour and opacity. */
   color?: string | null;
   opacity?: number;
@@ -265,6 +268,9 @@ export function MapCanvas({
   const [selecting, setSelecting] = useState(false);
   const [sketch, setSketch] = useState<{ a: { x: number; y: number }; b: { x: number; y: number } }
     | null>(null);
+  // §571's Draw shape: a click a corner, and a click back on the first (or a
+  // double-click) closes it. Null when the tool is not in hand.
+  const [outline, setOutline] = useState<{ x: number; y: number }[] | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drag = useRef<{ px: number; py: number; view: MapView } | null>(null);
 
@@ -418,6 +424,16 @@ export function MapCanvas({
     };
   }, [drawing, current, onArea]);
 
+  const finishOutline = (corners: { x: number; y: number }[]) => {
+    setOutline(null);
+    if (corners.length < 3) return;
+    const frame = { width: WIDTH, height: HEIGHT };
+    onArea?.({ points: corners.map((c) => {
+      const { lat, lon } = lonLatAt(c.x, c.y, current, frame);
+      return { lat: Math.min(90, Math.max(-90, lat)), lon: Math.min(180, Math.max(-180, lon)) };
+    }) });
+  };
+
   const svgPoint = (e: React.MouseEvent | React.WheelEvent) => {
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return { x: WIDTH / 2, y: HEIGHT / 2 };
@@ -437,13 +453,22 @@ export function MapCanvas({
         role="img"
         aria-label="Map"
         style={{ width: "100%", touchAction: "none",
-          cursor: selecting ? "crosshair" : panning ? "grabbing" : "grab" }}
+          cursor: selecting || outline ? "crosshair" : panning ? "grabbing" : "grab" }}
         onMouseDown={(e) => {
           // The widget's own Craft.js drag connector sits on the block around
           // this SVG, and in the editor it would otherwise pick the map up and
           // carry it across the canvas the moment somebody tried to pan.
           // Panning wins inside the map; the block's border still drags it.
           e.stopPropagation();
+          if (outline) {
+            const at = svgPoint(e);
+            if (closes(outline, at)) {
+              finishOutline(outline);
+            } else if (outline.length < MAX_POLYGON_POINTS) {
+              setOutline([...outline, at]);
+            }
+            return;
+          }
           if (selecting) {
             const a = svgPoint(e);
             setSketch({ a, b: a });
@@ -454,6 +479,9 @@ export function MapCanvas({
         }}
         onWheel={(e) => {
           zoomBy(e.deltaY > 0 ? 1.25 : 1 / 1.25, svgPoint(e));
+        }}
+        onDoubleClick={() => {
+          if (outline) finishOutline(outline);
         }}
       >
         <rect width={WIDTH} height={HEIGHT} fill="var(--map-sea, #eef2f4)" />
@@ -503,7 +531,13 @@ export function MapCanvas({
         </g>
         {/* p.302's selected area, and the one being drawn. Under the pins, as
             the shapes are, so a pin inside it stays a thing to click. */}
-        {area && (() => {
+        {area && isPolygon(area) && (
+          <polygon data-testid="map-area" data-shape="polygon"
+            points={polygonPoints(area, current, { width: WIDTH, height: HEIGHT })}
+            fill="var(--accent-wash)" fillOpacity={0.35} stroke="var(--accent)"
+            strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
+        )}
+        {area && !isPolygon(area) && (() => {
           const r = boxRect(area, current, { width: WIDTH, height: HEIGHT });
           return (
             <rect data-testid="map-area" x={r.x} y={r.y} width={r.width} height={r.height}
@@ -511,6 +545,12 @@ export function MapCanvas({
               strokeDasharray="4 3" style={{ pointerEvents: "none" }} />
           );
         })()}
+        {outline && outline.length > 0 && (
+          <polyline data-testid="map-outline-sketch"
+            points={outline.map((c) => `${c.x},${c.y}`).join(" ")}
+            fill="none" stroke="var(--accent)" strokeDasharray="4 3"
+            style={{ pointerEvents: "none" }} />
+        )}
         {sketch && (
           <rect data-testid="map-area-sketch"
             x={Math.min(sketch.a.x, sketch.b.x)} y={Math.min(sketch.a.y, sketch.b.y)}
@@ -604,9 +644,20 @@ export function MapCanvas({
             type="button"
             data-testid="map-select-area"
             aria-pressed={selecting}
-            onClick={() => setSelecting(!selecting)}
+            onClick={() => { setOutline(null); setSelecting(!selecting); }}
           >
             Select area
+          </button>
+        )}
+        {onArea && (
+          <button
+            type="button"
+            data-testid="map-draw-shape"
+            aria-pressed={outline !== null}
+            title="Click each corner, then the first again (or double-click) to close the shape"
+            onClick={() => { setSelecting(false); setOutline(outline ? null : []); }}
+          >
+            Draw shape
           </button>
         )}
         {onArea && area && (

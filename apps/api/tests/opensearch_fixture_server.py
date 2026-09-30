@@ -391,6 +391,22 @@ def _match(source: dict, clause: dict, index: str = "") -> bool:
         # antimeridian, and then "between" is the union of two ranges rather
         # than one interval.
         return west <= lon <= east if west <= east else (lon >= west or lon <= east)
+    if "geo_polygon" in clause:
+        # §571: a polygon on the mapped geo_point, by the even-odd rule a
+        # cluster uses and `object_sets.in_polygon` states.
+        field, spec = next(iter(clause["geo_polygon"].items()))
+        found = _resolve(source, field)
+        if found is MISSING:
+            return False
+        if _declared_type(index, field) != "geo_point":
+            raise MappingError(f"[geo_polygon] query on non-geo_point field [{field}]")
+        lat, lon = _parse_geo(found)
+        corners = [_parse_geo(p) for p in spec["points"]]
+        inside = False
+        for (lat1, lon1), (lat2, lon2) in zip(corners, corners[1:] + corners[:1]):
+            if (lat1 > lat) != (lat2 > lat) and lon < lon1 + (lat - lat1) * (lon2 - lon1) / (lat2 - lat1):
+                inside = not inside
+        return inside
     if "multi_match" in clause:
         # Substring over every property value plus the primary key. Real
         # OpenSearch tokenises and ranks; the fixture only has to decide
