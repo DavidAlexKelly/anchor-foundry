@@ -120,7 +120,8 @@ describe("named listener types (§518)", () => {
     expect(schemesOf("pubsub")).toEqual(["query_token"]);
     expect(Object.keys(LISTENER_TYPES))
       .toEqual(["custom", "slack", "jira", "github", "gitlab", "stripe", "shopify", "pubsub",
-        "bitbucket", "meta", "azure_event_grid", "jotform", "pagerduty", "zendesk", "airtable"]);
+        "bitbucket", "meta", "azure_event_grid", "jotform", "pagerduty", "zendesk", "airtable",
+        "cisco_meraki", "pandadoc", "dialpad", "twilio", "sendgrid"]);
     // §591: Jotform signs nothing, so a token in its address is the default.
     expect(schemesOf("jotform")).toEqual(["query_token", "none"]);
   });
@@ -139,6 +140,14 @@ describe("named listener types (§518)", () => {
     for (const secret of ["c2VjcmV0", "c2VjcmU=", "c2VjcmV0cw=="]) {
       expect(draftProblem(draft({ listener_type: "airtable", verification: "airtable", secret }))).toBe("");
     }
+  });
+
+  it("asks for SendGrid's key as base64 (§593)", () => {
+    const sendgrid = (secret: string) =>
+      draftProblem(draft({ listener_type: "sendgrid", verification: "sendgrid", secret }));
+    expect(sendgrid("not a key")).toBe("SendGrid's verification key is the base64 public key SendGrid shows.");
+    expect(sendgrid("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE")).toBe("");
+    expect(sendgrid(" MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE ")).toBe("");
   });
 
   it("asks a named type for its secret and nothing else", () => {

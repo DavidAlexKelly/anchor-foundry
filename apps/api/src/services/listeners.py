@@ -47,11 +47,23 @@ RATE_PER_SECOND = 100
 VERIFICATIONS = ("none", "basic", "header_secret", "hmac_sha256", "hmac_sha256_base64",
                  "slack_v0", "stripe_v1", "query_token",
                  # §591: the three further schemes p.262's named listeners sign with.
-                 "pagerduty_v1", "zendesk", "airtable")
+                 "pagerduty_v1", "zendesk", "airtable",
+                 # §593: five more, three of which read no header.
+                 "meraki", "pandadoc", "dialpad_jwt", "twilio", "sendgrid")
 
 #: The schemes that read a named header, which is then stored and redacted.
 HEADER_SCHEMES = ("header_secret", "hmac_sha256", "hmac_sha256_base64", "slack_v0", "stripe_v1",
-                  "pagerduty_v1", "zendesk", "airtable")
+                  "pagerduty_v1", "zendesk", "airtable", "twilio", "sendgrid")
+
+#: Where each scheme that reads no named header finds its proof, for the
+#: refusal of a header given to one.
+HEADERLESS = {
+    "basic": "the Authorization header, so it takes no other",
+    "query_token": "the endpoint's query string, so it takes no header",
+    "pandadoc": "the endpoint's query string, so it takes no header",
+    "meraki": "the secret inside the payload, so it takes no header",
+    "dialpad_jwt": "a body that is itself the signed token, so it takes no header",
+}
 
 #: How stale a signed timestamp may be (Slack and Stripe both sign one, and
 #: both say five minutes), so a captured request cannot be replayed later.
@@ -88,6 +100,16 @@ LISTENER_TYPES: dict[str, dict[str, Any]] = {
     "pagerduty": {"label": "PagerDuty", "schemes": {"pagerduty_v1": "X-PagerDuty-Signature"}},
     "zendesk": {"label": "Zendesk", "schemes": {"zendesk": "X-Zendesk-Webhook-Signature"}},
     "airtable": {"label": "Airtable", "schemes": {"airtable": "X-Airtable-Content-MAC"}},
+    # §593. Meraki puts the shared secret in the payload's `sharedSecret`.
+    "cisco_meraki": {"label": "Cisco Meraki", "schemes": {"meraki": None}},
+    # PandaDoc adds `?signature=<hex HMAC-SHA256 of the body>` to the address.
+    "pandadoc": {"label": "PandaDoc", "schemes": {"pandadoc": None}},
+    # Dialpad, given a secret, sends the event as an HS256 token; without
+    # one it sends plain JSON and signs nothing.
+    "dialpad": {"label": "Dialpad", "schemes": {"dialpad_jwt": None, "none": None}},
+    "twilio": {"label": "Twilio", "schemes": {"twilio": "X-Twilio-Signature"}},
+    "sendgrid": {"label": "Twilio SendGrid",
+                 "schemes": {"sendgrid": "X-Twilio-Email-Event-Webhook-Signature"}},
 }
 
 #: Headers never stored, because they are how a sender authenticates. p.265:
@@ -120,10 +142,7 @@ def check_configuration(verification: str, header: str | None, secret: str | Non
     if needs_header and not header:
         raise ListenerError(f"{verification} verification needs the header it arrives in")
     if not needs_header and header:
-        raise ListenerError(
-            "basic verification reads the Authorization header, so it takes no other"
-            if verification == "basic"
-            else f"{verification} verification reads the endpoint's query string, so it takes no header")
+        raise ListenerError(f"{verification} verification reads {HEADERLESS[verification]}")
     if verification == "basic" and ":" not in secret:
         raise ListenerError("basic verification's secret is username:password")
     if verification == "airtable":
@@ -133,6 +152,23 @@ def check_configuration(verification: str, header: str | None, secret: str | Non
             base64.b64decode(secret, validate=True)
         except binascii.Error as exc:
             raise ListenerError("an Airtable MAC secret is the base64 Airtable gave") from exc
+    if verification == "sendgrid" and _sendgrid_key(secret) is None:
+        raise ListenerError(
+            "a SendGrid verification key is the base64 public key SendGrid gave")
+
+
+def _sendgrid_key(secret: str) -> Any:
+    """SendGrid's verification key - the base64 of an elliptic-curve public
+    key, with or without PEM's armour - or None for anything else."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import load_der_public_key
+
+    bare = "".join(line for line in secret.strip().splitlines() if not line.startswith("-----"))
+    try:
+        key = load_der_public_key(base64.b64decode(bare, validate=True))
+    except (binascii.Error, ValueError):
+        return None
+    return key if isinstance(key, ec.EllipticCurvePublicKey) else None
 
 
 def resolve(listener_type: str, verification: str | None, header: str | None,
@@ -181,8 +217,13 @@ def _signed_at(stamp: str, now: float) -> bool:
 
 def verify(verification: str, header: str | None, secret: str | None,
            headers: Mapping[str, str], body: bytes, *,
-           query: Mapping[str, str] | None = None, now: float = 0.0) -> bool:
+           query: Mapping[str, str] | None = None, now: float = 0.0,
+           url: str = "") -> bool:
     """Whether a request passes its listener's scheme.
+
+    `url` is the address the request was sent to, query string and all, as
+    this API sees it - the one the listener's card shows, which is what an
+    author gives Twilio, the one sender here that signs its address.
 
     Every comparison is `hmac.compare_digest`, so how long a refusal takes says
     nothing about how much of a guess was right.
@@ -192,6 +233,21 @@ def verify(verification: str, header: str | None, secret: str | None,
     assert secret is not None
     if verification == "query_token":
         return hmac.compare_digest((query or {}).get("token", "").encode(), secret.encode())
+    if verification == "pandadoc":
+        # `?signature=<hex>`: an HMAC-SHA256 of the body, keyed with the
+        # webhook's shared key.
+        expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        return hmac.compare_digest((query or {}).get("signature", "").encode(), expected.encode())
+    if verification == "meraki":
+        # The payload carries the shared secret the author set on the webhook.
+        try:
+            payload = json.loads(body)
+        except (ValueError, UnicodeDecodeError):
+            return False
+        carried = payload.get("sharedSecret") if isinstance(payload, dict) else None
+        return isinstance(carried, str) and hmac.compare_digest(carried.encode(), secret.encode())
+    if verification == "dialpad_jwt":
+        return _dialpad_claims(secret, body) is not None
     if verification == "basic":
         given = headers.get("authorization", "")
         if not given.lower().startswith("basic "):
@@ -244,6 +300,26 @@ def verify(verification: str, header: str | None, secret: str | None,
             return False
         digest = hmac.new(secret.encode(), stamp.encode() + body, hashlib.sha256).digest()
         return hmac.compare_digest(given.encode(), base64.b64encode(digest))
+    if verification == "twilio":
+        return hmac.compare_digest(given.encode(), _twilio_signature(secret, url, headers, body))
+    if verification == "sendgrid":
+        # An ECDSA signature of `{timestamp}{body}`, checked with the public
+        # key SendGrid gave; the timestamp beside it, so a stale one is a
+        # replay, as Slack's and Stripe's are.
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        stamp = headers.get("x-twilio-email-event-webhook-timestamp", "")
+        key = _sendgrid_key(secret)
+        if not _signed_at(stamp, now) or key is None:
+            return False
+        try:
+            key.verify(base64.b64decode(given, validate=True), stamp.encode() + body,
+                       ec.ECDSA(hashes.SHA256()))
+        except (binascii.Error, InvalidSignature):
+            return False
+        return True
     if verification == "airtable":
         # `hmac-sha256=<hex>`, keyed with the bytes the base64 secret encodes.
         key = base64.b64decode(secret)
@@ -255,6 +331,57 @@ def verify(verification: str, header: str | None, secret: str | None,
         given = given[7:]
     expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(given.lower().encode(), expected.encode())
+
+
+def _dialpad_claims(secret: str, body: bytes) -> dict[str, Any] | None:
+    """The event a Dialpad token carries, or None if the body is not one
+    signed with this secret. HS256 alone: a token naming another algorithm
+    is refused rather than trusted to say how it should be checked. PyJWT
+    refuses a payload that is not an object, so what comes back is one."""
+    import jwt
+
+    try:
+        return jwt.decode(body.decode("ascii").strip(), secret, algorithms=["HS256"])
+    except (jwt.PyJWTError, UnicodeDecodeError):
+        return None
+
+
+def _twilio_signature(secret: str, url: str, headers: Mapping[str, str], body: bytes) -> bytes:
+    """Twilio's `X-Twilio-Signature`: base64 of an HMAC-SHA1 of the address,
+    then for a form each parameter's name and value, sorted by name and then
+    value. A JSON body is instead vouched for by the address's `bodySHA256`,
+    which the signature covers and which must be the body's hash."""
+    from urllib.parse import parse_qs, parse_qsl, urlsplit
+
+    signed = url
+    hashed = parse_qs(urlsplit(url).query).get("bodySHA256")
+    if hashed:
+        if not hmac.compare_digest(hashed[0].encode(), hashlib.sha256(body).hexdigest().encode()):
+            return b""
+    elif headers.get("content-type", "").startswith("application/x-www-form-urlencoded"):
+        # A form that is not UTF-8 reads with replacement characters, which no
+        # signature Twilio made covers, so it is refused without a case.
+        pairs = parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)
+        signed += "".join(f"{name}{value}" for name, value in sorted(set(pairs)))
+    digest = hmac.new(secret.encode(), signed.encode(), hashlib.sha1).digest()
+    return base64.b64encode(digest)
+
+
+def stored_body(verification: str, secret: str | None, body: bytes,
+                content_type: str | None) -> tuple[bytes, str | None]:
+    """The body as kept with the event: what arrived, but for two senders
+    whose proof travels inside it. Meraki's payload carries the shared secret
+    itself, which is kept as a header's would be - redacted (p.265). And a
+    Dialpad token is the envelope its event is signed in, so the event kept is
+    the JSON inside it, as Dialpad sends it when there is no secret."""
+    if verification == "meraki":
+        payload = json.loads(body)
+        payload["sharedSecret"] = "[redacted]"
+        return json.dumps(payload).encode(), content_type
+    if verification == "dialpad_jwt":
+        assert secret is not None
+        return json.dumps(_dialpad_claims(secret, body)).encode(), "application/json"
+    return body, content_type
 
 
 def stored_headers(headers: Mapping[str, str], verification_header: str | None) -> dict[str, str]:
@@ -380,7 +507,8 @@ async def admit(conn: AsyncConnection, token: str, *, sender: str | None = None)
 
 async def accept(conn: AsyncConnection, gateway: SecretsGateway, found: Mapping[str, Any],
                  headers: Mapping[str, str], body: bytes, *,
-                 query: Mapping[str, str] | None = None, now: float | None = None) -> dict[str, Any]:
+                 query: Mapping[str, str] | None = None, now: float | None = None,
+                 url: str = "") -> dict[str, Any]:
     """Take one admitted request, or refuse it with the status that says why.
 
     Returns the event's id, or for Slack's set-up handshake the challenge to
@@ -395,17 +523,19 @@ async def accept(conn: AsyncConnection, gateway: SecretsGateway, found: Mapping[
     secret = (gateway.get_secret(found["secret_arn"])["secret"]
               if found["secret_arn"] else None)
     if not verify(found["verification"], found["verification_header"], secret, headers, body,
-                  query=query, now=time.time() if now is None else now):
+                  query=query, now=time.time() if now is None else now, url=url):
         raise Refusal(401, "the request did not verify")
     challenge = slack_challenge(found["verification"], body)
     if challenge is not None:
         # The handshake is not an event: Slack sends it once, to see the
         # address answer, and nothing downstream is waiting for it.
         return {"challenge": challenge}
+    body, content_type = stored_body(found["verification"], secret, body,
+                                     headers.get("content-type"))
     row = await fetch_one(conn, """
         SELECT record_listener_event(:lid, :eid, :ct, :body, CAST(:headers AS jsonb)) AS id
     """, {"lid": str(found["listener_id"]), "eid": str(found["endpoint_id"]),
-          "ct": headers.get("content-type"), "body": body,
+          "ct": content_type, "body": body,
           "headers": json.dumps(stored_headers(headers, found["verification_header"]))})
     assert row is not None
     return {"event": int(row["id"])}

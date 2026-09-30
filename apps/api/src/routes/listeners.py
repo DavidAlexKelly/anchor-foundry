@@ -340,7 +340,8 @@ async def receive(token: str, request: Request) -> JSONResponse:
         # decided here (db 0110).
         async with get_engine().begin() as conn:
             taken = await listener_service.accept(
-                conn, secrets_gateway(), found, headers, body, query=dict(request.query_params))
+                conn, secrets_gateway(), found, headers, body, query=dict(request.query_params),
+                url=str(request.url))
     except listener_service.Refusal as refusal:
         return JSONResponse({"detail": refusal.detail}, status_code=refusal.status,
                             headers=refusal.headers)

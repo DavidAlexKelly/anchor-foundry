@@ -216,6 +216,39 @@ def test_airtable_asks_for_its_base64_secret_and_signs_with_its_bytes(page, api)
     assert post(url, body) == 401
 
 
+def test_twilio_signs_the_address_the_card_shows(page, api) -> None:
+    """§593, p.262's Twilio: its signature covers the address it posts to, so
+    the address on the card has to be the one the server checks against,
+    through whatever sits between them."""
+    import base64
+    import hashlib
+    import hmac
+    from urllib.parse import urlencode
+
+    mod = Module(api, "Listeners twilio")
+    open_connections(page, mod)
+    name = f"Texts {mod.tag}"
+    page.get_by_test_id("listener-new").click()
+    page.get_by_test_id("listener-name").fill(name)
+    page.get_by_test_id("listener-type").select_option("twilio")
+    expect(page.get_by_test_id("listener-verification")).to_have_value("twilio")
+    page.get_by_test_id("listener-secret").fill("auth-token")
+    page.get_by_test_id("listener-create").click()
+
+    listener = card(page, name)
+    expect(listener.get_by_test_id("listener-verification-text")).to_have_text(
+        "Verification: Twilio · Twilio auth token (X-Twilio-Signature)", timeout=15000)
+    listener.get_by_test_id("listener-toggle").click()
+    expect(listener.get_by_test_id("listener-status")).to_contain_text("Running")
+    url = listener.get_by_test_id("listener-url").inner_text()
+    params = [("From", "+15550100"), ("Body", "hello")]
+    signed = url + "".join(f"{k}{v}" for k, v in sorted(params))
+    sig = base64.b64encode(hmac.new(b"auth-token", signed.encode(), hashlib.sha1).digest()).decode()
+    form = {"Content-Type": "application/x-www-form-urlencoded"}
+    assert post(url, urlencode(params).encode(), {**form, "X-Twilio-Signature": sig}) == 200
+    assert post(url, urlencode(params[:1]).encode(), {**form, "X-Twilio-Signature": sig}) == 401
+
+
 def test_archiving_now_makes_the_backing_dataset(page, api) -> None:
     """§519, p.264: "Every few minutes, the listener event stream will archive
     into a backing dataset. This dataset can be used like any other dataset".
