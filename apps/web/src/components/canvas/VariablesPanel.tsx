@@ -28,6 +28,7 @@
 import { SeriesTransformsEditor } from "./SeriesTransformsEditor";
 import { MAX_PRECISION, ROUNDINGS, isMath, mathArity, mathSlotLabel, precisionOf } from "./variable-math";
 import { DATE_ARITY, dateSlotLabels, isDateMath, takesDirection, unitsFor } from "./variable-dates";
+import { checkArity, checkSlotLabel, isCheck } from "./variable-checks";
 import { seriesDerivationInputs, type SeriesTransform } from "./series-transforms";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEditor } from "@craftjs/core";
@@ -191,6 +192,17 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   { value: "time_is_on_or_before", label: "Times: is on or before", arity: "two" },
   { value: "time_is_before", label: "Times: is before", arity: "two" },
   { value: "time_is_equal", label: "Times: is equal", arity: "two" },
+  // p.142's string and boolean comparisons (§566).
+  { value: "string_is", label: "Text: is", arity: "two or more" },
+  { value: "string_is_not", label: "Text: is not", arity: "two or more" },
+  { value: "string_contains", label: "Text: contains", arity: "two or more" },
+  { value: "string_does_not_contain", label: "Text: does not contain", arity: "two or more" },
+  { value: "string_starts_with", label: "Text: starts with", arity: "two or more" },
+  { value: "string_ends_with", label: "Text: ends with", arity: "two or more" },
+  { value: "is_true", label: "Is true", arity: "one" },
+  { value: "is_false", label: "Is false (NOT)", arity: "one" },
+  { value: "is_null", label: "Is null", arity: "one" },
+  { value: "is_not_null", label: "Is not null", arity: "one" },
 ];
 
 /** Offered on `time_series_set` variables, and the only thing offered there -
@@ -224,6 +236,7 @@ const CAST_TARGETS = ["string", "number", "boolean"] as const;
 function arityOf(transform: WorkshopTransform): number | "many" {
   if (isMath(transform)) return mathArity(transform);
   if (isDateMath(transform)) return DATE_ARITY[transform] ?? 2;
+  if (isCheck(transform)) return checkArity(transform);
   if (transform === "concat") return "many";
   if (transform === "if_else") return 3;
   if (transform === "filter_set") return 2;
@@ -1067,6 +1080,7 @@ function DerivationEditor({
       {slots.map((value, index) => (
         <label key={index}>
           {isMath(derivation.transform) ? mathSlotLabel(derivation.transform, index)
+            : isCheck(derivation.transform) ? checkSlotLabel(derivation.transform, index)
             : arity === "many" ? `Part ${index + 1}` : slotLabels(derivation.transform)[index]}
           <select
             value={value}

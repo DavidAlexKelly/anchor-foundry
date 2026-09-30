@@ -457,6 +457,10 @@ export type WorkshopTransform =
   | "date_is_on_or_after" | "date_is_after" | "date_is_on_or_before" | "date_is_before"
   | "date_is_equal" | "time_is_on_or_after" | "time_is_after" | "time_is_on_or_before"
   | "time_is_before" | "time_is_equal"
+  /** p.142's string and boolean comparisons (§566), evaluated by
+   * `services/variable_checks.py`. */
+  | "string_is" | "string_is_not" | "string_contains" | "string_does_not_contain"
+  | "string_starts_with" | "string_ends_with" | "is_true" | "is_false" | "is_null" | "is_not_null"
 
 /** What a `time_series_set` variable resolves to: the whole question, and no
  * data. Decision 0009 keeps points in the dataset they arrived in, so a

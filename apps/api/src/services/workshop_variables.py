@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
-from . import variable_dates, variable_math
+from . import variable_checks, variable_dates, variable_math
 
 KINDS = (
     "string",
@@ -104,6 +104,8 @@ TRANSFORMS = (
     *variable_math.TRANSFORMS,
     # p.140-141's date/time math and comparisons (§565): `variable_dates.py`.
     *variable_dates.TRANSFORMS,
+    # p.142's string and boolean comparisons (§566): `variable_checks.py`.
+    *variable_checks.TRANSFORMS,
 )
 
 # Still declared and deliberately not evaluated here: an aggregate over a set
@@ -1245,8 +1247,9 @@ def _check_arity(vid: str, d: Derivation) -> None:
     """Refuse a derivation that cannot produce a value, at save rather than at
     view: an app that renders a blank card because a transform was configured
     with one input instead of three is a bug nobody can see the cause of."""
-    if d.transform in variable_math.ARITY or d.transform in variable_dates.ARITY:
-        module = variable_math if d.transform in variable_math.ARITY else variable_dates
+    module = next((m for m in (variable_math, variable_dates, variable_checks)
+                   if d.transform in m.ARITY), None)
+    if module is not None:
         problem = module.check(d.transform, len(d.inputs), d.config)
         if problem:
             raise VariableError(f"variable {vid!r}: {problem}")
@@ -1617,6 +1620,15 @@ def evaluate(
                 variable_math.of_number_variable(value) if variables[i].kind == "number" else value
                 for i, value in zip(variable.derivation.inputs, inputs)
             ]
+        if (variable.derivation.transform in variable_checks.ARITY
+                or variable.derivation.transform == "if_else"):
+            # A boolean variable's typed "false" is false (§566), and was the
+            # value present that `if_else` read as true.
+            inputs = [
+                variable_checks.of_boolean_variable(value) if variables[i].kind == "boolean"
+                else value
+                for i, value in zip(variable.derivation.inputs, inputs)
+            ]
         resolved[vid] = _apply(variable, inputs, property_types)
         if timings is not None:
             timings[vid] = (perf_counter() - started) * 1000
@@ -1644,6 +1656,11 @@ def _apply(
         try:
             return variable_dates.apply(d.transform, list(inputs), d.config, variable.label)
         except variable_dates.DateError as exc:
+            raise VariableError(str(exc)) from None
+    if d.transform in variable_checks.ARITY:
+        try:
+            return variable_checks.apply(d.transform, list(inputs), d.config, variable.label)
+        except variable_checks.CheckError as exc:
             raise VariableError(str(exc)) from None
     if d.transform == "if_else":
         condition, then, otherwise = inputs
