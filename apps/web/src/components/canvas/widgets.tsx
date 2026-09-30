@@ -310,6 +310,7 @@ import { CanvasNode, OffLayout, holdsKept } from "./SettingsPanel";
 import {
   CanvasHeaderCollapsedContext,
   CanvasParameterProvider,
+  useCanvasActions,
   useCanvasEnv,
   useHeaderCollapsed,
   useCanvasPage,
@@ -5376,6 +5377,7 @@ export function CanvasObjectTable({
   inlineEditButtonText = "",
   inlineEditByDefault = false,
   inlineEditOneClick = false,
+  exportCsv = false,
   seriesFormats = null,
   seriesRules = null,
   seriesTransforms = null,
@@ -5471,6 +5473,8 @@ export function CanvasObjectTable({
   inlineEditButtonText?: string;
   inlineEditByDefault?: boolean;
   inlineEditOneClick?: boolean;
+  /** p.223's "Enable export to CSV": from a row's right-click menu (§611). */
+  exportCsv?: boolean;
 }) {
   const {
     id: nodeId,
@@ -5693,6 +5697,31 @@ export function CanvasObjectTable({
   // also sets the active object, and a table bound to that variable is
   // interactive whether or not anybody wired an event to it.
   const rowsAreClickable = rowEvents.length > 0 || !!activeVariable;
+
+  // p.223's right-click menu (§611): "Enable export to CSV: … export object
+  // table data to CSV format from a row's right-click menu." The whole set,
+  // not the page - p.223's own limit is 10,000 rows, which is §459's - in the
+  // columns this table shows, through §459's export, so the file and what is
+  // said about it are the Export widget's. **Only over an object set
+  // variable**: the other path is a type narrowed by a search box, which is
+  // no set an export can name.
+  const { exportObjects } = useCanvasActions();
+  const offersExport = mode === "run" && !!exportCsv && usingSet;
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!rowMenu) return;
+    const close = () => setRowMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    // A press anywhere else closes it; the menu's own button stops its press.
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [rowMenu]);
 
   const chooseActive = (key: string) => {
     if (activeVariable) setParameter(activeVariable, selectionClauses([key]));
@@ -5953,6 +5982,10 @@ export function CanvasObjectTable({
                       );
                       event.dataTransfer.effectAllowed = "copy";
                     } : undefined}
+                    onContextMenu={offersExport && !inEditMode ? (event) => {
+                      event.preventDefault();
+                      setRowMenu({ x: event.clientX, y: event.clientY });
+                    } : undefined}
                     onClick={
                       rowsAreClickable
                         ? () => {
@@ -6201,6 +6234,34 @@ export function CanvasObjectTable({
               </tbody>
             </table>
           </div>
+          {rowMenu && (
+            <div
+              className="explore-menu canvas-row-menu"
+              role="menu"
+              data-testid="table-row-menu"
+              style={{ position: "fixed", left: rowMenu.x, top: rowMenu.y }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="btn quiet"
+                data-testid="table-export-csv"
+                onClick={() => {
+                  setRowMenu(null);
+                  exportObjects({
+                    variable: objectSetVariable!,
+                    definition: setDefinition,
+                    format: "csv",
+                    fileName: null,
+                    properties: properties.map((p) => p.api_name),
+                  });
+                }}
+              >
+                Export to CSV
+              </button>
+            </div>
+          )}
           {usingSet && total > rows.length && (
             <div className="canvas-table-pager">
               <button
@@ -6707,10 +6768,11 @@ function ObjectTableSettings() {
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
     inlineEditAction, inlineEditMapping, inlineEditVariables, inlineEditButtonText,
     inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules, seriesTransforms, seriesBaselines,
-    columnsVariable,
+    columnsVariable, exportCsv,
     actions: { setProp },
   } = useNode((node) => ({
     columnsVariable: node.data.props.columnsVariable,
+    exportCsv: node.data.props.exportCsv,
     objectTypeId: node.data.props.objectTypeId,
     filterProperty: node.data.props.filterProperty,
     filterParameter: node.data.props.filterParameter,
@@ -7142,6 +7204,23 @@ function ObjectTableSettings() {
           </span>
         </>
       )}
+      {/* p.223's Right-click menu (§611). */}
+      <label className="field-check">
+        <input
+          type="checkbox"
+          data-testid="table-export-csv-toggle"
+          checked={!!exportCsv}
+          onChange={(e) => setProp((p: { exportCsv: boolean }) => (p.exportCsv = e.target.checked))}
+        />
+        <span>Enable export to CSV</span>
+      </label>
+      <span className="field-hint" data-testid="table-export-csv-hint">
+        {objectSetVariable
+          ? "A reader right-clicks a row to download every object in the set (up to 10,000), "
+            + "in the columns shown."
+          : "Offered when the table reads an object set variable: a table narrowed by a "
+            + "search box is not a set an export can name."}
+      </span>
       <TableSortsField
         sort={sort}
         properties={detail.data?.properties ?? []}
@@ -7353,7 +7432,7 @@ CanvasObjectTable.craft = {
     inlineEditButtonText: "",
     inlineEditByDefault: false, inlineEditOneClick: false,
     seriesFormats: null, seriesRules: null, seriesTransforms: null, seriesBaselines: null,
-    columnsVariable: null,
+    columnsVariable: null, exportCsv: false,
   },
   related: { settings: ObjectTableSettings },
 };
