@@ -88,13 +88,20 @@ def module(api):
     return mod
 
 
-def open_first_van(page, module):
+def open_van(page, module, name):
+    """Open a van by its name. The explorer promises no row order, so the
+    row is found by what it says rather than where it sits."""
     page.goto(f"{WEB_BASE}/{module.workspace_slug}/explore?type={module.object_type_id}")
     rows = page.locator("tbody tr")
     eventually(lambda: rows.count(), lambda n: n == 2,
                what="this type's vans, and only this type's")
-    rows.first.get_by_role("button", name="Explore").click()
+    rows.filter(has_text=name).get_by_role("button", name="Explore").click()
     expect(page.get_by_test_id("standard-object-view")).to_be_visible()
+
+
+def open_first_van(page, module):
+    """`V1`, the van with a track."""
+    open_van(page, module, "North van")
 
 
 def test_a_prominent_geotemporal_series_renders_a_map(page, module):
@@ -168,12 +175,9 @@ def test_a_van_with_one_position_gets_a_pin_and_no_line(page, module):
     nothing at all, and a card showing an empty map for an object with a known
     location would be worse than one showing the location.
 
-    `V2` is the second row, and it has exactly one fix.
+    `V2` has exactly one fix.
     """
-    page.goto(f"{WEB_BASE}/{module.workspace_slug}/explore?type={module.object_type_id}")
-    rows = page.locator("tbody tr")
-    eventually(lambda: rows.count(), lambda n: n == 2, what="both vans")
-    rows.nth(1).get_by_role("button", name="Explore").click()
+    open_van(page, module, "South van")
     card = page.get_by_test_id("sov-track-trail")
     expect(card).to_be_visible(timeout=30000)
     expect(card.locator("[data-testid='map-shape-trail']")).to_have_count(0)
