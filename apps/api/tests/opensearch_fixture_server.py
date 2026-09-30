@@ -43,6 +43,7 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -391,6 +392,23 @@ def _match(source: dict, clause: dict, index: str = "") -> bool:
         # antimeridian, and then "between" is the union of two ranges rather
         # than one interval.
         return west <= lon <= east if west <= east else (lon >= west or lon <= east)
+    if "geo_distance" in clause:
+        # §572: an arc on the mean Earth, as a cluster measures it.
+        spec = dict(clause["geo_distance"])
+        distance = spec.pop("distance")
+        field, centre = next(iter(spec.items()))
+        found = _resolve(source, field)
+        if found is MISSING:
+            return False
+        if _declared_type(index, field) != "geo_point":
+            raise MappingError(f"[geo_distance] query on non-geo_point field [{field}]")
+        if not distance.endswith("m"):
+            raise MappingError(f"distance {distance!r} is not in metres")
+        (lat, lon), (clat, clon) = _parse_geo(found), _parse_geo(centre)
+        p1, p2 = math.radians(clat), math.radians(lat)
+        h = (math.sin((p2 - p1) / 2) ** 2
+             + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon - clon) / 2) ** 2)
+        return 2 * 6371008.7714 * math.asin(min(1.0, math.sqrt(h))) <= float(distance[:-1])
     if "geo_polygon" in clause:
         # §571: a polygon on the mapped geo_point, by the even-odd rule a
         # cluster uses and `object_sets.in_polygon` states.

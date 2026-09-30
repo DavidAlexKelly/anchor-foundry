@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  AREA_OP, POLYGON_OP, areaOf, boxBetween, boxRect, closes, isDrag, isPolygon, lonLatAt,
+  AREA_OP, CIRCLE_OP, EARTH_RADIUS_M, MAX_RADIUS_M, POLYGON_OP, areaOf, boxBetween, boxRect,
+  circleBetween, circlePath, circleRings, closes, distanceM, isCircle, isDrag, isPolygon, lonLatAt,
   polygonPoints, withArea, type Box,
 } from "./map-area";
 
@@ -100,5 +101,99 @@ describe("a drawn shape as a clause (§571)", () => {
     expect(closes(corners, { x: 6, y: 6 })).toBe(true);
     expect(closes(corners, { x: 8, y: 8 })).toBe(false);
     expect(closes(corners.slice(0, 2), { x: 0, y: 0 })).toBe(false);
+  });
+});
+
+describe("a drawn circle (§572)", () => {
+  const circle = { lat: 52, lon: 5, radius: 470_000 };
+  const degree = (EARTH_RADIUS_M * Math.PI) / 180;
+
+  it("measures on the ground, as object_sets.distance_m does", () => {
+    expect(distanceM({ lat: 0, lon: 0 }, { lat: 0, lon: 1 })).toBeCloseTo(degree, 6);
+    expect(distanceM({ lat: 0, lon: 0 }, { lat: 1, lon: 0 })).toBeCloseTo(degree, 6);
+    expect(distanceM({ lat: 0, lon: 0 }, { lat: 0, lon: 180 })).toBeCloseTo(degree * 180, 6);
+    // The server's own figure for the two rows its tests hold a circle to.
+    expect(distanceM({ lat: 52, lon: 5 }, { lat: 55, lon: 10 })).toBeCloseTo(469509.72736757, 4);
+    expect(distanceM({ lat: 0, lon: 179.5 }, { lat: 0, lon: -179.5 })).toBeCloseTo(degree, 6);
+    // A haversine term that rounds to just over 1 (object_sets.distance_m).
+    expect(distanceM({ lat: -87.5, lon: 0 }, { lat: 87.5, lon: -180 })).toBeCloseTo(degree * 180, 6);
+  });
+
+  it("is the drag from its centre out to its edge, to the metre", () => {
+    expect(circleBetween({ lat: 0, lon: 0 }, { lat: 0, lon: 1 }))
+      .toEqual({ lat: 0, lon: 0, radius: Math.round(degree) });
+    // A centre dragged from past the map's edge is held to the world.
+    expect(circleBetween({ lat: 95, lon: 190 }, { lat: 89, lon: 180 }))
+      .toEqual({ lat: 90, lon: 180, radius: Math.round(degree) });
+    expect(circleBetween({ lat: 0, lon: 0 }, { lat: 0, lon: 0 }).radius).toBe(1);
+    expect(circleBetween({ lat: 90, lon: 0 }, { lat: -90, lon: 0 }).radius).toBe(MAX_RADIUS_M);
+  });
+
+  it("writes a within_distance, one area to a property of any kind", () => {
+    const box = { north: 45, south: 40, east: 10, west: 0 };
+    const drawn = withArea(withArea([], "site", box), "site", circle);
+    expect(drawn).toEqual([{ property: "site", op: CIRCLE_OP, value: circle }]);
+    expect(areaOf(drawn, "site")).toEqual(circle);
+    expect(isCircle(circle)).toBe(true);
+    expect(isCircle(box)).toBe(false);
+    expect(isPolygon(circle)).toBe(false);
+    const read = (value: unknown) => areaOf([{ property: "site", op: CIRCLE_OP, value }], "site");
+    expect(read({ lat: 1, lon: 1 })).toBeNull();
+    expect(read({ lat: 1, lon: "1", radius: 5 })).toBeNull();
+    expect(read(null)).toBeNull();
+    expect(read({ lat: 1, lon: 2, radius: 3, odd: true })).toEqual({ lat: 1, lon: 2, radius: 3 });
+  });
+
+  it("walks its edge the radius from the centre", () => {
+    const [edge, ...more] = circleRings(circle);
+    expect(more).toEqual([]);
+    expect(edge).toHaveLength(90);
+    for (const p of edge!) expect(distanceM(circle, p)).toBeCloseTo(circle.radius, 3);
+    // Due north first: the same meridian, 470 km up.
+    expect(edge![0]!.lon).toBeCloseTo(5, 9);
+    expect(edge![0]!.lat).toBeGreaterThan(52);
+  });
+
+  it("keeps its edge whole across the antimeridian", () => {
+    const [edge] = circleRings({ lat: 0, lon: 179, radius: 500_000 });
+    const lons = edge!.map((p) => p.lon);
+    expect(Math.max(...lons)).toBeGreaterThan(180);
+    for (let n = 1; n < lons.length; n++) expect(Math.abs(lons[n]! - lons[n - 1]!)).toBeLessThan(1);
+  });
+
+  it("closes a circle round one pole along that pole's edge", () => {
+    for (const [lat, pole] of [[80, 90], [-80, -90]] as const) {
+      const [band, ...more] = circleRings({ lat, lon: 0, radius: 2_000_000 });
+      expect(more).toEqual([]);
+      expect(band).toHaveLength(92);
+      const [a, b] = band!.slice(-2);
+      expect([a!.lat, b!.lat]).toEqual([pole, pole]);
+      // The band goes once round the world.
+      expect(Math.abs(a!.lon - b!.lon)).toBeGreaterThan(350);
+      expect(b!.lon).toBe(band![0]!.lon);
+      expect(a!.lon).toBe(band![89]!.lon);
+    }
+  });
+
+  it("leaves the far cap out of a circle round both poles", () => {
+    const rings = circleRings({ lat: 0, lon: 0, radius: 15_000_000 });
+    expect(rings).toHaveLength(2);
+    expect(rings[0]).toEqual([{ lat: 90, lon: -180 }, { lat: 90, lon: 180 },
+      { lat: -90, lon: 180 }, { lat: -90, lon: -180 }]);
+    for (const p of rings[1]!) expect(distanceM({ lat: 0, lon: 0 }, p)).toBeCloseTo(15_000_000, 3);
+  });
+
+  it("draws each ring as a closed path on the frame", () => {
+    const small = { lat: 40, lon: 0, radius: 1000 };
+    const d = circlePath(small, view, frame);
+    expect(d.match(/M/g)).toHaveLength(1);
+    expect(d.endsWith("Z")).toBe(true);
+    // The first point due north of (40, 0): 100px in, just above 100px down.
+    const [x, y] = d.slice(1).split("L")[0]!.split(",").map(Number);
+    expect(x).toBeCloseTo(100, 6);
+    expect(y).toBeLessThan(100);
+    expect(y).toBeGreaterThan(99.8);
+    expect(circlePath({ lat: 0, lon: 0, radius: 15_000_000 }, view, frame).match(/M/g))
+      .toHaveLength(2);
   });
 });

@@ -118,7 +118,7 @@ LIST_OPERATORS = ("in",)
 # against it - `matches` below, the Postgres store's SQL, and OpenSearch's
 # `geo_bounding_box`, which handles the wrap natively and is the reason the
 # shape is a box rather than four comparisons in the first place.
-GEO_OPERATORS = ("within_box", "within_polygon")
+GEO_OPERATORS = ("within_box", "within_polygon", "within_distance")
 
 # p.301-302's polygon (§571): the shape a Map draws when a rectangle is not
 # the area somebody means. Its own operator, for the box's reason - a polygon
@@ -126,6 +126,12 @@ GEO_OPERATORS = ("within_box", "within_polygon")
 # Capped: a hand-drawn outline is tens of points, and every point is an edge
 # each store tests every candidate against.
 MAX_POLYGON_POINTS = 100
+
+# p.301's circle (§572): the objects within a distance of a point, on the
+# ground - great-circle distance on the mean Earth, the radius OpenSearch's
+# `geo_distance` measures with, so the two stores draw one circle.
+EARTH_RADIUS_M = 6371008.7714
+MAX_RADIUS_M = 20_000_000
 
 # The type a bounding box may be drawn on. One, and not by omission: a box is a
 # pair of coordinates, and `geopoint` is the only declared type that holds one
@@ -838,7 +844,8 @@ def parse(
             # alternative is four numbers each store re-reads, which is three
             # places to get the wrap rule wrong instead of one. A polygon is
             # parsed the same way, into a `Polygon` (§571).
-            value = parse_box(value) if op == "within_box" else parse_polygon(value)
+            value = (parse_box(value) if op == "within_box"
+                     else parse_polygon(value) if op == "within_polygon" else parse_circle(value))
         if op in LIST_OPERATORS:
             if not isinstance(value, list):
                 raise ValueError(f"the {op!r} operator needs a list of values")
@@ -1054,6 +1061,58 @@ def parse_polygon(raw: Any) -> "Polygon":
     return Polygon(points=tuple(corners))
 
 
+@dataclass(frozen=True)
+class Circle:
+    """A circle on the ground: its centre and its radius in metres."""
+
+    lat: float
+    lon: float
+    radius: float
+
+
+def parse_circle(raw: Any) -> "Circle":
+    """Validate a circle, refusing in a sentence somebody can act on."""
+    if not isinstance(raw, dict):
+        raise ValueError("a within_distance value must be an object with lat, lon and radius")
+    values: dict[str, float] = {}
+    for name in ("lat", "lon", "radius"):
+        value = raw.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"a circle needs a number for {name!r}, got {value!r}")
+        values[name] = float(value)
+    if not -90.0 <= values["lat"] <= 90.0:
+        raise ValueError("a circle's lat must be between -90 and 90")
+    if not -180.0 <= values["lon"] <= 180.0:
+        raise ValueError("a circle's lon must be between -180 and 180")
+    if not 0 < values["radius"] <= MAX_RADIUS_M:
+        raise ValueError(f"a circle's radius is metres, more than 0 and at most {MAX_RADIUS_M:,}")
+    return Circle(**values)
+
+
+def distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in metres, by the haversine.
+
+    A near-antipodal pair can round the term to just over 1, and asin refuses
+    anything over 1. Removing the clamp survived the sweep here and in SQL:
+    the largest term found in 3 million such pairs was 1 + 2**-52, whose
+    square root rounds back to 1. No bound rules out 1 + 2**-51, though,
+    which would fail the query, so the clamp stays."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(h)))
+
+
+def in_circle(actual: Any, circle: "Circle") -> bool:
+    """Whether a stored geopoint is within a circle's radius. **The one
+    definition**, for `in_box`'s reason. Across the antimeridian by nature:
+    distance on the ground has no seam."""
+    point = _point(actual)
+    if point is None:
+        return False
+    return distance_m(circle.lat, circle.lon, *point) <= circle.radius
+
+
 def polygon_edges(polygon: "Polygon") -> list[tuple[float, float, float, float]]:
     """The polygon's edges as (lat1, lon1, lat2, lon2), the last back to the
     first - the form the Postgres store binds."""
@@ -1156,7 +1215,9 @@ def _matches_one(actual: Any, f: Filter) -> bool:
     if f.op in ORDERED_OPERATORS:
         return _compares(actual, f)
     if f.op in GEO_OPERATORS:
-        return in_box(actual, f.value) if f.op == "within_box" else in_polygon(actual, f.value)
+        if f.op == "within_box":
+            return in_box(actual, f.value)
+        return in_polygon(actual, f.value) if f.op == "within_polygon" else in_circle(actual, f.value)
     # Unreachable while `parse` is the only way to build a Filter, which it is.
     raise ValueError(f"no reference semantics for operator {f.op!r}")
 
