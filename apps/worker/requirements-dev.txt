@@ -11,3 +11,7 @@
 # runner task, so it is part of the image rather than part of the suite. It
 # arrives here through the include above.
 moto[server]==5.0.13
+# §599's test reads the worker's hand-signed OpenID Connect token back with an
+# independent verifier, so a signer and a checker that share a mistake cannot
+# agree on it. The API pins the same version for its own tokens.
+PyJWT==2.9.0
