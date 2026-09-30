@@ -222,6 +222,18 @@ describe("startableParameters", () => {
     { api_name: "untyped", data_type: "object", object_type_id: null },
   ];
 
+  it("offers an ObjectReference list, and no other list (§581)", () => {
+    const withLists = [
+      ...all,
+      { api_name: "team", data_type: "array", array_of: "object", object_type_id: EMPLOYEE },
+      { api_name: "tags", data_type: "array", array_of: "string", object_type_id: EMPLOYEE },
+    ];
+    expect(startableParameters(withLists, "issue")).toEqual([
+      { api_name: "who", object_type_id: EMPLOYEE },
+      { api_name: "team", object_type_id: EMPLOYEE },
+    ]);
+  });
+
   it("offers the other object parameters, with their types", () => {
     expect(startableParameters(all, "issue"))
       .toEqual([{ api_name: "who", object_type_id: EMPLOYEE }]);

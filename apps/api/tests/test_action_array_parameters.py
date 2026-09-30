@@ -299,17 +299,18 @@ def test_the_action_editor_offers_every_element_type_the_server_takes() -> None:
     editor's `ELEMENT_TYPES` leaves `attachment` out for want of an upload,
     which that test states; an action form has one, so the parameter list is
     that list **and** attachment - p.127's "Allow multiple values" for an
-    attachment parameter - and together they must be the server's."""
+    attachment parameter - and object, p.36's ObjectReference list (§581),
+    which no property holds. Together they must be the server's."""
     import re
 
-    from src.services import array_properties
+    from src.services import actions as actions_service
 
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     editor = open(os.path.join(root, "web", "src", "components",
                                "action-definition-editor.tsx"), encoding="utf-8").read()
     listed = re.search(r"const PARAMETER_ELEMENTS = \[(.*?)\];", editor, re.S)
     assert listed, "PARAMETER_ELEMENTS not found - has the editor moved?"
-    assert listed.group(1).replace(" ", "") == '...ELEMENT_TYPES,"attachment"'
+    assert listed.group(1).replace(" ", "") == '...ELEMENT_TYPES,"attachment","object"'
     types = re.search(r"const PARAMETER_TYPES = \[(.*?)\];", editor, re.S)
     assert types and '"array"' in types.group(1)
     elements = open(os.path.join(root, "web", "src", "lib", "array-property.ts"),
@@ -317,5 +318,5 @@ def test_the_action_editor_offers_every_element_type_the_server_takes() -> None:
     base = re.search(r"export const ELEMENT_TYPES: PropertyDataType\[\] = \[(.*?)\];",
                      elements, re.S)
     assert base
-    offered = set(re.findall(r'"([a-z_]+)"', base.group(1))) | {"attachment"}
-    assert offered == set(array_properties.INNER_TYPES)
+    offered = set(re.findall(r'"([a-z_]+)"', base.group(1))) | {"attachment", "object"}
+    assert offered == set(actions_service._parameter_elements())

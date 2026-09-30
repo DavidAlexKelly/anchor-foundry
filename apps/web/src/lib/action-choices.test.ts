@@ -139,4 +139,12 @@ describe("untypedNote", () => {
     expect(note).toContain("checked before the action runs");
     expect(note).not.toMatch(/error|invalid|must/i);
   });
+
+  it("says a list of objects needs its type, since it cannot be saved without one (§581)", () => {
+    const note = untypedNote({ data_type: "array", array_of: "object", object_type_id: null });
+    expect(note).toContain("cannot be saved without one");
+    expect(untypedNote({ data_type: "array", array_of: "object", object_type_id: "t-1" }))
+      .toBeNull();
+    expect(untypedNote({ data_type: "array", array_of: "string" })).toBeNull();
+  });
 });

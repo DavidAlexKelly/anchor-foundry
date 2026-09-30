@@ -61,6 +61,22 @@ def object_parameters(parameters: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [p for p in parameters or [] if str(p.get("data_type")) == "object"]
 
 
+def object_list_parameters(parameters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """p.36's ObjectReference list parameters (§581), in declaration order."""
+    from .actions import is_object_list
+
+    return [p for p in parameters or [] if is_object_list(p)]
+
+
+def choice_parameters(parameters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The parameters the choices endpoint offers objects for: single object
+    references and lists of them, in declaration order. A list's choices are
+    its whole type, since p.33's filters and walks are a single reference's."""
+    listed = {id(p) for p in object_list_parameters(parameters)}
+    return [p for p in parameters or []
+            if str(p.get("data_type")) == "object" or id(p) in listed]
+
+
 def type_of(parameter: dict[str, Any]) -> str | None:
     """Which object type this parameter holds — **only when somebody said so.**
 
@@ -153,7 +169,7 @@ async def start_key_of(
     *,
     workspace_id: UUID,
     bound: dict[str, Any],
-) -> str | None:
+) -> str | list[str] | None:
     """The primary key of the object p.37's walk starts from, or `None`.
 
     **A form holds instance ids and a set names primary keys**, and this is the
@@ -173,17 +189,26 @@ async def start_key_of(
     if name is None:
         return None
     held = bound.get(name)
+    # An empty list comes back as no keys, which `build` treats as nothing
+    # chosen; saying so here too survived the sweep as equivalent.
     if held is None or held == "":
         return None
     start = (search_arounds.source_of(parameter) or {}).get("start") or {}
     type_id = str(start.get("object_type_id") or "")
+    # p.36's ObjectReference list (§581): each chosen object's key, in order,
+    # for a walk that starts from all of them.
+    ids = [str(v) for v in held] if isinstance(held, list) else [str(held)]
     if not type_id:
-        return str(held)
+        return ids if isinstance(held, list) else ids[0]
     prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
-    row = await instance_store.store_for(conn).get_instance(
-        search_prefix=prefix, object_type_id=type_id, instance_id=str(held),
-    )
-    return str(row["primary_key"]) if row else str(held)
+    store = instance_store.store_for(conn)
+    keys: list[str] = []
+    for one in ids:
+        row = await store.get_instance(
+            search_prefix=prefix, object_type_id=type_id, instance_id=one,
+        )
+        keys.append(str(row["primary_key"]) if row else one)
+    return keys if isinstance(held, list) else keys[0]
 
 
 async def object_values_of(
@@ -273,11 +298,32 @@ async def check_object_values(
             continue
         wanted.append((name, type_id, interface_id, parameter))
 
-    if not wanted:
+    # p.34's check for each object in a list (§581): the same sentence an
+    # object parameter gets, about the element that fails it. A list's objects
+    # are chosen from its whole type, so the type is the whole of the check.
+    listed = [
+        (str(p.get("api_name", "")), str(p["object_type_id"]))
+        for p in object_list_parameters(parameters)
+        if bound.get(str(p.get("api_name", ""))) not in (None, "") and p.get("object_type_id")
+    ]
+    if not wanted and not listed:
         return
 
     prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
     store = instance_store.store_for(conn)
+    for name, type_id in listed:
+        held = bound[name]
+        if not isinstance(held, list):
+            raise ValueError(f"{name!r} is a list of objects, and was given {held!r}")
+        for index, one in enumerate(held):
+            row = await store.get_instance(
+                search_prefix=prefix, object_type_id=type_id, instance_id=str(one),
+            )
+            if row is None:
+                raise ValueError(
+                    f"{one!r} (item {index + 1} of {name!r}) is not an object of "
+                    "the type it asks for"
+                )
     for name, type_id, interface_id, parameter in wanted:
         value = str(bound[name])
         if interface_id is not None:

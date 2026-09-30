@@ -53,6 +53,7 @@ import {
 } from "@/lib/action-filters";
 import {
   blankSearchAround,
+  isObjectList,
   landingNote,
   nextHops,
   sourceSummary,
@@ -103,8 +104,9 @@ const PARAMETER_TYPES = [
 /** What an array parameter may hold: the property editor's element types
  * (`array-property.ts`, the server's `INNER_TYPES`) and **attachment**, which
  * that editor leaves out for want of an upload and a form has one of - which
- * is p.127's "Allow multiple values" for an attachment parameter. */
-const PARAMETER_ELEMENTS = [...ELEMENT_TYPES, "attachment"];
+ * is p.127's "Allow multiple values" for an attachment parameter - and
+ * **object**, p.36's ObjectReference list (§581), which no property holds. */
+const PARAMETER_ELEMENTS = [...ELEMENT_TYPES, "attachment", "object"];
 
 /** The rule kinds this build can execute, and what to call them.
  *
@@ -1536,7 +1538,7 @@ export function ActionDefinitionEditor({
           a `TypePicker` is a search control and the table is already seven
           columns wide — and because this only exists for one of the ten
           parameter types. */}
-      {parameters.some((p) => p.data_type === "object") && (
+      {parameters.some((p) => p.data_type === "object" || isObjectList(p)) && (
         <>
           <h3 className="field-label" style={{ marginTop: 24 }}>Object parameters</h3>
           <p className="field-hint">
@@ -1546,7 +1548,7 @@ export function ActionDefinitionEditor({
             (p.34). Leaving it unsaid keeps the parameter exactly as it is.
           </p>
           <div data-testid="object-parameter-types">
-            {parameters.map((p, i) => p.data_type !== "object" ? null : (
+            {parameters.map((p, i) => p.data_type !== "object" && !isObjectList(p) ? null : (
               <div key={i} data-object-parameter={p.api_name} style={{ marginBottom: 8 }}>
                 <Field label={p.display_name || p.api_name}>
                   <TypePicker
@@ -1571,7 +1573,10 @@ export function ActionDefinitionEditor({
                     switch above it, because p.62 calls the two similar and a
                     reader choosing between them is choosing *what to constrain
                     by*, not what kind of parameter to make. */}
-                <Field label="…or any object implementing">
+                {/* A list of objects (§581) says which type and nothing more:
+                    p.33 narrows a single object reference, so the interface,
+                    the walk and the filters below are a single reference's. */}
+                {!isObjectList(p) && <Field label="…or any object implementing">
                   <select
                     value={p.interface_id ?? ""}
                     aria-label={`Parameter ${i + 1} interface`}
@@ -1588,7 +1593,7 @@ export function ActionDefinitionEditor({
                       </option>
                     ))}
                   </select>
-                </Field>
+                </Field>}
                 {untypedNote(p) && (
                   <p className="field-hint" data-testid="parameter-untyped">
                     {untypedNote(p)}
@@ -1598,7 +1603,7 @@ export function ActionDefinitionEditor({
                     decides which set they narrow. Only once the parameter says
                     what it offers: a walk has to land somewhere, and §330's
                     column is the only thing that says where. */}
-                {p.object_type_id && (
+                {p.object_type_id && !isObjectList(p) && (
                   <SearchAroundPanel
                     workspaceId={workspaceId}
                     parameters={parameters}
@@ -1611,7 +1616,7 @@ export function ActionDefinitionEditor({
                       patchParameter(i, { dropdown_search_around: next })}
                   />
                 )}
-                {p.object_type_id && (
+                {p.object_type_id && !isObjectList(p) && (
                   <FilterPanel
                     workspaceId={workspaceId}
                     parameters={parameters}

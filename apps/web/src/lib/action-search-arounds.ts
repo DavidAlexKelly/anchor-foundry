@@ -188,14 +188,23 @@ export function landingNote(
  * from one would treat whatever somebody typed as an object's key. Not this one
  * either, which would make the dropdown walk from the value it is offering. The
  * server refuses both; this is why nobody meets those refusals by the obvious
- * route.
+ * route. **And p.36's ObjectReference list** (§581), a walk from every object
+ * it holds.
  */
 export function startableParameters(
-  parameters: { api_name: string; data_type: string; object_type_id?: string | null }[],
+  parameters: {
+    api_name: string; data_type: string; array_of?: string | null;
+    object_type_id?: string | null;
+  }[],
   apiName: string,
 ): { api_name: string; object_type_id: string }[] {
   return (parameters ?? [])
-    .filter((p) => p.api_name !== apiName
-      && p.data_type === "object" && !!p.object_type_id)
+    .filter((p) => p.api_name !== apiName && !!p.object_type_id
+      && (p.data_type === "object" || isObjectList(p)))
     .map((p) => ({ api_name: p.api_name, object_type_id: p.object_type_id as string }));
+}
+
+/** p.36's ObjectReference list parameter (§581): an array of objects. */
+export function isObjectList(p: { data_type: string; array_of?: string | null }): boolean {
+  return p.data_type === "array" && p.array_of === "object";
 }

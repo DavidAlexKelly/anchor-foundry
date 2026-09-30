@@ -2968,10 +2968,26 @@ def _check_struct_rules(
                 from_struct[f"{target}.{prop}"] = parameter
 
 
+#: What an array parameter may hold: an array property's element types, and
+#: **objects** (§581) - p.36's "ObjectReference list parameter", which no
+#: property holds, so it is the one element a parameter has and a property
+#: does not.
+def _parameter_elements() -> frozenset[str]:
+    from .array_properties import INNER_TYPES
+
+    return INNER_TYPES | {"object"}
+
+
+def is_object_list(parameter: dict[str, Any]) -> bool:
+    """p.36's ObjectReference list parameter (§581)."""
+    return (str(parameter.get("data_type")) == "array"
+            and str(parameter.get("array_of") or "") == "object")
+
+
 def _check_array_of(name: str, data_type: str, array_of: Any) -> None:
     """db 0118's pairing, in both directions (`array_properties.parse`'s rule
     for properties, said about a parameter)."""
-    from .array_properties import INNER_TYPES
+    INNER_TYPES = _parameter_elements()
 
     named = str(array_of or "").strip()
     if data_type != "array":
@@ -3040,7 +3056,8 @@ def _validate_definition(
             raise ValueError(f"parameter {name!r} has unknown type {data_type!r}")
         # db 0083: a type on a string is a claim nothing reads, and it would
         # sit in the document looking like it meant something.
-        if parameter.get("object_type_id") and data_type != "object":
+        if parameter.get("object_type_id") and data_type != "object" \
+                and not is_object_list(parameter):
             raise ValueError(
                 f"parameter {name!r} is a {data_type}, so it cannot name an "
                 "object type; only an `object` parameter holds one"
@@ -3064,6 +3081,22 @@ def _validate_definition(
                 )
             interface_parameters.add(name)
         _check_array_of(name, data_type, parameter.get("array_of"))
+        if is_object_list(parameter):
+            # A list of *which* objects is the question its dropdown and p.34's
+            # check both ask, so it is answered at save rather than guessed.
+            if not parameter.get("object_type_id"):
+                raise ValueError(
+                    f"parameter {name!r} is a list of objects and does not say "
+                    "of which object type"
+                )
+            # p.33 narrows "single object reference parameters"; a list's
+            # objects are chosen from its whole type.
+            if parameter.get("dropdown_filters") or parameter.get("dropdown_search_around"):
+                raise ValueError(
+                    f"parameter {name!r} is a list of objects, and dropdown filters "
+                    "and search arounds narrow a single object reference "
+                    "(action-types p.33)"
+                )
         if data_type in _UNSUPPORTED_PARAMETER_TYPES:
             raise ValueError(
                 f"parameter {name!r} cannot be a {data_type}: "
@@ -3615,7 +3648,9 @@ async def set_definition(
         readable: dict[str, set[str]] = {}
         for other in parameters:
             other_type = other.get("object_type_id")
-            if not other_type:
+            # A list of objects has no one object to read a property of
+            # (§581), so only a single reference is readable here.
+            if not other_type or str(other.get("data_type")) != "object":
                 continue
             readable[str(other.get("api_name", ""))] = await _properties_of(
                 str(other_type)
