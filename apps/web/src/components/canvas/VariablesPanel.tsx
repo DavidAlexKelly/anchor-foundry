@@ -30,6 +30,7 @@ import { MAX_PRECISION, ROUNDINGS, isMath, mathArity, mathSlotLabel, precisionOf
 import { DATE_ARITY, dateSlotLabels, isDateMath, takesDirection, unitsFor } from "./variable-dates";
 import { checkArity, checkSlotLabel, isCheck } from "./variable-checks";
 import { INDEXED, arrayArity, arraySlotLabel, indexOf, isArrayOp } from "./variable-arrays";
+import { MAX_GEOHASH, geohashPrecisionOf, isGeo } from "./variable-geo";
 import { seriesDerivationInputs, type SeriesTransform } from "./series-transforms";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEditor } from "@craftjs/core";
@@ -214,6 +215,11 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   { value: "array_contains", label: "Arrays: contains", arity: "two or more" },
   { value: "array_does_not_contain", label: "Arrays: does not contain", arity: "two or more" },
   { value: "array_is_subset_of", label: "Arrays: is subset of", arity: "two" },
+  // p.142's geospatial operations (§568).
+  { value: "geohash", label: "Geo: geohash from geopoint", arity: "one" },
+  { value: "latitude", label: "Geo: latitude from geopoint", arity: "one" },
+  { value: "longitude", label: "Geo: longitude from geopoint", arity: "one" },
+  { value: "mgrs", label: "Geo: MGRS from geopoint", arity: "one" },
 ];
 
 /** Offered on `time_series_set` variables, and the only thing offered there -
@@ -258,6 +264,7 @@ function arityOf(transform: WorkshopTransform): number | "many" {
 function slotLabels(transform: WorkshopTransform): string[] {
   if (isMath(transform)) return [mathSlotLabel(transform, 0), mathSlotLabel(transform, 1)];
   if (isDateMath(transform)) return dateSlotLabels(transform);
+  if (isGeo(transform)) return ["Geopoint"];
   if (transform === "if_else") return ["Condition", "Then", "Else"];
   if (transform === "filter_set") return ["Set to narrow", "Filter value from"];
   if (transform === "cast") return ["Value"];
@@ -1143,6 +1150,28 @@ function DerivationEditor({
             }}
           />
           <span className="field-hint">negative rounds to tens, hundreds…</span>
+        </label>
+      )}
+
+      {/* A geohash's length (§568). */}
+      {derivation.transform === "geohash" && (
+        <label>
+          Characters
+          <input
+            type="number"
+            data-testid="geohash-precision"
+            min={1}
+            max={MAX_GEOHASH}
+            defaultValue={String(derivation.config?.precision ?? MAX_GEOHASH)}
+            readOnly={readOnly}
+            onChange={(e) => {
+              const precision = geohashPrecisionOf(e.target.value);
+              if (precision !== null) {
+                onChange({ ...derivation, config: { ...derivation.config, precision } });
+              }
+            }}
+          />
+          <span className="field-hint">12 is about 4 cm; 5 is about 5 km</span>
         </label>
       )}
 
