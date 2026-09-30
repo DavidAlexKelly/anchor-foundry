@@ -46,12 +46,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from ..lib.db import fetch_all, fetch_one
 from .actions import _passes  # the condition grammar decision 0007 already has
 
-#: p.45's "then": what a block may change. Constraints are p.45's fourth and
-#: are absent here because the thing they would override is — an
-#: `action_parameters` row has a type, a default, a `required` and a `hidden`,
-#: and no value constraints for a block to narrow. Named rather than silently
-#: missing: see the roadmap row's ○.
-SETTABLE = ("hidden", "required", "default")
+#: p.45's "then": what a block may change. The constraint is p.45's fourth,
+#: which db 0082 left out because parameters had none until §584.
+SETTABLE = ("hidden", "required", "default", "constraint")
 
 
 def _json(value: Any) -> Any:
@@ -216,6 +213,12 @@ def effective(
             # again fails at column 1. A default is the only jsonb here that is
             # routinely a scalar — and an override's default is a second one.
             resolved["default_value"] = block["set_default"]
+        if block.get("set_constraint") is not None:
+            # p.45's fourth (§584): the block's constraint *instead of* the
+            # parameter's, not as well — it is what "change the configuration
+            # of the parameter's constraints" says, and narrowing both ways
+            # would leave a block unable to widen anything.
+            resolved["value_constraint"] = _json(block["set_constraint"])
         resolved["overridden_by"] = str(block.get("id") or "")
         return resolved
     return dict(parameter)
@@ -280,7 +283,7 @@ async def overrides_for(
         conn,
         """
         SELECT id, parameter_id, sort_order, conditions,
-               set_hidden, set_required, set_default
+               set_hidden, set_required, set_default, set_constraint
           FROM action_parameter_overrides
          WHERE parameter_id = ANY(CAST(:ids AS uuid[]))
          ORDER BY sort_order, id
@@ -336,9 +339,10 @@ async def write_overrides(
             """
             INSERT INTO action_parameter_overrides
                    (parameter_id, sort_order, conditions,
-                    set_hidden, set_required, set_default)
+                    set_hidden, set_required, set_default, set_constraint)
             VALUES (:pid, :ord, CAST(:conditions AS jsonb),
-                    :hidden, :required, CAST(:default AS jsonb))
+                    :hidden, :required, CAST(:default AS jsonb),
+                    CAST(:constraint AS jsonb))
             RETURNING id
             """,
             {
@@ -349,5 +353,7 @@ async def write_overrides(
                 "required": block.get("set_required"),
                 "default": json.dumps(block["set_default"])
                 if block.get("set_default") is not None else None,
+                "constraint": json.dumps(block["set_constraint"])
+                if block.get("set_constraint") is not None else None,
             },
         )

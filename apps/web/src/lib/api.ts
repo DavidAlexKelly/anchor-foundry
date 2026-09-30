@@ -2274,6 +2274,9 @@ export interface ActionDefinitionInput {
      * condition. Omitted means none, which is what every parameter written
      * before §329 has. */
     overrides?: import("./types").ActionOverrideBlock[];
+    /** p.8 and p.71: what values the parameter accepts (§584). Null is p.8's
+     * "User input". */
+    value_constraint?: import("./types").ValueConstraint | null;
   }[];
   rules: { kind: string; config: Record<string, unknown> }[];
   criteria: { message: string; config: Record<string, unknown> }[];
@@ -2467,6 +2470,9 @@ export const actions = {
               set_hidden: b.set_hidden,
               set_required: b.set_required,
               set_default: b.set_default,
+              // p.45's fourth (§584). Named here or dropped: this list is
+              // what goes back, and the browser test is what found it missing.
+              set_constraint: b.set_constraint ?? null,
             })),
           })),
         }),

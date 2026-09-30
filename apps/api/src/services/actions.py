@@ -121,6 +121,14 @@ def bind_parameters(
             bound[name] = default
         elif parameter.get("required"):
             raise ValueError(f"{name!r} is required by this action")
+    # p.8 and p.71's constraints (§584), against the parameters as p.45's
+    # overrides left them, so a block's constraint is the one that applies.
+    from .action_constraints import violation as _constraint_violation
+
+    for name, value in bound.items():
+        why = _constraint_violation(declared[name], value)
+        if why:
+            raise ValueError(f"{name!r}: {why}")
     return bound
 
 
@@ -1339,7 +1347,7 @@ def seed_from_instance(
 _PARAMETER_COLUMNS = (
     "id, action_type_id, api_name, display_name, data_type, array_of, required, "
     "default_value, hidden, sort_order, object_type_id, interface_id, "
-    "dropdown_filters, dropdown_search_around, options_from"
+    "dropdown_filters, dropdown_search_around, options_from, value_constraint"
 )
 
 
@@ -3576,6 +3584,11 @@ async def set_definition(
         sections if sections is not None
         else await sections_service.list_sections(conn, action_type_id),
     )
+    # p.8, p.45 and p.71's constraints (§584): a pure check over the document,
+    # here beside p.45's other one because both read the override blocks.
+    from .action_constraints import check_parameters as check_constraints_of
+
+    check_constraints_of(parameters)
     declared_names = {str(p.get("api_name", "")) for p in parameters}
     # One read per object type rather than per parameter that mentions it: an
     # action with four parameters offering the same type asked four times.
@@ -3771,12 +3784,14 @@ async def set_definition(
                     (action_type_id, api_name, display_name, data_type, array_of, required,
                      default_value, hidden, sort_order, section_id, object_type_id,
                      interface_id,
-                     dropdown_filters, dropdown_search_around, options_from)
+                     dropdown_filters, dropdown_search_around, options_from,
+                     value_constraint)
                 VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type),
                         CAST(:array_of AS action_parameter_type), :required,
                         CAST(:default AS jsonb), :hidden, :ord, :section,
                         CAST(:otype AS uuid), CAST(:iface AS uuid), CAST(:filters AS jsonb),
-                        CAST(:around AS jsonb), CAST(:options AS jsonb))
+                        CAST(:around AS jsonb), CAST(:options AS jsonb),
+                        CAST(:constraint AS jsonb))
                 """
             ),
             {
@@ -3827,6 +3842,13 @@ async def set_definition(
                 "options": (
                     json.dumps(parameter["options_from"])
                     if parameter.get("options_from") else None
+                ),
+                # p.8 and p.71's constraint (db 0119), normalised by
+                # `action_constraints.check_parameters` above. NULL is p.8's
+                # "User input".
+                "constraint": (
+                    json.dumps(parameter["value_constraint"])
+                    if parameter.get("value_constraint") else None
                 ),
             },
         )

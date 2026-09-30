@@ -368,6 +368,7 @@ import {
   withArea as withMapArea, withDrawTool,
 } from "./map-area";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
+import { constraintNote, multipleChoice } from "@/lib/parameter-constraint";
 import { conditionalStyle, cssFor } from "@/lib/conditional-format";
 
 /** The grid's own line height, in pixels (`globals.css`, `.data-grid td`).
@@ -16212,6 +16213,8 @@ export function CanvasActionForm({
           structFields={parameter.struct_fields}
           // db 0118's element type, for an array parameter's rows (§580).
           arrayOf={parameter.array_of}
+          // p.8's multiple choice (§584), a dropdown of its options.
+          choices={multipleChoice(parameter)}
           value={values[parameter.api_name] ?? null}
           onChange={(next) => {
             setTyped((was) => ({ ...was, [parameter.api_name]: true }));
@@ -16220,6 +16223,13 @@ export function CanvasActionForm({
           label={parameterLabel(parameter)}
           required={parameter.required}
         />
+        )}
+        {/* p.8 and p.71's constraint, said beside the box in the words the
+            server's refusal uses (§584). */}
+        {constraintNote(parameter) && (
+          <span className="field-hint" data-testid="constraint-note">
+            {constraintNote(parameter)}
+          </span>
         )}
         {/* p.36's filter can read a box nobody has filled in, and then the
             list is empty for a reason worth saying: "there are no Teams" is

@@ -718,6 +718,9 @@ def _parameter_for(
         "hidden": bool(parameter.get("hidden", False)),
         "dropdown_filters": parameter.get("dropdown_filters") or [],
         "overrides": parameter.get("overrides") or [],
+        # p.8 and p.71's constraint (§584), checked by `set_definition` as any
+        # other save's would be.
+        "value_constraint": parameter.get("value_constraint"),
         **parameter_transfer.to_ids(
             parameter, type_ids=type_ids, link_ids=link_ids,
             where=f"{where}.{parameter.get('api_name')}",

@@ -71,6 +71,7 @@ import {
   savedMessage,
   submitLabel,
 } from "@/lib/explorer-edit";
+import { multipleChoice } from "@/lib/parameter-constraint";
 import { PropertyInput } from "@/components/property-value";
 import type { ObjectTypeSummary, SavedSearch } from "@/lib/types";
 
@@ -766,6 +767,12 @@ export function ObjectExplorer({
                                     (p) => p.api_name === parameter,
                                   )?.array_of
                                 }
+                                // p.8's multiple choice (§584).
+                                choices={multipleChoice(
+                                  editAction?.parameters?.find(
+                                    (p) => p.api_name === parameter,
+                                  ) ?? { data_type: "" },
+                                )}
                                 value={
                                   (typed !== undefined
                                     ? typed

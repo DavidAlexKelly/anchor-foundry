@@ -48,10 +48,18 @@ export function ValueConstraintEditor({
   baseType,
   value,
   onChange,
+  noneLabel = "No constraint",
+  hint = "Optional — p.224. A value type carries meaning even with no rule.",
+  label = "Constraint",
 }: {
   baseType: PropertyDataType;
   value: ValueConstraint | null;
   onChange: (next: ValueConstraint | null) => void;
+  /** What "no constraint" is called: an action parameter's is p.8's "User
+   * input" (§584). */
+  noneLabel?: string;
+  hint?: string;
+  label?: string;
 }) {
   const kinds = kindsFor(baseType);
   // Kept as text so a half-typed "1," or "2026-" is not thrown away on every
@@ -95,16 +103,14 @@ export function ValueConstraintEditor({
 
   return (
     <div>
-      <Field
-        label="Constraint"
-        hint="Optional — p.224. A value type carries meaning even with no rule."
-      >
+      <Field label={label} hint={hint}>
         <select
           data-testid="constraint-kind"
+          aria-label={label}
           value={value?.kind ?? ""}
           onChange={(e) => setKind(e.target.value)}
         >
-          <option value="">No constraint</option>
+          <option value="">{noneLabel}</option>
           {kinds.map((k) => (
             <option key={k} value={k}>{KIND_LABELS[k]}</option>
           ))}

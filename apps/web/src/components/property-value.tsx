@@ -375,6 +375,7 @@ export function PropertyInput({
   required = false,
   structFields,
   arrayOf = null,
+  choices = null,
 }: {
   workspaceId: string;
   dataType: PropertyDataType | undefined;
@@ -397,6 +398,9 @@ export function PropertyInput({
   /** What an `array` holds (db 0087 for a property, db 0118 for a parameter;
    * §580). Without it an array is refused rather than guessed at. */
   arrayOf?: string | null;
+  /** `action-types` p.8's multiple choice (§584): the only values this may
+   * take, drawn as a dropdown. On an array it is each item's. */
+  choices?: unknown[] | null;
 }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -424,6 +428,7 @@ export function PropertyInput({
               workspaceId={workspaceId}
               dataType={arrayOf as PropertyDataType}
               structFields={structFields}
+              choices={choices}
               value={item}
               label={`${label} ${index + 1}`}
               onChange={(next) => onChange(withItem(items, index, next))}
@@ -448,6 +453,27 @@ export function PropertyInput({
           Add {label.toLowerCase()}
         </button>
       </div>
+    );
+  }
+
+  if (choices) {
+    // p.8's options. Handed back as the option's text: the server reads a
+    // value as its type before checking it (§584), so "2" for an integer is
+    // the 2 it writes, and a lookup here was found by a sweep to change
+    // nothing.
+    return (
+      <select
+        aria-label={label}
+        required={required}
+        data-testid="multiple-choice"
+        value={value === null || value === undefined ? "" : String(value)}
+        onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
+      >
+        <option value="">Choose…</option>
+        {choices.map((c) => (
+          <option key={String(c)} value={String(c)}>{String(c)}</option>
+        ))}
+      </select>
     );
   }
 

@@ -290,7 +290,8 @@ async def export_ontology(
                sort_order, section_id,
                object_type_id, dropdown_filters::text AS dropdown_filters,
                dropdown_search_around::text AS dropdown_search_around,
-               options_from::text AS options_from
+               options_from::text AS options_from,
+               value_constraint::text AS value_constraint
           FROM action_parameters
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -342,7 +343,8 @@ async def export_ontology(
         """
         SELECT o.parameter_id, o.conditions::text AS conditions,
                o.set_hidden, o.set_required,
-               o.set_default::text AS set_default, o.sort_order
+               o.set_default::text AS set_default,
+               o.set_constraint::text AS set_constraint, o.sort_order
           FROM action_parameter_overrides o
           JOIN action_parameters p ON p.id = o.parameter_id
          WHERE p.action_type_id = ANY(
@@ -425,6 +427,10 @@ async def export_ontology(
                         # alongside the type they are written against, which
                         # is why they waited for §342 rather than riding §341.
                         "dropdown_filters": _json(p["dropdown_filters"]) or [],
+                        # p.8 and p.71's constraint (§584): values and bounds,
+                        # no ids, so it travels verbatim. Only when there is one.
+                        **({"value_constraint": _json(p["value_constraint"])}
+                           if p["value_constraint"] else {}),
                         # db 0083, 0085 and 0086's three pointing fields, as
                         # api_names (§342). Only the ones this parameter has.
                         **parameter_transfer.to_names(
@@ -447,6 +453,8 @@ async def export_ontology(
                                 "set_hidden": o["set_hidden"],
                                 "set_required": o["set_required"],
                                 "set_default": _json(o["set_default"]),
+                                # p.45's fourth (§584), name-free like the rest.
+                                "set_constraint": _json(o["set_constraint"]),
                                 "sort_order": o["sort_order"],
                             }
                             for o in overrides_by.get(str(p["id"]), [])
