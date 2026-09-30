@@ -80,6 +80,7 @@ import {
   removeParameter, renameParameter, sectionSummary, type FormSection,
 } from "@/lib/action-sections";
 import type { ActionType } from "@/lib/types";
+import { DEFAULT_ELEMENT, ELEMENT_TYPES } from "@/lib/array-property";
 
 /** `action_parameter_type` (migration 0044): the ontology's property types
  * plus `object`, which p.25 needs for a parameter that takes an object. */
@@ -95,7 +96,15 @@ const PARAMETER_TYPES = [
   // object type — so this is the second word in the list that the ontology has
   // no use for, beside `object`.
   "object_type",
+  // db 0118's array parameter (§580), which says what it holds beside it.
+  "array",
 ];
+
+/** What an array parameter may hold: the property editor's element types
+ * (`array-property.ts`, the server's `INNER_TYPES`) and **attachment**, which
+ * that editor leaves out for want of an upload and a form has one of - which
+ * is p.127's "Allow multiple values" for an attachment parameter. */
+const PARAMETER_ELEMENTS = [...ELEMENT_TYPES, "attachment"];
 
 /** The rule kinds this build can execute, and what to call them.
  *
@@ -587,6 +596,9 @@ export function ActionDefinitionEditor({
       api_name: p.api_name,
       display_name: p.display_name,
       data_type: p.data_type,
+      // db 0118 (§580). **Loaded or silently deleted**, for the reason
+      // `interface_id` gives below: this dialog saves parameters whole.
+      array_of: p.array_of ?? null,
       required: p.required,
       default_value: p.default_value,
       hidden: p.hidden,
@@ -835,10 +847,24 @@ export function ActionDefinitionEditor({
                 <select
                   value={p.data_type}
                   aria-label={`Parameter ${i + 1} type`}
-                  onChange={(e) => patchParameter(i, { data_type: e.target.value })}
+                  onChange={(e) => patchParameter(i, {
+                    data_type: e.target.value,
+                    // An array says what of from the moment it is one, and
+                    // nothing else carries an element type (db 0118).
+                    array_of: e.target.value === "array" ? (p.array_of || DEFAULT_ELEMENT) : null,
+                  })}
                 >
                   {PARAMETER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
+                {p.data_type === "array" && (
+                  <select
+                    value={p.array_of || DEFAULT_ELEMENT}
+                    aria-label={`Parameter ${i + 1} element type`}
+                    onChange={(e) => patchParameter(i, { array_of: e.target.value })}
+                  >
+                    {PARAMETER_ELEMENTS.map((t) => <option key={t} value={t}>of {t}</option>)}
+                  </select>
+                )}
               </td>
               <td>
                 {/* Empty means *no default*, which is not a default of "" -

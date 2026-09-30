@@ -2243,6 +2243,9 @@ export interface ActionDefinitionInput {
     api_name: string;
     display_name: string;
     data_type: string;
+    /** db 0118: what an `array` parameter holds (§580). Refused on any other
+     * type, as `object_type_id` is. */
+    array_of?: string | null;
     required?: boolean;
     default_value?: unknown;
     hidden?: boolean;

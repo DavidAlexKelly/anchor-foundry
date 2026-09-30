@@ -285,7 +285,7 @@ async def export_ontology(
         conn,
         """
         SELECT id, action_type_id, api_name, display_name,
-               data_type::text AS data_type, required,
+               data_type::text AS data_type, array_of::text AS array_of, required,
                default_value::text AS default_value, hidden,
                sort_order, section_id,
                object_type_id, dropdown_filters::text AS dropdown_filters,
@@ -414,6 +414,8 @@ async def export_ontology(
                         "api_name": p["api_name"],
                         "display_name": p["display_name"],
                         "data_type": p["data_type"],
+                        # db 0118, only on an array parameter (§580).
+                        **({"array_of": p["array_of"]} if p["array_of"] else {}),
                         "required": p["required"],
                         "default_value": _json(p["default_value"]),
                         "hidden": p["hidden"],

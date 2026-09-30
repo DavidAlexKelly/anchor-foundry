@@ -648,6 +648,21 @@ def edit_only_properties(properties: list[dict[str, Any]]) -> set[str]:
     return {str(p["api_name"]) for p in properties if p.get("edit_only")}
 
 
+def array_of_of(properties: list[dict[str, Any]]) -> dict[str, str]:
+    """`{api_name: its element type}` for the array properties (db 0087).
+
+    `struct_fields_of`' counterpart below, for the other type whose label does
+    not say what it holds: the action write path coerces an array against its
+    element type, and a map with only the arrays in it can be passed
+    everywhere (§580).
+    """
+    return {
+        str(p["api_name"]): str(p["array_of"])
+        for p in properties
+        if p.get("array_of")
+    }
+
+
 def struct_fields_of(properties: list[dict[str, Any]]) -> dict[str, Any]:
     """`{api_name: its declared fields}` for the struct properties (db 0064).
 

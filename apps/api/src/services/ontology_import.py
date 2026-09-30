@@ -712,6 +712,7 @@ def _parameter_for(
         "api_name": parameter.get("api_name"),
         "display_name": parameter.get("display_name"),
         "data_type": parameter.get("data_type"),
+        "array_of": parameter.get("array_of"),
         "required": bool(parameter.get("required", False)),
         "default_value": parameter.get("default_value"),
         "hidden": bool(parameter.get("hidden", False)),

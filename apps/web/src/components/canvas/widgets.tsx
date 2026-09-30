@@ -186,6 +186,7 @@ import {
   type Link as SearchLink,
 } from "./search-bar";
 import { nextIndex } from "@/lib/search-keys";
+import { hasItems, submittedValues } from "@/lib/array-parameter";
 import {
   // §211's aliasing rule: `labelOf` is a name half the widgets here could want,
   // and `MAX_TERMS` says nothing about which list it caps once it is in this
@@ -5896,6 +5897,7 @@ export function CanvasObjectTable({
                                     // so the fields are on the property here
                                     // rather than derived from a rule (§450).
                                     structFields={p.struct_fields}
+                                    arrayOf={p.array_of}
                                     label={p.display_name || p.api_name}
                                     value={cellValue(
                                       staged, instance.id, parameter,
@@ -15704,7 +15706,9 @@ export function CanvasActionForm({
   }, [outputVariable, outputStated, variablesPending, moduleVariables]);
 
   const execute = useMutation({
-    mutationFn: () => actionApi.execute(workspaceId, projectId, actionType!.id, instanceId, values),
+    // An array's blank rows are dropped here, as it is sent (§580).
+    mutationFn: () => actionApi.execute(workspaceId, projectId, actionType!.id, instanceId,
+      submittedValues(values, actionType!.parameters)),
     onSuccess: async (result) => {
       if (!result.ok) return;
       // Everything reading this object type reads a *set*, and the set is now
@@ -15938,10 +15942,13 @@ export function CanvasActionForm({
   // somebody clears the last field is `{}` — which `hasValue` calls a value.
   // That is the right answer for the attachment reference it was written for
   // and the wrong one here, so the struct case is named rather than folded
-  // into `hasValue`: an empty *array* parameter is a third question this is
-  // not deciding (§450).
+  // into `hasValue`. **An array is the third question, decided by §580**: it
+  // is answered by a row with something in it, since blank rows are dropped
+  // when the form is sent and p.116 says a required array has an item.
   const supplied = (p: FormParameter, value: unknown) =>
-    p.data_type === "struct" ? isFilled(value) : hasValue(value);
+    p.data_type === "struct" ? isFilled(value)
+    : p.data_type === "array" ? hasItems(value)
+    : hasValue(value);
   const missingRequired = visible.filter(
     (p) => p.required && !supplied(p, values[p.api_name]),
   );
@@ -16068,6 +16075,8 @@ export function CanvasActionForm({
           // server derives them from the property the rule writes, so this
           // form has nothing that could disagree with the ontology.
           structFields={parameter.struct_fields}
+          // db 0118's element type, for an array parameter's rows (§580).
+          arrayOf={parameter.array_of}
           value={values[parameter.api_name] ?? null}
           onChange={(next) => {
             setTyped((was) => ({ ...was, [parameter.api_name]: true }));

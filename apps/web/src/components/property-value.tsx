@@ -24,6 +24,7 @@ import { formatValue } from "@/lib/value-format";
 // The Canvas Action Form's rule for which control a type gets, now shared
 // rather than duplicated (§237).
 import { inputTypeFor } from "@/components/canvas/pure";
+import { arrayItems, blankItem, withItem, withoutItem } from "@/lib/array-parameter";
 import {
   asStruct, fieldLabel, setField, unknownFieldsNote,
 } from "@/lib/struct-parameter";
@@ -373,6 +374,7 @@ export function PropertyInput({
   label,
   required = false,
   structFields,
+  arrayOf = null,
 }: {
   workspaceId: string;
   dataType: PropertyDataType | undefined;
@@ -392,9 +394,62 @@ export function PropertyInput({
    *  field required would refuse a struct whose optional fields are blank,
    *  which is a rule Foundry does not state and this build would be inventing. */
   structFields?: StructField[] | null;
+  /** What an `array` holds (db 0087 for a property, db 0118 for a parameter;
+   * §580). Without it an array is refused rather than guessed at. */
+  arrayOf?: string | null;
 }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // An array (§580): one control per element, each the element type's own,
+  // with an Add and a Remove - the control that collects several values the
+  // array parameter waited for. **An element is never null** (p.86: "Array
+  // properties cannot contain null elements"), so a new row starts as the
+  // element's blank and a blank one is dropped on the way out rather than
+  // sent as a null the server would refuse.
+  if (dataType === "array") {
+    if (!arrayOf) {
+      return (
+        <p className="form-error" data-testid="array-element-unknown">
+          {label} is a list, and this form was not told what it holds.
+        </p>
+      );
+    }
+    const items = arrayItems(value);
+    return (
+      <div className="array-items" role="group" aria-label={label} data-testid="array-items">
+        {items.map((item, index) => (
+          <div key={index} className="row-actions" data-testid="array-item">
+            <PropertyInput
+              workspaceId={workspaceId}
+              dataType={arrayOf as PropertyDataType}
+              structFields={structFields}
+              value={item}
+              label={`${label} ${index + 1}`}
+              onChange={(next) => onChange(withItem(items, index, next))}
+            />
+            <button
+              type="button"
+              className="btn quiet"
+              aria-label={`Remove ${label} ${index + 1}`}
+              data-testid="array-item-remove"
+              onClick={() => onChange(withoutItem(items, index))}
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="array-item-add"
+          onClick={() => onChange([...items, blankItem(arrayOf)])}
+        >
+          Add {label.toLowerCase()}
+        </button>
+      </div>
+    );
+  }
 
   if (dataType === "attachment") {
     const current = parseAttachment(value);

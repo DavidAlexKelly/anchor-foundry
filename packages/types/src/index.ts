@@ -2914,6 +2914,10 @@ export interface ActionParameter {
   api_name: string;
   display_name: string;
   data_type: string;
+  /** db 0118: what an `array` parameter holds (§580), and null on every other.
+   * Optional because the definition editor builds parameters before the
+   * server has spoken. */
+  array_of?: string | null;
   /** `action-types` p.66's nested fields, on a `struct` parameter (§450).
    *
    * **Derived by the server from the property this parameter writes**, never

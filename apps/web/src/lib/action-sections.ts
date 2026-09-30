@@ -68,6 +68,8 @@ export interface FormParameter {
    * nobody can fill in. Optional like the rest — a caller with a bare
    * `{api_name}` is still a form parameter. */
   struct_fields?: StructField[] | null;
+  /** db 0118: an array parameter's element type, for its rows (§580). */
+  array_of?: string | null;
 }
 
 function side(spec: unknown): Record<string, unknown> {

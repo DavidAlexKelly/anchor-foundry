@@ -106,6 +106,8 @@ function EditInstanceDialog({
               // properties by name, so there is no rule to derive them from
               // and nothing in between to get it wrong.
               structFields={properties[p]?.struct_fields}
+              // db 0087's element type, for an array property's rows (§580).
+              arrayOf={properties[p]?.array_of}
               value={values[p]}
               onChange={(next) => setValues({ ...values, [p]: next })}
               label={p}
