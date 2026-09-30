@@ -1,45 +1,42 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_MOUNT, DEFAULT_UNMOUNT, MOUNTS, UNMEASURED_HEIGHT, UNMOUNTS,
-  mountOf, placeholderHeight, shows, unmountOf, watches,
+  DEFAULT_MOUNT, DEFAULT_UNMOUNT, MOUNTS, UNMEASURED_HEIGHT, UNMOUNTS, keptOffLayout,
+  mayKeep, mountOf, placeholderHeight, shows, unmountOf, watches,
 } from "./display-optimization";
 
 /** p.180-182's widget display optimization. */
 
 describe("the options offered", () => {
-  it("is p.182's list minus the two this platform cannot honour", () => {
-    expect(Object.keys(MOUNTS)).toEqual(["default", "on_screen"]);
-    expect(Object.keys(UNMOUNTS)).toEqual(["default", "off_screen"]);
-    // **Not offered rather than offered and ignored** (§214). Both absentees
-    // are claims about a widget whose layout is not rendered, and the setting
-    // lives inside that layout.
-    expect(Object.keys(MOUNTS)).not.toContain("eager");
-    expect(Object.keys(UNMOUNTS)).not.toContain("never");
+  it("is all of p.182's list since §609", () => {
+    expect(Object.keys(MOUNTS)).toEqual(["default", "on_screen", "eager"]);
+    expect(Object.keys(UNMOUNTS)).toEqual(["default", "off_screen", "never"]);
   });
 
   it("names them the way p.182 does", () => {
     expect(MOUNTS.on_screen).toBe("Delay until on-screen");
+    expect(MOUNTS.eager).toBe("Eagerly mount");
     expect(UNMOUNTS.off_screen).toBe("Unmount when off-screen");
+    expect(UNMOUNTS.never).toBe("Never unmount");
   });
 });
 
 describe("reading a stored setting", () => {
   it("falls back for anything it does not offer", () => {
-    // §212, and the specific case: a document written by a build that offered
-    // p.182's other two. `eager` must read as the default rather than as
-    // itself, or the panel would show a setting nothing implements.
-    for (const raw of ["eager", "", null, undefined, 3, {}]) {
+    // §212: a document holds whatever was put there.
+    for (const raw of ["sometimes", "", null, undefined, 3, {}]) {
       expect(mountOf(raw)).toBe(DEFAULT_MOUNT);
     }
-    for (const raw of ["never", "", null, undefined, [], true]) {
+    for (const raw of ["later", "", null, undefined, [], true]) {
       expect(unmountOf(raw)).toBe(DEFAULT_UNMOUNT);
     }
   });
 
-  it("keeps the two it does offer", () => {
+  it("keeps the ones it offers", () => {
     expect(mountOf("on_screen")).toBe("on_screen");
+    expect(mountOf("eager")).toBe("eager");
     expect(unmountOf("off_screen")).toBe("off_screen");
+    expect(unmountOf("never")).toBe("never");
   });
 });
 
@@ -113,5 +110,37 @@ describe("the height held open while the body is gone", () => {
     expect(placeholderHeight(null)).toBe(UNMEASURED_HEIGHT);
     expect(placeholderHeight(0)).toBe(UNMEASURED_HEIGHT);
     expect(UNMEASURED_HEIGHT).toBeGreaterThan(0);
+  });
+});
+
+describe("p.182's two settings about a closed page (§609)", () => {
+  it("keeps an eager widget whether or not it has been shown", () => {
+    // "mounts as soon as the module loads … remains mounted for the rest of
+    // the session".
+    expect(keptOffLayout({ mount: "eager", unmount: "default", mounted: false })).toBe(true);
+    expect(keptOffLayout({ mount: "eager", unmount: "off_screen", mounted: true })).toBe(true);
+  });
+
+  it("keeps a never-unmount widget only once it has been mounted", () => {
+    // "Once mounted": a page nobody has opened is not mounted early - that is
+    // the mount setting's job, and the two are independent.
+    expect(keptOffLayout({ mount: "default", unmount: "never", mounted: false })).toBe(false);
+    expect(keptOffLayout({ mount: "default", unmount: "never", mounted: true })).toBe(true);
+  });
+
+  it("keeps nothing else", () => {
+    for (const mount of ["default", "on_screen"]) {
+      for (const unmount of ["default", "off_screen"]) {
+        expect(keptOffLayout({ mount, unmount, mounted: true })).toBe(false);
+      }
+    }
+  });
+
+  it("knows which settings could keep a node, reading them as stored", () => {
+    expect(mayKeep({ mount: "eager" })).toBe(true);
+    expect(mayKeep({ unmount: "never" })).toBe(true);
+    expect(mayKeep({ mount: "on_screen", unmount: "off_screen" })).toBe(false);
+    expect(mayKeep({ mount: "eagerly" })).toBe(false);
+    expect(mayKeep(undefined)).toBe(false);
   });
 });

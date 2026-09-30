@@ -37,48 +37,52 @@
  *
  * ---
  *
- * **So two of p.182's six options are offered and four are not**, and the two
- * that are offered are the two this platform can honour from inside a widget:
+ * **All six of p.182's options are offered.** Four are decided inside the
+ * widget: mount **Default** and **Delay until on-screen**, unmount **Default**
+ * and **when off-screen**. The last two are "is this element in the viewport",
+ * which `useOnScreen` already asks for §224's auto-selection rule.
  *
- * * mount **Delay until on-screen**, and unmount **when off-screen** — both
- *   are "is this element in the viewport", which `useOnScreen` already asks
- *   for §224's auto-selection rule.
- * * mount **Default** and unmount **Default** are what happens now.
+ * **Eagerly mount** and **Never unmount** (§609) are about a widget whose page
+ * is not showing, and §407 left them out because `CanvasPage` returned `null`
+ * for such a page: no widget left to keep mounted, none to mount early. So an
+ * inactive page that holds one now renders *hidden* rather than nothing, and
+ * tells what is inside it that it is off-layout (`OffLayout` in
+ * `SettingsPanel.tsx`). Every node there renders nothing, exactly as before,
+ * unless `keptOffLayout` says it stays: an eager widget always, a never-unmount
+ * widget once it has been mounted, and a container with one of those inside
+ * it, so the widget has somewhere to be. A page with none of them still
+ * returns `null`, so a module that configures nothing is untouched.
  *
- * **Eagerly mount** and **Never unmount** are *not offered*, and the reason is
- * structural rather than a shortcut: both are claims about a widget whose
- * layout is not rendered, and this code runs inside that layout. When
- * `CanvasPage` returns `null` there is no widget left to keep mounted and none
- * to mount early — honouring either would mean changing how pages render their
- * children, which is a different unit. §214: a control that looks like it
- * works is worse than one that is absent, so they are absent, with the panel
- * saying why.
+ * **Tabs and collapsed sections are unchanged.** They already keep every
+ * widget mounted (see above), which is Never unmount for all of them.
  *
  * Pure, for `components/canvas/pure.ts`'s reason: what shows when is exactly
  * the kind of rule a browser test can only confirm rendered *something*.
  */
 
-/** p.182's mount options, minus the one this platform cannot honour. */
+/** p.182's mount options. */
 export const MOUNTS: Record<string, string> = {
   default: "When its layout renders",
   on_screen: "Delay until on-screen",
+  eager: "Eagerly mount",
 };
 
-/** p.182's unmount options, minus the one this platform cannot honour. */
+/** p.182's unmount options. */
 export const UNMOUNTS: Record<string, string> = {
   default: "When its layout closes",
   off_screen: "Unmount when off-screen",
+  never: "Never unmount",
 };
 
 export const DEFAULT_MOUNT = "default";
 export const DEFAULT_UNMOUNT = "default";
 
-/** p.182's two options this platform does not offer, and the sentence saying
- * so. Exported so the panel and its test read the same words. */
-export const UNSUPPORTED = "Eagerly mount and Never unmount are not offered: "
-  + "both are about a widget whose layout is not on screen, and this setting "
-  + "lives inside that layout. Tabs and collapsed sections already keep their "
-  + "widgets mounted.";
+/** What the panel says under the two settings: p.181's own caution, and this
+ * platform's one difference. Exported so the panel and its test read the
+ * same words. */
+export const DISPLAY_NOTE = "Eagerly mount and Never unmount keep a widget "
+  + "across page switches, at the cost of memory while its page is closed. "
+  + "Tabs and collapsed sections already keep their widgets mounted.";
 
 function oneOf(raw: unknown, allowed: Record<string, string>, fallback: string): string {
   const value = String(raw ?? "");
@@ -153,4 +157,29 @@ export const UNMEASURED_HEIGHT = 40;
 
 export function placeholderHeight(measured: number | null): number {
   return measured && measured > 0 ? measured : UNMEASURED_HEIGHT;
+}
+
+/**
+ * Whether a widget stays mounted while its page is closed (§609; p.182).
+ *
+ * > "Eagerly mount: The widget mounts as soon as the module loads, even if it
+ * > is not yet visible. The widget remains mounted for the rest of the
+ * > session." / "Never unmount: Once mounted, the widget remains mounted for
+ * > the rest of the session."
+ *
+ * `mounted` is "has this widget been mounted while its page was showing",
+ * which is the whole of Never unmount's "once mounted": a never-unmount
+ * widget on a page nobody has opened is not mounted early - that is what the
+ * *mount* setting is for, and the two are independent.
+ */
+export function keptOffLayout(
+  { mount, unmount, mounted }: { mount: string; unmount: string; mounted: boolean },
+): boolean {
+  return mount === "eager" || (unmount === "never" && mounted);
+}
+
+/** Whether a node's own settings could keep it mounted off-layout, which is
+ *  what a closed page and the containers in it ask of what they hold. */
+export function mayKeep(display: { mount?: unknown; unmount?: unknown } | undefined): boolean {
+  return mountOf(display?.mount) === "eager" || unmountOf(display?.unmount) === "never";
 }

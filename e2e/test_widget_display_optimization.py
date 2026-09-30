@@ -192,9 +192,8 @@ def test_the_builder_is_not_optimised(page, api):
 
 
 def test_the_panel_offers_p182s_two_and_says_why_not_the_others(page, api):
-    """p.182 lists three of each. Two of the six are not offered, and the panel
-    says so rather than leaving somebody hunting — the same shape as §406's
-    hint, and this one is true."""
+    """p.182 lists three of each, and since §609 all six are offered - with
+    p.181's caution beside them, since keeping widgets mounted costs memory."""
     mod = build(api, "Display opt panel")
     open_builder(page, mod)
     settled(page)
@@ -202,17 +201,109 @@ def test_the_panel_offers_p182s_two_and_says_why_not_the_others(page, api):
     page.get_by_role("tab", name="Display").click()
 
     mounts = page.get_by_test_id("display-mount").locator("option")
-    expect(mounts).to_have_count(2)
+    expect(mounts).to_have_count(3)
     labels = [mounts.nth(i).inner_text() for i in range(mounts.count())]
-    assert "Delay until on-screen" in labels, labels
-    assert not any("Eager" in label for label in labels), labels
+    assert {"Delay until on-screen", "Eagerly mount"} <= set(labels), labels
 
     unmounts = page.get_by_test_id("display-unmount").locator("option")
-    expect(unmounts).to_have_count(2)
+    expect(unmounts).to_have_count(3)
     ulabels = [unmounts.nth(i).inner_text() for i in range(unmounts.count())]
-    assert "Unmount when off-screen" in ulabels, ulabels
-    assert not any("Never" in label for label in ulabels), ulabels
+    assert {"Unmount when off-screen", "Never unmount"} <= set(ulabels), ulabels
 
-    expect(page.get_by_test_id("display-unsupported")).to_contain_text(
-        "Eagerly mount and Never unmount are not offered"
-    )
+    expect(page.get_by_test_id("display-note")).to_contain_text("across page switches")
+
+
+
+# ---- p.182's Eagerly mount and Never unmount, across pages (§609) -------------
+
+PLAIN, KEPT, EAGER, HOME = "Plain on B", "Kept on B", "Eager on B", "Home page body"
+DEEP, SIBLING = "Kept inside a section", "Plain inside a section"
+
+
+def two_pages(api, name: str):
+    """A header that switches pages, page A with a body, and page B holding one
+    widget of each kind: default, Never unmount, Eagerly mount."""
+    mod = Module(api, name)
+
+    def text(words: str, parent: str, display: dict | None = None) -> dict:
+        spec = {"resolvedName": "CanvasText", "props": {"tag": "p", "text": words},
+                "parent": parent}
+        if display:
+            spec["custom"] = {"display": {"mode": "auto", **display}}
+        return spec
+
+    nodes = {
+        "hdr": {"resolvedName": "CanvasHeader", "props": {"title": "PAGES"},
+                "isCanvas": True, "nodes": ["go_a", "go_b"]},
+        "go_a": {"resolvedName": "CanvasButton", "props": {"label": "Go A"}, "parent": "hdr"},
+        "go_b": {"resolvedName": "CanvasButton", "props": {"label": "Go B"}, "parent": "hdr"},
+        "pa": {"resolvedName": "CanvasPage", "props": {"title": "A", "pageId": "a"},
+               "isCanvas": True, "nodes": ["pa_body"]},
+        "pa_body": text(HOME, "pa"),
+        "pb": {"resolvedName": "CanvasPage", "props": {"title": "B", "pageId": "b"},
+               "isCanvas": True, "nodes": ["pb_plain", "pb_kept", "pb_eager", "pb_sec"]},
+        "pb_plain": text(PLAIN, "pb"),
+        "pb_kept": text(KEPT, "pb", {"unmount": "never"}),
+        "pb_eager": text(EAGER, "pb", {"mount": "eager"}),
+        # A kept widget one level down: the section has to render on the
+        # closed page for it to have somewhere to be.
+        "pb_sec": {"resolvedName": "CanvasSection", "isCanvas": True, "props": {},
+                   "parent": "pb", "nodes": ["pb_deep", "pb_sibling"]},
+        "pb_deep": text(DEEP, "pb_sec", {"unmount": "never"}),
+        "pb_sibling": text(SIBLING, "pb_sec"),
+    }
+    mod.define({
+        "format": 2,
+        "layout": layout(nodes),
+        "variables": {},
+        "events": {
+            "e_a": {"id": "e_a", "trigger": {"node": "go_a", "on": "click"},
+                    "effects": [{"type": "navigate", "config": {"page": "pa"}}]},
+            "e_b": {"id": "e_b", "trigger": {"node": "go_b", "on": "click"},
+                    "effects": [{"type": "navigate", "config": {"page": "pb"}}]},
+        },
+    })
+    return mod
+
+
+def in_document(page, words: str) -> int:
+    """Mounted is in the document; visible is a different question."""
+    return page.get_by_text(words, exact=True).count()
+
+
+def test_an_eager_widget_is_mounted_before_its_page_is_opened(page, api):
+    """p.182: "The widget mounts as soon as the module loads, even if it is
+    not yet visible." And only it: the rest of page B is not mounted early."""
+    mod = two_pages(api, "Display opt eager")
+    open_module(page, mod)
+    expect(page.get_by_text(HOME, exact=True)).to_be_visible()
+    eventually(lambda: in_document(page, EAGER), lambda n: n == 1, what="the eager widget")
+    expect(page.get_by_text(EAGER, exact=True)).to_be_hidden()
+    assert in_document(page, PLAIN) == 0
+    assert in_document(page, KEPT) == 0
+
+
+def test_a_never_unmount_widget_stays_after_its_page_closes(page, api):
+    """p.182: "Once mounted, the widget remains mounted for the rest of the
+    session." The default widget beside it unmounts, as a closed page's
+    widgets always have."""
+    mod = two_pages(api, "Display opt never")
+    open_module(page, mod)
+    page.get_by_role("button", name="Go B").click()
+    for words in (PLAIN, KEPT, EAGER):
+        expect(page.get_by_text(words, exact=True)).to_be_visible(timeout=15000)
+
+    page.get_by_role("button", name="Go A").click()
+    expect(page.get_by_text(HOME, exact=True)).to_be_visible()
+    eventually(lambda: in_document(page, PLAIN), lambda n: n == 0, what="the plain widget gone")
+    assert in_document(page, KEPT) == 1 and in_document(page, EAGER) == 1
+    expect(page.get_by_text(KEPT, exact=True)).to_be_hidden()
+    # One level down too, and only the kept one: its section renders so it has
+    # somewhere to be, and the section's other widget unmounts as usual.
+    assert in_document(page, DEEP) == 1
+    assert in_document(page, SIBLING) == 0
+
+    # And back: the kept one was there all along; the plain one mounts again.
+    page.get_by_role("button", name="Go B").click()
+    for words in (PLAIN, KEPT, EAGER):
+        expect(page.get_by_text(words, exact=True)).to_be_visible(timeout=15000)
