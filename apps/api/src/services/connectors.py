@@ -91,11 +91,52 @@ def check_identifier(name: str) -> str:
 
 
 @dataclass(frozen=True)
+class ColumnReference:
+    """The column a foreign key points at (`data-connection` p.143; §602).
+
+    `constraint` is the foreign key's own name, so a composite key reads as one
+    relation rather than as several unrelated columns that happen to point at
+    the same table - and two keys between the same pair of tables (a billing
+    and a shipping customer, say) stay two."""
+
+    schema: str
+    table: str
+    column: str
+    constraint: str
+
+
+@dataclass(frozen=True)
 class ColumnInfo:
     name: str
     data_type: str
     nullable: bool
     is_primary_key: bool
+    #: Decision 0015 §7's "column annotation": the foreign key this column is
+    #: part of, beside `is_primary_key` and the same shape. None for a column
+    #: in no foreign key, and for every column of a connector whose source has
+    #: no such thing (`reports_relations` is False).
+    references: ColumnReference | None = None
+
+
+def _references(
+    rows: Any,
+) -> dict[tuple[str, str, str], ColumnReference]:
+    """A foreign-key query's rows, keyed by the column that holds the key.
+
+    **A column in two foreign keys shows the first**, by constraint name - the
+    queries order by it, and the first row wins. That is a narrowing, and a
+    deliberate one: a column is one row in p.143's "expandable column list", and
+    the case (one column pointing at two tables) is rare enough that a second
+    annotation shape for it would be the larger cost."""
+    out: dict[tuple[str, str, str], ColumnReference] = {}
+    for schema, table, column, ref_schema, ref_table, ref_column, constraint in rows:
+        out.setdefault(
+            (schema, table, column),
+            ColumnReference(
+                schema=ref_schema, table=ref_table, column=ref_column, constraint=constraint
+            ),
+        )
+    return out
 
 
 @dataclass(frozen=True)
@@ -225,6 +266,13 @@ class SourceConnector(Protocol):
     display_name: str
     config_model: type[BaseModel]
     secret_fields: tuple[str, ...]
+    #: Whether `discover` can fill `ColumnInfo.references` (§602). p.143 says
+    #: of its relationship graph that it "is not always available… a graph
+    #: would not appear for exploration of a table-based REST API model as
+    #: there are no clear relations between objects." False is that sentence:
+    #: the Explore screen draws no graph rather than an empty one, which would
+    #: read as a source whose tables are unrelated.
+    reports_relations: bool
 
     def validate_config(self, config: dict[str, Any]) -> dict[str, Any]:
         """Re-derive the stored config shape, dropping anything a client
@@ -345,6 +393,7 @@ class PostgresConnector:
     display_name = "PostgreSQL"
     config_model: type[BaseModel] = PostgresConfig
     secret_fields = ("password",)
+    reports_relations = True
 
     _CONNECT_TIMEOUT_S = 8
 
@@ -419,6 +468,7 @@ class PostgresConnector:
         try:
             with psycopg.connect(**self._conninfo(config, secret)) as conn:
                 rows = conn.execute(sql).fetchall()
+                references = _references(conn.execute(self._FOREIGN_KEYS).fetchall())
         except psycopg.OperationalError as exc:
             raise self._operational(exc) from exc
 
@@ -432,9 +482,45 @@ class PostgresConnector:
                     kind="view" if table_type == "VIEW" else "table",
                 )
             tables[key].columns.append(
-                ColumnInfo(name=col, data_type=dtype, nullable=bool(nullable), is_primary_key=bool(is_pk))
+                ColumnInfo(
+                    name=col,
+                    data_type=dtype,
+                    nullable=bool(nullable),
+                    is_primary_key=bool(is_pk),
+                    references=references.get((schema, name, col)),
+                )
             )
         return list(tables.values())
+
+    #: Every foreign key, one row per column pair (§602).
+    #:
+    #: From `pg_constraint` rather than `information_schema`, because the
+    #: standard views cannot pair a composite key's columns in Postgres: the
+    #: join from `referential_constraints` to the referenced key goes through
+    #: the constraint's *name*, and Postgres only makes that unique per table.
+    #: `unnest` over the two arrays together pairs them position by position,
+    #: which is what `conkey`/`confkey` mean. Which columns anyone sees is
+    #: still `information_schema.columns`' answer above - a key on a column the
+    #: role cannot read annotates nothing, because nothing looks it up.
+    #:
+    #: **No `contype = 'f'` and no schema filter**, both of which §602's
+    #: harness found could not change the answer: only a foreign key has a
+    #: `confrelid`, so the join to `fcl` already drops every other kind of
+    #: constraint, and the system schemas declare no foreign keys - nor would
+    #: one matter, since only discovered columns are looked up.
+    _FOREIGN_KEYS = """
+        SELECT ns.nspname, cl.relname, att.attname,
+               fns.nspname, fcl.relname, fatt.attname, con.conname
+          FROM pg_constraint con
+          JOIN pg_class cl ON cl.oid = con.conrelid
+          JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+          JOIN pg_class fcl ON fcl.oid = con.confrelid
+          JOIN pg_namespace fns ON fns.oid = fcl.relnamespace
+          CROSS JOIN LATERAL unnest(con.conkey, con.confkey) AS k(attnum, fattnum)
+          JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.attnum
+          JOIN pg_attribute fatt ON fatt.attrelid = con.confrelid AND fatt.attnum = k.fattnum
+         ORDER BY ns.nspname, cl.relname, con.conname
+    """
 
     def preview(
         self,
@@ -722,6 +808,7 @@ class MySQLConnector:
     display_name = "MySQL / MariaDB"
     config_model: type[BaseModel] = MySQLConfig
     secret_fields = ("password",)
+    reports_relations = True
 
     _CONNECT_TIMEOUT_S = 8
     _SYSTEM_SCHEMAS = ("information_schema", "performance_schema", "mysql", "sys")
@@ -834,11 +921,25 @@ class MySQLConnector:
              WHERE c.TABLE_SCHEMA NOT IN ({placeholders})
              ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION
         """
+        # Every foreign key, one row per column pair (§602). InnoDB fills the
+        # REFERENCED_* columns only for foreign keys, so "not null" is the
+        # filter. Each row names its own referenced column, so a composite
+        # key pairs without help; the order is for `_references`' first-wins.
+        foreign_keys = f"""
+            SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_SCHEMA,
+                   REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME, CONSTRAINT_NAME
+              FROM information_schema.KEY_COLUMN_USAGE
+             WHERE REFERENCED_TABLE_NAME IS NOT NULL
+               AND TABLE_SCHEMA NOT IN ({placeholders})
+             ORDER BY TABLE_SCHEMA, TABLE_NAME, CONSTRAINT_NAME
+        """
         try:
             with self._connect(config, secret) as conn:
                 with conn.cursor() as cur:
                     cur.execute(sql, self._SYSTEM_SCHEMAS)
                     rows = cur.fetchall()
+                    cur.execute(foreign_keys, self._SYSTEM_SCHEMAS)
+                    references = _references(cur.fetchall())
         except pymysql.MySQLError as exc:
             raise self._translate(exc) from exc
 
@@ -857,6 +958,7 @@ class MySQLConnector:
                     data_type=dtype,
                     nullable=bool(nullable),
                     is_primary_key=bool(is_pk),
+                    references=references.get((schema, name, col)),
                 )
             )
         return list(tables.values())
@@ -1187,6 +1289,7 @@ class S3Connector:
     display_name = "S3 / object storage"
     config_model: type[BaseModel] = S3Config
     secret_fields = ("access_key_id", "secret_access_key")
+    reports_relations = False
 
     _CONNECT_TIMEOUT_S = 8
 
@@ -1621,6 +1724,7 @@ class RestConnector:
     display_name = "REST / HTTP JSON"
     config_model: type[BaseModel] = RestConfig
     secret_fields = ("api_key", "client_id", "client_secret")
+    reports_relations = False
 
     def validate_config(self, config: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -2097,6 +2201,7 @@ def list_source_types() -> list[dict[str, Any]]:
                 "display_name": connector.display_name,
                 "config_schema": schema,
                 "secret_fields": list(connector.secret_fields),
+                "reports_relations": connector.reports_relations,
             }
         )
     return out

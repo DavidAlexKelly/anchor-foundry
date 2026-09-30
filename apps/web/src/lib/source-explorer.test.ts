@@ -14,14 +14,21 @@
  */
 import { describe as group, expect, test } from "vitest";
 
-import type { DiscoveredTable, SourcePreview } from "./types";
+import type { ColumnReference, DiscoveredColumn, DiscoveredTable, SourcePreview } from "./types";
 import {
   KEY_SEP,
   bySchema,
   cell,
   defaultDatasetName,
+  graphLayout,
   isSyncable,
   matchNote,
+  referenceLabel,
+  referencedKey,
+  relatedNotOnGraph,
+  relationLabel,
+  relationsBetween,
+  relationsOf,
   sampleCaveat,
   sampleSummary,
   search,
@@ -37,8 +44,8 @@ function table(over: Partial<DiscoveredTable> = {}): DiscoveredTable {
     name: "orders",
     kind: "table",
     columns: [
-      { name: "id", data_type: "bigint", nullable: false, is_primary_key: true },
-      { name: "customer_email", data_type: "text", nullable: false, is_primary_key: false },
+      { name: "id", data_type: "bigint", nullable: false, is_primary_key: true, references: null },
+      { name: "customer_email", data_type: "text", nullable: false, is_primary_key: false, references: null },
     ],
     ...over,
   };
@@ -92,7 +99,7 @@ group("p.143's free-text helper", () => {
   // exactly one right answer. The default fixture gives every table that
   // column, which would make "found it by column" indistinguishable from
   // "found everything".
-  const plain = [{ name: "id", data_type: "bigint", nullable: false, is_primary_key: true }];
+  const plain = [{ name: "id", data_type: "bigint", nullable: false, is_primary_key: true, references: null }];
   const tables = [
     table({ schema_name: "public", name: "orders", columns: plain }),
     table({ schema_name: "staging", name: "stg_customer_orders", columns: plain }),
@@ -101,7 +108,7 @@ group("p.143's free-text helper", () => {
       name: "people",
       columns: [
         ...plain,
-        { name: "customer_email", data_type: "text", nullable: true, is_primary_key: false },
+        { name: "customer_email", data_type: "text", nullable: true, is_primary_key: false, references: null },
       ],
     }),
   ];
@@ -164,8 +171,8 @@ group("p.143's free-text helper", () => {
     const wide = table({
       name: "events",
       columns: [
-        { name: "user_id", data_type: "bigint", nullable: false, is_primary_key: false },
-        { name: "user_email", data_type: "text", nullable: true, is_primary_key: false },
+        { name: "user_id", data_type: "bigint", nullable: false, is_primary_key: false, references: null },
+        { name: "user_email", data_type: "text", nullable: true, is_primary_key: false, references: null },
       ],
     });
     expect(search([wide], "user").length).toBe(1);
@@ -279,5 +286,138 @@ group("cells", () => {
 
   test("an ordinary value passes through untouched", () => {
     expect(cell("ada@example.com")).toEqual({ text: "ada@example.com", isNull: false });
+  });
+});
+
+group("p.143's relationship graph (§602)", () => {
+  function col(name: string, references: ColumnReference | null = null): DiscoveredColumn {
+    return { name, data_type: "bigint", nullable: true, is_primary_key: false, references };
+  }
+  function ref(table: string, column: string, constraint: string, schema = "public") {
+    return { schema_name: schema, table, column, constraint };
+  }
+  const customers = table({ name: "customers", columns: [col("id")] });
+  const orders = table({
+    name: "orders",
+    columns: [
+      col("id"),
+      col("billed_to", ref("customers", "id", "billed_fk")),
+      col("shipped_to", ref("customers", "id", "shipped_fk")),
+    ],
+  });
+  const shipments = table({
+    name: "shipments",
+    columns: [
+      col("line_number", ref("order_lines", "line_no", "line_fk")),
+      col("note"),
+      col("line_order", ref("order_lines", "order_id", "line_fk")),
+    ],
+  });
+  const lines = table({ name: "order_lines", columns: [col("order_id"), col("line_no")] });
+  const invoices = table({
+    schema_name: "billing",
+    name: "invoices",
+    columns: [col("order_id", ref("orders", "id", "invoice_fk"))],
+  });
+  const staff = table({
+    name: "staff",
+    columns: [col("id"), col("manager_id", ref("staff", "id", "manager_fk"))],
+  });
+
+  test("a reference names its table the way the tree does", () => {
+    expect(referencedKey(ref("orders", "id", "x", "billing"))).toBe(
+      tableKey({ schema_name: "billing", name: "orders" }),
+    );
+  });
+
+  test("each constraint is one relation, composite columns in declared order", () => {
+    expect(relationsOf([orders, shipments])).toEqual([
+      {
+        id: `${tableKey(orders)}${KEY_SEP}billed_fk`,
+        from: tableKey(orders),
+        to: tableKey(customers),
+        constraint: "billed_fk",
+        pairs: [["billed_to", "id"]],
+      },
+      {
+        id: `${tableKey(orders)}${KEY_SEP}shipped_fk`,
+        from: tableKey(orders),
+        to: tableKey(customers),
+        constraint: "shipped_fk",
+        pairs: [["shipped_to", "id"]],
+      },
+      {
+        id: `${tableKey(shipments)}${KEY_SEP}line_fk`,
+        from: tableKey(shipments),
+        to: tableKey(lines),
+        constraint: "line_fk",
+        pairs: [
+          ["line_number", "line_no"],
+          ["line_order", "order_id"],
+        ],
+      },
+    ]);
+  });
+
+  test("one constraint name in two tables is two relations", () => {
+    // Postgres makes a constraint name unique per table, not per schema.
+    const a = table({ name: "a", columns: [col("x", ref("customers", "id", "fk"))] });
+    const b = table({ name: "b", columns: [col("x", ref("customers", "id", "fk"))] });
+    expect(relationsOf([a, b]).map((r) => r.from)).toEqual([tableKey(a), tableKey(b)]);
+  });
+
+  test("the graph draws only keys with both ends on it", () => {
+    expect(relationsBetween([orders, shipments]).map((r) => r.constraint)).toEqual([]);
+    expect(relationsBetween([orders, customers]).map((r) => r.constraint)).toEqual([
+      "billed_fk",
+      "shipped_fk",
+    ]);
+    // A key into its own table has both ends on the graph once it is.
+    expect(relationsBetween([staff]).map((r) => r.constraint)).toEqual(["manager_fk"]);
+  });
+
+  test("the label above the link pairs columns, bracketing a composite key", () => {
+    const [billed] = relationsOf([orders]);
+    expect(relationLabel(billed!)).toBe("billed_to → id");
+    const [line] = relationsOf([shipments]);
+    expect(relationLabel(line!)).toBe("(line_number, line_order) → (line_no, order_id)");
+  });
+
+  test("the column list names the target's schema only when it differs", () => {
+    expect(referenceLabel(ref("customers", "id", "fk"), orders)).toBe("→ customers.id");
+    expect(referenceLabel(ref("orders", "id", "fk"), invoices)).toBe("→ public/orders.id");
+  });
+
+  test("related tables either way, once each, and not ones already on the graph", () => {
+    const all = [customers, orders, shipments, lines, invoices, staff];
+    // orders holds keys into customers and invoices holds one into orders.
+    expect(relatedNotOnGraph(orders, all, [orders]).map((t) => t.name)).toEqual([
+      "customers",
+      "invoices",
+    ]);
+    expect(relatedNotOnGraph(orders, all, [orders, customers]).map((t) => t.name)).toEqual([
+      "invoices",
+    ]);
+    // Only discovered tables: nothing to add for a key into the unseen.
+    expect(relatedNotOnGraph(shipments, [shipments], [shipments])).toEqual([]);
+    // A table related only to itself adds nothing; it is already there.
+    expect(relatedNotOnGraph(staff, all, [staff])).toEqual([]);
+  });
+
+  test("nodes sit round the ellipse from the left, one alone in the middle", () => {
+    expect(graphLayout(0, 560, 220)).toEqual([]);
+    expect(graphLayout(1, 560, 220)).toEqual([{ x: 280, y: 110 }]);
+    const two = graphLayout(2, 560, 220).map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+    expect(two).toEqual([
+      { x: 70, y: 110 },
+      { x: 490, y: 110 },
+    ]);
+    const four = graphLayout(4, 560, 220).map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+    expect(four).toEqual([
+      { x: 70, y: 110 },
+      { x: 280, y: 30 },
+      { x: 490, y: 110 },
+      { x: 280, y: 190 },
+    ]);
   });
 });

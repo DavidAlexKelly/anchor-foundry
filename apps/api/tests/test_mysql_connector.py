@@ -147,6 +147,34 @@ def source_database() -> dict[str, object]:
         # A leading-digit table name is legal in MySQL and illegal in Postgres -
         # the identifier rules genuinely differ, and the connector owns that.
         cur.execute("CREATE TABLE 2024_archive (id BIGINT PRIMARY KEY)")
+        # p.143's relationships (§602): a plain key and a composite one.
+        cur.execute(
+            """CREATE TABLE order_lines (
+                   order_id BIGINT,
+                   line_no INT,
+                   note VARCHAR(40),
+                   PRIMARY KEY (order_id, line_no),
+                   -- InnoDB wants an index in the referencing order.
+                   UNIQUE KEY lines_by_number (line_no, order_id),
+                   CONSTRAINT lines_order_fk FOREIGN KEY (order_id) REFERENCES orders (id)
+               )"""
+        )
+        cur.execute(
+            """CREATE TABLE refunds (
+                   subject_id BIGINT,
+                   CONSTRAINT refunds_b_fk FOREIGN KEY (subject_id) REFERENCES 2024_archive (id),
+                   CONSTRAINT refunds_a_fk FOREIGN KEY (subject_id) REFERENCES orders (id)
+               )"""
+        )
+        cur.execute(
+            """CREATE TABLE shipments (
+                   id BIGINT PRIMARY KEY,
+                   line_order BIGINT,
+                   line_number INT,
+                   CONSTRAINT shipments_line_fk FOREIGN KEY (line_number, line_order)
+                       REFERENCES order_lines (line_no, order_id)
+               )"""
+        )
         cur.execute(
             """INSERT INTO orders (id, customer_email, total_pence, placed_at) VALUES
                (1, 'a@example.com', 1200, '2024-01-01 10:00:00'),
@@ -290,6 +318,34 @@ def test_discover_reads_the_mysql_information_schema(
     # vocabulary across source types.
     assert all(schema == SOURCE_DB for schema, _ in tables)
     assert SOURCE_PASSWORD not in r.text
+
+
+def test_discover_reports_mysql_foreign_keys(
+    client: TestClient, fx: Fixture, connection_id: str
+) -> None:
+    """p.143's relationships from KEY_COLUMN_USAGE (§602)."""
+    r = client.post(f"{cbase(fx)}/{connection_id}/discover", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    tables = {t["name"]: t for t in r.json()}
+
+    def refs(name: str) -> dict[str, object]:
+        return {c["name"]: c["references"] for c in tables[name]["columns"]}
+
+    lines = refs("order_lines")
+    assert lines["order_id"] == {
+        "schema_name": SOURCE_DB, "table": "orders", "column": "id",
+        "constraint": "lines_order_fk",
+    }
+    assert lines["line_no"] is None and lines["note"] is None
+    assert all(v is None for v in refs("orders").values())
+    # A composite key pairs its columns as declared.
+    shipments = refs("shipments")
+    assert (shipments["line_number"]["column"], shipments["line_order"]["column"]) == (
+        "line_no", "order_id",
+    )
+    assert shipments["id"] is None
+    # A column in two keys shows the first by name.
+    assert refs("refunds")["subject_id"]["constraint"] == "refunds_a_fk"
 
 
 def test_wrong_password_is_a_clean_error_not_a_500(

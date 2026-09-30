@@ -1091,6 +1091,9 @@ export interface SourceTypeInfo {
     required?: string[];
   };
   secret_fields: string[];
+  /** Whether discovery reports foreign keys, so the Explore screen can draw
+   * p.143's relationship graph - which "is not always available" (§602). */
+  reports_relations: boolean;
 }
 
 export interface ConnectionTestResult {
@@ -1099,11 +1102,24 @@ export interface ConnectionTestResult {
   connection: Connection;
 }
 
+/** The column a foreign key points at (`data-connection` p.143; §602).
+ * `constraint` is the key's own name, which is what groups a composite key's
+ * columns into one relation. */
+export interface ColumnReference {
+  schema_name: string;
+  table: string;
+  column: string;
+  constraint: string;
+}
+
 export interface DiscoveredColumn {
   name: string;
   data_type: string;
   nullable: boolean;
   is_primary_key: boolean;
+  /** Null for a column in no foreign key, and always for a source type
+   * whose `reports_relations` is false. */
+  references: ColumnReference | null;
 }
 
 export interface DiscoveredTable {
