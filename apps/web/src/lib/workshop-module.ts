@@ -308,6 +308,12 @@ export const NESTED_REFERENCE_PROPS: Record<string, readonly string[]> = {
   layers: ["objectSetVariable"],
 };
 
+/** Props holding a map of names to variable ids of this module (§598): an
+ * embed's interface mapping (p.127) and p.241's variables passed as action
+ * parameters. Mirrors `MAPPING_REFERENCE_PROPS` in
+ * `services/workshop_variables.py`. */
+export const MAPPING_REFERENCE_PROPS: readonly string[] = ["interface", "inlineEditVariables"];
+
 export interface Reference {
   /** `objectSetVariable`, or `steps[1].completedVariable` for a nested one. */
   prop: string;
@@ -345,10 +351,11 @@ export function referencesOf(props: unknown): Reference[] {
   // missing it the same way - which is how a routed page left a mapped
   // variable out of what it needs, and a copied embed kept pointing at the
   // source module's ids.
-  const mapping = bag.interface;
-  if (mapping && typeof mapping === "object" && !Array.isArray(mapping)) {
-    for (const [externalId, ref] of Object.entries(mapping as Record<string, unknown>)) {
-      if (typeof ref === "string" && ref) found.push({ prop: `interface.${externalId}`, ref });
+  for (const prop of MAPPING_REFERENCE_PROPS) {
+    const mapping = bag[prop];
+    if (!mapping || typeof mapping !== "object" || Array.isArray(mapping)) continue;
+    for (const [key, ref] of Object.entries(mapping as Record<string, unknown>)) {
+      if (typeof ref === "string" && ref) found.push({ prop: `${prop}.${key}`, ref });
     }
   }
   return found;
@@ -379,11 +386,12 @@ export function remapReferences(
       return copy;
     });
   }
-  const mapping = next.interface;
-  if (mapping && typeof mapping === "object" && !Array.isArray(mapping)) {
-    next.interface = Object.fromEntries(
-      Object.entries(mapping as Record<string, unknown>).map(([externalId, value]) => [
-        externalId,
+  for (const prop of MAPPING_REFERENCE_PROPS) {
+    const mapping = next[prop];
+    if (!mapping || typeof mapping !== "object" || Array.isArray(mapping)) continue;
+    next[prop] = Object.fromEntries(
+      Object.entries(mapping as Record<string, unknown>).map(([key, value]) => [
+        key,
         typeof value === "string" && replacement.has(value) ? replacement.get(value) : value,
       ]),
     );

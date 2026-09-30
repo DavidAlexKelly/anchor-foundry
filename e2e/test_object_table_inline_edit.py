@@ -622,3 +622,60 @@ def test_p241_an_enumerated_parameter_is_an_in_cell_dropdown(page, api) -> None:
     page.get_by_test_id("inline-edit-confirm-submit").click()
     eventually(lambda: mirror_values(page), lambda v: "blocked" in v,
                what="the chosen option on the object")
+
+
+def with_note_variable(mod, table_props: dict) -> None:
+    """The module `build` made, plus a string variable and these table props."""
+    document = mod.definition()
+    document["variables"]["v_note"] = {"id": "v_note", "kind": "string", "label": "Note to add",
+                                       "default": "from the variable"}
+    document["layout"]["tbl"]["props"].update(table_props)
+    mod.define(document)
+
+
+def test_p241_a_variable_is_passed_as_a_parameter(page, api) -> None:
+    """p.241: "You can also pass variables as action parameters that will get
+    passed into the action automatically without the user needing to edit the
+    field in the table." (§598)"""
+    mod = build(api, "Inline variable", properties=("status", "note"))
+    with_note_variable(mod, {"inlineEditMapping": {"status": "status"},
+                             "inlineEditVariables": {"note": "v_note"}})
+    open_module(page, mod)
+    settled(page)
+    page.get_by_test_id("inline-edit-toggle").click()
+    # Not a column: nobody types it.
+    expect(page.get_by_test_id("edit-T1-note")).to_have_count(0)
+    cell(page, "T1", "status").fill("triaged")
+    page.get_by_test_id("inline-edit-submit").click()
+    page.get_by_test_id("inline-edit-confirm-submit").click()
+
+    def stored():
+        found = api.call("POST", f"/workspaces/{mod.workspace_id}/object-sets/evaluate",
+                         {"definition": {"object_type_id": mod.type_id, "filters": []},
+                          "limit": 10})["instances"]
+        return {i["properties"]["id"]: i["properties"] for i in found}
+    eventually(stored, lambda rows: (rows["T1"]["status"], rows["T1"]["note"]) == (
+        "triaged", "from the variable"), what="the typed value and the variable's")
+    # A row nobody edited is not submitted, so its note is its own.
+    assert stored()["T2"]["note"] == "second"
+
+
+def test_the_panel_passes_a_variable_instead_of_a_column(page, api) -> None:
+    mod = build(api, "Inline variable panel", properties=("status", "note"))
+    with_note_variable(mod, {"inlineEditMapping": {"status": "status", "note": "note"}})
+    open_builder(page, mod)
+    settled(page)
+    select_table(page)
+    mapping = page.get_by_test_id("inline-edit-mapping")
+    expect(mapping.locator("[data-parameter='note']")).to_have_value("note")
+    mapping.get_by_test_id("inline-edit-variable-note").select_option("v_note")
+    # One or the other: the column is let go.
+    expect(mapping.locator("[data-parameter='note']")).to_have_value("")
+    # Sets and filters hold no parameter's value.
+    expect(mapping.get_by_test_id("inline-edit-variable-note").locator("option")).to_have_text(
+        ["Or from a variable…", "Note to add"])
+    mapping.locator("[data-parameter='note']").select_option("note")
+    expect(mapping.get_by_test_id("inline-edit-variable-note")).to_have_value("")
+    # Let go for good: unmapping the column again does not bring it back.
+    mapping.locator("[data-parameter='note']").select_option("")
+    expect(mapping.get_by_test_id("inline-edit-variable-note")).to_have_value("")

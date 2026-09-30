@@ -167,3 +167,17 @@ describe("the two catalogues", () => {
     expect(NESTED_REFERENCE_PROPS.steps).toEqual(["completedVariable"]);
   });
 });
+
+describe("mapping references (§598)", () => {
+  it("reads and rewrites p.241's variables passed as action parameters", () => {
+    const props = { inlineEditVariables: { note: "v_a", bad: 3 }, interface: { ext: "v_b" } };
+    expect(referencesOf(props)).toEqual([
+      { prop: "interface.ext", ref: "v_b" },
+      { prop: "inlineEditVariables.note", ref: "v_a" },
+    ]);
+    expect(remapReferences(props, new Map([["v_a", "v_c"], ["v_b", "v_d"]]))).toEqual({
+      inlineEditVariables: { note: "v_c", bad: 3 }, interface: { ext: "v_d" },
+    });
+    expect(referencesOf({ inlineEditVariables: ["v_a"] })).toEqual([]);
+  });
+});

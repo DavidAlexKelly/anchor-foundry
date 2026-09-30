@@ -576,6 +576,14 @@ NESTED_REFERENCE_PROPS: dict[str, tuple[str, ...]] = {
 }
 
 
+#: Props holding a **map of names to variable ids** of this module (§598).
+#: An embed's interface mapping (p.127) was the first and was read by a case
+#: of its own; p.241's variables passed as action parameters (an Object
+#: Table's `{parameter: variable}`) is the second, which is what makes it a
+#: catalogue. Mirrored in `workshop-module.ts`.
+MAPPING_REFERENCE_PROPS: tuple[str, ...] = ("interface", "inlineEditVariables")
+
+
 def references(props: Any) -> list[tuple[str, str]]:
     """Every variable id a node's props name, with the prop that names it.
 
@@ -613,11 +621,12 @@ def references(props: Any) -> list[tuple[str, str]]:
     # filtered table showed every row; and `usages()` reported it unused. The
     # save path's own check of the mapping (in `validate_module`) still runs
     # first, because its message names the external ID.
-    mapping = props.get("interface")
-    if isinstance(mapping, dict):
-        for external_id, ref in mapping.items():
-            if isinstance(ref, str) and ref:
-                found.append((f"interface.{external_id}", ref))
+    for prop in MAPPING_REFERENCE_PROPS:
+        mapping = props.get(prop)
+        if isinstance(mapping, dict):
+            for key, ref in mapping.items():
+                if isinstance(ref, str) and ref:
+                    found.append((f"{prop}.{key}", ref))
     return found
 
 

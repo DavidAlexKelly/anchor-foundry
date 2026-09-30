@@ -247,6 +247,53 @@ export function toEdits(staged: Staged): { instance_id: string; values: Record<s
     .map((instance_id) => ({ instance_id, values: { ...staged[instance_id] } }));
 }
 
+/** p.241's variables passed as action parameters (§598): "You can also pass
+ * variables as action parameters that will get passed into the action
+ * automatically without the user needing to edit the field in the table."
+ *
+ * `{parameter: variable id}`, kept only where the parameter is the action's,
+ * the variable is one the module declares, and **no column edits the
+ * parameter**: a value the reader typed into a cell and one a variable holds
+ * cannot both be the parameter's, and the panel makes the author choose. Any
+ * of the action's parameters, hidden ones too - a variable is not a column,
+ * so p.137's reason to leave a hidden one out of the table does not apply. */
+export function variableFeedsOf(
+  raw: unknown,
+  action: EditAction | null | undefined,
+  variables: readonly string[],
+  columnMapping: Record<string, string>,
+): Record<string, string> {
+  const parameters = new Set((action?.parameters ?? []).map((p) => p.api_name));
+  const declared = new Set(variables);
+  const out: Record<string, string> = {};
+  // Only nothing needs refusing: anything else `Object.entries` reads, and a
+  // string's or an array's entries are keyed "0", "1", … which no parameter
+  // is called (`mappingOf`'s reasoning).
+  if (raw === null || raw === undefined) return out;
+  for (const [parameter, variable] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof variable !== "string" || !declared.has(variable)) continue;
+    if (!parameters.has(parameter) || parameter in columnMapping) continue;
+    out[parameter] = variable;
+  }
+  return out;
+}
+
+/** Each edit with the fed parameters' values added, as the variables hold
+ * them now. A variable holding nothing adds nothing, so the parameter keeps
+ * the object's value (p.135) rather than being cleared by an unset filter. */
+export function withVariables(
+  edits: { instance_id: string; values: Record<string, unknown> }[],
+  feeds: Record<string, string>,
+  resolved: Record<string, unknown>,
+): { instance_id: string; values: Record<string, unknown> }[] {
+  const fed: Record<string, unknown> = {};
+  for (const [parameter, variable] of Object.entries(feeds)) {
+    const value = resolved[variable];
+    if (value !== undefined && value !== null) fed[parameter] = value;
+  }
+  return edits.map((edit) => ({ ...edit, values: { ...edit.values, ...fed } }));
+}
+
 /** p.242's Custom button text, with the label p.242 itself uses. */
 export const DEFAULT_BUTTON_TEXT = "Edit table";
 
