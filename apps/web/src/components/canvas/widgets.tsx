@@ -16356,18 +16356,16 @@ export function CanvasActionForm({
               </select>
             </label>
           )}
-          {/* p.124's form body: the parameters no section has claimed, in the
-              order the action declares them. */}
-          {layout.loose.map(field)}
-          {/* Then p.122's "logical grouping", in p.124's Form Content order.
-              The body first and the sections after, because this build stores
-              two orderings — a section's and a parameter's — and p.124's single
-              list over both is its own row in `docs/parity`. */}
-          {layout.sections.map((drawn) => (
-            <ActionFormSection key={drawn.section.id} section={drawn.section}>
-              {drawn.parameters.map(field)}
-            </ActionFormSection>
-          ))}
+          {/* p.124: "Parameters and sections display in the form based on
+              their order in this Form Content section" - the parameters no
+              section holds and p.122's groupings, in one order (§589). */}
+          {layout.blocks.map((block) => block.kind === "parameter"
+            ? field(block.parameter)
+            : (
+              <ActionFormSection key={block.drawn.section.id} section={block.drawn.section}>
+                {block.drawn.parameters.map(field)}
+              </ActionFormSection>
+            ))}
           <button
             type="submit"
             className="btn"

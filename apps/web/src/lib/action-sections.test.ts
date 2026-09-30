@@ -15,6 +15,7 @@ import {
   hasConditions,
   formLayout,
   moveSection,
+  placeChoices,
   placeParameter,
   removeParameter,
   requiredElsewhere,
@@ -676,5 +677,72 @@ describe("forgetParameters", () => {
     expect(forgetParameters(
       [section({ parameters: ["trace"] })], PARAMETERS)[0]!.parameters)
       .toEqual(["trace"]);
+  });
+});
+
+describe("p.124's one Form Content order (§589)", () => {
+  const params: FormParameter[] = [
+    { api_name: "a", display_name: "A" }, { api_name: "b" }, { api_name: "c" },
+    { api_name: "d" }, { api_name: "e", hidden: true }, { api_name: "f" },
+  ];
+  const names = (layout: ReturnType<typeof formLayout>) =>
+    layout.blocks.map((b) => (b.kind === "parameter" ? b.parameter.api_name
+      : `[${b.drawn.section.id}:${b.drawn.parameters.map((p) => p.api_name).join(",")}]`));
+
+  it("draws each section after the loose parameters it says come first", () => {
+    const layout = formLayout(params, [
+      section({ id: "s1", parameters: ["c"], loose_before: 0 }),
+      section({ id: "s2", parameters: ["d"], loose_before: 2 }),
+    ], undefined);
+    expect(names(layout)).toEqual(["[s1:c]", "a", "b", "[s2:d]", "f"]);
+    expect(layout.loose.map((p) => p.api_name)).toEqual(["a", "b", "f"]);
+    expect(layout.sections.map((d) => d.section.id)).toEqual(["s1", "s2"]);
+  });
+
+  it("puts a section that says nothing after all of them, as before", () => {
+    expect(names(formLayout(params, [section({ id: "s1", parameters: ["c"] })], undefined)))
+      .toEqual(["a", "b", "d", "f", "[s1:c]"]);
+    // Past the end is the end.
+    expect(names(formLayout(params, [section({ id: "s1", parameters: ["c"], loose_before: 99 })],
+      undefined))).toEqual(["a", "b", "d", "f", "[s1:c]"]);
+  });
+
+  it("counts a hidden parameter, so hiding one does not move a section", () => {
+    // Loose, in order: a, b, d, e (hidden), f. Four before the section.
+    expect(names(formLayout(params, [section({ id: "s1", parameters: ["c"], loose_before: 4 })],
+      undefined))).toEqual(["a", "b", "d", "[s1:c]", "f"]);
+  });
+
+  it("keeps a hidden section's place without drawing it", () => {
+    expect(names(formLayout(params, [
+      section({ id: "s1", parameters: ["c"], loose_before: 1, hidden: true }),
+      section({ id: "s2", parameters: ["d"], loose_before: 2 }),
+    ], undefined))).toEqual(["a", "b", "[s2:d]", "f"]);
+  });
+
+  it("offers the places between the sections either side", () => {
+    const loose: FormParameter[] = [{ api_name: "a", display_name: "A" }, { api_name: "b" },
+      { api_name: "c" }];
+    const sections = [
+      section({ id: "s1", loose_before: 1 }),
+      section({ id: "s2", loose_before: null }),
+      section({ id: "s3", loose_before: null }),
+    ];
+    expect(placeChoices(loose, sections, 0).map((c) => c.value)).toEqual([0, 1, 2, null]);
+    expect(placeChoices(loose, sections, 0)[1]!.label).toBe("After A");
+    expect(placeChoices(loose, sections, 1).map((c) => c.value)).toEqual([1, 2, null]);
+    // After a section at the end, only the end.
+    expect(placeChoices(loose, sections, 2).map((c) => c.value)).toEqual([null]);
+    expect(placeChoices([], [section()], 0)).toEqual([{ value: null, label: "In order" }]);
+    // Boxed in by the sections either side at the same place.
+    expect(placeChoices(loose, [section({ loose_before: 1 }), section({ loose_before: 1 }),
+      section({ loose_before: 1 })], 1).map((c) => c.value)).toEqual([1]);
+  });
+
+  it("moves a section through the places, which stay in order", () => {
+    const moved = moveSection([
+      section({ id: "s1", loose_before: 0 }), section({ id: "s2", loose_before: 2 }),
+    ], 1, -1);
+    expect(moved.map((s) => [s.id, s.loose_before])).toEqual([["s2", 0], ["s1", 2]]);
   });
 });

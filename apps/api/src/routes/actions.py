@@ -1236,6 +1236,10 @@ class SectionIn(BaseModel):
     visible_when: dict[str, Any] | None = None
     #: The parameters inside it, by api_name, in the order they are drawn.
     parameters: list[str] = Field(default_factory=list, max_length=100)
+    #: p.124's one Form Content order (§589; db 0123): how many of the
+    #: parameters no section holds come before this section. `None` is after
+    #: all of them.
+    loose_before: int | None = Field(default=None, ge=0)
 
 
 class SectionOut(SectionIn):

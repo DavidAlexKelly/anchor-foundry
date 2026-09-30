@@ -332,7 +332,7 @@ async def export_ontology(
         """
         SELECT id, action_type_id, title, description, columns, collapsible,
                collapsed, hidden, visible_when::text AS visible_when,
-               sort_order
+               sort_order, loose_before
           FROM action_sections
          WHERE action_type_id = ANY(
                    SELECT id FROM action_types WHERE workspace_id = :wid)
@@ -486,6 +486,9 @@ async def export_ontology(
                         "hidden": sec["hidden"],
                         "visible_when": _json(sec["visible_when"]),
                         "sort_order": sec["sort_order"],
+                        # p.124's one order (§589): only where it is placed.
+                        **({"loose_before": sec["loose_before"]}
+                           if sec["loose_before"] is not None else {}),
                         "parameters": [
                             p["api_name"]
                             for p in params_by.get(str(a["id"]), [])

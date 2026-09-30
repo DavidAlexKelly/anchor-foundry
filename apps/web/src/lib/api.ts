@@ -2398,6 +2398,8 @@ export const actions = {
             title: s.title, description: s.description, columns: s.columns,
             collapsible: s.collapsible, collapsed: s.collapsed, hidden: s.hidden,
             visible_when: s.visible_when, parameters: s.parameters,
+            // p.124's one order (§589). Named here or dropped on every save.
+            loose_before: s.loose_before ?? null,
           })),
         }),
       },

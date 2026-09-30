@@ -99,7 +99,7 @@ async def list_sections(
         conn,
         """
         SELECT id, title, description, columns, collapsible, collapsed,
-               hidden, visible_when, sort_order
+               hidden, visible_when, sort_order, loose_before
           FROM action_sections
          WHERE action_type_id = :atid
          ORDER BY sort_order, title
@@ -166,6 +166,24 @@ async def replace_sections(
                     "this action"
                 )
 
+    # p.124's one Form Content order (§589): a section's place among the loose
+    # parameters can only move down the list, since sections keep their order
+    # among themselves and two orders that disagreed would have no answer.
+    reached = 0
+    for section in sections:
+        before = section.get("loose_before")
+        if before is None:
+            reached = -1
+            continue
+        if int(before) < 0:
+            raise ValueError(f"{section.get('title')!r} cannot come before the start")
+        if reached == -1 or int(before) < reached:
+            raise ValueError(
+                f"{section.get('title')!r} is placed above a section before it; "
+                "p.124's Form Content is one list"
+            )
+        reached = int(before)
+
     claimed: dict[str, str] = {}
     for section in sections:
         for name in section.get("parameters") or []:
@@ -200,9 +218,9 @@ async def replace_sections(
             """
             INSERT INTO action_sections
                    (action_type_id, title, description, columns, collapsible,
-                    collapsed, hidden, visible_when, sort_order)
+                    collapsed, hidden, visible_when, sort_order, loose_before)
             VALUES (:atid, :title, :description, :columns, :collapsible,
-                    :collapsed, :hidden, CAST(:visible AS jsonb), :ord)
+                    :collapsed, :hidden, CAST(:visible AS jsonb), :ord, :before)
             RETURNING id
             """,
             {
@@ -216,6 +234,8 @@ async def replace_sections(
                 "visible": json.dumps(section["visible_when"])
                 if section.get("visible_when") else None,
                 "ord": index,
+                # db 0123: NULL is after every loose parameter.
+                "before": section.get("loose_before"),
             },
         )
         assert row is not None
