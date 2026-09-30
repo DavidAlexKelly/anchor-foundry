@@ -1288,11 +1288,17 @@ function CanvasBody({
         // A Menu or Two-part button carries its items, so an event can be
         // aimed at one of them (p.483; §462).
         const kind = name === "CanvasButton" ? buttonTypeOf(props.buttonType) : "inline";
+        // p.243's custom right-click menu (§613): a table's menu items are
+        // clicks the way a Menu button's are, and only when it is customised.
+        const menu = name === "CanvasObjectTable" && props.customMenu
+          ? itemsOf(props.menuItems) : [];
         triggers.push({
           id, label: `${node.data.displayName ?? name} · ${label}`, widget: name,
           ...(kind !== "inline"
             ? { buttonType: kind, items: itemsOf(props.items).map((i) => ({ id: i.id, label: i.label })) }
-            : {}),
+            : menu.length
+              ? { buttonType: "menu" as const, items: menu.map((i) => ({ id: i.id, label: i.label })) }
+              : {}),
         });
       }
       if (name === "CanvasPage" || name === "CanvasOverlay") {

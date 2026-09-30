@@ -286,6 +286,8 @@ export const REFERENCE_PROPS = [
   "drawnShapesVariable",
   // p.225's column visibility on the Object Table (§610). See the API's copy.
   "columnsVariable",
+  // p.243's right-clicked object on the Object Table (§613). See the API's copy.
+  "rightClickedVariable",
   "name",
 ] as const;
 

@@ -53,8 +53,10 @@ const TRIGGERS: {
     label: "Clicked",
     // p.330's Interactive metric: "trigger a command, action, or event upon
     // card selection" (§527).
-    widgets: ["CanvasButton", "CanvasTabs", "CanvasMetricCard"],
-    labels: { CanvasMetricCard: "Card selected" },
+    widgets: ["CanvasButton", "CanvasTabs", "CanvasMetricCard", "CanvasObjectTable"],
+    // p.243's custom right-click menu (§613): a table's clicks are its
+    // menu's items, and it is offered only when the menu has some.
+    labels: { CanvasMetricCard: "Card selected", CanvasObjectTable: "Right-click menu item" },
   },
   {
     on: "row_select",
@@ -220,8 +222,9 @@ export interface TriggerCandidate {
  * since its own click only opens the menu and the server refuses an event on
  * it; nothing for anything else, including a Two-part button, whose own click
  * is its main button. */
-function startingItem(node: TriggerCandidate | undefined): string | undefined {
-  return node?.buttonType === "menu" ? node.items?.[0]?.id : undefined;
+function startingItem(node: TriggerCandidate | undefined, on = "click"): string | undefined {
+  // Only a click comes from an item - a table's row selection has none (§613).
+  return on === "click" && node?.buttonType === "menu" ? node.items?.[0]?.id : undefined;
 }
 
 export interface PageCandidate {
@@ -239,8 +242,15 @@ export interface ActionCandidate {
   editable: string[];
 }
 
-function triggersFor(widget: string): { on: string; label: string }[] {
-  return TRIGGERS.filter((t) => t.widgets.includes(widget)).map((t) => ({
+function triggersFor(
+  widget: string, node?: TriggerCandidate,
+): { on: string; label: string }[] {
+  return TRIGGERS.filter((t) => t.widgets.includes(widget))
+    // A table's click is a right-click menu item, so it is not a trigger of a
+    // table with none - the server refuses the event (§613).
+    .filter((t) => !(widget === "CanvasObjectTable" && t.on === "click"
+      && (node?.items?.length ?? 0) === 0))
+    .map((t) => ({
     on: t.on,
     label: t.labels?.[widget] ?? t.label,
   }));
@@ -314,8 +324,10 @@ export function EventsPanel({
   function addEvent() {
     const node = triggerNodes[0];
     if (!node) return;
-    const on = triggersFor(node.widget)[0]?.on ?? "click";
+    const on = triggersFor(node.widget, node)[0]?.on ?? "click";
     const id = newEventId();
+    // Without `on`: a widget with items always lists its click first, so a
+    // new event on one starts on a click (§613's sweep).
     const item = startingItem(node);
     onChange({
       ...events,
@@ -373,7 +385,7 @@ export function EventsPanel({
             <button type="button" className="canvas-event-head" onClick={() => setOpenId(open ? null : id)}>
               <strong>{node?.label ?? event.trigger?.node ?? "?"}</strong>
               <span>
-                {triggersFor(node?.widget ?? "").find((t) => t.on === event.trigger?.on)?.label ??
+                {triggersFor(node?.widget ?? "", node).find((t) => t.on === event.trigger?.on)?.label ??
                   event.trigger?.on}
                 {event.trigger?.item
                   ? ` · ${node?.items?.find((i) => i.id === event.trigger.item)?.label ?? event.trigger.item}`
@@ -394,20 +406,17 @@ export function EventsPanel({
                       if (!picked) return;
                       // The trigger has to be one this widget can fire: a row
                       // selection on a button is an event that never runs.
-                      const still = triggersFor(picked.widget).some(
+                      const still = triggersFor(picked.widget, picked).some(
                         (t) => t.on === event.trigger?.on,
                       );
+                      const on = still
+                        ? event.trigger.on
+                        : triggersFor(picked.widget, picked)[0]?.on ?? "click";
                       // An item belongs to one button, so it does not travel.
-                      const item = startingItem(picked);
+                      const item = startingItem(picked, on);
                       update(id, {
                         ...event,
-                        trigger: {
-                          node: picked.id,
-                          on: still
-                            ? event.trigger.on
-                            : triggersFor(picked.widget)[0]?.on ?? "click",
-                          ...(item ? { item } : {}),
-                        },
+                        trigger: { node: picked.id, on, ...(item ? { item } : {}) },
                       });
                     }}
                   >
@@ -423,11 +432,17 @@ export function EventsPanel({
                   <select
                     disabled={readOnly}
                     value={event.trigger?.on ?? ""}
-                    onChange={(e) =>
-                      update(id, { ...event, trigger: { ...event.trigger, on: e.target.value } })
-                    }
+                    onChange={(e) => {
+                      // An item goes with a click and nothing else (§613).
+                      const { item: _dropped, ...rest } = event.trigger;
+                      const item = startingItem(node, e.target.value);
+                      update(id, {
+                        ...event,
+                        trigger: { ...rest, on: e.target.value, ...(item ? { item } : {}) },
+                      });
+                    }}
                   >
-                    {triggersFor(node?.widget ?? "").map((t) => (
+                    {triggersFor(node?.widget ?? "", node).map((t) => (
                       <option key={t.on} value={t.on}>
                         {t.label}
                       </option>
@@ -437,7 +452,8 @@ export function EventsPanel({
                 {/* p.483: a Menu or Two-part button's items are clicks of their
                     own. A Two-part button's main button is one more choice; a
                     Menu button's own click only opens the menu, so it is not. */}
-                {node?.buttonType && (node.items?.length ?? 0) > 0 && (
+                {node?.buttonType && (node.items?.length ?? 0) > 0
+                  && event.trigger?.on === "click" && (
                   <label className="field">
                     <span className="field-label">Which</span>
                     <select

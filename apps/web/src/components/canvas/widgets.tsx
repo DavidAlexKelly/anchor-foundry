@@ -150,7 +150,7 @@ import { moved as movedColumn, storageKey as columnsKey, storedChoice, toggled a
   viewerColumnsOf } from "./viewer-columns";
 import { DerivedValue } from "@/components/derived-value";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
-import type { ConditionalRule } from "@/lib/types";
+import type { ConditionalRule, ObjectInstance } from "@/lib/types";
 import { latest as latestOf } from "./sparkline";
 import {
   // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
@@ -5381,6 +5381,9 @@ export function CanvasObjectTable({
   inlineEditOneClick = false,
   exportCsv = false,
   hideColumnConfig = false,
+  customMenu = false,
+  menuItems = null,
+  rightClickedVariable = null,
   seriesFormats = null,
   seriesRules = null,
   seriesTransforms = null,
@@ -5480,6 +5483,12 @@ export function CanvasObjectTable({
   exportCsv?: boolean;
   /** p.225's "Hide column configuration": no viewer-side Configure columns (§612). */
   hideColumnConfig?: boolean;
+  /** p.243's "Customize right-click menu" (§613): the toggle, the menu's items
+   * (`button-items.ts`'s shape, so the Events panel names them as it names a
+   * menu button's), and the right-clicked object as selection clauses. */
+  customMenu?: boolean;
+  menuItems?: unknown;
+  rightClickedVariable?: string | null;
 }) {
   const {
     id: nodeId,
@@ -5755,7 +5764,15 @@ export function CanvasObjectTable({
   // no set an export can name.
   const { exportObjects } = useCanvasActions();
   const offersExport = mode === "run" && !!exportCsv && usingSet;
-  const [rowMenu, setRowMenu] = useState<{ x: number; y: number } | null>(null);
+  // p.243's custom items (§613): "run actions or events on an object that is
+  // right-clicked from the object table". Each item is a click the Events
+  // panel wires, as a menu button's items are, and it fires with the row's
+  // object as its selection - the same context a row click gives.
+  const rowItems = customMenu ? itemsOf(menuItems) : [];
+  const offersItems = mode === "run" && rowItems.length > 0;
+  const [rowMenu, setRowMenu] = useState<
+    { x: number; y: number; instance: ObjectInstance } | null
+  >(null);
   useEffect(() => {
     if (!rowMenu) return;
     const close = () => setRowMenu(null);
@@ -6050,9 +6067,15 @@ export function CanvasObjectTable({
                       );
                       event.dataTransfer.effectAllowed = "copy";
                     } : undefined}
-                    onContextMenu={offersExport && !inEditMode ? (event) => {
+                    onContextMenu={(offersExport || offersItems) && !inEditMode ? (event) => {
                       event.preventDefault();
-                      setRowMenu({ x: event.clientX, y: event.clientY });
+                      setRowMenu({ x: event.clientX, y: event.clientY, instance });
+                      // p.243's right-clicked object "outputs the currently
+                      // right-clicked object": set on the right-click, so an
+                      // item's events read a variable already settled.
+                      if (rightClickedVariable) {
+                        setParameter(rightClickedVariable, selectionClauses([instance.primary_key]));
+                      }
                     } : undefined}
                     onClick={
                       rowsAreClickable
@@ -6376,7 +6399,27 @@ export function CanvasObjectTable({
               style={{ position: "fixed", left: rowMenu.x, top: rowMenu.y }}
               onMouseDown={(e) => e.stopPropagation()}
             >
-              <button
+              {/* No `offersItems &&`: the menu opens only in run mode,
+                  where having items is offering them (§613's sweep). */}
+              {rowItems.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="menuitem"
+                  className="btn quiet"
+                  data-testid={`table-row-item-${item.id}`}
+                  onClick={() => {
+                    setRowMenu(null);
+                    runEvents(eventsFor(moduleEvents, nodeId, "click", item.id), {
+                      ...eventContext,
+                      ...selectionOf(rowMenu.instance, effectiveTypeId),
+                    });
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+              {offersExport && (<button
                 type="button"
                 role="menuitem"
                 className="btn quiet"
@@ -6393,7 +6436,7 @@ export function CanvasObjectTable({
                 }}
               >
                 Export to CSV
-              </button>
+              </button>)}
             </div>
           )}
           {usingSet && total > rows.length && (
@@ -6902,9 +6945,12 @@ function ObjectTableSettings() {
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
     inlineEditAction, inlineEditMapping, inlineEditVariables, inlineEditButtonText,
     inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules, seriesTransforms, seriesBaselines,
-    columnsVariable, exportCsv, hideColumnConfig,
+    columnsVariable, exportCsv, hideColumnConfig, customMenu, menuItems, rightClickedVariable,
     actions: { setProp },
   } = useNode((node) => ({
+    customMenu: node.data.props.customMenu,
+    menuItems: node.data.props.menuItems,
+    rightClickedVariable: node.data.props.rightClickedVariable,
     hideColumnConfig: node.data.props.hideColumnConfig,
     columnsVariable: node.data.props.columnsVariable,
     exportCsv: node.data.props.exportCsv,
@@ -7371,6 +7417,84 @@ function ObjectTableSettings() {
           : "Offered when the table reads an object set variable: a table narrowed by a "
             + "search box is not a set an export can name."}
       </span>
+      {/* p.243's Customize right-click menu (§613). */}
+      <label className="field-check">
+        <input
+          type="checkbox"
+          data-testid="table-custom-menu-toggle"
+          checked={!!customMenu}
+          onChange={(e) =>
+            setProp((p: { customMenu: boolean; menuItems: unknown }) => {
+              p.customMenu = e.target.checked;
+              // A menu with nothing in it opens nothing, so the first switch
+              // on starts it with an item to rename - the menu button's rule.
+              if (e.target.checked && itemsOf(p.menuItems).length === 0) {
+                p.menuItems = addItem([]);
+              }
+            })}
+        />
+        <span>Customize right-click menu</span>
+      </label>
+      {customMenu && (
+        <>
+          <label className="field">
+            <span className="field-label">Right-clicked object</span>
+            <select
+              value={rightClickedVariable || ""}
+              data-testid="table-right-clicked-variable"
+              onChange={(e) =>
+                setProp((p: { rightClickedVariable: string | null }) =>
+                  (p.rightClickedVariable = e.target.value || null))}
+            >
+              <option value="">None</option>
+              {clauseVariables.map((v) => (
+                <option key={v.id} value={v.id}>{v.label}</option>
+              ))}
+            </select>
+            <span className="field-hint">
+              Holds the clauses that pick the row a reader right-clicked, as the active object does
+            </span>
+          </label>
+          <fieldset className="field" data-testid="table-menu-items">
+            <legend className="field-label">Menu items</legend>
+            {itemsOf(menuItems).map((item) => (
+              <div key={item.id} className="row-actions">
+                <input
+                  value={item.label}
+                  aria-label={`Label of ${item.label || item.id}`}
+                  data-testid={`table-menu-item-${item.id}`}
+                  onChange={(e) =>
+                    setProp((p: { menuItems: unknown }) =>
+                      (p.menuItems = renameItem(itemsOf(p.menuItems), item.id, e.target.value)))}
+                />
+                <button
+                  type="button"
+                  className="btn quiet"
+                  aria-label={`Remove ${item.label || item.id}`}
+                  onClick={() =>
+                    setProp((p: { menuItems: unknown }) =>
+                      (p.menuItems = removeItem(itemsOf(p.menuItems), item.id)))}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="btn quiet"
+              data-testid="table-menu-add-item"
+              onClick={() =>
+                setProp((p: { menuItems: unknown }) => (p.menuItems = addItem(itemsOf(p.menuItems))))}
+            >
+              Add item
+            </button>
+            <span className="field-hint">
+              Each item fires its own events, with the right-clicked row as the selection: wire
+              them in the Events panel under Right-click menu item
+            </span>
+          </fieldset>
+        </>
+      )}
       <TableSortsField
         sort={sort}
         properties={detail.data?.properties ?? []}
@@ -7583,6 +7707,7 @@ CanvasObjectTable.craft = {
     inlineEditByDefault: false, inlineEditOneClick: false,
     seriesFormats: null, seriesRules: null, seriesTransforms: null, seriesBaselines: null,
     columnsVariable: null, exportCsv: false, hideColumnConfig: false,
+    customMenu: false, menuItems: null, rightClickedVariable: null,
   },
   related: { settings: ObjectTableSettings },
 };

@@ -542,6 +542,9 @@ REFERENCE_PROPS = (
     # p.225's variable-backed column visibility on the Object Table (§610):
     # the string array naming which configured columns show, in order.
     "columnsVariable",
+    # p.243's Custom right-click menu on the Object Table (§613): the
+    # right-clicked object, written as the active object is.
+    "rightClickedVariable",
     "name",
 )
 

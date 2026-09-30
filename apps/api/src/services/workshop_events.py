@@ -261,6 +261,8 @@ def collapsible_sections(layout: Any) -> list[str]:
     return found
 
 
+#: p.243's custom right-click menu lives on the Object Table (§613).
+TABLE_WIDGET = "CanvasObjectTable"
 #: The Button widget, and p.483's three types of it. `inline` is one button;
 #: `menu` is a button that opens a list of items; `twoPart` is "a primary button
 #: alongside an additional menu of options".
@@ -287,6 +289,19 @@ def button_items(layout: Any) -> dict[str, tuple[str, list[str]]]:
         node_type = node.get("type")
         name = node_type.get("resolvedName") if isinstance(node_type, dict) else node_type
         props = node.get("props")
+        if name == TABLE_WIDGET and isinstance(props, dict):
+            # p.243's custom right-click menu (§613): a table's clicks are its
+            # menu's items, and nothing else - a table without a customised
+            # menu has none, so an event aimed at its click is refused rather
+            # than saved to never fire.
+            items = props.get("menuItems") if isinstance(props.get("menuItems"), list) else []
+            out[node_id] = (
+                "row_menu",
+                [str(i["id"]) for i in items if isinstance(i, dict) and i.get("id")]
+                if props.get("customMenu") else [],
+            )
+        # A table falls through here and out: it is not a Button (§613's sweep
+        # found a `continue` above could not change an answer).
         if name != BUTTON_WIDGET or not isinstance(props, dict):
             continue
         kind = props.get("buttonType") or "inline"
@@ -448,6 +463,12 @@ def _parse_item(
     `nodes` above: the shape is still checked, the membership is not.
     """
     item = trigger.get("item")
+    if item is None and menus is not None and on == "click" \
+            and menus.get(node, ("",))[0] == "row_menu":
+        raise EventError(
+            f"event {key!r} fires when table {node!r} is clicked, but a table's clicks are "
+            "the items of its right-click menu - choose which item fires the event"
+        )
     if item is None:
         # A Menu button's own click opens its menu; an event on it would be a
         # wiring that never fires. A Two-part button's is its main button.
@@ -466,7 +487,7 @@ def _parse_item(
         if entry is None:
             raise EventError(
                 f"event {key!r} fires from item {item!r} of {node!r}, which has no items - "
-                "only a Menu or Two-part button does"
+                "only a Menu or Two-part button does, or a table's right-click menu"
             )
         if item not in entry[1]:
             # Named against the items that are there: the usual cause is an
