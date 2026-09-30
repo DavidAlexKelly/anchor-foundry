@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_COLUMNS, DISPLAYS, LAYOUTS, MAX_COLUMNS, MIN_COLUMNS, SELECTIONS,
-  chosenOf, columnsOf, displayOf, displaysFor, layoutOf, layoutStyle, modeOf,
-  optionsOf, outputKind, pick, placeholderOf, selectionOf, sourceOf,
+  canCreate, chosenOf, columnsOf, createdOf, displayOf, displaysFor, layoutOf, layoutStyle, modeOf,
+  optionsOf, outputKind, pick, placeholderOf, selectionOf, sourceOf, withTyped,
 } from "./string-selector";
 
 /** p.459–461's String Selector. */
@@ -301,5 +301,32 @@ describe("modeOf", () => {
     // of what will actually be drawn.
     expect(modeOf("multiple", "radio").hasLayout).toBe(false);
     expect(modeOf("multiple", "radio").placeholder).toBe("Search options...");
+  });
+});
+
+describe("p.461's user-created options (§579)", () => {
+  it("belong to a Multiple dropdown that allows them, and nothing else", () => {
+    expect(canCreate("multiple", "dropdown", true)).toBe(true);
+    expect(canCreate("multiple", "dropdown", false)).toBe(false);
+    expect(canCreate("multiple", "dropdown", undefined)).toBe(false);
+    expect(canCreate("multiple", "dropdown", "true")).toBe(false);
+    expect(canCreate("multiple", "checkboxes", true)).toBe(false);
+    expect(canCreate("single", "dropdown", true)).toBe(false);
+    // A display the selection cannot have falls back to its dropdown.
+    expect(canCreate("multiple", "radio", true)).toBe(true);
+  });
+
+  it("are the chosen values the options do not list", () => {
+    expect(createdOf(["a", "b"], ["b", "x", "a", "y"])).toEqual(["x", "y"]);
+    expect(createdOf(["a"], [])).toEqual([]);
+    expect(createdOf([], ["x"])).toEqual(["x"]);
+  });
+
+  it("are added as typed, trimmed, and once", () => {
+    expect(withTyped(["a"], "  new one ")).toEqual(["a", "new one"]);
+    expect(withTyped(["a"], "a")).toEqual(["a"]);
+    expect(withTyped(["a"], "   ")).toEqual(["a"]);
+    expect(withTyped(null, "x")).toEqual(["x"]);
+    expect(withTyped(["a", 3], "x")).toEqual(["a", "x"]);
   });
 });

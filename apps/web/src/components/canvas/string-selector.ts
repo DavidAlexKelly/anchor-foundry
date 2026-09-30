@@ -223,6 +223,37 @@ export function pick(
     : [...chosen, option];
 }
 
+// ---- user-created options (§579) ---------------------------------------------
+
+/** p.461's "Allow creating new options", which only a Multiple dropdown has.
+ *
+ * > "Allow creating new options: Can be toggled on to allow users to create
+ * > new options to be added to the dropdown. Any user-created options will
+ * > be italicized." (p.461)
+ */
+export function canCreate(selection: unknown, display: unknown, allow: unknown): boolean {
+  return allow === true && selectionOf(selection) === "multiple"
+    && displayOf(selection, display) === "dropdown";
+}
+
+/** The options a viewer created: what the selection holds that the options
+ * do not. **They live in the selection itself**, which answers the question
+ * of where they are kept: an option nobody has chosen has nothing to be, and
+ * one that is chosen is already in the variable the widget writes. */
+export function createdOf(options: readonly string[], chosen: readonly string[]): string[] {
+  return chosen.filter((c) => !options.includes(c));
+}
+
+/** The selection after a viewer types an option: added, trimmed, unless it
+ * is blank or already chosen. One that matches a listed option is that
+ * option, chosen, rather than a created copy of it. */
+export function withTyped(value: unknown, text: string): string[] {
+  const chosen = chosenOf("multiple", value);
+  const option = text.trim();
+  if (!option || chosen.includes(option)) return chosen;
+  return [...chosen, option];
+}
+
 // ---- layout ----------------------------------------------------------------
 
 export type LayoutName = "vertical" | "horizontal" | "grid";
