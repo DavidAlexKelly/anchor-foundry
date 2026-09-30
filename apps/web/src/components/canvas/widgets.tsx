@@ -349,6 +349,7 @@ import {
   timeLabel, timelineSpan, trackShape, windowOf, withinWindow, type TimeFormat,
 } from "./map-tracks";
 // Aliased on §211's rule: `areaOf` is also §537's chart area option.
+import { shapeOutputOf, shapesText, syncShapes } from "./map-drawn";
 import {
   DRAWN_OPACITY, DRAW_TOOLS, DRAW_TOOL_LABELS, areaOf as mapAreaOf, drawToolsOf, drawnOpacityOf,
   withArea as withMapArea, withDrawTool,
@@ -12092,6 +12093,8 @@ export function CanvasMap({
   drawOptions = null,
   drawnShapeColor = null,
   drawnShapeOpacity = DRAWN_OPACITY,
+  drawnShapesVariable = null,
+  shapeOutputType = "features",
   showLegend = false,
   legendCollapsed = false,
   legendSize = "full",
@@ -12134,6 +12137,11 @@ export function CanvasMap({
   drawOptions?: string[] | null;
   drawnShapeColor?: string | null;
   drawnShapeOpacity?: number;
+  /** p.301's Drawn shapes and Shape output type (§574): a string variable
+   * the drawn shape is read from and written to as GeoJSON, as features or
+   * as geometries (`map-drawn.ts`). */
+  drawnShapesVariable?: string | null;
+  shapeOutputType?: string;
   /** A `geotemporal_series` property (§557): each object's track drawn as a
    * line, and the object at its position at the selected time. */
   trackProperty?: string | null;
@@ -12193,6 +12201,27 @@ export function CanvasMap({
   const areaClauses = clausesOf(areaWritten !== undefined ? areaWritten : areaResolved);
   const selectsArea = source === "objects" && !!objectSetVariable && !!areaVariable
     && !!locationProperty;
+  const mapArea = selectsArea ? mapAreaOf(areaClauses, locationProperty!) : null;
+  // p.301's Drawn shapes (§574): the area as GeoJSON, read and written, and
+  // whichever of the two moved since the map last looked wins.
+  const shapesWritten = useCanvasParameter(drawnShapesVariable);
+  const shapesResolved = useCanvasVariable(drawnShapesVariable);
+  const shapesNow = String((shapesWritten !== undefined ? shapesWritten : shapesResolved) ?? "");
+  const shapeOutput = shapeOutputOf(shapeOutputType);
+  const shapesSeen = React.useRef<{ area: string; shapes: string } | null>(null);
+  React.useEffect(() => {
+    if (!selectsArea || !drawnShapesVariable) {
+      shapesSeen.current = null;
+      return;
+    }
+    const sync = syncShapes(shapesSeen.current, { area: mapArea, shapes: shapesNow }, shapeOutput);
+    shapesSeen.current = { area: shapesText(mapArea, shapeOutput), shapes: shapesNow };
+    if (sync?.write === "area") {
+      setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, sync.area));
+    } else if (sync?.write === "shapes") {
+      setParameter(drawnShapesVariable, sync.text);
+    }
+  });
   const searchValue = useCanvasParameter(searchParameter);
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
@@ -12445,6 +12474,8 @@ export function CanvasMap({
   // any more than the table does: it says an object was picked and the
   // module's events say what happens.
   const pinEvents = eventsFor(moduleEvents, nodeId, "row_select");
+  // p.301's On drawn shape (§574): `change`, worded "Shape drawn" on a map.
+  const drawEvents = eventsFor(moduleEvents, nodeId, "change");
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
@@ -12483,12 +12514,20 @@ export function CanvasMap({
                 count: trackShapes.length }] : []),
             ],
           } : null}
-          area={selectsArea ? mapAreaOf(areaClauses, locationProperty!) : null}
+          area={mapArea}
           drawTools={drawToolsOf(drawOptions)}
           drawnColor={layerColorOf(drawnShapeColor)}
           drawnOpacity={drawnOpacityOf(drawnShapeOpacity)}
           onArea={selectsArea
-            ? (box) => setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, box))
+            ? (area) => {
+                setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, area));
+                const text = shapesText(area, shapeOutput);
+                if (drawnShapesVariable) setParameter(drawnShapesVariable, text);
+                // Drawn, not cleared: `{{value}}` is the shape's GeoJSON.
+                if (area && drawEvents.length > 0) {
+                  runEvents(drawEvents, { ...eventContext, payload: { value: text } });
+                }
+              }
             : undefined}
           unplaceable={unplaceable}
           notYet={notYet}
@@ -12640,7 +12679,7 @@ function MapSettings() {
     windowStartVariable, windowEndVariable, timeZone, timeFormat, playingVariable,
     playbackPositionVariable, autoPauseVariable, layerLabel, selectedVariable, layerVisible,
     layerVisibleVariable, lockLayer, layerColor, layerOpacity,
-    drawOptions, drawnShapeColor, drawnShapeOpacity,
+    drawOptions, drawnShapeColor, drawnShapeOpacity, drawnShapesVariable, shapeOutputType,
     showLegend, legendCollapsed, legendSize, showSelectionPanel, autoZoom, autoZoomSetVariable,
     autoZoomOutsideOnly, boundsVariable, followSetVariable,
     actions: { setProp },
@@ -12664,6 +12703,8 @@ function MapSettings() {
     drawOptions: node.data.props.drawOptions,
     drawnShapeColor: node.data.props.drawnShapeColor,
     drawnShapeOpacity: node.data.props.drawnShapeOpacity,
+    drawnShapesVariable: node.data.props.drawnShapesVariable,
+    shapeOutputType: node.data.props.shapeOutputType,
     windowStartVariable: node.data.props.windowStartVariable,
     windowEndVariable: node.data.props.windowEndVariable,
     timeZone: node.data.props.timeZone,
@@ -12946,6 +12987,28 @@ function MapSettings() {
                 onChange={(e) => setProp((p: { drawnShapeOpacity: number }) =>
                   (p.drawnShapeOpacity = drawnOpacityOf(e.target.value)))}
               />
+              {/* p.301's Drawn shapes and Shape output type (§574). */}
+              <select
+                aria-label="Drawn shapes"
+                data-testid="map-drawn-shapes-variable"
+                value={drawnShapesVariable || ""}
+                onChange={(e) => setProp((p: { drawnShapesVariable: string | null }) =>
+                  (p.drawnShapesVariable = e.target.value || null))}
+              >
+                <option value="">Drawn shapes: not written</option>
+                {Object.values(declared).filter((v) => v.kind === "string" && !v.derivation)
+                  .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
+              <select
+                aria-label="Shape output type"
+                data-testid="map-shape-output"
+                value={shapeOutputOf(shapeOutputType)}
+                onChange={(e) => setProp((p: { shapeOutputType: string }) =>
+                  (p.shapeOutputType = e.target.value))}
+              >
+                <option value="features">As a feature collection</option>
+                <option value="geometries">As a geometry collection</option>
+              </select>
             </div>
           )}
           {/* p.300's layer settings (§559), for the map's one object layer. */}
@@ -13312,6 +13375,7 @@ CanvasMap.craft = {
     layerLabel: "", selectedVariable: null, layerVisible: true, layerVisibleVariable: null,
     lockLayer: false, layerColor: null, layerOpacity: 1,
     drawOptions: null, drawnShapeColor: null, drawnShapeOpacity: DRAWN_OPACITY,
+    drawnShapesVariable: null, shapeOutputType: "features",
     showLegend: false, legendCollapsed: false, legendSize: "full", showSelectionPanel: false,
     autoZoom: "default", autoZoomSetVariable: null, autoZoomOutsideOnly: false,
     boundsVariable: null, followSetVariable: null,

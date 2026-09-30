@@ -281,6 +281,8 @@ export const REFERENCE_PROPS = [
   "autoZoomSetVariable",
   "followSetVariable",
   "boundsVariable",
+  // p.301's Drawn shapes on the Map (§574). See the API's copy.
+  "drawnShapesVariable",
   "name",
 ] as const;
 
