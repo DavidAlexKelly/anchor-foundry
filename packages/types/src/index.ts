@@ -578,6 +578,11 @@ export interface WorkshopVariable {
    * p.132 also lists `struct`, which this platform refuses with that reason:
    * a struct element needs a kind carrying named fields and there is none. */
   element?: "string" | "number" | "boolean" | "date" | "timestamp";
+  /** `object_set_filter` variables only (§592): p.148's "Update used
+   * variables on filter value changes". A default filter whose values read
+   * variables (`{"variable": "<id>"}`) writes a matching filter's values back
+   * into them. */
+  update_used_variables?: boolean;
   /** What this was called when it was a string-keyed parameter, so a converted
    * app can still be read against the v1 document it came from. */
   legacy_name?: string;

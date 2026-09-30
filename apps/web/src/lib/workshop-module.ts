@@ -18,6 +18,7 @@
  * implementation rather than two that drift - see the API route's own note.
  */
 import type { WorkshopEvent, WorkshopModule, WorkshopVariable } from "./types";
+import { usedVariables } from "../components/canvas/filter-default";
 
 /** A Craft.js serialised node map: what `<Frame data>` wants and what
  * `query.getSerializedNodes()` produces. */
@@ -411,6 +412,12 @@ export function usagesOf(
   for (const variable of Object.values(variablesOf(definition))) {
     if (variable.derivation?.inputs?.includes(variableId)) {
       found.push({ node: variable.id, prop: "derivation" });
+    }
+  }
+  // A filter default reading it (§592), as `workshop_variables.usages` says.
+  for (const variable of Object.values(variablesOf(definition))) {
+    if (variable.kind === "object_set_filter" && usedVariables(variable.default).includes(variableId)) {
+      found.push({ node: variable.id, prop: "default" });
     }
   }
   return found;

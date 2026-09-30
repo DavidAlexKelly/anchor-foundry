@@ -51,6 +51,7 @@ import {
 } from "./variable-finder";
 import { TypePicker } from "@/components/type-picker";
 import { holdsClauses } from "./pure";
+import { FILTER_REF_KINDS, usedVariables } from "./filter-default";
 
 /** Mirrors `SAVABLE_KINDS` in `services/workshop_variables.py` (p.205). */
 const SAVABLE_KINDS = [
@@ -753,6 +754,15 @@ export function VariablesPanel({
                               }
                             />
                           </label>
+                        )}
+                        {variable.kind === "object_set_filter" && (
+                          <FilterDefaultReads
+                            id={id}
+                            variable={variable}
+                            variables={variables}
+                            readOnly={readOnly}
+                            onChange={(on) => update(id, { update_used_variables: on || undefined })}
+                          />
                         )}
                         {!readOnly && (
                           <button
@@ -1767,6 +1777,53 @@ function ObjectSetEditor({
           {detail.data.properties.length} propert
           {detail.data.properties.length === 1 ? "y" : "ies"} available to filter on
         </p>
+      )}
+    </div>
+  );
+}
+
+
+/** p.146's "The values can be specified inline, or as variables" and p.148's
+ * *Update used variables on filter value changes* (§592). Which variables a
+ * default value may read, by the reference it is typed as, and the toggle,
+ * offered once the default reads one. */
+function FilterDefaultReads({
+  id, variable, variables, readOnly, onChange,
+}: {
+  id: string;
+  variable: WorkshopVariable;
+  variables: Record<string, WorkshopVariable>;
+  readOnly: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  const readable = Object.values(variables).filter(
+    (v) => v.id !== id && FILTER_REF_KINDS.includes(v.kind) && !v.derivation,
+  );
+  const used = usedVariables(variable.default);
+  return (
+    <div className="vars-filter-reads" data-testid="filter-default-reads">
+      {readable.length > 0 && (
+        <p className="soft">
+          A value can read a variable:{" "}
+          {readable.map((v, i) => (
+            <span key={v.id}>
+              {i > 0 && ", "}
+              {v.label} <code>{`{"variable": "${v.id}"}`}</code>
+            </span>
+          ))}
+        </p>
+      )}
+      {(used.length > 0 || variable.update_used_variables) && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={!!variable.update_used_variables}
+            disabled={readOnly}
+            data-testid="filter-update-used"
+            onChange={(e) => onChange(e.target.checked)}
+          />
+          Update used variables on filter value changes
+        </label>
       )}
     </div>
   );
