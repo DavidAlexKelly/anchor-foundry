@@ -75,7 +75,25 @@ KINDS = (
     # `extract_struct_field` names one by id, and a field the value does not
     # hold reads as empty rather than as an error.
     "struct",
+    # > "Object set filter: Stores a set of property type / property value
+    # > pairs used to filter object set variables." (p.75)
+    # > "An object set filter variable is used to track the filter state of an
+    # > object set, often output by widgets such as the Filter List... Object
+    # > set filters can then be applied to object set variables, or used to
+    # > filter object sets in widget configurations." (p.146)
+    #
+    # **Its own kind as of §590**, where filter state had travelled as an
+    # `array` with no element: the same clauses in the same shape, so
+    # everything that reads clauses (`narrow_set`, `filter_value`, the
+    # widgets) reads either, and a module saved before keeps working. What the
+    # kind adds is the question a widget could not ask before - "a filter,
+    # specifically" - and the panel's word for it.
+    "object_set_filter",
 )
+
+#: The kinds that hold filter clauses (§590): p.75's object set filter, and
+#: an array with no element, which is how filter state travelled before it.
+CLAUSE_KINDS = ("object_set_filter", "array")
 
 # Foundry's transformation vocabulary, less the ones that need a widget or a
 # store behind them. Each is a pure function of already-resolved inputs, which
@@ -287,6 +305,26 @@ ARRAY_ELEMENTS = ("string", "number", "boolean", "date", "timestamp")
 #: and p.132's struct (§570), which a loop hands to a struct variable.
 ELEMENTS = (*ARRAY_ELEMENTS, "struct")
 
+def _filter_default(label: str, raw: Any) -> list[dict[str, Any]] | None:
+    """An object set filter's default (§590): its clauses, read from the JSON
+    text the panel types, or refused by name. None is no default filter."""
+    value = variable_arrays.of_array_variable(raw)
+    if value is None or value == "" or value == []:
+        return None
+    if not isinstance(value, list):
+        raise VariableError(
+            f"variable {label!r} is an object set filter, so its default is a list of "
+            "filter clauses"
+        )
+    for clause in value:
+        if not isinstance(clause, dict) or not isinstance(clause.get("property"), str):
+            raise VariableError(
+                f"variable {label!r}: each default filter names a property to filter on "
+                "(p.146's property type / property value pairs)"
+            )
+    return value
+
+
 #: p.133's two loop sources. The object-set arm is older than this constant;
 #: naming both is what lets the builder's toggle and the server's refusals be
 #: checked against one list rather than against each other.
@@ -295,6 +333,8 @@ LOOP_SOURCES = ("object_set", "array")
 SAVABLE_KINDS = (
     "string", "number", "boolean", "date", "timestamp",
     "array", "single_object", "object_set",
+    # p.205's "Object Set Filter" (§590).
+    "object_set_filter",
 )
 
 # Props whose value is a variable id. The vocabulary grows widget by widget in
@@ -682,6 +722,11 @@ def parse(
             # array's is its JSON (§570): read here, so a loop over one the
             # panel typed has entries rather than a string.
             default = variable_arrays.of_array_variable(default)
+        if kind == "object_set_filter":
+            # p.146's default filter: clauses, typed as JSON by the panel as an
+            # array's are. Each is a property/value pair, so anything else is
+            # refused here rather than when a set is narrowed by it.
+            default = _filter_default(label, default)
         variables[vid] = Variable(
             id=vid,
             kind=str(kind),
@@ -838,6 +883,12 @@ def _parse_url_behavior(
             "URL - that is the shape filter clauses travel in, which p.199 excludes. "
             f"Give it an element ({', '.join(ARRAY_ELEMENTS)}) and each entry becomes "
             "one repeated query parameter"
+        )
+    if kind == "object_set_filter":
+        raise VariableError(
+            f"variable {label!r} is an object set filter and cannot be in the URL - "
+            "p.199 excludes \"Object set filter variables\". Route a string and use it "
+            "in the filter's default instead"
         )
     if kind not in ROUTABLE_KINDS and kind != "array":
         raise VariableError(

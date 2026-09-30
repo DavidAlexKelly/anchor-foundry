@@ -394,7 +394,12 @@ export type WorkshopVariableKind =
    * would be one schema in two places. p.155 says how Foundry answers "what
    * does this hold" — by reading the variable's own current value — so a field
    * is named by id and one the value lacks reads as empty. */
-  | "struct";
+  | "struct"
+  /** "Stores a set of property type / property value pairs used to filter
+   * object set variables" (`workshop` p.75, p.146; §590). The same clauses an
+   * untyped `array` has always carried filter state in, under their own name,
+   * so a widget can ask for "a filter" specifically. */
+  | "object_set_filter";
 
 /** Foundry's transformation vocabulary, less the two that read the ontology
  * (`object_property`, `object_set_aggregation`) — those need the instance

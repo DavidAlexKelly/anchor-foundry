@@ -317,7 +317,7 @@ import { eventsFor, interpolate, run as runEvents, useEventContext } from "./eve
 import { invalidateCanvasReads } from "./refresh";
 import { describeSet, selectionOf, useOnScreen, useSetPage } from "./object-set";
 import {
-  MIN_SHARE, formatWeights, hasValue, parseWeights, pivotClauses, resizeWeights,
+  MIN_SHARE, formatWeights, hasValue, holdsClauses, parseWeights, pivotClauses, resizeWeights,
   roundWeight, seedActionForm, seriesLabel, seriesPointLabel, type PivotPick,
 } from "./pure";
 import {
@@ -1375,7 +1375,7 @@ function FilterListSettings() {
   const { workspaceId } = useCanvasEnv();
   const { declared, resolved } = useCanvasVariables();
   const sets = Object.values(declared).filter((v) => v.kind === "object_set");
-  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const arrays = Object.values(declared).filter((v) => holdsClauses(v));
   const bound = objectSetVariable ? resolved[objectSetVariable] : undefined;
   const typeId = (bound as { object_type_id?: string } | undefined)?.object_type_id ?? null;
   const type = useQuery({
@@ -1677,7 +1677,7 @@ function FilterListSettings() {
           ))}
         </select>
         <span className="field-hint">
-          An array variable. Point a narrow_set variable at it and the set to get the
+          An object set filter variable (or an array). Point a narrow_set variable at it and the set to get the
           filtered set other widgets read.
         </span>
       </label>
@@ -2303,7 +2303,7 @@ function FilterPillsSettings() {
   }));
   const { declared } = useCanvasVariables();
   const sets = Object.values(declared).filter((v) => v.kind === "object_set");
-  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const arrays = Object.values(declared).filter((v) => holdsClauses(v));
   const needsOutput = canRemove(mode);
 
   return (
@@ -2763,7 +2763,7 @@ function SearchBarSettings() {
   const { workspaceId } = useCanvasEnv();
   const { declared, resolved } = useCanvasVariables();
   const sets = Object.values(declared).filter((v) => v.kind === "object_set");
-  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const arrays = Object.values(declared).filter((v) => holdsClauses(v));
   const typeId = (objectSetVariable
     ? (resolved[objectSetVariable] as { object_type_id?: string } | undefined)?.object_type_id
     : undefined) ?? null;
@@ -3128,7 +3128,7 @@ function ProminentTermsSettings() {
   const { workspaceId } = useCanvasEnv();
   const { declared, resolved } = useCanvasVariables();
   const sets = Object.values(declared).filter((v) => v.kind === "object_set");
-  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const arrays = Object.values(declared).filter((v) => holdsClauses(v));
   const typeId = objectSetVariable
     ? ((resolved[objectSetVariable] as { object_type_id?: string } | undefined)
         ?.object_type_id ?? null)
@@ -6597,7 +6597,7 @@ function ObjectTableSettings() {
   // `narrow_set` derivation reads - so the variable to bind here is the array
   // in the middle. Offering object-set variables would invite binding the
   // derived one and overwriting the thing that derives it.
-  const clauseVariables = Object.values(declared).filter((v) => v.kind === "array");
+  const clauseVariables = Object.values(declared).filter((v) => holdsClauses(v));
   // `TypePicker` owns the object type read now (§256): the listing is a page,
   // so a control over it has to be able to search the ontology rather than the
   // rows it happened to receive.
@@ -8600,7 +8600,7 @@ function PieChartSettings() {
   }));
   const { declared, resolved } = useCanvasVariables();
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
-  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const arrays = Object.values(declared).filter((v) => holdsClauses(v));
   const bound = objectSetVariable ? resolved[objectSetVariable] : undefined;
   const typeId = (bound as { object_type_id?: string } | undefined)?.object_type_id ?? null;
   const type = useQuery({
@@ -9362,7 +9362,7 @@ function TimelineSettings() {
   }));
   const { declared } = useCanvasVariables();
   const sets = Object.values(declared).filter((v) => v.kind === "object_set");
-  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const arrays = Object.values(declared).filter((v) => holdsClauses(v));
   const drawn = timelineLayersOf(layers);
   const raw: Record<string, unknown>[] = Array.isArray(layers)
     ? (layers as Record<string, unknown>[])
@@ -10912,7 +10912,7 @@ function SearchSettings() {
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   const clauseVariables = Object.values(declared).filter(
-    (v) => v.kind === "array" && !v.derivation,
+    (v) => holdsClauses(v) && !v.derivation,
   );
   const typeId = (resolved[objectSetVariable as string] as
     { object_type_id?: string } | undefined)?.object_type_id;
@@ -11559,7 +11559,7 @@ function PivotTableSettings() {
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   const clauseVariables = Object.values(declared).filter(
-    (v) => v.kind === "array" && !v.derivation,
+    (v) => holdsClauses(v) && !v.derivation,
   );
   const typeId = (resolved[objectSetVariable as string] as
     { object_type_id?: string } | undefined)?.object_type_id;
@@ -13755,7 +13755,7 @@ function MapSettings() {
                   (p.areaVariable = e.target.value || null))}
               >
                 <option value="">No area selection</option>
-                {Object.values(declared).filter((v) => v.kind === "array" && !v.derivation)
+                {Object.values(declared).filter((v) => holdsClauses(v) && !v.derivation)
                   .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
               </select>
               <span className="field-hint">
@@ -13889,7 +13889,7 @@ function MapSettings() {
                   (p.selectedVariable = e.target.value || null))}
               >
                 <option value="">No selected objects</option>
-                {Object.values(declared).filter((v) => v.kind === "array" && !v.derivation)
+                {Object.values(declared).filter((v) => holdsClauses(v) && !v.derivation)
                   .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
               </select>
               <label className="field canvas-toggle">
@@ -14812,7 +14812,7 @@ function ChartSettings() {
   // Derived ones are absent because they are computed from their inputs and a
   // write to one has no meaning.
   const clauseVariables = Object.values(declared).filter(
-    (v) => v.kind === "array" && !v.derivation,
+    (v) => holdsClauses(v) && !v.derivation,
   );
   const setTypeId = (resolved[objectSetVariable as string] as
     { object_type_id?: string } | undefined)?.object_type_id;
@@ -16444,7 +16444,7 @@ function ActionFormSettings() {
   // list a `narrow_set` derivation reads, so the variable to bind is the array
   // in the middle. Offering the derived set would invite binding the thing that
   // is computed *from* this one and overwriting it on every submit.
-  const clauseVariables = Object.values(declared).filter((v) => v.kind === "array");
+  const clauseVariables = Object.values(declared).filter((v) => holdsClauses(v));
   const list = useQuery({
     queryKey: ["action-types", workspaceId],
     queryFn: () => actionApi.listTypes(workspaceId),
@@ -18600,7 +18600,7 @@ function SectionSettings() {
             >
               <option value="">None — only fire the On drop event</option>
               {Object.values(declared)
-                .filter((v) => v.kind === "array")
+                .filter((v) => holdsClauses(v))
                 .map((v) => (
                   <option key={v.id} value={v.id}>{v.label || v.id}</option>
                 ))}

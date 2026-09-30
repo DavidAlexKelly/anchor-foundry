@@ -50,11 +50,14 @@ import {
   SETTINGS, type DefinitionType, type SettingName,
 } from "./variable-finder";
 import { TypePicker } from "@/components/type-picker";
+import { holdsClauses } from "./pure";
 
 /** Mirrors `SAVABLE_KINDS` in `services/workshop_variables.py` (p.205). */
 const SAVABLE_KINDS = [
   "string", "number", "boolean", "date", "timestamp",
   "array", "single_object", "object_set",
+  // p.205's "Object Set Filter" (§590).
+  "object_set_filter",
 ];
 
 const KINDS: WorkshopVariableKind[] = [
@@ -68,6 +71,8 @@ const KINDS: WorkshopVariableKind[] = [
   "object_set",
   "time_series_set",
   "struct",
+  // p.75's object set filter (§590).
+  "object_set_filter",
 ];
 
 /** p.132's array element types, mirroring `ELEMENTS` in the service: the
@@ -733,9 +738,16 @@ export function VariablesPanel({
                           <label>
                             Default
                             <input
-                              value={String(variable.default ?? "")}
+                              // A list default (an array's or, §590, a filter's
+                              // clauses) is shown as the JSON it is typed as.
+                              value={typeof variable.default === "string" || variable.default == null
+                                ? String(variable.default ?? "")
+                                : JSON.stringify(variable.default)}
                               readOnly={readOnly}
-                              placeholder="empty"
+                              data-testid="variable-default"
+                              placeholder={variable.kind === "object_set_filter"
+                                ? '[{"property": "region", "op": "eq", "value": "north"}]'
+                                : "empty"}
                               onChange={(e) =>
                                 update(id, { default: e.target.value === "" ? undefined : e.target.value })
                               }
@@ -1517,7 +1529,8 @@ function ObjectSetEditor({
     }
     return out;
   });
-  const arrays = Object.values(variables).filter((v) => v.kind === "array");
+  // The clauses `narrow_set` reads: an object set filter (§590) or an array.
+  const arrays = Object.values(variables).filter((v) => holdsClauses(v));
 
   function setDerivation(patch: Record<string, unknown>) {
     const d = variable.derivation ?? { transform: SET_TRANSFORMS[0]!, inputs: [], config: {} };
