@@ -1912,12 +1912,26 @@ export default function ObjectsPage() {
       )}
       {editingType && workspace && editingDetail.data && (
         <EditObjectTypeDialog
+          // Keyed by the type, because a related link type opens the type at
+          // its other end in this same slot, and the dialog seeds its fields
+          // from the type it was mounted with.
+          key={editingType}
           workspaceId={workspace.id}
           type={editingDetail.data}
           onClose={() => setEditingType(null)}
           // p.255: only the ontology level may apply `promoted`, and a
           // workspace is this platform's ontology (db 0003).
           canPromote={workspace.effective_role === "admin"}
+          // p.30's related resources (§603): each opens the dialog the page
+          // already has for it, in place of this one.
+          onOpenRelated={(to) => {
+            setEditingType(to.open === "object_type" ? to.id : null);
+            if (to.open === "action_type") {
+              setNamingAction(actionTypes.data?.find((a) => a.id === to.id) ?? null);
+            } else if (to.open === "interface") setOpeningInterface(to.id);
+            else if (to.open === "shared_property") setEditingShared(to.id);
+            else if (to.open === "group") setOpeningGroup(to.id);
+          }}
         />
       )}
       {creatingSource && workspace && project && (

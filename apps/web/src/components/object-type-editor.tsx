@@ -39,6 +39,7 @@ import { ValueTypePicker } from "@/components/value-type-picker";
 import { ApiError, actions as actionApi, objects as objApi, type PropertyInput } from "@/lib/api";
 import { inlineActionChoices, type InlineAction } from "@/lib/property-inline-action";
 import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
+import { relatedResources, type RelatedDestination } from "@/lib/related-resources";
 import type {
   ObjectTypeDetail,
   ObjectTypeImpact,
@@ -772,6 +773,7 @@ export function EditObjectTypeDialog({
   type,
   onClose,
   canPromote = true,
+  onOpenRelated,
 }: {
   workspaceId: string;
   type: ObjectTypeDetail;
@@ -779,6 +781,10 @@ export function EditObjectTypeDialog({
   /** p.255: only the ontology level may apply `promoted`. The page knows the
    * caller's workspace role; this dialog only needs the answer. */
   canPromote?: boolean;
+  /** p.30's "all resources that are related to the one you are currently
+   * viewing" (§603): where one of them opens. The page owns every dialog a
+   * related entry can go to, so it decides; absent, no list is drawn. */
+  onOpenRelated?: (to: RelatedDestination) => void;
 }) {
   const [displayName, setDisplayName] = useState(type.display_name);
   const [description, setDescription] = useState(type.description);
@@ -830,6 +836,31 @@ export function EditObjectTypeDialog({
   });
   const tracked = tracking ?? originalTracking;
 
+  // §603's related resources. The page's own queries for the two lists, so
+  // opening this dialog reads them from the cache.
+  const linkTypes = useQuery({
+    queryKey: ["link-types", workspaceId],
+    queryFn: () => objApi.listLinkTypes(workspaceId),
+    enabled: !!onOpenRelated,
+  });
+  const workspaceActions = useQuery({
+    queryKey: ["action-types", workspaceId],
+    queryFn: () => actionApi.listTypes(workspaceId),
+    enabled: !!onOpenRelated,
+  });
+  const implementations = useQuery({
+    queryKey: ["implementations", workspaceId, type.id],
+    queryFn: () => objApi.listImplementations(workspaceId, type.id),
+    enabled: !!onOpenRelated,
+  });
+  const related = relatedResources(
+    type,
+    linkTypes.data ?? [],
+    workspaceActions.data ?? [],
+    implementations.data ?? [],
+    currentGroups.data ?? [],
+  );
+
   const named = properties.filter((p) => p.api_name.trim());
   const body = {
     display_name: displayName,
@@ -839,6 +870,20 @@ export function EditObjectTypeDialog({
     properties: named,
     title_property: titleProperty || null,
   };
+
+  // **Going somewhere else closes this dialog**, and an edit nobody saved
+  // would go with it. So §603's related links wait until there is nothing to
+  // lose: what the save would send, against what it would have sent on the
+  // first render — one comparison rather than a clause per field, so a field
+  // added to the save is covered without anybody remembering this. The two
+  // separate writes are compared the way the save decides whether to send
+  // them.
+  const sends = JSON.stringify({ ...body, status, deprecation });
+  const [opened] = useState(sends);
+  const unsaved =
+    sends !== opened ||
+    !sameSelection(selectedGroupIds, originalGroupIds) ||
+    tracked !== originalTracking;
 
   const originalSignature = impactSignature(
     type.properties.map((p) => ({ api_name: p.api_name, data_type: p.data_type })),
@@ -1068,6 +1113,45 @@ export function EditObjectTypeDialog({
           </button>
         </div>
       </form>
+
+      {onOpenRelated && related.length > 0 && (
+        <section data-testid="type-related">
+          <h3 style={{ fontSize: 13.5, margin: "18px 0 6px" }}>Related</h3>
+          {unsaved && (
+            <p className="field-hint" data-testid="type-related-unsaved">
+              Save or cancel your changes to open a related resource.
+            </p>
+          )}
+          {related.map((section) => (
+            <div key={section.title} style={{ marginBottom: 6 }}>
+              <div className="slug">{section.title}</div>
+              <ul className="link-list">
+                {section.entries.map((entry) => (
+                  <li key={entry.key}>
+                    <button
+                      type="button"
+                      className="btn quiet"
+                      style={{ padding: "3px 9px", fontSize: 12.5, textAlign: "left" }}
+                      data-testid={`type-related-${entry.label}`}
+                      disabled={unsaved || entry.to === null}
+                      onClick={() => {
+                        if (entry.to) onOpenRelated(entry.to);
+                      }}
+                    >
+                      <strong>{entry.label}</strong>
+                      {entry.via && (
+                        <span className="slug" style={{ marginLeft: 8 }}>
+                          {entry.via}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </section>
+      )}
 
       <VersionHistory workspaceId={workspaceId} type={type} onRestored={onClose} />
     </Dialog>
