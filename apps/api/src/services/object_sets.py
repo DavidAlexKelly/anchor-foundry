@@ -118,7 +118,7 @@ LIST_OPERATORS = ("in",)
 # against it - `matches` below, the Postgres store's SQL, and OpenSearch's
 # `geo_bounding_box`, which handles the wrap natively and is the reason the
 # shape is a box rather than four comparisons in the first place.
-GEO_OPERATORS = ("within_box", "within_polygon", "within_distance")
+GEO_OPERATORS = ("within_box", "within_polygon", "within_distance", "within_any")
 
 # p.301-302's polygon (§571): the shape a Map draws when a rectangle is not
 # the area somebody means. Its own operator, for the box's reason - a polygon
@@ -132,6 +132,15 @@ MAX_POLYGON_POINTS = 100
 # `geo_distance` measures with, so the two stores draw one circle.
 EARTH_RADIUS_M = 6371008.7714
 MAX_RADIUS_M = 20_000_000
+
+# p.301's several shapes (§639): "Drawn shapes" is plural, and a Map without
+# single draw mode keeps every shape somebody draws. Selecting inside them is
+# "inside any one of them" - an either-of the three shapes above could not say,
+# because a set's filters are all required. Its value is the shapes, each
+# parsed by the rule its own operator has and told apart by its keys. Capped
+# for the polygon cap's reason: every shape is a test each store runs on every
+# candidate.
+MAX_SHAPES = 20
 
 # The type a bounding box may be drawn on. One, and not by omission: a box is a
 # pair of coordinates, and `geopoint` is the only declared type that holds one
@@ -845,7 +854,8 @@ def parse(
             # places to get the wrap rule wrong instead of one. A polygon is
             # parsed the same way, into a `Polygon` (§571).
             value = (parse_box(value) if op == "within_box"
-                     else parse_polygon(value) if op == "within_polygon" else parse_circle(value))
+                     else parse_polygon(value) if op == "within_polygon"
+                     else parse_circle(value) if op == "within_distance" else parse_shapes(value))
         if op in LIST_OPERATORS:
             if not isinstance(value, list):
                 raise ValueError(f"the {op!r} operator needs a list of values")
@@ -1089,6 +1099,42 @@ def parse_circle(raw: Any) -> "Circle":
     return Circle(**values)
 
 
+def parse_shape(raw: Any) -> "Box | Polygon | Circle":
+    """One of §639's shapes, told apart by its keys: `points` is a polygon,
+    `radius` a circle, and anything else is read as a box, whose refusal names
+    the four edges it needs."""
+    if isinstance(raw, dict) and "points" in raw:
+        return parse_polygon(raw)
+    if isinstance(raw, dict) and "radius" in raw:
+        return parse_circle(raw)
+    return parse_box(raw)
+
+
+def parse_shapes(raw: Any) -> "tuple[Box | Polygon | Circle, ...]":
+    """Validate §639's shapes. **None is refused**, where `in []` is allowed:
+    a Map with nothing drawn publishes no filter at all, so an empty list is
+    a caller's mistake rather than a question with an answer."""
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("a within_any value must be a non-empty list of shapes")
+    if len(raw) > MAX_SHAPES:
+        raise ValueError(f"within_any takes at most {MAX_SHAPES} shapes")
+    shapes = []
+    for n, shape in enumerate(raw, start=1):
+        try:
+            shapes.append(parse_shape(shape))
+        except ValueError as refused:
+            raise ValueError(f"shape {n}: {refused}") from None
+    return tuple(shapes)
+
+
+def in_shape(actual: Any, shape: "Box | Polygon | Circle") -> bool:
+    """Whether a stored geopoint is inside one shape, by that shape's own
+    definition."""
+    if isinstance(shape, Polygon):
+        return in_polygon(actual, shape)
+    return in_circle(actual, shape) if isinstance(shape, Circle) else in_box(actual, shape)
+
+
 def distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance in metres, by the haversine.
 
@@ -1214,10 +1260,10 @@ def _matches_one(actual: Any, f: Filter) -> bool:
         raise ValueError("a filter on linked objects is resolved before it is matched")
     if f.op in ORDERED_OPERATORS:
         return _compares(actual, f)
+    if f.op == "within_any":
+        return any(in_shape(actual, shape) for shape in f.value)
     if f.op in GEO_OPERATORS:
-        if f.op == "within_box":
-            return in_box(actual, f.value)
-        return in_polygon(actual, f.value) if f.op == "within_polygon" else in_circle(actual, f.value)
+        return in_shape(actual, f.value)
     # Unreachable while `parse` is the only way to build a Filter, which it is.
     raise ValueError(f"no reference semantics for operator {f.op!r}")
 

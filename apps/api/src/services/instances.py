@@ -612,6 +612,17 @@ def _within_distance_sql(
             f"<= CAST(:{val}radius AS double precision))")
 
 
+def _within_shape_sql(
+    prop: str, val: str, shape: "Any", params: dict[str, Any]
+) -> str:
+    """One shape, as the SQL its own operator writes."""
+    if isinstance(shape, object_sets.Polygon):
+        return _within_polygon_sql(prop, val, shape, params)
+    if isinstance(shape, object_sets.Circle):
+        return _within_distance_sql(prop, val, shape, params)
+    return _within_box_sql(prop, val, shape, params)
+
+
 def _comparable_sql(extract: str, data_type: str | None) -> str:
     """A stored property, as a value its declared type can be ordered by.
 
@@ -784,12 +795,15 @@ def _set_predicate(
                 f"CAST(:{val} AS {_CAST_FOR[f.data_type]}))"
             )
             params[val] = bound.isoformat() if hasattr(bound, "isoformat") else bound
-        elif f.op == "within_polygon":
-            where.append(_within_polygon_sql(prop, val, f.value, params))
-        elif f.op == "within_distance":
-            where.append(_within_distance_sql(prop, val, f.value, params))
+        elif f.op == "within_any":
+            # §639: inside any one of the shapes, each bound under its own
+            # suffix so no two shapes' parameters share a name.
+            where.append("(" + " OR ".join(
+                _within_shape_sql(prop, f"{val}s{n}", shape, params)
+                for n, shape in enumerate(f.value)
+            ) + ")")
         elif f.op in object_sets.GEO_OPERATORS:
-            where.append(_within_box_sql(prop, val, f.value, params))
+            where.append(_within_shape_sql(prop, val, f.value, params))
         elif f.op in object_sets.QUERY_OPERATORS:
             # p.452's advanced syntax (§543): the parsed tree as SQL, each term
             # the anchored ILIKE `starts_with` is. A value must be there to

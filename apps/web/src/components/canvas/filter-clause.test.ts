@@ -54,7 +54,8 @@ describe("the operators this language has", () => {
     for (const type of ["string", "integer", "geopoint", "date"]) {
       expect(operatorsFor(type)).not.toContain("within_box");
     }
-    expect(GEO_OPERATORS).toEqual(["within_box", "within_polygon", "within_distance"]);
+    expect(GEO_OPERATORS).toEqual(
+      ["within_box", "within_polygon", "within_distance", "within_any"]);
   });
 });
 
@@ -161,6 +162,13 @@ describe("what a pill says", () => {
     expect(circle(250.2)).toBe("within 250 m of 52.1235, -5");
     expect(valueLabel({ property: "site", op: "within_distance", value: { lat: 1, lon: 2 } }))
       .toBe("…");
+    // §639: several shapes by their count, never "[object Object], …".
+    const shapes = (value: unknown) => valueLabel({ property: "site", op: "within_any", value });
+    expect(shapes([{ points: [] }, { lat: 1, lon: 2, radius: 3 }])).toBe("2 drawn shapes");
+    expect(shapes([{ points: [] }])).toBe("1 drawn shape");
+    expect(shapes("odd")).toBe("0 drawn shapes");
+    expect(describeClause({ property: "site", op: "within_any", value: [{}, {}, {}] }, []))
+      .toBe("site is inside any of 3 drawn shapes");
   });
 
   it("shows an operator with no value as just its subject and words", () => {

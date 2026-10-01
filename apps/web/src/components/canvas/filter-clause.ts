@@ -58,6 +58,7 @@ export const OPERATOR_LABELS: Record<string, string> = {
   within_box: "is inside the area",
   within_polygon: "is inside the drawn shape",
   within_distance: "is inside the drawn circle",
+  within_any: "is inside any of",
   keyword_query: "matches",
   has_link: "has a link",
 };
@@ -71,7 +72,9 @@ export const OPERATOR_LABELS: Record<string, string> = {
  * already carries one renders as a pill and says so — read-only is the honest
  * state, not a gap.
  */
-export const GEO_OPERATORS: readonly string[] = ["within_box", "within_polygon", "within_distance"];
+export const GEO_OPERATORS: readonly string[] = [
+  "within_box", "within_polygon", "within_distance", "within_any",
+];
 
 /** `object_sets.QUERY_OPERATORS`: p.452's advanced keyword syntax (§543),
  * whose value is a query over prefix terms. Written by a Filter List's
@@ -170,6 +173,11 @@ export function clausesOf(raw: unknown): Clause[] {
  */
 export function valueLabel(clause: Clause): string {
   const { value } = clause;
+  // §639's shapes, counted, for the polygon's reason below.
+  if (clause.op === "within_any") {
+    const n = Array.isArray(value) ? value.length : 0;
+    return `${n} drawn shape${n === 1 ? "" : "s"}`;
+  }
   if (Array.isArray(value)) return value.map((v) => String(v)).join(", ");
   if (clause.op === "has_link") {
     // The linked type's own filters, counted: naming them would need its
