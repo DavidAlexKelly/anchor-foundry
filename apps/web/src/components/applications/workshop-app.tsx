@@ -27,7 +27,7 @@
 
 import { Editor, Element, Frame, useEditor } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { ChangelogPanel } from "@/components/canvas/ChangelogPanel";
 import { CheckAccessPanel } from "@/components/canvas/CheckAccessPanel";
@@ -491,6 +491,7 @@ function ActionBar({
   savedColours,
   onView,
   onReverted,
+  onSaved,
 }: {
   app: CanvasAppDetail;
   workspaceId: string;
@@ -522,6 +523,9 @@ function ActionBar({
   translations: NonNullable<import("@/lib/types").WorkshopModule["translations"]>;
   onView: (version: number) => void;
   onReverted: () => void;
+  /** The version this Save wrote, told to the builder before the refetch it
+   * triggers lands - see `ownSave` there. */
+  onSaved: (version: number) => void;
 }) {
   const { enabled, actions, query } = useEditor((state) => ({ enabled: state.options.enabled }));
   const [showPublish, setShowPublish] = useState(false);
@@ -552,8 +556,9 @@ function ActionBar({
         }),
         description,
       ),
-    onSuccess: async () => {
+    onSuccess: async (saved) => {
       setFailure(null);
+      onSaved(saved.current_version);
       await queryClient.invalidateQueries({ queryKey: ["canvas-app", app.id] });
     },
     // The server refuses a cycle or a binding to a variable that is not
@@ -1043,8 +1048,16 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     { language: string; snapshot: Record<string, unknown> } | null
   >(null);
   const savedVersion = appQuery.data?.current_version;
+  // **The version this builder's own Save wrote.** The refetch a Save triggers
+  // brings back exactly what was sent, so resetting the panels from it can
+  // only lose something: an edit made in the moment between the PUT returning
+  // and the refetch landing went back to the saved value, and the next Save
+  // wrote the old value over it (#468, a test that kept editing). A revert or
+  // a first load is a version this builder did not write, and still resets.
+  const ownSave = useRef<number | null>(null);
   useEffect(() => {
     if (!appQuery.data) return;
+    if (savedVersion === ownSave.current) return;
     setVariables(variablesOf(appQuery.data.definition));
     setEvents(eventsOf(appQuery.data.definition));
     setRouting(routingOf(appQuery.data.definition));
@@ -1160,6 +1173,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           savedColours={savedColours}
           onView={setViewingVersion}
           onReverted={() => setReloadToken((n) => n + 1)}
+          onSaved={(version) => { ownSave.current = version; }}
         />
         <CanvasBody
           hasSavedLayout={hasLayout(app.definition)}
