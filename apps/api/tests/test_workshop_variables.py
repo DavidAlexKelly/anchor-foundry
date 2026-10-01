@@ -1968,6 +1968,41 @@ def table_event(item=None, on: str = "click") -> dict:
     return {"e_1": {"id": "e_1", "trigger": trigger, "effects": [set_var("v_a", "x")]}}
 
 
+def markdown_layout(actions=None) -> dict:
+    """p.322's Create annotations via actions or events (§638)."""
+    return {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["md"]},
+        "md": {"type": {"resolvedName": "CanvasMarkdown"},
+               "props": {"highlightActions": actions if actions is not None else [
+                   {"id": "h_note", "label": "Annotate"}, {"label": "no id"}, "junk"]}},
+    }
+
+
+def markdown_event(item=None, on: str = "click") -> dict:
+    trigger = {"node": "md", "on": on, **({"item": item} if item is not None else {})}
+    return {"e_1": {"id": "e_1", "trigger": trigger, "effects": [set_var("v_a", "x")]}}
+
+
+def test_a_markdown_widgets_highlight_actions_are_clicks() -> None:
+    """p.322: "Configure actions or events to create new annotation objects
+    when text is highlighted within the widget." Each is a click of its own,
+    and the widget's clicks are those and nothing else."""
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    events = we.parse(markdown_event("h_note"), layout=markdown_layout(), variables=variables)
+    assert events["e_1"].item == "h_note"
+    with pytest.raises(we.EventError, match="actions offered on highlighted text"):
+        we.parse(markdown_event(), layout=markdown_layout(), variables=variables)
+    with pytest.raises(we.EventError, match="does not have"):
+        we.parse(markdown_event("h_gone"), layout=markdown_layout(), variables=variables)
+    for junk in (5, {"id": "h_note"}, "h_note"):
+        with pytest.raises(we.EventError, match="does not have"):
+            we.parse(markdown_event("h_note"), layout=markdown_layout(junk),
+                     variables=variables)
+    # Its row selection (a reference or an annotation) is untouched.
+    assert we.parse(markdown_event(on="row_select"), layout=markdown_layout(),
+                    variables=variables)["e_1"].on == "row_select"
+
+
 def test_a_tables_right_click_menu_items_are_clicks() -> None:
     """p.243: "add custom items to the menu… choose whether your menu item
     triggers an action or an event"."""

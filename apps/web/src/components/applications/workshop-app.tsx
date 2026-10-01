@@ -1305,8 +1305,10 @@ function CanvasBody({
         const kind = name === "CanvasButton" ? buttonTypeOf(props.buttonType) : "inline";
         // p.243's custom right-click menu (§613): a table's menu items are
         // clicks the way a Menu button's are, and only when it is customised.
+        // p.322's actions on highlighted text (§638), the same shape.
         const menu = name === "CanvasObjectTable" && props.customMenu
-          ? itemsOf(props.menuItems) : [];
+          ? itemsOf(props.menuItems)
+          : name === "CanvasMarkdown" ? itemsOf(props.highlightActions) : [];
         // p.349's Override selection event (§616): a timeline's overriding
         // layers are row selections of their own, beside the widget's.
         const layers = name === "CanvasTimeline"
