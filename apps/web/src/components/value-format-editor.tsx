@@ -26,14 +26,15 @@
 import { useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import type { PropertyDataType, ValueFormat } from "@/lib/types";
-import { formatValue } from "@/lib/value-format";
+import { formatValue, isLookup } from "@/lib/value-format";
 
 const NUMERIC: PropertyDataType[] = ["integer", "float"];
 const TEMPORAL: PropertyDataType[] = ["date", "timestamp"];
 
 /** Whether a property of this base type can carry a formatter at all (p.95). */
 export function formattable(dataType: PropertyDataType): boolean {
-  return NUMERIC.includes(dataType) || TEMPORAL.includes(dataType);
+  // A string holds an id, which p.95's lookups format (§624).
+  return NUMERIC.includes(dataType) || TEMPORAL.includes(dataType) || dataType === "string";
 }
 
 type NumberFormat = ValueFormat & { kind: "number" };
@@ -89,7 +90,7 @@ function digitsOf(value: string): number | undefined {
  */
 function incomplete(draft: ValueFormat | null): string | null {
   if (!draft) return null;
-  if (draft.kind === "datetime") return null;
+  if (draft.kind !== "number") return null;
   if (draft.style === "currency" && (draft.currency ?? "").length !== 3)
     return "A currency needs a three-letter code, like USD.";
   if (draft.style === "unit" && !(draft.unit ?? "").trim())
@@ -130,7 +131,8 @@ export function ValueFormatEditor({
   // what you'd expect to see in your property's values".
   const [sample, setSample] = useState(numeric ? "123456.789" : "2020-07-22T13:00:00Z");
 
-  const preview = draft ? formatValue(sample, draft) : sample;
+  const text = dataType === "string";
+  const preview = draft && !isLookup(draft) ? formatValue(sample, draft) : sample;
   // **What the server would refuse, refused here first.** Every branch below
   // is a rule in `services/value_format.py`; an Apply button that sent one of
   // them would turn a form somebody had filled in into a 422 on save, with the
@@ -142,27 +144,37 @@ export function ValueFormatEditor({
     <Dialog open={open} title={`Format ${propertyName}`} onClose={onClose}>
       {!formattable(dataType) ? (
         <p className="field-hint">
-          Value formatting applies to numbers, dates and timestamps. This
-          property is a {dataType}.
+          Value formatting applies to numbers, dates, timestamps and ids held
+          as text. This property is a {dataType}.
         </p>
       ) : (
         <>
           <Field label="Formatting">
             <select
               data-testid="format-on"
-              value={draft ? "on" : "off"}
+              value={draft ? (isLookup(draft) ? draft.kind : "on") : "off"}
               onChange={(e) =>
                 setDraft(
                   e.target.value === "off"
                     ? null
-                    : numeric
-                      ? { kind: "number", style: "plain" }
-                      : { kind: "datetime", style: "datetime_short" },
+                    : e.target.value === "user" || e.target.value === "resource"
+                      ? { kind: e.target.value }
+                      : numeric
+                        ? { kind: "number", style: "plain" }
+                        : { kind: "datetime", style: "datetime_short" },
                 )
               }
             >
               <option value="off">None</option>
-              <option value="on">{numeric ? "Numeric" : "Date and time"}</option>
+              {text ? (
+                <>
+                  {/* p.95's Foundry ID and Resource RID formatting (§624). */}
+                  <option value="user">Person or group</option>
+                  <option value="resource">Resource</option>
+                </>
+              ) : (
+                <option value="on">{numeric ? "Numeric" : "Date and time"}</option>
+              )}
             </select>
           </Field>
 
@@ -313,7 +325,14 @@ export function ValueFormatEditor({
             </>
           )}
 
-          {draft && (
+          {draft && isLookup(draft) && (
+            <p className="field-hint" data-testid="format-lookup-note">
+              {draft.kind === "user"
+                ? "Each id is shown as the person's name, or the group's, looked up where it is shown."
+                : "Each id is shown as the resource's name, linking to it, looked up where it is shown."}
+            </p>
+          )}
+          {draft && !isLookup(draft) && (
             <Field label="Preview" hint="p.96 — the same formatter the tables use.">
               <input
                 data-testid="format-sample"

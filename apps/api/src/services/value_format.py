@@ -33,7 +33,15 @@ from typing import Any
 NUMERIC_TYPES = ("integer", "float")
 TEMPORAL_TYPES = ("date", "timestamp")
 
-KINDS = ("number", "datetime")
+#: p.95's two lookup formatters with a counterpart here (§624): a Foundry ID
+#: shown "as a user's first and last name or group name", and a resource RID
+#: "as an icon and resource name, with a clickable link". Artifact GIDs have
+#: none - there are no artifacts. Both are **looked up where they are shown**,
+#: like every formatter here, so this module only says where they may go.
+LOOKUP_KINDS = ("user", "resource")
+KINDS = ("number", "datetime", *LOOKUP_KINDS)
+#: An id is text here, so a lookup formats a string property.
+LOOKUP_TYPES = ("string",)
 
 #: p.97's "Base type" dropdown, minus Fixed Values - a value-to-label map is a
 #: lookup rather than a formatter, and it is named in the parity doc instead of
@@ -89,7 +97,27 @@ def parse(raw: Any, *, data_type: str, property_name: str) -> dict[str, Any] | N
         )
     if kind == "number":
         return _number(raw, data_type=data_type, property_name=property_name)
+    if kind in LOOKUP_KINDS:
+        return _lookup(raw, str(kind), data_type=data_type, property_name=property_name)
     return _datetime(raw, data_type=data_type, property_name=property_name)
+
+
+def _lookup(
+    raw: dict[str, Any], kind: str, *, data_type: str, property_name: str
+) -> dict[str, Any]:
+    """p.95's user and resource formatting (§624): no options, on text."""
+    what = "person or group" if kind == "user" else "resource"
+    if data_type not in LOOKUP_TYPES:
+        raise FormatError(
+            f"{property_name}: {what} formatting reads an id, which is a string "
+            f"property; this one is {data_type}"
+        )
+    extra = _unknown_fields(raw, ())
+    if extra:
+        raise FormatError(
+            f"{property_name}: {what} formatting has no options, not {', '.join(extra)}"
+        )
+    return {"kind": kind}
 
 
 def _unknown_fields(raw: dict[str, Any], allowed: tuple[str, ...]) -> list[str]:

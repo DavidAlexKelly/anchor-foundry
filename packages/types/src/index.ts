@@ -2185,7 +2185,12 @@ export type ValueFormat =
        * author's choice and an absent one is "wherever the reader is". Only
        * ever set on a timestamp: a date has no instant to place in a zone. */
       timezone?: string;
-    };
+    }
+  /** p.95's lookup formatters (§624): an id shown as a person's or group's
+   * name, or as a resource's name linking to it. Looked up where shown, on a
+   * string property; no options. */
+  | { kind: "user" }
+  | { kind: "resource" };
 
 /** One person named in a comment, and where (§322; `object-views` p.137).
  *
