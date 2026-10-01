@@ -76,6 +76,15 @@ def test_opening_a_group_ticks_its_types_and_nothing_else(page, grouped) -> None
     page.goto(f"{WEB_BASE}/{grouped.workspace_slug}/explore")
     harbour.click()
     expect(harbour).to_have_attribute("aria-pressed", "true")
+    # **Searched for, not found on the page by luck.** The type list is the
+    # first page of a server search (§256), and once the shared workspace
+    # holds more types than one page, an unticked type is on it only by
+    # chance. It was not on #480's run. The filter box is offered only past a
+    # dozen types, so it is used when it is there.
+    expect(page.get_by_text("Loading types…")).to_have_count(0, timeout=30000)
+    search = page.get_by_role("searchbox", name="Filter the object type list")
+    if search.count():
+        search.fill(f"Ship {grouped.tag}")
     # Clicked rather than `check()`ed: the box is drawn from the address bar,
     # so it turns on a render after the click rather than during it.
     ship = type_box(page, f"Ship {grouped.tag}").first
