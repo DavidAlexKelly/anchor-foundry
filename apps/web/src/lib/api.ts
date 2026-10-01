@@ -1874,6 +1874,19 @@ export const objects = {
         (opts.transforms?.length
           ? `&transforms=${encodeURIComponent(JSON.stringify(opts.transforms))}` : ""),
     ),
+  /** p.393's *Linked event set* (§654): one event per object linked to this
+   * one, from its `start` property to its `end`. */
+  linkedEvents: (
+    wid: string, typeId: string, instanceId: string,
+    opts: { link: string; direction: string; start: string; end: string | null },
+  ) =>
+    request<{ total: number; truncated: boolean; unreadable: number;
+      events: { id: string; start: string; end: string }[] }>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/linked-events` +
+        `?link=${encodeURIComponent(opts.link)}&direction=${encodeURIComponent(opts.direction)}` +
+        `&start=${encodeURIComponent(opts.start)}` +
+        (opts.end ? `&end=${encodeURIComponent(opts.end)}` : ""),
+    ),
   /** One object's track: where it was, in time order (§427;
    * `object-link-types` p.127). `seriesPoints`' counterpart, and a separate
    * call rather than an option on it, because a track takes no interval and

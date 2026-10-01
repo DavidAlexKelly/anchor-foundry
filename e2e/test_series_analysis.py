@@ -237,3 +237,60 @@ def test_a_linear_aggregation_lines_the_series_up(page, api, module) -> None:
     lined = f"Linear aggregation of North sensor with {shifted}"
     expect(stat(page, lined, "max")).to_have_text("925")
     expect(stat(page, lined, "min")).to_have_text("10")
+
+
+VISITS = (
+    b"visit_id,sensor_id,began,ended\n"
+    b"V1,S1,2026-01-02T00:00:00,2026-01-03T00:00:00\n"
+    b"V2,S1,2026-01-04T00:00:00,\n"
+    b"V3,S2,2026-01-01T00:00:00,2026-01-02T00:00:00\n"
+)
+
+
+def test_a_linked_event_set_is_the_visits_to_a_sensor(page, api, module) -> None:
+    """p.393's Linked event set (§654). Visits link to their sensor, each
+    from its began to its ended timestamp: North has two - one a day long,
+    one with no end, a moment - and South's is its own."""
+    mod = build(api, module, "Analysis linked events")
+    visits = mod.api.upload_csv(f"{mod.base}/datasets/upload", f"visits_{mod.tag}", VISITS)
+    visit = mod.api.call("POST", f"/workspaces/{mod.workspace_id}/object-types", {
+        "api_name": f"visit_{mod.tag}", "display_name": f"Visit {mod.tag}",
+        "properties": [{"api_name": "sensor_id", "display_name": "Sensor", "data_type": "string"},
+                       {"api_name": "began", "display_name": "Began", "data_type": "timestamp"},
+                       {"api_name": "ended", "display_name": "Ended", "data_type": "timestamp"}]})
+    source = mod.api.call("POST", f"{mod.base}/object-type-sources", {
+        "object_type_id": visit["id"], "dataset_id": visits["id"], "primary_key_column": "visit_id",
+        "column_mappings": {"sensor_id": "sensor_id", "began": "began", "ended": "ended"}})
+    mod.api.call("POST", f"{mod.base}/object-type-sources/{source['id']}/sync", {})
+    link = mod.api.call("POST", f"/workspaces/{mod.workspace_id}/link-types", {
+        "api_name": f"visited_{mod.tag}", "display_name": "Visited",
+        "from_type_id": visit["id"], "to_type_id": module.sensor_type, "cardinality": "one_to_many",
+        "from_property": "sensor_id", "to_property": "$primary_key",
+        "from_side_name": "Visits", "to_side_name": "Sensor"})
+    open_module(page, mod)
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_role("button", name="New linked event set").click()
+    page.get_by_label("Linked from plot").select_option(label="North sensor")
+    page.get_by_label("Event link").select_option(f"{link['id']}:inbound")
+    page.get_by_label("Event start").select_option("began")
+    page.get_by_label("Event end").select_option("ended")
+    page.get_by_role("button", name="Add linked event set").click()
+    count = page.locator("[data-testid='series-event-sets'] tr[data-label='Visits of North sensor'] "
+                         "td[data-stat='events']")
+    expect(count).to_have_text("2")
+    shaded = page.locator("[data-testid='series-canvas-1'] rect[data-event-set='events-1']")
+    expect(shaded).to_have_count(2)
+    # A day on a three-day axis is a third of it; the moment is the least drawn.
+    widths = sorted(float(w) for w in shaded.evaluate_all("rs => rs.map(r => r.getAttribute('width'))"))
+    assert widths[0] == 2 and widths[1] > 100
+    # With no end, South's one visit is still one event, a moment.
+    page.get_by_role("button", name="New linked event set").click()
+    page.get_by_label("Linked from plot").select_option(label="South sensor")
+    page.get_by_label("Event link").select_option(f"{link['id']}:inbound")
+    page.get_by_label("Event start").select_option("began")
+    page.get_by_role("button", name="Add linked event set").click()
+    expect(page.locator("[data-testid='series-event-sets'] tr[data-label='Visits of South sensor'] "
+                        "td[data-stat='events']")).to_have_text("1")
+    # Event statistics aggregates over a search's events, not a linked set's.
+    page.get_by_label("New plot").select_option("event_statistics")
+    expect(page.get_by_test_id("series-event-statistics")).to_contain_text("Add an event set first")
