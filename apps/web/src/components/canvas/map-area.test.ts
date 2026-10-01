@@ -200,15 +200,17 @@ describe("a drawn circle (§572)", () => {
 });
 
 describe("p.301's draw options and drawn shape style (§573)", () => {
-  it("offers the tools named, in the toolbar's order, and all three by default", () => {
+  it("offers the tools named, in the toolbar's order, and all of them by default", () => {
     expect(drawToolsOf(undefined)).toEqual([...DRAW_TOOLS]);
-    expect(drawToolsOf(null)).toEqual(["rectangle", "polygon", "circle"]);
-    expect(drawToolsOf(["circle", "rectangle", "line"])).toEqual(["rectangle", "circle"]);
+    // p.301's line is the fourth (§634).
+    expect(drawToolsOf(null)).toEqual(["rectangle", "polygon", "circle", "line"]);
+    expect(drawToolsOf(["line", "circle", "rectangle", "freehand"]))
+      .toEqual(["rectangle", "circle", "line"]);
     expect(drawToolsOf([])).toEqual([]);
   });
 
   it("turns one tool on or off, keeping the rest", () => {
-    expect(withDrawTool(null, "rectangle", false)).toEqual(["polygon", "circle"]);
+    expect(withDrawTool(null, "rectangle", false)).toEqual(["polygon", "circle", "line"]);
     expect(withDrawTool(["circle"], "rectangle", true)).toEqual(["rectangle", "circle"]);
     expect(withDrawTool(["circle"], "circle", false)).toEqual([]);
     expect(withDrawTool(["circle"], "circle", true)).toEqual(["circle"]);

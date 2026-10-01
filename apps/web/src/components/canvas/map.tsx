@@ -23,7 +23,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { WORLD_OUTLINE } from "./basemap";
 import { boundsOf, onScreen, pathsFor } from "./map-shapes";
 import { allInside, boundsText, sameView, viewOfBounds } from "./map-view";
-import { measureLabels, type PerimeterMode } from "./map-measure";
+import { lineLabels, measureLabels, type PerimeterMode } from "./map-measure";
+import type { Line } from "./map-drawn";
 import {
   DRAWN_OPACITY, DRAW_TOOLS, MAX_POLYGON_POINTS, MIN_DRAG_PX, boxBetween, boxRect, circleBetween, circlePath, closes, isCircle,
   isDrag, isPolygon, lonLatAt, polygonPoints, type Area, type DrawTool,
@@ -210,6 +211,8 @@ export function MapCanvas({
   drawnColor = null,
   drawnOpacity = DRAWN_OPACITY,
   measure = null,
+  line = null,
+  onLine,
   color = null,
   opacity = 1,
   selectedKeys,
@@ -250,7 +253,11 @@ export function MapCanvas({
   drawnOpacity?: number;
   /** p.302's Enable measurements (§575): the drawn shape's perimeter, as
    * segments or a total, and its area. Null for none. */
-  measure?: { perimeter: PerimeterMode | null; area: boolean } | null;
+  measure?: { perimeter: PerimeterMode | null; area: boolean; line?: PerimeterMode | null } | null;
+  /** p.301's drawn line (§634), and where a newly drawn one goes. Without
+   * `onLine` there is no Draw line tool. */
+  line?: Line | null;
+  onLine?: (line: Line | null) => void;
   /** p.300's layer Style (§559): its colour and opacity. */
   color?: string | null;
   opacity?: number;
@@ -286,6 +293,8 @@ export function MapCanvas({
   // §571's Draw shape: a click a corner, and a click back on the first (or a
   // double-click) closes it. Null when the tool is not in hand.
   const [outline, setOutline] = useState<{ x: number; y: number }[] | null>(null);
+  // §634's Draw line: a click for each point, and a double-click ends it.
+  const [lining, setLining] = useState<{ x: number; y: number }[] | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drag = useRef<{ px: number; py: number; view: MapView } | null>(null);
 
@@ -456,6 +465,19 @@ export function MapCanvas({
     }) });
   };
 
+  const finishLine = (points: { x: number; y: number }[]) => {
+    setLining(null);
+    // A double-click lands two clicks on one spot; one of them is not a point.
+    const distinct = points.filter((p, n) => n === 0
+      || Math.hypot(p.x - points[n - 1]!.x, p.y - points[n - 1]!.y) >= 1);
+    if (distinct.length < 2) return;
+    const frame = { width: WIDTH, height: HEIGHT };
+    onLine?.(distinct.map((c) => {
+      const { lat, lon } = lonLatAt(c.x, c.y, current, frame);
+      return { lat: Math.min(90, Math.max(-90, lat)), lon: Math.min(180, Math.max(-180, lon)) };
+    }));
+  };
+
   const svgPoint = (e: React.MouseEvent | React.WheelEvent) => {
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return { x: WIDTH / 2, y: HEIGHT / 2 };
@@ -475,13 +497,18 @@ export function MapCanvas({
         role="img"
         aria-label="Map"
         style={{ width: "100%", touchAction: "none",
-          cursor: selecting || circling || outline ? "crosshair" : panning ? "grabbing" : "grab" }}
+          cursor: selecting || circling || outline || lining
+            ? "crosshair" : panning ? "grabbing" : "grab" }}
         onMouseDown={(e) => {
           // The widget's own Craft.js drag connector sits on the block around
           // this SVG, and in the editor it would otherwise pick the map up and
           // carry it across the canvas the moment somebody tried to pan.
           // Panning wins inside the map; the block's border still drags it.
           e.stopPropagation();
+          if (lining) {
+            if (lining.length < MAX_POLYGON_POINTS) setLining([...lining, svgPoint(e)]);
+            return;
+          }
           if (outline) {
             const at = svgPoint(e);
             if (closes(outline, at)) {
@@ -504,6 +531,7 @@ export function MapCanvas({
         }}
         onDoubleClick={() => {
           if (outline) finishOutline(outline);
+          if (lining) finishLine(lining);
         }}
       >
         <rect width={WIDTH} height={HEIGHT} fill="var(--map-sea, #eef2f4)" />
@@ -585,6 +613,32 @@ export function MapCanvas({
               {l.text}
             </text>
           ))}
+        {/* p.301's drawn line (§634), and its measurements (p.302). */}
+        {line && line.length > 1 && (() => {
+          const h = current.w * (HEIGHT / WIDTH);
+          const pts = line.map((p) =>
+            `${((p.lon - current.x) / current.w) * WIDTH},${((-p.lat - current.y) / h) * HEIGHT}`);
+          return (
+            <polyline data-testid="map-line" points={pts.join(" ")} fill="none"
+              stroke={drawnColor ?? "var(--accent)"} strokeWidth={2}
+              style={{ pointerEvents: "none" }} />
+          );
+        })()}
+        {line && measure?.line
+          && lineLabels(line, measure.line, current, { width: WIDTH, height: HEIGHT }).map((l, n) => (
+            <text key={`line-${n}`} data-testid="map-measure" data-kind={l.kind}
+              x={l.x} y={l.y} textAnchor="middle" dominantBaseline="middle" fontSize={11}
+              fill="var(--fg, #1d2327)" stroke="var(--bg, #fff)" strokeWidth={3}
+              paintOrder="stroke" style={{ pointerEvents: "none" }}>
+              {l.text}
+            </text>
+          ))}
+        {lining && lining.length > 0 && (
+          <polyline data-testid="map-line-sketch"
+            points={lining.map((c) => `${c.x},${c.y}`).join(" ")}
+            fill="none" stroke={drawnColor ?? "var(--accent)"} strokeDasharray="4 3"
+            style={{ pointerEvents: "none" }} />
+        )}
         {outline && outline.length > 0 && (
           <polyline data-testid="map-outline-sketch"
             points={outline.map((c) => `${c.x},${c.y}`).join(" ")}
@@ -693,7 +747,9 @@ export function MapCanvas({
             type="button"
             data-testid="map-select-area"
             aria-pressed={selecting}
-            onClick={() => { setOutline(null); setCircling(false); setSelecting(!selecting); }}
+            onClick={() => {
+              setOutline(null); setLining(null); setCircling(false); setSelecting(!selecting);
+            }}
           >
             Select area
           </button>
@@ -704,7 +760,10 @@ export function MapCanvas({
             data-testid="map-draw-shape"
             aria-pressed={outline !== null}
             title="Click each corner, then the first again (or double-click) to close the shape"
-            onClick={() => { setSelecting(false); setCircling(false); setOutline(outline ? null : []); }}
+            onClick={() => {
+              setSelecting(false); setLining(null); setCircling(false);
+              setOutline(outline ? null : []);
+            }}
           >
             Draw shape
           </button>
@@ -715,14 +774,35 @@ export function MapCanvas({
             data-testid="map-draw-circle"
             aria-pressed={circling}
             title="Drag from the centre out to the edge"
-            onClick={() => { setSelecting(false); setOutline(null); setCircling(!circling); }}
+            onClick={() => {
+              setSelecting(false); setLining(null); setOutline(null); setCircling(!circling);
+            }}
           >
             Draw circle
+          </button>
+        )}
+        {onLine && drawTools.includes("line") && (
+          <button
+            type="button"
+            data-testid="map-draw-line"
+            aria-pressed={lining !== null}
+            title="Click each point, and double-click to end the line"
+            onClick={() => {
+              setSelecting(false); setCircling(false); setOutline(null);
+              setLining(lining ? null : []);
+            }}
+          >
+            Draw line
           </button>
         )}
         {onArea && area && (
           <button type="button" data-testid="map-clear-area" onClick={() => onArea(null)}>
             Clear area
+          </button>
+        )}
+        {onLine && line && (
+          <button type="button" data-testid="map-clear-line" onClick={() => onLine(null)}>
+            Clear line
           </button>
         )}
         <span className="canvas-map-note">

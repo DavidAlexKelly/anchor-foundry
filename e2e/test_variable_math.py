@@ -73,6 +73,64 @@ def test_the_panel_builds_a_math_operation(page, api) -> None:
     save_and_expect(page, mod, {"transform": "subtract", "inputs": ["sum", "a"], "config": {}})
 
 
+def test_an_edit_made_while_a_save_refetches_is_kept(page, api) -> None:
+    """**A Save must not undo what is typed straight after it.**
+
+    A Save refetches the module, and the builder used to reset its panels from
+    whatever came back. That is the document just sent, so the reset could only
+    lose something: an edit made between the PUT returning and the refetch
+    landing went back to the saved value, and the next Save wrote the old value
+    over it. It surfaced as `test_the_panel_builds_a_math_operation` going red
+    on an unrelated change (#468), because that test edits straight after
+    saving.
+
+    The refetch is held rather than slowed, for `test_action_sections`' reason:
+    a sleeping route handler blocks Playwright's dispatcher.
+    """
+    mod = build(api, "Math refetch")
+    page.goto(f"{WEB_BASE}{mod.url}")
+    expect(page.get_by_role("button", name="Preview", exact=True)).to_be_visible(timeout=30000)
+    page.get_by_role("button", name="Variables", exact=False).first.click()
+    page.get_by_text("Total", exact=True).first.click()
+    page.get_by_role("button", name="Make this derived").click()
+    page.get_by_label("Computed by").select_option("round_nearest")
+    page.get_by_role("combobox", name=re.compile(r"^Value")).select_option("ratio")
+    page.get_by_test_id("math-precision").fill("2")
+
+    held = []
+    the_module = re.compile(r"/canvas-apps/[^/?]+(\?.*)?$")
+
+    def hold(route):
+        if route.request.method == "GET":
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route(the_module, hold)
+    try:
+        save_and_expect(page, mod, {"transform": "round_nearest", "inputs": ["ratio"],
+                                    "config": {"precision": 2}})
+        page.get_by_label("Computed by").select_option("subtract")
+        page.get_by_role("combobox", name=re.compile(r"^From")).select_option("sum")
+        page.get_by_role("combobox", name=re.compile(r"^Take away")).first.select_option("a")
+        assert held, "the save did not refetch the module"
+    finally:
+        if held:
+            with page.expect_response(
+                lambda r: the_module.search(r.url) and r.request.method == "GET"
+            ):
+                for route in held:
+                    route.continue_()
+        # After the release: unrouting first lets Playwright continue the held
+        # requests itself, and the release then fails as already handled.
+        page.unroute(the_module)
+
+    # The refetch has landed. The edit made while it was held is still there...
+    expect(page.get_by_label("Computed by")).to_have_value("subtract")
+    # ...and it is what the next Save writes.
+    save_and_expect(page, mod, {"transform": "subtract", "inputs": ["sum", "a"], "config": {}})
+
+
 def save_and_expect(page, mod, derivation: dict) -> None:
     with page.expect_response(
         lambda r: "/definition" in r.url and r.request.method in ("PUT", "POST")

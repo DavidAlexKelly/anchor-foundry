@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { EARTH_RADIUS_M as R } from "./map-area";
 import {
-  areaLabel, areaM2, cornersOf, edgeM, lengthLabel, measureLabels, perimeterM, perimeterModeOf,
-  segmentsM,
+  areaLabel, areaM2, cornersOf, edgeM, lengthLabel, lineLabels, lineM, measureLabels, perimeterM,
+  perimeterModeOf, segmentsM,
 } from "./map-measure";
 
 const degree = (R * Math.PI) / 180;
@@ -174,5 +174,26 @@ describe("where the labels go (§575)", () => {
     const labels = measureLabels(circle, { perimeter: "segments", area: false }, view, frame);
     expect(labels).toEqual([
       { kind: "perimeter", text: lengthLabel(perimeterM(circle)), x: 100, y: 50 }]);
+  });
+});
+
+describe("p.302's line measurements (§634)", () => {
+  const line = [{ lat: 0, lon: 0 }, { lat: 0, lon: 1 }, { lat: 1, lon: 1 }];
+  const view = { x: -1, y: -2, w: 4 };
+  const frame = { width: 400, height: 400 };
+
+  it("is the sum of its segments, each measured as an edge is", () => {
+    expect(lineM(line)).toBeCloseTo(2 * degree, 3);
+    expect(lineM([line[0]!])).toBe(0);
+  });
+
+  it("labels each segment at its middle, or the whole at the end", () => {
+    const segments = lineLabels(line, "segments", view, frame);
+    expect(segments.map((l) => [l.kind, l.text])).toEqual([
+      ["segment", lengthLabel(degree)], ["segment", lengthLabel(degree)]]);
+    expect(segments[0]).toMatchObject({ x: 150, y: 200 });
+    const total = lineLabels(line, "total", view, frame);
+    expect(total).toEqual([{ kind: "length", text: lengthLabel(2 * degree), x: 200, y: 88 }]);
+    expect(lineLabels([line[0]!], "total", view, frame)).toEqual([]);
   });
 });
