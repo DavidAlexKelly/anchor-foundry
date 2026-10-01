@@ -2286,6 +2286,8 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .lineage-head h3 { margin: 0; font-size: 13px; }
 .lineage-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
 .lineage-canvas { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.lineage-detail { border-top: 1px solid var(--line); padding-top: 8px; font-size: 12px; }
+.lineage-detail p { margin: 4px 0 0; color: var(--ink-soft); }
 .lineage-edge { stroke: var(--line-strong); stroke-width: 1.25; }
 .lineage-node {
   fill: var(--panel); stroke: var(--line-strong); stroke-width: 1; cursor: pointer;

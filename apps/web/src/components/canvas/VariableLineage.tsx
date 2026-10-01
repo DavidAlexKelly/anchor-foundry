@@ -32,9 +32,10 @@
 import { useMemo, useState } from "react";
 
 import type { WorkshopVariable } from "@/lib/types";
+import { useCanvasVariables } from "./context";
 import {
-  buildGraph, clear, collapse, expand, hasMore, initial, layers, redo, showAll,
-  step, undo, type History, type Lineage,
+  buildGraph, clear, collapse, computedLine, expand, hasMore, initial, layers, placesOf, redo,
+  showAll, step, undo, type History, type Lineage,
 } from "./variable-lineage";
 
 const NODE_W = 150;
@@ -138,6 +139,8 @@ export function VariableLineage({
   const height = Math.max(...placed.map((p) => y(p.position) + NODE_H + PAD), 180);
 
   const act = (next: Parameters<typeof step>[1]) => setHistory((h) => step(h, next));
+  const { computedAt } = useCanvasVariables();
+  const chosen = selected ? graph.nodes.get(selected) : undefined;
 
   return (
     <div className="canvas-scrim" data-testid="lineage">
@@ -269,7 +272,52 @@ export function VariableLineage({
             </svg>
           </div>
         )}
+
+        {chosen && (
+          <NodeDetail
+            kind={chosen.kind}
+            label={chosen.label}
+            places={placesOf(graph, (layout ?? {}) as Record<string, unknown>, chosen.id)}
+            computed={computedAt?.[chosen.id]}
+          />
+        )}
       </div>
+    </div>
+  );
+}
+
+/** p.78: "Each node can display the pages and overlays where a variable is
+ * used and the time at which a variable was computed" (§627), for the node
+ * selected. A widget has no computation of its own, so it says where it is. */
+function NodeDetail({ kind, label, places, computed }: {
+  kind: "variable" | "widget";
+  label: string;
+  places: { id: string; kind: "page" | "overlay"; label: string }[];
+  computed: number | undefined;
+}) {
+  return (
+    <div className="lineage-detail" data-testid="lineage-detail">
+      <strong>{label}</strong>
+      <p data-testid="lineage-places">
+        {places.length === 0
+          ? kind === "variable"
+            ? "Not used on any page or overlay."
+            : "Not on a page or overlay."
+          : <>
+              {kind === "variable" ? "Used on " : "On "}
+              {places.map((place, i) => (
+                <span key={place.id} data-testid="lineage-place" data-kind={place.kind}>
+                  {i > 0 && ", "}
+                  {place.label} ({place.kind})
+                </span>
+              ))}
+            </>}
+      </p>
+      {kind === "variable" && (
+        <p data-testid="lineage-computed">
+          {computedLine(computed)}
+        </p>
+      )}
     </div>
   );
 }

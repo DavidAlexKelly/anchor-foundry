@@ -108,6 +108,10 @@ export interface CanvasVariables {
   /** True while the first resolve is in flight. A widget that rendered "0
    * results" during it would be reporting an answer it does not have. */
   pending: boolean;
+  /** p.78's "the time at which a variable was computed" (§627): epoch
+   * milliseconds of the resolve that last computed each variable. Absent for
+   * one nothing on screen has needed yet. */
+  computedAt?: Record<string, number>;
 }
 
 const VariableContext = createContext<CanvasVariables>({
