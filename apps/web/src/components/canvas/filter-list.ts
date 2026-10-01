@@ -515,3 +515,22 @@ export function groupFilters(specs: readonly FilterSpec[], display: LinkDisplay)
   }
   return [{ link: null, linkTo: null, specs: own }, ...sections];
 }
+
+/**
+ * A linked filter's name on its pill (§621; p.451): the linked type it reads,
+ * then which of its properties - or p.451's "Has link" - the way a Grouped
+ * layout heads its section with the type. A pill used to say the property's
+ * api name alone, so two links reaching types with a `status` each drew two
+ * pills called `status`.
+ *
+ * `farName` is `null` until the linked type has loaded, and the pill says
+ * "Linked objects" meanwhile, as the group's heading does.
+ */
+export function linkedPillLabel(
+  spec: Pick<FilterSpec, "property">,
+  farName: string | null,
+  propertyName?: string | null,
+): string {
+  const of = farName ?? "Linked objects";
+  return spec.property ? `${of} · ${propertyName || spec.property}` : `${of} · Has link`;
+}

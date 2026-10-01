@@ -211,3 +211,20 @@ def test_the_panel_groups_and_collapses_linked_filters(page, api, world) -> None
     save(page)
     props = mod.definition()["layout"]["fl"]["props"]
     assert (props["linkDisplay"], props["collapseLinked"]) == ("grouped", True), props
+
+
+def test_a_linked_pill_names_the_linked_type(page, api, world) -> None:
+    """In the Pills layout a linked filter's pill names the type it reads and
+    then the property, or p.451's Has link (§621) - as a Grouped section heads
+    itself with the type. It used to say the property's api name alone."""
+    issue = api.call("GET", f"/workspaces/{world.workspace_id}/object-types/{world.issue_type}")
+    mod = build_shown(api, world, "Links pills",
+                      [linked(world), linked(world, "title", "keyword", fid="f_2")],
+                      layout="pills")
+    open_module(page, mod)
+    pills = page.locator(".canvas-filter-pill")
+    expect(pills).to_have_text([f"{issue['display_name']} · Has link",
+                                f"{issue['display_name']} · Title"], timeout=20000)
+    pills.first.click()
+    page.get_by_test_id("filter-has-link-f_1").check()
+    expect(pills.first).to_have_text(f"{issue['display_name']} · Has link: has a link")

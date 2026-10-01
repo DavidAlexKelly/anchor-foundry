@@ -247,7 +247,7 @@ import {
   timelineIntervalOf, withBucket,
   keywordOf, layoutOf, newFilterId, pillSummary, rangeOf, toggleValue, valuesOf, viewerFilterId,
   visibleFilters, withKeyword, withRange, withValues, withoutFilter,
-  hasLinkOf, linkedClausesOf, withHasLink, withLinked, groupFilters, linkDisplayOf,
+  hasLinkOf, linkedClausesOf, linkedPillLabel, withHasLink, withLinked, groupFilters, linkDisplayOf,
   LINK_DISPLAYS,
   type Clause, type DayRange, type FilterSpec,
 } from "./filter-list";
@@ -859,8 +859,11 @@ export function CanvasFilterList({
         // configuration UI." Closed, a pill says what it applies.
         <div className="canvas-filter-pills" ref={pillsRef}>
           {specs.map((spec) => {
-            // A linked filter's property is the linked type's (§545).
-            const label = spec.link ? spec.property || "Has link" : labelOf(spec.property);
+            // A linked filter's property is the linked type's (§545), so its
+            // pill names that type first (§621).
+            const label = spec.link
+              ? <LinkedPillLabel workspaceId={workspaceId} spec={spec} />
+              : labelOf(spec.property);
             const summary = pillSummary(spec, clauses);
             const open = openPill === spec.id;
             return (
@@ -871,7 +874,7 @@ export function CanvasFilterList({
                   aria-expanded={open}
                   onClick={() => setOpenPill(open ? null : spec.id)}
                 >
-                  {summary ? `${label}: ${summary}` : label}
+                  {summary ? <>{label}: {summary}</> : label}
                 </button>
                 {open && <div className="canvas-filter-popover">{filterOf(spec)}</div>}
               </div>
@@ -953,6 +956,22 @@ function AdvancedKeyword({ label, applied, onApply }: {
  * the set - the traversal §544 made every count honour. p.451's Collapse by
  * default starts it closed.
  */
+/** A linked filter's pill label (§621), read off the linked type the way
+ * `LinkedFilterGroup` heads its section, and from the same query. */
+function LinkedPillLabel({ workspaceId, spec }: { workspaceId: string; spec: FilterSpec }) {
+  const far = useQuery({
+    queryKey: ["object-type", spec.linkTo],
+    queryFn: () => objApi.getType(workspaceId, spec.linkTo!),
+    enabled: !!spec.linkTo,
+  });
+  const property = far.data?.properties?.find((p) => p.api_name === spec.property);
+  return (
+    <span data-testid="filter-pill-link-label">
+      {linkedPillLabel(spec, far.data?.display_name ?? null, property?.display_name)}
+    </span>
+  );
+}
+
 function LinkedFilterGroup({ workspaceId, link, linkTo, base, collapsed, children }: {
   workspaceId: string;
   link: string;
