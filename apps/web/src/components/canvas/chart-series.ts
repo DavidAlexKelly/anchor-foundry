@@ -12,9 +12,17 @@
  * > current series." (p.282)
  *
  * The chart's own Measure is the first series; these are the rest. Each is
- * one more `/object-sets/group` question over the same set and the same X
- * axis property, and the answers are laid side by side as a grid - the shape
- * a segmented chart already draws, with a series where a segment was.
+ * one more `/object-sets/group` question, and the answers are laid side by
+ * side as a grid - the shape a segmented chart already draws, with a series
+ * where a segment was.
+ *
+ * **A series may read its own object set, grouped by its own property**
+ * (§625): p.280's layers, each with its own "Data input" ("The Object set
+ * option allows a Workshop object set variable to be used as input") and its
+ * own "X axis property". Categories are matched by their label, so alerts by
+ * airport and flights by origin airport meet on one axis. Unset, a series
+ * reads the chart's set by the chart's property, which is every series saved
+ * before.
  */
 
 import type { ChartPoint } from "./charts";
@@ -29,6 +37,11 @@ export interface SeriesSpec {
   name: string;
   /** p.283's value axis for this series, when the chart has two (§542). */
   axis: AxisSide;
+  /** p.280's layer Data input (§625): an object set variable, or null for the
+   * chart's own set. */
+  objectSetVariable: string | null;
+  /** p.280's layer X axis property (§625), or null for the chart's own. */
+  dimension: string | null;
 }
 
 export type AxisSide = "left" | "right";
@@ -48,12 +61,38 @@ export function seriesOf(raw: unknown): SeriesSpec[] {
       measure: typeof s.measure === "string" && s.measure !== "" ? s.measure : null,
       name: typeof s.name === "string" ? s.name : "",
       axis: s.axis === "left" ? "left" : "right",
+      objectSetVariable: nonEmpty(s.objectSetVariable),
+      dimension: nonEmpty(s.dimension),
     }));
 }
 
-/** A series' name in the legend: its override, else what it plots. */
-export function seriesName(spec: SeriesSpec): string {
-  return spec.name.trim() || defaultValueTitle("bar", spec.aggregate, spec.measure);
+function nonEmpty(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** What a series is asked of (§625): its own set by its own property, or the
+ * chart's, each half falling back on its own. A set of its own gets no
+ * inherited property - the chart's property names a different type's column -
+ * so such a series waits for one. `null` while there is nothing to ask. */
+export function seriesSource(
+  spec: SeriesSpec,
+  chart: { objectSetVariable: string | null; dimension: string | null },
+  resolved: Readonly<Record<string, unknown>>,
+): { key: string; definition: unknown; dimension: string } | null {
+  const own = spec.objectSetVariable !== null && spec.objectSetVariable !== chart.objectSetVariable;
+  const variable = own ? spec.objectSetVariable : chart.objectSetVariable;
+  const dimension = spec.dimension ?? (own ? null : chart.dimension);
+  const definition = variable ? resolved[variable] : undefined;
+  if (!variable || !dimension || definition === undefined || definition === null) return null;
+  return { key: variable, definition, dimension };
+}
+
+/** A series' name in the legend: its override, else what it plots - and,
+ * for one reading a set of its own (§625), which set, since "Count" twice
+ * names nothing. */
+export function seriesName(spec: SeriesSpec, setLabel?: string): string {
+  const plotted = defaultValueTitle("bar", spec.aggregate, spec.measure);
+  return spec.name.trim() || (setLabel ? `${plotted} · ${setLabel}` : plotted);
 }
 
 /** What to ask the server for each series, or null for one still being

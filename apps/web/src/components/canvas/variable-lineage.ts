@@ -134,6 +134,8 @@ export const NESTED_PROP_DIRECTION: Record<string, "read" | "write"> = {
   // widget - the same direction as every other `objectSetVariable`, which is
   // why the flat catalogue calls that one a read too.
   "layers.objectSetVariable": "read",
+  // p.280: a Chart XY layer's Data input (§625), charted and never written.
+  "series.objectSetVariable": "read",
 };
 
 /** The mapping props' directions (§598). p.241's variables passed as action

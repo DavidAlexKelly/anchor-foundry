@@ -409,6 +409,22 @@ def test_a_variable_named_inside_a_list_prop_counts_as_a_usage() -> None:
     assert found["v_done"] == [{"node": "w1", "prop": "steps[1].completedVariable"}]
 
 
+def test_a_chart_series_reading_its_own_set_uses_it() -> None:
+    """p.280's Chart XY layers (§625): a series names an object set of its own.
+    Uncounted, deleting that set would leave a series drawing nothing under a
+    legend entry still naming it."""
+    assert wv.NESTED_REFERENCE_PROPS.get("series") == ("objectSetVariable",)
+    layout = {"c1": node({"objectSetVariable": "v_alerts", "series": [
+        {"aggregate": "count"},
+        {"aggregate": "count", "objectSetVariable": "v_flights", "dimension": "origin"},
+    ]})}
+    found = wv.usages(layout, wv.parse({
+        "v_alerts": object_set_var("v_alerts", object_set={"object_type_id": TYPE_ID}),
+        "v_flights": object_set_var("v_flights", object_set={"object_type_id": TYPE_ID}),
+    }))
+    assert found["v_flights"] == [{"node": "c1", "prop": "series[1].objectSetVariable"}]
+
+
 def test_a_list_prop_holding_junk_names_no_variables() -> None:
     """The tolerance §212 argued for, one level deeper. A saved document can
     hold anything, and a scan that threw on it would make a module with one bad

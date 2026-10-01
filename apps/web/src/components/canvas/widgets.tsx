@@ -341,6 +341,7 @@ import {
 import { Chart, MultiLineChart, PieChart, SegmentedBarChart, toPoints } from "./charts";
 import {
   MAX_SERIES, axisSides, mergeSeries, seriesName as seriesNameOf, seriesOf, seriesRequests,
+  seriesSource,
 } from "./chart-series";
 import {
   SEGMENT_LEGEND_POSITIONS, SEGMENT_MODES, segmentLegendPositionOf, segmentModeOf, segmentedFrom,
@@ -15012,7 +15013,7 @@ export function CanvasChart({
   const { workspaceId, projectId } = useCanvasEnv();
   const filterValue = useCanvasParameter(filterParameter);
   const setDefinition = useCanvasVariable(objectSetVariable);
-  const { pending: variablesPending } = useCanvasVariables();
+  const { pending: variablesPending, resolved, declared } = useCanvasVariables();
   const { set: setParameter } = useCanvasParameters();
   const drilled = useCanvasParameter(drilldownVariable);
   // A time series set beats an object set beats a dataset. One order, stated
@@ -15142,29 +15143,37 @@ export function CanvasChart({
       }
     : undefined;
 
-  // p.281's multiple series: the rest of the chart's series, asked the same
-  // question of the same set as the Measure's, each with its own aggregation.
-  // A series still being filled in asks nothing and is left out.
+  // p.281's multiple series: the rest of the chart's series, each with its own
+  // aggregation - and, as p.280's layers (§625), its own set grouped by its
+  // own property when it names one. A series still being filled in asks
+  // nothing and is left out.
   const extras = usingSet && !segmenting && (drawnKind === "bar" || drawnKind === "line")
     ? seriesOf(series) : [];
   const extraAsks = seriesRequests(extras);
+  const extraSources = extras.map((spec) => seriesSource(
+    spec, { objectSetVariable: objectSetVariable ?? null, dimension: dimension ?? null },
+    resolved));
   const extraResults = useQueries({
     queries: extras.map((spec, i) => ({
       queryKey: [
-        "canvas-chart-set", objectSetVariable, JSON.stringify(setDefinition ?? null), dimension,
+        "canvas-chart-set", extraSources[i]?.key ?? null,
+        JSON.stringify(extraSources[i]?.definition ?? null), extraSources[i]?.dimension ?? null,
         extraAsks[i]?.aggregation ?? null, extraAsks[i]?.aggregation_property ?? null,
       ],
-      queryFn: () => objApi.groupObjectSet(workspaceId, setDefinition, dimension!, extraAsks[i]!),
-      enabled: !!setDefinition && !!dimension && !!extraAsks[i],
+      queryFn: () => objApi.groupObjectSet(
+        workspaceId, extraSources[i]!.definition, extraSources[i]!.dimension, extraAsks[i]!),
+      enabled: !!extraSources[i] && !!extraAsks[i],
     })),
   });
   const drawnExtras = extras.flatMap((spec, i) => {
     const data = extraResults[i]?.data;
     const request = extraAsks[i];
-    if (!request || !data) return [];
+    const source = extraSources[i];
+    if (!request || !data || !source) return [];
     return [{
       spec,
-      name: seriesNameOf(spec),
+      name: seriesNameOf(spec, source.key !== objectSetVariable
+        ? declared[source.key]?.label ?? source.key : undefined),
       points: data.groups.map((g) => ({
         label: g.value,
         value: request.aggregation !== "count" ? Number(g.metric ?? 0) : g.count,
@@ -15177,7 +15186,9 @@ export function CanvasChart({
     ? mergeSeries(points, drawnExtras.map((e) => e.points),
       [firstName, ...drawnExtras.map((e) => e.name)])
     : null;
-  const extrasPending = extraResults.some((r, i) => !!extraAsks[i] && r.isPending);
+  // Only a series that asked is waited for: a disabled query stays pending.
+  const extrasPending = extraResults.some(
+    (r, i) => !!extraAsks[i] && !!extraSources[i] && r.isPending);
   const sides = axisSides(drawnExtras.map((e) => e.spec), multipleAxes === true);
 
   // p.283's value axis and titles. A problem with the bounds is said and the
@@ -15721,6 +15732,8 @@ function ChartSettings() {
           showLegend={showLegend !== false}
           legend={legendPosition}
           twoAxes={multipleAxes === true}
+          sets={setVariables.map((v) => ({ id: v.id, label: v.label }))}
+          chartSet={objectSetVariable}
           setProp={setProp as (fn: (p: Record<string, unknown>) => void) => void}
         />
       )}
@@ -15855,10 +15868,14 @@ function ChartSettings() {
  * panel. The Measure above is the first series; these are the rest. */
 function ChartSeriesFields({
   segmented, series, firstName, firstDefault, numbers, names, showLegend, legend, twoAxes,
-  setProp,
+  sets, chartSet, setProp,
 }: {
   /** p.283's Use multiple value axes (§542). */
   twoAxes: boolean;
+  /** p.280's layer Data input (§625): the object set variables a series may
+   * read instead of the chart's, `chartSet`. */
+  sets: { id: string; label: string }[];
+  chartSet: string;
   segmented: boolean;
   series: unknown;
   firstName: string;
@@ -15872,6 +15889,33 @@ function ChartSeriesFields({
 }) {
   const specs = seriesOf(series);
   const write = (next: typeof specs) => setProp((p) => (p.series = next));
+  // A series reading a set of its own (§625) is offered that set's
+  // properties, which are another type's: each such type is read once.
+  const { workspaceId } = useCanvasEnv();
+  const { resolved } = useCanvasVariables();
+  const ownSet = (spec: (typeof specs)[number]) =>
+    spec.objectSetVariable !== null && spec.objectSetVariable !== chartSet
+      ? spec.objectSetVariable : null;
+  const typeOf = (variable: string) =>
+    (resolved[variable] as { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  const typeIds = [...new Set(specs.flatMap((spec) => {
+    const own = ownSet(spec);
+    const type = own ? typeOf(own) : null;
+    return type ? [type] : [];
+  }))];
+  const types = useQueries({
+    queries: typeIds.map((id) => ({
+      queryKey: ["object-type", id],
+      queryFn: () => objApi.getType(workspaceId, id),
+    })),
+  });
+  const propertiesOf = (spec: (typeof specs)[number]) => {
+    const own = ownSet(spec);
+    if (!own) return null;
+    const type = typeOf(own);
+    const found = types[typeIds.indexOf(type ?? "")]?.data;
+    return (found?.properties ?? []).map((prop) => ({ name: prop.api_name, type: prop.data_type }));
+  };
   if (segmented) {
     return (
       <p className="field-hint" data-testid="chart-series-segmented">
@@ -15882,8 +15926,41 @@ function ChartSeriesFields({
   return (
     <div className="field" data-testid="chart-series">
       <span className="field-label">More series</span>
-      {specs.map((spec, i) => (
+      {specs.map((spec, i) => {
+        const own = propertiesOf(spec);
+        const seriesNumbers = own
+          ? own.filter((p) => p.type === "integer" || p.type === "float").map((p) => p.name)
+          : numbers;
+        const seriesNames = own ? own.map((p) => p.name) : names;
+        return (
         <div key={i} className="field-inline" data-testid="chart-series-row">
+          <select
+            aria-label={`Series ${i + 2} object set`}
+            data-testid="chart-series-set"
+            value={ownSet(spec) ?? ""}
+            onChange={(e) => write(specs.map((s, j) =>
+              // Another set's properties are another type's: what was picked
+              // for the old one is let go.
+              (j === i ? { ...s, objectSetVariable: e.target.value || null, dimension: null,
+                           measure: null } : s)))}
+          >
+            <option value="">The chart&apos;s set</option>
+            {sets.filter((v) => v.id !== chartSet).map((v) => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+          {own && (
+            <select
+              aria-label={`Series ${i + 2} X axis property`}
+              data-testid="chart-series-dimension"
+              value={spec.dimension ?? ""}
+              onChange={(e) => write(specs.map((s, j) =>
+                (j === i ? { ...s, dimension: e.target.value || null } : s)))}
+            >
+              <option value="">Group by…</option>
+              {seriesNames.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          )}
           <select
             aria-label={`Series ${i + 2} aggregation`}
             data-testid="chart-series-aggregate"
@@ -15904,7 +15981,7 @@ function ChartSeriesFields({
                 (j === i ? { ...s, measure: e.target.value || null } : s)))}
             >
               <option value="">Choose…</option>
-              {(spec.aggregate === "count_distinct" ? names : numbers)
+              {(spec.aggregate === "count_distinct" ? seriesNames : seriesNumbers)
                 .map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           )}
@@ -15924,7 +16001,8 @@ function ChartSeriesFields({
             type="text"
             aria-label={`Series ${i + 2} name`}
             data-testid="chart-series-name"
-            placeholder={seriesNameOf({ ...spec, name: "" })}
+            placeholder={seriesNameOf({ ...spec, name: "" },
+              sets.find((v) => v.id === ownSet(spec))?.label)}
             value={spec.name}
             onChange={(e) => write(specs.map((s, j) =>
               (j === i ? { ...s, name: e.target.value } : s)))}
@@ -15939,14 +16017,16 @@ function ChartSeriesFields({
             ×
           </button>
         </div>
-      ))}
+        );
+      })}
       <button
         type="button"
         className="btn"
         data-testid="chart-add-series"
         disabled={specs.length >= MAX_SERIES - 1}
         onClick={() =>
-          write([...specs, { aggregate: "count", measure: null, name: "", axis: "right" }])}
+          write([...specs, { aggregate: "count", measure: null, name: "", axis: "right",
+                             objectSetVariable: null, dimension: null }])}
       >
         Add a series
       </button>
