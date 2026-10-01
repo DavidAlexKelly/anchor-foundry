@@ -89,6 +89,7 @@ import type {
   WorkshopVariable,
 } from "@/lib/types";
 import { buttonTypeOf, itemsOf } from "@/components/canvas/button-items";
+import { layersOf as timelineLayersOf, overridingLayers } from "@/components/canvas/timeline";
 
 /** The Versions dialog (Foundry p.191-192).
  *
@@ -1292,13 +1293,20 @@ function CanvasBody({
         // clicks the way a Menu button's are, and only when it is customised.
         const menu = name === "CanvasObjectTable" && props.customMenu
           ? itemsOf(props.menuItems) : [];
+        // p.349's Override selection event (§616): a timeline's overriding
+        // layers are row selections of their own, beside the widget's.
+        const layers = name === "CanvasTimeline"
+          ? overridingLayers(timelineLayersOf(props.layers)) : [];
         triggers.push({
           id, label: `${node.data.displayName ?? name} · ${label}`, widget: name,
           ...(kind !== "inline"
             ? { buttonType: kind, items: itemsOf(props.items).map((i) => ({ id: i.id, label: i.label })) }
             : menu.length
               ? { buttonType: "menu" as const, items: menu.map((i) => ({ id: i.id, label: i.label })) }
-              : {}),
+              : layers.length
+                ? { buttonType: "twoPart" as const, items: layers, itemsOn: "row_select",
+                    noItemLabel: "Every other layer" }
+                : {}),
         });
       }
       if (name === "CanvasPage" || name === "CanvasOverlay") {

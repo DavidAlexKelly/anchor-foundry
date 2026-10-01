@@ -163,6 +163,15 @@ export function iconModeOf(raw: unknown): string {
 }
 
 export interface Layer {
+  /** What an event is aimed at when it fires for this layer alone (§616).
+   * `""` for a layer saved before layers had one; the settings panel gives
+   * it one when its override is switched on. An index would not do: a layer
+   * removed above another would move the other's events onto a stranger. */
+  id: string;
+  /** p.349's Override selection event: "set event(s) to be triggered when an
+   * event within the timeline layer is selected… Setting this will override
+   * any events set for the widget's 'On active timeline event selection'". */
+  overrideSelection: boolean;
   /** p.348's Layer label. */
   label: string;
   /** p.348's Object set — a variable id. See `NESTED_REFERENCE_PROPS`. */
@@ -204,6 +213,8 @@ export function layersOf(raw: unknown): Layer[] {
     const date = text(item.dateProperty);
     if (!set || !date) continue;
     out.push({
+      id: text(item.id),
+      overrideSelection: item.overrideSelection === true,
       label: text(item.label),
       objectSetVariable: set,
       dateProperty: date,
@@ -218,6 +229,38 @@ export function layersOf(raw: unknown): Layer[] {
     });
   }
   return out;
+}
+
+/**
+ * The item a layer's selection fires as, or `null` for the widget's own
+ * "On active timeline event selection" (p.349).
+ *
+ * `null` for a layer with the override on but no id yet, because an event
+ * cannot be aimed at it: the server registers only the layers it can name,
+ * so wiring one is impossible until the panel gives it an id - which it does
+ * in the same act that switches the override on.
+ */
+export function selectionItemOf(layer: Layer): string | null {
+  return layer.overrideSelection && layer.id ? layer.id : null;
+}
+
+/** The layers whose selection is their own, as the Events panel lists them. */
+export function overridingLayers(layers: readonly Layer[]): { id: string; label: string }[] {
+  return layers.flatMap((layer, index) => {
+    const item = selectionItemOf(layer);
+    return item ? [{ id: item, label: labelFor(layer, index) }] : [];
+  });
+}
+
+/** A fresh layer id: `l_N` for the first N no layer in `raw` has. Read from
+ * the raw list rather than the drawn one, so an unfinished layer's id is not
+ * handed out twice. */
+export function newLayerId(raw: readonly unknown[]): string {
+  const taken = new Set(raw.map((entry) =>
+    entry && typeof entry === "object" ? (entry as { id?: unknown }).id : undefined));
+  let n = raw.length + 1;
+  while (taken.has(`l_${n}`)) n += 1;
+  return `l_${n}`;
 }
 
 function text(raw: unknown): string {

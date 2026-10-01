@@ -7,12 +7,13 @@ import {
   instantOf, labelFor,
   layerColour, layersOf, orderOf, orientationOf, propertyModeOf, showsIcon,
   sortFor, titleModeOf, toggleLayer, visibleEvents, type Layer,
+  newLayerId, overridingLayers, selectionItemOf,
 } from "./timeline";
 
 /** p.347-349's Timeline. */
 
 const layer = (extra: Partial<Layer> = {}): Layer => ({
-  label: "", objectSetVariable: "v_set", dateProperty: "seen",
+  id: "", overrideSelection: false, label: "", objectSetVariable: "v_set", dateProperty: "seen",
   titleMode: "object", titleValue: "", propertyMode: "prominent", properties: "",
   colourMode: "default", colour: "", iconMode: "default", icon: "", ...extra,
 });
@@ -60,15 +61,46 @@ describe("p.348's date property, as a server-side sort", () => {
   });
 });
 
+describe("p.349's Override selection event (§616)", () => {
+  it("is off unless a document says true", () => {
+    for (const raw of [undefined, "yes", 1]) {
+      expect(layersOf([{ objectSetVariable: "v_a", dateProperty: "seen",
+                         overrideSelection: raw }])[0]!.overrideSelection).toBe(false);
+    }
+    expect(layersOf([{ objectSetVariable: "v_a", dateProperty: "seen" }])[0]!.id).toBe("");
+  });
+
+  it("fires a layer's own events only when it overrides and can be named", () => {
+    expect(selectionItemOf(layer({ id: "l_1", overrideSelection: true }))).toBe("l_1");
+    expect(selectionItemOf(layer({ id: "l_1", overrideSelection: false }))).toBeNull();
+    expect(selectionItemOf(layer({ id: "", overrideSelection: true }))).toBeNull();
+  });
+
+  it("lists the overriding layers by the name the legend gives them", () => {
+    expect(overridingLayers([
+      layer({ id: "l_1", overrideSelection: true, label: "Orders" }),
+      layer({ id: "l_2" }),
+      layer({ id: "l_3", overrideSelection: true }),
+    ])).toEqual([{ id: "l_1", label: "Orders" }, { id: "l_3", label: "Layer 3" }]);
+  });
+
+  it("hands out an id no layer has, counting the unfinished ones", () => {
+    expect(newLayerId([])).toBe("l_1");
+    expect(newLayerId([{}, { id: "l_3" }])).toBe("l_4");
+    expect(newLayerId([{ id: "l_3" }, "junk", null])).toBe("l_4");
+  });
+});
+
 describe("p.348's layers", () => {
   it("reads every setting p.348 and p.349 name", () => {
     const [read] = layersOf([{
       label: " Orders ", objectSetVariable: "v_a", dateProperty: " placed ",
       titleMode: "property", titleValue: "reference", propertyMode: "specific",
       properties: "total,status", colourMode: "static", colour: "#123456",
-      iconMode: "custom", icon: "cart",
+      iconMode: "custom", icon: "cart", id: " l_1 ", overrideSelection: true,
     }]);
     expect(read).toEqual({
+      id: "l_1", overrideSelection: true,
       label: "Orders", objectSetVariable: "v_a", dateProperty: "placed",
       titleMode: "property", titleValue: "reference", propertyMode: "specific",
       properties: "total,status", colourMode: "static", colour: "#123456",

@@ -1889,6 +1889,60 @@ def test_a_tables_click_must_name_a_menu_item_it_has() -> None:
                     variables=variables)["e_1"].on == "row_select"
 
 
+def timeline_layout(layers) -> dict:
+    """p.349's Timeline with per-layer selection overrides (§616)."""
+    return {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["tl"]},
+        "tl": {"type": {"resolvedName": "CanvasTimeline"}, "props": {"layers": layers}},
+    }
+
+
+def timeline_event(item=None, on: str = "row_select") -> dict:
+    trigger = {"node": "tl", "on": on, **({"item": item} if item is not None else {})}
+    return {"e_1": {"id": "e_1", "trigger": trigger, "effects": [set_var("v_a", "x")]}}
+
+
+LAYERS = [
+    {"id": "l_1", "overrideSelection": True, "objectSetVariable": "v_s", "dateProperty": "d"},
+    {"id": "l_2", "overrideSelection": False},
+    {"overrideSelection": True},
+    {"id": "l_4", "overrideSelection": "yes"},
+    "junk",
+]
+
+
+def test_a_timeline_layer_that_overrides_is_a_row_selection_of_its_own() -> None:
+    """p.349: "set event(s) to be triggered when an event within the timeline
+    layer is selected… Setting this will override any events set for the
+    widget's 'On active timeline event selection'"."""
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    events = we.parse(timeline_event("l_1"), layout=timeline_layout(LAYERS), variables=variables)
+    assert (events["e_1"].on, events["e_1"].item) == ("row_select", "l_1")
+    # The widget's own selection event stands beside the overriding layers'.
+    assert we.parse(timeline_event(), layout=timeline_layout(LAYERS),
+                    variables=variables)["e_1"].item is None
+
+
+def test_only_an_overriding_layer_with_an_id_can_be_named() -> None:
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    for item in ("l_2", "l_4", "l_9"):
+        with pytest.raises(we.EventError, match="does not have"):
+            we.parse(timeline_event(item), layout=timeline_layout(LAYERS), variables=variables)
+    # Layers that are not a list are no layers, rather than a crash.
+    for junk in (5, {"id": "l_1", "overrideSelection": True}):
+        with pytest.raises(we.EventError, match="does not have"):
+            we.parse(timeline_event("l_1"), layout=timeline_layout(junk), variables=variables)
+
+
+def test_a_layer_is_a_row_selection_and_a_button_item_a_click() -> None:
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    with pytest.raises(we.EventError, match="whose items are 'row_select' triggers"):
+        we.parse(timeline_event("l_1", on="click"), layout=timeline_layout(LAYERS),
+                 variables=variables)
+    with pytest.raises(we.EventError, match="whose items are 'click' triggers"):
+        we.parse(item_event("i_csv", on="row_select"), layout=menu_layout(), variables=variables)
+
+
 def test_without_a_layout_an_item_is_only_checked_for_shape() -> None:
     """The same rule as a trigger's node: no layout, no membership check."""
     events = we.parse(item_event("anything"))

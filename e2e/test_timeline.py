@@ -31,7 +31,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, save, settled
 
 # **Three orderings, deliberately all different**: the order these are written,
 # the order their keys sort in, and the order their dates run. A sync stamps
@@ -88,7 +88,7 @@ def ontology(api):
 
 
 def build(api, ontology, name: str, props: dict | None = None, *, layers=None,
-          with_output: bool = False):
+          with_output: bool = False, events: dict | None = None):
     """One timeline over one or two layers, and optionally a table reading the
     set its selection narrows."""
     variables = {
@@ -127,9 +127,15 @@ def build(api, ontology, name: str, props: dict | None = None, *, layers=None,
             "props": {"objectSetVariable": "v_picked", "columns": "id,name",
                       "pageSize": 25, "activeVariable": None, "autoSelect": False},
         }
+    if events:
+        # p.349's events (§616) write here, and a text reads it back.
+        variables["v_note"] = {"id": "v_note", "kind": "string", "label": "Note",
+                               "default": "none"}
+        nodes["note"] = {"resolvedName": "CanvasText",
+                         "props": {"tag": "p", "text": "NOTE={{v_note}}"}}
     mod = Module(api, name, beside=ontology)
     mod.define({"format": 2, "layout": layout(nodes), "variables": variables,
-                "events": {}})
+                "events": events or {}})
     return mod
 
 
@@ -544,3 +550,79 @@ def test_the_layer_editor_offers_only_object_set_variables(page, api, ontology) 
     options = page.get_by_test_id("timeline-set-0").locator("option").all_text_contents()
     assert "Every site" in options
     assert "The picked event" not in options, "an array variable is not an object set"
+
+
+# ---- p.349's Override selection event (§616) -----------------------------------
+def noting(value: str, item: str | None = None) -> dict:
+    trigger = {"node": "tl", "on": "row_select", **({"item": item} if item else {})}
+    return {"trigger": trigger, "effects": [
+        {"type": "set_variable", "config": {"variable": "v_note", "value": value}}]}
+
+
+TWO_LAYERS = [
+    {"id": "l_1", "label": "Sites", "objectSetVariable": "v_sites", "dateProperty": "seen",
+     "overrideSelection": True},
+    {"id": "l_2", "label": "Orders", "objectSetVariable": "v_orders", "dateProperty": "placed"},
+]
+
+
+def test_a_layer_that_overrides_fires_its_own_events_instead(page, api, ontology) -> None:
+    """p.349: "set event(s) to be triggered when an event within the timeline
+    layer is selected… Setting this will override any events set for the
+    widget's 'On active timeline event selection'"."""
+    mod = build(api, ontology, "Timeline layer events", layers=TWO_LAYERS, events={
+        "e_widget": {"id": "e_widget", **noting("widget {{key}}")},
+        "e_sites": {"id": "e_sites", **noting("site {{key}}", "l_1")},
+    })
+    open_module(page, mod)
+    expect(events(page)).to_have_count(6)
+    expect(page.get_by_text("NOTE=none")).to_be_visible()
+
+    # A site's layer overrides: its own event, and not the widget's.
+    events(page).filter(has_text="Bravo").first.click()
+    expect(page.get_by_text("NOTE=site S1")).to_be_visible()
+    # An order's layer does not: the widget's event.
+    events(page).filter(has_text="O1").first.click()
+    expect(page.get_by_text("NOTE=widget O1")).to_be_visible()
+
+
+def test_an_overriding_layer_with_no_events_fires_nothing(page, api, ontology) -> None:
+    """Overridden by nothing is still overridden: the widget's event does not
+    fall through to a layer that took its selection for itself."""
+    # With the Active object output, so the click shows it landed.
+    mod = build(api, ontology, "Timeline layer silent", layers=TWO_LAYERS, with_output=True,
+                events={"e_widget": {"id": "e_widget", **noting("widget {{key}}")}})
+    open_module(page, mod)
+    expect(events(page)).to_have_count(6)
+    events(page).filter(has_text="Bravo").first.click()
+    expect(events(page).filter(has_text="Bravo").first).to_have_attribute(
+        "data-selected", "yes")
+    expect(page.get_by_text("NOTE=none")).to_be_visible()
+
+
+def test_the_builder_switches_a_layer_s_override_on_and_aims_an_event_at_it(
+    page, api, ontology,
+) -> None:
+    layers = [dict(layer) for layer in TWO_LAYERS]
+    for layer in layers:
+        layer.pop("id"), layer.pop("overrideSelection", None)
+    mod = build(api, ontology, "Timeline layer builder", layers=layers)
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row").filter(has_text="Timeline").first.click()
+    page.get_by_test_id("timeline-override-1").check()
+
+    page.get_by_role("button", name="Events (0)").click()
+    page.get_by_role("button", name="New event").click()
+    which = page.get_by_test_id("event-item")
+    # The widget's own selection first, then the one layer that overrides.
+    expect(which.locator("option")).to_have_text(["Every other layer", "Orders"])
+    which.select_option(label="Orders")
+    save(page)
+    document = mod.definition()
+    saved = document["layout"]["tl"]["props"]["layers"]
+    # The layer got an id in the act of switching its override on.
+    assert saved[1]["overrideSelection"] is True and saved[1]["id"], saved
+    assert "id" not in saved[0], saved
+    assert [e["trigger"] for e in document["events"].values()] == [
+        {"node": "tl", "on": "row_select", "item": saved[1]["id"]}]
