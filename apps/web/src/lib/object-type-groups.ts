@@ -123,3 +123,28 @@ export function toGroupApiName(display: string): string {
 export function memberSummary(count: number): string {
   return `${count} object type${count === 1 ? "" : "s"}`;
 }
+
+/**
+ * Which group the Object Explorer's selection *is* (§618; `object-link-types`
+ * p.262: "Groups are also displayed on the Object Explorer home page").
+ *
+ * **Derived, never remembered**, the rule the saved-search rail keeps: a group
+ * is lit while the types ticked are exactly its members, and goes dark the
+ * moment somebody ticks one more - because the question on screen is then no
+ * longer "this group". `chosen` is the last group opened with the members it
+ * had then, since a group's membership is a read the selection alone cannot
+ * answer.
+ */
+export function activeGroup(
+  selected: readonly string[],
+  chosen: { id: string; members: readonly string[] } | null,
+): string | null {
+  return chosen && chosen.members.length > 0 && sameSelection(selected, chosen.members)
+    ? chosen.id : null;
+}
+
+/** What the Explorer's groups aside says when there are none. Groups are made
+ * in the Ontology Manager (p.261), so that is where it points. */
+export function groupsEmptyReason(): string {
+  return "No object type groups yet. An ontology editor makes them in the Ontology Manager.";
+}
