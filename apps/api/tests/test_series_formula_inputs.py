@@ -445,6 +445,68 @@ def test_a_combine_names_its_variables_as_a_formula_does() -> None:
     assert wv.series_inputs(got) == ["v_other"]
 
 
+# ---- p.393's Linear aggregation (§653) --------------------------------------------
+def linear(aggregate: str = "sum", **inputs) -> dict:
+    return {"kind": "linear_aggregate", "aggregate": aggregate, "inputs": inputs}
+
+
+@pytest.mark.parametrize("aggregate, at_six", [
+    ("sum", 20.0 + 1.0 + 3 / 21), ("avg", (20.0 + 1.0 + 3 / 21) / 2), ("min", 1.0 + 3 / 21),
+    ("max", 20.0),
+])
+def test_a_linear_aggregation_lines_each_series_up_first(aggregate, at_six) -> None:
+    """p.393: "Compute a linear aggregation across multiple time series over
+    time." At every instant either series reads, each stands on the line
+    between its readings either side: at 03:00 S1 is half way from 10 to 20,
+    and at 06:00 W1 is 3/21 of the way from 1 to 2. Before 03:00 W1 has not
+    begun, so midnight on the 1st is S1's alone."""
+    got = run([linear(aggregate, y=spec("W1", "input_1"))])
+    assert [at for at, _ in got] == [datetime(2026, 1, 1, 0), datetime(2026, 1, 1, 3),
+                                     datetime(2026, 1, 1, 6), datetime(2026, 1, 2, 0)]
+    by = dict(got)
+    assert by[datetime(2026, 1, 1, 0)] == 10.0
+    assert by[datetime(2026, 1, 1, 6)] == pytest.approx(at_six)
+    three = {"sum": 16.0, "avg": 8.0, "min": 1.0, "max": 15.0}[aggregate]
+    assert by[datetime(2026, 1, 1, 3)] == pytest.approx(three)
+    two = {"sum": 32.0, "avg": 16.0, "min": 2.0, "max": 30.0}[aggregate]
+    assert by[datetime(2026, 1, 2, 0)] == two
+
+
+def test_a_linear_aggregation_skips_a_series_gaps() -> None:
+    """A reading with no value is not a point of the line: S1's blank at 03:00
+    leaves S1 on its line from 10 to 20 there."""
+    con = duckdb.connect()
+    try:
+        con.execute("CREATE TABLE dataset (sensor VARCHAR, taken TIMESTAMP, reading DOUBLE)")
+        con.executemany("INSERT INTO dataset VALUES (?, ?, ?)",
+                        S1 + [("S1", "2026-01-01 03:00:00", None)])
+        con.execute("CREATE TABLE input_1 (sensor VARCHAR, taken TIMESTAMP, reading DOUBLE)")
+        con.executemany("INSERT INTO input_1 VALUES (?, ?, ?)", W1)
+        sql = ts.points_sql(key_column="sensor", timestamp_column="taken", value_column="reading",
+                            series_id="S1", interval="none", aggregate="avg",
+                            transforms=[linear("sum", y=spec("W1", "input_1"))])
+        got = dict(con.execute(sql).fetchall())
+    finally:
+        con.close()
+    assert got[datetime(2026, 1, 1, 3)] == pytest.approx(16.0)
+
+
+def test_a_linear_aggregation_of_three() -> None:
+    """S2 reads only at midnight on the 1st, so it counts there alone."""
+    got = dict(run([linear("sum", y=spec("W1", "input_1"), z=spec("S2", "dataset"))]))
+    assert got[datetime(2026, 1, 1, 0)] == 10.0 + 99.0
+    assert got[datetime(2026, 1, 2, 0)] == 32.0
+
+
+def test_a_linear_aggregation_is_refused_as_a_combine_is() -> None:
+    with pytest.raises(ValueError) as caught:
+        parsed([{"kind": "linear_aggregate", "inputs": {}}], "references")
+    assert str(caught.value) == "transform 1: combining needs at least one other series"
+    got = parsed([{"kind": "linear_aggregate", "inputs": {"y": "v_other"}}], "variables")
+    assert got == [{"kind": "linear_aggregate", "aggregate": "avg", "inputs": {"y": "v_other"}}]
+    assert wv.series_inputs(got) == ["v_other"]
+
+
 # ---- p.393's Event statistics (§652) ----------------------------------------------
 #: W2 is above 2 from 03:00 to 07:00 on the 1st, at midnight on the 2nd, and at
 #: midnight on the 3rd.

@@ -100,3 +100,29 @@ def test_an_input_added_in_the_panel_is_saved_as_the_variables_input(page, api) 
     assert derivation["inputs"] == ["v_picked", "v_ref_series"]
     assert derivation["config"]["transforms"] == [
         {"kind": "formula", "expression": "x - y", "inputs": {"y": "v_ref_series"}}]
+
+
+def test_a_linear_aggregation_is_set_up_in_the_panel(page, api) -> None:
+    """p.393's Linear aggregation (§653), in the transform editor: another
+    series and the aggregate, and no unit to set."""
+    mod = with_reference(api, "Series linear aggregation", None)
+    page.goto(f"{WEB_BASE}{mod.url}")
+    expect(page.get_by_role("button", name="Preview", exact=True)).to_be_visible(timeout=30000)
+    page.get_by_role("button", name="Variables", exact=False).first.click()
+    page.get_by_text("Readings", exact=True).first.click()
+    transforms = page.get_by_test_id("series-transforms")
+    transforms.get_by_label("Add a transform").select_option("linear_aggregate")
+    expect(transforms.get_by_label("Transform 1 unit")).to_have_count(0)
+    transforms.get_by_label("Transform 1 combine by").select_option("sum")
+    transforms.get_by_label("Transform 1 input y").select_option("v_ref_series")
+    expect(page.get_by_test_id("series-transforms-problem")).to_have_count(0)
+    with page.expect_response(
+        lambda r: "/definition" in r.url and r.request.method in ("PUT", "POST")
+    ) as saved:
+        page.get_by_role("button", name="Save", exact=True).click()
+    assert saved.value.ok, saved.value.status
+    settled(page)
+    derivation = mod.definition()["variables"]["v_series"]["derivation"]
+    assert derivation["config"]["transforms"] == [
+        {"kind": "linear_aggregate", "aggregate": "sum", "inputs": {"y": "v_ref_series"}}]
+    assert "v_ref_series" in derivation["inputs"]

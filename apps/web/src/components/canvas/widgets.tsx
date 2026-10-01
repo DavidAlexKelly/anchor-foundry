@@ -13094,7 +13094,7 @@ export function CanvasSeriesAnalysis({
   const offered = SERIES_PLOT_TYPES.filter((k) => !plotTypes || plotTypes.includes(k));
   const [draft, setDraft] = useState<{
     parent: string; transforms: SeriesTransform[]; bands?: SeriesBands;
-    combine?: { others: string[]; aggregate: "avg" | "min" | "max" | "sum" };
+    combine?: { kind: "combine" | "linear_aggregate"; others: string[]; aggregate: "avg" | "min" | "max" | "sum" };
     eventStats?: { set: string; aggregate: "sum" | "avg" | "min" | "max" | "count" | "stddev" };
   } | null>(null);
   const canvases = seriesCanvasesOf(plots, addedCanvases);
@@ -13210,12 +13210,13 @@ export function CanvasSeriesAnalysis({
                         if (!e.target.value) return;
                         // p.393's Bollinger bands are three plots, set up by
                         // their own three numbers (§649).
-                        // Combine picks other plots as its inputs (§650).
+                        // Combine picks other plots as its inputs (§650), as
+                        // a linear aggregation does (§653).
                         setDraft(e.target.value === "bollinger"
                           ? { parent: plots[0]!.id, transforms: [], bands: DEFAULT_SERIES_BANDS }
-                          : e.target.value === "combine"
+                          : e.target.value === "combine" || e.target.value === "linear_aggregate"
                             ? { parent: plots[0]!.id, transforms: [],
-                                combine: { others: [], aggregate: "avg" } }
+                                combine: { kind: e.target.value, others: [], aggregate: "avg" } }
                           : e.target.value === "event_statistics"
                             ? { parent: plots[0]!.id, transforms: [],
                                 eventStats: { set: eventSets[0]?.id ?? "", aggregate: "avg" } }
@@ -13324,7 +13325,9 @@ export function CanvasSeriesAnalysis({
                           onChange={(e) => setDraft({ ...draft, combine: { ...draft.combine!,
                             aggregate: e.target.value as "avg" | "min" | "max" | "sum" } })}>
                     {COMBINE_AGGREGATES.map((a) => (
-                      <option key={a} value={a}>{`${COMBINE_WORDS[a]} where they meet`}</option>
+                      <option key={a} value={a}>
+                        {draft.combine!.kind === "combine" ? `${COMBINE_WORDS[a]} where they meet` : COMBINE_WORDS[a]}
+                      </option>
                     ))}
                   </select>
                   {plots.filter((p) => p.id !== draft.parent).map((p) => (
@@ -13378,7 +13381,7 @@ export function CanvasSeriesAnalysis({
                               draft.eventStats.aggregate, parent?.canvas ?? 1)
                             : draft.combine
                             ? withSeriesCombined(plots, draft.parent, draft.combine.others,
-                              draft.combine.aggregate, parent?.canvas ?? 1)
+                              draft.combine.aggregate, parent?.canvas ?? 1, draft.combine.kind)
                             : draft.bands
                             ? withSeriesBands(plots, draft.parent, draft.bands, parent?.canvas ?? 1)
                             : withSeriesDerived(plots, draft.parent, draft.transforms,

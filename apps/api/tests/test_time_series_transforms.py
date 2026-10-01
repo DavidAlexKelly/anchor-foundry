@@ -218,7 +218,7 @@ def test_the_cap_comes_after_the_transforms() -> None:
     ([{"kind": "cumulative", "aggregate": "sum"}] * 11, "a series takes at most 10 transforms"),
     (["cumulative"], "transform 1: must be an object"),
     ([{"kind": "smooth"}],
-     "transform 1: the kind must be one of cumulative, periodic, rolling, derivative, integral, shift, range, formula, filter, sample, combine, event_statistics"),
+     "transform 1: the kind must be one of cumulative, periodic, rolling, derivative, integral, shift, range, formula, filter, sample, combine, event_statistics, linear_aggregate"),
     ([{"kind": "cumulative", "aggregate": "median"}],
      "transform 1: the aggregate must be one of sum, avg, min, max, count, stddev"),
     ([{"kind": "rolling", "aggregate": "sum", "window": 0, "unit": "day"}],
@@ -306,7 +306,7 @@ def test_a_series_variable_refuses_a_transform_that_could_not_run() -> None:
                                                    "transforms": [{"kind": "smooth"}]}}},
         })
     assert str(caught.value) == ("variable 'v_series': transform 1: the kind must be one of "
-                                 "cumulative, periodic, rolling, derivative, integral, shift, range, formula, filter, sample, combine, event_statistics")
+                                 "cumulative, periodic, rolling, derivative, integral, shift, range, formula, filter, sample, combine, event_statistics, linear_aggregate")
 
 
 def test_the_points_endpoints_apply_transforms(client, fx, ontology, instance) -> None:
