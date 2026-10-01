@@ -103,3 +103,23 @@ def test_the_panel_names_the_set_and_the_property(page, api, module) -> None:
     props = mod.definition()["layout"]["tsa"]["props"]
     assert (props["objectSetVariable"], props["property"]) == ("v_all", "readings")
     assert "integral" not in props["plotTypes"] and "derivative" in props["plotTypes"]
+
+
+def test_a_filtered_and_a_sampled_plot(page, api, module) -> None:
+    """p.393's Filter time series and Sample (§648). North reads 10, 20, 30
+    and 40 on four days: kept above 15 it is 20 to 40, and sampled every twelve
+    hours from the reading before, 10, 10, 20, 20, 30, 30, 40."""
+    open_module(page, build(api, module, "Analysis filter sample"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_label("New plot").select_option("filter")
+    page.get_by_label("Input plot").select_option(label="North sensor")
+    page.get_by_label("Transform 1 value").fill("15")
+    page.get_by_role("button", name="Add plot").click()
+    filtered = "Filter time series of North sensor"
+    expect(stat(page, filtered, "min")).to_have_text("20")
+    expect(stat(page, filtered, "max")).to_have_text("40")
+    page.get_by_label("New plot").select_option("sample")
+    page.get_by_label("Input plot").select_option(label="North sensor")
+    page.get_by_label("Transform 1 step").fill("12")
+    page.get_by_role("button", name="Add plot").click()
+    expect(stat(page, "Sample of North sensor", "mean")).to_have_text("22.857")

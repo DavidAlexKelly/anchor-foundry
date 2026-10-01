@@ -7,6 +7,7 @@
  * it produced. The words and the checks are `series-transforms.ts`'s. */
 
 import {
+  FILTER_OPERATORS, FILTER_WORDS, SAMPLE_METHODS, type FilterOperator, type SampleMethod,
   FORMULA_FUNCTIONS, INTEGRATION_METHODS, KIND_LABELS, MAX_FORMULA, MAX_FORMULA_INPUTS, MAX_TRANSFORMS, TIME_UNITS,
   TRANSFORM_KINDS, WINDOW_AGGREGATES, WINDOW_TYPES, blankTransform, transformsProblem, withInput, withKind,
   withoutInput,
@@ -71,7 +72,16 @@ export function SeriesTransformsEditor({
               onChange={(e) => set(index, { ...t, by: Number(e.target.value) })}
             />
           )}
-          {t.kind !== "cumulative" && t.kind !== "range" && t.kind !== "formula" && (
+          {t.kind === "sample" && (
+            <input
+              type="number" min={1}
+              aria-label={`Transform ${index + 1} step`}
+              value={Number.isFinite(t.every) ? t.every : ""}
+              readOnly={readOnly}
+              onChange={(e) => set(index, { ...t, every: Number(e.target.value) })}
+            />
+          )}
+          {t.kind !== "cumulative" && t.kind !== "range" && t.kind !== "formula" && t.kind !== "filter" && (
             <select
               aria-label={`Transform ${index + 1} unit`}
               value={t.unit}
@@ -116,6 +126,46 @@ export function SeriesTransformsEditor({
                 <option key={m} value={m}>{m === "linear" ? "linear" : `${m}-hand sum`}</option>
               ))}
             </select>
+          )}
+          {t.kind === "sample" && (
+            <select
+              aria-label={`Transform ${index + 1} sample method`}
+              value={t.method}
+              disabled={readOnly}
+              onChange={(e) => set(index, { ...t, method: e.target.value as SampleMethod })}
+            >
+              {SAMPLE_METHODS.map((m) => (
+                <option key={m} value={m}>{m === "previous" ? "the reading before" : "interpolated"}</option>
+              ))}
+            </select>
+          )}
+          {t.kind === "filter" && (
+            <>
+              <select
+                aria-label={`Transform ${index + 1} keep`}
+                value={t.keep ? "keep" : "remove"}
+                disabled={readOnly}
+                onChange={(e) => set(index, { ...t, keep: e.target.value === "keep" })}
+              >
+                <option value="keep">keep readings</option>
+                <option value="remove">remove readings</option>
+              </select>
+              <select
+                aria-label={`Transform ${index + 1} comparison`}
+                value={t.op}
+                disabled={readOnly}
+                onChange={(e) => set(index, { ...t, op: e.target.value as FilterOperator })}
+              >
+                {FILTER_OPERATORS.map((o) => <option key={o} value={o}>{FILTER_WORDS[o]}</option>)}
+              </select>
+              <input
+                type="number"
+                aria-label={`Transform ${index + 1} value`}
+                value={Number.isFinite(t.value) ? t.value : ""}
+                readOnly={readOnly}
+                onChange={(e) => set(index, { ...t, value: Number(e.target.value) })}
+              />
+            </>
           )}
           {t.kind === "formula" && (
             <input

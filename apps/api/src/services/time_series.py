@@ -15,6 +15,7 @@ its own answer to "what did this look like last Tuesday".
 """
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -433,7 +434,21 @@ def points_for_many_sql(
 #: multiple transforms to be chained together." (p.583)
 TRANSFORM_KINDS = (
     "cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula",
+    "filter", "sample",
 )
+#: p.393's *Filter time series*: "Keep or remove points in a time series based
+#: on a time range or mathematical condition" (§648). The time range is
+#: `range`; the condition is a comparison of each reading with a number.
+FILTER_OPERATORS = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "eq": "=", "neq": "<>"}
+#: p.393's *Sample*: "Resample a time series at a constant frequency to fill
+#: gaps or change the data rate" (§648). Each sample takes the reading at or
+#: before it (`previous`), or the straight line between the readings either
+#: side (`linear`).
+SAMPLE_METHODS = ("previous", "linear")
+#: How many samples one series may be resampled to. Bounded inside the query,
+#: so a step of a second over a decade stops here rather than after building
+#: three hundred million rows to cap.
+MAX_SAMPLES = 100_000
 #: What a cumulative or rolling window aggregates with: p.586's summarizer
 #: vocabulary, as far as a window over points can use it.
 WINDOW_AGGREGATES = ("sum", "avg", "min", "max", "count", "stddev")
@@ -536,6 +551,24 @@ def parse_transforms(
             elif kind == "shift":
                 parsed = {"kind": kind, "by": _span(item.get("by"), "the shift", signed=True),
                           "unit": _unit(item.get("unit"))}
+            elif kind == "filter":
+                operator = item.get("op")
+                if operator not in FILTER_OPERATORS:
+                    raise ValueError(f"the comparison must be one of {', '.join(FILTER_OPERATORS)}")
+                value = item.get("value")
+                if (isinstance(value, bool) or not isinstance(value, (int, float))
+                        or not math.isfinite(value)):
+                    raise ValueError("a filter compares with a number")
+                keep = item.get("keep", True)
+                if not isinstance(keep, bool):
+                    raise ValueError("keep is true (keep the points that match) or false")
+                parsed = {"kind": kind, "op": operator, "value": float(value), "keep": keep}
+            elif kind == "sample":
+                method = item.get("method", "previous")
+                if method not in SAMPLE_METHODS:
+                    raise ValueError(f"the method must be one of {', '.join(SAMPLE_METHODS)}")
+                parsed = {"kind": kind, "every": _span(item.get("every"), "the step"),
+                          "unit": _unit(item.get("unit")), "method": method}
             elif kind == "formula":
                 expression = item.get("expression")
                 if not isinstance(expression, str) or not expression.strip():
@@ -791,6 +824,40 @@ def _transform_sql(
         # p.586: "identical to the input time series, but temporally shifted".
         return (f"SELECT {s}CAST(at AS TIMESTAMP) + INTERVAL ({transform['by']}) "
                 f"{transform['unit'].upper()} AS at, value FROM {source}")
+    if kind == "filter":
+        # p.393: keep the points whose reading matches, or remove them. A
+        # reading with no value matches nothing either way: a gap is not a
+        # reading to compare, and it is not kept by a NOT around it either.
+        condition = f"value {FILTER_OPERATORS[transform['op']]} {transform['value']!r}"
+        if not transform["keep"]:
+            condition = f"NOT ({condition})"
+        return f"SELECT {s}at, value FROM {source} WHERE {condition}"
+    if kind == "sample":
+        # p.393: a point every step from the first reading to the last, each
+        # the reading at or before it, or the line between the readings on
+        # either side. The grid is built at most MAX_SAMPLES long, inside
+        # the query. Gaps are what sampling fills, so only readings count.
+        step = transform["every"] * TIME_UNITS[transform["unit"]]
+        group = " GROUP BY series" if per_series else ""
+        on = "g.series = {0}.series AND " if per_series else ""
+        readings = (f"(SELECT {s}CAST(at AS TIMESTAMP) AS at, value FROM {source} "
+                    "WHERE value IS NOT NULL)")
+        grid = (
+            f"(SELECT {s}unnest(generate_series(lo, least(hi, lo + INTERVAL ({step * (MAX_SAMPLES - 1)}) "
+            f"SECOND), INTERVAL ({step}) SECOND)) AS at FROM (SELECT {s}min(CAST(at AS TIMESTAMP)) AS lo, "
+            f"max(CAST(at AS TIMESTAMP)) AS hi FROM {source} WHERE value IS NOT NULL{group}) bounds)"
+        )
+        g = "g.series, " if per_series else ""
+        if transform["method"] == "previous":
+            return (f"SELECT {g}g.at AS at, p.value AS value FROM {grid} g "
+                    f"ASOF LEFT JOIN {readings} p ON {on.format('p')}g.at >= p.at")
+        span = "(epoch_ms(n.at) - epoch_ms(p.at))"
+        return (
+            f"SELECT {g}g.at AS at, CASE WHEN n.at = p.at THEN p.value ELSE p.value + "
+            f"(n.value - p.value) * (epoch_ms(g.at) - epoch_ms(p.at)) / {span} END AS value "
+            f"FROM {grid} g ASOF LEFT JOIN {readings} p ON {on.format('p')}g.at >= p.at "
+            f"ASOF LEFT JOIN {readings} n ON {on.format('n')}g.at <= n.at"
+        )
     if kind == "formula" and inputs:
         # §561: p.586's formula over several series. **Its points are the
         # series' own**, and each other input is read *as of* each of them -

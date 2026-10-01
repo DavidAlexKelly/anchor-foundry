@@ -11,7 +11,7 @@ import {
 
 describe("the vocabulary", () => {
   it("is p.583-586's, as the server takes it", () => {
-    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula"]);
+    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample"]);
     expect([...FORMULA_FUNCTIONS]).toEqual(["abs", "sqrt", "ln", "log10", "exp", "floor", "ceil", "round"]);
     expect(MAX_FORMULA).toBe(200);
     expect([...WINDOW_TYPES]).toEqual(["start", "end"]);
@@ -182,5 +182,34 @@ describe("a formula's other inputs (§561)", () => {
     expect(seriesDerivationInputs("v_obj", [])).toEqual(["v_obj"]);
     expect(seriesDerivationInputs("", chain)).toEqual(["", "v_2", "v_1"]);
     expect(seriesDerivationInputs("", [])).toEqual([]);
+  });
+});
+
+describe("p.393's Filter time series and Sample (§648)", () => {
+  it("starts each with a working default", () => {
+    expect(blankTransform("filter")).toEqual({ kind: "filter", op: "gt", value: 0, keep: true });
+    expect(blankTransform("sample")).toEqual({ kind: "sample", every: 1, unit: "hour", method: "previous" });
+    expect(transformProblem(blankTransform("filter"))).toBeNull();
+    expect(transformProblem(blankTransform("sample"))).toBeNull();
+  });
+
+  it("says what each does", () => {
+    expect(transformText({ kind: "filter", op: "gte", value: 5, keep: true })).toBe("only readings at least 5");
+    expect(transformText({ kind: "filter", op: "neq", value: 0, keep: false }))
+      .toBe("without readings not equal to 0");
+    expect(transformText({ kind: "sample", every: 1, unit: "day", method: "previous" }))
+      .toBe("sampled every 1 day");
+    expect(transformText({ kind: "sample", every: 15, unit: "minute", method: "linear" }))
+      .toBe("sampled every 15 minutes, interpolated");
+  });
+
+  it("refuses what the server would", () => {
+    expect(transformProblem({ kind: "filter", op: "gt", value: Number.NaN, keep: true }))
+      .toBe("A filter compares with a number.");
+    for (const every of [0, 1.5, 100_001]) {
+      expect(transformProblem({ kind: "sample", every, unit: "day", method: "previous" }))
+        .toMatch(/^The step must be a whole number from 1/);
+    }
+    expect(transformProblem({ kind: "sample", every: 100_000, unit: "day", method: "linear" })).toBeNull();
   });
 });
