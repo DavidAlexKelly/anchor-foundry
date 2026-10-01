@@ -82,6 +82,8 @@ export interface Plot {
   /** p.394's display settings the reader changed (§655); `displayOf` fills
    * in the rest. */
   display?: Partial<PlotDisplay>;
+  /** p.394's *Axis*: which of its canvas's axes the plot is on (§656). */
+  axis?: number;
 }
 
 /** One root plot per object, on the first canvas. */
@@ -185,7 +187,7 @@ export function withoutPlot(plots: readonly Plot[], id: string): Plot[] {
   return plots.filter((p) => !gone.has(p.id));
 }
 
-export function withPlotSetting<K extends "canvas" | "style" | "label">(
+export function withPlotSetting<K extends "canvas" | "style" | "label" | "axis">(
   plots: readonly Plot[], id: string, key: K, value: Plot[K],
 ): Plot[] {
   return plots.map((p) => (p.id === id ? { ...p, [key]: value } : p));
@@ -233,32 +235,131 @@ export function statsOf(
   return { min, max, mean: sum / inside.length, count: inside.length };
 }
 
-/** The extent of several plots' readings, time and value, padded so a flat
- * line is not drawn on the frame's edge. Null when there is nothing. */
-export function extentOf(series: readonly (readonly Reading[])[]): {
-  t0: number; t1: number; v0: number; v1: number;
-} | null {
-  let t0 = Infinity; let t1 = -Infinity; let v0 = Infinity; let v1 = -Infinity;
+/** The time the plots of a canvas span, together; a lone instant is given a
+ * width to draw in. Null with no readings. */
+export function timesOf(series: readonly (readonly Reading[])[]): { t0: number; t1: number } | null {
+  let t0 = Infinity; let t1 = -Infinity;
+  for (const readings of series) {
+    for (const r of readings) { t0 = Math.min(t0, r.t); t1 = Math.max(t1, r.t); }
+  }
+  if (!Number.isFinite(t0)) return null;
+  return t1 === t0 ? { t0: t0 - 1, t1: t1 + 1 } : { t0, t1 };
+}
+
+/** p.394-395's *Axis* options (§656): each canvas has axes its plots are
+ * assigned to, each with "Unit", "Auto scale", "Axis min" and "Axis max",
+ * and p.395's "Align axis", "Log scale" and "Invert axis". The unit is a
+ * label: a time series property carries no unit to convert from. */
+export const AXIS_ALIGNS = ["left", "right"] as const;
+export type AxisAlign = (typeof AXIS_ALIGNS)[number];
+export interface AxisSettings {
+  unit: string;
+  auto: boolean;
+  min: number | null;
+  max: number | null;
+  log: boolean;
+  invert: boolean;
+  align: AxisAlign;
+}
+export const DEFAULT_AXIS: AxisSettings = {
+  unit: "", auto: true, min: null, max: null, log: false, invert: false, align: "left",
+};
+/** Axes on one canvas. */
+export const MAX_AXES = 4;
+export const MAX_UNIT = 24;
+/** Each canvas's axes' settings the reader changed, by `canvas:axis`. */
+export type Axes = Record<string, Partial<AxisSettings>>;
+
+export function axisOf(plot: Pick<Plot, "axis">): number {
+  return plot.axis ?? 1;
+}
+
+/** The axes a canvas's plots are on, in order; the first when none is. */
+export function axesOf(plots: readonly Plot[], canvas: number): number[] {
+  const used = new Set(plots.filter((p) => p.canvas === canvas).map(axisOf));
+  return used.size ? [...used].sort((a, b) => a - b) : [1];
+}
+
+/** The number a new axis on a canvas takes; null at the cap. */
+export function newAxisOf(plots: readonly Plot[], canvas: number): number | null {
+  const used = axesOf(plots, canvas);
+  return used.length >= MAX_AXES ? null : Math.max(...used) + 1;
+}
+
+export function axisSettingsOf(axes: Axes, canvas: number, axis: number): AxisSettings {
+  return { ...DEFAULT_AXIS, ...axes[`${canvas}:${axis}`] };
+}
+
+export function withAxisSetting<K extends keyof AxisSettings>(
+  axes: Axes, canvas: number, axis: number, key: K, value: AxisSettings[K],
+): Axes {
+  const set = key === "unit" ? (value as string).slice(0, MAX_UNIT) : value;
+  const at = `${canvas}:${axis}`;
+  return { ...axes, [at]: { ...axes[at], [key]: set } };
+}
+
+/** What is wrong with an axis's fixed range; null when it is scaled to its
+ * readings or the range is one. */
+export function axisProblem(a: AxisSettings): string | null {
+  if (a.auto) return null;
+  if (a.min === null || a.max === null || !Number.isFinite(a.min) || !Number.isFinite(a.max)) {
+    return "An axis not scaled automatically needs a minimum and a maximum.";
+  }
+  if (a.min >= a.max) return "The axis minimum must be below its maximum.";
+  if (a.log && a.min <= 0) return "A log axis starts above zero.";
+  return null;
+}
+
+export interface Scale { v0: number; v1: number; log: boolean; invert: boolean }
+
+/** An axis's value range: its fixed one, or its plots' readings, padded - on
+ * a log axis only the readings above zero, padded by a ratio. A fixed range
+ * with a problem is scaled automatically. Null with nothing to scale to. */
+export function scaleOf(series: readonly (readonly Reading[])[], a: AxisSettings = DEFAULT_AXIS): Scale | null {
+  const shape = { log: a.log, invert: a.invert };
+  if (!a.auto && axisProblem(a) === null) return { v0: a.min!, v1: a.max!, ...shape };
+  let v0 = Infinity; let v1 = -Infinity;
   for (const readings of series) {
     for (const r of readings) {
-      t0 = Math.min(t0, r.t); t1 = Math.max(t1, r.t);
+      if (a.log && r.v <= 0) continue;
       v0 = Math.min(v0, r.v); v1 = Math.max(v1, r.v);
     }
   }
-  if (!Number.isFinite(t0)) return null;
-  if (t1 === t0) { t0 -= 1; t1 += 1; }
+  if (!Number.isFinite(v0)) return null;
+  if (a.log) {
+    const ratio = v1 === v0 ? 2 : (v1 / v0) ** 0.05;
+    return { v0: v0 / ratio, v1: v1 * ratio, ...shape };
+  }
   const pad = v1 === v0 ? Math.max(1, Math.abs(v0) * 0.1) : (v1 - v0) * 0.05;
-  return { t0, t1, v0: v0 - pad, v1: v1 + pad };
+  return { v0: v0 - pad, v1: v1 + pad, ...shape };
 }
 
-type Extent = { t0: number; t1: number; v0: number; v1: number };
+/** How far up an axis a value sits, from 0 at its foot to 1 at its head. */
+export function fractionOf(scale: Scale, v: number): number {
+  const f = scale.log
+    ? (Math.log10(v) - Math.log10(scale.v0)) / (Math.log10(scale.v1) - Math.log10(scale.v0))
+    : (v - scale.v0) / (scale.v1 - scale.v0);
+  return scale.invert ? 1 - f : f;
+}
+
+/** The value at a fraction up an axis: `fractionOf` backwards, for its
+ * ticks. */
+export function valueAt(scale: Scale, f: number): number {
+  const up = scale.invert ? 1 - f : f;
+  return scale.log
+    ? 10 ** (Math.log10(scale.v0) + up * (Math.log10(scale.v1) - Math.log10(scale.v0)))
+    : scale.v0 + up * (scale.v1 - scale.v0);
+}
+
+type Extent = { t0: number; t1: number } & Scale;
 type Frame = { width: number; height: number };
 
-/** Where each reading falls on a frame, over an extent. */
+/** Where each reading falls on a frame, over an extent; a log axis has no
+ * place for a reading at or below zero. */
 function placed(readings: readonly Reading[], extent: Extent, frame: Frame): { x: number; y: number }[] {
-  return readings.map((r) => ({
+  return readings.filter((r) => !extent.log || r.v > 0).map((r) => ({
     x: ((r.t - extent.t0) / (extent.t1 - extent.t0)) * frame.width,
-    y: frame.height - ((r.v - extent.v0) / (extent.v1 - extent.v0)) * frame.height,
+    y: frame.height - fractionOf(extent, r.v) * frame.height,
   }));
 }
 

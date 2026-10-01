@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   MAX_EVENT_SETS, withEventStatistics, eventCount, eventSpan, eventsOf, liveEventSets, withEventSet, withLinkedEventSet,
-  DEFAULT_DISPLAY, areaOf, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
+  DEFAULT_DISPLAY, areaOf,
+  DEFAULT_AXIS, MAX_AXES, axesOf, axisOf, axisProblem, axisSettingsOf, fractionOf, newAxisOf, valueAt,
+  withAxisSetting, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
-  MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, extentOf, pathOf, readingsOf, rootOf, rootPlots,
+  MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, pathOf, scaleOf, timesOf, readingsOf, rootOf, rootPlots,
   statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
 } from "./series-analysis";
 import type { SeriesTransform } from "./series-transforms";
@@ -124,24 +126,27 @@ describe("readings, statistics and the line (§647)", () => {
   });
 
   it("frames several plots together, padded", () => {
-    const e = extentOf([readings, [{ t: readings[0]!.t, v: 13 }]])!;
-    expect(e.t0).toBe(readings[0]!.t);
-    expect(e.t1).toBe(readings[2]!.t);
+    const both = [readings, [{ t: readings[0]!.t, v: 13 }]];
+    expect(timesOf(both)).toEqual({ t0: readings[0]!.t, t1: readings[2]!.t });
+    const e = scaleOf(both)!;
     expect(e.v0).toBeCloseTo(1 - 0.6);
     expect(e.v1).toBeCloseTo(13 + 0.6);
-    expect(extentOf([[]])).toBeNull();
+    expect([e.log, e.invert]).toEqual([false, false]);
+    expect(timesOf([[]])).toBeNull();
+    expect(scaleOf([[]])).toBeNull();
     // One reading still has a width and a height to draw in.
-    const one = extentOf([[{ t: 10, v: 5 }]])!;
-    expect([one.t0, one.t1, one.v0, one.v1]).toEqual([9, 11, 4, 6]);
-    const zero = extentOf([[{ t: 10, v: 0 }, { t: 20, v: 0 }]])!;
+    expect(timesOf([[{ t: 10, v: 5 }]])).toEqual({ t0: 9, t1: 11 });
+    const one = scaleOf([[{ t: 10, v: 5 }]])!;
+    expect([one.v0, one.v1]).toEqual([4, 6]);
+    const zero = scaleOf([[{ t: 10, v: 0 }, { t: 20, v: 0 }]])!;
     expect([zero.v0, zero.v1]).toEqual([-1, 1]);
   });
 
   it("draws the line across the frame", () => {
     const frame = { width: 100, height: 50 };
-    expect(pathOf([{ t: 0, v: 0 }, { t: 10, v: 10 }], { t0: 0, t1: 10, v0: 0, v1: 10 }, frame))
+    expect(pathOf([{ t: 0, v: 0 }, { t: 10, v: 10 }], { t0: 0, t1: 10, v0: 0, v1: 10, log: false, invert: false }, frame))
       .toBe("M0.0,50.0L100.0,0.0");
-    expect(pathOf([], { t0: 0, t1: 1, v0: 0, v1: 1 }, frame)).toBe("");
+    expect(pathOf([], { t0: 0, t1: 1, v0: 0, v1: 1, log: false, invert: false }, frame)).toBe("");
   });
 });
 
@@ -336,7 +341,7 @@ describe("p.393's Linked event set (§654)", () => {
 
 describe("p.394's Display (§655)", () => {
   const frame = { width: 100, height: 50 };
-  const extent = { t0: 0, t1: 10, v0: 0, v1: 10 };
+  const extent = { t0: 0, t1: 10, v0: 0, v1: 10, log: false, invert: false };
   const two = [{ t: 0, v: 0 }, { t: 10, v: 10 }];
 
   it("starts as the line always was, with no points and no gradient", () => {
@@ -382,5 +387,72 @@ describe("p.394's Display (§655)", () => {
     expect(markerOf("circle", 10, 20, 4)).toBe("M8.0,20.0a2.0,2.0 0 1,0 4.0,0a2.0,2.0 0 1,0 -4.0,0Z");
     expect(markerOf("none", 10, 20, 4)).toBe("");
     expect(markersOf(two, extent, frame, "square", 2)).toBe("M-1.0,49.0h2.0v2.0h-2.0ZM99.0,-1.0h2.0v2.0h-2.0Z");
+  });
+});
+
+describe("p.394-395's Axis options (§656)", () => {
+  const frame = { width: 100, height: 50 };
+  const line = [{ t: 0, v: 1 }, { t: 5, v: 10 }, { t: 10, v: 100 }];
+
+  it("puts every plot on its canvas's first axis until it is moved", () => {
+    expect(axisOf(roots[0]!)).toBe(1);
+    expect(axesOf(roots, 1)).toEqual([1]);
+    expect(axesOf(roots, 2)).toEqual([1]);
+    const moved = withPlotSetting(roots, "root:i2", "axis", newAxisOf(roots, 1)!);
+    expect(axesOf(moved, 1)).toEqual([1, 2]);
+    // In order, whichever plot comes first.
+    expect(axesOf(withPlotSetting(moved, "root:i1", "axis", 3), 1)).toEqual([2, 3]);
+    expect(newAxisOf(moved, 1)).toBe(3);
+    let many = moved;
+    for (let n = 3; n <= MAX_AXES; n++) {
+      many = withDerived(many, "root:i1", [cumulative], 1);
+      many = withPlotSetting(many, many.at(-1)!.id, "axis", n);
+    }
+    expect(axesOf(many, 1)).toHaveLength(MAX_AXES);
+    expect(newAxisOf(many, 1)).toBeNull();
+  });
+
+  it("keeps each canvas's axes' settings apart", () => {
+    const axes = withAxisSetting(withAxisSetting({}, 1, 2, "log", true), 1, 2, "unit", "kPa".repeat(10));
+    expect(axisSettingsOf(axes, 1, 2)).toEqual({ ...DEFAULT_AXIS, log: true, unit: "kPa".repeat(8) });
+    expect(axisSettingsOf(axes, 1, 1)).toEqual(DEFAULT_AXIS);
+    expect(axisSettingsOf(axes, 2, 2)).toEqual(DEFAULT_AXIS);
+    expect(DEFAULT_AXIS).toEqual({ unit: "", auto: true, min: null, max: null, log: false, invert: false,
+      align: "left" });
+  });
+
+  it("says what is wrong with a fixed range, and scales to the readings meanwhile", () => {
+    const fixed = { ...DEFAULT_AXIS, auto: false };
+    expect(axisProblem(DEFAULT_AXIS)).toBeNull();
+    expect(axisProblem({ ...fixed, min: 0 })).toBe("An axis not scaled automatically needs a minimum and a maximum.");
+    expect(axisProblem({ ...fixed, min: 0, max: Number.NaN })).toBe("An axis not scaled automatically needs a minimum and a maximum.");
+    expect(axisProblem({ ...fixed, min: 5, max: 5 })).toBe("The axis minimum must be below its maximum.");
+    expect(axisProblem({ ...fixed, min: 0, max: 5, log: true })).toBe("A log axis starts above zero.");
+    expect(axisProblem({ ...fixed, min: 1, max: 5, log: true })).toBeNull();
+    expect(scaleOf([line], { ...fixed, min: 0, max: 200 })).toEqual({ v0: 0, v1: 200, log: false, invert: false });
+    expect(scaleOf([line], { ...fixed, min: 5, max: 5 })).toEqual(scaleOf([line]));
+  });
+
+  it("scales a log axis by ratio, over the readings above zero", () => {
+    const log = { ...DEFAULT_AXIS, log: true };
+    const s = scaleOf([[...line, { t: 11, v: 0 }, { t: 12, v: -3 }]], log)!;
+    expect(s.v0).toBeCloseTo(1 / 100 ** 0.05);
+    expect(s.v1).toBeCloseTo(100 * 100 ** 0.05);
+    expect(scaleOf([[{ t: 0, v: 4 }]], log)).toEqual({ v0: 2, v1: 8, log: true, invert: false });
+    expect(scaleOf([[{ t: 0, v: 0 }]], log)).toBeNull();
+    const exact = { v0: 1, v1: 100, log: true, invert: false };
+    expect(fractionOf(exact, 10)).toBeCloseTo(0.5);
+    expect(valueAt(exact, 0.5)).toBeCloseTo(10);
+    // A reading at or below zero has no place on it.
+    const path = pathOf([{ t: 0, v: 0 }, ...line], { t0: 0, t1: 10, ...exact }, frame);
+    expect(path).toBe("M0.0,50.0L50.0,25.0L100.0,0.0");
+  });
+
+  it("turns an inverted axis upside down", () => {
+    const up = { v0: 0, v1: 10, log: false, invert: true };
+    expect(fractionOf(up, 2)).toBeCloseTo(0.8);
+    expect(valueAt(up, 1)).toBe(0);
+    expect(valueAt(up, 0)).toBe(10);
+    expect(pathOf([{ t: 0, v: 0 }, { t: 10, v: 10 }], { t0: 0, t1: 10, ...up }, frame)).toBe("M0.0,0.0L100.0,50.0");
   });
 });

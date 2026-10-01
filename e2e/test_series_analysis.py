@@ -331,3 +331,47 @@ def test_a_plot_s_line_gradient_and_points(page, api, module) -> None:
     expect(points).to_have_attribute("stroke-width", "3")
     # Another plot is as it was.
     expect(canvas.locator(f"path[data-plot='{south_id}']")).to_have_attribute("stroke-width", "1.6")
+
+
+def test_axes_their_range_scale_side_and_unit(page, api, module) -> None:
+    """p.394-395's Axis options (§656). South, flat at 900, moved to an axis
+    of its own on the right, leaves North's 10 to 40 the first axis; fixed at
+    0 to 100 it reads 0, 50, 100 up, or down inverted, and 1 to 100 on a log
+    scale is 10 half way."""
+    open_module(page, build(api, module, "Analysis axes"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    axes = page.locator("[data-testid='series-axes'] tbody tr")
+    expect(axes).to_have_count(1)
+    canvas = page.locator("[data-testid='series-canvas-1']")
+    page.get_by_label("South sensor axis").select_option("new")
+    expect(axes).to_have_count(2)
+    expect(canvas.locator("g[data-axis]")).to_have_count(2)
+    # Two axes on the left, side by side, both on the canvas.
+    beside = canvas.locator("g[data-axis='2'] text[data-tick='0']")
+    expect(beside).to_have_attribute("x", "44")
+    page.get_by_label("Canvas 1 axis 2 align").select_option("right")
+    expect(beside).to_have_attribute("x", "596")
+    expect(canvas.locator("g[data-axis='2']")).to_have_attribute("data-align", "right")
+    page.get_by_label("Canvas 1 axis 2 unit").fill("kPa")
+    expect(canvas.locator("g[data-axis='2'] text[data-unit]")).to_have_text("kPa")
+    # A fixed range, and what it needs.
+    first = canvas.locator("g[data-axis='1']")
+    expect(page.get_by_label("Canvas 1 axis 1 min")).to_be_disabled()
+    page.get_by_label("Canvas 1 axis 1 auto scale").uncheck()
+    expect(page.get_by_test_id("series-axis-problem")).to_have_text(
+        "An axis not scaled automatically needs a minimum and a maximum.")
+    page.get_by_label("Canvas 1 axis 1 min").fill("0")
+    page.get_by_label("Canvas 1 axis 1 max").fill("100")
+    expect(page.get_by_test_id("series-axis-problem")).to_have_count(0)
+    tick = lambda f: first.locator(f"text[data-tick='{f}']")  # noqa: E731
+    expect(tick(0)).to_have_text("0")
+    expect(tick(0.5)).to_have_text("50")
+    expect(tick(1)).to_have_text("100")
+    page.get_by_label("Canvas 1 axis 1 invert").check()
+    expect(tick(1)).to_have_text("0")
+    page.get_by_label("Canvas 1 axis 1 invert").uncheck()
+    page.get_by_label("Canvas 1 axis 1 min").fill("1")
+    page.get_by_label("Canvas 1 axis 1 log scale").check()
+    expect(tick(0.5)).to_have_text("10")
+    # South's own axis is untouched: flat at 900, padded either side.
+    expect(canvas.locator("g[data-axis='2'] text[data-tick='0.5']")).to_have_text("900")
