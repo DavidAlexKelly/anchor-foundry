@@ -1395,6 +1395,53 @@ async def ontology_cleanup(
     return [CleanupCandidate(**row) for row in rows]
 
 
+class CleanupSettings(BaseModel):
+    """p.72's "Configure Ontology cleanup" (§619): the flags you use, most
+    urgent first, or `null` for the default set - which is what you follow
+    until you choose otherwise, new flags included."""
+
+    flags: list[str] | None = Field(default=None, max_length=32)
+    #: The default set's order, so a panel can offer every flag without a copy
+    #: of the list of its own.
+    available: list[str] = Field(default_factory=lambda: list(cleanup_service.FLAG_PRIORITY))
+
+
+class CleanupSettingsIn(BaseModel):
+    flags: list[str] | None = Field(default=None, max_length=32)
+
+
+@router.get("/ontology-cleanup/settings", response_model=CleanupSettings)
+async def ontology_cleanup_settings(
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> CleanupSettings:
+    """Your cleanup flag setup (p.72). Editor, as the queue it tunes is."""
+    async with user_connection(access.auth.user_id) as conn:
+        flags = await cleanup_service.settings(
+            conn, access.workspace_id, user_id=access.auth.user_id)
+    return CleanupSettings(flags=flags)
+
+
+@router.put("/ontology-cleanup/settings", response_model=CleanupSettings)
+async def save_ontology_cleanup_settings(
+    body: CleanupSettingsIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> CleanupSettings:
+    """Keep your flag setup, or send `null` to go back to the default set.
+
+    **Yours alone** - "an individual customization that does not affect other
+    Ontology editors" (p.72) - which db 0128's row policy enforces.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        try:
+            flags = await cleanup_service.save_settings(
+                conn, access.workspace_id, user_id=access.auth.user_id, flags=body.flags)
+        except cleanup_service.SettingsError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+    return CleanupSettings(flags=flags)
+
+
 @router.put(
     "/object-types/{type_id}/cleanup-snooze", response_model=SnoozeOut,
     status_code=status.HTTP_200_OK,

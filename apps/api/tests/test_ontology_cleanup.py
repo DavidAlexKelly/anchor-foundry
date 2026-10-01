@@ -719,3 +719,83 @@ def test_the_page_keeps_the_worst_rather_than_the_first_found(
         "the cap kept the worst two, not the first two the scan happened to see"
     )
     assert rows[0]["priority"] == 0
+
+
+# ---- p.72's Configure Ontology cleanup (§619) ----------------------------------
+def settings(client: TestClient, fx: Fixture, sub: str, flags=..., status_code: int = 200):
+    url = f"{wbase(fx)}/ontology-cleanup/settings"
+    r = (client.get(url, headers=hdr(sub)) if flags is ... else
+         client.put(url, headers=hdr(sub), json={"flags": flags}))
+    assert r.status_code == status_code, r.text
+    return r.json()
+
+
+@pytest.fixture
+def owner_setup(client: TestClient, fx: Fixture):
+    """The owner's own setup, put back to the default set afterwards. The
+    owner rather than the editor, so the editor's queue the other tests read
+    is untouched while this runs."""
+    yield fx.owner_sub
+    settings(client, fx, fx.owner_sub, None)
+
+
+def test_the_default_set_is_what_nobody_chose(client: TestClient, fx: Fixture) -> None:
+    got = settings(client, fx, fx.editor_sub)
+    assert got["flags"] is None
+    assert got["available"] == list(cleanup.FLAG_PRIORITY)
+
+
+def test_a_custom_setup_leaves_out_what_is_off_and_ranks_by_its_order(
+    client: TestClient, fx: Fixture, owner_setup: str,
+) -> None:
+    """A type with no description and no source: by default `no_source` ranks
+    first. With only `no_description` on, it is flagged for that alone and
+    ranks first by it; with neither on, it is not in the queue."""
+    type_id = a_type(client, fx, description="")
+    default = entry(queue(client, fx, sub=owner_setup), type_id)
+    assert default["flags"][:2] == ["unused", "no_source"], default
+    assert default["priority"] == cleanup.FLAG_PRIORITY.index("unused")
+
+    saved = settings(client, fx, owner_setup, ["no_description", "no_source"])
+    assert saved["flags"] == ["no_description", "no_source"]
+    mine = entry(queue(client, fx, sub=owner_setup), type_id)
+    assert mine["flags"] == ["no_description", "no_source"]
+    assert mine["priority"] == 0
+    # The editor's queue is theirs, and still the default set's (p.72).
+    theirs = entry(queue(client, fx), type_id)
+    assert theirs["flags"] == default["flags"]
+
+    settings(client, fx, owner_setup, ["name_looks_temporary"])
+    assert entry(queue(client, fx, sub=owner_setup), type_id) is None
+    # Every flag off is a setup too, and its queue is empty.
+    settings(client, fx, owner_setup, [])
+    assert settings(client, fx, owner_setup)["flags"] == []
+    assert queue(client, fx, sub=owner_setup) == []
+
+
+def test_going_back_to_the_default_set_keeps_nothing(
+    client: TestClient, fx: Fixture, owner_setup: str,
+) -> None:
+    settings(client, fx, owner_setup, ["unused"])
+    assert settings(client, fx, owner_setup, None)["flags"] is None
+    with psycopg.connect(ADMIN_DSN) as conn:
+        left = conn.execute(
+            "SELECT count(*) FROM ontology_cleanup_settings WHERE workspace_id = %s",
+            (fx.workspace,)).fetchone()[0]
+    assert left == 0
+
+
+@pytest.mark.parametrize("flags, match", [
+    (["unused", "nonsense"], "not a cleanup flag: nonsense"),
+    (["unused", "unused"], "once"),
+])
+def test_a_setup_names_each_flag_once_and_only_flags(
+    client: TestClient, fx: Fixture, owner_setup: str, flags, match,
+) -> None:
+    r = settings(client, fx, owner_setup, flags, status_code=422)
+    assert match in str(r)
+
+
+def test_a_viewer_has_no_cleanup_setup(client: TestClient, fx: Fixture) -> None:
+    settings(client, fx, fx.viewer_sub, status_code=403)
+    settings(client, fx, fx.viewer_sub, ["unused"], status_code=403)

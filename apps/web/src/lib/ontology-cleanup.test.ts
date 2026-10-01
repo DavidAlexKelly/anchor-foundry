@@ -18,6 +18,7 @@ import {
   headline,
   snoozeText,
   stillInUse,
+  CUSTOM_FLAGS_NOTE, flagRows, movedFlag, toggledFlag,
 } from "./ontology-cleanup";
 import type { CleanupCandidate } from "./types";
 
@@ -170,5 +171,43 @@ describe("an empty queue", () => {
     // tool being broken.
     expect(NOTHING_TO_DO).toContain("Nothing here");
     expect(NOTHING_TO_DO.length).toBeGreaterThan(20);
+  });
+});
+
+describe("p.72's flag setup (§619)", () => {
+  const ALL = ["past_deprecation", "unused", "no_source", "no_description"];
+
+  it("draws the default set as every flag on, in its order", () => {
+    expect(flagRows(null, ALL)).toEqual(ALL.map((flag) => ({ flag, on: true })));
+  });
+
+  it("draws a custom set's flags first, in its order, then the rest off", () => {
+    expect(flagRows(["no_source", "unused"], ALL)).toEqual([
+      { flag: "no_source", on: true }, { flag: "unused", on: true },
+      { flag: "past_deprecation", on: false }, { flag: "no_description", on: false },
+    ]);
+    expect(flagRows([], ALL).every((r) => !r.on)).toBe(true);
+  });
+
+  it("turns a flag on at the least urgent end, and off out of the order", () => {
+    expect(toggledFlag(["no_source", "unused"], "past_deprecation", true))
+      .toEqual(["no_source", "unused", "past_deprecation"]);
+    expect(toggledFlag(["no_source", "unused"], "no_source", false)).toEqual(["unused"]);
+    // On twice is still once.
+    expect(toggledFlag(["no_source", "unused"], "no_source", true))
+      .toEqual(["unused", "no_source"]);
+  });
+
+  it("moves a flag one place, and not past either end", () => {
+    const order = ["a", "b", "c"];
+    expect(movedFlag(order, "b", -1)).toEqual(["b", "a", "c"]);
+    expect(movedFlag(order, "b", 1)).toEqual(["a", "c", "b"]);
+    expect(movedFlag(order, "a", -1)).toEqual(order);
+    expect(movedFlag(order, "c", 1)).toEqual(order);
+    expect(movedFlag(order, "z", 1)).toEqual(order);
+  });
+
+  it("says what a custom set gives up", () => {
+    expect(CUSTOM_FLAGS_NOTE).toContain("not turned on");
   });
 });
