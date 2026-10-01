@@ -238,3 +238,31 @@ export function syncShapes(
   }
   return { write: "shapes", text: areaText };
 }
+
+/** p.301's Selected shapes (§641): which of the map's areas the text names.
+ *
+ * > "Selected shapes: A bidirectional string variable that reflects the
+ * > shapes selected on the map interface as a GeoJSON string." (p.301)
+ *
+ * A shape is named by the text it is written as, in the output the map
+ * writes: a box read back from geometries is a polygon with the box's four
+ * corners, and a circle is its outline, so comparing the values would miss
+ * both where comparing the text does not. Indices, in the areas' order. */
+export function selectedIn(areas: readonly Area[], text: unknown, output: ShapeOutput): number[] {
+  const named = new Set(areasOfShapes(text).map((area) => shapesText(area, output)));
+  return areas.flatMap((area, at) => (named.has(shapesText(area, output)) ? [at] : []));
+}
+
+/** The selection with one area clicked: added, or taken off if it was on. */
+export function toggledShape(selected: readonly number[], at: number): number[] {
+  return selected.includes(at)
+    ? selected.filter((n) => n !== at)
+    : [...selected, at].sort((a, b) => a - b);
+}
+
+/** The selected areas as p.301's GeoJSON text, in the areas' order, or "" for
+ * none. */
+export function selectedText(areas: readonly Area[], selected: readonly number[],
+  output: ShapeOutput): string {
+  return shapesText(areas.filter((_, at) => selected.includes(at)), output);
+}

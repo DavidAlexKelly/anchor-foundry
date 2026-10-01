@@ -382,7 +382,8 @@ import {
   timeLabel, timelineControls, timelineSpan, trackShape, windowOf, withinWindow, type TimeFormat,
 } from "./map-tracks";
 import {
-  type Line as DrawnLine, lineOfShapes, lineText, shapeOutputOf, shapesText, syncShapes,
+  type Line as DrawnLine, lineOfShapes, lineText, selectedIn, selectedText, shapeOutputOf, shapesText,
+  syncShapes, toggledShape,
 } from "./map-drawn";
 import { perimeterModeOf } from "./map-measure";
 // Aliased on §211's rule: `areaOf` is also §537's chart area option.
@@ -13995,6 +13996,7 @@ export function CanvasMap({
   drawnShapeOpacity = DRAWN_OPACITY,
   singleDrawMode,
   drawnShapesVariable = null,
+  selectedShapesVariable = null,
   shapeOutputType = "features",
   enableMeasurements = false,
   measurePerimeter = true,
@@ -14053,6 +14055,10 @@ export function CanvasMap({
    * the drawn shape is read from and written to as GeoJSON, as features or
    * as geometries (`map-drawn.ts`). */
   drawnShapesVariable?: string | null;
+  /** p.301's Selected shapes (§641): a string variable the drawn shapes
+   * clicked are written to as GeoJSON, in the same output type, and read
+   * back from. */
+  selectedShapesVariable?: string | null;
   shapeOutputType?: string;
   /** p.302's Enable measurements, Enable polygon perimeter (by segment or in
    * total) and Enable polygon area (§575, `map-measure.ts`). */
@@ -14140,6 +14146,14 @@ export function CanvasMap({
   // and held here where there is not.
   const [localLine, setLocalLine] = useState<DrawnLine | null>(null);
   const drawnLine = drawnShapesVariable ? lineOfShapes(shapesNow) : localLine;
+  // p.301's Selected shapes (§641): read back from the variable each render,
+  // so text written there selects the drawn shapes it names.
+  const shapesPicked = useCanvasParameter(selectedShapesVariable);
+  const shapesPickedResolved = useCanvasVariable(selectedShapesVariable);
+  const selectedAreas = selectedShapesVariable
+    ? selectedIn(mapAreas, shapesPicked !== undefined ? shapesPicked : shapesPickedResolved,
+      shapeOutput)
+    : [];
   React.useEffect(() => {
     if (!selectsArea || !drawnShapesVariable) {
       shapesSeen.current = null;
@@ -14449,6 +14463,11 @@ export function CanvasMap({
             ],
           } : null}
           areas={mapAreas}
+          selectedAreas={selectedAreas}
+          onSelectArea={selectsArea && selectedShapesVariable
+            ? (at) => setParameter(selectedShapesVariable,
+              selectedText(mapAreas, toggledShape(selectedAreas, at), shapeOutput))
+            : undefined}
           drawTools={drawToolsOf(drawOptions)}
           drawnColor={layerColorOf(drawnShapeColor)}
           drawnOpacity={drawnOpacityOf(drawnShapeOpacity)}
@@ -14479,6 +14498,12 @@ export function CanvasMap({
                 // p.301's single draw mode (§640): the new shape replaces the
                 // last, or out of it joins the rest. Clearing clears them all.
                 const next = area ? withDrawn(mapAreas, area, single) : [];
+                // A selected shape that is no longer drawn is no longer
+                // selected: cleared, or replaced in single draw mode.
+                if (selectedShapesVariable && selectedAreas.length > 0) {
+                  const kept = selectedAreas.map((at) => mapAreas[at]!).filter((a) => next.includes(a));
+                  setParameter(selectedShapesVariable, shapesText(kept, shapeOutput));
+                }
                 // The Drawn shapes text follows by the sync above, the area
                 // having moved (writing it here too survived the sweep as
                 // equivalent).
@@ -14658,7 +14683,7 @@ function MapSettings() {
     playbackPositionVariable, autoPauseVariable, layerLabel, selectedVariable, layerVisible,
     layerVisibleVariable, lockLayer, layerColor, layerOpacity,
     drawOptions, drawnShapeColor, drawnShapeOpacity, singleDrawMode, drawnShapesVariable,
-    shapeOutputType, enableMeasurements, measurePerimeter, perimeterMode, measureArea, measureLine, lineMode,
+    selectedShapesVariable, shapeOutputType, enableMeasurements, measurePerimeter, perimeterMode, measureArea, measureLine, lineMode,
     showLegend, legendCollapsed, legendSize, showSelectionPanel, autoZoom, autoZoomSetVariable,
     autoZoomOutsideOnly, boundsVariable, followSetVariable,
     actions: { setProp },
@@ -14684,6 +14709,7 @@ function MapSettings() {
     drawnShapeOpacity: node.data.props.drawnShapeOpacity,
     singleDrawMode: node.data.props.singleDrawMode,
     drawnShapesVariable: node.data.props.drawnShapesVariable,
+    selectedShapesVariable: node.data.props.selectedShapesVariable,
     shapeOutputType: node.data.props.shapeOutputType,
     enableMeasurements: node.data.props.enableMeasurements,
     measurePerimeter: node.data.props.measurePerimeter,
@@ -15000,6 +15026,18 @@ function MapSettings() {
                   (p.drawnShapesVariable = e.target.value || null))}
               >
                 <option value="">Drawn shapes: not written</option>
+                {Object.values(declared).filter((v) => v.kind === "string" && !v.derivation)
+                  .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
+              {/* p.301's Selected shapes (§641). */}
+              <select
+                aria-label="Selected shapes"
+                data-testid="map-selected-shapes-variable"
+                value={selectedShapesVariable || ""}
+                onChange={(e) => setProp((p: { selectedShapesVariable: string | null }) =>
+                  (p.selectedShapesVariable = e.target.value || null))}
+              >
+                <option value="">Selected shapes: not written</option>
                 {Object.values(declared).filter((v) => v.kind === "string" && !v.derivation)
                   .map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
               </select>
@@ -15466,7 +15504,7 @@ CanvasMap.craft = {
     layerLabel: "", selectedVariable: null, layerVisible: true, layerVisibleVariable: null,
     lockLayer: false, layerColor: null, layerOpacity: 1,
     drawOptions: null, drawnShapeColor: null, drawnShapeOpacity: DRAWN_OPACITY,
-    drawnShapesVariable: null, shapeOutputType: "features",
+    drawnShapesVariable: null, selectedShapesVariable: null, shapeOutputType: "features",
     enableMeasurements: false, measurePerimeter: true, perimeterMode: "total", measureArea: true,
     showLegend: false, legendCollapsed: false, legendSize: "full", showSelectionPanel: false,
     autoZoom: "default", autoZoomSetVariable: null, autoZoomOutsideOnly: false,
