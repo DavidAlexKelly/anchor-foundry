@@ -299,9 +299,19 @@ import { Sparkline } from "./Sparkline";
 import { useSeriesPoints, type SeriesRef } from "./series-points";
 import { ChartExport } from "./ChartExport";
 import {
-  readableTransforms, transformsByColumn, transformsText, withColumnTransforms,
+  blankTransform, readableTransforms, transformsByColumn, transformsProblem as seriesTransformsProblem,
+  transformsText, withColumnTransforms, type SeriesTransform, type TransformKind,
 } from "./series-transforms";
 import { SeriesTransformsEditor } from "./SeriesTransformsEditor";
+import { SeriesAnalysisChart } from "./SeriesAnalysisChart";
+import {
+  LINE_STYLES as SERIES_LINE_STYLES, MAX_PLOTS as MAX_SERIES_PLOTS, MAX_ROOTS as MAX_SERIES_ROOTS,
+  PLOT_LABELS as SERIES_PLOT_LABELS, PLOT_TYPES as SERIES_PLOT_TYPES, canvasesOf as seriesCanvasesOf,
+  chainOf as seriesChainOf, readingsOf as seriesReadingsOf, rootOf as seriesRootOf,
+  rootPlots as seriesRootPlots, statsOf as seriesStatsOf, withDerived as withSeriesDerived,
+  withPlotSetting as withSeriesPlotSetting, withRoots as withSeriesRoots, withoutPlot as withoutSeriesPlot,
+  type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
+} from "./series-analysis";
 import { outputClauses } from "./action-output";
 import {
   actionItemsOf, activeIndexOf, menuLabelOf, moreActionsOf, withAddedAction, withMoreAction,
@@ -352,7 +362,9 @@ import {
   type ChartKind,
   type FilterOperator,
 } from "./filter-sql";
-import { Chart, MultiLineChart, PieChart, SegmentedBarChart, toPoints } from "./charts";
+import {
+  Chart, MultiLineChart, PALETTE as CHART_PALETTE, PieChart, SegmentedBarChart, toPoints,
+} from "./charts";
 import {
   MAX_SERIES, axisSides, drillClauses, drilledLabel as drilledOn, layerKinds, mergeSeries,
   seriesName as seriesNameOf, seriesOf, seriesRequests, seriesSource,
@@ -12998,6 +13010,309 @@ CanvasTimeSeries.craft = {
   related: { settings: TimeSeriesSettings },
 };
 
+// ---- Time Series Analysis (§647) -------------------------------------------
+/**
+ * `workshop` p.392's *Time Series Analysis*: "enables users to independently investigate time
+ * series data … derive new plots by selecting New Plot. Plots can be
+ * organized across multiple canvases within the same analysis."
+ *
+ * The plots come from p.396's *Control series with object sets*: an object set and a
+ * time series property, one root plot per object, which the reader cannot
+ * delete or re-point but can move and restyle. A **New plot** is derived from
+ * any plot by p.583-586's transforms, and is read as its root's series through
+ * the whole chain (`series-analysis.ts`), so the server's transform machinery
+ * does the arithmetic and a plot derived from a derived plot costs nothing
+ * new. The analysis lives in the viewer's session: p.397's *Enable analysis
+ * saving* is ○.
+ */
+export function CanvasSeriesAnalysis({
+  objectSetVariable = null,
+  property = null,
+  labelProperty = null,
+  limit = 5,
+  title = "",
+  plotTypes = null,
+}: {
+  objectSetVariable?: string | null;
+  property?: string | null;
+  labelProperty?: string | null;
+  limit?: number;
+  title?: string;
+  /** p.396's *Customize available plot types*: those offered by New plot, in
+   * order; null offers them all. */
+  plotTypes?: string[] | null;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const definition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+  const typeId = (definition as { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  const roots = Math.max(1, Math.min(MAX_SERIES_ROOTS, Number(limit) || 5));
+  const set = useQuery({
+    queryKey: ["canvas-series-analysis-set", JSON.stringify(definition ?? null), roots],
+    queryFn: () => objApi.evaluateObjectSet(workspaceId, definition, { limit: roots }),
+    enabled: !!objectSetVariable && !!definition && !!property,
+  });
+  const objects = (set.data?.instances ?? []).map((i) => {
+    const raw = labelProperty ? i.properties[labelProperty] : null;
+    return { id: i.id, label: raw === null || raw === undefined ? String(i.primary_key) : String(raw) };
+  });
+  const rootsKey = JSON.stringify([typeId, property, objects]);
+  const [plots, setPlots] = useState<SeriesPlot[]>([]);
+  const [addedCanvases, setAddedCanvases] = useState(0);
+  React.useEffect(() => {
+    if (!typeId || !property) return;
+    setPlots((previous) => withSeriesRoots(previous, seriesRootPlots(objects, typeId, property)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rootsKey]);
+  const readingsFor = useQueries({
+    queries: plots.map((plot) => {
+      const root = seriesRootOf(plots, plot.id)?.root ?? null;
+      const chain = seriesChainOf(plots, plot.id);
+      return {
+        queryKey: ["canvas-series-analysis-plot", root?.objectId, root?.property, JSON.stringify(chain)],
+        queryFn: () => objApi.seriesPoints(workspaceId, root!.typeId, root!.objectId, root!.property,
+          { transforms: chain }),
+        enabled: !!root && !seriesTransformsProblem(chain),
+      };
+    }),
+  });
+  const readings = plots.map((_, n) => seriesReadingsOf(readingsFor[n]?.data?.points ?? []));
+  const colorOf = (n: number) => CHART_PALETTE[n % CHART_PALETTE.length]!;
+  const offered = SERIES_PLOT_TYPES.filter((k) => !plotTypes || plotTypes.includes(k));
+  const [draft, setDraft] = useState<{ parent: string; transforms: SeriesTransform[] } | null>(null);
+  const canvases = seriesCanvasesOf(plots, addedCanvases);
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block"
+         data-testid="series-analysis">
+      {title && <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>{title}</h3>}
+      {(!objectSetVariable || !property) && (
+        <p className="canvas-widget-empty">
+          Time series analysis - choose an object set and its time series property in Settings
+        </p>
+      )}
+      {objectSetVariable && property && (variablesPending || set.isPending) && (
+        <p className="canvas-widget-empty">Loading…</p>
+      )}
+      {set.isError && (
+        <p className="canvas-widget-empty">
+          {set.error instanceof ApiError ? set.error.message : "Couldn't read this object set."}
+        </p>
+      )}
+      {set.data && plots.length === 0 && (
+        <p className="canvas-widget-empty">Nothing in this set.</p>
+      )}
+      {plots.length > 0 && (
+        <>
+          {canvases.map((canvas) => (
+            <SeriesAnalysisChart key={canvas} canvas={canvas} plots={plots
+              .map((p, n) => ({ plot: p, n }))
+              .filter(({ plot }) => plot.canvas === canvas)
+              .map(({ plot, n }) => ({ id: plot.id, label: plot.label, color: colorOf(n),
+                dashed: plot.style === "dashed", readings: readings[n] ?? [] }))} />
+          ))}
+          {/* The Plots panel: each plot's display, place and statistics. */}
+          <table className="data-grid" data-testid="series-plots">
+            <thead>
+              <tr><th>Plot</th><th>Canvas</th><th>Line</th><th>Min</th><th>Max</th><th>Mean</th><th /></tr>
+            </thead>
+            <tbody>
+              {plots.map((plot, n) => {
+                const stats = seriesStatsOf(readings[n] ?? []);
+                const failed = readingsFor[n]?.error;
+                return (
+                  <tr key={plot.id} data-plot={plot.id} data-label={plot.label}>
+                    <td>
+                      <span style={{ color: colorOf(n) }}>■</span> {plot.label}
+                      {failed && (
+                        <div className="field-hint">
+                          {failed instanceof ApiError ? failed.message : "Couldn't read this plot."}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <select aria-label={`${plot.label} canvas`} value={plot.canvas}
+                              onChange={(e) => setPlots(withSeriesPlotSetting(plots, plot.id, "canvas",
+                                Number(e.target.value)))}>
+                        {canvases.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </td>
+                    <td>
+                      <select aria-label={`${plot.label} line`} value={plot.style}
+                              onChange={(e) => setPlots(withSeriesPlotSetting(plots, plot.id, "style",
+                                e.target.value as SeriesLineStyle))}>
+                        {SERIES_LINE_STYLES.map((s) => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </td>
+                    <td data-stat="min">{stats ? Number(stats.min.toFixed(3)) : "—"}</td>
+                    <td data-stat="max">{stats ? Number(stats.max.toFixed(3)) : "—"}</td>
+                    <td data-stat="mean">{stats ? Number(stats.mean.toFixed(3)) : "—"}</td>
+                    <td>
+                      {!plot.root && (
+                        <button type="button" className="btn quiet"
+                                aria-label={`Remove ${plot.label}`}
+                                onClick={() => setPlots(withoutSeriesPlot(plots, plot.id))}>
+                          Remove
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div className="row-actions" style={{ marginTop: 6 }}>
+            {offered.length > 0 && plots.length < MAX_SERIES_PLOTS && (
+              <select aria-label="New plot" value=""
+                      onChange={(e) => {
+                        if (!e.target.value) return;
+                        setDraft({ parent: plots[0]!.id,
+                          transforms: [blankTransform(e.target.value as TransformKind)] });
+                      }}>
+                <option value="">New plot…</option>
+                {offered.map((k) => <option key={k} value={k}>{SERIES_PLOT_LABELS[k]}</option>)}
+              </select>
+            )}
+            <button type="button" className="btn quiet"
+                    onClick={() => setAddedCanvases(Math.max(addedCanvases, ...canvases) + 1)}>
+              New canvas
+            </button>
+          </div>
+          {draft && (
+            <div className="card" data-testid="series-new-plot" style={{ marginTop: 6, padding: 8 }}>
+              <label className="field">
+                <span className="field-label">Input plot</span>
+                <select aria-label="Input plot" value={draft.parent}
+                        onChange={(e) => setDraft({ ...draft, parent: e.target.value })}>
+                  {plots.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                </select>
+              </label>
+              <SeriesTransformsEditor transforms={draft.transforms} readOnly={false}
+                onChange={(next) => setDraft({ ...draft, transforms: next })} />
+              <div className="row-actions">
+                <button type="button" className="btn"
+                        disabled={draft.transforms.length === 0 || !!seriesTransformsProblem(draft.transforms)}
+                        onClick={() => {
+                          const parent = plots.find((p) => p.id === draft.parent);
+                          setPlots(withSeriesDerived(plots, draft.parent, draft.transforms,
+                            parent?.canvas ?? 1));
+                          setDraft(null);
+                        }}>
+                  Add plot
+                </button>
+                <button type="button" className="btn quiet" onClick={() => setDraft(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function SeriesAnalysisSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const { declared } = useCanvasVariables();
+  const {
+    objectSetVariable, property, labelProperty, limit, title, plotTypes,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    property: node.data.props.property,
+    labelProperty: node.data.props.labelProperty,
+    limit: node.data.props.limit,
+    title: node.data.props.title,
+    plotTypes: node.data.props.plotTypes,
+  }));
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const typeId = (declared[objectSetVariable ?? ""]?.object_set as { object_type_id?: string } | undefined)
+    ?.object_type_id ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const properties = type.data?.properties ?? [];
+  const offered = SERIES_PLOT_TYPES.filter((k) => !plotTypes || plotTypes.includes(k));
+  return (
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Object set</span>
+        <select aria-label="Series object set" value={objectSetVariable || ""}
+                onChange={(e) => setProp((p: { objectSetVariable: string | null }) =>
+                  (p.objectSetVariable = e.target.value || null))}>
+          <option value="">Choose…</option>
+          {setVariables.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Time series property</span>
+        <select aria-label="Series property" value={property || ""} disabled={!typeId}
+                onChange={(e) => setProp((p: { property: string | null }) =>
+                  (p.property = e.target.value || null))}>
+          <option value="">Choose…</option>
+          {properties.filter((p) => p.data_type === "time_series")
+            .map((p) => <option key={p.api_name} value={p.api_name}>{p.api_name}</option>)}
+        </select>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Plot label</span>
+        <select aria-label="Series label property" value={labelProperty || ""} disabled={!typeId}
+                onChange={(e) => setProp((p: { labelProperty: string | null }) =>
+                  (p.labelProperty = e.target.value || null))}>
+          <option value="">Primary key</option>
+          {properties.map((p) => <option key={p.api_name} value={p.api_name}>{p.api_name}</option>)}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Objects plotted</span>
+        <input type="number" aria-label="Series objects plotted" min={1} max={MAX_SERIES_ROOTS}
+               value={Number(limit) || 5}
+               onChange={(e) => setProp((p: { limit: number }) =>
+                 (p.limit = Math.max(1, Math.min(MAX_SERIES_ROOTS, Number(e.target.value) || 1))))} />
+        <span className="field-hint">The first {MAX_SERIES_ROOTS} at most, one plot each</span>
+      </label>
+      <div className="field" data-testid="series-plot-types">
+        <span className="field-label">Plot types offered</span>
+        {SERIES_PLOT_TYPES.map((k) => (
+          <label key={k} className="field canvas-toggle">
+            <input type="checkbox" data-testid={`series-plot-type-${k}`} checked={offered.includes(k)}
+                   onChange={(e) => setProp((p: { plotTypes: string[] | null }) => {
+                     const now = SERIES_PLOT_TYPES.filter((t) => !p.plotTypes || p.plotTypes.includes(t));
+                     p.plotTypes = SERIES_PLOT_TYPES.filter((t) => (t === k ? e.target.checked : now.includes(t)));
+                   })} />
+            <span className="field-label">{SERIES_PLOT_LABELS[k]}</span>
+          </label>
+        ))}
+      </div>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input type="text" value={title || ""}
+               onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))} />
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasSeriesAnalysis.craft = {
+  displayName: "Time series analysis",
+  props: { objectSetVariable: null, property: null, labelProperty: null, limit: 5, title: "",
+    plotTypes: null },
+  related: { settings: SeriesAnalysisSettings },
+};
+
 
 // ---- embedded module (roadmap 1.5, priority 4) -------------------------------
 /**
@@ -22151,6 +22466,7 @@ export const CANVAS_RESOLVER = {
   CanvasSearch,
   CanvasPivotTable,
   CanvasTimeSeries,
+  CanvasSeriesAnalysis,
   CanvasEmbeddedModule,
   CanvasLoopSection,
   CanvasChart,

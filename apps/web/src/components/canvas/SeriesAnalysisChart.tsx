@@ -1,0 +1,72 @@
+"use client";
+
+/** One canvas of the Time Series Analysis widget (§647): its plots against
+ * one time axis and one value axis, each in its colour and line style. The
+ * geometry is `series-analysis.ts`'s. */
+
+import { extentOf, pathOf, type Reading } from "./series-analysis";
+
+const WIDTH = 640;
+const HEIGHT = 200;
+const LEFT = 48;
+const BOTTOM = 20;
+
+export interface CanvasPlot {
+  id: string;
+  label: string;
+  color: string;
+  dashed: boolean;
+  readings: Reading[];
+}
+
+function valueText(v: number): string {
+  const abs = Math.abs(v);
+  return abs >= 1000 || (abs > 0 && abs < 0.01) ? v.toExponential(1) : String(Number(v.toFixed(2)));
+}
+
+function timeText(t: number, span: number): string {
+  const d = new Date(t);
+  return span > 2 * 86_400_000 ? d.toISOString().slice(0, 10) : d.toISOString().slice(5, 16).replace("T", " ");
+}
+
+export function SeriesAnalysisChart({ canvas, plots }: { canvas: number; plots: CanvasPlot[] }) {
+  const extent = extentOf(plots.map((p) => p.readings));
+  const frame = { width: WIDTH - LEFT, height: HEIGHT - BOTTOM };
+  return (
+    <figure data-testid={`series-canvas-${canvas}`} style={{ margin: "6px 0" }}>
+      {extent === null ? (
+        <p className="canvas-widget-empty">No readings on this canvas.</p>
+      ) : (
+        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`Canvas ${canvas}`}
+             style={{ width: "100%" }}>
+          {[0, 0.5, 1].map((f) => {
+            const v = extent.v0 + (extent.v1 - extent.v0) * f;
+            const y = frame.height - f * frame.height;
+            return (
+              <g key={`v${f}`}>
+                <line x1={LEFT} x2={WIDTH} y1={y} y2={y} stroke="var(--border, #d8dee4)" />
+                <text x={LEFT - 4} y={y + 4} fontSize={10} textAnchor="end" fill="var(--muted, #5c6670)">
+                  {valueText(v)}
+                </text>
+              </g>
+            );
+          })}
+          {[0, 0.5, 1].map((f) => (
+            <text key={`t${f}`} x={LEFT + f * frame.width} y={HEIGHT - 4} fontSize={10}
+                  textAnchor={f === 0 ? "start" : f === 1 ? "end" : "middle"} fill="var(--muted, #5c6670)">
+              {timeText(extent.t0 + (extent.t1 - extent.t0) * f, extent.t1 - extent.t0)}
+            </text>
+          ))}
+          <g transform={`translate(${LEFT} 0)`}>
+            {plots.map((p) => (
+              <path key={p.id} data-plot={p.id} d={pathOf(p.readings, extent, frame)} fill="none"
+                    stroke={p.color} strokeWidth={1.6} strokeDasharray={p.dashed ? "5 3" : undefined}>
+                <title>{p.label}</title>
+              </path>
+            ))}
+          </g>
+        </svg>
+      )}
+    </figure>
+  );
+}

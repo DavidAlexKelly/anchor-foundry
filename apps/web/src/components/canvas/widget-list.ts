@@ -59,6 +59,7 @@ export const PALETTE: PaletteEntry[] = [
   { key: "CanvasSearch", label: "Search", hint: "Narrow an object set by a property prefix" },
   { key: "CanvasPivotTable", label: "Pivot table", hint: "Counts by two properties at once, over an object set" },
   { key: "CanvasTimeSeries", label: "Time series", hint: "When the objects in a set last changed" },
+  { key: "CanvasSeriesAnalysis", label: "Time series analysis", hint: "Plot objects' time series, and derive new plots from them" },
   { key: "CanvasEmbeddedModule", label: "Embedded module", hint: "Another Workshop module, shown inside this one" },
   { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
   { key: "CanvasMap", label: "Map", hint: "Pins from a geopoint property or location columns" },

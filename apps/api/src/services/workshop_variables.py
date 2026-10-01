@@ -2507,7 +2507,8 @@ WIDGETS = frozenset({
     "CanvasPieChart", "CanvasStepper", "CanvasTimeline", "CanvasMediaPreview",
     "CanvasIframe", "CanvasDataFreshness", "CanvasEditHistory",
     "CanvasDatasetTable", "CanvasObjectTable", "CanvasObjectCards",
-    "CanvasSearch", "CanvasPivotTable", "CanvasTimeSeries", "CanvasEmbeddedModule",
+    "CanvasSearch", "CanvasPivotTable", "CanvasTimeSeries", "CanvasSeriesAnalysis",
+    "CanvasEmbeddedModule",
     "CanvasLoopSection", "CanvasChart", "CanvasMap", "CanvasMetricCard",
     "CanvasActionForm",
 })
