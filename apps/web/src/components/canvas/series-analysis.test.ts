@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_BANDS, MAX_DEVIATIONS, bandsProblem, withBands,
+  DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, canvasesOf, chainOf, extentOf, pathOf, readingsOf, rootOf, rootPlots,
   statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
 } from "./series-analysis";
@@ -190,5 +190,37 @@ describe("p.393's Bollinger bands (§649)", () => {
     expect(bandsProblem({ ...bands, deviations: Number.NaN })).toMatch(/standard deviations/);
     expect(bandsProblem({ ...bands, deviations: MAX_DEVIATIONS + 0.5 })).toMatch(/standard deviations/);
     expect(bandsProblem({ ...bands, deviations: MAX_DEVIATIONS })).toBeNull();
+  });
+});
+
+describe("p.393's Combine time series (§650)", () => {
+  it("reads a plot as its root's raw series through its whole chain", () => {
+    const once = withDerived(roots, "root:i2", [cumulative], 1);
+    expect(referenceTo(once, "plot-3", [derivative])).toEqual({
+      object_type_id: "t1", instance_id: "i2", property: "pressure", interval: "none",
+      aggregate: "avg", transforms: [cumulative, derivative] });
+    expect(referenceTo(once, "gone")).toBeNull();
+  });
+
+  it("combines a plot with others as inputs, named for them", () => {
+    const next = withCombined(roots, "root:i1", ["root:i2"], "max", 2);
+    const made = next[2]!;
+    expect(made).toMatchObject({ id: "plot-3", label: "Pump 1 combined with Pump 2", canvas: 2,
+      parent: "root:i1" });
+    expect(made.transforms).toEqual([{ kind: "combine", aggregate: "max", inputs: {
+      y: referenceTo(roots, "root:i2") } }]);
+  });
+
+  it("leaves the plot itself out, takes at most four, and needs one", () => {
+    let many = roots;
+    for (let n = 0; n < 5; n++) many = withDerived(many, "root:i2", [cumulative], 1);
+    const others = many.slice(1).map((p) => p.id);
+    const made = withCombined(many, "root:i1", ["root:i1", ...others], "sum", 1).at(-1)!;
+    expect(Object.keys((made.transforms[0] as { inputs: object }).inputs)).toEqual(["y", "z", "a", "b"]);
+    expect(MAX_COMBINED).toBe(4);
+    expect(withCombined(roots, "root:i1", [], "sum", 1)).toEqual(roots);
+    expect(withCombined(roots, "root:i1", ["root:i1"], "sum", 1)).toEqual(roots);
+    expect(withCombined(roots, "root:i1", ["gone"], "sum", 1)).toEqual(roots);
+    expect(withCombined(roots, "gone", ["root:i2"], "sum", 1)).toEqual(roots);
   });
 });

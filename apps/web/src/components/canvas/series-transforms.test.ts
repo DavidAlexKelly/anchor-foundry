@@ -11,7 +11,7 @@ import {
 
 describe("the vocabulary", () => {
   it("is p.583-586's, as the server takes it", () => {
-    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample"]);
+    expect([...TRANSFORM_KINDS]).toEqual(["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine"]);
     expect([...FORMULA_FUNCTIONS]).toEqual(["abs", "sqrt", "ln", "log10", "exp", "floor", "ceil", "round"]);
     expect(MAX_FORMULA).toBe(200);
     expect([...WINDOW_TYPES]).toEqual(["start", "end"]);
@@ -211,5 +211,30 @@ describe("p.393's Filter time series and Sample (§648)", () => {
         .toMatch(/^The step must be a whole number from 1/);
     }
     expect(transformProblem({ kind: "sample", every: 100_000, unit: "day", method: "linear" })).toBeNull();
+  });
+});
+
+describe("p.393's Combine time series (§650)", () => {
+  const combine = (inputs?: Record<string, unknown>) =>
+    ({ kind: "combine" as const, aggregate: "max" as const, ...(inputs ? { inputs } : {}) });
+
+  it("starts with one input to choose, and says what it does", () => {
+    expect(blankTransform("combine")).toEqual({ kind: "combine", aggregate: "avg", inputs: { y: "" } });
+    expect(transformText(combine({ y: "v1", z: "v2" }))).toBe("combined with y, z, maximum where they meet");
+    expect(transformText(combine())).toBe("combined with nothing, maximum where they meet");
+  });
+
+  it("needs another series, chosen", () => {
+    expect(transformProblem(combine())).toBe("Combining needs at least one other series.");
+    expect(transformProblem(combine({ y: "" }))).toBe("Choose a series for y.");
+    expect(transformProblem(combine({ y: "v1" }))).toBeNull();
+  });
+
+  it("adds and removes inputs as a formula does, and names its variables", () => {
+    const one = withInput(combine({ y: "v1" }) as never);
+    expect(Object.keys((one as { inputs: object }).inputs)).toEqual(["y", "z"]);
+    expect(withoutInput(combine({ y: "v1", z: "v2" }) as never, "y")).toEqual(combine({ z: "v2" }));
+    expect(seriesInputs([combine({ y: "v1" }), { kind: "formula", expression: "x", inputs: { y: "v2" } }]))
+      .toEqual(["v1", "v2"]);
   });
 });
