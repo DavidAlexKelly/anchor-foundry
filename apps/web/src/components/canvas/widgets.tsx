@@ -387,8 +387,8 @@ import {
 import { perimeterModeOf } from "./map-measure";
 // Aliased on §211's rule: `areaOf` is also §537's chart area option.
 import {
-  DRAWN_OPACITY, DRAW_TOOLS, DRAW_TOOL_LABELS, areaOf as mapAreaOf, drawToolsOf, drawnOpacityOf,
-  withArea as withMapArea, withDrawTool,
+  DRAWN_OPACITY, DRAW_TOOLS, DRAW_TOOL_LABELS, areasOf as mapAreasOf, drawToolsOf, drawnOpacityOf,
+  singleDrawOf, withAreas as withMapAreas, withDrawTool, withDrawn,
 } from "./map-area";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { PropertyInlineEdit } from "@/components/property-inline-edit";
@@ -13993,6 +13993,7 @@ export function CanvasMap({
   drawOptions = null,
   drawnShapeColor = null,
   drawnShapeOpacity = DRAWN_OPACITY,
+  singleDrawMode,
   drawnShapesVariable = null,
   shapeOutputType = "features",
   enableMeasurements = false,
@@ -14043,6 +14044,11 @@ export function CanvasMap({
   drawOptions?: string[] | null;
   drawnShapeColor?: string | null;
   drawnShapeOpacity?: number;
+  /** p.301's Enable single draw mode (§640): one shape at a time, "removing
+   * the previous shape when a new one is drawn". On unless set false, which
+   * is how a map saved before the choice behaved; off, the shapes drawn
+   * select the objects inside any of them (§639's `within_any`). */
+  singleDrawMode?: boolean;
   /** p.301's Drawn shapes and Shape output type (§574): a string variable
    * the drawn shape is read from and written to as GeoJSON, as features or
    * as geometries (`map-drawn.ts`). */
@@ -14121,7 +14127,8 @@ export function CanvasMap({
   const areaClauses = clausesOf(areaWritten !== undefined ? areaWritten : areaResolved);
   const selectsArea = source === "objects" && !!objectSetVariable && !!areaVariable
     && !!locationProperty;
-  const mapArea = selectsArea ? mapAreaOf(areaClauses, locationProperty!) : null;
+  const mapAreas = selectsArea ? mapAreasOf(areaClauses, locationProperty!) : [];
+  const single = singleDrawOf(singleDrawMode);
   // p.301's Drawn shapes (§574): the area as GeoJSON, read and written, and
   // whichever of the two moved since the map last looked wins.
   const shapesWritten = useCanvasParameter(drawnShapesVariable);
@@ -14138,10 +14145,11 @@ export function CanvasMap({
       shapesSeen.current = null;
       return;
     }
-    const sync = syncShapes(shapesSeen.current, { area: mapArea, shapes: shapesNow }, shapeOutput);
-    shapesSeen.current = { area: shapesText(mapArea, shapeOutput), shapes: shapesNow };
+    const sync = syncShapes(shapesSeen.current, { areas: mapAreas, shapes: shapesNow }, shapeOutput,
+      single);
+    shapesSeen.current = { area: shapesText(mapAreas, shapeOutput), shapes: shapesNow };
     if (sync?.write === "area") {
-      setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, sync.area));
+      setParameter(areaVariable!, withMapAreas(areaClauses, locationProperty!, sync.areas));
     } else if (sync?.write === "shapes") {
       setParameter(drawnShapesVariable, sync.text);
     }
@@ -14440,7 +14448,7 @@ export function CanvasMap({
                 count: trackShapes.length }] : []),
             ],
           } : null}
-          area={mapArea}
+          areas={mapAreas}
           drawTools={drawToolsOf(drawOptions)}
           drawnColor={layerColorOf(drawnShapeColor)}
           drawnOpacity={drawnOpacityOf(drawnShapeOpacity)}
@@ -14452,10 +14460,10 @@ export function CanvasMap({
           line={drawnLine}
           onLine={selectsArea || drawnShapesVariable
             ? (line) => {
-                // One drawn shape at a time (p.301's single draw mode): a line
-                // replaces the area, which a line cannot be.
-                if (selectsArea && mapArea) {
-                  setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, null));
+                // A line replaces the areas, which a line cannot be one of:
+                // the Drawn shapes text holds areas or a line, not both.
+                if (selectsArea && mapAreas.length > 0) {
+                  setParameter(areaVariable!, withMapAreas(areaClauses, locationProperty!, []));
                 }
                 const text = lineText(line, shapeOutput);
                 if (drawnShapesVariable) setParameter(drawnShapesVariable, text);
@@ -14468,12 +14476,16 @@ export function CanvasMap({
           onArea={selectsArea
             ? (area) => {
                 setLocalLine(null);
-                setParameter(areaVariable!, withMapArea(areaClauses, locationProperty!, area));
-                const text = shapesText(area, shapeOutput);
-                if (drawnShapesVariable) setParameter(drawnShapesVariable, text);
-                // Drawn, not cleared: `{{value}}` is the shape's GeoJSON.
+                // p.301's single draw mode (§640): the new shape replaces the
+                // last, or out of it joins the rest. Clearing clears them all.
+                const next = area ? withDrawn(mapAreas, area, single) : [];
+                // The Drawn shapes text follows by the sync above, the area
+                // having moved (writing it here too survived the sweep as
+                // equivalent).
+                setParameter(areaVariable!, withMapAreas(areaClauses, locationProperty!, next));
+                // Drawn, not cleared: `{{value}}` is the drawn shape's GeoJSON.
                 if (area && drawEvents.length > 0) {
-                  runEvents(drawEvents, { ...eventContext, payload: { value: text } });
+                  runEvents(drawEvents, { ...eventContext, payload: { value: shapesText(area, shapeOutput) } });
                 }
               }
             : undefined}
@@ -14645,8 +14657,8 @@ function MapSettings() {
     allowTimeChange, liveModeToggle, openTimelineByDefault,
     playbackPositionVariable, autoPauseVariable, layerLabel, selectedVariable, layerVisible,
     layerVisibleVariable, lockLayer, layerColor, layerOpacity,
-    drawOptions, drawnShapeColor, drawnShapeOpacity, drawnShapesVariable, shapeOutputType,
-    enableMeasurements, measurePerimeter, perimeterMode, measureArea, measureLine, lineMode,
+    drawOptions, drawnShapeColor, drawnShapeOpacity, singleDrawMode, drawnShapesVariable,
+    shapeOutputType, enableMeasurements, measurePerimeter, perimeterMode, measureArea, measureLine, lineMode,
     showLegend, legendCollapsed, legendSize, showSelectionPanel, autoZoom, autoZoomSetVariable,
     autoZoomOutsideOnly, boundsVariable, followSetVariable,
     actions: { setProp },
@@ -14670,6 +14682,7 @@ function MapSettings() {
     drawOptions: node.data.props.drawOptions,
     drawnShapeColor: node.data.props.drawnShapeColor,
     drawnShapeOpacity: node.data.props.drawnShapeOpacity,
+    singleDrawMode: node.data.props.singleDrawMode,
     drawnShapesVariable: node.data.props.drawnShapesVariable,
     shapeOutputType: node.data.props.shapeOutputType,
     enableMeasurements: node.data.props.enableMeasurements,
@@ -14963,6 +14976,21 @@ function MapSettings() {
                 onChange={(e) => setProp((p: { drawnShapeOpacity: number }) =>
                   (p.drawnShapeOpacity = drawnOpacityOf(e.target.value)))}
               />
+              {/* p.301's Enable single draw mode (§640). */}
+              <label className="field canvas-toggle">
+                <input
+                  type="checkbox"
+                  data-testid="map-single-draw"
+                  checked={singleDrawOf(singleDrawMode)}
+                  onChange={(e) => setProp((p: { singleDrawMode: boolean }) =>
+                    (p.singleDrawMode = e.target.checked))}
+                />
+                <span className="field-label">Enable single draw mode</span>
+                <span className="field-hint">
+                  Off, each shape drawn joins the others, and the objects inside any of them
+                  are selected
+                </span>
+              </label>
               {/* p.301's Drawn shapes and Shape output type (§574). */}
               <select
                 aria-label="Drawn shapes"
