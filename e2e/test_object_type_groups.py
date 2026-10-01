@@ -258,6 +258,49 @@ def test_groups_can_be_edited_from_the_object_type(page, module, group, api) -> 
     assert after == before | {group["id"]}, (before, after)
 
 
+def test_the_groups_cannot_be_ticked_before_the_memberships_are_read(
+    page, module, group,
+) -> None:
+    """**The PUT sends the whole membership, so it must start from all of it.**
+
+    The dialog reads two things: the workspace's groups, which draw the boxes,
+    and this type's memberships, which tick them. The first is shared with the
+    groups table on this page and is usually cached; the second is not. A box
+    drawn from the first alone can be ticked while the second is in flight,
+    and the selection it builds starts from nothing - so Save PUTs that one
+    group and un-groups the type from every other. It cost a red browser run
+    on an unrelated change to find (#450).
+
+    The read is held rather than slowed, for the reason `test_action_sections`
+    spells out: a sleeping route handler blocks Playwright's dispatcher.
+    """
+    held = []
+
+    def hold(route):
+        if route.request.method == "GET":
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route(f"**/object-types/{module.object_type_id}/groups", hold)
+    try:
+        open_objects(page, module)
+        # The groups table draws from the same query the dialog's boxes do, so
+        # this row is the proof that the boxes have everything they need
+        # except the memberships.
+        group_row(page, group)
+        open_type_editor(page, module)
+        expect(page.get_by_test_id("type-group-picker")).to_have_count(0)
+    finally:
+        for route in held:
+            route.continue_()
+
+    expect(page.get_by_test_id(f"type-group-{group['api_name']}")).to_be_visible(
+        timeout=15000,
+    )
+    assert held, "the memberships were never requested"
+
+
 def test_an_unrelated_edit_does_not_touch_the_groups(page, module, group, api) -> None:
     """**The carry-through failure, for the eighth time** (§157, §160, §163,
     §164, §165, §169, §171, and here) — and the first one answered by *not

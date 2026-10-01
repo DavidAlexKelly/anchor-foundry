@@ -915,7 +915,7 @@ export function EditObjectTypeDialog({
       // open the dialog, somebody else files the type under a group, change a
       // description, save, and their grouping is gone. Sending nothing when
       // nothing changed is what makes that impossible rather than unlikely.
-      if (!sameSelection(selectedGroupIds, originalGroupIds)) {
+      if (currentGroups.data && !sameSelection(selectedGroupIds, originalGroupIds)) {
         await objApi.setGroupsForObjectType(workspaceId, type.id, selectedGroupIds);
       }
       if (editHistory.data && tracked !== originalTracking) {
@@ -1018,8 +1018,14 @@ export function EditObjectTypeDialog({
         {/* p.261: "Groups can also be added directly to object types by
             selecting Edit groups in the object type overview page." Drawn only
             when there is a group to pick - a checklist of nothing is a control
-            that cannot do anything. */}
-        {(currentGroups.data ?? []).length + (allGroups.data ?? []).length > 0 && (
+            that cannot do anything.
+
+            **And only once this type's memberships have been read.** The
+            workspace's groups can land first, and a box ticked then builds the
+            selection from an empty membership - so the save would PUT the one
+            box and un-group the type from everything else it was in. */}
+        {currentGroups.data && allGroups.data
+          && currentGroups.data.length + allGroups.data.length > 0 && (
           <Field
             label="Groups"
             hint="A classification for finding this type. Being in one does not change it."
