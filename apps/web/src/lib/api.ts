@@ -2163,6 +2163,9 @@ export const objects = {
       join_dataset_id?: string | null;
       join_from_column?: string | null;
       join_to_column?: string | null;
+      /** p.253's status and p.254's note (§631); left out, each is kept. */
+      status?: import("./types").OntologyStatus;
+      deprecation?: import("./types").Deprecation | null;
     },
   ) =>
     request<import("./types").LinkType>(`/workspaces/${wid}/link-types/${linkId}`, {

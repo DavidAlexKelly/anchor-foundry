@@ -28,9 +28,9 @@ import { SharedPropertiesPanel } from "@/components/shared-properties-panel";
 import {
   GroupChips, GroupFilter, ObjectTypeGroupsPanel,
 } from "@/components/object-type-groups-panel";
-import { StatusBadge } from "@/components/status-field";
+import { StatusBadge, StatusField } from "@/components/status-field";
 import {
-  STATUS_LABELS, canDelete, deleteBlockedReason, statusesFor,
+  STATUS_LABELS, canDelete, deleteBlockedReason, deprecationSummary, linkCapNote, statusesFor,
 } from "@/lib/ontology-status";
 import { ValueTypesPanel } from "@/components/value-types-panel";
 import { Dialog, Field } from "@/components/dialog";
@@ -51,6 +51,7 @@ import {
   PRIMARY_KEY_REF,
   type ActionType,
   type Dataset,
+  type Deprecation,
   type LinkCardinality,
   type LinkType,
   type ObjectTypeSource,
@@ -606,6 +607,10 @@ function LinkJoinDialog({
   const [joinBy, setJoinBy] = useState<"properties" | "join_table">(
     link.join_from_column ? "join_table" : "properties");
   const [joinTable, setJoinTable] = useState<JoinTableDraft>(draftOf(link));
+  // p.253's status and p.254's note (§631), which a link had and no screen set.
+  const [status, setStatus] = useState<OntologyStatus>(link.status);
+  const [deprecation, setDeprecation] = useState<Deprecation | null>(link.deprecation);
+  const [capped, setCapped] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const throughTable = link.cardinality === "many_to_many" && joinBy === "join_table";
 
@@ -615,10 +620,20 @@ function LinkJoinDialog({
         from_property: throughTable ? null : fromProperty || null,
         to_property: throughTable ? null : toProperty || null,
         ...joinTablePayload(throughTable ? joinTable : NO_JOIN_TABLE),
+        status,
+        deprecation: status === "deprecated" ? deprecation : null,
       }),
-    onSuccess: async () => {
+    onSuccess: async (saved) => {
       await queryClient.invalidateQueries({ queryKey: ["link-types", workspaceId] });
       await queryClient.invalidateQueries({ queryKey: ["instance-links"] });
+      // p.257 keeps a link at the level of what it joins rather than refusing,
+      // so a status that did not stick is said here instead of closing on it.
+      const note = linkCapNote(status, saved.status);
+      if (note) {
+        setStatus(saved.status);
+        setCapped(note);
+        return;
+      }
       onClose();
     },
   });
@@ -667,6 +682,16 @@ function LinkJoinDialog({
           <div className="form-error">Set the property on both ends, or on neither.</div>
         )}
         {tableProblem && <div className="form-error">{tableProblem}</div>}
+        {/* p.253-256's status for a link type, and p.254's note when it is
+            deprecated (§631). */}
+        <StatusField
+          kind="link_type"
+          value={status}
+          deprecation={deprecation}
+          onChange={(next) => { setStatus(next); setCapped(null); }}
+          onDeprecationChange={setDeprecation}
+        />
+        {capped && <p className="field-hint" data-testid="link-status-capped">{capped}</p>}
         {save.isError && (
           <div className="form-error">
             {save.error instanceof ApiError ? save.error.message : "Couldn't save the join."}
@@ -1703,7 +1728,16 @@ export default function ObjectsPage() {
               <tbody>
                 {linkTypes.data.map((lt: LinkType) => (
                   <tr key={lt.id}>
-                    <td><strong>{lt.display_name}</strong></td>
+                    <td>
+                      <strong>{lt.display_name}</strong>
+                      <StatusBadge status={lt.status} />
+                      {/* p.254's note, where the link is listed (§631). */}
+                      {deprecationSummary(lt.deprecation) && (
+                        <div className="slug" data-testid={`link-deprecation-${lt.api_name}`}>
+                          {deprecationSummary(lt.deprecation)}
+                        </div>
+                      )}
+                    </td>
                     <td>{lt.from_display_name} → {lt.to_display_name}</td>
                     <td className="count">{lt.cardinality}</td>
                     <td className="slug">

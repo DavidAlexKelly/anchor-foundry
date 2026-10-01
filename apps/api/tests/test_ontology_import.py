@@ -1188,6 +1188,24 @@ def test_an_edited_join_is_applied_to_an_existing_link(
     assert links_of(client, fx)[f"lnk_{tag}"]["to_side_name"] == "Holder"
 
 
+def test_a_links_deprecation_note_is_applied_with_its_status(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.254's note travels with the link (§631), and comes back in the export
+    so a straight re-import plans no change."""
+    tag = uuid.uuid4().hex[:8]
+    note = {"reason": "Use the roster", "deadline": "2027-03-01"}
+    document = two_types_and_a_link(fx, tag, status="deprecated", deprecation=note)
+    apply(client, fx, document).raise_for_status()
+    made = links_of(client, fx)[f"lnk_{tag}"]
+    assert (made["status"], made["deprecation"]) == ("deprecated", note)
+    again = plan(client, fx, document)
+    assert again.json()["sections"]["link_types"]["changed"] == []
+    # A file that brings it back into use drops the note.
+    apply(client, fx, two_types_and_a_link(fx, tag)).raise_for_status()
+    assert links_of(client, fx)[f"lnk_{tag}"]["deprecation"] is None
+
+
 def test_a_file_that_moves_an_end_of_an_existing_link_is_refused(
     client: TestClient, fx: Fixture
 ) -> None:

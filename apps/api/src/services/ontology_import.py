@@ -547,11 +547,9 @@ async def _apply_links(
     an insert carrying a status would be a second answer to "how production-ready
     is this link", free to store something p.257 says is unreachable.
 
-    **A link's `deprecation` is not applied, and cannot be by anything.** The
-    column is exported and no code path in this build writes it — not this, not
-    the PATCH route, not §177's bulk status. That is a ○ on the Status row
-    rather than something to fix here, and it costs a round trip nothing today:
-    every export of every workspace carries `null` for it.
+    **A link's `deprecation` is applied with its status** (§631), through the
+    same writer, so p.254's note travels with the link and a link the cap keeps
+    from being deprecated arrives without one.
     """
     section = made["sections"]["link_types"]
     wanted = set(section["added"]) | set(section["changed"])
@@ -604,6 +602,7 @@ async def _apply_links(
             from_side_name=link.get("from_side_name"),
             to_side_name=link.get("to_side_name"),
             status=link.get("status"),
+            deprecation=link.get("deprecation"),
             # The file names no join table (it would be a dataset id), so a
             # link joined on one keeps it (§552).
             keep_join_table=True,

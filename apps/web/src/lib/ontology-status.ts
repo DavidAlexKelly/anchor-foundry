@@ -21,7 +21,7 @@
  * change by re-reading a page they thought they understood.
  */
 
-import type { OntologyStatus } from "@/lib/types";
+import type { Deprecation, OntologyStatus } from "@/lib/types";
 
 /** p.254's five, ordered as `services/ontology_status.STATUSES` orders them:
  * increasing "applications may rely on this". The order is what `weakest`
@@ -133,4 +133,23 @@ export function propagationWarning(
  * here, because the server refuses them anywhere else. */
 export function wantsDeprecationNote(status: OntologyStatus): boolean {
   return status === "deprecated";
+}
+
+/**
+ * What a link's save says when p.257's cap stored less than was asked (§631).
+ * The server keeps the capped status rather than refusing, so the only way an
+ * editor learns the link is not as ready as they chose is to be told.
+ */
+export function linkCapNote(asked: OntologyStatus, stored: OntologyStatus): string | null {
+  if (asked === stored) return null;
+  return `Kept as ${STATUS_LABELS[stored]}: a link is no more ready than the object types `
+    + "and properties it joins (p.257).";
+}
+
+/** p.254's note in a listing, or null when there is nothing to say. */
+export function deprecationSummary(note: Deprecation | null | undefined): string | null {
+  const reason = note?.reason?.trim();
+  const deadline = note?.deadline?.slice(0, 10);
+  if (!reason && !deadline) return null;
+  return [reason, deadline ? `by ${deadline}` : null].filter(Boolean).join(", ");
 }

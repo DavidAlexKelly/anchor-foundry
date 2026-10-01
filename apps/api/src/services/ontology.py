@@ -2251,6 +2251,11 @@ async def create_link_type(
     return dict(row)
 
 
+#: `set_link_join`'s "leave the deprecation note alone" (§631): distinct from
+#: `None`, which clears it.
+KEEP_DEPRECATION: Any = object()
+
+
 async def set_link_join(
     conn: AsyncConnection,
     workspace_id: UUID,
@@ -2265,9 +2270,15 @@ async def set_link_join(
     join_from_column: str | None = None,
     join_to_column: str | None = None,
     keep_join_table: bool = False,
+    deprecation: Any = KEEP_DEPRECATION,
 ) -> dict[str, Any]:
     """Map (or unmap) the properties a link joins on - or p.197's join table
     (§552), which replaces them - name its two sides, and set its status.
+
+    `deprecation` is p.254's note (§631), the one writer a link's has: left
+    out, a link that stays deprecated keeps the note it has and one that stops
+    being deprecated loses it; given, it is checked by `parse_deprecation`
+    against the status asked for.
 
     `keep_join_table` is for a caller that does not speak of join tables at
     all - an imported ontology file, which carries no dataset because a
@@ -2332,11 +2343,22 @@ async def set_link_join(
         from_property_status=by_type.get(str(link["from_object_type_id"])),
         to_property_status=by_type.get(str(link["to_object_type_id"])),
     )
+    if deprecation is KEEP_DEPRECATION:
+        note = link.get("deprecation") if capped == "deprecated" else None
+        if isinstance(note, str):
+            note = json.loads(note)
+    else:
+        # Checked against the status asked for, which refuses a note on
+        # anything but deprecated. The cap cannot then lose it: deprecated is
+        # the lowest status, so asking for it always stores it.
+        note = ontology_status.parse_deprecation(
+            deprecation, str(status or link["status"]))
     await conn.execute(
         text(
             "UPDATE link_types SET from_property = :fprop, to_property = :tprop, "
             "       join_dataset_id = :jds, join_from_column = :jfrom, "
             "       join_to_column = :jto, "
+            "       deprecation = CAST(:dep AS jsonb), "
             # p.257 caps a link's status by its ends and its foreign keys, so
             # what is stored is the capped value rather than what was asked
             # for - a link cannot be more production-ready than the things it
@@ -2351,6 +2373,7 @@ async def set_link_join(
             "WHERE id = :lid AND workspace_id = :wid"
         ),
         {"fprop": from_property, "tprop": to_property, "status": capped,
+         "dep": None if note is None else json.dumps(note),
          "jds": None if join_dataset is None else str(join_dataset),
          "jfrom": join_from, "jto": join_to,
          "fside": (from_side_name or "").strip() or None,

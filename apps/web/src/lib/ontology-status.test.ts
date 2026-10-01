@@ -19,6 +19,7 @@ import type { OntologyStatus } from "@/lib/types";
 import {
   canDelete, deleteBlockedReason, promoteBlockedReason, propagationWarning,
   statusesFor, wantsDeprecationNote, weakest,
+  deprecationSummary, linkCapNote,
 } from "./ontology-status";
 
 function props(...pairs: [string, OntologyStatus][]) {
@@ -193,5 +194,23 @@ describe("statusesFor and promotion (§175, p.255)", () => {
   it("says why when it is not on offer", () => {
     expect(promoteBlockedReason(false)).toMatch(/workspace admin/);
     expect(promoteBlockedReason(true)).toBeNull();
+  });
+});
+
+describe("a link's status (§631)", () => {
+  it("says when p.257's cap kept less than was asked", () => {
+    expect(linkCapNote("active", "active")).toBeNull();
+    expect(linkCapNote("active", "experimental")).toBe(
+      "Kept as Experimental: a link is no more ready than the object types and "
+      + "properties it joins (p.257).");
+  });
+
+  it("sums up p.254's note for a listing", () => {
+    expect(deprecationSummary(null)).toBeNull();
+    expect(deprecationSummary({ reason: "  " })).toBeNull();
+    expect(deprecationSummary({ reason: "Use the roster" })).toBe("Use the roster");
+    expect(deprecationSummary({ deadline: "2027-01-31T00:00:00Z" })).toBe("by 2027-01-31");
+    expect(deprecationSummary({ reason: " Use the roster ", deadline: "2027-01-31" }))
+      .toBe("Use the roster, by 2027-01-31");
   });
 });
