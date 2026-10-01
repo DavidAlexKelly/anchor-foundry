@@ -42,7 +42,12 @@ export interface SeriesSpec {
   objectSetVariable: string | null;
   /** p.280's layer X axis property (§625), or null for the chart's own. */
   dimension: string | null;
+  /** p.280's **Layer type** (§626): drawn as bars or as a line whatever the
+   * chart's own type is, or null for the chart's. */
+  kind: LayerKind | null;
 }
+
+export type LayerKind = "bar" | "line";
 
 export type AxisSide = "left" | "right";
 
@@ -63,7 +68,46 @@ export function seriesOf(raw: unknown): SeriesSpec[] {
       axis: s.axis === "left" ? "left" : "right",
       objectSetVariable: nonEmpty(s.objectSetVariable),
       dimension: nonEmpty(s.dimension),
+      kind: s.kind === "bar" || s.kind === "line" ? s.kind : null,
     }));
+}
+
+/**
+ * p.280's **Layer type** for every series, the chart's own first (§626).
+ *
+ * > "Layer type: Selects the type of chart displayed. Current options include
+ * > Bar Chart, Line Chart, and Scatter Chart." (p.280)
+ *
+ * A series that names none is drawn as the chart is.
+ */
+export function layerKinds(chart: LayerKind, specs: readonly SeriesSpec[]): LayerKind[] {
+  return [chart, ...specs.map((s) => s.kind ?? chart)];
+}
+
+/**
+ * A grid of series split into what is drawn as bars and what as lines, each
+ * keeping its place in the legend (§626). `bars` is the grid of the bar
+ * series alone, for the grouped layout; `barAt[i]` and `lineAt[i]` are the
+ * legend positions of its i-th bar and line series, which is what colours,
+ * names and places each on an axis.
+ */
+export function splitLayers(data: Segmented, kinds: readonly LayerKind[]): {
+  bars: Segmented;
+  barAt: number[];
+  lineAt: number[];
+} {
+  const barAt: number[] = [];
+  const lineAt: number[] = [];
+  data.segments.forEach((_, i) => ((kinds[i] ?? "bar") === "line" ? lineAt : barAt).push(i));
+  return {
+    bars: {
+      categories: data.categories,
+      segments: barAt.map((i) => data.segments[i]!),
+      values: data.values.map((row) => barAt.map((i) => row[i] ?? NaN)),
+    },
+    barAt,
+    lineAt,
+  };
 }
 
 function nonEmpty(value: unknown): string | null {

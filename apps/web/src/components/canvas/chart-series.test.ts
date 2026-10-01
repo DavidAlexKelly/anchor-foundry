@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_SERIES, axisSides, mergeSeries, seriesName, seriesOf, seriesRequests, seriesSource,
-  type SeriesSpec,
+  MAX_SERIES, axisSides, layerKinds, mergeSeries, seriesName, seriesOf, seriesRequests,
+  seriesSource, splitLayers, type SeriesSpec,
 } from "./chart-series";
 
-const ON_CHART = { objectSetVariable: null, dimension: null };
+const ON_CHART = { objectSetVariable: null, dimension: null, kind: null };
 
 describe("seriesOf (p.281's multiple series)", () => {
   it("reads what a saved chart holds, and nothing else", () => {
@@ -85,6 +85,40 @@ describe("seriesSource (p.280's layers, §625)", () => {
       .toBeNull();
     expect(seriesSource(spec({}), { objectSetVariable: "v_alerts", dimension: null }, resolved))
       .toBeNull();
+  });
+});
+
+describe("layerKinds (p.280's Layer type, §626)", () => {
+  it("reads a series' own type, and is the chart's where it names none", () => {
+    expect(seriesOf([{ kind: "line" }, { kind: "bar" }, { kind: "pie" }, {}])
+      .map((s) => s.kind)).toEqual(["line", "bar", null, null]);
+    expect(layerKinds("bar", [spec({ kind: "line" }), spec({})])).toEqual(["bar", "line", "bar"]);
+    expect(layerKinds("line", [spec({ kind: "bar" }), spec({})])).toEqual(["line", "bar", "line"]);
+    expect(layerKinds("line", [])).toEqual(["line"]);
+  });
+});
+
+describe("splitLayers", () => {
+  const grid = {
+    categories: ["open", "closed"],
+    segments: ["Count", "Hours", "Sum"],
+    values: [[3, 6, 30], [1, 1, 90]],
+  };
+
+  it("keeps the bar series as a grid of their own, each remembering its place", () => {
+    const split = splitLayers(grid, ["bar", "line", "bar"]);
+    expect(split.bars).toEqual({
+      categories: ["open", "closed"], segments: ["Count", "Sum"], values: [[3, 30], [1, 90]],
+    });
+    expect(split.barAt).toEqual([0, 2]);
+    expect(split.lineAt).toEqual([1]);
+  });
+
+  it("draws a series with no type named as a bar, and a short row as missing", () => {
+    const split = splitLayers({ ...grid, values: [[3], [1, 1, 90]] }, ["line"]);
+    expect(split.lineAt).toEqual([0]);
+    expect(split.barAt).toEqual([1, 2]);
+    expect(split.bars.values).toEqual([[NaN, NaN], [1, 90]]);
   });
 });
 

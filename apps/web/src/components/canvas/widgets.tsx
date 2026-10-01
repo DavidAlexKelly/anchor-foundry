@@ -340,8 +340,8 @@ import {
 } from "./filter-sql";
 import { Chart, MultiLineChart, PieChart, SegmentedBarChart, toPoints } from "./charts";
 import {
-  MAX_SERIES, axisSides, mergeSeries, seriesName as seriesNameOf, seriesOf, seriesRequests,
-  seriesSource,
+  MAX_SERIES, axisSides, layerKinds, mergeSeries, seriesName as seriesNameOf, seriesOf,
+  seriesRequests, seriesSource,
 } from "./chart-series";
 import {
   SEGMENT_LEGEND_POSITIONS, SEGMENT_MODES, segmentLegendPositionOf, segmentModeOf, segmentedFrom,
@@ -15187,6 +15187,11 @@ export function CanvasChart({
       [firstName, ...drawnExtras.map((e) => e.name)])
     : null;
   // Only a series that asked is waited for: a disabled query stays pending.
+  // p.280's Layer type (§626): a chart whose series are drawn as both bars
+  // and lines is drawn as bars with the lines across them.
+  const kinds = layerKinds(drawnKind === "line" ? "line" : "bar",
+    drawnExtras.map((e) => e.spec));
+  const mixed = kinds.includes("bar") && kinds.includes("line");
   const extrasPending = extraResults.some(
     (r, i) => !!extraAsks[i] && !!extraSources[i] && r.isPending);
   const sides = axisSides(drawnExtras.map((e) => e.spec), multipleAxes === true);
@@ -15279,13 +15284,15 @@ export function CanvasChart({
           values.
         </p>
       )}
-      {multi && drawnKind === "bar" && (
+      {multi && (drawnKind === "bar" || mixed) && (
         <SegmentedBarChart
           // Side by side, a colour per series. A series with no value for a
-          // category has no bar there, which a zero draws as.
-          data={{ ...multi, values: multi.values.map((row) =>
+          // category has no bar there, which a zero draws as - and a line
+          // layer's missing value is left missing, for the chart to join over.
+          data={mixed ? multi : { ...multi, values: multi.values.map((row) =>
             row.map((v) => (Number.isNaN(v) ? 0 : v))) }}
           mode="grouped"
+          kinds={mixed ? kinds : undefined}
           sides={sides}
           showLegend={showLegend !== false}
           titles={titles}
@@ -15295,7 +15302,7 @@ export function CanvasChart({
           drill={chartDrill}
         />
       )}
-      {multi && drawnKind === "line" && (
+      {multi && drawnKind === "line" && !mixed && (
         <MultiLineChart
           data={multi}
           sides={sides}
@@ -15962,6 +15969,19 @@ function ChartSeriesFields({
             </select>
           )}
           <select
+            aria-label={`Series ${i + 2} type`}
+            data-testid="chart-series-kind"
+            value={spec.kind ?? ""}
+            onChange={(e) => write(specs.map((s, j) => (j === i
+              ? { ...s, kind: e.target.value === "bar" || e.target.value === "line"
+                  ? e.target.value : null }
+              : s)))}
+          >
+            <option value="">As the chart</option>
+            <option value="bar">Bar</option>
+            <option value="line">Line</option>
+          </select>
+          <select
             aria-label={`Series ${i + 2} aggregation`}
             data-testid="chart-series-aggregate"
             value={spec.aggregate}
@@ -16026,7 +16046,7 @@ function ChartSeriesFields({
         disabled={specs.length >= MAX_SERIES - 1}
         onClick={() =>
           write([...specs, { aggregate: "count", measure: null, name: "", axis: "right",
-                             objectSetVariable: null, dimension: null }])}
+                             objectSetVariable: null, dimension: null, kind: null }])}
       >
         Add a series
       </button>
