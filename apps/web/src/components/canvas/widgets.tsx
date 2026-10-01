@@ -301,6 +301,8 @@ import { ChartExport } from "./ChartExport";
 import {
   blankTransform, readableTransforms, transformsByColumn, transformsProblem as seriesTransformsProblem,
   transformsText, withColumnTransforms, TIME_UNITS, COMBINE_AGGREGATES, COMBINE_WORDS,
+  FILTER_OPERATORS as SERIES_FILTER_OPERATORS, FILTER_WORDS as SERIES_FILTER_WORDS,
+  type FilterOperator as SeriesFilterOperator,
   type SeriesTransform, type TimeUnit,
   type TransformKind,
 } from "./series-transforms";
@@ -314,6 +316,9 @@ import {
   withPlotSetting as withSeriesPlotSetting, withRoots as withSeriesRoots, withoutPlot as withoutSeriesPlot,
   DEFAULT_BANDS as DEFAULT_SERIES_BANDS, bandsProblem as seriesBandsProblem, withBands as withSeriesBands,
   MAX_COMBINED as MAX_SERIES_COMBINED, withCombined as withSeriesCombined,
+  MAX_EVENT_SETS as MAX_SERIES_EVENT_SETS, eventCount as seriesEventCount, eventsOf as seriesEventsOf,
+  liveEventSets as liveSeriesEventSets, withEventSet as withSeriesEventSet,
+  type EventSet as SeriesEventSet,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
 import { outputClauses } from "./action-output";
@@ -13091,6 +13096,25 @@ export function CanvasSeriesAnalysis({
     combine?: { others: string[]; aggregate: "avg" | "min" | "max" | "sum" };
   } | null>(null);
   const canvases = seriesCanvasesOf(plots, addedCanvases);
+  // p.392's Time series search (§651): event sets over the plots, each
+  // searched by the server over the plot's whole chain.
+  const [eventSetsRaw, setEventSets] = useState<SeriesEventSet[]>([]);
+  const eventSets = liveSeriesEventSets(eventSetsRaw, plots);
+  const [eventDraft, setEventDraft] = useState<{ plot: string; op: SeriesFilterOperator; value: string } | null>(null);
+  const eventsFor = useQueries({
+    queries: eventSets.map((set) => {
+      const root = seriesRootOf(plots, set.plot)?.root ?? null;
+      const chain = seriesChainOf(plots, set.plot);
+      return {
+        queryKey: ["canvas-series-analysis-events", root?.objectId, root?.property,
+          JSON.stringify(chain), set.op, set.value],
+        queryFn: () => objApi.seriesEvents(workspaceId, root!.typeId, root!.objectId, root!.property,
+          { op: set.op, value: set.value, transforms: chain }),
+        enabled: !!root,
+      };
+    }),
+  });
+  const eventsOfSet = eventSets.map((_, n) => seriesEventsOf(eventsFor[n]?.data?.events ?? []));
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block"
@@ -13115,7 +13139,13 @@ export function CanvasSeriesAnalysis({
       {plots.length > 0 && (
         <>
           {canvases.map((canvas) => (
-            <SeriesAnalysisChart key={canvas} canvas={canvas} plots={plots
+            <SeriesAnalysisChart key={canvas} canvas={canvas}
+              events={eventSets.flatMap((set, n) => {
+                const at = plots.findIndex((p) => p.id === set.plot);
+                return set.highlight && plots[at]?.canvas === canvas
+                  ? [{ id: set.id, color: colorOf(at), events: eventsOfSet[n] ?? [] }] : [];
+              })}
+              plots={plots
               .map((p, n) => ({ plot: p, n }))
               .filter(({ plot }) => plot.canvas === canvas)
               .map(({ plot, n }) => ({ id: plot.id, label: plot.label, color: colorOf(n),
@@ -13195,7 +13225,65 @@ export function CanvasSeriesAnalysis({
                     onClick={() => setAddedCanvases(Math.max(addedCanvases, ...canvases) + 1)}>
               New canvas
             </button>
+            {eventSets.length < MAX_SERIES_EVENT_SETS && (
+              <button type="button" className="btn quiet"
+                      onClick={() => setEventDraft({ plot: plots[0]!.id, op: "gt", value: "" })}>
+                New event set
+              </button>
+            )}
           </div>
+          {eventDraft && (
+            <div className="row-actions" data-testid="series-new-events" style={{ marginTop: 6 }}>
+              <select aria-label="Event plot" value={eventDraft.plot}
+                      onChange={(e) => setEventDraft({ ...eventDraft, plot: e.target.value })}>
+                {plots.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+              <select aria-label="Event comparison" value={eventDraft.op}
+                      onChange={(e) => setEventDraft({ ...eventDraft, op: e.target.value as SeriesFilterOperator })}>
+                {SERIES_FILTER_OPERATORS.map((o) => <option key={o} value={o}>{SERIES_FILTER_WORDS[o]}</option>)}
+              </select>
+              <input type="number" aria-label="Event threshold" value={eventDraft.value}
+                     onChange={(e) => setEventDraft({ ...eventDraft, value: e.target.value })} />
+              <button type="button" className="btn"
+                      disabled={eventDraft.value.trim() === "" || !Number.isFinite(Number(eventDraft.value))}
+                      onClick={() => {
+                        setEventSets(withSeriesEventSet(eventSets, plots, eventDraft.plot, eventDraft.op,
+                          Number(eventDraft.value)));
+                        setEventDraft(null);
+                      }}>
+                Add event set
+              </button>
+              <button type="button" className="btn quiet" onClick={() => setEventDraft(null)}>Cancel</button>
+            </div>
+          )}
+          {eventSets.length > 0 && (
+            <table className="data-grid" data-testid="series-event-sets" style={{ marginTop: 6 }}>
+              <thead><tr><th>Event set</th><th>Events</th><th>Highlight</th><th /></tr></thead>
+              <tbody>
+                {eventSets.map((set, n) => (
+                  <tr key={set.id} data-label={set.label}>
+                    <td>{set.label}</td>
+                    <td data-stat="events">
+                      {eventsFor[n]?.data
+                        ? `${seriesEventCount(eventsOfSet[n] ?? [])}${eventsFor[n]!.data!.truncated ? "+" : ""}`
+                        : "…"}
+                    </td>
+                    <td>
+                      <input type="checkbox" aria-label={`Highlight ${set.label}`} checked={set.highlight}
+                             onChange={(e) => setEventSets(eventSets.map((x) => x.id === set.id
+                               ? { ...x, highlight: e.target.checked } : x))} />
+                    </td>
+                    <td>
+                      <button type="button" className="btn quiet" aria-label={`Remove ${set.label}`}
+                              onClick={() => setEventSets(eventSets.filter((x) => x.id !== set.id))}>
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           {draft && (
             <div className="card" data-testid="series-new-plot" style={{ marginTop: 6, padding: 8 }}>
               <label className="field">

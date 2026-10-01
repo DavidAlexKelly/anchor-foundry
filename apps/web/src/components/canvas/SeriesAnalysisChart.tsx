@@ -4,7 +4,7 @@
  * one time axis and one value axis, each in its colour and line style. The
  * geometry is `series-analysis.ts`'s. */
 
-import { extentOf, pathOf, type Reading } from "./series-analysis";
+import { eventSpan, extentOf, pathOf, type Reading, type SeriesEvent } from "./series-analysis";
 
 const WIDTH = 640;
 const HEIGHT = 200;
@@ -29,7 +29,13 @@ function timeText(t: number, span: number): string {
   return span > 2 * 86_400_000 ? d.toISOString().slice(0, 10) : d.toISOString().slice(5, 16).replace("T", " ");
 }
 
-export function SeriesAnalysisChart({ canvas, plots }: { canvas: number; plots: CanvasPlot[] }) {
+/** p.395's *Event highlight* (§651): an event set's time ranges, shaded in
+ * its plot's colour under the lines. */
+export interface CanvasEvents { id: string; color: string; events: SeriesEvent[] }
+
+export function SeriesAnalysisChart({ canvas, plots, events = [] }: {
+  canvas: number; plots: CanvasPlot[]; events?: CanvasEvents[];
+}) {
   const extent = extentOf(plots.map((p) => p.readings));
   const frame = { width: WIDTH - LEFT, height: HEIGHT - BOTTOM };
   return (
@@ -58,6 +64,13 @@ export function SeriesAnalysisChart({ canvas, plots }: { canvas: number; plots: 
             </text>
           ))}
           <g transform={`translate(${LEFT} 0)`}>
+            {events.flatMap((set) => set.events.map((e, n) => {
+              const span = eventSpan(e, extent, frame.width);
+              return span && (
+                <rect key={`${set.id}-${n}`} data-event-set={set.id} x={span.x} y={0}
+                      width={span.width} height={frame.height} fill={set.color} fillOpacity={0.15} />
+              );
+            }))}
             {plots.map((p) => (
               <path key={p.id} data-plot={p.id} d={pathOf(p.readings, extent, frame)} fill="none"
                     stroke={p.color} strokeWidth={1.6} strokeDasharray={p.dashed ? "5 3" : undefined}>

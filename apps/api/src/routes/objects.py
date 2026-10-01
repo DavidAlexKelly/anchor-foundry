@@ -4411,6 +4411,36 @@ async def read_series_points(
     )
 
 
+async def _instance_series(
+    access: WorkspaceAccess, type_id: UUID, instance_id: UUID, property_api_name: str,
+    transforms: str | None,
+) -> tuple[dict[str, Any], str | None, list[dict[str, Any]], dict[str, str]]:
+    """One object's series as a read needs it: the mapping, the object's own
+    series id (None when it has none), the transforms with each formula or
+    combine input resolved (§561) under the reader's own access, and the
+    datasets those inputs are in. 404 for an object the reader cannot see or
+    a property with no series mapped."""
+    async with user_connection(access.auth.user_id) as conn:
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        instance = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id)
+        )
+        if instance is None:
+            raise NotFoundError("object instance")
+        series = await time_series_service.series_for_source(
+            conn, UUID(str(instance["source_id"])), property_api_name
+        )
+        if series is None:
+            raise NotFoundError("time series")
+        chain = _series_transforms(transforms, inputs="references")
+        input_tables: dict[str, str] = {}
+        await _resolve_formula_inputs(conn, prefix, chain, input_tables)
+    series_id = (_jsonb(instance["properties"]) or {}).get(property_api_name)
+    if series_id is None or str(series_id).strip() == "":
+        return series, None, chain, input_tables
+    return series, str(series_id), chain, input_tables
+
+
 @router.get(
     "/object-types/{type_id}/instances/{instance_id}/series/{property_api_name}/points",
     response_model=SeriesPoints,
@@ -4441,27 +4471,9 @@ async def instance_series_points(
     endpoint answers is "this object's readings" rather than "these readings".
     """
     storage = _dataset_storage()
-    async with user_connection(access.auth.user_id) as conn:
-        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
-        instance = await instance_store.store_for(conn).get_instance(
-            search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id)
-        )
-        if instance is None:
-            raise NotFoundError("object instance")
-        series = await time_series_service.series_for_source(
-            conn, UUID(str(instance["source_id"])), property_api_name
-        )
-        if series is None:
-            raise NotFoundError("time series")
-        # §561: a time series set's formula may read other series, each
-        # resolved here, under the reader's own access.
-        chain = _series_transforms(transforms, inputs="references")
-        input_tables: dict[str, str] = {}
-        await _resolve_formula_inputs(conn, prefix, chain, input_tables)
-
-    properties = _jsonb(instance["properties"]) or {}
-    series_id = properties.get(property_api_name)
-    if series_id is None or str(series_id).strip() == "":
+    series, series_id, chain, input_tables = await _instance_series(
+        access, type_id, instance_id, property_api_name, transforms)
+    if series_id is None:
         # The property is declared and the series is mapped; this object simply
         # has no series id. An empty chart is the honest answer - a 404 would
         # say the *configuration* is missing, which it is not.
@@ -4496,6 +4508,68 @@ async def instance_series_points(
         aggregate=aggregate,
         points=[SeriesPoint(at=row[0], value=row[1]) for row in result.rows],
         truncated=result.truncated,
+    )
+
+
+class SeriesEvent(BaseModel):
+    start: Any
+    end: Any
+    points: int
+
+
+class SeriesEvents(BaseModel):
+    property_api_name: str
+    events: list[SeriesEvent]
+    #: True when the search found more than `time_series.MAX_EVENTS` events
+    #: and only the first are here.
+    truncated: bool
+
+
+@router.get(
+    "/object-types/{type_id}/instances/{instance_id}/series/{property_api_name}/events",
+    response_model=SeriesEvents,
+)
+async def instance_series_events(
+    type_id: UUID,
+    instance_id: UUID,
+    property_api_name: str,
+    op: str = Query(max_length=8),
+    value: float = Query(),
+    interval: str = Query(default="none", max_length=16),
+    aggregate: str = Query(default="avg", max_length=16),
+    transforms: str | None = Query(default=None, max_length=4000),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> SeriesEvents:
+    """p.392's *Time series search* (§651): "Create an event set from
+    conditions on time series data, identifying time ranges that match a
+    specified pattern or threshold." Each event is a run of consecutive
+    readings meeting the threshold (`time_series.events_sql`), searched over
+    the series as `instance_series_points` reads it, through the same
+    transforms and under the same access."""
+    storage = _dataset_storage()
+    series, series_id, chain, input_tables = await _instance_series(
+        access, type_id, instance_id, property_api_name, transforms)
+    if series_id is None:
+        return SeriesEvents(property_api_name=property_api_name, events=[], truncated=False)
+    sql = time_series_service.events_sql(
+        key_column=str(series["key_column"]),
+        timestamp_column=str(series["timestamp_column"]),
+        value_column=str(series["value_column"]),
+        series_id=series_id, interval=interval, aggregate=aggregate,
+        transforms=chain, op=op, value=value,
+    )
+    local_path = await anyio.to_thread.run_sync(storage.local_path, str(series["s3_location"]))
+    tables = {
+        table: await anyio.to_thread.run_sync(storage.local_path, location)
+        for location, table in input_tables.items()
+    }
+    result = await anyio.to_thread.run_sync(
+        engine.query, local_path, sql, engine.MAX_RESULT_ROWS, tables)
+    rows = result.rows[: time_series_service.MAX_EVENTS]
+    return SeriesEvents(
+        property_api_name=property_api_name,
+        events=[SeriesEvent(start=r[0], end=r[1], points=int(r[2])) for r in rows],
+        truncated=len(result.rows) > time_series_service.MAX_EVENTS,
     )
 
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_EVENT_SETS, eventCount, eventSpan, eventsOf, liveEventSets, withEventSet,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, canvasesOf, chainOf, extentOf, pathOf, readingsOf, rootOf, rootPlots,
   statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
@@ -222,5 +223,54 @@ describe("p.393's Combine time series (§650)", () => {
     expect(withCombined(roots, "root:i1", ["root:i1"], "sum", 1)).toEqual(roots);
     expect(withCombined(roots, "root:i1", ["gone"], "sum", 1)).toEqual(roots);
     expect(withCombined(roots, "gone", ["root:i2"], "sum", 1)).toEqual(roots);
+  });
+});
+
+describe("p.392's Time series search (§651)", () => {
+  it("adds an event set searching a plot, named for what it asks", () => {
+    const sets = withEventSet([], roots, "root:i1", "gte", 20);
+    expect(sets).toEqual([{ id: "events-1", label: "Pump 1 at least 20", plot: "root:i1", op: "gte",
+      value: 20, highlight: true }]);
+    expect(withEventSet(sets, roots, "root:i2", "lt", -1.5)[1]!.label).toBe("Pump 2 below -1.5");
+    expect(withEventSet([], roots, "gone", "gt", 1)).toEqual([]);
+    expect(withEventSet([], roots, "root:i1", "gt", Number.NaN)).toEqual([]);
+  });
+
+  it("names a new set so no two share an id, and stops at the cap", () => {
+    const taken = [{ ...withEventSet([], roots, "root:i1", "gt", 1)[0]!, id: "events-2" }];
+    expect(withEventSet(taken, roots, "root:i1", "gt", 2)[1]!.id).toBe("events-3");
+    let sets = withEventSet([], roots, "root:i1", "gt", 0);
+    while (sets.length < MAX_EVENT_SETS) sets = withEventSet(sets, roots, "root:i1", "gt", sets.length);
+    expect(withEventSet(sets, roots, "root:i1", "gt", 99)).toHaveLength(MAX_EVENT_SETS);
+  });
+
+  it("drops a search whose plot is gone", () => {
+    const derived = withDerived(roots, "root:i1", [cumulative], 1);
+    const sets = withEventSet(withEventSet([], derived, "plot-3", "gt", 1), derived, "root:i2", "gt", 1);
+    expect(liveEventSets(sets, withoutPlot(derived, "plot-3")).map((e) => e.plot)).toEqual(["root:i2"]);
+  });
+
+  it("reads events as times and counts those in the view", () => {
+    const events = eventsOf([
+      { start: "2026-01-02T00:00:00Z", end: "2026-01-03T00:00:00Z" },
+      { start: "2026-01-05T00:00:00Z", end: "2026-01-05T00:00:00Z" },
+      { start: "no", end: "2026-01-06T00:00:00Z" },
+      { start: 7, end: "2026-01-06T00:00:00Z" },
+    ]);
+    expect(events).toHaveLength(2);
+    expect(eventCount(events)).toBe(2);
+    const view = { from: Date.parse("2026-01-03T00:00:00Z"), to: Date.parse("2026-01-04T00:00:00Z") };
+    expect(eventCount(events, view)).toBe(1);
+    expect(eventCount(events, { from: 0, to: 1 })).toBe(0);
+  });
+
+  it("shades an event across the frame, a one-reading event visibly", () => {
+    const extent = { t0: 0, t1: 100 };
+    expect(eventSpan({ start: 10, end: 30 }, extent, 200)).toEqual({ x: 20, width: 40 });
+    expect(eventSpan({ start: 50, end: 50 }, extent, 200)).toEqual({ x: 100, width: 2 });
+    expect(eventSpan({ start: 100, end: 100 }, extent, 200)).toEqual({ x: 198, width: 2 });
+    expect(eventSpan({ start: -50, end: 10 }, extent, 200)).toEqual({ x: 0, width: 20 });
+    expect(eventSpan({ start: 150, end: 160 }, extent, 200)).toBeNull();
+    expect(eventSpan({ start: -20, end: -10 }, extent, 200)).toBeNull();
   });
 });
