@@ -60,6 +60,10 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   // p.225's column visibility (§610): the table reads which columns to show.
   columnsVariable: "read",
   rightClickedVariable: "write",
+  // p.317's user text selection (§636): the Markdown widget writes all three.
+  selectedTextVariable: "write",
+  selectionStartVariable: "write",
+  selectionEndVariable: "write",
   variable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",

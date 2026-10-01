@@ -543,6 +543,11 @@ REFERENCE_PROPS = (
     # p.243's Custom right-click menu on the Object Table (§613): the
     # right-clicked object, written as the active object is.
     "rightClickedVariable",
+    # p.317's User text selection on the Markdown widget (§636): the selected
+    # raw Markdown and its start and end indices, all three written by it.
+    "selectedTextVariable",
+    "selectionStartVariable",
+    "selectionEndVariable",
     "name",
 )
 

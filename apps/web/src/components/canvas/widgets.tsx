@@ -275,6 +275,9 @@ import { readerLayout } from "./reader-layout";
 import { PALETTE as WIDGET_LIST } from "./widget-list";
 import { MarkdownReferences, MarkdownView } from "../markdown-view";
 import {
+  type SelectionEnd, selectedSource, selectionRange,
+} from "./markdown-selection";
+import {
   SELECTION_BEHAVIORS as REFERENCE_SELECTIONS, isLit as isReferenceLit, numberReferences, referenceTypesOf,
   selectionBehaviorOf as referenceSelectionOf,
 } from "./markdown-references";
@@ -5001,6 +5004,9 @@ export function CanvasMarkdown({
   selectedVariable = null,
   referenceTypes = [],
   selectionBehavior = "last",
+  selectedTextVariable = null,
+  selectionStartVariable = null,
+  selectionEndVariable = null,
 }: {
   source?: string;
   text?: string;
@@ -5019,6 +5025,11 @@ export function CanvasMarkdown({
   referenceTypes?: unknown;
   /** p.320's Selection behavior. */
   selectionBehavior?: string;
+  /** p.317's User text selection (§636): the selected raw Markdown, and its
+   * start and end indices in the source. */
+  selectedTextVariable?: string | null;
+  selectionStartVariable?: string | null;
+  selectionEndVariable?: string | null;
 }) {
   const {
     id: nodeId,
@@ -5042,7 +5053,51 @@ export function CanvasMarkdown({
   const filled = markdownSourceOf(source) === "text" ? interpolate(raw, resolved) : raw;
   const widgetAlign = alignmentOf(alignment);
   const references = tagType === "inline_reference";
-  const blocks = parseMarkdown(filled, { breaks: breaks !== false, references });
+  // p.317's outputs need to know where each character came from (§636).
+  const selecting = !!(selectedTextVariable || selectionStartVariable || selectionEndVariable);
+  const blocks = parseMarkdown(filled, {
+    breaks: breaks !== false, references, offsets: selecting });
+  const rawSource = filled.replace(/\r\n?/g, "\n");
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  // A selection's end as a place in the source: the run it is in, and how far
+  // into it. An end on an element boundary is the first run after it, or the
+  // end of the last run before it.
+  const endOf = (node: Node | null, offset: number): SelectionEnd | null => {
+    const root = containerRef.current;
+    if (!node || !root || !root.contains(node)) return null;
+    const runOf = (text: Node): SelectionEnd | null => {
+      const holder = text.parentElement;
+      const at = holder?.getAttribute("data-at");
+      return at === null || at === undefined || holder!.firstChild !== text
+        ? null : { at: Number(at), offset: 0 };
+    };
+    if (node.nodeType === Node.TEXT_NODE) {
+      const run = runOf(node);
+      return run ? { ...run, offset } : null;
+    }
+    const texts: Text[] = [];
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) texts.push(t as Text);
+    const after = node.childNodes[offset];
+    const next = after ? texts.find((t) => after === t || after.contains(t)) : undefined;
+    if (next) return runOf(next);
+    const last = [...texts].reverse().find((t) => runOf(t));
+    return last ? { ...runOf(last)!, offset: last.length } : null;
+  };
+  const readSelection = () => {
+    if (!selecting) return;
+    const chosen = window.getSelection();
+    if (!chosen || chosen.rangeCount === 0) return;
+    const range = selectionRange(
+      endOf(chosen.anchorNode, chosen.anchorOffset), endOf(chosen.focusNode, chosen.focusOffset));
+    const inside = containerRef.current?.contains(chosen.anchorNode ?? null);
+    if (!inside) return;
+    if (selectedTextVariable) {
+      setParameter(selectedTextVariable, range ? selectedSource(rawSource, range) : "");
+    }
+    if (selectionStartVariable) setParameter(selectionStartVariable, range ? range.start : null);
+    if (selectionEndVariable) setParameter(selectionEndVariable, range ? range.end : null);
+  };
   if (references) numberReferences(blocks);
   const types = referenceTypesOf(referenceTypes);
   const behavior = referenceSelectionOf(selectionBehavior);
@@ -5100,7 +5155,8 @@ export function CanvasMarkdown({
       {blocks.length === 0 ? (
         <p className="canvas-widget-empty">Markdown - add text in Settings</p>
       ) : (
-        <div className={classes.join(" ")} data-testid="markdown">
+        <div className={classes.join(" ")} data-testid="markdown" ref={containerRef}
+             onMouseUp={readSelection} onKeyUp={readSelection}>
           <MarkdownReferences.Provider value={references ? drawReference : null}>
             <MarkdownView blocks={blocks} align={widgetAlign} />
           </MarkdownReferences.Provider>
@@ -5114,8 +5170,12 @@ function MarkdownSettings() {
   const {
     source, text, textVariable, monospace, scrolling, wordWrap, breaks, alignment,
     tagType, selectedVariable, referenceTypes, selectionBehavior,
+    selectedTextVariable, selectionStartVariable, selectionEndVariable,
     actions: { setProp },
   } = useNode((node) => ({
+    selectedTextVariable: node.data.props.selectedTextVariable,
+    selectionStartVariable: node.data.props.selectionStartVariable,
+    selectionEndVariable: node.data.props.selectionEndVariable,
     tagType: node.data.props.tagType,
     selectedVariable: node.data.props.selectedVariable,
     referenceTypes: node.data.props.referenceTypes,
@@ -5136,6 +5196,17 @@ function MarkdownSettings() {
   const clauseVariables = Object.values(declared).filter(
     (v) => holdsClauses(v) && !v.derivation);
   const types = referenceTypesOf(referenceTypes);
+  // p.317's outputs (§636): the text into a string, the indices into numbers.
+  const writable = (kind: string) =>
+    Object.values(declared).filter((v) => v.kind === kind && !v.derivation);
+  const selectionOutputs: { prop: string; label: string; kind: string; value: unknown }[] = [
+    { prop: "selectedTextVariable", label: "Selected text", kind: "string",
+      value: selectedTextVariable },
+    { prop: "selectionStartVariable", label: "Selection start index", kind: "number",
+      value: selectionStartVariable },
+    { prop: "selectionEndVariable", label: "Selection end index", kind: "number",
+      value: selectionEndVariable },
+  ];
   const writeTypes = (next: { objectType: string; color: string | null }[]) =>
     setProp((p: { referenceTypes: unknown }) => (p.referenceTypes = next));
 
@@ -5286,6 +5357,29 @@ function MarkdownSettings() {
           </label>
         </>
       )}
+      {/* p.317's User text selection (§636). */}
+      <div className="field" data-testid="markdown-selection-outputs">
+        <span className="field-label">User text selection</span>
+        {selectionOutputs.map((output) => (
+          <label key={output.prop} className="field">
+            <span className="field-label">{output.label}</span>
+            <select
+              value={typeof output.value === "string" ? output.value : ""}
+              data-testid={`markdown-${output.prop}`}
+              onChange={(e) => setProp((p: Record<string, unknown>) =>
+                (p[output.prop] = e.target.value || null))}
+            >
+              <option value="">Not output</option>
+              {writable(output.kind).map((v) => (
+                <option key={v.id} value={v.id}>{v.label}</option>
+              ))}
+            </select>
+          </label>
+        ))}
+        <span className="field-hint">
+          The raw Markdown selected, and where it starts and ends in the text
+        </span>
+      </div>
       <label className="field">
         <span className="field-label">Text alignment</span>
         <select
