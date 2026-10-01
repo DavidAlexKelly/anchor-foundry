@@ -24,14 +24,21 @@
  * Pure: the widget reads each plot's points and draws them.
  */
 
-import { KIND_LABELS, type SeriesTransform, type TransformKind } from "./series-transforms";
+import {
+  KIND_LABELS, MAX_SPAN, type SeriesTransform, type TimeUnit, type TransformKind,
+} from "./series-transforms";
 
-/** The derived plot types this widget offers, as the source names them. */
-export const PLOT_TYPES: TransformKind[] = [
-  "cumulative", "rolling", "periodic", "derivative", "integral", "shift", "formula", "filter",
-  "sample",
+/** p.393's Bollinger bands (§649), which is three plots rather than one
+ * transform. */
+export type PlotType = TransformKind | "bollinger";
+/** The derived plot types this widget offers, as the source names them, in
+ * p.393's order. */
+export const PLOT_TYPES: PlotType[] = [
+  "bollinger", "cumulative", "rolling", "periodic", "derivative", "integral", "shift", "formula",
+  "filter", "sample",
 ];
-export const PLOT_LABELS: Partial<Record<TransformKind, string>> = {
+export const PLOT_LABELS: Partial<Record<PlotType, string>> = {
+  bollinger: "Bollinger bands",
   cumulative: "Cumulative aggregate",
   rolling: "Rolling aggregate",
   periodic: "Periodic aggregate",
@@ -246,4 +253,58 @@ export function pathOf(
   const x = (t: number) => ((t - extent.t0) / (extent.t1 - extent.t0)) * frame.width;
   const y = (v: number) => frame.height - ((v - extent.v0) / (extent.v1 - extent.v0)) * frame.height;
   return readings.map((r, n) => `${n === 0 ? "M" : "L"}${x(r.t).toFixed(1)},${y(r.v).toFixed(1)}`).join("");
+}
+
+
+/** p.393's *Bollinger bands*: "Plot upper and lower bands at a configurable
+ * number of standard deviations around a moving average" (§649). */
+export interface Bands { window: number; unit: TimeUnit; deviations: number }
+export const DEFAULT_BANDS: Bands = { window: 20, unit: "day", deviations: 2 };
+export const MAX_DEVIATIONS = 10;
+
+export function bandsProblem(b: Bands): string | null {
+  if (!Number.isInteger(b.window) || b.window < 1 || b.window > MAX_SPAN) {
+    return `The window must be a whole number from 1 to ${MAX_SPAN.toLocaleString("en-US")}.`;
+  }
+  if (!Number.isFinite(b.deviations) || b.deviations <= 0 || b.deviations > MAX_DEVIATIONS) {
+    return `The bands are more than 0 and at most ${MAX_DEVIATIONS} standard deviations out.`;
+  }
+  return null;
+}
+
+/** The plots with a moving average of `parent` and a band either side of it.
+ * Each band is a formula over the parent's own series with two more inputs,
+ * the same series' rolling average (`y`) and rolling standard deviation
+ * (`z`): the server's formula inputs (§561), read through the parent's whole
+ * chain, so a band sits on its parent's points. The first point of a window
+ * has no standard deviation, so its bands are gaps. Unchanged without room
+ * for all three, for a parent with no root, or for bands that say too little. */
+export function withBands(plots: readonly Plot[], parent: string, bands: Bands, canvas: number): Plot[] {
+  const from = byId(plots).get(parent);
+  const root = rootOf(plots, parent)?.root;
+  if (!from || !root || bandsProblem(bands) || plots.length + 3 > MAX_PLOTS) return [...plots];
+  const chain = chainOf(plots, parent);
+  const rolling = (aggregate: "avg" | "stddev"): SeriesTransform =>
+    ({ kind: "rolling", aggregate, window: bands.window, unit: bands.unit });
+  const input = (aggregate: "avg" | "stddev") => ({
+    object_type_id: root.typeId, instance_id: root.objectId, property: root.property,
+    interval: "none", aggregate: "avg", transforms: [...chain, rolling(aggregate)],
+  });
+  const band = (sign: "+" | "-"): SeriesTransform => ({
+    kind: "formula", expression: `y ${sign} ${bands.deviations} * z`,
+    inputs: { y: input("avg"), z: input("stddev") },
+  });
+  let n = plots.length + 1;
+  const free = () => {
+    while (plots.some((p) => p.id === `plot-${n}`)) n += 1;
+    return `plot-${n++}`;
+  };
+  const made = (label: string, transforms: SeriesTransform[], style: LineStyle): Plot =>
+    ({ id: free(), label: `${label} of ${from.label}`, canvas, style, root: null, parent, transforms });
+  return [
+    ...plots,
+    made("Moving average", [rolling("avg")], "solid"),
+    made("Upper Bollinger band", [band("+")], "dashed"),
+    made("Lower Bollinger band", [band("-")], "dashed"),
+  ];
 }

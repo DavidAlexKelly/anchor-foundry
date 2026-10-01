@@ -123,3 +123,21 @@ def test_a_filtered_and_a_sampled_plot(page, api, module) -> None:
     page.get_by_label("Transform 1 step").fill("12")
     page.get_by_role("button", name="Add plot").click()
     expect(stat(page, "Sample of North sensor", "mean")).to_have_text("22.857")
+
+
+def test_bollinger_bands_around_a_moving_average(page, api, module) -> None:
+    """p.393's Bollinger bands (§649), over two days: North's moving average
+    is 10, 15, 20, 30, its standard deviation -, 7.07, 10, 10, so twice that
+    either side puts the upper band at most 50 and the lower at least 0."""
+    open_module(page, build(api, module, "Analysis bands"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_label("New plot").select_option("bollinger")
+    page.get_by_label("Input plot").select_option(label="North sensor")
+    page.get_by_label("Bands window").fill("2")
+    page.get_by_label("Bands unit").select_option("day")
+    page.get_by_role("button", name="Add plot").click()
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(6)
+    expect(stat(page, "Moving average of North sensor", "max")).to_have_text("30")
+    expect(stat(page, "Upper Bollinger band of North sensor", "max")).to_have_text("50")
+    expect(stat(page, "Upper Bollinger band of North sensor", "min")).to_have_text("29.142")
+    expect(stat(page, "Lower Bollinger band of North sensor", "min")).to_have_text("0")

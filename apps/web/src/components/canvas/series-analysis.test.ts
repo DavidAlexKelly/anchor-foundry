@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_BANDS, MAX_DEVIATIONS, bandsProblem, withBands,
   MAX_PLOTS, MAX_ROOTS, canvasesOf, chainOf, extentOf, pathOf, readingsOf, rootOf, rootPlots,
   statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
 } from "./series-analysis";
@@ -139,5 +140,55 @@ describe("readings, statistics and the line (§647)", () => {
     expect(pathOf([{ t: 0, v: 0 }, { t: 10, v: 10 }], { t0: 0, t1: 10, v0: 0, v1: 10 }, frame))
       .toBe("M0.0,50.0L100.0,0.0");
     expect(pathOf([], { t0: 0, t1: 1, v0: 0, v1: 1 }, frame)).toBe("");
+  });
+});
+
+describe("p.393's Bollinger bands (§649)", () => {
+  const bands = { window: 2, unit: "day" as const, deviations: 2 };
+
+  it("adds a moving average and a band either side, from the parent's own chain", () => {
+    const derived = withDerived(roots, "root:i1", [cumulative], 2);
+    const next = withBands(derived, "plot-3", bands, 2);
+    const [average, upper, lower] = next.slice(3);
+    expect(next).toHaveLength(6);
+    expect(average).toMatchObject({ id: "plot-4", label: "Moving average of Cumulative aggregate of Pump 1",
+      parent: "plot-3", canvas: 2, style: "solid",
+      transforms: [{ kind: "rolling", aggregate: "avg", window: 2, unit: "day" }] });
+    expect(upper!.label).toBe("Upper Bollinger band of Cumulative aggregate of Pump 1");
+    expect(upper!.style).toBe("dashed");
+    expect(lower!.id).toBe("plot-6");
+    const formula = upper!.transforms[0] as Extract<SeriesTransform, { kind: "formula" }>;
+    expect(formula.expression).toBe("y + 2 * z");
+    expect((lower!.transforms[0] as { expression: string }).expression).toBe("y - 2 * z");
+    // Each input is the same object's series, through the parent's chain and
+    // then the rolling window.
+    expect(formula.inputs).toEqual({
+      y: { object_type_id: "t1", instance_id: "i1", property: "pressure", interval: "none",
+        aggregate: "avg", transforms: [cumulative,
+          { kind: "rolling", aggregate: "avg", window: 2, unit: "day" }] },
+      z: { object_type_id: "t1", instance_id: "i1", property: "pressure", interval: "none",
+        aggregate: "avg", transforms: [cumulative,
+          { kind: "rolling", aggregate: "stddev", window: 2, unit: "day" }] },
+    });
+    expect(chainOf(next, upper!.id)).toEqual([cumulative, formula]);
+  });
+
+  it("needs room for all three, a root to read, and numbers that make bands", () => {
+    let full = roots;
+    while (full.length < MAX_PLOTS - 2) full = withDerived(full, "root:i1", [cumulative], 1);
+    expect(withBands(full, "root:i1", bands, 1)).toEqual(full);
+    // One fewer, and the three fit exactly.
+    expect(withBands(full.slice(0, -1), "root:i1", bands, 1)).toHaveLength(MAX_PLOTS);
+    expect(withBands(roots, "gone", bands, 1)).toEqual(roots);
+    expect(withBands(roots, "root:i1", { ...bands, deviations: 0 }, 1)).toEqual(roots);
+  });
+
+  it("says what is wrong with the numbers", () => {
+    expect(bandsProblem(DEFAULT_BANDS)).toBeNull();
+    expect(bandsProblem({ ...bands, window: 1.5 })).toMatch(/^The window/);
+    expect(bandsProblem({ ...bands, window: 0 })).toMatch(/^The window/);
+    expect(bandsProblem({ ...bands, deviations: Number.NaN })).toMatch(/standard deviations/);
+    expect(bandsProblem({ ...bands, deviations: MAX_DEVIATIONS + 0.5 })).toMatch(/standard deviations/);
+    expect(bandsProblem({ ...bands, deviations: MAX_DEVIATIONS })).toBeNull();
   });
 });
