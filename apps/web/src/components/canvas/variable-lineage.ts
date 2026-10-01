@@ -102,6 +102,8 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   selectedTextVariable: "write",
   selectionStartVariable: "write",
   selectionEndVariable: "write",
+  // p.322's Selected annotation (§637).
+  selectedAnnotationVariable: "write",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",
@@ -142,6 +144,8 @@ export const NESTED_PROP_DIRECTION: Record<string, "read" | "write"> = {
   "series.objectSetVariable": "read",
   // p.282: a layer's Selection as filter (§628) writes the clause picked.
   "series.drilldownVariable": "write",
+  // p.321: an annotation layer's object set is drawn, never written (§637).
+  "annotationLayers.objectSetVariable": "read",
 };
 
 /** The mapping props' directions (§598). p.241's variables passed as action

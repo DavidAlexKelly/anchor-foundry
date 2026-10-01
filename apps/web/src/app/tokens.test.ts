@@ -80,7 +80,8 @@ describe("globals.css custom properties", () => {
     // itself from p.320's Highlight color and the accent when none is chosen.
     // Listed rather than pattern-matched away, so a third is a decision
     // somebody makes.
-    expect(undeclaredFallbacks).toEqual(["--muted-bg", "--ref-color"]);
+    // `--annotation-color` is the same idea for p.322's annotations (§637).
+    expect(undeclaredFallbacks).toEqual(["--annotation-color", "--muted-bg", "--ref-color"]);
   });
 
   it("reads the stylesheet rather than the prose about it", () => {

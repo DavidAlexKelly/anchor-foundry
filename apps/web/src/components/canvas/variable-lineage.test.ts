@@ -64,6 +64,8 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   selectedTextVariable: "write",
   selectionStartVariable: "write",
   selectionEndVariable: "write",
+  // p.322's Selected annotation (§637).
+  selectedAnnotationVariable: "write",
   variable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",

@@ -2268,6 +2268,23 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-markdown-ref.on {
   background: color-mix(in srgb, var(--ref-color, var(--accent)) 22%, transparent);
 }
+/* p.322's Annotation formatting (§637). */
+.canvas-markdown-annotation {
+  color: inherit; cursor: pointer; border-radius: 2px; padding: 0;
+  background: none; text-underline-offset: 3px;
+}
+.canvas-markdown-annotation.fmt-highlight,
+.canvas-markdown-annotation.fmt-both {
+  background: color-mix(in srgb, var(--annotation-color, var(--accent)) 25%, transparent);
+}
+.canvas-markdown-annotation.fmt-underline,
+.canvas-markdown-annotation.fmt-both {
+  text-decoration: underline 2px var(--annotation-color, var(--accent));
+}
+.canvas-markdown-annotation.fmt-dashed {
+  text-decoration: underline dashed 2px var(--annotation-color, var(--accent));
+}
+.canvas-markdown-annotation.on { outline: 2px solid var(--annotation-color, var(--accent)); }
 
 /* ---- String selector (p.461, decision 0011) ------------------------------- */
 .canvas-selector { display: grid; gap: 6px; }

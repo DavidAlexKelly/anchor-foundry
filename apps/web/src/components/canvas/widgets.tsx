@@ -273,7 +273,11 @@ import {
 } from "./inline-edit";
 import { readerLayout } from "./reader-layout";
 import { PALETTE as WIDGET_LIST } from "./widget-list";
-import { MarkdownReferences, MarkdownView } from "../markdown-view";
+import { MarkdownReferences, MarkdownRuns, MarkdownView } from "../markdown-view";
+import {
+  ANNOTATION_FORMATS, annotationFormatOf, annotationLayersOf, annotationsOf,
+  segmentsOf as annotatedPieces, tooltipOf,
+} from "./markdown-annotations";
 import {
   type SelectionEnd, selectedSource, selectionRange,
 } from "./markdown-selection";
@@ -5007,6 +5011,10 @@ export function CanvasMarkdown({
   selectedTextVariable = null,
   selectionStartVariable = null,
   selectionEndVariable = null,
+  annotationLayers = [],
+  annotationFormat = "highlight",
+  selectedAnnotationVariable = null,
+  annotationTooltip = "",
 }: {
   source?: string;
   text?: string;
@@ -5030,6 +5038,13 @@ export function CanvasMarkdown({
   selectedTextVariable?: string | null;
   selectionStartVariable?: string | null;
   selectionEndVariable?: string | null;
+  /** p.321-322's annotations (§637), with Tag type `annotation`: the layers,
+   * how they are drawn, the selected annotation's output and the properties
+   * its tooltip shows (comma-separated). */
+  annotationLayers?: unknown;
+  annotationFormat?: string;
+  selectedAnnotationVariable?: string | null;
+  annotationTooltip?: string;
 }) {
   const {
     id: nodeId,
@@ -5055,8 +5070,71 @@ export function CanvasMarkdown({
   const references = tagType === "inline_reference";
   // p.317's outputs need to know where each character came from (§636).
   const selecting = !!(selectedTextVariable || selectionStartVariable || selectionEndVariable);
+  // p.321's annotations (§637): each layer's objects read, and drawn over the
+  // runs their indices name.
+  const annotating = tagType === "annotation";
+  // p.321 names no limit; one read per layer, of as many objects as a read
+  // returns. More than that are counted and said, not silently left out.
+  const ANNOTATIONS_READ = 200;
+  const layers = annotating ? annotationLayersOf(annotationLayers) : [];
+  const { workspaceId } = useCanvasEnv();
+  const layerReads = useQueries({
+    queries: layers.map((layer) => ({
+      queryKey: ["canvas-markdown-annotations", layer.objectSetVariable,
+        JSON.stringify(layer.objectSetVariable ? resolved[layer.objectSetVariable] ?? null : null)],
+      queryFn: () => objApi.evaluateObjectSet(
+        workspaceId, resolved[layer.objectSetVariable!], { limit: ANNOTATIONS_READ }),
+      enabled: !!layer.objectSetVariable && resolved[layer.objectSetVariable] !== undefined
+        && !!layer.startProperty && !!layer.endProperty,
+    })),
+  });
+  const read = layers.map((layer, n) =>
+    annotationsOf(n, layer, layerReads[n]?.data?.instances ?? []));
+  const annotations = read.flatMap((r) => r.annotations);
+  const unreadable = read.reduce((sum, r) => sum + r.unreadable, 0);
+  const beyond = layerReads.reduce((sum, r) =>
+    sum + Math.max(0, (r.data?.total ?? 0) - (r.data?.instances.length ?? 0)), 0);
+  const selectedAnnotations = keysOf(
+    selectedAnnotationVariable ? parameterValues[selectedAnnotationVariable] : undefined);
+  const tooltipProps = annotationTooltip.split(",").map((p) => p.trim()).filter(Boolean);
+  const format = annotationFormatOf(annotationFormat);
+  const drawRun = (runText: string, runAt: number) => annotatedPieces(runText, runAt, annotations)
+    .map((piece) => {
+      if (piece.covering.length === 0) {
+        return <span key={piece.at} data-at={piece.at}>{piece.text}</span>;
+      }
+      // The first annotation covering a piece is the one a click selects;
+      // the tooltip names every one.
+      const top = piece.covering[0]!;
+      const color = layers[top.layer]?.color;
+      const on = piece.covering.some((a) => selectedAnnotations.includes(a.key));
+      return (
+        <mark
+          key={piece.at}
+          data-at={piece.at}
+          data-testid="markdown-annotation"
+          data-annotation={piece.covering.map((a) => a.key).join(" ")}
+          className={`canvas-markdown-annotation fmt-${format}${on ? " on" : ""}`}
+          style={color ? ({ "--annotation-color": color } as React.CSSProperties) : undefined}
+          title={piece.covering.map((a) => tooltipOf(a, tooltipProps)).filter(Boolean).join("\n\n")
+            || undefined}
+          aria-pressed={on}
+          onClick={() => {
+            if (selectedAnnotationVariable) {
+              setParameter(selectedAnnotationVariable, selectionClauses([top.key]));
+            }
+            if (mode === "run" && onSelect.length > 0) {
+              runEvents(onSelect, { ...eventContext, payload: {
+                primary_key: top.key, layer: layers[top.layer]?.name ?? "" } });
+            }
+          }}
+        >
+          {piece.text}
+        </mark>
+      );
+    });
   const blocks = parseMarkdown(filled, {
-    breaks: breaks !== false, references, offsets: selecting });
+    breaks: breaks !== false, references, offsets: selecting || annotating });
   const rawSource = filled.replace(/\r\n?/g, "\n");
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   // A selection's end as a place in the source: the run it is in, and how far
@@ -5158,8 +5236,22 @@ export function CanvasMarkdown({
         <div className={classes.join(" ")} data-testid="markdown" ref={containerRef}
              onMouseUp={readSelection} onKeyUp={readSelection}>
           <MarkdownReferences.Provider value={references ? drawReference : null}>
-            <MarkdownView blocks={blocks} align={widgetAlign} />
+            <MarkdownRuns.Provider value={annotating ? drawRun : null}>
+              <MarkdownView blocks={blocks} align={widgetAlign} />
+            </MarkdownRuns.Provider>
           </MarkdownReferences.Provider>
+          {unreadable > 0 && (
+            // Said, not dropped: an annotation that cannot be placed and one
+            // that is not there look the same otherwise.
+            <p className="canvas-widget-empty" data-testid="markdown-annotations-unreadable">
+              {unreadable} annotation{unreadable === 1 ? "" : "s"} with no usable start and end
+            </p>
+          )}
+          {beyond > 0 && (
+            <p className="canvas-widget-empty" data-testid="markdown-annotations-beyond">
+              {beyond} more annotation{beyond === 1 ? "" : "s"} than one read draws
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -5171,8 +5263,13 @@ function MarkdownSettings() {
     source, text, textVariable, monospace, scrolling, wordWrap, breaks, alignment,
     tagType, selectedVariable, referenceTypes, selectionBehavior,
     selectedTextVariable, selectionStartVariable, selectionEndVariable,
+    annotationLayers, annotationFormat, selectedAnnotationVariable, annotationTooltip,
     actions: { setProp },
   } = useNode((node) => ({
+    annotationLayers: node.data.props.annotationLayers,
+    annotationFormat: node.data.props.annotationFormat,
+    selectedAnnotationVariable: node.data.props.selectedAnnotationVariable,
+    annotationTooltip: node.data.props.annotationTooltip,
     selectedTextVariable: node.data.props.selectedTextVariable,
     selectionStartVariable: node.data.props.selectionStartVariable,
     selectionEndVariable: node.data.props.selectionEndVariable,
@@ -5264,12 +5361,13 @@ function MarkdownSettings() {
       <label className="field">
         <span className="field-label">Tag type</span>
         <select
-          value={tagType === "inline_reference" ? "inline_reference" : "standard"}
+          value={tagType === "inline_reference" || tagType === "annotation" ? tagType : "standard"}
           data-testid="markdown-tag-type"
           onChange={(e) => setProp((p: { tagType: string }) => (p.tagType = e.target.value))}
         >
           <option value="standard">Standard</option>
           <option value="inline_reference">Inline reference</option>
+          <option value="annotation">Annotation</option>
         </select>
         {tagType === "inline_reference" && (
           <span className="field-hint">
@@ -5357,6 +5455,83 @@ function MarkdownSettings() {
           </label>
         </>
       )}
+      {/* p.321-322's annotations (§637). */}
+      {tagType === "annotation" && (() => {
+        const layers = annotationLayersOf(annotationLayers);
+        const sets = Object.values(declared).filter((v) => v.kind === "object_set");
+        const write = (next: typeof layers) =>
+          setProp((p: { annotationLayers: unknown }) => (p.annotationLayers = next));
+        const change = (i: number, patch: Partial<(typeof layers)[number]>) =>
+          write(layers.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+        return (
+          <div className="field" data-testid="markdown-annotation-settings">
+            <span className="field-label">Annotation layers</span>
+            {layers.map((layer, i) => (
+              <div key={i} className="field" data-testid="markdown-annotation-layer">
+                <input type="text" aria-label={`Layer ${i + 1} name`} value={layer.name}
+                  placeholder="Name" onChange={(e) => change(i, { name: e.target.value })} />
+                <select aria-label={`Layer ${i + 1} object set`}
+                  data-testid="markdown-annotation-set"
+                  value={layer.objectSetVariable ?? ""}
+                  onChange={(e) => change(i, { objectSetVariable: e.target.value || null })}>
+                  <option value="">Choose an object set…</option>
+                  {sets.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                </select>
+                <input type="text" aria-label={`Layer ${i + 1} start index property`}
+                  data-testid="markdown-annotation-start" placeholder="Start index property"
+                  value={layer.startProperty}
+                  onChange={(e) => change(i, { startProperty: e.target.value })} />
+                <input type="text" aria-label={`Layer ${i + 1} end index property`}
+                  data-testid="markdown-annotation-end" placeholder="End index property"
+                  value={layer.endProperty}
+                  onChange={(e) => change(i, { endProperty: e.target.value })} />
+                <input type="color" aria-label={`Layer ${i + 1} highlight colour`}
+                  value={layer.color ?? "#2563eb"}
+                  onChange={(e) => change(i, { color: e.target.value })} />
+                <button type="button" className="btn quiet" aria-label={`Remove layer ${i + 1}`}
+                  onClick={() => write(layers.filter((_, j) => j !== i))}>×</button>
+              </div>
+            ))}
+            <button type="button" className="btn" data-testid="markdown-annotation-add"
+              onClick={() => write([...layers, { name: "", objectSetVariable: null,
+                startProperty: "", endProperty: "", color: null }])}>
+              Add a layer
+            </button>
+            <label className="field">
+              <span className="field-label">Annotation formatting</span>
+              <select data-testid="markdown-annotation-format"
+                value={annotationFormatOf(annotationFormat)}
+                onChange={(e) => setProp((p: { annotationFormat: string }) =>
+                  (p.annotationFormat = e.target.value))}>
+                {Object.entries(ANNOTATION_FORMATS).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span className="field-label">Selected annotation</span>
+              <select data-testid="markdown-annotation-selected"
+                value={selectedAnnotationVariable || ""}
+                onChange={(e) => setProp((p: { selectedAnnotationVariable: string | null }) =>
+                  (p.selectedAnnotationVariable = e.target.value || null))}>
+                <option value="">None</option>
+                {clauseVariables.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span className="field-label">Properties to display in tooltip</span>
+              <input type="text" data-testid="markdown-annotation-tooltip"
+                value={annotationTooltip || ""} placeholder="author, note"
+                onChange={(e) => setProp((p: { annotationTooltip: string }) =>
+                  (p.annotationTooltip = e.target.value))} />
+            </label>
+            <span className="field-hint">
+              Indices are into this Markdown: zero-based, start inclusive, end exclusive —
+              what User text selection writes
+            </span>
+          </div>
+        );
+      })()}
       {/* p.317's User text selection (§636). */}
       <div className="field" data-testid="markdown-selection-outputs">
         <span className="field-label">User text selection</span>

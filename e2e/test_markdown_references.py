@@ -138,4 +138,4 @@ def test_the_panel_turns_references_on(page, api) -> None:
     page.get_by_role("button", name="New event").click()
     # The open event's trigger picker, as `test_object_table_row_menu` reads it.
     expect(page.locator(".canvas-event.on select").nth(1).locator("option")).to_have_text(
-        ["Reference selected"])
+        ["Reference or annotation selected"])
