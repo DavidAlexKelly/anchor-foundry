@@ -9,16 +9,12 @@
  * it. This platform's card computes its own, by asking `/object-sets/aggregate`
  * directly.
  *
- * The variable-backed shape is the better one and this platform half has it:
- * `object_set_aggregation` is a declared transform in `workshop_variables.py`
- * and is refused on save — "not built yet: it reads the ontology, so it needs a
- * server round trip rather than a local computation". That refusal is now the
- * only thing in the way, and §226 is what removed its reason. Until it is
- * built, one number needs one widget, and every other consumer of an aggregate
- * — a Markdown heading, a chart title, an action's default — has nowhere to
- * read one from. **Named here rather than fixed in passing**, because moving
- * the aggregation onto the variable is a change to the resolver's shape, not to
- * this widget.
+ * **The variable-backed shape exists since §617**: `object_set_aggregation` is
+ * p.73's Object set aggregation, a number variable the server resolves by
+ * asking the store, so a Markdown heading, a chart title or an action's
+ * default can read an aggregate too. The card still computes its own, because
+ * its secondary metric, sparkline and rules are about *its* number; a card
+ * that read a variable would be a second way to configure the same thing.
  */
 
 import { showNumber, type NumberFormat } from "./value-formats";

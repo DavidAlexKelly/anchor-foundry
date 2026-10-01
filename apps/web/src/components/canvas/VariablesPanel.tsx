@@ -32,6 +32,10 @@ import { checkArity, checkSlotLabel, isCheck } from "./variable-checks";
 import { INDEXED, arrayArity, arraySlotLabel, indexOf, isArrayOp } from "./variable-arrays";
 import { MAX_GEOHASH, geohashPrecisionOf, isGeo } from "./variable-geo";
 import { seriesDerivationInputs, type SeriesTransform } from "./series-transforms";
+import {
+  AGGREGATIONS as METRIC_AGGREGATIONS, aggregationOf as metricAggregationOf,
+  needsProperty as metricNeedsProperty,
+} from "./metric-card";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEditor } from "@craftjs/core";
 import { useEffect, useMemo, useState } from "react";
@@ -141,12 +145,11 @@ function subtreeOf(nodes: Record<string, { data?: { nodes?: string[] } }>, id: s
   return out;
 }
 
-/** Matches `TRANSFORMS` in the service. `object_set_aggregation` is
- * deliberately absent - it reads the ontology, so the API refuses it until it
- * is built, and offering it here would be offering a choice that fails on
- * save. `object_property` used to be absent for the same reason and is here
- * now (§84): a `single_object` variable holds the object somebody picked, so
- * reading a property off it needs no round trip. */
+/** Matches `TRANSFORMS` in the service. The two that read the ontology were
+ * absent until each was built: `object_property` (§84), because a
+ * `single_object` variable holds the object somebody picked, and
+ * `object_set_aggregation` (§617), because the server's evaluation asks the
+ * store for the aggregate it needs. */
 const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] = [
   { value: "concat", label: "Join text", arity: "one or more" },
   { value: "if_else", label: "If / else", arity: "condition, then, else" },
@@ -154,6 +157,8 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   { value: "is_empty", label: "Is empty", arity: "one" },
   { value: "is_not_empty", label: "Is not empty", arity: "one" },
   { value: "object_property", label: "A property of an object", arity: "one" },
+  // p.73's Object set aggregation (§617): a number from a set.
+  { value: "object_set_aggregation", label: "Aggregate an object set", arity: "one" },
   // p.444's "reused in widget configurations": `narrow_set` applies filter
   // state to a set, this reads a value back out of it for a heading, a
   // chart title, or an action's default.
@@ -274,6 +279,7 @@ function slotLabels(transform: WorkshopTransform): string[] {
   if (transform === "filter_set") return ["Set to narrow", "Filter value from"];
   if (transform === "cast") return ["Value"];
   if (transform === "object_property" || transform === "object_rid") return ["Object"];
+  if (transform === "object_set_aggregation") return ["Object set"];
   if (transform === "extract_struct_field") return ["Struct"];
   if (transform === "filter_value") return ["Filter clauses"];
   if (transform === "object_series") return ["Object"];
@@ -1103,7 +1109,9 @@ function DerivationEditor({
               // of a join, and keeping them would produce a plausible-looking
               // derivation nobody configured.
               inputs: [],
-              config: {},
+              // An aggregation starts as the count its picker shows, rather
+              // than as none, which the server refuses (§617).
+              config: e.target.value === "object_set_aggregation" ? { aggregation: "count" } : {},
             })
           }
         >
@@ -1364,6 +1372,49 @@ function DerivationEditor({
             </span>
           )}
         </label>
+      )}
+
+      {derivation.transform === "object_set_aggregation" && (
+        <>
+          <label>
+            Aggregation
+            <select
+              value={metricAggregationOf(derivation.config?.aggregation)}
+              disabled={readOnly}
+              data-testid="vars-aggregation"
+              onChange={(e) =>
+                onChange({
+                  ...derivation,
+                  config: { ...derivation.config, aggregation: e.target.value },
+                })
+              }
+            >
+              {Object.entries(METRIC_AGGREGATIONS).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+          </label>
+          {metricNeedsProperty(derivation.config?.aggregation) && (
+            <label>
+              Of property
+              <input
+                value={String(derivation.config?.property ?? "")}
+                readOnly={readOnly}
+                placeholder="e.g. capacity"
+                data-testid="vars-aggregation-property"
+                onChange={(e) =>
+                  onChange({
+                    ...derivation,
+                    config: { ...derivation.config, property: e.target.value },
+                  })
+                }
+              />
+              <span className="field-hint">
+                a number for arithmetic; any property for how many distinct values
+              </span>
+            </label>
+          )}
+        </>
       )}
 
       {derivation.transform === "extract_struct_field" && (

@@ -4610,33 +4610,20 @@ async def aggregate_object_set(
     every row. A card that got its number by paging would be wrong the moment
     a set outgrew a page, which is exactly when the number starts mattering.
     """
-    # **The ontology first, then the definition** - the order `/evaluate` uses
-    # since §221, and for the same reason twice over here: an ordered filter is
-    # validated against the declared types, and so is p.310's numeric
-    # aggregation. Parsing before resolving them meant this route refused every
-    # `gt` filter a Metric Card was pointed at, which was §221's rule applied
-    # to one caller and not to its neighbour.
-    type_id = object_sets.object_type_id_of(body.definition)
+    # **The ontology first, then the definition** - see `object_set_eval.
+    # aggregate`, which p.73's aggregation variable reads through too (§617).
+    # Parsing before resolving the types meant this route refused every `gt`
+    # filter a Metric Card was pointed at, which was §221's rule applied to one
+    # caller and not to its neighbour.
     async with user_connection(access.auth.user_id) as conn:
-        await ontology_service.get_type(conn, access.workspace_id, type_id)
-        property_types = await _declared_types(conn, type_id)
         try:
-            definition = object_sets.parse(body.definition, property_types=property_types)
-            aggregation = object_sets.parse_aggregation(
-                body.aggregation, body.property, property_types=property_types
+            value, aggregation = await object_set_eval.aggregate(
+                conn, access.workspace_id, body.definition, body.aggregation, body.property,
             )
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
             ) from exc
-        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
-        store = instance_store.store_for(conn)
-        value = await store.aggregate_object_set(
-            search_prefix=prefix,
-            object_type_id=definition.object_type_id,
-            filters=await _members(conn, store, prefix, access.workspace_id, definition),
-            aggregation=aggregation,
-        )
     return ObjectSetAggregateOut(
         value=value, aggregation=aggregation.name, property=aggregation.property
     )

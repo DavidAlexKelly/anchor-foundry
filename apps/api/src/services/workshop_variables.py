@@ -34,6 +34,7 @@ inside it.
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -134,22 +135,19 @@ TRANSFORMS = (
     *variable_geo.TRANSFORMS,
     # p.139's Object RID (§569): an object's own id.
     "object_rid",
+    # p.73's "Object set aggregation: For variables derived from an
+    # aggregation of an object set" (§617). The one transform whose answer is
+    # not in the values: `evaluate` names what it needs and the caller reads
+    # it from the store (`variable_aggregates.py`).
+    "object_set_aggregation",
 )
 
-# Still declared and deliberately not evaluated here: an aggregate over a set
-# needs the instance store, so it is a server round trip rather than a pure
-# function, and pretending otherwise would mean this module quietly returning
-# None for it and every caller having to know which of its results are real.
-# `/object-sets/aggregate` is what answers it, and the Metric Card is what asks
-# (§74) - which is the correction recorded against roadmap 1.2.
-#
-# **`object_property` moved out of this list** (§84), because its premise
-# changed. It was here on the assumption that a `single_object` variable holds
-# a *key* and reading a property means fetching the object. It holds the object
-# the viewer picked - key, type and properties - so reading one is a lookup in
-# a value this module already has, and the round trip it was waiting for does
-# not exist.
-STORE_TRANSFORMS = ("object_set_aggregation",)
+# **`STORE_TRANSFORMS` is gone** (§617). It held the transforms that need the
+# instance store and so could not be a pure function here: `object_property`
+# left it in §84, once a picked object was held rather than fetched, and
+# `object_set_aggregation` left it when `evaluate` learned to *ask* for an
+# aggregate instead of computing one - the round trip is the caller's, which
+# has a connection, and this module still has none.
 
 CAST_TARGETS = ("string", "number", "boolean", *variable_casts.TARGETS)
 
@@ -860,8 +858,52 @@ def parse(
     _refuse_unknown_inputs(variables)
     _refuse_bad_filter_refs(variables)
     _refuse_non_series_inputs(variables)
+    _refuse_bad_aggregations(variables, property_types)
     _refuse_cycles(variables)
     return variables
+
+
+def _refuse_bad_aggregations(
+    variables: dict[str, Variable], property_types: "dict[str, dict[str, str]] | None",
+) -> None:
+    """p.73's Object set aggregation (§617), as far as a saved document can be
+    checked: a number, of an object set, and - when that set is one the
+    document itself defines - over a property its type can aggregate.
+
+    A number because every one of p.310's aggregations answers one; p.75's
+    other kinds "initialized from… aggregation" (a string, a date) would each
+    be this and a cast, which the transform catalogue already has.
+
+    **The property is checked against the type only for a set this document
+    defines outright.** A derived set's type is its base's, but following that
+    back is `evaluate`'s job, and a refusal at view is what it gets - the same
+    line `narrow_set` draws."""
+    from . import object_sets  # local: only aggregations need it
+
+    for variable in variables.values():
+        d = variable.derivation
+        if d is None or d.transform != "object_set_aggregation":
+            continue
+        if variable.kind != "number":
+            raise VariableError(
+                f"variable {variable.label!r}: an object set aggregation is a number, "
+                f"not a {variable.kind}"
+            )
+        source = variables[d.inputs[0]]
+        if source.kind != "object_set":
+            raise VariableError(
+                f"variable {variable.label!r}: {source.label!r} is not an object set, "
+                "so there is nothing to aggregate"
+            )
+        declared = _types_for(source.object_set, property_types)
+        if declared is not None:
+            try:
+                object_sets.parse_aggregation(
+                    str(d.config["aggregation"]), d.config.get("property"),
+                    property_types=declared,
+                )
+            except ValueError as exc:
+                raise VariableError(f"variable {variable.label!r}: {exc}") from None
 
 
 def _refuse_non_series_inputs(variables: dict[str, Variable]) -> None:
@@ -1403,11 +1445,6 @@ def _parse_derivation(vid: str, raw: Any) -> Derivation | None:
     if not isinstance(raw, dict):
         raise VariableError(f"variable {vid!r} has a derivation that is not an object")
     transform = raw.get("transform")
-    if transform in STORE_TRANSFORMS:
-        raise VariableError(
-            f"{transform} is not built yet - it reads the ontology, so it needs a "
-            "server round trip rather than a local computation"
-        )
     if transform not in TRANSFORMS:
         raise VariableError(
             f"variable {vid!r} uses transform {transform!r}; expected one of "
@@ -1495,6 +1532,22 @@ def _check_arity(vid: str, d: Derivation) -> None:
                 f"variable {vid!r}: filter_set operator {op!r}; expected one of "
                 f"{', '.join(object_sets.OPERATORS)}"
             )
+    elif d.transform == "object_set_aggregation":
+        from . import object_sets
+
+        if len(d.inputs) != 1:
+            raise VariableError(
+                f"variable {vid!r}: object_set_aggregation needs exactly one input "
+                "(the object set to aggregate)"
+            )
+        name = d.config.get("aggregation")
+        if name not in object_sets.AGGREGATIONS + object_sets.NUMERIC_AGGREGATIONS:
+            raise VariableError(
+                f"variable {vid!r}: aggregation {name!r}; " + object_sets.AGGREGATION_HINT
+            )
+        prop = d.config.get("property")
+        if name != "count" and (not prop or not isinstance(prop, str)):
+            raise VariableError(f"variable {vid!r}: {name} needs a property to aggregate")
     elif d.transform == "object_property":
         if len(d.inputs) != 1:
             raise VariableError(
@@ -1675,8 +1728,16 @@ def evaluate(
     only: "frozenset[str] | None" = None,
     timings: "dict[str, float] | None" = None,
     time_zone: str | None = None,
+    aggregates: "dict[str, Any] | None" = None,
+    wanted: "dict[str, dict[str, Any]] | None" = None,
 ) -> dict[str, Any]:
     """Resolve every variable, computing derived ones from their inputs.
+
+    `aggregates` and `wanted` are p.73's Object set aggregation (§617): the
+    answers the caller already read from the store, keyed by `aggregate_key`,
+    and where this call writes the ones it needed and did not have. A missing
+    answer resolves to `None` for this pass; `variable_aggregates.evaluate`
+    reads what was wanted and calls again until nothing new is.
 
     `time_zone` is the viewer's, as the browser names it (§596): what a cast
     whose zone is p.138-139's "the user's local timezone" reads.
@@ -1788,14 +1849,14 @@ def evaluate(
             if vid in recompute_now:
                 resolved[vid] = _apply(
                     variable, [resolved[i] for i in variable.derivation.inputs],
-                    property_types, local,
+                    property_types, local, aggregates, wanted,
                 )
             elif held is not None and vid in held:
                 resolved[vid] = held[vid]
             elif fresh:
                 resolved[vid] = _apply(
                     variable, [resolved[i] for i in variable.derivation.inputs],
-                    property_types, local,
+                    property_types, local, aggregates, wanted,
                 )
             else:
                 resolved[vid] = None
@@ -1843,7 +1904,7 @@ def evaluate(
                 else value
                 for i, value in zip(variable.derivation.inputs, inputs)
             ]
-        resolved[vid] = _apply(variable, inputs, property_types, local)
+        resolved[vid] = _apply(variable, inputs, property_types, local, aggregates, wanted)
         if timings is not None:
             timings[vid] = (perf_counter() - started) * 1000
     return resolved
@@ -1853,9 +1914,13 @@ def _apply(
     variable: Variable, inputs: list[Any],
     property_types: "dict[str, dict[str, str]] | None" = None,
     local_zone: str | None = None,
+    aggregates: "dict[str, Any] | None" = None,
+    wanted: "dict[str, dict[str, Any]] | None" = None,
 ) -> Any:
     d = variable.derivation
     assert d is not None
+    if d.transform == "object_set_aggregation":
+        return _aggregate(inputs[0], d.config, aggregates, wanted)
     if d.transform == "concat":
         separator = str(d.config.get("separator") or "")
         # Nothing is not the string "None". A null part contributes an empty
@@ -1936,6 +2001,39 @@ def _apply(
     if d.transform == "traverse_set":
         return _traverse_set(variable, inputs[0], d.config)
     raise VariableError(f"unknown transform {d.transform!r}")  # pragma: no cover
+
+
+def aggregate_key(request: dict[str, Any]) -> str:
+    """One aggregation, as the text both sides of the round trip key it by: the
+    set, the aggregation and its property. Two variables asking the same
+    question share an answer, and a set that changed is a new question.
+
+    Plain `json.dumps`: both sides build the key with this function from the
+    same resolved values, which are JSON already, so sorting the keys or
+    naming a fallback encoder could not change a match (§617's sweep)."""
+    return json.dumps(request)
+
+
+def _aggregate(
+    definition: Any, config: dict[str, Any],
+    aggregates: "dict[str, Any] | None", wanted: "dict[str, dict[str, Any]] | None",
+) -> Any:
+    """p.73's Object set aggregation (§617): the answer if the caller has it,
+    and otherwise a note of the question.
+
+    **No set is no number**, not a count of zero: an input that resolved to
+    nothing is a set nobody has chosen yet, and "0 sites" would say something
+    about data that was never asked about."""
+    if not isinstance(definition, dict):
+        return None
+    request = {"definition": definition, "aggregation": config.get("aggregation"),
+               "property": config.get("property")}
+    key = aggregate_key(request)
+    if aggregates is not None and key in aggregates:
+        return aggregates[key]
+    if wanted is not None:
+        wanted[key] = request
+    return None
 
 
 def _filter_set(

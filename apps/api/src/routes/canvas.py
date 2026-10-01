@@ -45,6 +45,7 @@ from ..services import workshop_metrics
 from ..services import module_states as states_service
 from ..services import workshop_format
 from ..services import workshop_variables as variables_service
+from ..services import variable_aggregates
 from ..services.workshop_variables import MAX_EMBED_DEPTH
 
 router = APIRouter(
@@ -879,37 +880,42 @@ async def evaluate_variables(
         # `evaluate` below, because the read needs a connection and `evaluate`
         # deliberately has none.
         values = await _rehydrated(conn, access.workspace_id, variables, body.values)
-    try:
-        measured: dict[str, float] | None = {} if body.profile else None
-        resolved = variables_service.evaluate(
-            variables,
-            values,
-            bound=frozenset(body.bound),
-            held=body.held,
-            recompute_now=frozenset(body.recompute),
-            # A `narrow_set` derivation combines the widget's clauses with the
-            # base set and re-validates the result, so an ordered clause needs
-            # the declared types here too (§221) - not only where the document
-            # was checked.
-            property_types=property_types,
-            # p.75's lazy rule (§392). Expanded here rather than in the
-            # browser: the closure - a chart needs its set, the set needs its
-            # filter - is over a graph this service already understands, and a
-            # second walker of it would be the copy that disagrees.
-            only=_only_visible(body, document, variables),
-            timings=measured,
-            # p.138-139's "the user's local timezone" (§596).
-            time_zone=body.time_zone,
-        )
-    except variables_service.VariableError as exc:
-        # Not the same failure, and not the same fault. The document is fine;
-        # what arrived with the request is not - a Filter List can send filter
-        # clauses, and `narrow_set` refuses ones it cannot mean rather than
-        # dropping them. Blaming the saved app for a bad request would send
-        # whoever reads this to the wrong place entirely.
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
+        try:
+            measured: dict[str, float] | None = {} if body.profile else None
+            # p.73's Object set aggregation (§617) reads the store, so this
+            # stays inside the connection; everything else is the pure
+            # `evaluate` it always was.
+            resolved = await variable_aggregates.evaluate(
+                conn,
+                access.workspace_id,
+                variables,
+                values,
+                bound=frozenset(body.bound),
+                held=body.held,
+                recompute_now=frozenset(body.recompute),
+                # A `narrow_set` derivation combines the widget's clauses with the
+                # base set and re-validates the result, so an ordered clause needs
+                # the declared types here too (§221) - not only where the document
+                # was checked.
+                property_types=property_types,
+                # p.75's lazy rule (§392). Expanded here rather than in the
+                # browser: the closure - a chart needs its set, the set needs its
+                # filter - is over a graph this service already understands, and a
+                # second walker of it would be the copy that disagrees.
+                only=_only_visible(body, document, variables),
+                timings=measured,
+                # p.138-139's "the user's local timezone" (§596).
+                time_zone=body.time_zone,
+            )
+        except variables_service.VariableError as exc:
+            # Not the same failure, and not the same fault. The document is fine;
+            # what arrived with the request is not - a Filter List can send filter
+            # clauses, and `narrow_set` refuses ones it cannot mean rather than
+            # dropping them. Blaming the saved app for a bad request would send
+            # whoever reads this to the wrong place entirely.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
     return EvaluateVariablesOut(
         values=resolved,
         order=variables_service.evaluation_order(variables),
@@ -1254,33 +1260,38 @@ async def evaluate_published_variables(
             ) from exc
         # See the project-scoped route: the connection is still open here.
         values = await _rehydrated(conn, access.workspace_id, variables, body.values)
-    try:
-        measured: dict[str, float] | None = {} if body.profile else None
-        resolved = variables_service.evaluate(
-            variables,
-            values,
-            bound=frozenset(body.bound),
-            held=body.held,
-            recompute_now=frozenset(body.recompute),
-            # A `narrow_set` derivation combines the widget's clauses with the
-            # base set and re-validates the result, so an ordered clause needs
-            # the declared types here too (§221) - not only where the document
-            # was checked.
-            property_types=property_types,
-            # p.75's lazy rule (§392). Expanded here rather than in the
-            # browser: the closure - a chart needs its set, the set needs its
-            # filter - is over a graph this service already understands, and a
-            # second walker of it would be the copy that disagrees.
-            only=_only_visible(body, document, variables),
-            timings=measured,
-            # p.138-139's "the user's local timezone" (§596).
-            time_zone=body.time_zone,
-        )
-    except variables_service.VariableError as exc:
-        # The values, not the document - see the note on the project-scoped one.
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
+        try:
+            measured: dict[str, float] | None = {} if body.profile else None
+            # p.73's Object set aggregation (§617) reads the store, so this
+            # stays inside the connection; everything else is the pure
+            # `evaluate` it always was.
+            resolved = await variable_aggregates.evaluate(
+                conn,
+                access.workspace_id,
+                variables,
+                values,
+                bound=frozenset(body.bound),
+                held=body.held,
+                recompute_now=frozenset(body.recompute),
+                # A `narrow_set` derivation combines the widget's clauses with the
+                # base set and re-validates the result, so an ordered clause needs
+                # the declared types here too (§221) - not only where the document
+                # was checked.
+                property_types=property_types,
+                # p.75's lazy rule (§392). Expanded here rather than in the
+                # browser: the closure - a chart needs its set, the set needs its
+                # filter - is over a graph this service already understands, and a
+                # second walker of it would be the copy that disagrees.
+                only=_only_visible(body, document, variables),
+                timings=measured,
+                # p.138-139's "the user's local timezone" (§596).
+                time_zone=body.time_zone,
+            )
+        except variables_service.VariableError as exc:
+            # The values, not the document - see the note on the project-scoped one.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
     return EvaluateVariablesOut(
         values=resolved,
         order=variables_service.evaluation_order(variables),
