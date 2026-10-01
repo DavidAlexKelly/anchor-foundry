@@ -204,3 +204,13 @@ def test_time_last_built_is_offered_and_keyed(page, coloured) -> None:
     # Built at some point in the last minutes: whatever quarter, an age.
     expect(page.locator("[data-testid^='legend-q']").first).to_contain_text(
         re.compile(r"\d+ (min|h|days)"))
+
+
+def test_build_duration_colours_what_was_built(page, coloured) -> None:
+    """p.39's build duration (§623): the two model outputs were built and
+    timed; the upload and the models were not."""
+    open_graph(page, coloured)
+    page.get_by_test_id("graph-colouring").select_option("duration")
+    expect(page.get_by_test_id("legend-none")).to_have_attribute("data-count", "3")
+    expect(page.get_by_test_id("legend-none")).to_contain_text("No build timed")
+    expect(page.locator("[data-colour^='q']")).to_have_count(2)

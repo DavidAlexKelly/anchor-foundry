@@ -41,7 +41,9 @@ export interface Timeline {
   without: number;
 }
 
-function windowOf(node: TimelineNode): { from: number; to: number } | null {
+export function buildWindowOf(
+  node: Pick<TimelineNode, "build_started_at" | "build_finished_at">,
+): { from: number; to: number } | null {
   const from = Date.parse(node.build_started_at ?? "");
   const to = Date.parse(node.build_finished_at ?? "");
   if (Number.isNaN(from) || Number.isNaN(to)) return null;
@@ -74,7 +76,7 @@ export function timelineFor(nodes: readonly TimelineNode[]): Timeline {
   const windows: { node: TimelineNode; from: number; to: number }[] = [];
   let without = 0;
   for (const node of nodes) {
-    const window = windowOf(node);
+    const window = buildWindowOf(node);
     if (window === null) without += 1;
     else windows.push({ node, ...window });
   }

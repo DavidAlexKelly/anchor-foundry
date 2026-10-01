@@ -56,7 +56,7 @@ FOCUS_HINT = (
 #: `test_saved_graphs.py` reads that file and asserts the two say the same
 #: thing. That test is the reason this is safe to write twice.
 COLOURINGS = ("status", "out_of_date", "health", "kind", "origin", "permissions", "rows", "built",
-              "none")
+              "duration", "none")
 
 #: p.11's arrangements, as the browser offers them (§424). Mirrored from
 #: `apps/web/src/lib/graph-layout.ts` and pinned by the same cross-file test

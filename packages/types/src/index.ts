@@ -1573,6 +1573,11 @@ export interface PipelineNode {
    * rename touches that one and a rename is not a build. Null on a model and
    * on an object type, neither of which is a thing that gets built. */
   built_at: string | null;
+  /** p.10's "actual build time" (§418): the window of the run that produced
+   * the version a dataset holds, or null on anything nobody built. Read by the
+   * build timeline and by p.39's build duration colouring (§623). */
+  build_started_at: string | null;
+  build_finished_at: string | null;
   /** p.51's "upstream dataset that hasn't built and isn't up to date". */
   out_of_date: boolean;
   /** Which of p.51's reasons — `"input_is_newer"` names the dataset to
