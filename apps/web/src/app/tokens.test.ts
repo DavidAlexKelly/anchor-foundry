@@ -74,10 +74,13 @@ describe("globals.css custom properties", () => {
     const undeclaredFallbacks = [...new Set(withFallback)]
       .filter((name) => !defined.has(name))
       .sort();
-    // `--muted-bg` is the one: the template picker's cell colour, which has no
-    // token because the shade is specific to that drawing. Listed rather than
-    // pattern-matched away, so a second one is a decision somebody makes.
-    expect(undeclaredFallbacks).toEqual(["--muted-bg"]);
+    // `--muted-bg` is one: the template picker's cell colour, which has no
+    // token because the shade is specific to that drawing. `--ref-color` is
+    // the other: a Markdown anchor's type colour (§632), set on the anchor
+    // itself from p.320's Highlight color and the accent when none is chosen.
+    // Listed rather than pattern-matched away, so a third is a decision
+    // somebody makes.
+    expect(undeclaredFallbacks).toEqual(["--muted-bg", "--ref-color"]);
   });
 
   it("reads the stylesheet rather than the prose about it", () => {

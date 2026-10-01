@@ -37,10 +37,11 @@
  * examples that reads as a specification and is used as one by the test beside
  * this module.
  *
- * **Not built here, and named rather than approximated**: p.319's inline
- * `:objectreference[…]{…}` extension and p.315's annotation objects. Both need
- * ontology plumbing and an output object set; a renderer that showed their
- * syntax as literal text would be worse than one that says it does not do them.
+ * **p.319's inline `:objectreference[…]{…}` extension is parsed when asked
+ * for** (§632, the `references` option): a widget with p.316's "Inline
+ * reference" tag type on. Off, the same characters are text, as they are in
+ * standard Markdown and in a README. **Not built here**: p.315's annotation
+ * objects, named rather than approximated.
  */
 
 // ---- the tree ---------------------------------------------------------------
@@ -54,7 +55,14 @@ export type Inline =
   | { kind: "mark"; children: Inline[] }
   | { kind: "break" }
   | { kind: "link"; href: string; children: Inline[] }
-  | { kind: "image"; src: string; alt: string };
+  | { kind: "image"; src: string; alt: string }
+  /** p.319's anchor (§632): text standing for one object, by its type's
+   * api_name and its primary key. */
+  | {
+      kind: "objectref"; objectType: string; primaryKey: string; children: Inline[];
+      /** Its place among the anchors, in reading order, once numbered. */
+      index?: number;
+    };
 
 export type Align = "left" | "center" | "right";
 
@@ -152,7 +160,24 @@ function pushText(out: Inline[], text: string): void {
  * asked for italics, and a parser that gives it to them is a parser people
  * stop trusting with arithmetic.
  */
-export function parseInline(source: string): Inline[] {
+/** p.319's syntax: `:objectreference[$text]{objectType="…" primaryKey="…"}`. */
+const OBJECT_REFERENCE = /^:objectreference\[([^\]]*)\]\{([^}]*)\}/;
+const ATTRIBUTE = /(\w+)\s*=\s*"([^"]*)"/g;
+
+/** The two attributes p.319 requires, or null when either is missing. */
+export function referenceAttributes(
+  raw: string,
+): { objectType: string; primaryKey: string } | null {
+  const found: Record<string, string> = {};
+  for (const [, key, value] of raw.matchAll(ATTRIBUTE)) found[key!] = value!;
+  const objectType = found.objectType?.trim();
+  const primaryKey = found.primaryKey;
+  return objectType && primaryKey !== undefined && primaryKey !== ""
+    ? { objectType, primaryKey }
+    : null;
+}
+
+export function parseInline(source: string, references = false): Inline[] {
   const out: Inline[] = [];
   let i = 0;
   let plain = "";
@@ -181,6 +206,23 @@ export function parseInline(source: string): Inline[] {
       }
     }
 
+    // p.319's anchor, before links: its text is in brackets too. Only when
+    // the widget asked for references, and only with both attributes - an
+    // anchor naming no object is its own source text, as a refused link is.
+    const reference = references ? OBJECT_REFERENCE.exec(rest) : null;
+    if (reference) {
+      const named = referenceAttributes(reference[2] ?? "");
+      flush();
+      if (named) {
+        out.push({ kind: "objectref", ...named,
+                   children: parseInline(reference[1] ?? "", references) });
+      } else {
+        pushText(out, reference[0]);
+      }
+      i += reference[0].length;
+      continue;
+    }
+
     // Images before links: `![alt](src)` starts with the link syntax one
     // character in.
     const image = /^!\[([^\]]*)\]\(([^)\s]*)\)/.exec(rest);
@@ -200,7 +242,7 @@ export function parseInline(source: string): Inline[] {
       // **A refused URL renders as its own source text**, not as a link with a
       // dead href and not as nothing: an author who typed something this
       // platform will not follow should be able to see what was rejected.
-      if (href) out.push({ kind: "link", href, children: parseInline(link[1] ?? "") });
+      if (href) out.push({ kind: "link", href, children: parseInline(link[1] ?? "", references) });
       else pushText(out, link[0]);
       i += link[0].length;
       continue;
@@ -215,7 +257,7 @@ export function parseInline(source: string): Inline[] {
         flush();
         out.push({
           kind: mark.kind,
-          children: parseInline(rest.slice(mark.open.length, end)),
+          children: parseInline(rest.slice(mark.open.length, end), references),
         } as Inline);
         i += end + mark.close.length;
         continue;
@@ -270,11 +312,15 @@ export interface ParseOptions {
   /** p.317's "Break on newlines", **default on** — which is a divergence from
    * standard Markdown that p.317 states and chooses. */
   breaks?: boolean;
+  /** p.316's "Inline reference" tag type (§632): parse p.319's anchors. */
+  references?: boolean;
 }
 
 /** p.318's syntax, as blocks. */
 export function parse(source: unknown, options: ParseOptions = {}): Block[] {
   const breaks = options.breaks !== false;
+  const refs = options.references === true;
+  const inline = (text: string) => parseInline(text, refs);
   const lines = String(source ?? "").replace(/\r\n?/g, "\n").split("\n");
   const blocks: Block[] = [];
   let i = 0;
@@ -283,7 +329,7 @@ export function parse(source: unknown, options: ParseOptions = {}): Block[] {
   const endParagraph = () => {
     if (paragraph.length === 0) return;
     const joined = breaks ? paragraph.join("\n") : paragraph.join(" ");
-    blocks.push({ kind: "paragraph", children: withBreaks(joined) });
+    blocks.push({ kind: "paragraph", children: withBreaks(joined, refs) });
     paragraph.length = 0;
   };
 
@@ -313,7 +359,7 @@ export function parse(source: unknown, options: ParseOptions = {}): Block[] {
       blocks.push({
         kind: "heading",
         level: heading[1]!.length,
-        children: parseInline(heading[2]!),
+        children: inline(heading[2]!),
       });
       i += 1;
       continue;
@@ -337,12 +383,12 @@ export function parse(source: unknown, options: ParseOptions = {}): Block[] {
     // just lines with pipes in them.
     if (TABLE_ROW.test(line) && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]!)) {
       endParagraph();
-      const head = cells(line).map(parseInline);
+      const head = cells(line).map(inline);
       const align = cells(lines[i + 1]!).map(alignOf);
       i += 2;
       const rows: Inline[][][] = [];
       while (i < lines.length && TABLE_ROW.test(lines[i]!)) {
-        rows.push(cells(lines[i]!).map(parseInline));
+        rows.push(cells(lines[i]!).map(inline));
         i += 1;
       }
       blocks.push({ kind: "table", head, rows, align });
@@ -362,8 +408,8 @@ export function parse(source: unknown, options: ParseOptions = {}): Block[] {
         const text = m[1]!;
         const task = TASK.exec(text);
         items.push(task
-          ? { children: parseInline(task[2]!), done: task[1]!.toLowerCase() === "x" }
-          : { children: parseInline(text) });
+          ? { children: inline(task[2]!), done: task[1]!.toLowerCase() === "x" }
+          : { children: inline(text) });
         i += 1;
       }
       blocks.push({ kind: "list", ordered, items });
@@ -383,12 +429,12 @@ export function parse(source: unknown, options: ParseOptions = {}): Block[] {
  * text it was handed, joined with newlines when the option is on and with
  * spaces when it is off.
  */
-function withBreaks(text: string): Inline[] {
+function withBreaks(text: string, references: boolean): Inline[] {
   const parts = text.split("\n");
   const out: Inline[] = [];
   parts.forEach((part, index) => {
     if (index > 0) out.push({ kind: "break" });
-    out.push(...parseInline(part));
+    out.push(...parseInline(part, references));
   });
   return out;
 }

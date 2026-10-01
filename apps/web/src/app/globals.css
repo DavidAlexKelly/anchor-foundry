@@ -2259,6 +2259,15 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 /* p.317's "Allow long word wrap", for "long, unbroken strings (such as long
    URLs) that exceed the width of the widget". */
 .canvas-markdown-wrap { overflow-wrap: anywhere; }
+/* p.319-320's inline references (§632): underlined anchor text, lit when selected. */
+.canvas-markdown-ref {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0 1px; cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--ref-color, var(--accent));
+  text-decoration-thickness: 2px; text-underline-offset: 2px; border-radius: 2px;
+}
+.canvas-markdown-ref.on {
+  background: color-mix(in srgb, var(--ref-color, var(--accent)) 22%, transparent);
+}
 
 /* ---- String selector (p.461, decision 0011) ------------------------------- */
 .canvas-selector { display: grid; gap: 6px; }

@@ -39,6 +39,21 @@ export function leavesTheApp(href: string): boolean {
   return !href.startsWith("/");
 }
 
+type ObjectRef = Extract<Inline, { kind: "objectref" }>;
+
+/** p.319's anchors, drawn by whoever asked for them (§632). A screen that
+ * provides nothing - a README - never parses one, and if it did would show
+ * the anchor's text and nothing more. */
+export const MarkdownReferences = React.createContext<
+  ((node: ObjectRef, children: React.ReactNode) => React.ReactNode) | null
+>(null);
+
+function Anchor({ node }: { node: ObjectRef }) {
+  const draw = React.useContext(MarkdownReferences);
+  const children = renderInline(node.children);
+  return <>{draw ? draw(node, children) : children}</>;
+}
+
 function renderInline(nodes: Inline[]): React.ReactNode {
   return nodes.map((node, index) => {
     switch (node.kind) {
@@ -79,6 +94,8 @@ function renderInline(nodes: Inline[]): React.ReactNode {
         );
       case "image":
         return <img key={index} src={node.src} alt={node.alt} />;
+      case "objectref":
+        return <Anchor key={index} node={node} />;
     }
   });
 }
