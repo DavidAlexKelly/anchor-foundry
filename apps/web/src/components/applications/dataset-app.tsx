@@ -20,12 +20,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ApiError, api as platformApi, datasets as datasetApi, models as modelApi, resourceTags,
+  scheduledSync as scheduledSyncApi,
 } from "@/lib/api";
 import { addable, tagLabel } from "@/lib/resource-tags";
 import { canEditProject } from "@/lib/test-runs";
 import { Dialog, Field } from "@/components/dialog";
 import { branchName, whyNotBranchable } from "@/lib/branch-from-version";
-import { rollbackSummary, whyNotRollbackable } from "@/lib/dataset-rollback";
+import { nextSyncNote, rollbackSummary, whyNotRollbackable } from "@/lib/dataset-rollback";
 import { madeByText, originHref } from "@/lib/dataset-origin";
 import { bytesText } from "@/lib/bytes";
 import { NO_SCHEDULES, scheduleName, scheduleWhen } from "@/lib/dataset-schedules";
@@ -855,6 +856,9 @@ function HistoryTab({
           onClose={() => setBranching(null)}
         />
       )}
+      {detail.data?.origin === "sync" && detail.data.connection_id && (
+        <NextSync wid={wid} pid={pid} did={did} connectionId={detail.data.connection_id} />
+      )}
       {retention.data && (
         <p className="ds-retention">
           Keeping {retention.data.versions} version
@@ -868,6 +872,57 @@ function HistoryTab({
         </p>
       )}
     </>
+  );
+}
+
+/** p.73 and p.77's **Force a snapshot on the next build**, for a dataset an
+ * incremental sync writes (§629): where the next sync starts, and the one
+ * press that makes it read the whole table. `lib/dataset-rollback.nextSyncNote`
+ * says why the next sync is the next build. Nothing for any other dataset. */
+function NextSync({ wid, pid, did, connectionId }: {
+  wid: string;
+  pid: string;
+  did: string;
+  connectionId: string;
+}) {
+  const qc = useQueryClient();
+  const sync = useQuery({
+    queryKey: ["scheduled-sync", connectionId],
+    queryFn: () => scheduledSyncApi.get(wid, pid, connectionId),
+    retry: false,
+  });
+  const force = useMutation({
+    mutationFn: () => scheduledSyncApi.forgetCursor(wid, pid, connectionId),
+    onSuccess: (updated) => qc.setQueryData(["scheduled-sync", connectionId], updated),
+  });
+  const note = nextSyncNote(sync.data, did);
+  if (!note) return null;
+  return (
+    <div className="ds-note" data-testid="next-sync">
+      <p data-testid="next-sync-text">{note.text}</p>
+      {!note.forced && (
+        <>
+          <button
+            type="button"
+            className="btn"
+            data-testid="force-snapshot"
+            disabled={force.isPending}
+            onClick={() => force.mutate()}
+          >
+            Force a snapshot on the next sync
+          </button>
+          <p className="soft">
+            Nothing changes until the next sync, which then reads every row and merges
+            them by key. The history above stays as it is.
+          </p>
+        </>
+      )}
+      {force.isError && (
+        <p className="form-error" data-testid="force-snapshot-error">
+          {(force.error as Error).message}
+        </p>
+      )}
+    </div>
   );
 }
 

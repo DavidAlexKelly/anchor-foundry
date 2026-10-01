@@ -105,3 +105,42 @@ export function rollbackSummary(
 export function isRebuilt(origin: string): boolean {
   return origin === "model_output" || origin === "sync";
 }
+
+/**
+ * p.73's second way back, for a dataset an incremental sync writes (§629;
+ * `data-lineage` p.73, p.77).
+ *
+ * > "Forcing a snapshot on the next build: Typically applicable for
+ * >  incremental workflows when there is no previous transaction to roll back
+ * >  to" (p.73) … "Forcing a snapshot will not change the dataset's
+ * >  transaction history or produce immediate visible changes. The snapshot
+ * >  will occur on the next build." (p.77)
+ *
+ * Incrementality here is the connection's sync (`merge_incremental`), so the
+ * next build is the next sync, and its snapshot is a sync that reads the whole
+ * table: exactly what forgetting the stored position does (§363). Null when
+ * no incremental sync writes this dataset, since there is nothing to force.
+ */
+export type SyncPosition = {
+  sync_mode: string;
+  sync_dataset_id: string | null;
+  sync_cursor_column: string | null;
+  sync_last_cursor_value: string | null;
+};
+
+export function nextSyncNote(
+  sync: SyncPosition | null | undefined,
+  datasetId: string,
+): { forced: boolean; text: string } | null {
+  if (!sync || sync.sync_mode !== "incremental" || sync.sync_dataset_id !== datasetId) {
+    return null;
+  }
+  if (sync.sync_last_cursor_value === null) {
+    return { forced: true, text: "The next sync reads the whole table, as a snapshot." };
+  }
+  return {
+    forced: false,
+    text: `The next sync reads only rows with ${sync.sync_cursor_column ?? "its cursor"} `
+      + `after ${sync.sync_last_cursor_value}.`,
+  };
+}

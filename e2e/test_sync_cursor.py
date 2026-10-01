@@ -250,3 +250,52 @@ def test_nothing_offers_to_forget_a_position_that_does_not_exist(page, synced) -
     expect(page.get_by_test_id("cursor-start")).to_be_visible()
     expect(page.get_by_test_id("forget-cursor")).to_have_count(0)
     expect(page.get_by_test_id("cursor-position")).to_have_count(0)
+
+
+# ---- p.73 and p.77's force a snapshot on the next build (§629) ---------------
+
+def test_the_history_forces_a_snapshot_on_the_next_sync(page, synced) -> None:
+    """> "Forcing a snapshot will not change the dataset's transaction history
+    > or produce immediate visible changes. The snapshot will occur on the next
+    > build." (`data-lineage` p.77)
+
+    The dataset an incremental sync writes says, where its history is, where
+    the next sync starts; one press makes the next sync read the whole table,
+    and the history is left as it was."""
+    with psycopg.connect(_for_database(ADMIN_DSN, SOURCE_DB), autocommit=True) as conn:
+        conn.execute("DELETE FROM public.orders")
+        conn.execute("INSERT INTO public.orders (id, customer_email) VALUES "
+                     "(1, 'a@example.com'), (2, 'b@example.com')")
+    mod, api = synced["mod"], synced["api"]
+    api.call("POST", f"{mod.base}/connections/{synced['connection']['id']}/scheduled-sync/run", {})
+    schedule = schedule_of(synced)
+    assert schedule["sync_last_cursor_value"] == "2", schedule
+    dataset = api.call("GET", f"{mod.base}/datasets/{schedule['sync_dataset_id']}")
+    resources = api.call("GET", f"{mod.base}/resources")["resources"]
+    resource = next(r for r in resources if r["name"] == dataset["name"])
+
+    page.goto(f"{WEB_BASE}/r/{resource['id']}?tab=history")
+    expect(page.get_by_test_id("next-sync-text")).to_have_text(
+        "The next sync reads only rows with id after 2.", timeout=30000)
+    versions = page.get_by_test_id("rollback-version")
+    before = versions.count()
+
+    page.get_by_test_id("force-snapshot").click()
+    expect(page.get_by_test_id("next-sync-text")).to_have_text(
+        "The next sync reads the whole table, as a snapshot.")
+    expect(page.get_by_test_id("force-snapshot")).to_have_count(0)
+    # Nothing visible changes but that: no version, and the stored place gone.
+    expect(versions).to_have_count(before)
+    assert schedule_of(synced)["sync_last_cursor_value"] is None
+    # The rest of the configuration is kept.
+    assert schedule_of(synced)["sync_mode"] == "incremental"
+
+
+def test_an_uploaded_dataset_has_no_next_sync(page, api) -> None:
+    mod = Module(api, "No next sync")
+    mod.object_type(columns=["id"], rows=[{"id": "A"}], key="id")
+    resources = api.call("GET", f"{mod.base}/resources")["resources"]
+    resource = next(r for r in resources if r["kind"] == "dataset")
+    page.goto(f"{WEB_BASE}/r/{resource['id']}?tab=history")
+    expect(page.get_by_test_id("rollback-version").first).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("next-sync")).to_have_count(0)
