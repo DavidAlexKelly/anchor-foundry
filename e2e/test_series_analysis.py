@@ -192,3 +192,23 @@ def test_an_event_set_is_counted_and_highlighted(page, api, module) -> None:
     expect(shaded).to_have_count(0)
     page.get_by_label("Remove South sensor above 1000").click()
     expect(sets).to_have_count(2)
+
+
+def test_statistics_per_event(page, api, module) -> None:
+    """p.393's Event statistics (§652). South is at least 900 on the 1st and
+    2nd, one event; North's average over it is 15, its readings then being 10
+    and 20."""
+    open_module(page, build(api, module, "Analysis event statistics"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_role("button", name="New event set").click()
+    page.get_by_label("Event plot").select_option(label="South sensor")
+    page.get_by_label("Event comparison").select_option("gte")
+    page.get_by_label("Event threshold").fill("900")
+    page.get_by_role("button", name="Add event set").click()
+    page.get_by_label("New plot").select_option("event_statistics")
+    page.get_by_label("Input plot").select_option(label="North sensor")
+    page.get_by_label("Statistic").select_option("avg")
+    page.get_by_role("button", name="Add plot").click()
+    label = "avg of North sensor per event of South sensor at least 900"
+    expect(stat(page, label, "mean")).to_have_text("15")
+    expect(stat(page, label, "max")).to_have_text("15")

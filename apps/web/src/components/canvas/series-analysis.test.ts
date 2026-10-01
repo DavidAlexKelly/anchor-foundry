@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_EVENT_SETS, eventCount, eventSpan, eventsOf, liveEventSets, withEventSet,
+  MAX_EVENT_SETS, withEventStatistics, eventCount, eventSpan, eventsOf, liveEventSets, withEventSet,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, canvasesOf, chainOf, extentOf, pathOf, readingsOf, rootOf, rootPlots,
   statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
@@ -272,5 +272,25 @@ describe("p.392's Time series search (§651)", () => {
     expect(eventSpan({ start: -50, end: 10 }, extent, 200)).toEqual({ x: 0, width: 20 });
     expect(eventSpan({ start: 150, end: 160 }, extent, 200)).toBeNull();
     expect(eventSpan({ start: -20, end: -10 }, extent, 200)).toBeNull();
+  });
+});
+
+describe("p.393's Event statistics (§652)", () => {
+  it("aggregates a plot over the events of an event set, searched through its plot's chain", () => {
+    const derived = withDerived(roots, "root:i2", [cumulative], 1);
+    const [set] = withEventSet([], derived, "plot-3", "gte", 20);
+    const next = withEventStatistics(derived, "root:i1", set, "max", 2);
+    const made = next.at(-1)!;
+    expect(made).toMatchObject({ id: "plot-4", parent: "root:i1", canvas: 2,
+      label: "max of Pump 1 per event of Cumulative aggregate of Pump 2 at least 20" });
+    expect(made.transforms).toEqual([{ kind: "event_statistics", aggregate: "max", op: "gte", value: 20,
+      inputs: { e: referenceTo(derived, "plot-3") } }]);
+  });
+
+  it("needs the set, its plot and the parent", () => {
+    const [set] = withEventSet([], roots, "root:i2", "gt", 1);
+    expect(withEventStatistics(roots, "root:i1", undefined, "avg", 1)).toEqual(roots);
+    expect(withEventStatistics(roots, "gone", set, "avg", 1)).toEqual(roots);
+    expect(withEventStatistics(roots, "root:i1", { ...set!, plot: "gone" }, "avg", 1)).toEqual(roots);
   });
 });

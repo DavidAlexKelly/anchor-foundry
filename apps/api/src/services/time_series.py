@@ -434,7 +434,7 @@ def points_for_many_sql(
 #: multiple transforms to be chained together." (p.583)
 TRANSFORM_KINDS = (
     "cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula",
-    "filter", "sample", "combine",
+    "filter", "sample", "combine", "event_statistics",
 )
 #: p.393's *Combine time series*: "Merge multiple time series into a single
 #: plot, specifying how to handle overlapping time points (for example, mean,
@@ -576,6 +576,25 @@ def parse_transforms(
                 if not named:
                     raise ValueError("combining needs at least one other series")
                 parsed = {"kind": kind, "aggregate": aggregate, "inputs": named}
+            elif kind == "event_statistics":
+                # p.393's *Event statistics* (§652): the events are a search
+                # of one input series (§651's rule), and this series is
+                # aggregated over each of them.
+                aggregate = item.get("aggregate", "avg")
+                if aggregate not in WINDOW_AGGREGATES:
+                    raise ValueError(f"the aggregate must be one of {', '.join(WINDOW_AGGREGATES)}")
+                operator = item.get("op")
+                if operator not in FILTER_OPERATORS:
+                    raise ValueError(f"the comparison must be one of {', '.join(FILTER_OPERATORS)}")
+                value = item.get("value")
+                if (isinstance(value, bool) or not isinstance(value, (int, float))
+                        or not math.isfinite(value)):
+                    raise ValueError("the events are found by comparing with a number")
+                named = _formula_inputs(item.get("inputs"), inputs, _depth)
+                if len(named) != 1:
+                    raise ValueError("event statistics needs the one series its events are found in")
+                parsed = {"kind": kind, "aggregate": aggregate, "op": operator,
+                          "value": float(value), "inputs": named}
             elif kind == "sample":
                 method = item.get("method", "previous")
                 if method not in SAMPLE_METHODS:
@@ -870,6 +889,25 @@ def _transform_sql(
             f"(n.value - p.value) * (epoch_ms(g.at) - epoch_ms(p.at)) / {span} END AS value "
             f"FROM {grid} g ASOF LEFT JOIN {readings} p ON {on.format('p')}g.at >= p.at "
             f"ASOF LEFT JOIN {readings} n ON {on.format('n')}g.at <= n.at"
+        )
+    if kind == "event_statistics":
+        # p.393: "Aggregate a time series over intervals where an event
+        # occurs, returning one point per event." The events are §651's runs
+        # in the one input; each is one point, at its start, of this series'
+        # readings from its first instant to its last. An event this series
+        # has no reading in is a gap, or a count of zero.
+        [events_of] = (inputs or {}).values()
+        condition = f"value {FILTER_OPERATORS[transform['op']]} {transform['value']!r}"
+        events = (
+            f"SELECT min(at) AS start, max(at) AS finish FROM (SELECT at, hit, sum(CASE WHEN hit "
+            f"THEN 0 ELSE 1 END) OVER (ORDER BY at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) "
+            f"AS run FROM (SELECT CAST(at AS TIMESTAMP) AS at, ({condition}) AS hit FROM {events_of} "
+            f"WHERE value IS NOT NULL) marked) runs WHERE hit GROUP BY run"
+        )
+        return (
+            f"SELECT e.start AS at, {transform['aggregate']}(x.value) "
+            f"AS value FROM ({events}) e LEFT JOIN (SELECT CAST(at AS TIMESTAMP) AS at, value FROM "
+            f"{source}) x ON x.at BETWEEN e.start AND e.finish GROUP BY e.start"
         )
     if kind == "combine":
         # p.393: every point of every series, and where two share an instant,

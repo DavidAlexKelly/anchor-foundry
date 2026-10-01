@@ -443,3 +443,87 @@ def test_a_combine_names_its_variables_as_a_formula_does() -> None:
     got = parsed([{"kind": "combine", "inputs": {"y": "v_other"}}], "variables")
     assert got == [{"kind": "combine", "aggregate": "avg", "inputs": {"y": "v_other"}}]
     assert wv.series_inputs(got) == ["v_other"]
+
+
+# ---- p.393's Event statistics (§652) ----------------------------------------------
+#: W2 is above 2 from 03:00 to 07:00 on the 1st, at midnight on the 2nd, and at
+#: midnight on the 3rd.
+W2 = [("W2", "2026-01-01 00:00:00", 1.0), ("W2", "2026-01-01 03:00:00", 5.0),
+      ("W2", "2026-01-01 07:00:00", 6.0), ("W2", "2026-01-01 12:00:00", 0.0),
+      ("W2", "2026-01-02 00:00:00", 9.0), ("W2", "2026-01-02 12:00:00", 0.0),
+      ("W2", "2026-01-03 00:00:00", 4.0)]
+
+
+def stats(aggregate: str, op: str = "gt", value: float = 2, **kw) -> list[tuple]:
+    con = duckdb.connect()
+    try:
+        for table, rows in (("dataset", S1), ("input_1", kw.get("events", W2))):
+            con.execute(f"CREATE TABLE {table} (sensor VARCHAR, taken TIMESTAMP, reading DOUBLE)")
+            con.executemany(f"INSERT INTO {table} VALUES (?, ?, ?)", rows)
+        transform = {"kind": "event_statistics", "aggregate": aggregate, "op": op, "value": value,
+                     "inputs": {"e": spec("W2", "input_1")}}
+        sql = ts.points_sql(key_column="sensor", timestamp_column="taken", value_column="reading",
+                            series_id="S1", interval="none", aggregate="avg",
+                            transforms=kw.get("before", []) + [transform])
+        return [(r[0], None if r[1] is None else float(r[1])) for r in con.execute(sql).fetchall()]
+    finally:
+        con.close()
+
+
+@pytest.mark.parametrize("aggregate, first, second, third", [
+    ("avg", 20.0, 30.0, None), ("count", 1.0, 1.0, 0.0), ("max", 20.0, 30.0, None),
+])
+def test_one_point_per_event_from_this_series_readings_in_it(aggregate, first, second, third) -> None:
+    """p.393: "Aggregate a time series over intervals where an event occurs,
+    returning one point per event." W2 is above 2 from 03:00 to 07:00 (S1
+    reads 20 in it), at midnight on the 2nd (S1 reads 30) and on the 3rd,
+    where S1 has no reading: a gap, or a count of none."""
+    assert stats(aggregate) == [(datetime(2026, 1, 1, 3), first), (datetime(2026, 1, 2), second),
+                                (datetime(2026, 1, 3), third)]
+
+
+def test_the_events_follow_the_comparison() -> None:
+    """Below 2 is one event at midnight on the 1st (S1 reads 10), and one at
+    noon on each day, where S1 has nothing."""
+    assert stats("sum", op="lt", value=2) == [(datetime(2026, 1, 1, 0), 10.0),
+                                              (datetime(2026, 1, 1, 12), None),
+                                              (datetime(2026, 1, 2, 12), None)]
+
+
+def test_event_statistics_read_this_series_through_its_chain() -> None:
+    running = [{"kind": "cumulative", "aggregate": "sum"}]
+    assert stats("max", before=running)[:2] == [(datetime(2026, 1, 1, 3), 30.0),
+                                                 (datetime(2026, 1, 2), 60.0)]
+
+
+@pytest.mark.parametrize("raw, said", [
+    ({"kind": "event_statistics", "op": "gt", "value": 1, "inputs": {}},
+     "event statistics needs the one series its events are found in"),
+    ({"kind": "event_statistics", "op": "gt", "value": 1, "inputs": {"e": ref(), "f": ref()}},
+     "event statistics needs the one series its events are found in"),
+    ({"kind": "event_statistics", "op": "near", "value": 1, "inputs": {"e": ref()}},
+     "the comparison must be one of"),
+    ({"kind": "event_statistics", "op": "gt", "value": "1", "inputs": {"e": ref()}},
+     "comparing with a number"),
+    ({"kind": "event_statistics", "aggregate": "median", "op": "gt", "value": 1,
+      "inputs": {"e": ref()}}, "the aggregate must be one of"),
+])
+def test_event_statistics_that_say_too_little_are_refused(raw, said) -> None:
+    with pytest.raises(ValueError) as caught:
+        parsed([raw])
+    assert said in str(caught.value)
+
+
+def test_event_statistics_parse_with_the_average_by_default() -> None:
+    got = parsed([{"kind": "event_statistics", "op": "gte", "value": 3, "inputs": {"e": "v"}}],
+                 "variables")
+    assert got == [{"kind": "event_statistics", "aggregate": "avg", "op": "gte", "value": 3.0,
+                    "inputs": {"e": "v"}}]
+
+
+def test_a_gap_in_the_searched_series_does_not_split_an_event() -> None:
+    """W2 above 2 at 03:00, silent at 05:00, above again at 07:00: one event,
+    over which S1 reads 20."""
+    gappy = [("W2", "2026-01-01 03:00:00", 5.0), ("W2", "2026-01-01 05:00:00", None),
+             ("W2", "2026-01-01 07:00:00", 6.0)]
+    assert stats("count", events=gappy) == [(datetime(2026, 1, 1, 3), 1.0)]

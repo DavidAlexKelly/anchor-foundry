@@ -12,7 +12,7 @@
  * vocabularies are held to the server's by `test_time_series_transforms.py`.
  */
 
-export const TRANSFORM_KINDS = ["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine"] as const;
+export const TRANSFORM_KINDS = ["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine", "event_statistics"] as const;
 export type TransformKind = (typeof TRANSFORM_KINDS)[number];
 export const WINDOW_AGGREGATES = ["sum", "avg", "min", "max", "count", "stddev"] as const;
 export type WindowAggregate = (typeof WINDOW_AGGREGATES)[number];
@@ -67,6 +67,9 @@ export type SeriesTransform =
   | { kind: "range"; start: string | null; end: string | null }
   | { kind: "filter"; op: FilterOperator; value: number; keep: boolean }
   | { kind: "sample"; every: number; unit: TimeUnit; method: SampleMethod }
+  | { kind: "event_statistics"; aggregate: WindowAggregate; op: FilterOperator; value: number;
+      /** The one series whose events are searched, as `e` (§652). */
+      inputs?: Record<string, unknown> }
   | { kind: "combine"; aggregate: CombineAggregate;
       /** The other series, by name, as a formula's inputs are (§561). */
       inputs?: Record<string, unknown> }
@@ -88,6 +91,7 @@ export const KIND_LABELS: Record<TransformKind, string> = {
   filter: "Filter",
   sample: "Sample",
   combine: "Combine",
+  event_statistics: "Event statistics",
 };
 
 /** A new transform of `kind`, ready to use: p.584's own examples where it
@@ -121,6 +125,8 @@ export function blankTransform(kind: TransformKind): SeriesTransform {
       return { kind, every: 1, unit: "hour", method: "previous" };
     case "combine":
       return { kind, aggregate: "avg", inputs: { y: "" } };
+    case "event_statistics":
+      return { kind, aggregate: "avg", op: "gt", value: 0, inputs: { e: "" } };
   }
 }
 
@@ -159,6 +165,8 @@ export function transformText(t: SeriesTransform): string {
       return `${t.keep ? "only" : "without"} readings ${FILTER_WORDS[t.op]} ${t.value}`;
     case "sample":
       return `sampled every ${units(t.every, t.unit)}${t.method === "linear" ? ", interpolated" : ""}`;
+    case "event_statistics":
+      return `${AGGREGATE_WORDS[t.aggregate]} over each time e is ${FILTER_WORDS[t.op]} ${t.value}`;
     case "combine":
       return `combined with ${Object.keys(t.inputs ?? {}).join(", ") || "nothing"}, ` +
         `${COMBINE_WORDS[t.aggregate]} where they meet`;
@@ -181,6 +189,12 @@ export function transformProblem(t: SeriesTransform): string | null {
     case "rolling":
       return whole(t.window) && t.window >= 1 && t.window <= MAX_SPAN
         ? null : `The window must be a whole number from 1 to ${MAX_SPAN.toLocaleString("en-US")}.`;
+    case "event_statistics": {
+      const chosen = Object.values(t.inputs ?? {});
+      if (chosen.length !== 1) return "Event statistics needs the one series its events are found in.";
+      if (!chosen[0]) return "Choose the series the events are found in.";
+      return Number.isFinite(t.value) ? null : "The events are found by comparing with a number.";
+    }
     case "combine":
       if (Object.keys(t.inputs ?? {}).length === 0) return "Combining needs at least one other series.";
       for (const [name, chosen] of Object.entries(t.inputs ?? {})) {
@@ -246,7 +260,7 @@ export function withoutInput(
 export function seriesInputs(transforms: SeriesTransform[]): string[] {
   const out: string[] = [];
   for (const t of transforms) {
-    if (t.kind !== "formula" && t.kind !== "combine") continue;
+    if (t.kind !== "formula" && t.kind !== "combine" && t.kind !== "event_statistics") continue;
     for (const chosen of Object.values(t.inputs ?? {})) {
       if (typeof chosen === "string" && chosen && !out.includes(chosen)) out.push(chosen);
     }
