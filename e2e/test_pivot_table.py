@@ -122,15 +122,21 @@ def table_rows(page) -> int:
 
 def cells(page, index=0) -> list[list[int]]:
     """The grid, without its margins: the last row is Total and the last column
-    is Total, and both are asserted separately."""
-    body = pivot(page, index).locator("tbody tr")
-    return [
-        [
-            int(body.nth(r).locator("td").nth(c).inner_text().strip())
-            for c in range(body.nth(r).locator("td").count() - 1)
-        ]
-        for r in range(body.count() - 1)
-    ]
+    is Total, and both are asserted separately.
+
+    **Read in one call, not cell by cell.** Counting a row's cells and then
+    reading each by index is several round trips, and a grid that re-renders
+    between them leaves `inner_text` waiting on a cell that is no longer there.
+    That is a 30-second timeout raised out of `eventually` rather than a
+    mismatch it would retry (#452, an unrelated change). One read in the page
+    sees one render, so a re-render can only produce a mismatch that the
+    caller retries. A cell that is not a number yet reads as None for the same
+    reason."""
+    texts = pivot(page, index).locator("tbody tr").evaluate_all(
+        """rows => rows.slice(0, -1).map(row =>
+            [...row.querySelectorAll("td")].slice(0, -1).map(td => td.innerText.trim()))"""
+    )
+    return [[int(t) if t.isdigit() else None for t in row] for row in texts]
 
 
 def test_the_grid_counts_both_properties_at_once(page, module):
