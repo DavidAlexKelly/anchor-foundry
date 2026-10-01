@@ -320,6 +320,9 @@ import {
   MAX_EVENT_SETS as MAX_SERIES_EVENT_SETS, eventCount as seriesEventCount, eventsOf as seriesEventsOf,
   liveEventSets as liveSeriesEventSets, withEventSet as withSeriesEventSet,
   withLinkedEventSet as withSeriesLinkedEventSet,
+  POINT_FILLS as SERIES_POINT_FILLS, POINT_FILL_WORDS as SERIES_POINT_FILL_WORDS,
+  POINT_SHAPES as SERIES_POINT_SHAPES, displayOf as seriesDisplayOf, pointOptions as seriesPointOptions,
+  withDisplay as withSeriesDisplay, type PointFill as SeriesPointFill, type PointShape as SeriesPointShape,
   type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
@@ -13180,17 +13183,23 @@ export function CanvasSeriesAnalysis({
               .map((p, n) => ({ plot: p, n }))
               .filter(({ plot }) => plot.canvas === canvas)
               .map(({ plot, n }) => ({ id: plot.id, label: plot.label, color: colorOf(n),
-                dashed: plot.style === "dashed", readings: readings[n] ?? [] }))} />
+                dashed: plot.style === "dashed", display: seriesDisplayOf(plot),
+                readings: readings[n] ?? [] }))} />
           ))}
           {/* The Plots panel: each plot's display, place and statistics. */}
           <table className="data-grid" data-testid="series-plots">
             <thead>
-              <tr><th>Plot</th><th>Canvas</th><th>Line</th><th>Min</th><th>Max</th><th>Mean</th><th /></tr>
+              <tr>
+                <th>Plot</th><th>Canvas</th><th>Line</th><th>Width</th><th>Gradient</th><th>Points</th>
+                <th>Min</th><th>Max</th><th>Mean</th><th />
+              </tr>
             </thead>
             <tbody>
               {plots.map((plot, n) => {
                 const stats = seriesStatsOf(readings[n] ?? []);
                 const failed = readingsFor[n]?.error;
+                const display = seriesDisplayOf(plot);
+                const options = seriesPointOptions(display);
                 return (
                   <tr key={plot.id} data-plot={plot.id} data-label={plot.label}>
                     <td>
@@ -13214,6 +13223,42 @@ export function CanvasSeriesAnalysis({
                                 e.target.value as SeriesLineStyle))}>
                         {SERIES_LINE_STYLES.map((s) => <option key={s} value={s}>{s}</option>)}
                       </select>
+                    </td>
+                    <td>
+                      <input type="number" min={0.5} max={8} step={0.5} style={{ width: 56 }}
+                             aria-label={`${plot.label} line width`} value={display.width}
+                             onChange={(e) => setPlots(withSeriesDisplay(plots, plot.id, "width",
+                               e.target.value === "" ? Number.NaN : Number(e.target.value)))} />
+                    </td>
+                    <td>
+                      <input type="checkbox" aria-label={`${plot.label} gradient`} checked={display.gradient}
+                             onChange={(e) => setPlots(withSeriesDisplay(plots, plot.id, "gradient",
+                               e.target.checked))} />
+                    </td>
+                    <td>
+                      <span className="row-actions" style={{ gap: 4, flexWrap: "nowrap" }}>
+                        <select aria-label={`${plot.label} point shape`} value={display.shape}
+                                onChange={(e) => setPlots(withSeriesDisplay(plots, plot.id, "shape",
+                                  e.target.value as SeriesPointShape))}>
+                          {SERIES_POINT_SHAPES.map((s) => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                        <input type="number" min={2} max={16} style={{ width: 48 }}
+                               aria-label={`${plot.label} point size`} value={display.size}
+                               disabled={!options.size}
+                               onChange={(e) => setPlots(withSeriesDisplay(plots, plot.id, "size",
+                                 e.target.value === "" ? Number.NaN : Number(e.target.value)))} />
+                        <select aria-label={`${plot.label} point fill`} value={display.fill}
+                                disabled={!options.fill}
+                                onChange={(e) => setPlots(withSeriesDisplay(plots, plot.id, "fill",
+                                  e.target.value as SeriesPointFill))}>
+                          {SERIES_POINT_FILLS.map((f) => <option key={f} value={f}>{SERIES_POINT_FILL_WORDS[f]}</option>)}
+                        </select>
+                        <input type="number" min={0.5} max={4} step={0.5} style={{ width: 48 }}
+                               aria-label={`${plot.label} point outline`} value={display.outline}
+                               disabled={!options.outline}
+                               onChange={(e) => setPlots(withSeriesDisplay(plots, plot.id, "outline",
+                                 e.target.value === "" ? Number.NaN : Number(e.target.value)))} />
+                      </span>
                     </td>
                     <td data-stat="min">{stats ? Number(stats.min.toFixed(3)) : "—"}</td>
                     <td data-stat="max">{stats ? Number(stats.max.toFixed(3)) : "—"}</td>

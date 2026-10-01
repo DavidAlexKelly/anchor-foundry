@@ -11,6 +11,8 @@ canvas of its own it is the only line drawn there.
 """
 from __future__ import annotations
 
+import re
+
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
@@ -72,7 +74,7 @@ def test_a_new_plot_is_derived_moved_and_removed(page, api, module) -> None:
     page.get_by_label(f"{derived} canvas").select_option("2")
     expect(page.locator("[data-testid='series-canvas-2'] path[data-plot]")).to_have_count(1)
     expect(page.locator("[data-testid='series-canvas-1'] path[data-plot]")).to_have_count(3)
-    page.get_by_label(f"{derived} line").select_option("dashed")
+    page.get_by_label(f"{derived} line", exact=True).select_option("dashed")
     expect(page.locator("[data-testid='series-canvas-2'] path[data-plot]")).to_have_attribute(
         "stroke-dasharray", "5 3")
     # A plot derived from the derived one goes with it.
@@ -294,3 +296,38 @@ def test_a_linked_event_set_is_the_visits_to_a_sensor(page, api, module) -> None
     # Event statistics aggregates over a search's events, not a linked set's.
     page.get_by_label("New plot").select_option("event_statistics")
     expect(page.get_by_test_id("series-event-statistics")).to_contain_text("Add an event set first")
+
+
+def test_a_plot_s_line_gradient_and_points(page, api, module) -> None:
+    """p.394's Display (§655): line width, gradient shading, and points by
+    shape and size, with p.395's point fill and outline - each only offered
+    where it applies."""
+    open_module(page, build(api, module, "Analysis display"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    canvas = page.locator("[data-testid='series-canvas-1']")
+    north_id = plot_row(page, "North sensor").get_attribute("data-plot")
+    south_id = plot_row(page, "South sensor").get_attribute("data-plot")
+    north = canvas.locator(f"path[data-plot='{north_id}']")
+    page.get_by_label("North sensor line width").fill("4")
+    expect(north).to_have_attribute("stroke-width", "4")
+    expect(canvas.locator("[data-gradient]")).to_have_count(0)
+    page.get_by_label("North sensor gradient").check()
+    expect(canvas.locator(f"[data-gradient='{north_id}']")).to_have_count(1)
+    assert canvas.locator(f"[data-gradient='{north_id}']").get_attribute("d").endswith("Z")
+    # No points until a shape is chosen, and nothing of them to set.
+    expect(canvas.locator("[data-points]")).to_have_count(0)
+    expect(page.get_by_label("North sensor point size")).to_be_disabled()
+    expect(page.get_by_label("North sensor point fill")).to_be_disabled()
+    page.get_by_label("North sensor point shape").select_option("square")
+    points = canvas.locator(f"path[data-points='{north_id}']")
+    # Four readings, four squares.
+    expect(points).to_have_attribute("d", re.compile(r"^(M[^M]*h[^M]*Z){4}$"))
+    page.get_by_label("North sensor point size").fill("10")
+    expect(points).to_have_attribute("d", re.compile(r"h10\.0v10\.0"))
+    expect(page.get_by_label("North sensor point outline")).to_be_disabled()
+    page.get_by_label("North sensor point fill").select_option("white")
+    expect(points).to_have_attribute("fill", "#fff")
+    page.get_by_label("North sensor point outline").fill("3")
+    expect(points).to_have_attribute("stroke-width", "3")
+    # Another plot is as it was.
+    expect(canvas.locator(f"path[data-plot='{south_id}']")).to_have_attribute("stroke-width", "1.6")
