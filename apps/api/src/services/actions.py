@@ -919,7 +919,9 @@ class CriteriaRefusal(ValueError):
 _SINGLE_VALUE_OPERATORS = frozenset(
     {"is", "is_not", "matches", "is_less_than", "is_greater_than_or_equals"}
 )
-_LIST_OPERATORS = frozenset({"includes", "is_included_in"})
+_LIST_OPERATORS = frozenset(
+    {"includes", "is_included_in", "includes_any", "each_is", "each_is_not"}
+)
 CRITERION_OPERATORS = _SINGLE_VALUE_OPERATORS | _LIST_OPERATORS
 
 
@@ -1007,6 +1009,26 @@ def _passes(condition: dict[str, Any], *, bound: dict[str, Any], user: dict[str,
         if not isinstance(left, (list, tuple)):
             raise _Unevaluable("`includes` needs a list on the left")
         return right in left
+    if operator == "includes_any":
+        # p.55: "At least one of the left values exactly matches at least one
+        # of the right values." Both sides are lists.
+        if not isinstance(left, (list, tuple)) or not isinstance(right, (list, tuple)):
+            raise _Unevaluable("`includes_any` needs a list on each side")
+        return any(value in right for value in left)
+    if operator in ("each_is", "each_is_not"):
+        # p.55: "All left values exactly match the right value", and "All left
+        # values do not exactly match the right value" - p.55's example is
+        # `[ "John Doe", "Maria Smith" ] each is not "King Louis" = TRUE`. **An
+        # empty list is refused rather than read as vacuously true**: "each
+        # pilot is John Doe" of an aircraft with no pilots is not a condition
+        # anybody meant to pass, and this check decides who may write.
+        if not isinstance(left, (list, tuple)):
+            raise _Unevaluable(f"`{operator}` needs a list on the left")
+        if not left:
+            raise _Unevaluable(f"`{operator}` has no values on the left to check")
+        if operator == "each_is":
+            return all(value == right for value in left)
+        return all(value != right for value in left)
     # is_included_in - p.55, the same check with the sides swapped.
     if not isinstance(right, (list, tuple)):
         raise _Unevaluable("`is_included_in` needs a list on the right")

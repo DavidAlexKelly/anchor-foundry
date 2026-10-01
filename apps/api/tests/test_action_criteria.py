@@ -129,6 +129,42 @@ def test_includes_and_is_included_in() -> None:
                      {"name": "Ada"})
 
 
+def refusal(config: dict, bound: dict) -> str:
+    with pytest.raises(actions_service.CriteriaRefusal) as caught:
+        actions_service.check_criteria(bound, criteria=[criterion(config)], user=USER)
+    return str(caught.value)
+
+
+def test_includes_any() -> None:
+    """p.55 (§644): "At least one of the left values exactly matches at least
+    one of the right values" - `["King Louis", "John Doe"]` against
+    `["John Doe", "Maria Smith"]` is TRUE."""
+    op = {"left": param("names"), "operator": "includes_any",
+          "right": value(["John Doe", "Maria Smith"])}
+    assert check(op, {"names": ["King Louis", "John Doe"]})
+    assert not check(op, {"names": ["King Louis"]})
+    assert not check(op, {"names": []})
+    assert "a list on each side" in refusal(op, {"names": "John Doe"})
+    assert "a list on each side" in refusal({**op, "right": value("John Doe")},
+                                            {"names": ["John Doe"]})
+
+
+def test_each_is_and_each_is_not() -> None:
+    """p.55 (§644): `["John Doe", "Maria Smith"] each is "John Doe"` is FALSE,
+    and `each is not "King Louis"` is TRUE."""
+    pilots = {"pilots": ["John Doe", "Maria Smith"]}
+    each_is = {"left": param("pilots"), "operator": "each_is", "right": value("John Doe")}
+    each_is_not = {"left": param("pilots"), "operator": "each_is_not", "right": value("King Louis")}
+    assert not check(each_is, pilots)
+    assert check(each_is, {"pilots": ["John Doe", "John Doe"]})
+    assert check(each_is_not, pilots)
+    assert not check(each_is_not, {"pilots": ["King Louis", "John Doe"]})
+    # No pilots at all is not "each pilot is John Doe": refused, not passed.
+    assert "no values on the left" in refusal(each_is, {"pilots": []})
+    assert "no values on the left" in refusal(each_is_not, {"pilots": []})
+    assert "a list on the left" in refusal(each_is, {"pilots": "John Doe"})
+
+
 def test_no_value_checks_emptiness() -> None:
     """p.55: "No value checks whether the first value is empty (or null)."
     A property of the right-hand side rather than an operator of its own, which

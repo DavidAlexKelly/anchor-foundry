@@ -283,6 +283,12 @@ describe("conditionDraft / conditionValue", () => {
     expect(conditionDraft(conditionValue(draft))).toEqual(draft);
   });
 
+  it("takes a list operator's values between commas (§644)", () => {
+    const draft = { parameter: "status", operator: "is_included_in", value: "open, closed" };
+    expect(conditionValue(draft).right).toEqual({ kind: "value", value: ["open", "closed"] });
+    expect(conditionDraft(conditionValue(draft))).toEqual(draft);
+  });
+
   it("round-trips p.43's current-user condition", () => {
     const draft = { parameter: CURRENT_USER, operator: "is", value: "u1" };
     expect(conditionDraft(conditionValue(draft))).toEqual(draft);

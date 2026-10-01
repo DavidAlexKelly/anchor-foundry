@@ -85,8 +85,9 @@ import { DEFAULT_ELEMENT, ELEMENT_TYPES } from "@/lib/array-property";
 import { constraintBaseType, isStructParameter } from "@/lib/parameter-constraint";
 import { ValueConstraintEditor } from "@/components/value-constraint-editor";
 import {
-  LOGIC, LOGIC_LABELS, MAX_DEPTH, atPath, childrenOf, depthOf, grouped, isGroup, renamed, withAdded,
-  withAt, withoutAt,
+  LOGIC, LOGIC_LABELS, MAX_DEPTH, RIGHT_LIST_OPERATORS, USER_CHOICES, atPath, childrenOf, depthOf,
+  grouped, isGroup, leftChoice, leftOf, renamed, rightOf, rightText, withAdded, withAt, withOperator,
+  withoutAt,
 } from "@/lib/criterion-logic";
 
 /** `action_parameter_type` (migration 0044): the ontology's property types
@@ -145,7 +146,11 @@ const OPERATORS = [
   ["is_less_than", "is less than"],
   ["is_greater_than_or_equals", "is greater than or equals"],
   ["includes", "includes"],
+  // p.55's other three list operators (§644).
+  ["includes_any", "includes any of"],
   ["is_included_in", "is included in"],
+  ["each_is", "each is"],
+  ["each_is_not", "each is not"],
 ];
 
 type Parameter = ActionDefinitionInput["parameters"][number];
@@ -206,20 +211,22 @@ function ConditionEditor({ root, path, label, parameters, onChange }: {
       </div>
     );
   }
-  const left = side(node.left);
-  const right = side(node.right);
   const set = (next: Record<string, unknown>) => onChange(withAt(root, path, next));
   return (
     <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
       <Field label="Parameter">
         <select
-          value={String(left.parameter ?? "")}
+          value={leftChoice(node.left)}
           aria-label={`${label} parameter`}
-          onChange={(e) => set({ ...node, left: { kind: "parameter", parameter: e.target.value } })}
+          onChange={(e) => set({ ...node, left: leftOf(e.target.value) })}
         >
           <option value="">Choose…</option>
           {parameters.map((p) => (
             <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+          ))}
+          {/* p.50's other template, "based on current user" (§644). */}
+          {USER_CHOICES.map(([value, text]) => (
+            <option key={value} value={value}>{text}</option>
           ))}
         </select>
       </Field>
@@ -227,7 +234,7 @@ function ConditionEditor({ root, path, label, parameters, onChange }: {
         <select
           value={String(node.operator ?? "is")}
           aria-label={`${label} operator`}
-          onChange={(e) => set({ ...node, operator: e.target.value })}
+          onChange={(e) => set(withOperator(node, e.target.value))}
         >
           {OPERATORS.map(([value, text]) => (
             <option key={value} value={value}>{text}</option>
@@ -240,17 +247,11 @@ function ConditionEditor({ root, path, label, parameters, onChange }: {
             empty string", and the only way to express "must be
             filled in". */}
         <input
-          value={right.kind === "value" ? String(right.value ?? "") : ""}
-          placeholder="(leave blank for: is empty)"
+          value={rightText(node.right)}
+          placeholder={RIGHT_LIST_OPERATORS.includes(String(node.operator))
+            ? "values, separated by commas" : "(leave blank for: is empty)"}
           aria-label={`${label} value`}
-          onChange={(e) =>
-            set({
-              ...node,
-              right: e.target.value === ""
-                ? { kind: "none" }
-                : { kind: "value", value: e.target.value },
-            })
-          }
+          onChange={(e) => set({ ...node, right: rightOf(String(node.operator ?? "is"), e.target.value) })}
         />
       </Field>
     </div>

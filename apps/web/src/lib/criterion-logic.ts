@@ -108,3 +108,57 @@ export function renamed(config: Config, before: string, after: string): Config {
   }
   return next;
 }
+
+/** p.55's operators whose right-hand value is a list (§644), typed as values
+ * separated by commas. */
+export const RIGHT_LIST_OPERATORS = ["is_included_in", "includes_any"];
+
+/** A condition's right-hand side from what is typed: blank is p.55's "no
+ * value" (is it empty?), and a list operator's is its comma-separated
+ * values. */
+export function rightOf(operator: string, text: string): Config {
+  if (text === "") return { kind: "none" };
+  return { kind: "value", value: valueFor(operator, text) };
+}
+
+/** A typed value as the operator takes it: a list operator's values between
+ * commas, anything else's text as it is. */
+export function valueFor(operator: string, text: string): unknown {
+  if (!RIGHT_LIST_OPERATORS.includes(operator)) return text;
+  return text.split(",").map((v) => v.trim()).filter((v) => v !== "");
+}
+
+/** What the value box shows for a right-hand side. */
+export function rightText(spec: unknown): string {
+  const s = (spec ?? {}) as Config;
+  if (s.kind !== "value") return "";
+  return Array.isArray(s.value) ? s.value.map(String).join(", ") : String(s.value ?? "");
+}
+
+/** A condition with its operator changed, its value re-read for it: a value
+ * typed for "is" becomes a one-item list for "is included in", and back. */
+export function withOperator(node: Config, operator: string): Config {
+  const right = node.right as Config | undefined;
+  return { ...node, operator, right: right?.kind === "value" ? rightOf(operator, rightText(right)) : right };
+}
+
+/** p.50's two condition templates for the left side (§644): a parameter, or
+ * the current user - their id, or the groups they are in (p.140: "Simple
+ * submission criteria can require a specific user ID or group ID"). The
+ * dialog's choice is a parameter's name or one of these. */
+export const USER_CHOICES: [string, string][] = [
+  ["@user:id", "Current user"],
+  ["@user:group_ids", "Current user's groups"],
+];
+
+export function leftOf(choice: string): Config {
+  return choice.startsWith("@user:")
+    ? { kind: "current_user", attribute: choice.slice("@user:".length) }
+    : { kind: "parameter", parameter: choice };
+}
+
+export function leftChoice(spec: unknown): string {
+  const s = (spec ?? {}) as Config;
+  if (s.kind === "current_user") return `@user:${String(s.attribute ?? "id")}`;
+  return String(s.parameter ?? "");
+}

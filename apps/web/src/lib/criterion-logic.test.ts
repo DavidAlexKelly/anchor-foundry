@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_DEPTH, atPath, childrenOf, depthOf, grouped, isGroup, newCondition, renamed, withAdded,
-  withAt, withoutAt,
+  MAX_DEPTH, USER_CHOICES, atPath, childrenOf, depthOf, grouped, isGroup, leftChoice, leftOf,
+  newCondition, renamed, rightOf, rightText, withAdded, withAt, withOperator, withoutAt,
 } from "./criterion-logic";
 
 const cond = (parameter: string) => ({
@@ -80,5 +80,39 @@ describe("p.56's logical operators in the editor (§643)", () => {
     // A current-user side is not a parameter, whatever it is called.
     const user = { left: { kind: "current_user", parameter: "b" }, operator: "is" };
     expect(renamed(user, "b", "x")).toEqual(user);
+  });
+});
+
+describe("p.55's list operators and p.50's current user in the editor (§644)", () => {
+  it("reads a list operator's value as the values typed between commas", () => {
+    expect(rightOf("is_included_in", "Ada, Grace,, ")).toEqual({ kind: "value", value: ["Ada", "Grace"] });
+    expect(rightOf("includes_any", "Ada")).toEqual({ kind: "value", value: ["Ada"] });
+    expect(rightOf("is", "Ada, Grace")).toEqual({ kind: "value", value: "Ada, Grace" });
+    expect(rightOf("each_is", "")).toEqual({ kind: "none" });
+    expect(rightText({ kind: "value", value: ["Ada", "Grace"] })).toBe("Ada, Grace");
+    expect(rightText({ kind: "value", value: 7 })).toBe("7");
+    expect(rightText({ kind: "none" })).toBe("");
+    expect(rightText(undefined)).toBe("");
+  });
+
+  it("re-reads the value when the operator changes", () => {
+    const node = { left: {}, operator: "is", right: { kind: "value", value: "Ada" } };
+    expect(withOperator(node, "is_included_in").right).toEqual({ kind: "value", value: ["Ada"] });
+    const listed = withOperator(node, "includes_any");
+    expect(withOperator(listed, "is").right).toEqual({ kind: "value", value: "Ada" });
+    // No value stays no value.
+    const empty = { operator: "is", right: { kind: "none" } };
+    expect(withOperator(empty, "is_included_in")).toEqual({ operator: "is_included_in", right: { kind: "none" } });
+  });
+
+  it("offers the current user beside the parameters", () => {
+    expect(leftOf("@user:group_ids")).toEqual({ kind: "current_user", attribute: "group_ids" });
+    expect(leftOf("@user:id")).toEqual({ kind: "current_user", attribute: "id" });
+    expect(leftOf("status")).toEqual({ kind: "parameter", parameter: "status" });
+    expect(leftChoice({ kind: "current_user", attribute: "group_ids" })).toBe("@user:group_ids");
+    expect(leftChoice({ kind: "current_user" })).toBe("@user:id");
+    expect(leftChoice({ kind: "parameter", parameter: "status" })).toBe("status");
+    expect(leftChoice(undefined)).toBe("");
+    expect(USER_CHOICES.map(([v]) => leftChoice(leftOf(v)))).toEqual(USER_CHOICES.map(([v]) => v));
   });
 });

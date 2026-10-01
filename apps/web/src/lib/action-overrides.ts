@@ -36,6 +36,7 @@
  */
 
 import type { ActionOverrideBlock, ActionParameter } from "@platform/types";
+import { rightText, valueFor } from "./criterion-logic";
 
 export type OverrideBlock = ActionOverrideBlock;
 
@@ -231,7 +232,7 @@ export function conditionDraft(condition: unknown): ConditionDraft {
       ? CURRENT_USER
       : String(left.parameter ?? ""),
     operator: String(c.operator ?? "is"),
-    value: right.kind === "value" ? String(right.value ?? "") : "",
+    value: rightText(right),
   };
 }
 
@@ -247,7 +248,8 @@ export function conditionValue(draft: ConditionDraft): Record<string, unknown> {
   return {
     left,
     operator: draft.operator || "is",
-    right: { kind: "value", value: draft.value },
+    // A list operator's values between commas (§644), as the criteria take them.
+    right: { kind: "value", value: valueFor(draft.operator || "is", draft.value) },
   };
 }
 
