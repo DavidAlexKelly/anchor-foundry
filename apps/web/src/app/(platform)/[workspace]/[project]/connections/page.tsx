@@ -10,6 +10,7 @@ import {
   sync as syncApi,
 } from "@/lib/api";
 import { trustLines, usesOidc } from "@/lib/connection-oidc";
+import { stepLabel, summary as diagnoseSummary } from "@/lib/diagnose";
 import { Dialog, Field } from "@/components/dialog";
 import { EgressDialog } from "@/components/egress-panel";
 import { ExportsPanel } from "@/components/exports-panel";
@@ -953,6 +954,58 @@ function ScheduledSyncDialog({
   );
 }
 
+/** TOC §6's *Where to start*, run on one connection (§646): each step, what
+ * it found, and for the one that failed, what to do. Run once on opening, and
+ * again on request, since the fix is usually made somewhere else. */
+function DiagnoseDialog({
+  workspaceId,
+  projectId,
+  connection,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  connection: Connection;
+  onClose: () => void;
+}) {
+  const run = useMutation({
+    mutationFn: () => connApi.diagnose(workspaceId, projectId, connection.id),
+  });
+  useEffect(() => {
+    run.mutate();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const result = run.data;
+  return (
+    <Dialog open title={`Diagnose · ${connection.name}`} onClose={onClose}>
+      {run.isPending && <p className="state">Checking…</p>}
+      {run.isError && <p className="state error">{String(run.error)}</p>}
+      {result && (
+        <>
+          <p data-testid="diagnose-summary" className={result.ok ? "state" : "state error"}>
+            {diagnoseSummary(result)}
+          </p>
+          <ol className="diagnose-steps" data-testid="diagnose-steps">
+            {result.steps.map((step) => (
+              <li key={step.name} data-step={step.name} data-status={step.status}>
+                <strong>{stepLabel(step)}</strong>{" "}
+                <span className="chip">{step.status}</span>
+                <div className="field-hint">{step.detail}</div>
+                {step.hint && <div data-testid={`diagnose-hint-${step.name}`}>{step.hint}</div>}
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+      <div className="row-actions">
+        <button className="btn quiet" disabled={run.isPending} onClick={() => run.mutate()}>
+          Run again
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 function ConnectionRow({
   workspaceId,
   projectId,
@@ -977,6 +1030,7 @@ function ConnectionRow({
   const [syncFrom, setSyncFrom] = useState<DiscoveredTable | null>(null);
   const [showScheduledSync, setShowScheduledSync] = useState(false);
   const [showNetworking, setShowNetworking] = useState(false);
+  const [showDiagnose, setShowDiagnose] = useState(false);
   // **This was two statements and one of them ran on every render** (§264): a
   // concise-body arrow ends at the first semicolon, so the sync-health line was
   // never part of `refresh` and was instead a query invalidation fired from
@@ -1062,6 +1116,15 @@ function ConnectionRow({
             >
               {test.isPending ? "Testing…" : "Test"}
             </button>
+            {/* TOC §6's *Where to start*, step by step (§646). */}
+            <button
+              className="btn quiet"
+              data-testid={`diagnose-${connection.name}`}
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              onClick={() => setShowDiagnose(true)}
+            >
+              Diagnose
+            </button>
             {/* p.142's own name for this: "Select the Explore link". It was
                 "Schema", which described what the dialog could do rather than
                 what somebody comes here to do — and the dialog now shows the
@@ -1131,6 +1194,14 @@ function ConnectionRow({
               setShowSync(false);
               setSyncFrom(null);
             }}
+          />
+        )}
+        {showDiagnose && (
+          <DiagnoseDialog
+            workspaceId={workspaceId}
+            projectId={projectId}
+            connection={connection}
+            onClose={() => setShowDiagnose(false)}
           />
         )}
         {showExplore && (

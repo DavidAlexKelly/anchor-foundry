@@ -554,6 +554,11 @@ export const connections = {
       `/workspaces/${wid}/projects/${pid}/connections/${cid}/test`,
       { method: "POST", body: JSON.stringify({}) },
     ),
+  diagnose: (wid: string, pid: string, cid: string) =>
+    request<import("./types").DiagnoseResult>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/diagnose`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
   discover: (wid: string, pid: string, cid: string) =>
     request<import("./types").DiscoveredTable[]>(
       `/workspaces/${wid}/projects/${pid}/connections/${cid}/discover`,

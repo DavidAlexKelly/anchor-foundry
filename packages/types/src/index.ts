@@ -1097,6 +1097,19 @@ export interface SourceTypeInfo {
   reports_relations: boolean;
 }
 
+/** §646: one step of TOC §6's *Where to start*, run on a connection. */
+export interface DiagnoseStep {
+  name: string;
+  status: "ok" | "failed" | "skipped" | "info";
+  detail: string;
+  hint: string | null;
+}
+
+export interface DiagnoseResult {
+  ok: boolean;
+  steps: DiagnoseStep[];
+}
+
 export interface ConnectionTestResult {
   ok: boolean;
   error: string | null;
