@@ -908,7 +908,8 @@ def test_the_panel_adds_and_names_a_series(page, api, sites) -> None:
     props = mod.definition()["layout"]["chart"]["props"]
     assert props["series"] == [{"aggregate": "sum", "measure": "capacity", "name": "Capacity",
                                 "axis": "right", "objectSetVariable": None,
-                                "dimension": None, "kind": None}], props
+                                "dimension": None, "kind": None,
+                                "drilldownVariable": None}], props
     assert (props["seriesName"], props["legendPosition"]) == ("Sites", "top"), props
     page.get_by_test_id("chart-series-remove").click()
     page.get_by_role("button", name="Save", exact=True).click()
@@ -1020,15 +1021,120 @@ def test_the_panel_points_a_series_at_another_set(page, api, sites, tickets) -> 
     props = mod.definition()["layout"]["chart"]["props"]
     assert props["series"] == [{"aggregate": "sum", "measure": "hours", "name": "",
                                 "axis": "right", "objectSetVariable": "v_tickets",
-                                "dimension": "state", "kind": None}], props
+                                "dimension": "state", "kind": None,
+                                "drilldownVariable": None}], props
     # Back to the chart's set lets go of what was the tickets'.
     page.get_by_test_id("chart-series-set").select_option("")
     page.get_by_role("button", name="Save", exact=True).click()
     eventually(lambda: mod.definition()["layout"]["chart"]["props"]["series"],
                lambda got: got == [{"aggregate": "sum", "measure": None, "name": "",
                                     "axis": "right", "objectSetVariable": None,
-                                    "dimension": None, "kind": None}],
+                                    "dimension": None, "kind": None,
+                                    "drilldownVariable": None}],
                what="the series back on the chart's set")
+
+
+# ---- p.282's Selection as filter per layer (§628) ---------------------------
+
+def build_selecting(api, sites, tickets, name: str, *, chart_kind: str = "bar",
+                    layer_kind: str | None = None) -> Module:
+    """Sites counted by status, with a tickets layer by state that narrows the
+    tickets and not the sites. Each set has a table showing what it holds."""
+    mod = Module(api, name, beside=sites)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "chart": {"resolvedName": "CanvasChart", "props": {
+                "objectSetVariable": "v_set", "kind": chart_kind, "dimension": "status",
+                "drilldownVariable": "v_clauses",
+                "series": [{"aggregate": "count", "objectSetVariable": "v_tickets",
+                            "dimension": "state", "drilldownVariable": "v_tclauses",
+                            "kind": layer_kind}]}},
+            "sites": {"resolvedName": "CanvasObjectTable", "props": {
+                "objectSetVariable": "v_picked", "columns": "id,status", "pageSize": 50,
+                "title": "Picked sites"}},
+            "tix": {"resolvedName": "CanvasObjectTable", "props": {
+                "objectSetVariable": "v_tpicked", "columns": "id,state", "pageSize": 50,
+                "title": "Picked tickets"}},
+        }),
+        "variables": {
+            "v_set": {"id": "v_set", "kind": "object_set", "label": "Sites",
+                      "object_set": object_set(sites.site_type_id)},
+            "v_tickets": {"id": "v_tickets", "kind": "object_set", "label": "Tickets",
+                          "object_set": object_set(tickets.ticket_type_id)},
+            "v_clauses": {"id": "v_clauses", "kind": "array", "label": "Drilled"},
+            "v_tclauses": {"id": "v_tclauses", "kind": "array", "label": "Ticket picks"},
+            "v_picked": {"id": "v_picked", "kind": "object_set", "label": "Picked",
+                         "derivation": {"transform": "narrow_set",
+                                        "inputs": ["v_set", "v_clauses"]}},
+            "v_tpicked": {"id": "v_tpicked", "kind": "object_set", "label": "Ticket picked",
+                          "derivation": {"transform": "narrow_set",
+                                         "inputs": ["v_tickets", "v_tclauses"]}},
+        },
+        "events": {},
+    })
+    return mod
+
+
+def table_ids(page, title: str) -> list[str]:
+    """The ids a table shows: the sites' table is first in the layout, the
+    tickets' second."""
+    grid = page.locator(".data-grid").nth(0 if title == "Picked sites" else 1)
+    return sorted(c.strip() for c in grid.locator("tbody tr td:first-child").all_text_contents())
+
+
+def test_a_layer_selects_into_its_own_filter(page, api, sites, tickets) -> None:
+    mod = build_selecting(api, sites, tickets, "Chart XY layer selection")
+    open_module(page, mod)
+    eventually(lambda: table_ids(page, "Picked tickets"), lambda got: len(got) == 4,
+               what="every ticket before a click")
+    # A click on the tickets' bar narrows the tickets by state ...
+    segment(page, "open", "Count · Tickets").click()
+    eventually(lambda: table_ids(page, "Picked tickets"), lambda got: got == ["T1", "T2"],
+               what="the open tickets")
+    expect(segment(page, "open", "Count · Tickets")).to_have_attribute("aria-pressed", "true")
+    # ... and leaves the sites, which it says nothing about, alone.
+    assert table_ids(page, "Picked sites") == ["S1", "S2", "S3", "S4"]
+    expect(segment(page, "open", "Count")).to_have_attribute("aria-pressed", "false")
+    # The sites' bar narrows the sites by status, as the chart always has.
+    segment(page, "closed", "Count").click()
+    eventually(lambda: table_ids(page, "Picked sites"), lambda got: got == ["S4"],
+               what="the closed site")
+    assert table_ids(page, "Picked tickets") == ["T1", "T2"]
+    # A second click on the tickets' picked bar lets it go.
+    segment(page, "open", "Count · Tickets").click()
+    eventually(lambda: table_ids(page, "Picked tickets"), lambda got: len(got) == 4,
+               what="every ticket again")
+
+
+@pytest.mark.parametrize("chart_kind,layer_kind", [("bar", "line"), ("line", None)])
+def test_a_line_layer_selects_into_its_own_filter(
+        page, api, sites, tickets, chart_kind, layer_kind) -> None:
+    """A line over bars, and a chart of lines: a dot selects as a bar does."""
+    mod = build_selecting(api, sites, tickets, f"Chart XY line selection {chart_kind}",
+                          chart_kind=chart_kind, layer_kind=layer_kind)
+    open_module(page, mod)
+    eventually(lambda: table_ids(page, "Picked tickets"), lambda got: len(got) == 4,
+               what="every ticket before a click")
+    dot(page, "Count · Tickets", "closed").click()
+    eventually(lambda: table_ids(page, "Picked tickets"), lambda got: got == ["T3"],
+               what="the closed ticket")
+    assert table_ids(page, "Picked sites") == ["S1", "S2", "S3", "S4"]
+
+
+def test_the_panel_points_a_series_selection_at_a_variable(page, api, sites, tickets) -> None:
+    mod = build_selecting(api, sites, tickets, "Chart XY layer selection panel")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    drill = page.get_by_test_id("chart-series-drill")
+    expect(drill).to_have_value("v_tclauses")
+    expect(drill.locator("option")).to_have_text(
+        ["Filters as the chart does", "Writes Drilled", "Writes Ticket picks"])
+    drill.select_option("")
+    save(page)
+    assert mod.definition()["layout"]["chart"]["props"]["series"][0][
+        "drilldownVariable"] is None
 
 
 # ---- p.280's Layer type: bars and a line on one chart (§626) ----------------

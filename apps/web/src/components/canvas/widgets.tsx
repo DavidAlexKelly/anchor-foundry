@@ -340,8 +340,8 @@ import {
 } from "./filter-sql";
 import { Chart, MultiLineChart, PieChart, SegmentedBarChart, toPoints } from "./charts";
 import {
-  MAX_SERIES, axisSides, layerKinds, mergeSeries, seriesName as seriesNameOf, seriesOf,
-  seriesRequests, seriesSource,
+  MAX_SERIES, axisSides, drillClauses, drilledLabel as drilledOn, layerKinds, mergeSeries,
+  seriesName as seriesNameOf, seriesOf, seriesRequests, seriesSource,
 } from "./chart-series";
 import {
   SEGMENT_LEGEND_POSITIONS, SEGMENT_MODES, segmentLegendPositionOf, segmentModeOf, segmentedFrom,
@@ -15014,7 +15014,7 @@ export function CanvasChart({
   const filterValue = useCanvasParameter(filterParameter);
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending, resolved, declared } = useCanvasVariables();
-  const { set: setParameter } = useCanvasParameters();
+  const { set: setParameter, values: parameterValues } = useCanvasParameters();
   const drilled = useCanvasParameter(drilldownVariable);
   // A time series set beats an object set beats a dataset. One order, stated
   // once, rather than three sources that can all be half-configured and a
@@ -15037,13 +15037,7 @@ export function CanvasChart({
   // What is currently drilled into, read back out of the variable the chart
   // writes rather than held here as a second copy - so the chart reflects the
   // document's state, including a clause something else set.
-  const drilledLabel = (() => {
-    for (const clause of Array.isArray(drilled) ? drilled : []) {
-      const c = clause as { property?: string; op?: string; value?: unknown };
-      if (c.property === dimension && c.op === "eq") return String(c.value);
-    }
-    return null;
-  })();
+  const drilledLabel = drilledOn(drilled, dimension ?? null);
 
   const sql = chartQuery({
     kind, dimension, measure, aggregate,
@@ -15136,10 +15130,7 @@ export function CanvasChart({
         // is no way back out from inside the chart, and a filter you cannot
         // remove is a filter you have to remember you applied.
         onSelect: (label: string) =>
-          setParameter(
-            drilldownVariable!,
-            label === drilledLabel ? [] : [{ property: dimension, op: "eq", value: label }],
-          ),
+          setParameter(drilldownVariable!, drillClauses(dimension!, label, drilledLabel)),
       }
     : undefined;
 
@@ -15172,6 +15163,7 @@ export function CanvasChart({
     if (!request || !data || !source) return [];
     return [{
       spec,
+      source,
       name: seriesNameOf(spec, source.key !== objectSetVariable
         ? declared[source.key]?.label ?? source.key : undefined),
       points: data.groups.map((g) => ({
@@ -15187,6 +15179,18 @@ export function CanvasChart({
       [firstName, ...drawnExtras.map((e) => e.name)])
     : null;
   // Only a series that asked is waited for: a disabled query stays pending.
+  // p.282's Selection as filter per layer (§628): a series naming its own
+  // variable narrows it on its own property; the rest narrow the chart's.
+  const drills = multi ? [chartDrill, ...drawnExtras.map(({ spec, source }) => {
+    const variable = spec.drilldownVariable;
+    if (!variable) return chartDrill;
+    const selected = drilledOn(parameterValues[variable], source.dimension);
+    return {
+      selected,
+      onSelect: (label: string) =>
+        setParameter(variable, drillClauses(source.dimension, label, selected)),
+    };
+  })] : undefined;
   // p.280's Layer type (§626): a chart whose series are drawn as both bars
   // and lines is drawn as bars with the lines across them.
   const kinds = layerKinds(drawnKind === "line" ? "line" : "bar",
@@ -15293,6 +15297,7 @@ export function CanvasChart({
             row.map((v) => (Number.isNaN(v) ? 0 : v))) }}
           mode="grouped"
           kinds={mixed ? kinds : undefined}
+          drills={drills}
           sides={sides}
           showLegend={showLegend !== false}
           titles={titles}
@@ -15305,6 +15310,7 @@ export function CanvasChart({
       {multi && drawnKind === "line" && !mixed && (
         <MultiLineChart
           data={multi}
+          drills={drills}
           sides={sides}
           axis={axis}
           nulls={nulls}
@@ -15741,6 +15747,7 @@ function ChartSettings() {
           twoAxes={multipleAxes === true}
           sets={setVariables.map((v) => ({ id: v.id, label: v.label }))}
           chartSet={objectSetVariable}
+          clauses={clauseVariables.map((v) => ({ id: v.id, label: v.label }))}
           setProp={setProp as (fn: (p: Record<string, unknown>) => void) => void}
         />
       )}
@@ -15875,8 +15882,11 @@ function ChartSettings() {
  * panel. The Measure above is the first series; these are the rest. */
 function ChartSeriesFields({
   segmented, series, firstName, firstDefault, numbers, names, showLegend, legend, twoAxes,
-  sets, chartSet, setProp,
+  sets, chartSet, clauses, setProp,
 }: {
+  /** p.282's Selection as filter per layer (§628): the array variables a
+   * series may write its selection into. */
+  clauses: { id: string; label: string }[];
   /** p.283's Use multiple value axes (§542). */
   twoAxes: boolean;
   /** p.280's layer Data input (§625): the object set variables a series may
@@ -16017,6 +16027,16 @@ function ChartSeriesFields({
               <option value="right">Right axis</option>
             </select>
           )}
+          <select
+            aria-label={`Series ${i + 2} selection filter`}
+            data-testid="chart-series-drill"
+            value={spec.drilldownVariable ?? ""}
+            onChange={(e) => write(specs.map((s, j) =>
+              (j === i ? { ...s, drilldownVariable: e.target.value || null } : s)))}
+          >
+            <option value="">Filters as the chart does</option>
+            {clauses.map((v) => <option key={v.id} value={v.id}>Writes {v.label}</option>)}
+          </select>
           <input
             type="text"
             aria-label={`Series ${i + 2} name`}
@@ -16046,7 +16066,8 @@ function ChartSeriesFields({
         disabled={specs.length >= MAX_SERIES - 1}
         onClick={() =>
           write([...specs, { aggregate: "count", measure: null, name: "", axis: "right",
-                             objectSetVariable: null, dimension: null, kind: null }])}
+                             objectSetVariable: null, dimension: null, kind: null,
+                             drilldownVariable: null }])}
       >
         Add a series
       </button>

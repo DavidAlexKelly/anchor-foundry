@@ -581,8 +581,9 @@ NESTED_REFERENCE_PROPS: dict[str, tuple[str, ...]] = {
     # object set variable to be used as input", per layer. A series reading a
     # set of its own must have that set resolved to be asked at all, and must
     # count as a use of it, or deleting the set leaves a series drawing
-    # nothing under a legend entry that still names it.
-    "series": ("objectSetVariable",),
+    # nothing under a legend entry that still names it. p.282's Selection as
+    # filter per layer (§628) names the array variable a click writes into.
+    "series": ("objectSetVariable", "drilldownVariable"),
 }
 
 
