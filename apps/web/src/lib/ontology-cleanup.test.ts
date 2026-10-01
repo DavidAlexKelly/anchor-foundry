@@ -19,6 +19,7 @@ import {
   snoozeText,
   stillInUse,
   CUSTOM_FLAGS_NOTE, flagRows, movedFlag, toggledFlag,
+  daysOf, patternOf,
 } from "./ontology-cleanup";
 import type { CleanupCandidate } from "./types";
 
@@ -209,5 +210,35 @@ describe("p.72's flag setup (§619)", () => {
 
   it("says what a custom set gives up", () => {
     expect(CUSTOM_FLAGS_NOTE).toContain("not turned on");
+  });
+});
+
+describe("p.74's two values, per person (§630)", () => {
+  it("says your days and your pattern in the hints, and the defaults otherwise", () => {
+    const mine = { name_pattern: "UAT - |Testing - ", stale_days: 7 };
+    expect(flagHint("stale_source", mine)).toBe("No mapping has synced in the last 7 days.");
+    expect(flagHint("name_looks_temporary", mine)).toBe("The name matches UAT - |Testing - .");
+    const none = { name_pattern: null, stale_days: null };
+    expect(flagHint("stale_source", none)).toBe(FLAG_LABELS.stale_source!.hint);
+    expect(flagHint("name_looks_temporary", none)).toBe(FLAG_LABELS.name_looks_temporary!.hint);
+    // Other flags are not about either value.
+    expect(flagHint("unused", mine)).toBe(FLAG_LABELS.unused!.hint);
+  });
+
+  it("sends a blank pattern as the default, and a pattern as typed", () => {
+    expect(patternOf("   ")).toBeNull();
+    expect(patternOf("")).toBeNull();
+    // p.74's own example ends in a space, which is part of the pattern.
+    expect(patternOf("UAT - ")).toBe("UAT - ");
+  });
+
+  it("sends whole days from 1 to 3650, blank as the default, and refuses the rest", () => {
+    expect(daysOf("")).toBeNull();
+    expect(daysOf(" 7 ")).toBe(7);
+    expect(daysOf("1")).toBe(1);
+    expect(daysOf("3650")).toBe(3650);
+    for (const bad of ["0", "3651", "7.5", "-3", "seven", "1e3"]) {
+      expect(daysOf(bad)).toBeUndefined();
+    }
   });
 });

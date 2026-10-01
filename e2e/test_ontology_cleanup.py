@@ -301,3 +301,53 @@ def test_a_set_with_none_of_a_type_s_flags_leaves_it_out(page, own_setup) -> Non
     page.get_by_test_id("cleanup-settings-save").click()
     expect(page.get_by_test_id("cleanup-settings-saved")).to_be_visible()
     expect(row(page, mod)).to_have_count(0)
+
+
+# ---- p.74's two values, per person (§630) ------------------------------------
+def test_your_pattern_decides_what_is_marked_temporary(page, own_setup) -> None:
+    """p.74: "Display name regex matches string … Supports ECMA (JavaScript)
+    regex syntax." With only that flag on, the candidate - named `[test]
+    Leftover …` - is in the queue by the default markers, out of it under a
+    pattern it does not match, and back under one it does."""
+    mod = own_setup
+    open_queue(page, mod)
+    settings = page.get_by_test_id("cleanup-settings")
+    settings.locator("summary").click()
+    page.get_by_test_id("cleanup-custom-set").check()
+    for flag in ("unused", "no_source", "no_description"):
+        page.get_by_test_id(f"cleanup-setting-{flag}-on").uncheck()
+    page.get_by_test_id("cleanup-settings-save").click()
+    expect(page.get_by_test_id("cleanup-settings-saved")).to_be_visible()
+    expect(headline(page, mod)).to_have_text("Marked temporary")
+
+    page.get_by_test_id("cleanup-name-pattern").fill("^UAT - ")
+    page.get_by_test_id("cleanup-settings-save").click()
+    expect(page.get_by_test_id("cleanup-settings-saved")).to_be_visible()
+    expect(row(page, mod)).to_have_count(0)
+
+    page.get_by_test_id("cleanup-name-pattern").fill("Leftover [0-9a-f]+$")
+    page.get_by_test_id("cleanup-settings-save").click()
+    expect(headline(page, mod)).to_have_text("Marked temporary")
+    expect(row(page, mod)).to_contain_text("The name matches Leftover [0-9a-f]+$.")
+
+    # Kept across a reload, with the custom flags it was saved beside.
+    open_queue(page, mod)
+    settings.locator("summary").click()
+    expect(page.get_by_test_id("cleanup-name-pattern")).to_have_value("Leftover [0-9a-f]+$")
+
+
+def test_a_pattern_or_days_that_cannot_be_used_are_said(page, own_setup) -> None:
+    mod = own_setup
+    open_queue(page, mod)
+    page.get_by_test_id("cleanup-settings").locator("summary").click()
+    days = page.get_by_test_id("cleanup-stale-days")
+    expect(days).to_have_attribute("placeholder", "30")
+    days.fill("0")
+    expect(page.get_by_test_id("cleanup-stale-days-problem")).to_be_visible()
+    expect(page.get_by_test_id("cleanup-settings-save")).to_be_disabled()
+    days.fill("7")
+    expect(page.get_by_test_id("cleanup-stale-days-problem")).to_have_count(0)
+    # A pattern only the server can judge is refused by it, in words.
+    page.get_by_test_id("cleanup-name-pattern").fill("(unclosed")
+    page.get_by_test_id("cleanup-settings-save").click()
+    expect(page.get_by_test_id("cleanup-settings")).to_contain_text("not a pattern")

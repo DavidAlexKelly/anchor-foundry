@@ -1403,13 +1403,23 @@ class CleanupSettings(BaseModel):
     until you choose otherwise, new flags included."""
 
     flags: list[str] | None = Field(default=None, max_length=32)
+    #: p.74's "Display name regex matches string" and "Datasource not updated
+    #: in [x] days" (§630), each `null` for its default.
+    name_pattern: str | None = None
+    stale_days: int | None = None
     #: The default set's order, so a panel can offer every flag without a copy
     #: of the list of its own.
     available: list[str] = Field(default_factory=lambda: list(cleanup_service.FLAG_PRIORITY))
+    #: The defaults the two settings fall back on, for a panel to show.
+    default_stale_days: int = cleanup_service.STALE_SOURCE_DAYS
 
 
 class CleanupSettingsIn(BaseModel):
+    """The whole setup: a setting left out is its default."""
+
     flags: list[str] | None = Field(default=None, max_length=32)
+    name_pattern: str | None = Field(default=None, max_length=1000)
+    stale_days: int | None = None
 
 
 @router.get("/ontology-cleanup/settings", response_model=CleanupSettings)
@@ -1418,9 +1428,9 @@ async def ontology_cleanup_settings(
 ) -> CleanupSettings:
     """Your cleanup flag setup (p.72). Editor, as the queue it tunes is."""
     async with user_connection(access.auth.user_id) as conn:
-        flags = await cleanup_service.settings(
+        mine = await cleanup_service.settings(
             conn, access.workspace_id, user_id=access.auth.user_id)
-    return CleanupSettings(flags=flags)
+    return CleanupSettings(**mine)
 
 
 @router.put("/ontology-cleanup/settings", response_model=CleanupSettings)
@@ -1435,13 +1445,14 @@ async def save_ontology_cleanup_settings(
     """
     async with user_connection(access.auth.user_id) as conn:
         try:
-            flags = await cleanup_service.save_settings(
-                conn, access.workspace_id, user_id=access.auth.user_id, flags=body.flags)
+            mine = await cleanup_service.save_settings(
+                conn, access.workspace_id, user_id=access.auth.user_id, flags=body.flags,
+                name_pattern=body.name_pattern, stale_days=body.stale_days)
         except cleanup_service.SettingsError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
             ) from exc
-    return CleanupSettings(flags=flags)
+    return CleanupSettings(**mine)
 
 
 @router.put(

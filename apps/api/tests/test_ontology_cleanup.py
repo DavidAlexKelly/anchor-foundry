@@ -722,10 +722,13 @@ def test_the_page_keeps_the_worst_rather_than_the_first_found(
 
 
 # ---- p.72's Configure Ontology cleanup (§619) ----------------------------------
-def settings(client: TestClient, fx: Fixture, sub: str, flags=..., status_code: int = 200):
+def settings(client: TestClient, fx: Fixture, sub: str, flags=..., status_code: int = 200,
+             **more):
+    """Read a setup, or - given `flags` - keep one; `more` carries p.74's
+    `name_pattern` and `stale_days` (§630)."""
     url = f"{wbase(fx)}/ontology-cleanup/settings"
     r = (client.get(url, headers=hdr(sub)) if flags is ... else
-         client.put(url, headers=hdr(sub), json={"flags": flags}))
+         client.put(url, headers=hdr(sub), json={"flags": flags, **more}))
     assert r.status_code == status_code, r.text
     return r.json()
 
@@ -799,3 +802,76 @@ def test_a_setup_names_each_flag_once_and_only_flags(
 def test_a_viewer_has_no_cleanup_setup(client: TestClient, fx: Fixture) -> None:
     settings(client, fx, fx.viewer_sub, status_code=403)
     settings(client, fx, fx.viewer_sub, ["unused"], status_code=403)
+
+
+# ---- p.74's parameterised flags, per person (§630) ---------------------------
+def test_your_pattern_decides_what_looks_temporary(
+    client: TestClient, fx: Fixture, owner_setup: str,
+) -> None:
+    """p.74: "if a common pattern at your Organization is to mark object types
+    in user acceptance testing with the prefix UAT - or Testing - , you would
+    use the regex UAT - |Testing - to find all object types matching this
+    pattern." Yours replaces the default markers, and is yours alone."""
+    uat = a_type(client, fx, display_name=f"UAT - Vessels {uuid.uuid4().hex[:6]}")
+    marked = a_type(client, fx, display_name=f"[test] Ports {uuid.uuid4().hex[:6]}")
+    lower = a_type(client, fx, display_name=f"uat - Docks {uuid.uuid4().hex[:6]}")
+
+    saved = settings(client, fx, owner_setup, None, name_pattern="UAT - |Testing - ")
+    assert saved["name_pattern"] == "UAT - |Testing - "
+    # A pattern is not a custom flag set: the default's flags still reach you.
+    assert saved["flags"] is None
+    mine = queue(client, fx, sub=owner_setup)
+    assert "name_looks_temporary" in entry(mine, uat)["flags"]
+    assert "name_looks_temporary" not in entry(mine, marked)["flags"]
+    # ECMA's default: case matters.
+    assert "name_looks_temporary" not in entry(mine, lower)["flags"]
+    # The editor's queue keeps the default markers.
+    theirs = queue(client, fx)
+    assert "name_looks_temporary" not in entry(theirs, uat)["flags"]
+    assert "name_looks_temporary" in entry(theirs, marked)["flags"]
+
+
+def test_your_days_decide_what_is_stale(
+    client: TestClient, fx: Fixture, owner_setup: str,
+) -> None:
+    """p.74's "Datasource not updated in [x] days", with your x."""
+    type_id = a_type(client, fx)
+    source_id = give_it_a_source(client, fx, type_id)
+    sql("UPDATE object_type_sources SET sync_status = 'ok', "
+        "last_synced_at = now() - interval '10 days' WHERE id = %s", (source_id,))
+    assert "stale_source" not in entry(queue(client, fx, sub=owner_setup), type_id)["flags"]
+    saved = settings(client, fx, owner_setup, None, stale_days=7)
+    assert saved["stale_days"] == 7
+    assert "stale_source" in entry(queue(client, fx, sub=owner_setup), type_id)["flags"]
+    assert settings(client, fx, owner_setup)["default_stale_days"] == cleanup.STALE_SOURCE_DAYS
+
+
+def test_a_setup_that_is_all_defaults_keeps_nothing(
+    client: TestClient, fx: Fixture, owner_setup: str,
+) -> None:
+    settings(client, fx, owner_setup, None, name_pattern="x", stale_days=5)
+    # A blank pattern is the default, not a pattern matching everything.
+    back = settings(client, fx, owner_setup, None, name_pattern="  ")
+    assert (back["name_pattern"], back["stale_days"], back["flags"]) == (None, None, None)
+    with psycopg.connect(ADMIN_DSN) as conn:
+        left = conn.execute(
+            "SELECT count(*) FROM ontology_cleanup_settings WHERE workspace_id = %s",
+            (fx.workspace,)).fetchone()[0]
+    assert left == 0
+
+
+@pytest.mark.parametrize("more, match", [
+    ({"name_pattern": "(unclosed"}, "not a pattern"),
+    ({"name_pattern": "x" * 201}, "at most 200"),
+    ({"stale_days": 0}, "between 1 and 3650"),
+    ({"stale_days": 3651}, "between 1 and 3650"),
+])
+def test_a_pattern_or_days_that_cannot_be_used_is_refused(
+    client: TestClient, fx: Fixture, owner_setup: str, more, match,
+) -> None:
+    r = settings(client, fx, owner_setup, None, status_code=422, **more)
+    assert match in str(r)
+    # Refused whole: nothing of it was kept.
+    assert settings(client, fx, owner_setup) | {"available": None} == {
+        "flags": None, "name_pattern": None, "stale_days": None, "available": None,
+        "default_stale_days": cleanup.STALE_SOURCE_DAYS}

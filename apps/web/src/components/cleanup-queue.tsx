@@ -56,6 +56,13 @@ export function CleanupQueue({
       }),
   });
 
+  // Your setup (§630), for hints that say your days and your pattern. Shared
+  // with the settings panel, so saving there updates these.
+  const setup = useQuery({
+    queryKey: ["ontology-cleanup-settings", workspaceId],
+    queryFn: () => objApi.cleanupSettings(workspaceId),
+  });
+
   async function refresh() {
     await client.invalidateQueries({ queryKey: ["ontology-cleanup"] });
   }
@@ -147,7 +154,7 @@ export function CleanupQueue({
                 </td>
                 <td>
                   <strong data-testid="cleanup-headline">{headline(row)}</strong>
-                  <div className="slug">{flagHint(row.flags[0] ?? "")}</div>
+                  <div className="slug">{flagHint(row.flags[0] ?? "", setup.data)}</div>
                   {alsoText(row) && (
                     <div className="slug" data-testid="cleanup-also">
                       {alsoText(row)}

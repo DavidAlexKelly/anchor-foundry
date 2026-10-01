@@ -18,7 +18,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { objects as objApi } from "@/lib/api";
 import {
-  CUSTOM_FLAGS_NOTE, flagHint, flagLabel, flagRows, movedFlag, toggledFlag,
+  CUSTOM_FLAGS_NOTE, DEFAULT_PATTERN_NOTE, daysOf, flagHint, flagLabel, flagRows, movedFlag,
+  patternOf, toggledFlag,
 } from "@/lib/ontology-cleanup";
 
 export function CleanupSettings({ workspaceId }: { workspaceId: string }) {
@@ -29,13 +30,22 @@ export function CleanupSettings({ workspaceId }: { workspaceId: string }) {
   });
   // `undefined` until the saved setup arrives; `null` is the default set.
   const [draft, setDraft] = useState<string[] | null | undefined>(undefined);
+  // p.74's two values (§630), as typed; blank is each one's default.
+  const [pattern, setPattern] = useState("");
+  const [days, setDays] = useState("");
   const [done, setDone] = useState(false);
   useEffect(() => {
-    if (saved.data && draft === undefined) setDraft(saved.data.flags);
+    if (saved.data && draft === undefined) {
+      setDraft(saved.data.flags);
+      setPattern(saved.data.name_pattern ?? "");
+      setDays(saved.data.stale_days === null ? "" : String(saved.data.stale_days));
+    }
   }, [saved.data, draft]);
 
   const save = useMutation({
-    mutationFn: (flags: string[] | null) => objApi.saveCleanupSettings(workspaceId, flags),
+    mutationFn: (flags: string[] | null) => objApi.saveCleanupSettings(workspaceId, {
+      flags, name_pattern: patternOf(pattern), stale_days: daysOf(days) ?? null,
+    }),
     onSuccess: async (next) => {
       client.setQueryData(["ontology-cleanup-settings", workspaceId], next);
       await client.invalidateQueries({ queryKey: ["ontology-cleanup"] });
@@ -50,6 +60,7 @@ export function CleanupSettings({ workspaceId }: { workspaceId: string }) {
     setDraft(next);
     setDone(false);
   };
+  const badDays = daysOf(days) === undefined;
 
   return (
     <details className="cleanup-settings" data-testid="cleanup-settings">
@@ -73,7 +84,7 @@ export function CleanupSettings({ workspaceId }: { workspaceId: string }) {
       <ol className="cleanup-flag-list">
         {flagRows(draft, available).map(({ flag, on }, index) => (
           <li key={flag} data-testid={`cleanup-setting-${flag}`}>
-            <label title={flagHint(flag)}>
+            <label title={flagHint(flag, saved.data)}>
               <input
                 type="checkbox"
                 checked={on}
@@ -97,9 +108,40 @@ export function CleanupSettings({ workspaceId }: { workspaceId: string }) {
           </li>
         ))}
       </ol>
+      {/* p.74's "Display name regex matches string" and "Datasource not
+          updated in [x] days" (§630). */}
+      <label className="field">
+        <span className="field-label">Marked temporary: name pattern</span>
+        <input
+          type="text"
+          data-testid="cleanup-name-pattern"
+          value={pattern}
+          placeholder="\[test|deprecated\]"
+          onChange={(e) => { setPattern(e.target.value); setDone(false); }}
+        />
+        <span className="field-hint">
+          A regular expression, matched with case. {DEFAULT_PATTERN_NOTE}
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Not synced lately: days</span>
+        <input
+          type="text"
+          inputMode="numeric"
+          data-testid="cleanup-stale-days"
+          value={days}
+          placeholder={String(saved.data.default_stale_days)}
+          onChange={(e) => { setDays(e.target.value); setDone(false); }}
+        />
+        {badDays && (
+          <span className="field-hint" data-testid="cleanup-stale-days-problem">
+            A whole number of days, from 1 to 3650.
+          </span>
+        )}
+      </label>
       <div className="row-actions">
         <button type="button" className="btn" data-testid="cleanup-settings-save"
-                disabled={save.isPending} onClick={() => save.mutate(draft)}>
+                disabled={save.isPending || badDays} onClick={() => save.mutate(draft)}>
           Save
         </button>
         {done && (
