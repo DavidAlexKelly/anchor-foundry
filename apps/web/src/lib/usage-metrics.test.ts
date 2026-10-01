@@ -8,6 +8,7 @@ import {
   hasAudience,
   headline,
   isUnused,
+  linkUsageLine,
 } from "./usage-metrics";
 import type { ObjectTypeUsage, ObjectTypeUsageByApplication } from "./types";
 
@@ -149,5 +150,22 @@ describe("what an application is called", () => {
     // is not included." A label for it would be a row that can never appear,
     // and the next person to read this file would go looking for the bug.
     expect(APPLICATION_LABELS.ontology_manager).toBeUndefined();
+  });
+});
+
+describe("a link type's usage line (§620)", () => {
+  const used = { reads: 5, writes: 0, interactions: 5, active_users: 2, window_days: 30 };
+  const row = (application: string) =>
+    ({ application, reads: 5, writes: 0, interactions: 5, active_users: 2 });
+
+  it("names the busiest application after the headline", () => {
+    expect(linkUsageLine(used, [row("explorer"), row("workshop")]))
+      .toBe(`${headline(used)} Most in ${applicationLabel("explorer")}.`);
+  });
+
+  it("is the headline alone when nothing used it, or nothing says what did", () => {
+    const idle = { ...used, reads: 0, interactions: 0, active_users: 0 };
+    expect(linkUsageLine(idle, [])).toBe(headline(idle));
+    expect(linkUsageLine(used, [])).toBe(headline(used));
   });
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { linkUsageLine } from "@/lib/usage-metrics";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
@@ -1698,7 +1699,7 @@ export default function ObjectsPage() {
           )}
           {linkTypes.data && linkTypes.data.length > 0 && (
             <table className="table" style={{ marginBottom: 28 }}>
-              <thead><tr><th>Link</th><th>From → To</th><th>Cardinality</th><th>Joins on</th><th aria-label="Actions" /></tr></thead>
+              <thead><tr><th>Link</th><th>From → To</th><th>Cardinality</th><th>Joins on</th><th>Usage</th><th aria-label="Actions" /></tr></thead>
               <tbody>
                 {linkTypes.data.map((lt: LinkType) => (
                   <tr key={lt.id}>
@@ -1707,6 +1708,10 @@ export default function ObjectsPage() {
                     <td className="count">{lt.cardinality}</td>
                     <td className="slug">
                       {joinDescription(lt, joinLabel)}
+                    </td>
+                    {/* p.32's usage, for a link type (§620). */}
+                    <td className="slug" data-testid={`link-usage-${lt.api_name}`}>
+                      {workspace && <LinkUsage workspaceId={workspace.id} linkId={lt.id} />}
                     </td>
                     <td>
                       <div className="row-actions">
@@ -1971,4 +1976,18 @@ export default function ObjectsPage() {
       )}
     </main>
   );
+}
+
+
+/** p.32's usage for one link type, in its row (§620). A row rather than a
+ * panel because a link has no page of its own here; the numbers are the ones
+ * an object type's panel shows, from the same service. */
+function LinkUsage({ workspaceId, linkId }: { workspaceId: string; linkId: string }) {
+  const usage = useQuery({
+    queryKey: ["link-type-usage", linkId],
+    queryFn: () => objApi.linkTypeUsage(workspaceId, linkId),
+  });
+  if (usage.isPending) return <>…</>;
+  if (usage.isError || !usage.data) return <>Couldn&apos;t load usage.</>;
+  return <>{linkUsageLine(usage.data.summary, usage.data.applications)}</>;
 }

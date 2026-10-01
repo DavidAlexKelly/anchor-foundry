@@ -63,6 +63,26 @@ APPLICATIONS = (
 ONTOLOGY_MANAGER = "ontology_manager"
 
 
+#: What a counter is kept for, and where (§620). db 0077 counted object types;
+#: db 0129 is the same shape for link types, which p.32 names in the same
+#: breath ("any object type or link type usage"), so one service answers both
+#: and the two cannot come to count differently.
+_TABLES = {
+    "object_type": ("object_type_usage", "object_type_id"),
+    "link_type": ("link_type_usage", "link_type_id"),
+}
+
+
+def _target(object_type_id: UUID | None, link_type_id: UUID | None) -> tuple[str, str, str]:
+    """The table, its key column and the key, for exactly one of the two."""
+    if (object_type_id is None) == (link_type_id is None):
+        raise ValueError("usage is counted for one object type or one link type")
+    kind, rid = (("object_type", object_type_id) if object_type_id is not None
+                 else ("link_type", link_type_id))
+    table, column = _TABLES[kind]
+    return table, column, str(rid)
+
+
 def counts(application: str) -> bool:
     """Whether usage from this application is included (p.32).
 
@@ -77,7 +97,8 @@ def counts(application: str) -> bool:
 async def record(
     conn: AsyncConnection,
     *,
-    object_type_id: UUID,
+    object_type_id: UUID | None = None,
+    link_type_id: UUID | None = None,
     user_id: UUID | None,
     application: str,
     reads: int = 0,
@@ -97,9 +118,10 @@ async def record(
         return False
     if reads == 0 and writes == 0:
         return False
+    table, column, rid = _target(object_type_id, link_type_id)
     uid = str(user_id) if user_id else None
     params: dict[str, Any] = {
-        "tid": str(object_type_id),
+        "tid": rid,
         "day": date.today(),
         "app": application[:50],
         "reads": reads,
@@ -113,7 +135,7 @@ async def record(
     # the database refused (RLS refused hundreds in CI) took the request with
     # it - an action's edit included. Now a failure loses only the count.
     async with conn.begin_nested():
-        await conn.execute(_UPSERT_WITH_USER if uid else _UPSERT_ANONYMOUS, params)
+        await conn.execute(_upsert(table, column, anonymous=uid is None), params)
     return True
 
 
@@ -121,34 +143,33 @@ async def record(
 # `user_id` is nullable — a background job's read has no person behind it — so
 # it cannot be part of a primary key, and db 0077 covers the two cases with two
 # partial indexes instead. An `ON CONFLICT` target has to name one of them.
-_UPSERT_WITH_USER = text(
-    """
-    INSERT INTO object_type_usage
-           (object_type_id, user_id, day, application, reads, writes)
-    VALUES (:tid, :uid, :day, :app, :reads, :writes)
-    ON CONFLICT (object_type_id, user_id, day, application)
-          WHERE user_id IS NOT NULL
-    DO UPDATE
-       SET reads  = object_type_usage.reads  + EXCLUDED.reads,
-           writes = object_type_usage.writes + EXCLUDED.writes
-    """
-)
-
-_UPSERT_ANONYMOUS = text(
-    """
-    INSERT INTO object_type_usage
-           (object_type_id, user_id, day, application, reads, writes)
-    VALUES (:tid, NULL, :day, :app, :reads, :writes)
-    ON CONFLICT (object_type_id, day, application) WHERE user_id IS NULL
-    DO UPDATE
-       SET reads  = object_type_usage.reads  + EXCLUDED.reads,
-           writes = object_type_usage.writes + EXCLUDED.writes
-    """
-)
+def _upsert(table: str, column: str, *, anonymous: bool) -> Any:
+    """The counter's upsert, for one table and one of its two partial unique
+    indexes (db 0077's reasons, which db 0129 copies). `table` and `column`
+    come from `_TABLES` and nowhere else, so nothing a caller sends reaches
+    the statement's text."""
+    if anonymous:
+        return text(f"""
+            INSERT INTO {table} ({column}, user_id, day, application, reads, writes)
+            VALUES (:tid, NULL, :day, :app, :reads, :writes)
+            ON CONFLICT ({column}, day, application) WHERE user_id IS NULL
+            DO UPDATE
+               SET reads  = {table}.reads  + EXCLUDED.reads,
+                   writes = {table}.writes + EXCLUDED.writes
+        """)
+    return text(f"""
+        INSERT INTO {table} ({column}, user_id, day, application, reads, writes)
+        VALUES (:tid, :uid, :day, :app, :reads, :writes)
+        ON CONFLICT ({column}, user_id, day, application) WHERE user_id IS NOT NULL
+        DO UPDATE
+           SET reads  = {table}.reads  + EXCLUDED.reads,
+               writes = {table}.writes + EXCLUDED.writes
+    """)
 
 
 async def summary(
-    conn: AsyncConnection, object_type_id: UUID
+    conn: AsyncConnection, object_type_id: UUID | None = None,
+    *, link_type_id: UUID | None = None,
 ) -> dict[str, int]:
     """p.32's four numbers over p.32's window.
 
@@ -157,16 +178,17 @@ async def summary(
     to disagree with the two it came from — §191's mirrored copies, in the
     shape where nothing can notice.
     """
+    table, column, rid = _target(object_type_id, link_type_id)
     row = await fetch_one(
         conn,
-        """
+        f"""
         SELECT COALESCE(sum(reads), 0)  AS reads,
                COALESCE(sum(writes), 0) AS writes,
                count(DISTINCT user_id)  AS active_users
-          FROM object_type_usage
-         WHERE object_type_id = :tid AND day >= :since
+          FROM {table}
+         WHERE {column} = :tid AND day >= :since
         """,
-        {"tid": str(object_type_id), "since": date.today() - timedelta(days=WINDOW_DAYS)},
+        {"tid": rid, "since": date.today() - timedelta(days=WINDOW_DAYS)},
     )
     assert row is not None
     reads, writes = int(row["reads"]), int(row["writes"])
@@ -183,26 +205,28 @@ async def summary(
 
 
 async def by_application(
-    conn: AsyncConnection, object_type_id: UUID
+    conn: AsyncConnection, object_type_id: UUID | None = None,
+    *, link_type_id: UUID | None = None,
 ) -> list[dict[str, Any]]:
     """p.33's "in which Foundry applications", over the same window.
 
     Ordered by how much each application did, because the question this answers
     is "who would notice if I changed this" and the biggest user is the answer.
     """
+    table, column, rid = _target(object_type_id, link_type_id)
     rows = await fetch_all(
         conn,
-        """
+        f"""
         SELECT application,
                COALESCE(sum(reads), 0)  AS reads,
                COALESCE(sum(writes), 0) AS writes,
                count(DISTINCT user_id)  AS active_users
-          FROM object_type_usage
-         WHERE object_type_id = :tid AND day >= :since
+          FROM {table}
+         WHERE {column} = :tid AND day >= :since
          GROUP BY application
          ORDER BY sum(reads) + sum(writes) DESC, application
         """,
-        {"tid": str(object_type_id), "since": date.today() - timedelta(days=WINDOW_DAYS)},
+        {"tid": rid, "since": date.today() - timedelta(days=WINDOW_DAYS)},
     )
     return [
         {

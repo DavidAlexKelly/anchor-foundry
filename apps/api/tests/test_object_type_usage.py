@@ -516,7 +516,7 @@ def test_a_counter_the_database_refuses_does_not_undo_the_action(
 
     from src.services import object_type_usage as service
 
-    monkeypatch.setattr(service, "_UPSERT_WITH_USER", sql_text("SELECT 1 / 0"))
+    monkeypatch.setattr(service, "_upsert", lambda *a, **k: sql_text("SELECT 1 / 0"))
     r = client.post(
         f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
         json={"object_type_id": with_objects, "api_name": f"w_{uuid.uuid4().hex[:8]}",
@@ -553,7 +553,7 @@ def test_a_read_survives_a_counter_the_database_refuses(
 
     from src.services import object_type_usage as service
 
-    monkeypatch.setattr(service, "_UPSERT_WITH_USER", sql_text("SELECT 1 / 0"))
+    monkeypatch.setattr(service, "_upsert", lambda *a, **k: sql_text("SELECT 1 / 0"))
     r = client.get(
         f"{wbase(fx)}/object-types/{with_objects}/instances?application=explorer",
         headers=hdr(fx.viewer_sub),
@@ -607,3 +607,107 @@ def test_an_action_that_did_not_succeed_is_not_a_write(
     assert r.status_code == 200, r.text
     assert r.json()["ok"] is False, r.json()
     assert summary(client, fx, with_objects)["writes"] == before
+
+
+# ---- link types (§620; db 0129) -----------------------------------------------
+def a_link(client: TestClient, fx: Fixture, from_id: str, to_id: str) -> str:
+    tag = uuid.uuid4().hex[:8]
+    r = client.post(
+        f"{wbase(fx)}/link-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"rel_{tag}", "display_name": f"Rel {tag}",
+              "from_type_id": from_id, "to_type_id": to_id, "cardinality": "one_to_many",
+              # Mapped, since an object's links panel walks the mapped ones.
+              "from_property": "name", "to_property": "name"},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def link_usage(client: TestClient, fx: Fixture, link_id: str, sub: str | None = None):
+    return client.get(f"{wbase(fx)}/link-types/{link_id}/usage",
+                      headers=hdr(sub or fx.viewer_sub))
+
+
+def follow_links(client: TestClient, fx: Fixture, type_id: str, application: str | None):
+    r = client.get(f"{wbase(fx)}/object-types/{type_id}/instances",
+                   headers=hdr(fx.viewer_sub))
+    instance = r.json()["items"][0]["id"]
+    q = f"?application={application}" if application else ""
+    r = client.get(f"{wbase(fx)}/object-types/{type_id}/instances/{instance}/links{q}",
+                   headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_following_an_object_s_links_is_one_read_of_each_link_type(
+    client: TestClient, fx: Fixture, with_objects: str,
+) -> None:
+    """p.32's unit is the request, for a link type as for an object type: one
+    look at an object's links reads each link type once - a link from a type to
+    itself included, although the panel shows it from both of its ends."""
+    self_link = a_link(client, fx, with_objects, with_objects)
+    groups = follow_links(client, fx, with_objects, "explorer")
+    assert [g["link_type_id"] for g in groups].count(self_link) == 2, groups
+    r = link_usage(client, fx, self_link)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["summary"]["reads"], body["summary"]["writes"],
+            body["summary"]["active_users"], body["summary"]["window_days"]) == (1, 0, 1, 30)
+    assert [(a["application"], a["reads"]) for a in body["applications"]] == [("explorer", 1)]
+    # And a second look is a second read.
+    follow_links(client, fx, with_objects, "workshop")
+    body = link_usage(client, fx, self_link).json()
+    assert body["summary"]["reads"] == 2
+    assert sorted(a["application"] for a in body["applications"]) == ["explorer", "workshop"]
+
+
+def test_the_ontology_manager_s_look_at_a_link_is_not_counted(
+    client: TestClient, fx: Fixture, with_objects: str,
+) -> None:
+    link = a_link(client, fx, with_objects, with_objects)
+    follow_links(client, fx, with_objects, usage.ONTOLOGY_MANAGER)
+    assert link_usage(client, fx, link).json()["summary"]["reads"] == 0
+    # A caller that says nothing is the API, which counts.
+    follow_links(client, fx, with_objects, None)
+    assert [(a["application"], a["reads"]) for a in link_usage(client, fx, link).json()[
+        "applications"]] == [("api", 1)]
+
+
+def test_a_link_type_nobody_can_see_is_not_found(client: TestClient, fx: Fixture) -> None:
+    assert link_usage(client, fx, str(uuid.uuid4())).status_code == 404
+
+
+def test_usage_is_counted_for_one_thing_at_a_time() -> None:
+    with pytest.raises(ValueError, match="one object type or one link type"):
+        usage._target(None, None)
+    with pytest.raises(ValueError, match="one object type or one link type"):
+        usage._target(uuid.uuid4(), uuid.uuid4())
+
+
+@pytest.mark.anyio
+async def test_a_link_read_with_nobody_behind_it_counts_but_not_as_a_user(
+    client: TestClient, fx: Fixture, with_objects: str,
+) -> None:
+    """db 0077's second partial index, for link types: a background job's
+    reads are reads, and two of them are one row rather than a log. Recorded
+    through the service on an owner's connection, because no route reads as
+    nobody."""
+    from uuid import UUID
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    link = a_link(client, fx, with_objects, with_objects)
+    engine = create_async_engine(ADMIN_DSN.replace("postgresql://", "postgresql+psycopg://", 1))
+    try:
+        for _ in range(2):
+            async with engine.begin() as conn:
+                assert await usage.record(conn, link_type_id=UUID(link), user_id=None,
+                                          application="api", reads=1)
+    finally:
+        await engine.dispose()
+    said = link_usage(client, fx, link).json()["summary"]
+    assert (said["reads"], said["active_users"]) == (2, 0)
+    with psycopg.connect(ADMIN_DSN) as c:
+        rows = c.execute("SELECT count(*) FROM link_type_usage WHERE link_type_id = %s",
+                         (link,)).fetchone()[0]
+    assert rows == 1

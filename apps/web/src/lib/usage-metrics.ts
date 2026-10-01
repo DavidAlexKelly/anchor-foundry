@@ -117,3 +117,20 @@ export function applicationLabel(application: string): string {
 function count(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
+
+/**
+ * A link type's usage in one line, for its row (§620): p.32's headline, and
+ * the application that did the most of it - p.33's "in which applications",
+ * cut to the one that answers "who would notice".
+ *
+ * `rows` arrives busiest first, as `by_application` orders it.
+ */
+export function linkUsageLine(
+  usage: ObjectTypeUsage, rows: readonly ObjectTypeUsageByApplication[],
+): string {
+  // No `isUnused` check: an unused link has no application rows, since a
+  // count of nothing is never recorded (§620's sweep).
+  const top = rows[0];
+  return top ? `${headline(usage)} Most in ${applicationLabel(top.application)}.`
+    : headline(usage);
+}
