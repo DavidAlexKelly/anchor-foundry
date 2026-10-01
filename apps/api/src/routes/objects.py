@@ -4679,8 +4679,8 @@ async def group_object_set(
     """How many in each distinct value of one property - what a chart over a
     set plots (roadmap 1.5).
 
-    p.310's **Aggregation**, per bucket: a count, or one of §226's four numeric
-    ones over a second property. A pie's slices are sized by this, which is why
+    p.310's **Aggregation**, per bucket: a count, one of §226's four numeric
+    ones over a second property, or (§615) how many distinct values of it. A pie's slices are sized by this, which is why
     the ordering follows it - the top 20 of 300 has to be the twenty largest
     slices rather than the twenty most populous.
     """

@@ -215,6 +215,8 @@ export interface AxisTitles {
 }
 
 const AGGREGATE_WORDS: Record<string, string> = {
+  // p.282's "Approximate Unique Count" (§615), worded for an axis.
+  count_distinct: "Unique count",
   sum: "Sum", avg: "Average", min: "Minimum", max: "Maximum",
 };
 

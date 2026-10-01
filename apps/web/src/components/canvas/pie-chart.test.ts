@@ -15,32 +15,32 @@ const GROUPS = [
 ];
 
 describe("p.310's aggregation", () => {
-  it("offers five of p.310's six", () => {
+  it("offers all six of p.310's", () => {
     // This read `["count"]` until §227, because a grouped sum would have been
-    // computed differently by the two stores (decision 0006). §226 and §227
-    // shipped the four numeric ones. `count_distinct` — p.310's "approximate
-    // unique count" — stays out: per bucket it is a question about a *third*
-    // property nobody has named, so the control would have nowhere to put its
-    // argument.
-    expect(Object.keys(AGGREGATIONS)).toEqual(["count", "sum", "avg", "min", "max"]);
+    // computed differently by the two stores (decision 0006), and five until
+    // §615 gave the grouped endpoint a distinct count per bucket.
+    expect(Object.keys(AGGREGATIONS)).toEqual(
+      ["count", "count_distinct", "sum", "avg", "min", "max"]);
+    expect(AGGREGATIONS.count_distinct).toBe("Approximate unique count of");
     expect(DEFAULT_AGGREGATION).toBe("count");
   });
 
   it("falls back to counting for an aggregation nothing offers", () => {
-    expect(aggregationOf("count_distinct")).toBe("count");
+    expect(aggregationOf("median")).toBe("count");
     expect(aggregationOf(undefined)).toBe("count");
     expect(aggregationOf("sum")).toBe("sum");
+    expect(aggregationOf("count_distinct")).toBe("count_distinct");
   });
 
   it("knows which aggregations need a property to run over", () => {
     expect(needsProperty("count")).toBe(false);
-    for (const name of ["sum", "avg", "min", "max"]) {
+    for (const name of ["count_distinct", "sum", "avg", "min", "max"]) {
       expect(needsProperty(name)).toBe(true);
     }
     // And an unknown one is a count, so it needs nothing - the fallback and
     // this question have to agree, or the panel shows a property field for a
     // request that will not carry one.
-    expect(needsProperty("count_distinct")).toBe(false);
+    expect(needsProperty("median")).toBe(false);
   });
 });
 
@@ -55,6 +55,13 @@ describe("what the pie asks the server for", () => {
     expect(aggregationRequest("sum", " reading ")).toEqual({
       aggregation: "sum", aggregation_property: "reading",
     });
+  });
+
+  it("sends a distinct count with the property whose values it counts", () => {
+    expect(aggregationRequest("count_distinct", "supplier")).toEqual({
+      aggregation: "count_distinct", aggregation_property: "supplier",
+    });
+    expect(aggregationRequest("count_distinct", "")).toBeNull();
   });
 
   it("sends nothing at all while the setting is unfinished", () => {

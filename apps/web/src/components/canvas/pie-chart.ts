@@ -23,22 +23,19 @@
  */
 
 /** p.310's Aggregation: "average, count, min, max, sum, or approximate unique
- * count".
+ * count" - and p.282's Series aggregation on Chart XY, which names the same
+ * six and reads this list.
  *
- * **Five of the six, and the missing one is the odd one out.** This list read
- * `count` alone until §227, because instance properties were stored untyped and
- * a pie whose slices were sums the two stores computed differently would be a
- * picture of a disagreement. §220's typed index removed that, §226 shipped the
- * four numeric aggregations over a set and §227 shipped them per bucket.
- *
- * `count_distinct` — p.310's "approximate unique count" — is **not** here: the
- * grouped endpoint answers it over a whole set, not per bucket, and "how many
- * distinct regions are in this slice" is a question about a *third* property
- * nobody has named. Offering it would mean a control with nowhere to put its
- * argument.
+ * **All six since §615.** `count_distinct`, p.310's "approximate unique
+ * count", was held out with a reason that read the page wrong: that per slice
+ * it was "a question about a *third* property nobody has named". It is the
+ * *second* property, the one Aggregate over already names for a sum - "how
+ * many distinct suppliers in each region's slice". What was missing was the
+ * server's answer per bucket, and §615 gave both stores one.
  */
 export const AGGREGATIONS: Record<string, string> = {
   count: "Count of objects",
+  count_distinct: "Approximate unique count of",
   sum: "Sum of",
   avg: "Average of",
   min: "Minimum of",
@@ -47,18 +44,16 @@ export const AGGREGATIONS: Record<string, string> = {
 
 export const DEFAULT_AGGREGATION = "count";
 
-/** The aggregations that run over a second property, and therefore need one. */
-export const NUMERIC_AGGREGATIONS = ["sum", "avg", "min", "max"] as const;
-
 export function aggregationOf(raw: unknown): string {
   return typeof raw === "string" && Object.hasOwn(AGGREGATIONS, raw)
     ? raw
     : DEFAULT_AGGREGATION;
 }
 
-/** Whether an aggregation needs a property to run over. */
+/** Whether an aggregation needs a property to run over: every one but a
+ * count of objects. */
 export function needsProperty(aggregation: unknown): boolean {
-  return (NUMERIC_AGGREGATIONS as readonly string[]).includes(aggregationOf(aggregation));
+  return aggregationOf(aggregation) !== "count";
 }
 
 /** What to ask the server for, from what the panel holds.

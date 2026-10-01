@@ -98,6 +98,35 @@ def test_a_count_still_counts_and_an_average_is_not_a_sum(page, api, sites) -> N
                what="bars of the average capacity")
 
 
+def test_a_unique_count_is_drawn_rather_than_a_count(page, api, sites) -> None:
+    """p.282's "Approximate Unique Count" (§615). Three open sites sit in two
+    regions and one closed site in one - so 2 and 1, not the count's 3 and 1."""
+    mod = build(api, sites, "Chart XY distinct",
+                {"aggregate": "count_distinct", "measure": "region"})
+    open_module(page, mod)
+    eventually(lambda: bar_titles(page), lambda got: got == ["open: 2", "closed: 1"],
+               what="bars of how many regions")
+
+
+def test_a_dataset_chart_counts_distinct_values_too(page, api) -> None:
+    """The same measure over a dataset, where it is SQL (`filter-sql.ts`)."""
+    mod = Module(api, "Chart XY distinct dataset")
+    mod.dataset = api.upload_csv(
+        f"{mod.base}/datasets/upload", f"visits_{mod.tag}",
+        b"site,visitor\nA,ann\nA,bob\nA,ann\nB,cat\n")
+    mod.define({
+        "format": 2,
+        "layout": layout({"chart": {"resolvedName": "CanvasChart", "props": {
+            "datasetId": mod.dataset["id"], "kind": "bar", "dimension": "site",
+            "aggregate": "count_distinct", "measure": "visitor"}}}),
+        "variables": {},
+        "events": {},
+    })
+    open_module(page, mod)
+    eventually(lambda: bar_titles(page), lambda got: got == ["A: 2", "B: 1"],
+               what="bars of how many visitors")
+
+
 def test_an_unfinished_aggregation_asks_for_its_property(page, api, sites) -> None:
     mod = build(api, sites, "Chart XY unfinished", {"aggregate": "sum"})
     open_module(page, mod)
@@ -190,6 +219,10 @@ def test_the_panel_segments_a_count_and_only_a_count(page, api, sites) -> None:
     # And its property is a number.
     expect(page.get_by_test_id("chart-measure").locator("option")).to_have_text(
         ["Choose…", "capacity"])
+    # A unique count is of any property (§615), and says so on its axis.
+    page.get_by_test_id("chart-aggregate").select_option("count_distinct")
+    expect(page.get_by_test_id("chart-measure").locator("option")).to_have_text(
+        ["Choose…", "id", "status", "region", "capacity"])
 
 
 # ---- p.281's Labels, p.283's Sort by, p.284's orientation (§468) --------------
@@ -858,6 +891,14 @@ def test_the_panel_adds_and_names_a_series(page, api, sites) -> None:
     page.get_by_test_id("chart-series-measure").select_option("capacity")
     expect(page.get_by_test_id("chart-series-name")).to_have_attribute(
         "placeholder", "Sum of capacity")
+    # A unique count's series is of any property (§615).
+    page.get_by_test_id("chart-series-aggregate").select_option("count_distinct")
+    expect(page.get_by_test_id("chart-series-measure").locator("option")).to_have_text(
+        ["Choose…", "id", "status", "region", "capacity"])
+    page.get_by_test_id("chart-series-aggregate").select_option("sum")
+    expect(page.get_by_test_id("chart-series-measure").locator("option")).to_have_text(
+        ["Choose…", "capacity"])
+    page.get_by_test_id("chart-series-measure").select_option("capacity")
     page.get_by_test_id("chart-series-name").fill("Capacity")
     page.get_by_test_id("chart-series-first-name").fill("Sites")
     page.get_by_test_id("chart-series-legend-position").select_option("top")

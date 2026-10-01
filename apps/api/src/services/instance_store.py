@@ -1024,7 +1024,18 @@ class OpenSearchInstanceStore:
         clauses = self._set_clauses(object_type_id, filters)
         order: list[dict[str, str]] = [{"_count": "desc"}, {"_key": "asc"}]
         sub: dict[str, Any] = {}
-        if agg is not None and agg.numeric:
+        if agg is not None and agg.name == "count_distinct":
+            # p.310's "approximate unique count" per slice (§615): a
+            # `cardinality` under each bucket - "approximate" is its word, and
+            # below its precision threshold (3,000 by default) it is exact,
+            # which is what lets the two stores agree. The same exclusion as
+            # the numeric four, for the same reason.
+            metric_field = f"properties.{agg.property}"
+            clauses = {**clauses, "filter": [*clauses.get("filter", []),
+                                             {"exists": {"field": metric_field}}]}
+            sub = {"metric": {"cardinality": {"field": f"{metric_field}.keyword"}}}
+            order = [{"metric": "desc"}, {"_key": "asc"}]
+        elif agg is not None and agg.numeric:
             metric_field = f"properties.{agg.property}"
             # **The documents with no value for the metric are filtered out of
             # the whole query**, not just out of the metric - which is what

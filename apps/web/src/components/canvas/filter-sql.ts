@@ -132,7 +132,7 @@ export function distinctValuesQuery(column: string, limit = 200): string {
 // ---- aggregation (ROADMAP Canvas item 2) ------------------------------------
 
 export type ChartKind = "bar" | "line" | "pie" | "scatter";
-export type Aggregate = "count" | "sum" | "avg" | "min" | "max";
+export type Aggregate = "count" | "count_distinct" | "sum" | "avg" | "min" | "max";
 
 /** Per-kind caps. A bar chart with 400 categories is a smear, a line with
  * 50,000 points is a solid block, and both are slow — so the cap is part of
@@ -147,6 +147,12 @@ const LIMITS: Record<ChartKind, number> = {
 function aggregateExpression(aggregate: Aggregate, measure: string | null | undefined): string | null {
   if (aggregate === "count") return "count(*)";
   if (!measure) return null;
+  // p.282's "Approximate Unique Count" (§615): distinct values of any column,
+  // so no cast - it is a question about identity, not arithmetic. Exact
+  // rather than DuckDB's `approx_count_distinct`, because a dataset chart has
+  // no reason to be less right than it can be; "approximate" is Foundry's
+  // allowance, not a requirement.
+  if (aggregate === "count_distinct") return `count(DISTINCT ${sqlIdentifier(measure)})`;
   // CAST rather than TRY_CAST: a measure column that is not numeric should
   // fail visibly with DuckDB's own message, not silently sum to null and
   // draw an empty chart that looks like "no data".
