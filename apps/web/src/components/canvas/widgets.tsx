@@ -278,6 +278,7 @@ import { readerLayout } from "./reader-layout";
 import { PALETTE as WIDGET_LIST } from "./widget-list";
 import { MarkdownReferences, MarkdownRuns, MarkdownView } from "../markdown-view";
 import { staticTypeOf } from "./object-export";
+import { iconPropertyOf, imageUrlOf } from "@/lib/type-classes";
 import {
   ANNOTATION_COLOR_MODES, ANNOTATION_FORMATS, addHoverAction, annotationColorOf, annotationFormatOf,
   annotationLayersOf, annotationsOf, hoverActionsOf, segmentsOf as annotatedPieces, tooltipOf,
@@ -6262,6 +6263,8 @@ export function CanvasObjectTable({
     queryFn: () => objApi.getType(workspaceId, effectiveTypeId!),
     enabled: !!effectiveTypeId,
   });
+  // p.222's hubble:icon (§671): the property holding each object's image.
+  const iconProperty = iconPropertyOf(type.data?.properties ?? []);
 
   // An exact property filter and a free-text search are different questions,
   // so the widget picks one rather than pretending to combine them: the
@@ -6848,7 +6851,17 @@ export function CanvasObjectTable({
                       {/* **The clamp lives on an inner element**, because
                           `-webkit-box` would stop the `<td>` being a table cell
                           and take the column widths with it. */}
-                      <div style={cell}>{instance.primary_key}</div>
+                      <div style={cell}>
+                        {/* p.222: "add the type class hubble:icon to display
+                            the image instead of the icon" (§671). An object
+                            with no usable URL shows its key alone. */}
+                        {iconProperty && imageUrlOf(instance.properties[iconProperty]) && (
+                          <img data-testid="object-table-icon" alt="" width={18} height={18} loading="lazy"
+                            referrerPolicy="no-referrer" src={imageUrlOf(instance.properties[iconProperty])!}
+                            style={{ verticalAlign: "middle", marginRight: 6, borderRadius: 3, objectFit: "cover" }} />
+                        )}
+                        {instance.primary_key}
+                      </div>
                     </td>
                     {properties.map((p, column) => {
                       const paint = conditionalStyle(

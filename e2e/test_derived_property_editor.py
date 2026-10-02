@@ -14,6 +14,8 @@ reaches an object view.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 from playwright.sync_api import expect
 
@@ -90,7 +92,7 @@ def open_customer(page, module, name: str) -> None:
 def add_property(page, name: str) -> int:
     """Append a property row and return its 1-based index."""
     page.get_by_role("button", name="Add property").click()
-    boxes = page.get_by_role("textbox", name="Property")
+    boxes = page.get_by_role("textbox", name=re.compile(r"^Property \d+ name$"))
     index = boxes.count()
     page.get_by_role("textbox", name=f"Property {index} name").fill(name)
     return index

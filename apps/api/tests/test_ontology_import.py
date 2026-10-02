@@ -97,7 +97,9 @@ def one_type(tag: str, **over) -> dict:
              "reducers": None,
              "status": "experimental", "deprecation": None,
              # §594, for the same test's reason again.
-             "inline_action": None},
+             "inline_action": None,
+             # §671's type classes (db 0133): and once more.
+             "type_classes": []},
         ],
         **over,
     }

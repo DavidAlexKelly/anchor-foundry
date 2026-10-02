@@ -31,7 +31,7 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 from . import (
     array_properties, conditional_format, derived_properties, link_backing, link_join_tables,
     ontology_status, property_inline_actions,
-    property_reducers, shared_properties, struct_fields, value_format,
+    property_reducers, shared_properties, struct_fields, type_classes, value_format,
     value_types,
 )
 from .property_values import (  # noqa: F401
@@ -456,7 +456,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
                p.conditional_format, p.edit_only, p.derivation,
                p.struct_fields, p.array_of, p.reducers,
                p.status, p.deprecation,
-               p.shared_property_id, p.inline_action_type_id,
+               p.shared_property_id, p.inline_action_type_id, p.type_classes,
                sp.api_name AS shared_property_api_name,
                sp.display_name AS sp_display_name,
                sp.description AS sp_description,
@@ -789,6 +789,8 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
         prop["deprecation"] = ontology_status.parse_deprecation(
             prop.get("deprecation"), prop["status"]
         )
+        # p.91 (§671; db 0133), normalised in place for `value_format`'s reason.
+        prop["type_classes"] = type_classes.parse(prop.get("type_classes"), property_name=api)
 
 
 async def _apply_shared(
@@ -989,7 +991,7 @@ async def _write_property_rows(
                                                 reducers,
                                                 shared_property_id,
                                                 value_type_id, status, deprecation,
-                                                inline_action_type_id)
+                                                inline_action_type_id, type_classes)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
                     :required, :descr, :sort, CAST(:vis AS property_visibility),
                     CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly,
@@ -998,7 +1000,7 @@ async def _write_property_rows(
                     CAST(:reducers AS jsonb),
                     :shared, :valuetype,
                     CAST(:status AS ontology_status), CAST(:depr AS jsonb),
-                    :inline)
+                    :inline, CAST(:tclasses AS text[]))
             RETURNING id
             """,
             {
@@ -1063,6 +1065,8 @@ async def _write_property_rows(
                 "status": str(prop.get("status") or ontology_status.DEFAULT_STATUS),
                 # §594's inline action, checked by `property_inline_actions`.
                 "inline": prop.get("inline_action_type_id") or None,
+                # p.91's type classes (§671), as `_validate_properties` left them.
+                "tclasses": list(prop.get("type_classes") or []),
                 "depr": (
                     json.dumps(prop["deprecation"])
                     if prop.get("deprecation") is not None
@@ -1209,7 +1213,8 @@ async def _snapshot_version(
                                'value_type_id', p.value_type_id,
                                'status', p.status,
                                'deprecation', p.deprecation,
-                               'inline_action_type_id', p.inline_action_type_id)
+                               'inline_action_type_id', p.inline_action_type_id,
+                               'type_classes', p.type_classes)
                            ORDER BY p.sort_order, p.api_name)
                       FROM object_type_properties p WHERE p.object_type_id = ot.id),
                    '[]'::jsonb),

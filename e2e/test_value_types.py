@@ -14,6 +14,7 @@ property failed and why" is the thing being asserted, not a JSON field.
 """
 from __future__ import annotations
 
+import re
 import uuid
 
 import pytest
@@ -62,7 +63,7 @@ def property_index(page, api_name: str) -> int:
     expect(page.get_by_role("textbox", name="Property 1 name")).to_be_visible(
         timeout=15000
     )
-    boxes = page.get_by_role("textbox", name="Property")
+    boxes = page.get_by_role("textbox", name=re.compile(r"^Property \d+ name$"))
     for i in range(boxes.count()):
         if boxes.nth(i).input_value() == api_name:
             return i + 1
