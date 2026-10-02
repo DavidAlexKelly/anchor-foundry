@@ -2734,6 +2734,7 @@ def rules_for_implementation(
     mapping: dict[str, str],
     interface_name: str,
     type_name: str,
+    presented: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """An interface action's rules, in one implementing type's vocabulary
     (`action-types` p.59-62; §451).
@@ -2774,6 +2775,17 @@ def rules_for_implementation(
             continue
         prop = str(config.get("property", ""))
         target = mapping.get(prop)
+        through = (presented or {}).get(str(target))
+        if target and through:
+            # p.170 (§675): "Interface actions that edit a property
+            # implemented through a property reducer or struct main field will
+            # return an error ... reduced and struct main field values cannot
+            # be translated back to the underlying object property."
+            raise InterfaceSubjectError(
+                f"{type_name} implements {interface_name}'s {prop!r} through "
+                f"{through} on {target!r}, which cannot be written back to the "
+                "property it came from (object-link-types p.170)"
+            )
         if not target:
             raise InterfaceSubjectError(
                 f"{type_name} implements {interface_name} without mapping "

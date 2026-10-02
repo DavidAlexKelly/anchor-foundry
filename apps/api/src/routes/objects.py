@@ -3033,6 +3033,10 @@ async def evaluate_interface_set(
                 # which would be decision 0002's silent widening.
                 continue
             property_types = await _declared_types(conn, member.object_type_id)
+            # §675: each implementing property's row, for what it presents
+            # (p.131's reduced element, p.170's main field).
+            presenters = {str(p["api_name"]): p
+                          for p in await ontology_service.list_properties(conn, member.object_type_id)}
             try:
                 definition = object_sets.parse(
                     {"object_type_id": str(member.object_type_id),
@@ -3066,7 +3070,7 @@ async def evaluate_interface_set(
                     "updated_at": r["updated_at"],
                     "properties": interface_sets.project(
                         _jsonb(r["properties"]) or {},
-                        member=member, declared=declared,
+                        member=member, declared=declared, presenters=presenters,
                     ),
                 }
                 for r in rows
