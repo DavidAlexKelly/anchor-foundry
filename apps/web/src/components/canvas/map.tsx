@@ -200,6 +200,8 @@ export interface MapShape {
   id: string;
   label: string;
   value: unknown;
+  /** p.300's geometry colour (§670); the map's colour where none. */
+  color?: string | null;
 }
 
 export function MapCanvas({
@@ -287,7 +289,7 @@ export function MapCanvas({
   /** p.304's Legend panel: its entries, whether it opens collapsed, and its
    * size. */
   legend?: {
-    entries: { label: string; color: string; count: number; kind: "points" | "track" }[];
+    entries: { label: string; color: string; count: number; kind: "points" | "track" | "shape" }[];
     collapsed: boolean;
     compact: boolean;
   } | null;
@@ -611,10 +613,10 @@ export function MapCanvas({
                 key={`${shape.id}:${i}`}
                 data-testid={`map-shape-${shape.id}`}
                 d={path.d}
-                fill={path.filled ? (color ?? "var(--accent-wash)") : "none"}
+                fill={path.filled ? (shape.color ?? color ?? "var(--accent-wash)") : "none"}
                 fillOpacity={path.filled ? 0.55 * opacity : undefined}
                 fillRule="evenodd"
-                stroke={color ?? "var(--accent)"}
+                stroke={shape.color ?? color ?? "var(--accent)"}
                 strokeOpacity={opacity}
                 strokeWidth={1.5}
                 vectorEffect="non-scaling-stroke"
@@ -763,13 +765,16 @@ export function MapCanvas({
         >
           <summary>Legend</summary>
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-            {legend.entries.map((entry) => (
-              <li key={`${entry.kind}:${entry.label}`} data-testid="map-legend-entry"
+            {legend.entries.map((entry, n) => (
+              <li key={`${entry.kind}:${entry.label}:${n}`} data-testid="map-legend-entry" data-kind={entry.kind}
                   className="row-actions" style={{ gap: 6 }}>
                 <svg width={16} height={10} aria-hidden="true">
                   {entry.kind === "track"
                     ? <line x1={1} y1={5} x2={15} y2={5} stroke={entry.color} strokeWidth={2} />
-                    : <circle cx={8} cy={5} r={4} fill={entry.color} />}
+                    : entry.kind === "shape"
+                      ? <rect x={2} y={1} width={12} height={8} fill={entry.color} fillOpacity={0.55}
+                              stroke={entry.color} />
+                      : <circle cx={8} cy={5} r={4} fill={entry.color} />}
                 </svg>
                 <span>{entry.label}</span>
                 {!legend.compact && <span className="slug">{entry.count.toLocaleString()}</span>}

@@ -16,6 +16,8 @@
  * writes the variable moves the selection on the map.
  */
 
+import { geometriesOf, type MapGeometry } from "./map-geometry";
+
 /** A layer colour as the panel stores it, or null for the theme's own. */
 export function layerColorOf(raw: unknown): string | null {
   return typeof raw === "string" && /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : null;
@@ -60,6 +62,10 @@ export interface MapLayer {
   locked: boolean;
   color: string | null;
   opacity: number;
+  /** p.300's Geometry (§670): geoshape properties drawn as shapes. */
+  geometries: MapGeometry[];
+  /** p.300's Legend visibility, for the whole layer. */
+  inLegend: boolean;
 }
 
 /** The layers a map adds, beyond its own. Each is a set read in full on every
@@ -94,6 +100,8 @@ export function layersOf(raw: unknown): MapLayer[] {
       // A missing opacity reads as 1 by `layerOpacityOf`'s own rule (a
       // default written here survived the sweep as equivalent).
       opacity: layerOpacityOf(l.opacity),
+      geometries: geometriesOf(l.geometries),
+      inLegend: l.inLegend !== false,
     });
     if (out.length === MAX_LAYERS) break;
   }
@@ -110,7 +118,7 @@ export function withNewLayer(raw: unknown): MapLayer[] {
   return [...layers, {
     id: `layer-${n}`, objectSetVariable: null, locationProperty: null, labelProperty: null,
     label: "", selectedVariable: null, visible: true, visibleVariable: null, locked: false,
-    color: null, opacity: 1,
+    color: null, opacity: 1, geometries: [], inLegend: true,
   }];
 }
 
@@ -142,10 +150,11 @@ export function layerPoints<P>(
 ): { points: P[]; unplaceable: number } {
   const points: P[] = [];
   let unplaceable = 0;
+  // A layer of shapes alone (§670) has no pins, rather than every object
+  // counted as one with nowhere to stand.
+  if (!layer.locationProperty) return { points, unplaceable };
   for (const instance of instances) {
-    // No location property reads as no location (a guard for it survived the
-    // sweep as equivalent: an api name is never empty).
-    const at = locate(instance.properties[layer.locationProperty ?? ""]);
+    const at = locate(instance.properties[layer.locationProperty]);
     if (!at) {
       unplaceable += 1;
       continue;

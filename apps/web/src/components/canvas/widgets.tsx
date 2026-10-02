@@ -431,6 +431,10 @@ import {
 } from "./chart-display";
 import { MapCanvas, toLatLon, type MapPoint, type MapShape } from "./map";
 import {
+  MAX_GEOMETRIES, geometriesOf, geometryShapes, withGeometryEarlier, withGeometrySetting, withNewGeometry,
+  withoutGeometry, type MapGeometry,
+} from "./map-geometry";
+import {
   extentOf, nextPlayback, pauseCrossed, pausesOf, positionAt, selectedTimeOf, selectedTimeText,
   timeLabel, timelineControls, timelineSpan, trackShape, windowOf, withinWindow, type TimeFormat,
 } from "./map-tracks";
@@ -15681,6 +15685,8 @@ export function CanvasMap({
   boundsVariable = null,
   followSetVariable = null,
   layers = null,
+  geometries = null,
+  layerInLegend = true,
 }: {
   source?: "objects" | "dataset";
   /** An `object_set` variable to plot (roadmap 1.5). When set, this map reads
@@ -15789,6 +15795,11 @@ export function CanvasMap({
   /** p.300's Add object layer (§642, `map-layer.ts`): the layers after the
    * map's own, each with its own object set and settings. */
   layers?: unknown;
+  /** p.300's Geometry (§670, `map-geometry.ts`): the map's own layer's
+   * geoshape properties, drawn as shapes. */
+  geometries?: unknown;
+  /** p.300's Legend visibility for the map's own layer. */
+  layerInLegend?: boolean;
 }) {
   const {
     id: nodeId,
@@ -15980,7 +15991,9 @@ export function CanvasMap({
         const at = fix ? { lat: fix.lat, lon: fix.lon }
           : locationProperty ? toLatLon(instance.properties[locationProperty]) : null;
         if (!at) {
-          bad += 1;
+          // A layer of shapes alone (§670) has no pins, rather than every
+          // object counted as one with nowhere to stand.
+          if (locationProperty) bad += 1;
           continue;
         }
         const label = labelProperty ? instance.properties[labelProperty] : null;
@@ -16026,7 +16039,7 @@ export function CanvasMap({
         queryKey: ["canvas-map-layer", layer.objectSetVariable, JSON.stringify(definition ?? null), limit],
         queryFn: () =>
           objApi.evaluateObjectSet(workspaceId, definition, { limit: Math.min(limit, 200) }),
-        enabled: !!definition && !!layer.locationProperty,
+        enabled: !!definition && (!!layer.locationProperty || layer.geometries.some((g) => !!g.property)),
       };
     }),
   });
@@ -16038,12 +16051,26 @@ export function CanvasMap({
         layer: { id: layer.id, color: layer.color, opacity: layer.opacity,
           selected: keys.has(String(instance.primary_key)), locked: layer.locked },
       }));
+    // p.300's geometries (§670): each a geoshape property drawn as shapes.
+    const shapes = layer.geometries.map((geometry) => ({
+      geometry,
+      shapes: geometryShapes(layer.id, geometry, layerSets[n]?.data?.instances ?? [], layer.labelProperty,
+        layer.color),
+    }));
     return {
-      layer, keys, ...placed,
+      layer, keys, ...placed, shapes,
       shown: layerVisibleOf(layer.visible, valueOf(layer.visibleVariable), !!layer.visibleVariable),
     };
   });
   const layerPins = layerData.flatMap((d) => (d.shown ? d.points : []));
+  const layerShapes = layerData.flatMap((d) => (d.shown ? d.shapes.flatMap((s) => s.shapes) : []));
+  // The map's own layer's geometries (§670).
+  const ownGeometries = usingSet ? geometriesOf(geometries).map((geometry) => ({
+    geometry,
+    shapes: geometryShapes("layer-1", geometry, setPage.data?.instances ?? [], labelProperty,
+      layerColorOf(layerColor)),
+  })) : [];
+  const ownShapes = ownGeometries.flatMap((g) => g.shapes);
   // Each layer's Selected objects written as "none selected" once, for the
   // map's own layer's reason below.
   const unstatedLayers = addedLayers.filter((l) => l.selectedVariable
@@ -16132,7 +16159,8 @@ export function CanvasMap({
   const needs =
     source === "objects"
       ? usingSet
-        ? !locationProperty && !trackProperty ? "pick the geopoint property to plot" : null
+        ? !locationProperty && !trackProperty && !geometriesOf(geometries).some((g) => g.property)
+          ? "pick the geopoint property to plot, or add a geometry" : null
         : !objectTypeId ? "pick an object type in Settings"
         : !locationProperty ? "pick the geopoint property to plot"
         : null
@@ -16162,7 +16190,7 @@ export function CanvasMap({
       {!needs && query.data && (
         <MapCanvas
           points={[...(layerShown ? points : []), ...layerPins]}
-          shapes={layerShown ? trackShapes : []}
+          shapes={[...(layerShown ? [...ownShapes, ...trackShapes] : []), ...layerShapes]}
           color={layerColorOf(layerColor)}
           opacity={layerOpacityOf(layerOpacity)}
           selectedKeys={selectedVariable ? selectedKeys : undefined}
@@ -16176,15 +16204,23 @@ export function CanvasMap({
             collapsed: !!legendCollapsed,
             compact: legendSize === "compact",
             entries: [
-              ...(layerShown ? [{ label: layerLabel || "Objects", kind: "points" as const,
-                color: layerColorOf(layerColor) ?? "var(--accent, #14646e)",
-                count: points.length }] : []),
-              ...(layerShown && trackShapes.length ? [{ label: `${layerLabel || "Objects"} tracks`,
-                kind: "track" as const, color: layerColorOf(layerColor) ?? "var(--accent, #14646e)",
-                count: trackShapes.length }] : []),
-              ...layerData.filter((d) => d.shown).map((d) => ({
-                label: d.layer.label || "Objects", kind: "points" as const,
-                color: d.layer.color ?? "var(--accent, #14646e)", count: d.points.length })),
+              // p.300's Legend visibility (§670): a layer, or one geometry,
+              // left out of the legend is still drawn.
+              ...(layerShown && layerInLegend !== false ? [
+                ...(locationProperty || tracking ? [{ label: layerLabel || "Objects", kind: "points" as const,
+                  color: layerColorOf(layerColor) ?? "var(--accent, #14646e)",
+                  count: points.length }] : []),
+                ...(trackShapes.length ? [{ label: `${layerLabel || "Objects"} tracks`,
+                  kind: "track" as const, color: layerColorOf(layerColor) ?? "var(--accent, #14646e)",
+                  count: trackShapes.length }] : []),
+                ...geometryLegend(layerLabel || "Objects", ownGeometries, layerColorOf(layerColor)),
+              ] : []),
+              ...layerData.filter((d) => d.shown && d.layer.inLegend).flatMap((d) => [
+                ...(d.layer.locationProperty ? [{
+                  label: d.layer.label || "Objects", kind: "points" as const,
+                  color: d.layer.color ?? "var(--accent, #14646e)", count: d.points.length }] : []),
+                ...geometryLegend(d.layer.label || "Objects", d.shapes, d.layer.color),
+              ]),
             ],
           } : null}
           areas={mapAreas}
@@ -16404,6 +16440,69 @@ function MapTimeline({ controls, start, end, selected, onSelect, playing, onPlay
 /** One added layer's settings (§642): p.300's Input and Style for it, the
  * same as the map's own layer has, with its object set and the property its
  * objects stand at. */
+/** A layer's geometries as legend entries (§670): each named by its layer
+ * and property, and counted, unless p.300's Legend visibility leaves it out. */
+function geometryLegend(
+  layerLabel: string, geometries: { geometry: MapGeometry; shapes: MapShape[] }[], color: string | null,
+) {
+  return geometries.filter(({ geometry }) => geometry.legend && geometry.property).map(({ geometry, shapes }) => ({
+    label: `${layerLabel} · ${geometry.property}`, kind: "shape" as const,
+    color: geometry.color ?? color ?? "var(--accent, #14646e)", count: shapes.length,
+  }));
+}
+
+/** p.300's Geometry and Legend visibility for one layer (§670): its geoshape
+ * properties, each with its colour and whether the legend lists it, in the
+ * order they are drawn. */
+function MapGeometrySettings({ tag, value, properties, inLegend, onChange, onInLegend }: {
+  tag: string;
+  value: unknown;
+  properties: { api_name: string; data_type: string }[];
+  inLegend: boolean;
+  onChange: (next: MapGeometry[]) => void;
+  onInLegend: (on: boolean) => void;
+}) {
+  const geometries = geometriesOf(value);
+  const shapes = properties.filter((p) => p.data_type === "geoshape");
+  return (
+    <div className="field" data-testid={`${tag}-geometries`}>
+      <span className="field-label">Geometry</span>
+      {geometries.map((g, n) => (
+        <div key={g.id} className="field-inline" data-testid={`${tag}-geometry`}>
+          <select aria-label={`Geometry ${n + 1} property`} value={g.property ?? ""}
+            onChange={(e) => onChange(withGeometrySetting(value, g.id, "property", e.target.value || null))}>
+            <option value="">Geoshape property…</option>
+            {shapes.map((p) => <option key={p.api_name} value={p.api_name}>{p.api_name}</option>)}
+          </select>
+          <input type="color" aria-label={`Geometry ${n + 1} colour`} value={g.color ?? "#14646e"}
+            onChange={(e) => onChange(withGeometrySetting(value, g.id, "color", e.target.value))} />
+          <label className="canvas-toggle">
+            <input type="checkbox" aria-label={`Geometry ${n + 1} in the legend`} checked={g.legend}
+              onChange={(e) => onChange(withGeometrySetting(value, g.id, "legend", e.target.checked))} />
+            <span>Legend</span>
+          </label>
+          <button type="button" className="btn quiet" aria-label={`Move geometry ${n + 1} earlier`}
+            disabled={n === 0} onClick={() => onChange(withGeometryEarlier(value, g.id))}>↑</button>
+          <button type="button" className="btn quiet" aria-label={`Remove geometry ${n + 1}`}
+            onClick={() => onChange(withoutGeometry(value, g.id))}>×</button>
+        </div>
+      ))}
+      <button type="button" className="btn quiet" data-testid={`${tag}-add-geometry`}
+        disabled={geometries.length >= MAX_GEOMETRIES} onClick={() => onChange(withNewGeometry(value))}>
+        Add geometry
+      </button>
+      {shapes.length === 0 && properties.length > 0 && (
+        <span className="field-hint">This type has no geoshape property to draw.</span>
+      )}
+      <label className="field canvas-toggle">
+        <input type="checkbox" data-testid={`${tag}-in-legend`} checked={inLegend}
+          onChange={(e) => onInLegend(e.target.checked)} />
+        <span className="field-label">Layer in the legend</span>
+      </label>
+    </div>
+  );
+}
+
 function MapLayerSettings({ layer, onSet, onRemove }: {
   layer: MapLayer;
   onSet: <K extends keyof MapLayer>(key: K, value: MapLayer[K]) => void;
@@ -16473,6 +16572,9 @@ function MapLayerSettings({ layer, onSet, onRemove }: {
       <input type="number" aria-label="Layer opacity" data-testid={`${tag}-opacity`}
         min={0.1} max={1} step={0.1} value={layer.opacity}
         onChange={(e) => onSet("opacity", layerOpacityOf(e.target.value))} />
+      <MapGeometrySettings tag={tag} value={layer.geometries} properties={properties}
+        inLegend={layer.inLegend} onChange={(next) => onSet("geometries", next)}
+        onInLegend={(on) => onSet("inLegend", on)} />
       <button type="button" className="btn quiet" data-testid={`${tag}-remove`} onClick={onRemove}>
         Remove layer
       </button>
@@ -16494,10 +16596,12 @@ function MapSettings() {
     drawOptions, drawnShapeColor, drawnShapeOpacity, singleDrawMode, drawnShapesVariable,
     selectedShapesVariable, shapeOutputType, enableMeasurements, measurePerimeter, perimeterMode, measureArea, measureLine, lineMode,
     showLegend, legendCollapsed, legendSize, showSelectionPanel, autoZoom, autoZoomSetVariable,
-    autoZoomOutsideOnly, boundsVariable, followSetVariable, layers,
+    autoZoomOutsideOnly, boundsVariable, followSetVariable, layers, geometries, layerInLegend,
     actions: { setProp },
   } = useNode((node) => ({
     layers: node.data.props.layers,
+    geometries: node.data.props.geometries,
+    layerInLegend: node.data.props.layerInLegend,
     showLegend: node.data.props.showLegend,
     legendCollapsed: node.data.props.legendCollapsed,
     legendSize: node.data.props.legendSize,
@@ -17004,6 +17108,10 @@ function MapSettings() {
                 onChange={(e) => setProp((p: { layerOpacity: number }) =>
                   (p.layerOpacity = layerOpacityOf(e.target.value)))}
               />
+              <MapGeometrySettings tag="map-layer" value={geometries} properties={detail.data?.properties ?? []}
+                inLegend={layerInLegend !== false}
+                onChange={(next) => setProp((p: { geometries: unknown }) => (p.geometries = next))}
+                onInLegend={(on) => setProp((p: { layerInLegend: boolean }) => (p.layerInLegend = on))} />
             </div>
           )}
           {/* p.300's Add object layer (§642): layers after the map's own. */}
