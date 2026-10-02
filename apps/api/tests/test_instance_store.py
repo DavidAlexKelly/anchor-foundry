@@ -873,12 +873,12 @@ def _explore(client: TestClient, fx: Fixture, **params) -> dict:
     return r.json()
 
 
-def _second_type(client: TestClient, fx: Fixture, mapped: dict) -> dict:
+def _second_type(client: TestClient, fx: Fixture, mapped: dict,
+                 parts: bytes = b"code,label\nX1,Widget\nX2,Gadget\n") -> dict:
     """A second mapped type, so "across every object type at once" has more
     than one type to be across. A plain helper rather than a fixture: the
     parametrised test below has to build it *after* choosing a store."""
     tag = uuid.uuid4().hex[:6]
-    parts = b"code,label\nX1,Widget\nX2,Gadget\n"
     r = client.post(
         f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
         headers=hdr(fx.editor_sub), data={"name": f"Parts {tag}"},
@@ -982,6 +982,33 @@ def test_the_explorer_pages_and_refuses_an_outsider(
         f"/api/workspaces/{fx.workspace}/object-instances", headers=hdr(fx.outsider_sub)
     )
     assert r.status_code == 404
+
+
+@pytest.mark.parametrize("store_name", ["postgres", "opensearch"])
+def test_objects_synced_together_come_back_in_key_order(
+    client: TestClient, fx: Fixture, mapped: dict, opensearch: str, store_name: str,
+) -> None:
+    """One sync writes its rows in one instant, so `updated_at` cannot order
+    them. Without a tie-break they came back in whatever order they were
+    written - here the dataset's, which is backwards - and "the first object"
+    was a different one from one read to the next."""
+    reset(opensearch)
+    if store_name == "opensearch":
+        instance_store.configure_instance_store(
+            instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin"))
+    try:
+        types = _second_type(client, fx, mapped,
+                             parts=b"code,label\nX3,Gizmo\nX2,Gadget\nX1,Widget\n")
+        page = _explore(client, fx, type_id=types["parts"])
+        assert [i["primary_key"] for i in page["items"]] == ["X1", "X2", "X3"], page
+        r = client.get(
+            f"/api/workspaces/{fx.workspace}/object-types/{types['parts']}/instances",
+            headers=hdr(fx.editor_sub),
+        )
+        assert r.status_code == 200, r.text
+        assert [i["primary_key"] for i in r.json()["items"]] == ["X1", "X2", "X3"]
+    finally:
+        instance_store.configure_instance_store(None)
 
 
 # ---- edit-only properties survive a sync, on *both* stores ------------------

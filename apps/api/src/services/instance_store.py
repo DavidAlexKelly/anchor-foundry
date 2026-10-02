@@ -763,7 +763,7 @@ class OpenSearchInstanceStore:
             index=index,
             body={
                 "query": {"term": {"object_type_id": str(object_type_id)}},
-                "sort": [{"updated_at": "desc"}],
+                "sort": [{"updated_at": "desc"}, {"primary_key": "asc"}],
                 "from": offset,
                 "size": limit,
             },
@@ -863,7 +863,9 @@ class OpenSearchInstanceStore:
             }]
         body: dict[str, Any] = {
             "query": {"bool": clauses} if clauses else {"match_all": {}},
-            "sort": [{"updated_at": "desc"}],
+            # Tied as Postgres's `instances.search` is: key, then type.
+            "sort": [{"updated_at": "desc"}, {"primary_key": "asc"},
+                     {"object_type_id": "asc"}],
             "from": offset,
             "size": limit,
         }
