@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   areaOf, axisProblem, axisTitlesOf, categoryText, chartSortOf, valueText, defaultValueTitle, missingCount, missingText,
-  nullDisplayOf, orientationOf, sortPoints, valueAxisOf, valueScale, withMissing,
+  nullDisplayOf, orientationOf, rightAxisTitle, sortPoints, valueAxisOf, valueScale, withMissing,
   type ValueAxis,
 } from "./chart-display";
 
@@ -160,12 +160,12 @@ describe("axis titles (p.283's Show title)", () => {
 
   it("shows a title only when asked, its override over its default", () => {
     const defaults = { category: "region", value: "Count" };
-    expect(axisTitlesOf({}, defaults)).toEqual({ category: null, value: null });
+    expect(axisTitlesOf({}, defaults)).toEqual({ category: null, value: null, right: null });
     expect(axisTitlesOf({ showCategoryTitle: true, showValueTitle: true }, defaults))
-      .toEqual(defaults);
+      .toEqual({ ...defaults, right: null });
     expect(axisTitlesOf({
       showCategoryTitle: true, categoryTitle: " Where ", showValueTitle: "yes", valueTitle: "Sites",
-    }, defaults)).toEqual({ category: "Where", value: null });
+    }, defaults)).toEqual({ category: "Where", value: null, right: null });
     expect(axisTitlesOf({ showValueTitle: true, valueTitle: "   " }, defaults).value).toBe("Count");
     expect(axisTitlesOf({ showCategoryTitle: true }, { category: null, value: null }).category)
       .toBeNull();
@@ -252,5 +252,29 @@ describe("axis number formats (p.283's Enable numerical formatting)", () => {
     expect(keys("2024")).toBe("$2,024");
     expect(keys("north")).toBe("north");
     expect(keys("")).toBe("");
+  });
+});
+
+describe("p.283's right value axis (§691)", () => {
+  const hours = { aggregate: "sum", measure: "hours" };
+  const count = { aggregate: "count", measure: null };
+  it("is titled by default with the aggregations of the series read against it", () => {
+    expect(rightAxisTitle([hours, count], ["left", "right", "left"], "bar")).toBe("Sum of hours");
+    expect(rightAxisTitle([hours, count], ["left", "right", "right"], "bar"))
+      .toBe("Sum of hours, Count");
+    // Once for each aggregation, and a scatter by its column.
+    expect(rightAxisTitle([hours, hours], ["left", "right", "right"], "bar")).toBe("Sum of hours");
+    expect(rightAxisTitle([{ ...hours, kind: "scatter" }], ["left", "right"], "bar")).toBe("hours");
+    expect(rightAxisTitle([hours], ["left", "left"], "bar")).toBe("");
+  });
+
+  it("shows its title only when asked, its override over its default", () => {
+    const defaults = { category: "c", value: "v", right: "Sum of hours" };
+    expect(axisTitlesOf({}, defaults).right).toBeNull();
+    expect(axisTitlesOf({ showRightTitle: true }, defaults).right).toBe("Sum of hours");
+    expect(axisTitlesOf({ showRightTitle: true, rightTitle: " Hours " }, defaults).right)
+      .toBe("Hours");
+    expect(axisTitlesOf({ showRightTitle: true }, { category: null, value: null }).right)
+      .toBeNull();
   });
 });

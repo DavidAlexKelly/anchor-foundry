@@ -434,6 +434,7 @@ import {
 import {
   AREA_OPTIONS, CHART_SORTS, NULL_DISPLAYS, SCALE_TYPES, areaOf, axisProblem, axisTitlesOf,
   categoryText, chartSortOf, defaultValueTitle, missingCount, missingText, nullDisplayOf,
+  rightAxisTitle,
   orientationOf, sortPoints, valueAxisOf, valueText, withMissing,
 } from "./chart-display";
 import { MapCanvas, toLatLon, type MapPoint, type MapShape } from "./map";
@@ -17673,6 +17674,12 @@ export function CanvasChart({
   series = [],
   seriesName = "",
   multipleAxes = false,
+  showRightTitle = false,
+  rightTitle = "",
+  rightScaleType = "linear",
+  rightMinBound = null,
+  rightMaxBound = null,
+  rightValueFormat = null,
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -17770,6 +17777,14 @@ export function CanvasChart({
   /** p.283's **Use multiple value axes** (§542): a second axis on the right
    * for the series that say so (`chart-series.axisSides`). */
   multipleAxes?: boolean;
+  /** p.283's value axes "configured on a per series basis" (§691): the right
+   * axis's own title, scale, bounds and number format. */
+  showRightTitle?: boolean;
+  rightTitle?: string;
+  rightScaleType?: string;
+  rightMinBound?: number | null;
+  rightMaxBound?: number | null;
+  rightValueFormat?: unknown;
 }) {
   const {
     connectors: { connect, drag },
@@ -18002,8 +18017,14 @@ export function CanvasChart({
   // chart drawn on calculated ones, rather than on an axis running backwards.
   const axis = valueAxisOf({ scaleType, minBound, maxBound });
   const axisTrouble = axisProblem(axis);
+  // The right axis's, when there is one (§691). A problem with its bounds is
+  // said, and `valueScale` draws it on calculated ones, as it does the left.
+  const rightAxis = valueAxisOf({
+    scaleType: rightScaleType, minBound: rightMinBound, maxBound: rightMaxBound });
+  const rightTrouble = sides.includes("right") ? axisProblem(rightAxis) : null;
+  const rightText = valueText(rightValueFormat) ?? undefined;
   const titles = axisTitlesOf(
-    { showCategoryTitle, categoryTitle, showValueTitle, valueTitle },
+    { showCategoryTitle, categoryTitle, showValueTitle, valueTitle, showRightTitle, rightTitle },
     usingSeries
       // p.281: a series chart has "the time range on the X axis".
       ? { category: "Time", value: defaultValueTitle("line", seriesRef?.aggregate, seriesRef?.property) }
@@ -18011,7 +18032,8 @@ export function CanvasChart({
       : { category: dimension,
           value: multi ? multi.segments.join(", ")
             : layered ? [firstName, ...drawnExtras.map((e) => e.name)].join(", ")
-            : defaultValueTitle(kind ?? "bar", aggregate, measure) },
+            : defaultValueTitle(kind ?? "bar", aggregate, measure),
+          right: rightAxisTitle(drawnExtras.map((e) => e.spec), sides, kind ?? "bar") },
   );
 
   const needs = usingSeries
@@ -18098,6 +18120,7 @@ export function CanvasChart({
           kinds={mixed ? kinds : undefined}
           drills={drills}
           sides={sides}
+          rightText={rightText}
           showLegend={showLegend !== false}
           titles={titles}
           legend={segmentLegendPositionOf(legendPosition)}
@@ -18117,6 +18140,7 @@ export function CanvasChart({
           kinds={mixed ? columnKinds : undefined}
           drills={drills}
           sides={columnSides}
+          rightText={rightText}
           showLegend={showLegend !== false}
           titles={titles}
           legend={segmentLegendPositionOf(legendPosition)}
@@ -18130,6 +18154,8 @@ export function CanvasChart({
           data={multi}
           drills={drills}
           sides={sides}
+          rightText={rightText}
+          rightAxis={rightAxis}
           axis={axis}
           nulls={nulls}
           showLegend={showLegend !== false}
@@ -18164,6 +18190,11 @@ export function CanvasChart({
       {!segmenting && !usingSeries && missingText(missing, drawnKind, nulls) && (
         <p className="canvas-widget-empty" data-testid="chart-missing">
           {missingText(missing, drawnKind, nulls)}
+        </p>
+      )}
+      {rightTrouble && (
+        <p className="canvas-widget-empty" data-testid="chart-right-axis-problem">
+          The right axis: {rightTrouble} It is calculated from the values instead.
         </p>
       )}
       {!segmenting && points && points.length > 0 && axisTrouble && (kind ?? "bar") !== "pie" && (
@@ -18226,9 +18257,16 @@ function ChartSettings() {
     scaleType, minBound, maxBound, showCategoryTitle, categoryTitle, showValueTitle, valueTitle,
     lineArea, nullDisplay, valueFormat, categoryFormat, legendPosition, segmentNames,
     series, seriesName, multipleAxes,
+    showRightTitle, rightTitle, rightScaleType, rightMinBound, rightMaxBound, rightValueFormat,
     actions: { setProp },
   } = useNode((node) => ({
     multipleAxes: node.data.props.multipleAxes,
+    showRightTitle: node.data.props.showRightTitle,
+    rightTitle: node.data.props.rightTitle,
+    rightScaleType: node.data.props.rightScaleType,
+    rightMinBound: node.data.props.rightMinBound,
+    rightMaxBound: node.data.props.rightMaxBound,
+    rightValueFormat: node.data.props.rightValueFormat,
     series: node.data.props.series,
     seriesName: node.data.props.seriesName,
     legendPosition: node.data.props.legendPosition,
@@ -18560,6 +18598,8 @@ function ChartSettings() {
           series={series}
           firstName={typeof seriesName === "string" ? seriesName : ""}
           firstDefault={defaultValueTitle(kind || "bar", aggregate, measure)}
+          rightAxis={{ showRightTitle, rightTitle, rightScaleType, rightMinBound, rightMaxBound,
+                       rightValueFormat }}
           numbers={columns.filter((c) => c.data_type === "integer" || c.data_type === "float")
             .map((c) => c.name)}
           names={columns.map((c) => c.name)}
@@ -18706,8 +18746,13 @@ function ChartSettings() {
  * panel. The Measure above is the first series; these are the rest. */
 function ChartSeriesFields({
   segmented, series, firstName, firstDefault, numbers, names, showLegend, legend, twoAxes,
-  sets, chartSet, clauses, setProp, chartKind = "bar",
+  sets, chartSet, clauses, setProp, chartKind = "bar", rightAxis,
 }: {
+  /** p.283's per-series value axes (§691): the right axis's settings. */
+  rightAxis: {
+    showRightTitle?: unknown; rightTitle?: unknown; rightScaleType?: unknown;
+    rightMinBound?: unknown; rightMaxBound?: unknown; rightValueFormat?: unknown;
+  };
   /** The chart's own type, which a series naming none is drawn as (§626). */
   chartKind?: "bar" | "line";
   /** p.282's Selection as filter per layer (§628): the array variables a
@@ -18932,6 +18977,13 @@ function ChartSeriesFields({
             />
             <span className="field-label">Use multiple value axes</span>
           </label>
+          {twoAxes && (
+            <ChartRightAxisFields
+              values={rightAxis}
+              fallback={rightAxisTitle(specs, axisSides(specs, true), chartKind)}
+              setProp={setProp}
+            />
+          )}
           <label className="field canvas-toggle">
             <input
               type="checkbox"
@@ -19016,6 +19068,94 @@ function SegmentLegendFields({ set, segmentBy, legend, names, setProp }: {
         <span className="field-hint">Blank keeps the value as its name</span>
       </div>
     </>
+  );
+}
+
+/** p.283's "Use multiple value axes … allows value axes to be configured on
+ * a per series basis" (§691): the right axis's own title, number format,
+ * scale and bounds, as the left's are set in `ChartAxisFields`. */
+function ChartRightAxisFields({ values, fallback, setProp }: {
+  values: {
+    showRightTitle?: unknown; rightTitle?: unknown; rightScaleType?: unknown;
+    rightMinBound?: unknown; rightMaxBound?: unknown; rightValueFormat?: unknown;
+  };
+  fallback: string;
+  setProp: (fn: (p: Record<string, unknown>) => void) => void;
+}) {
+  const read = valueAxisOf({
+    scaleType: values.rightScaleType, minBound: values.rightMinBound,
+    maxBound: values.rightMaxBound });
+  const trouble = axisProblem(read);
+  const bound = (key: "rightMinBound" | "rightMaxBound") =>
+    (e: React.ChangeEvent<HTMLInputElement>) =>
+      setProp((p) => (p[key] = e.target.value === "" ? null : Number(e.target.value)));
+  return (
+    <fieldset className="field" data-testid="chart-right-axis">
+      <legend className="field-label">Right value axis</legend>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          data-testid="chart-show-right-title"
+          checked={values.showRightTitle === true}
+          onChange={(e) => setProp((p) => (p.showRightTitle = e.target.checked))}
+        />
+        <span className="field-label">Show right axis title</span>
+      </label>
+      {values.showRightTitle === true && (
+        <label className="field">
+          <span className="field-label">Right axis title</span>
+          <input
+            type="text"
+            data-testid="chart-right-title-input"
+            value={typeof values.rightTitle === "string" ? values.rightTitle : ""}
+            placeholder={fallback}
+            onChange={(e) => setProp((p) => (p.rightTitle = e.target.value))}
+          />
+        </label>
+      )}
+      <ValueFormatField
+        label="Right axis number format"
+        testId="chart-right-format"
+        value={values.rightValueFormat}
+        hint="The right axis's ticks"
+        onChange={(next) => setProp((p) => (p.rightValueFormat = next))}
+      />
+      <label className="field">
+        <span className="field-label">Right axis scale</span>
+        <select
+          data-testid="chart-right-scale-type"
+          value={read.scale}
+          onChange={(e) => setProp((p) => (p.rightScaleType = e.target.value))}
+        >
+          {Object.entries(SCALE_TYPES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Right axis minimum bound</span>
+        <input
+          type="number"
+          data-testid="chart-right-min-bound"
+          value={read.min ?? ""}
+          placeholder="Calculated from the values"
+          onChange={bound("rightMinBound")}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Right axis maximum bound</span>
+        <input
+          type="number"
+          data-testid="chart-right-max-bound"
+          value={read.max ?? ""}
+          placeholder="Calculated from the values"
+          onChange={bound("rightMaxBound")}
+        />
+        <span className="field-hint">
+          {trouble ?? "For lines: bars on two axes start at zero on calculated axes."}
+        </span>
+      </label>
+    </fieldset>
   );
 }
 
@@ -19147,7 +19287,8 @@ CanvasChart.craft = {
     showCategoryTitle: false, categoryTitle: "", showValueTitle: false, valueTitle: "",
     lineArea: "line", nullDisplay: "ignored", valueFormat: null, categoryFormat: null,
     legendPosition: "bottom", segmentNames: {}, series: [], seriesName: "",
-    multipleAxes: false,
+    multipleAxes: false, showRightTitle: false, rightTitle: "", rightScaleType: "linear",
+    rightMinBound: null, rightMaxBound: null, rightValueFormat: null,
   },
   related: { settings: ChartSettings },
 };

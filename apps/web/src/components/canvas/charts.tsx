@@ -168,14 +168,27 @@ function Axes({ scale: s, area, format = niceNumber }: {
 }
 
 /** p.283's second value axis (§542): its ticks down the right edge, and no
- * grid lines of its own, which would be a second grid over the first. */
-function RightAxis({ scale: s, area, format = niceNumber }: {
+ * grid lines of its own, which would be a second grid over the first. Its
+ * title (§691) runs down beyond them, as the left one runs up. */
+function RightAxis({ scale: s, area, format = niceNumber, title }: {
   scale: ValueScale;
   area: Area;
   format?: (value: number) => string;
+  title?: string | null;
 }) {
   return (
     <g>
+      {title && (
+        <text
+          data-testid="chart-right-title"
+          transform={`translate(${area.x + area.w + RIGHT_AXIS + 6}, ${area.y + area.h / 2}) rotate(90)`}
+          textAnchor="middle"
+          fontSize={11}
+          fill="var(--ink-soft)"
+        >
+          {title}
+        </text>
+      )}
       <line
         x1={area.x + area.w} x2={area.x + area.w} y1={area.y} y2={area.y + area.h}
         stroke="var(--line)" strokeWidth={1}
@@ -197,8 +210,10 @@ function RightAxis({ scale: s, area, format = niceNumber }: {
   );
 }
 
-/** The width a right-hand axis's numbers take from the plot. */
+/** The width a right-hand axis's numbers take from the plot, and its title
+ * beyond them. */
 const RIGHT_AXIS = 44;
+const RIGHT_TITLE = 16;
 
 /** A legend entry's words: the series' name, and which axis it is read
  * against when there are two. */
@@ -717,8 +732,10 @@ export function PieChart({
  */
 export function SegmentedBarChart({
   data, mode, drill, showLegend = true, titles, valueText, categoryText,
-  legend = "bottom", names, sides, kinds, drills, stacks,
+  legend = "bottom", names, sides, kinds, drills, stacks, rightText,
 }: {
+  /** p.283's per-series value axes (§691): the right axis's own number format. */
+  rightText?: (value: number) => string;
   data: Segmented;
   mode: SegmentMode;
   /** p.282's Segment by on a layer (§678): the layer each column belongs to,
@@ -768,7 +785,7 @@ export function SegmentedBarChart({
   // A second axis only for bars side by side: a stack adds its parts, and
   // parts read against two axes do not add.
   const twoAxes = mode === "grouped" && (sides?.includes("right") ?? false);
-  if (twoAxes) area.w -= RIGHT_AXIS;
+  if (twoAxes) area.w -= RIGHT_AXIS + (titles?.right ? RIGHT_TITLE : 0);
   const sideOf = (segment: number) => (twoAxes ? sides?.[segment] ?? "left" : "left");
   const lineValues = (side: AxisSide | null) => lineAt
     .filter((series) => side === null || sideOf(series) === side)
@@ -798,7 +815,10 @@ export function SegmentedBarChart({
         area={area}
         format={percent ? (v) => `${Math.round(v * 100)}%` : valueText ?? niceNumber}
       />
-      {twoAxes && <RightAxis scale={right} area={area} format={valueText ?? niceNumber} />}
+      {twoAxes && (
+        <RightAxis scale={right} area={area} format={rightText ?? valueText ?? niceNumber}
+                   title={titles?.right} />
+      )}
       <AxisTitleMarks
         titles={titles}
         area={area}
@@ -912,7 +932,12 @@ export function SegmentedBarChart({
 export function MultiLineChart({
   data: given, drill, axis = CALCULATED, nulls = "ignored", showLegend = true,
   legend = "bottom", titles, valueText, categoryText, sides, fill = "line", drills,
+  rightAxis = CALCULATED, rightText,
 }: {
+  /** p.283's per-series value axes (§691): the right axis's own scale, bounds
+   * and number format. */
+  rightAxis?: ValueAxis;
+  rightText?: (value: number) => string;
   data: Segmented;
   /** p.282's Selection as filter per layer (§628), as the bar chart's. */
   drills?: (Drill | undefined)[];
@@ -942,14 +967,14 @@ export function MultiLineChart({
     h: frame.h - inset.top - inset.bottom,
   };
   const valueOf = (v: number) => (Number.isNaN(v) && nulls === "zeroes" ? 0 : v);
-  // Two axes when a series is read on the right: the left one is the axis
-  // the panel's scale and bounds describe, and the right one is calculated.
+  // Two axes when a series is read on the right, each with its own scale
+  // and bounds (p.283's "configured on a per series basis", §691).
   const twoAxes = sides?.includes("right") ?? false;
-  if (twoAxes) area.w -= RIGHT_AXIS;
+  if (twoAxes) area.w -= RIGHT_AXIS + (titles?.right ? RIGHT_TITLE : 0);
   const on = (side: AxisSide) => data.values.flatMap((row) =>
     row.filter((_, series) => (sides?.[series] ?? "left") === side)).map(valueOf);
   const s = valueScale(on("left"), axis);
-  const right = valueScale(on("right"), CALCULATED);
+  const right = valueScale(on("right"), rightAxis);
   const scaleOf = (series: number) => (sides?.[series] === "right" ? right : s);
   const step = data.categories.length > 1 ? area.w / (data.categories.length - 1) : 0;
   const labelEvery = Math.max(1, Math.ceil(data.categories.length / 8));
@@ -994,14 +1019,18 @@ export function MultiLineChart({
       style={{ width: "100%" }}
     >
       <Axes scale={s} area={area} format={valueText ?? tickFormat(axis)} />
-      {twoAxes && <RightAxis scale={right} area={area} format={valueText ?? niceNumber} />}
+      {twoAxes && (
+        <RightAxis scale={right} area={area} format={rightText ?? valueText ?? tickFormat(rightAxis)}
+                   title={titles?.right} />
+      )}
       <AxisTitleMarks
         titles={titles}
         area={area}
         belowY={area.y + area.h + 30}
         leftX={12 + inset.left}
       />
-      <Plot area={area} axis={axis}>
+      {/* Cut at the edges when either axis has a bound (§691). */}
+      <Plot area={area} axis={twoAxes && axis.min === null && axis.max === null ? rightAxis : axis}>
         {bands.map((band, series) => band && (
           <path
             key={`b${series}`}

@@ -212,6 +212,8 @@ export function valueScale(given: readonly number[], axis: ValueAxis): ValueScal
 export interface AxisTitles {
   category: string | null;
   value: string | null;
+  /** p.283's second value axis's own title (§691), when there is one. */
+  right?: string | null;
 }
 
 const AGGREGATE_WORDS: Record<string, string> = {
@@ -241,6 +243,7 @@ export function axisTitlesOf(
   props: {
     showCategoryTitle?: unknown; categoryTitle?: unknown;
     showValueTitle?: unknown; valueTitle?: unknown;
+    showRightTitle?: unknown; rightTitle?: unknown;
   },
   defaults: AxisTitles,
 ): AxisTitles {
@@ -252,6 +255,7 @@ export function axisTitlesOf(
   return {
     category: pick(props.showCategoryTitle, props.categoryTitle, defaults.category),
     value: pick(props.showValueTitle, props.valueTitle, defaults.value),
+    right: pick(props.showRightTitle, props.rightTitle, defaults.right ?? null),
   };
 }
 
@@ -344,4 +348,19 @@ export function valueText(raw: unknown): ((value: number) => string) | null {
 export function categoryText(raw: unknown): ((label: string) => string) | null {
   const format = numberFormatOf(raw);
   return format ? (label) => formatValue(label, format) ?? label : null;
+}
+
+/** p.283's default title for the second value axis (§691): "the aggregation
+ * type(s) used within the chart's series", of the series read against it.
+ * `sides` is `axisSides`' answer, the first series' side first. One title per
+ * distinct aggregation, so two sums of hours say it once. */
+export function rightAxisTitle(
+  specs: readonly { kind?: string | null; aggregate?: string | null; measure?: string | null }[],
+  sides: readonly string[],
+  kind: string,
+): string {
+  const titles = specs
+    .filter((_, i) => sides[i + 1] === "right")
+    .map((spec) => defaultValueTitle(spec.kind ?? kind, spec.aggregate, spec.measure));
+  return [...new Set(titles)].join(", ");
 }
