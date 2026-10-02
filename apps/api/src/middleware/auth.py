@@ -14,6 +14,7 @@ Nothing downstream of step 4 differs between the two.
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -24,8 +25,20 @@ from fastapi import Depends, Request
 from jwt import PyJWKClient
 
 from ..lib.config import Settings, get_settings
-from ..lib.db import auth_lookup_connection, fetch_one
-from ..lib.errors import UnauthorizedError
+from ..lib.db import auth_lookup_connection, fetch_one, get_engine, kiosk_settings
+from ..lib.errors import ForbiddenError, UnauthorizedError
+from ..services import kiosk
+
+
+@dataclass(frozen=True)
+class KioskSession:
+    """A kiosk session's credential, resolved (§684; db 0134)."""
+
+    session_id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    app_id: UUID
+    scope: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -38,6 +51,9 @@ class AuthContext:
     display_name: str
     org_role: str  # 'owner' | 'admin' | 'member'
     cognito_sub: str
+    #: Set when the credential is a kiosk session's (§684): the session, its
+    #: workspace and its scope. None for every ordinary request.
+    kiosk: KioskSession | None = None
 
     @property
     def is_org_admin(self) -> bool:
@@ -165,6 +181,8 @@ async def authenticate_token(token: str) -> AuthContext:
     first access, so it silently did nothing - and a shared function is what
     the reuse was reaching for anyway.
     """
+    if token.startswith(kiosk.PREFIX):
+        return await _authenticate_kiosk(token)
     claims = get_verifier().verify(token)  # steps 1-3
     sub = str(claims["sub"])  # step 4
 
@@ -202,11 +220,50 @@ async def authenticate_token(token: str) -> AuthContext:
     return ctx
 
 
+async def _authenticate_kiosk(token: str) -> AuthContext:
+    """A kiosk session's credential (§684; `workshop` p.610): the builder who
+    launched it, narrowed to the session. Looked up on every request rather
+    than cached, so a session an administrator ends stops at the next call."""
+    async with get_engine().begin() as conn:
+        row = await fetch_one(
+            conn, "SELECT * FROM kiosk_session_for_token(:hash)",
+            {"hash": kiosk.hash_token(token)},
+        )
+    if row is None:
+        raise UnauthorizedError("unknown kiosk session")
+    if not row["live"]:
+        raise UnauthorizedError("this kiosk session has ended")
+    if row["status"] != "active":
+        raise UnauthorizedError("user account is disabled")
+    scope = row["scope"]
+    return AuthContext(
+        user_id=row["user_id"],
+        organisation_id=row["organisation_id"],
+        email=str(row["email"]),
+        display_name=str(row["display_name"]),
+        org_role=str(row["org_role"]),
+        cognito_sub=str(row["cognito_sub"]),
+        kiosk=KioskSession(
+            session_id=row["session_id"], workspace_id=row["workspace_id"],
+            project_id=row["project_id"], app_id=row["app_id"],
+            scope=json.loads(scope) if isinstance(scope, str) else scope,
+        ),
+    )
+
+
 async def get_current_user(request: Request) -> AuthContext:
     """FastAPI dependency: §9 steps 1-6. Every API route depends on this
     (directly or via the permission dependencies); no route executes business
     logic without it."""
     ctx = await authenticate_token(_extract_bearer(request))
+    if ctx.kiosk is not None:
+        # §684: read-only and in its own workspace, refused here once for
+        # every route; and scoped, by the settings every connection this
+        # request opens will carry.
+        why = kiosk.refusal(request.method, request.url.path, str(ctx.kiosk.workspace_id))
+        if why is not None:
+            raise ForbiddenError(why)
+        kiosk_settings.set(kiosk.settings_for(ctx.kiosk.scope))
     request.state.auth = ctx  # step 6
     return ctx
 

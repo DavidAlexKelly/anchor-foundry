@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Any
 from uuid import UUID
 
@@ -26,6 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 from .config import get_settings
 
 _engine: AsyncEngine | None = None
+
+#: A kiosk session's settings for this request (§684, db 0134), or None. Set
+#: by the auth dependency when the credential is a kiosk one, and applied by
+#: `user_connection` to every transaction the request opens - so the scope is
+#: the database's to enforce, on every query, without a route having to ask.
+kiosk_settings: ContextVar[dict[str, str] | None] = ContextVar("kiosk_settings", default=None)
 
 
 def get_engine() -> AsyncEngine:
@@ -73,6 +80,10 @@ async def user_connection(user_id: UUID) -> AsyncIterator[AsyncConnection]:
         await conn.execute(
             text("SELECT set_config('app.user_id', :uid, true)"), {"uid": str(user_id)}
         )
+        for name, value in (kiosk_settings.get() or {}).items():
+            await conn.execute(
+                text("SELECT set_config(:name, :value, true)"), {"name": name, "value": value}
+            )
         yield conn
 
 

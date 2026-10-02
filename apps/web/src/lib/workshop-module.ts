@@ -82,6 +82,7 @@ export function moduleFrom(
     autoRefresh?: WorkshopModule["auto_refresh"];
     derivedProperties?: WorkshopModule["derived_properties"];
     savedColours?: WorkshopModule["saved_colours"];
+    kiosk?: WorkshopModule["kiosk"];
   },
 ): WorkshopModule {
   const current = isV2(definition) ? definition : undefined;
@@ -92,6 +93,7 @@ export function moduleFrom(
   const autoRefresh = parts.autoRefresh ?? current?.auto_refresh;
   const derivedProperties = parts.derivedProperties ?? current?.derived_properties;
   const savedColours = parts.savedColours ?? current?.saved_colours;
+  const kiosk = parts.kiosk ?? current?.kiosk;
   return {
     format: 2,
     layout: parts.layout ?? layoutOf(definition),
@@ -102,6 +104,8 @@ export function moduleFrom(
     // off for every module built before this existed, which is the same class
     // of quiet loss `broken_bindings` is carried to avoid.
     ...(routing ? { routing } : {}),
+    // Carried for `routing`'s reason, and written only when on (§684).
+    ...(kiosk?.enabled ? { kiosk: { enabled: true } } : {}),
     // Carried for `routing`'s reason, and written only when it is on: an
     // `enabled: false` in every document would be a setting recorded in every
     // diff that nobody chose.
@@ -159,6 +163,11 @@ export function translationsOf(
     ...(stored?.source_language ? { source_language: stored.source_language } : {}),
     languages: stored?.languages ?? {},
   };
+}
+
+/** Whether a module has p.610's Kiosk Mode turned on (§684). */
+export function kioskOf(definition: unknown): boolean {
+  return isV2(definition) && definition.kiosk?.enabled === true;
 }
 
 /** Whether a module writes its state to the URL (p.195). */

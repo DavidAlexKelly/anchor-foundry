@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, api, mutations } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
+import { KioskSettings } from "@/components/kiosk-settings";
 import type { OrgUser } from "@/lib/types";
 
 function InviteButton() {
@@ -205,6 +206,9 @@ export default function OrgPage() {
           </tbody>
         </table>
       )}
+      {/* p.610's Control Panel kiosk settings (§684): administrators only,
+          as the API is. */}
+      {isAdmin && <KioskSettings />}
     </main>
   );
 }
