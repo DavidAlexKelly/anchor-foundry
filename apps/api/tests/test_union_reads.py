@@ -121,6 +121,84 @@ def test_auto_steps_past_an_interval_with_too_many_buckets(monkeypatch) -> None:
     assert interval == "month" and len(filled) == 49 and total == 0
 
 
+# ---- a page over several types (§688) ----------------------------------------
+from src.services import object_sets  # noqa: E402
+
+
+def row(key: str, updated: str = "2024-01-01", **properties) -> dict:
+    return {"primary_key": key, "updated_at": updated, "properties": properties}
+
+
+def keys_of(rows: list[dict]) -> list[str]:
+    return [r["primary_key"] for r in rows]
+
+
+def by(prop: str, *, descending: bool = False, data_type: str = "float") -> object_sets.Sort:
+    return object_sets.Sort(key=prop, property=prop, descending=descending, data_type=data_type)
+
+
+def test_a_property_sort_puts_no_value_last_either_way() -> None:
+    pages = [[row("a", n=1), row("b")], [row("c", n=3), row("d", n="n/a")]]
+    up = union_reads.merge_page(pages, (by("n"),), limit=10, offset=0)
+    down = union_reads.merge_page(pages, (by("n", descending=True),), limit=10, offset=0)
+    assert keys_of(up) == ["a", "c", "b", "d"]
+    assert keys_of(down) == ["c", "a", "b", "d"]
+
+
+def test_ties_fall_to_the_key_then_to_the_part() -> None:
+    """Two types may share a key; which part a row came from settles it."""
+    pages = [[row("k2", n=1), row("k1", n=1)], [row("k1", n=1)]]
+    merged = union_reads.merge_page(pages, (by("n"),), limit=10, offset=0)
+    assert keys_of(merged) == ["k1", "k1", "k2"]
+    assert merged[0] is pages[0][1] and merged[1] is pages[1][0]
+
+
+def test_later_sorts_order_within_earlier_ones() -> None:
+    pages = [[row("a", g=1, n=2), row("b", g=2, n=9)], [row("c", g=1, n=5)]]
+    merged = union_reads.merge_page(
+        pages, (by("g"), by("n", descending=True)), limit=10, offset=0)
+    assert keys_of(merged) == ["c", "a", "b"]
+
+
+def test_the_fixed_sorts_order_by_what_every_row_carries() -> None:
+    pages = [[row("b", "2024-03-01"), row("a", "2024-01-01")], [row("c", "2024-02-01")]]
+    recent = union_reads.merge_page(pages, (), limit=10, offset=0)
+    assert keys_of(recent) == ["b", "c", "a"]
+    oldest = union_reads.merge_page(pages, (object_sets.Sort(key="oldest"),), limit=10, offset=0)
+    assert keys_of(oldest) == ["a", "c", "b"]
+    down = union_reads.merge_page(pages, (object_sets.Sort(key="-key"),), limit=10, offset=0)
+    assert keys_of(down) == ["c", "b", "a"]
+    # The page is a window of the order.
+    assert keys_of(union_reads.merge_page(pages, (object_sets.Sort(key="key"),),
+                                          limit=1, offset=1)) == ["b"]
+
+
+def test_a_part_is_read_in_the_stores_page_size(monkeypatch) -> None:
+    """OpenSearch clamps a read to a page, so a part is read a page at a time
+    until the order has enough of it."""
+    class Chunked(FakeStore):
+        sorts: list = []
+
+        async def evaluate_object_set(self, *, object_type_id, limit, offset, sort, **_):
+            self.asked.append(("page", object_type_id, limit, offset))
+            self.sorts.append(sort)
+            everything = [row(f"k{n:03d}") for n in range(120)]
+            return everything[offset: offset + min(limit, 50)], len(everything)
+
+    store = Chunked()
+    fake_parts(monkeypatch, store, {A: {}})
+    rows, total = asyncio.run(union_reads.page(
+        None, A, {}, sort="key", limit=20, offset=60))
+    assert total == 120 and keys_of(rows) == [f"k{n:03d}" for n in range(60, 80)]
+    # Until it holds the first 80, and not the 120 there are.
+    assert store.asked == [("page", A, 50, 0), ("page", A, 50, 50)]
+    # Each part is read in the page's order, so its first rows are the ones
+    # the merge needs.
+    assert store.sorts == [(object_sets.Sort(key="key"),)] * 2
+    rows, _ = asyncio.run(union_reads.page(None, A, {}, sort="key", limit=20, offset=100))
+    assert keys_of(rows) == [f"k{n:03d}" for n in range(100, 120)]
+
+
 # ---- against real instances -------------------------------------------------
 @pytest.fixture(scope="module")
 def mixed(client, fx) -> dict:
@@ -153,11 +231,13 @@ def mixed(client, fx) -> dict:
         {"api_name": "since", "data_type": "date"},
         {"api_name": "size", "data_type": "integer"},
         {"api_name": "opened", "data_type": "date"},
+        {"api_name": "rank", "data_type": "integer"},
     ])
     staff = a_type("staff", [
         {"api_name": "region", "data_type": "string"},
         {"api_name": "score", "data_type": "float"},
         {"api_name": "since", "data_type": "date"},
+        {"api_name": "rank", "data_type": "date"},
     ])
     upload(f"sites_{tag}", b"id,region,score,since,size,opened\n"
            b"S1,north,10,2024-01-05,1,2023-12-01\nS2,south,20,2024-01-20,2,2023-12-15\n"
@@ -293,3 +373,44 @@ def test_a_union_narrowed_to_nothing_reads_as_empty(client, fx, mixed) -> None:
 def test_a_union_that_is_not_one_is_refused(client, fx, definition, said) -> None:
     answer = post(client, fx, "group", {"definition": definition, "property": "region"})
     assert answer["status"] == 422 and said in answer["body"]["detail"], answer
+
+
+def page_of(client, fx, mixed, **body) -> dict:
+    return post(client, fx, "evaluate", {"definition": mixed, "limit": 50, **body})
+
+
+def test_a_page_holds_every_type_each_named(client, fx, mixed) -> None:
+    answer = page_of(client, fx, mixed, sort="key")
+    assert answer["status"] == 200, answer
+    body = answer["body"]
+    assert [i["primary_key"] for i in body["instances"]] == ["P1", "P2", "S1", "S2", "S3"]
+    sites, staff = (part["object_type_id"] for part in mixed["union"])
+    assert [i["object_type_id"] for i in body["instances"]] == [staff, staff, sites, sites, sites]
+    assert body["total"] == 5
+
+
+def test_a_page_sorts_by_a_shared_property_across_types(client, fx, mixed) -> None:
+    """p.458: "only shared properties can be sorted on". An integer and a
+    decimal are both numbers."""
+    body = page_of(client, fx, mixed, sort="-score")["body"]
+    assert [i["primary_key"] for i in body["instances"]] == ["P2", "S3", "S2", "S1", "P1"]
+    body = page_of(client, fx, mixed, sort="key", limit=2, offset=2)["body"]
+    assert [i["primary_key"] for i in body["instances"]] == ["S1", "S2"]
+
+
+@pytest.mark.parametrize("sort, said", [
+    ("size", "only a property every type in the union declares can be sorted on (p.458)"),
+    (["key", "-size"], "and 'size' is not one"),
+    ("nothing_has_this", "unknown sort 'nothing_has_this'"),
+    ("rank", "do not order against each other"),
+])
+def test_a_sort_not_every_type_can_answer_is_refused(client, fx, mixed, sort, said) -> None:
+    answer = page_of(client, fx, mixed, sort=sort)
+    assert answer["status"] == 422 and said in answer["body"]["detail"], answer
+
+
+def test_a_union_pages_to_a_stated_depth(client, fx, mixed) -> None:
+    answer = page_of(client, fx, mixed, limit=20, offset=190)
+    assert answer["status"] == 422, answer
+    assert "pages to 200 objects (asked for 190 + 20)" in answer["body"]["detail"]
+    assert page_of(client, fx, mixed, limit=20, offset=180)["status"] == 200

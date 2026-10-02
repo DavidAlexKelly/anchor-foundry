@@ -233,3 +233,114 @@ async def time_series(conn: Any, workspace_id: UUID, definition: dict[str, Any],
         if len(filled) <= object_sets.MAX_AUTO_POINTS or candidate == candidates[-1]:
             break
     return filled, candidate, total
+
+
+# ---- a page: the objects of every type, in one order (§688) ------------------
+#: How deep a union pages. Serving `[offset, offset + limit)` of one order over
+#: several types needs each type's first `offset + limit` objects, since any of
+#: them could supply the whole page - so the depth is a cost per type, stated
+#: and refused past rather than answered with a page from the wrong place.
+#: `ObjectSetIn`'s largest page, so one page is always servable.
+MAX_DEPTH = 200
+
+#: Declared types that order against each other. A sort over a union compares
+#: one type's value with another's, so the types it names must be comparable:
+#: numbers with numbers, instants with instants (`object_sets.comparable`).
+_ORDER_FAMILY = {"integer": "number", "float": "number", "date": "instant",
+                 "timestamp": "instant"}
+
+#: The four fixed sorts, as the field each row carries and its direction.
+_FIXED = {"recent": ("updated_at", True), "oldest": ("updated_at", False),
+          "key": ("primary_key", False), "-key": ("primary_key", True)}
+
+
+def union_sorts(raw: Any, declared: list[dict[str, str]]) -> tuple[object_sets.Sort, ...]:
+    """p.223's sorts, checked against every type. p.458: "If multiple object
+    types exist in the object set, only shared properties can be sorted on" -
+    so a property sort names a property each type declares, in types that
+    order against each other."""
+    for entry in [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []:
+        name = entry[1:] if isinstance(entry, str) and entry.startswith("-") else entry
+        if isinstance(name, str) and name not in object_sets.SORTS \
+                and any(name in types for types in declared) \
+                and not all(name in types for types in declared):
+            raise ValueError(
+                f"only a property every type in the union declares can be sorted on "
+                f"(p.458), and {name!r} is not one")
+    parsed = [object_sets.parse_sorts(raw, property_types=types) for types in declared]
+    first = parsed[0] if parsed else ()
+    for sorts in parsed[1:]:
+        for mine, theirs in zip(first, sorts):
+            # A fixed sort's family is None on every type, so it never differs.
+            if _ORDER_FAMILY.get(str(mine.data_type)) != _ORDER_FAMILY.get(
+                    str(theirs.data_type)):
+                raise ValueError(
+                    f"{mine.property!r} is a {mine.data_type} on one type and a "
+                    f"{theirs.data_type} on another, which do not order against each other")
+    return first
+
+
+def merge_page(pages: list[list[dict[str, Any]]], sorts: tuple[object_sets.Sort, ...],
+               *, limit: int, offset: int) -> list[dict[str, Any]]:
+    """One page of the combined order, from each part's already-ordered rows.
+
+    **The stores' own order, restated**: each sort in turn, a property's value
+    in its declared type with no value last in either direction (as
+    `instances._order_by` and OpenSearch both put it), then the primary key
+    unless a sort already was it. Two types can share a key, so which part a
+    row came from breaks the last tie, and a page reads the same twice.
+
+    Sorted in passes from the least significant key to the most, which a
+    stable sort makes equal to one comparison of them all. The rows start in
+    part order, so the last tie needs no pass of its own; and a key pass under
+    a sort by the key changes nothing, so it needs no condition."""
+    rows = [(n, row) for n, page in enumerate(pages) for row in page]
+    rows.sort(key=lambda nr: str(nr[1].get("primary_key") or ""))
+    for sort in reversed(sorts or (object_sets.Sort(),)):
+        if sort.property is None:
+            field, descending = _FIXED[sort.key]
+            # As text: an instant is a `datetime` on one store and an ISO
+            # string on the other, and one read only ever meets one of them.
+            rows.sort(key=lambda nr: str(nr[1].get(field)), reverse=descending)
+            continue
+        prop, data_type = sort.property, sort.data_type
+
+        def value(nr: tuple[int, dict[str, Any]]) -> Any:
+            return object_sets.comparable((nr[1].get("properties") or {}).get(prop), data_type)
+
+        if sort.descending:
+            rows.sort(key=lambda nr: (value(nr) is not None, value(nr)), reverse=True)
+        else:
+            rows.sort(key=lambda nr: (value(nr) is None, value(nr)))
+    return [row for _, row in rows[offset: offset + limit]]
+
+
+async def page(conn: Any, workspace_id: UUID, definition: dict[str, Any], *, sort: Any,
+               limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+    """A page of a union's objects in one order, each row naming its type -
+    p.455's "data on one or multiple object types" in one list."""
+    if offset + limit > MAX_DEPTH:
+        raise ValueError(
+            f"a union of object sets pages to {MAX_DEPTH} objects (asked for {offset} + "
+            f"{limit}) - narrow it with a filter")
+    store, prefix = await _store(conn, workspace_id)
+    parts = await _parts(conn, store, prefix, workspace_id, definition)
+    sorts = union_sorts(sort, [part.declared for part in parts])
+    pages: list[list[dict[str, Any]]] = []
+    total = 0
+    for part in parts:
+        rows: list[dict[str, Any]] = []
+        count = 0
+        # In the store's own page size: a read of more is clamped to it on
+        # OpenSearch, and the merge would drop real members without knowing.
+        while True:
+            chunk, count = await store.evaluate_object_set(
+                search_prefix=prefix, object_type_id=part.definition.object_type_id,
+                filters=part.members, limit=instance_store.INSTANCE_PAGE_SIZE,
+                offset=len(rows), sort=sorts)
+            rows.extend(chunk)
+            if not chunk or len(rows) >= min(count, offset + limit):
+                break
+        total += count
+        pages.append(rows)
+    return merge_page(pages, sorts, limit=limit, offset=offset), total

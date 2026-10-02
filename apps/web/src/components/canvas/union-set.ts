@@ -96,3 +96,13 @@ export function unionProperties<P extends { api_name: string; display_name: stri
     .map((p) => ({ ...p, display_name: `${p.display_name || p.api_name} (${t.displayName})` })));
   return { common, single };
 }
+
+/** The type a selection names, if it names one (§688): what tells a union's
+ * rows with the same key apart when the selection is read back. */
+export function selectedType(raw: unknown): string | null {
+  if (!Array.isArray(raw)) return null;
+  const clause = raw.find(
+    (c) => !!c && typeof c === "object" && (c as Clause).property === OBJECT_TYPE_CLAUSE,
+  ) as Clause | undefined;
+  return typeof clause?.value === "string" ? clause.value : null;
+}

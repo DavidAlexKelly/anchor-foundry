@@ -82,9 +82,10 @@ def test_a_property_one_type_lacks_leaves_that_type_nothing(client, fx, linked) 
 
 
 def test_a_read_over_one_type_refuses_a_union_in_a_sentence(client, fx, linked) -> None:
-    answer = evaluate(client, fx, {"union": [
-        {"object_type_id": linked["customer_type"], "filters": []},
-        {"object_type_id": linked["order_type"], "filters": []},
-    ]})
-    assert answer["status"] == 422, answer
-    assert "union of several object types" in answer["body"]["detail"]
+    r = client.post(f"/api/workspaces/{fx.workspace}/object-sets/aggregate",
+                    headers=hdr(fx.editor_sub), json={"definition": {"union": [
+                        {"object_type_id": linked["customer_type"], "filters": []},
+                        {"object_type_id": linked["order_type"], "filters": []},
+                    ]}, "aggregation": "count"})
+    assert r.status_code == 422, r.text
+    assert "union of several object types" in r.json()["detail"]

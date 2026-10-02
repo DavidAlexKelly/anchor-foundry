@@ -469,6 +469,10 @@ class InstanceOut(BaseModel):
     # it in: see `_reduced` for which those are and why.
     reduced: dict[str, Any] = {}
     updated_at: datetime
+    #: Which type this object is. Both stores' rows always carried it and this
+    #: model dropped it, since a read of one type is of the type its caller
+    #: named. A page of a union of sets (§688) holds several.
+    object_type_id: UUID | None = None
 
 
 class InstancePage(BaseModel):
@@ -6214,6 +6218,15 @@ async def evaluate_object_set(
     answer "how many match" or "show me the next page of the filtered set" -
     which is the whole reason object sets are a server concept.
     """
+    if object_sets.is_union(body.definition):
+        # §688: every type's objects in one order (`union_reads.page`).
+        async with user_connection(access.auth.user_id) as conn:
+            rows, total = await union_reads.page(
+                conn, access.workspace_id, body.definition, sort=body.sort,
+                limit=body.limit, offset=body.offset)
+        return ObjectSetOut(
+            instances=[InstanceOut(**{**r, "properties": _jsonb(r["properties"])}) for r in rows],
+            total=total, limit=body.limit, offset=body.offset)
     # **The id first, then the ontology, then the rest of the definition.** An
     # ordered comparison is validated against the declared property types
     # (§221), and reading those needs to know whose properties to read - so the
