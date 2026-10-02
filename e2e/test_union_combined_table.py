@@ -80,6 +80,9 @@ def column(page, table: int, name: str) -> list[str]:
     """One column's cells, by its header, in row order."""
     grid = page.locator(".data-grid").nth(table)
     headers = [h.strip() for h in grid.locator("thead th").all_text_contents()]
+    # The columns wait for every type's properties; until then there are none.
+    if name not in headers:
+        return []
     index = headers.index(name)
     return [c.strip() for c in grid.locator(f"tbody tr td:nth-child({index + 1})")
             .all_text_contents()]
