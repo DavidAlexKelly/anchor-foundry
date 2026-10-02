@@ -3091,6 +3091,13 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-section-header { display: flex; align-items: flex-start; gap: 8px; }
 .canvas-section-header-icon { font-size: 16px; line-height: 1.4; }
 .canvas-section-header-text { min-width: 0; flex: 1 1 auto; }
+/* p.14's widgets in the header, "on the right" (§680): after the title,
+   whose growing text is what pushes them to the far end, and wrapping rather
+   than squeezing it on a narrow screen. */
+.canvas-section-header-widgets {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end;
+  gap: 6px; flex: 0 1 auto; min-width: 0;
+}
 .canvas-section-title {
   margin: 0; font-family: var(--font-body); font-size: 13.5px; font-weight: 600;
   color: var(--ink); padding: 4px 0;

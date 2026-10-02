@@ -413,7 +413,7 @@ import {
   sortSegmented,
 } from "./chart-segments";
 import { useAttachmentUrl } from "./use-attachment-url";
-import { HEADER_STYLES, headerStyleOf, paddingTarget, styleTarget } from "./section-header";
+import { HEADER_STYLES, headerCount, headerStyleOf, paddingTarget, styleTarget } from "./section-header";
 import {
   DEFAULT_LOGO_HEIGHT, MAX_LOGO_HEIGHT, MIN_LOGO_HEIGHT, headerMark, imageRefOf, logoHeightOf,
   logoPositionOf, logoPositionsFor, type ImageRef,
@@ -21218,6 +21218,7 @@ export function CanvasSection({
   headerIcon = "",
   description = "",
   headerStyle = "block",
+  headerWidgets = 0,
   children,
 }: {
   /** p.13's "toggle on the options for Section Header" (§473): a header
@@ -21232,6 +21233,10 @@ export function CanvasSection({
   description?: string;
   /** p.58's Block, Contained or Floating (`section-header.ts`). */
   headerStyle?: string;
+  /** p.14's (+) "on the right" of a section header (§680): how many of the
+   * first children sit in the header rather than the body
+   * (`section-header.headerCount`). */
+  headerWidgets?: number;
   /** p.564-568's **Drop Handling**: this section becomes a drop zone for
    * objects dragged from a table cell, an Object View's icon or an Object Set
    * Title (p.569-570). Off by default, because a section that swallowed every
@@ -21340,7 +21345,12 @@ export function CanvasSection({
   // have proportions to configure or handles to drag. Tabs, Flow and Toolbar
   // are about *not* doing that.
   const shares = direction === "columns" || direction === "rows";
-  const parts = childList(children);
+  // p.14's header widgets come off the front, so everything below - tabs,
+  // proportions, handles - counts only what is in the body.
+  const all = childList(children);
+  const inHeader = headerCount(headerWidgets, all.length, showHeader === true);
+  const headerParts = all.slice(0, inHeader);
+  const parts = all.slice(inHeader);
 
   // p.54's Tabs layout and p.84's variable. Computed unconditionally, for the
   // reason the collapse block above gives: a hook whose presence depends on a
@@ -21572,6 +21582,16 @@ export function CanvasSection({
               <p className="canvas-section-description">{description}</p>
             )}
           </div>
+          {headerParts.length > 0 && (
+            // p.14: "the plus sign (+) on the right" - the header's widgets
+            // sit after its title, at the far end of the bar.
+            <div
+              className="canvas-section-header-widgets"
+              data-testid={`section-header-widgets-${nodeId}`}
+            >
+              {headerParts}
+            </div>
+          )}
         </div>
       ) : toggle}
       {tabbed && labels.length > 0 && (
@@ -21732,8 +21752,12 @@ function SectionSettings() {
     headerIcon,
     description,
     headerStyle,
+    headerWidgets,
+    childCount,
     actions: { setProp },
   } = useNode((node) => ({
+    headerWidgets: node.data.props.headerWidgets,
+    childCount: (node.data.nodes ?? []).length,
     showHeader: node.data.props.showHeader,
     headerIcon: node.data.props.headerIcon,
     description: node.data.props.description,
@@ -21955,6 +21979,24 @@ function SectionSettings() {
               ))}
             </select>
           </label>
+          <label className="field">
+            <span className="field-label">Widgets in the header</span>
+            <input
+              type="number"
+              min={0}
+              max={childCount}
+              value={headerCount(headerWidgets, childCount, true)}
+              data-testid="section-header-widgets"
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setProp((p: { headerWidgets: number }) => (p.headerWidgets = next));
+              }}
+            />
+            <span className="field-hint">
+              The first widgets in this section, in layer order, sit on the
+              right of its header - a Button Group or a count (p.14, p.44)
+            </span>
+          </label>
         </>
       )}
       {collapsible && (
@@ -22070,7 +22112,7 @@ CanvasSection.craft = {
     collapsible: false, collapsedByDefault: false, collapsedWhen: null, title: "",
     tabs: "", tabVariable: null,
     dropHandling: false, dropLabel: "", dropIcon: "", dropVariable: null,
-    showHeader: false, headerIcon: "", description: "", headerStyle: "block",
+    showHeader: false, headerIcon: "", description: "", headerStyle: "block", headerWidgets: 0,
   },
   isCanvas: true,
   related: { settings: SectionSettings },

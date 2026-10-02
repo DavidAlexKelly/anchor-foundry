@@ -45,3 +45,28 @@ export function styleTarget(showHeader: boolean, style: HeaderStyle): "section" 
 export function paddingTarget(showHeader: boolean, style: HeaderStyle): "section" | "body" {
   return showHeader && style !== "contained" ? "body" : "section";
 }
+
+/**
+ * How many of a section's children sit in its header rather than its body
+ * (§680).
+ *
+ * > "Select the section header above the newly configured Object View header.
+ * > Choose the plus sign (+) on the right, then select the Button Group widget
+ * > from the selector that appears." (p.14)
+ *
+ * p.44 puts a Metric Card there too: "Always include counts to indicate the
+ * length of tables and lists by configuring a Metric Card widget in the
+ * table's section header."
+ *
+ * **The first `count` children, in layer order**, rather than a second list
+ * of children: a section already has one ordered list the builder can move
+ * widgets around in, and a widget moves between header and body by moving
+ * across that line. None without a header, since there is nowhere to put them
+ * - and they come back into the body rather than vanishing, so switching the
+ * header off loses nothing.
+ */
+export function headerCount(count: unknown, children: number, showHeader: boolean): number {
+  if (!showHeader) return 0;
+  const n = typeof count === "number" && Number.isFinite(count) ? Math.floor(count) : 0;
+  return Math.max(0, Math.min(n, children));
+}
