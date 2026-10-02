@@ -120,6 +120,38 @@ class VersionOut(BaseModel):
     description: str = ""
 
 
+class BranchOut(BaseModel):
+    """A module branch (§698, db 0136) without its document."""
+    id: UUID
+    name: str
+    base_version: int
+    save_count: int
+    # p.193's "if main has changed since your last save": main has saved past
+    # the version this branch was taken from or last rebased onto.
+    needs_rebase: bool
+    created_by: UUID | None
+    created_by_name: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BranchDetail(BranchOut):
+    definition: dict[str, Any]
+
+
+class BranchCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=63)
+    definition: dict[str, Any] = Field(default_factory=dict)
+
+
+class BranchSave(BaseModel):
+    definition: dict[str, Any] = Field(default_factory=dict)
+    # Given only by the save that finishes a rebase (§699): the main version
+    # the rebase merged against, which becomes the branch's new base. Refused
+    # unless it is main's current version.
+    base_version: int | None = Field(default=None, ge=0)
+
+
 class VersionDetail(VersionOut):
     definition: dict[str, Any]
 
@@ -178,6 +210,10 @@ class EvaluateVariablesIn(BaseModel):
     # "recompute now" are both spelled "nothing held", and the event has to be
     # able to mean the second one.
     recompute: list[str] = Field(default_factory=list)
+    # The branch being edited (§698), whose document is the one to resolve:
+    # a branch can declare variables main does not have, and resolving main's
+    # would draw the branch's layout against the wrong module.
+    branch: str | None = Field(default=None, max_length=63)
     #: p.75's lazy rule (§392): the layout node ids currently on screen. The
     #: server expands these into the variables they need, inputs included, and
     #: computes nothing else.
@@ -503,13 +539,15 @@ async def _check_interface(
         )
 
 
-@router.put("/{app_id}/definition", response_model=CanvasAppDetail)
-async def save_definition(
-    app_id: UUID,
-    body: DefinitionIn,
-    request: Request,
-    access: ProjectAccess = Depends(require_project_role("editor")),
-) -> CanvasAppDetail:
+async def _validate_definition(
+    conn, access: ProjectAccess, app_id: UUID, definition: dict[str, Any]
+) -> None:
+    """Everything a saved document is checked for, wherever it is saved to.
+
+    One function since branches (§698): a branch save that skipped these
+    would be a way to store a document main's Save refuses, and merging it
+    would then put that document on main without either check having run.
+    """
     # Validated here rather than in `canvas_service`, which stores an opaque
     # blob and does not interpret it - a property decision 0002 records as
     # worth keeping. The API refuses the document; the storage layer stays
@@ -523,7 +561,7 @@ async def save_definition(
     # no variables, no events and no pages. Reading v1 is untouched: historical
     # version rows are deliberately left in the format they were written in
     # (0034), and the browser still renders them.
-    if workshop_format.is_v1(body.definition):
+    if workshop_format.is_v1(definition):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
@@ -536,7 +574,7 @@ async def save_definition(
     # open such a document at all, so a save that accepted one would be a
     # module nobody could open again - including the person who saved it.
     unknown = variables_service.unknown_widgets(
-        body.definition.get("layout") if isinstance(body.definition, dict) else None
+        definition.get("layout") if isinstance(definition, dict) else None
     )
     if unknown:
         names = ", ".join(sorted({u["widget"] or "(no name)" for u in unknown}))
@@ -548,35 +586,44 @@ async def save_definition(
                 "rather than saved"
             ),
         )
+    # The workspace's actions, so a `run_action` naming one that is not
+    # here - or writing a property it does not make editable - is refused
+    # by the person who wrote it rather than by whoever clicks it later.
+    # Only on the way in: see `validate_module` for why reading a document
+    # does not re-check it against live state.
+    known = {
+        str(a["id"]): actions_service.editable_properties_of(a["rules"])
+        for a in await actions_service.list_action_types(conn, access.workspace_id)
+    }
+    try:
+        variables_service.validate_module(
+            definition, actions=known,
+            property_types=await _workspace_property_types(
+                conn, access.workspace_id
+            ),
+        )
+    except variables_service.VariableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    try:
+        await _check_embeds(conn, access.project_id, app_id, definition)
+    except variables_service.VariableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+
+@router.put("/{app_id}/definition", response_model=CanvasAppDetail)
+async def save_definition(
+    app_id: UUID,
+    body: DefinitionIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> CanvasAppDetail:
     async with user_connection(access.auth.user_id) as conn:
-        # The workspace's actions, so a `run_action` naming one that is not
-        # here - or writing a property it does not make editable - is refused
-        # by the person who wrote it rather than by whoever clicks it later.
-        # Only on the way in: see `validate_module` for why reading a document
-        # does not re-check it against live state.
-        known = {
-            str(a["id"]): actions_service.editable_properties_of(a["rules"])
-            for a in await actions_service.list_action_types(conn, access.workspace_id)
-        }
-        try:
-            variables_service.validate_module(
-                body.definition, actions=known,
-                property_types=await _workspace_property_types(
-                    conn, access.workspace_id
-                ),
-            )
-        except variables_service.VariableError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-            ) from exc
-
-        try:
-            await _check_embeds(conn, access.project_id, app_id, body.definition)
-        except variables_service.VariableError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-            ) from exc
-
+        await _validate_definition(conn, access, app_id, body.definition)
         row = await canvas_service.save_definition(
             conn, access.project_id, app_id,
             definition=body.definition, created_by=access.auth.user_id,
@@ -695,6 +742,132 @@ async def revert_to_version(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"reverted_to": version_number},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return _out(row)
+
+
+# ---- branches (§698; p.193, p.617-620) -------------------------------------------
+def _branch(row: dict[str, Any]) -> BranchDetail:
+    return BranchDetail(**{**row, "definition": _parse_json(row["definition"])})
+
+
+@router.get("/{app_id}/branches", response_model=list[BranchOut])
+async def list_branches(
+    app_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[BranchOut]:
+    """The branch selector's list. Viewer, as versions are: a branch is a
+    draft of the module, and reading drafts is what project viewers may do."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await canvas_service.list_branches(conn, access.project_id, app_id)
+    return [BranchOut(**r) for r in rows]
+
+
+@router.post("/{app_id}/branches", response_model=BranchDetail,
+             status_code=status.HTTP_201_CREATED)
+async def create_branch(
+    app_id: UUID,
+    body: BranchCreate,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> BranchDetail:
+    """p.617-618's **Save to new branch**: "Name the branch", and the builder's
+    document is saved to it rather than to main."""
+    canvas_service.check_branch_name(body.name)
+    async with user_connection(access.auth.user_id) as conn:
+        await _validate_definition(conn, access, app_id, body.definition)
+        row = await canvas_service.create_branch(
+            conn, access.project_id, app_id,
+            name=body.name, definition=body.definition, created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="canvas_app.branch",
+            resource_type="canvas_app",
+            resource_id=app_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"branch": body.name, "base_version": row["base_version"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return _branch(row)
+
+
+@router.get("/{app_id}/branches/{name}", response_model=BranchDetail)
+async def get_branch(
+    app_id: UUID,
+    name: str,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> BranchDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.get_branch(conn, access.project_id, app_id, name)
+    return _branch(row)
+
+
+@router.put("/{app_id}/branches/{name}/definition", response_model=BranchDetail)
+async def save_branch(
+    app_id: UUID,
+    name: str,
+    body: BranchSave,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> BranchDetail:
+    """A save on a branch. Main's document, version and viewers are untouched,
+    which is the whole of what a branch is for (p.617: "develop modules and
+    their configurations safely and in isolation")."""
+    async with user_connection(access.auth.user_id) as conn:
+        await _validate_definition(conn, access, app_id, body.definition)
+        row = await canvas_service.save_branch(
+            conn, access.project_id, app_id, name, definition=body.definition,
+            base_version=body.base_version,
+        )
+    return _branch(row)
+
+
+@router.delete("/{app_id}/branches/{name}", status_code=status.HTTP_204_NO_CONTENT,
+               response_model=None)
+async def delete_branch(
+    app_id: UUID,
+    name: str,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> None:
+    async with user_connection(access.auth.user_id) as conn:
+        await canvas_service.delete_branch(conn, access.project_id, app_id, name)
+
+
+@router.post("/{app_id}/branches/{name}/merge", response_model=CanvasAppDetail)
+async def merge_branch(
+    app_id: UUID,
+    name: str,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> CanvasAppDetail:
+    """Merge a branch into main - 409 while main has changed since the branch's
+    base, because p.193 puts the rebase before the merge."""
+    async with user_connection(access.auth.user_id) as conn:
+        # Checked again on the way to main: the branch was valid when saved,
+        # and the workspace's actions or types may have changed since.
+        branch = await canvas_service.get_branch(conn, access.project_id, app_id, name)
+        await _validate_definition(
+            conn, access, app_id, _parse_json(branch["definition"]),
+        )
+        row = await canvas_service.merge_branch(
+            conn, access.project_id, app_id, name, created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="canvas_app.merge",
+            resource_type="canvas_app",
+            resource_id=app_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"branch": name, "version": row["current_version"]},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
@@ -856,7 +1029,11 @@ async def evaluate_variables(
     local computation would not.
     """
     async with user_connection(access.auth.user_id) as conn:
-        row = await canvas_service.get(conn, access.project_id, app_id)
+        row = (
+            await canvas_service.get_branch(conn, access.project_id, app_id, body.branch)
+            if body.branch
+            else await canvas_service.get(conn, access.project_id, app_id)
+        )
         # Read inside the connection that fetched the row, because validating a
         # saved ordered comparison needs the declared types (§221) - and the
         # *store* needs them too, to know what to cast.

@@ -2818,6 +2818,8 @@ export const canvas = {
     /** p.178's breakdown (§394): ask the evaluator to time each variable.
      * Off unless a profiler is listening. */
     profile?: boolean,
+    /** The branch being edited (§698): resolve its document, not main's. */
+    branch?: string,
   ) =>
     request<{
       values: Record<string, unknown>;
@@ -2836,6 +2838,7 @@ export const canvas = {
           // everything" too, but sending the field at all reads as an answer.
           ...(visible === undefined ? {} : { visible }),
           ...(profile ? { profile: true } : {}),
+          ...(branch ? { branch } : {}),
           // p.138-139's "the user's local timezone" (§596).
           time_zone: viewerZone(),
         }),
@@ -2960,6 +2963,51 @@ export const canvas = {
   revertToVersion: (wid: string, pid: string, appId: string, version: number) =>
     request<import("./types").CanvasApp>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/versions/${version}/revert`,
+      { method: "POST" },
+    ),
+  /** Module branches (§698; p.193, p.617-621). */
+  listBranches: (wid: string, pid: string, appId: string) =>
+    request<import("./types").CanvasAppBranch[]>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/branches`,
+    ),
+  getBranch: (wid: string, pid: string, appId: string, name: string) =>
+    request<import("./types").CanvasAppBranchDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/branches/${encodeURIComponent(name)}`,
+    ),
+  /** p.617-618's Save to new branch: the builder's document, to a new branch. */
+  createBranch: (
+    wid: string, pid: string, appId: string, name: string,
+    definition: import("./types").WorkshopModule | Record<string, unknown>,
+  ) =>
+    request<import("./types").CanvasAppBranchDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/branches`,
+      { method: "POST", body: JSON.stringify({ name, definition }) },
+    ),
+  /** A save on a branch. `baseVersion` only from the save that finishes a
+   * rebase, naming the main version it merged against. */
+  saveBranch: (
+    wid: string, pid: string, appId: string, name: string,
+    definition: import("./types").WorkshopModule | Record<string, unknown>,
+    baseVersion?: number,
+  ) =>
+    request<import("./types").CanvasAppBranchDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/branches/${encodeURIComponent(name)}/definition`,
+      {
+        method: "PUT",
+        body: JSON.stringify(
+          baseVersion === undefined ? { definition } : { definition, base_version: baseVersion },
+        ),
+      },
+    ),
+  deleteBranch: (wid: string, pid: string, appId: string, name: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/branches/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
+  /** Merge into main. 409 while main has moved past the branch's base. */
+  mergeBranch: (wid: string, pid: string, appId: string, name: string) =>
+    request<import("./types").CanvasAppDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/branches/${encodeURIComponent(name)}/merge`,
       { method: "POST" },
     ),
   setVersionSettings: (
