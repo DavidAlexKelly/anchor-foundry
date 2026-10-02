@@ -39,6 +39,7 @@ import { ApiError, actions as actionApi, objects as objApi } from "@/lib/api";
 import { glyph, swatch } from "@/lib/object-type-icon";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
+import { OBJECT_MEDIA_TYPE, objectPayload } from "@/components/canvas/drag-payload";
 import {
   emptyReason as favouritesEmptyReason,
   rowLabel,
@@ -747,7 +748,27 @@ export function ObjectExplorer({
                             <span className="chip">{i.object_type_display_name}</span>
                           )}
                         </td>
-                        <td className="slug">{i.primary_key}</td>
+                        <td className="slug">
+                          {/* `workshop` p.564's "drag and drop … to integrate
+                              your Workshop module with … other Palantir
+                              applications" (§673): the Explorer as a source,
+                              carrying p.568's object media type - what a
+                              Workshop table cell carries (§457). */}
+                          <span
+                            data-testid="explorer-drag"
+                            draggable
+                            style={{ cursor: "grab" }}
+                            title="Drag this object to a Workshop drop zone"
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData(
+                                OBJECT_MEDIA_TYPE, objectPayload(i.object_type_id, i.primary_key));
+                              event.dataTransfer.setData("text/plain", i.primary_key);
+                              event.dataTransfer.effectAllowed = "copy";
+                            }}
+                          >
+                            {i.primary_key}
+                          </span>
+                        </td>
                         {columns.map((c) => {
                           const target = editing ? editableFor[c] : undefined;
                           if (!target) {

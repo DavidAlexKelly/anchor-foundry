@@ -356,6 +356,8 @@ function SidePanel({
         workspaceId={workspaceId}
         typeId={stop.typeId}
         instance={stop.instance}
+        // `workshop` p.570's icon drag zone, outside Workshop too (§673).
+        dragIcon
       />
     </aside>
   );
@@ -454,6 +456,9 @@ export function LinkExplorerDialog({
         instance={here.instance}
         canComment={canComment}
         canEdit={canEdit}
+        // `workshop` p.570's icon drag zone, outside Workshop too (§673): the
+        // object open in the Explorer can be dragged into a module.
+        dragIcon
       />
 
       <h3 className="sov-section">Linked objects</h3>
