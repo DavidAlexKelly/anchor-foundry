@@ -3288,6 +3288,13 @@ export interface ActionType {
    * function-backed". Sent so the table can stop a reader staging the two
    * hundred and first row before Submit, without a second copy of the number. */
   inline_edit_row_limit: number;
+  /** Why this action cannot be drawn as `workshop` p.511's Action table, empty
+   * if it can (§702). p.511: "There may be some Actions that are not yet usable
+   * in the Table because some feature of the Action is only supported in the
+   * Form layout." */
+  table_refusals?: string[];
+  /** `action-types` p.131's batch cap: the most rows a table may hold. */
+  table_row_limit?: number;
   created_at: string;
   updated_at: string;
 }
