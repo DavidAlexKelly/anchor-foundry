@@ -136,3 +136,28 @@ describe("p.281's Stacked area (§601)", () => {
       categories: ["a", "b"], segments: ["x", "y", "z"], values: [[1, 3, 6], [4, 4, 5]] });
   });
 });
+
+describe("layers stacked side by side (§678)", () => {
+  it("piles each layer's columns and sets the layers beside each other", () => {
+    const data = { categories: ["a", "b"], segments: ["s1", "s2", "p"], values: [[1, 2, 4], [0, 3, NaN]] };
+    const { bars, max } = segmentLayout(data, "grouped", [0, 0, 1]);
+    expect(bars).toEqual([
+      { category: 0, segment: 0, from: 0, to: 1, offset: 0, width: 0.5, value: 1 },
+      { category: 0, segment: 1, from: 1, to: 3, offset: 0, width: 0.5, value: 2 },
+      { category: 0, segment: 2, from: 0, to: 4, offset: 0.5, width: 0.5, value: 4 },
+      { category: 1, segment: 1, from: 0, to: 3, offset: 0, width: 0.5, value: 3 },
+    ]);
+    expect(max).toBe(4);
+  });
+
+  it("reaches the tallest pile, not the tallest part", () => {
+    const data = { categories: ["a"], segments: ["s1", "s2", "p"], values: [[3, 2, 4]] };
+    expect(segmentLayout(data, "grouped", [0, 0, 1]).max).toBe(5);
+  });
+
+  it("orders the groups as they first appear, whatever their ids", () => {
+    const data = { categories: ["a"], segments: ["x", "y"], values: [[2, 5]] };
+    const { bars } = segmentLayout(data, "grouped", [7, 3]);
+    expect(bars.map((b) => b.offset)).toEqual([0, 0.5]);
+  });
+});

@@ -94,10 +94,11 @@ export interface SegmentBar {
  * An empty segment is left out: a zero-height rectangle is a click target and
  * a tooltip with nothing to show.
  */
-export function segmentLayout(data: Segmented, mode: SegmentMode): {
+export function segmentLayout(data: Segmented, mode: SegmentMode, stacks?: readonly number[]): {
   bars: SegmentBar[];
   max: number;
 } {
+  if (stacks) return stackedGroups(data, stacks);
   const bars: SegmentBar[] = [];
   let max = 0;
   const n = Math.max(data.segments.length, 1);
@@ -216,4 +217,30 @@ export function sortSegmented(data: Segmented, sort: ChartSort): Segmented {
     segments: data.segments,
     values: order.map((c) => data.values[c.index] ?? []),
   };
+}
+
+
+/**
+ * Layers side by side, each stacked by its own segments (§678; p.282's
+ * Segment by on a layer): `stacks[segment]` names the group a column belongs
+ * to, the groups share a category's slot in the order they first appear, and
+ * each group piles its columns from zero. The axis reaches the tallest pile.
+ */
+function stackedGroups(data: Segmented, stacks: readonly number[]): { bars: SegmentBar[]; max: number } {
+  const groups = [...new Set(stacks)];
+  const n = Math.max(groups.length, 1);
+  const bars: SegmentBar[] = [];
+  let max = 0;
+  data.values.forEach((row, category) => {
+    const running = new Map<number, number>();
+    row.forEach((value, segment) => {
+      if (!(value > 0)) return;
+      const group = groups.indexOf(stacks[segment]!);
+      const from = running.get(group) ?? 0;
+      running.set(group, from + value);
+      bars.push({ category, segment, from, to: from + value, offset: group / n, width: 1 / n, value });
+      max = Math.max(max, from + value);
+    });
+  });
+  return { bars, max };
 }

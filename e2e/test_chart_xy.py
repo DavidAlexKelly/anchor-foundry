@@ -902,14 +902,14 @@ def test_the_panel_adds_and_names_a_series(page, api, sites) -> None:
     page.get_by_test_id("chart-series-name").fill("Capacity")
     page.get_by_test_id("chart-series-first-name").fill("Sites")
     page.get_by_test_id("chart-series-legend-position").select_option("top")
-    # Several series or segments, not both.
-    expect(page.get_by_test_id("chart-segment-by")).to_be_disabled()
+    # A bar chart may segment and keep its series (§678).
+    expect(page.get_by_test_id("chart-segment-by")).to_be_enabled()
     save(page)
     props = mod.definition()["layout"]["chart"]["props"]
     assert props["series"] == [{"aggregate": "sum", "measure": "capacity", "name": "Capacity",
                                 "axis": "right", "objectSetVariable": None,
                                 "dimension": None, "kind": None,
-                                "drilldownVariable": None}], props
+                                "drilldownVariable": None, "segmentBy": None}], props
     assert (props["seriesName"], props["legendPosition"]) == ("Sites", "top"), props
     page.get_by_test_id("chart-series-remove").click()
     page.get_by_role("button", name="Save", exact=True).click()
@@ -917,13 +917,20 @@ def test_the_panel_adds_and_names_a_series(page, api, sites) -> None:
                lambda got: got == [], what="the series removed")
 
 
-def test_a_segmented_chart_is_offered_no_more_series(page, api, sites) -> None:
-    mod = build(api, sites, "Chart XY segmented series panel", {"segmentBy": "region"})
+def test_a_segmented_line_chart_is_offered_no_more_series(page, api, sites) -> None:
+    """A segmented line chart's segments are its lines, so it has one series;
+    a segmented bar chart keeps its series beside it (§678)."""
+    mod = build(api, sites, "Chart XY segmented series panel", {"segmentBy": "region", "kind": "line"})
     open_builder(page, mod)
     settled(page)
     page.locator(".canvas-tree-row", has_text="Chart").first.click()
     expect(page.get_by_test_id("chart-series-segmented")).to_be_visible()
     expect(page.get_by_test_id("chart-add-series")).to_have_count(0)
+    bars = build(api, sites, "Chart XY segmented bar series panel", {"segmentBy": "region"})
+    open_builder(page, bars)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    expect(page.get_by_test_id("chart-add-series")).to_be_visible()
 
 
 # ---- p.280's layers: a series reading a set of its own (§625) ---------------
@@ -1022,7 +1029,7 @@ def test_the_panel_points_a_series_at_another_set(page, api, sites, tickets) -> 
     assert props["series"] == [{"aggregate": "sum", "measure": "hours", "name": "",
                                 "axis": "right", "objectSetVariable": "v_tickets",
                                 "dimension": "state", "kind": None,
-                                "drilldownVariable": None}], props
+                                "drilldownVariable": None, "segmentBy": None}], props
     # Back to the chart's set lets go of what was the tickets'.
     page.get_by_test_id("chart-series-set").select_option("")
     page.get_by_role("button", name="Save", exact=True).click()
@@ -1030,7 +1037,7 @@ def test_the_panel_points_a_series_at_another_set(page, api, sites, tickets) -> 
                lambda got: got == [{"aggregate": "sum", "measure": None, "name": "",
                                     "axis": "right", "objectSetVariable": None,
                                     "dimension": None, "kind": None,
-                                    "drilldownVariable": None}],
+                                    "drilldownVariable": None, "segmentBy": None}],
                what="the series back on the chart's set")
 
 

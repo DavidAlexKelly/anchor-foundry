@@ -27,7 +27,7 @@
 
 import type { ChartPoint } from "./charts";
 import { defaultValueTitle } from "./chart-display";
-import type { Segmented } from "./chart-segments";
+import { segmentName, type Segmented } from "./chart-segments";
 import { aggregationOf, aggregationRequest } from "./pie-chart";
 
 export interface SeriesSpec {
@@ -49,6 +49,9 @@ export interface SeriesSpec {
    * variable a click on its marks writes a clause into, on the layer's own
    * property. Null for the chart's own drill-down. */
   drilldownVariable: string | null;
+  /** p.282's **Segment by** for this layer (§678): a second property its
+   * bars are split by, or null for none. */
+  segmentBy: string | null;
 }
 
 export type LayerKind = "bar" | "line";
@@ -74,6 +77,7 @@ export function seriesOf(raw: unknown): SeriesSpec[] {
       dimension: nonEmpty(s.dimension),
       kind: s.kind === "bar" || s.kind === "line" ? s.kind : null,
       drilldownVariable: nonEmpty(s.drilldownVariable),
+      segmentBy: nonEmpty(s.segmentBy),
     }));
 }
 
@@ -218,4 +222,72 @@ export function drillClauses(
   property: string, label: string, selected: string | null,
 ): { property: string; op: "eq"; value: string }[] {
   return label === selected ? [] : [{ property, op: "eq", value: label }];
+}
+
+
+/**
+ * p.282's **Segment by** on a layer (§678).
+ *
+ * > "Segment by: Optional. Enables each plotted value to be segmented by a
+ * > secondary property type." (p.282)
+ *
+ * Whether this layer is drawn split by its segments: a bar layer that counts,
+ * which is what a segment is here (the chart's own Segment by counts too).
+ */
+export function segmentsLayer(spec: SeriesSpec, chart: LayerKind): boolean {
+  return !!spec.segmentBy && canSegment(spec, chart);
+}
+
+/** Whether a layer could be segmented, for the panel to offer Segment by. */
+export function canSegment(spec: SeriesSpec, chart: LayerKind): boolean {
+  return spec.aggregate === "count" && (spec.kind ?? chart) === "bar";
+}
+
+/** One layer of a chart whose layers may be segmented: its values by category,
+ * or its grid of categories by segments, with the names p.282's Display
+ * override gives those segments. */
+export interface Layer {
+  name: string;
+  points?: readonly ChartPoint[];
+  grid?: Segmented;
+  segmentNames?: unknown;
+}
+
+/**
+ * Layers side by side, each segmented one as a stack of its segments (§678):
+ * one column per plain layer and per segment, with `stacks[column]` the layer
+ * it belongs to. The first layer's categories come first and in its order, as
+ * `mergeSeries` keeps them; a missing value is NaN.
+ */
+export function layeredGrid(layers: readonly Layer[]): { data: Segmented; stacks: number[] } {
+  const categories: string[] = [];
+  const add = (label: string) => { if (!categories.includes(label)) categories.push(label); };
+  for (const layer of layers) {
+    if (layer.grid) layer.grid.categories.forEach(add);
+    else (layer.points ?? []).forEach((p) => add(p.label));
+  }
+  const segments: string[] = [];
+  const stacks: number[] = [];
+  const columns: ((category: string) => number)[] = [];
+  layers.forEach((layer, at) => {
+    const grid = layer.grid;
+    if (grid) {
+      grid.segments.forEach((segment, j) => {
+        segments.push(`${layer.name} · ${segmentName(segment, layer.segmentNames)}`);
+        stacks.push(at);
+        columns.push((category) => {
+          const row = grid.categories.indexOf(category);
+          return row === -1 ? NaN : grid.values[row]?.[j] ?? NaN;
+        });
+      });
+      return;
+    }
+    segments.push(layer.name);
+    stacks.push(at);
+    columns.push((category) => layer.points?.find((p) => p.label === category)?.value ?? NaN);
+  });
+  return {
+    data: { categories, segments, values: categories.map((c) => columns.map((read) => read(c))) },
+    stacks,
+  };
 }
