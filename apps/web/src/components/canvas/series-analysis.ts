@@ -365,9 +365,50 @@ function placed(readings: readonly Reading[], extent: Extent, frame: Frame): { x
 
 const at = (n: number) => n.toFixed(1);
 
+/** p.395's *Interpolation* (§657): "Internal interpolation: The
+ * interpolation method used to connect data points within the time series.
+ * External interpolation: The interpolation method used before the first data
+ * point and after the last data point." p.395 does not list the methods; these
+ * are the usual time series ones. Internally a straight line, a step holding
+ * each reading until the next (`previous`), a step to each reading from the
+ * one before (`next`), a step half way between (`nearest`), or no line.
+ * Externally nothing, or the first and last readings held to the canvas's
+ * edges (`nearest`). */
+export const INTERNAL_INTERPOLATIONS = ["linear", "previous", "next", "nearest", "none"] as const;
+export type InternalInterpolation = (typeof INTERNAL_INTERPOLATIONS)[number];
+export const EXTERNAL_INTERPOLATIONS = ["none", "nearest"] as const;
+export type ExternalInterpolation = (typeof EXTERNAL_INTERPOLATIONS)[number];
+type Interpolation = { internal: InternalInterpolation; external: ExternalInterpolation };
+const LINEAR: Interpolation = { internal: "linear", external: "none" };
+
+/** The corners of a plot's line, by its interpolation; none without one. */
+function cornersOf(points: readonly { x: number; y: number }[], frame: Frame, how: Interpolation) {
+  if (how.internal === "none" || points.length === 0) return [];
+  const out: { x: number; y: number }[] = [points[0]!];
+  for (const [n, p] of points.entries()) {
+    if (n === 0) continue;
+    const before = points[n - 1]!;
+    if (how.internal === "previous") out.push({ x: p.x, y: before.y });
+    else if (how.internal === "next") out.push({ x: before.x, y: p.y });
+    else if (how.internal === "nearest") {
+      const half = (before.x + p.x) / 2;
+      out.push({ x: half, y: before.y }, { x: half, y: p.y });
+    }
+    out.push(p);
+  }
+  if (how.external === "nearest") {
+    out.unshift({ x: 0, y: points[0]!.y });
+    out.push({ x: frame.width, y: points.at(-1)!.y });
+  }
+  return out;
+}
+
 /** A plot's line as an SVG path on a frame, over an extent. */
-export function pathOf(readings: readonly Reading[], extent: Extent, frame: Frame): string {
-  return placed(readings, extent, frame).map((p, n) => `${n === 0 ? "M" : "L"}${at(p.x)},${at(p.y)}`).join("");
+export function pathOf(
+  readings: readonly Reading[], extent: Extent, frame: Frame, how: Interpolation = LINEAR,
+): string {
+  return cornersOf(placed(readings, extent, frame), frame, how)
+    .map((p, n) => `${n === 0 ? "M" : "L"}${at(p.x)},${at(p.y)}`).join("");
 }
 
 /** p.394's *Display* (§655): "Line width: The thickness of the plot line.
@@ -389,9 +430,13 @@ export interface PlotDisplay {
   size: number;
   fill: PointFill;
   outline: number;
+  /** p.395's *Interpolation* (§657). */
+  internal: InternalInterpolation;
+  external: ExternalInterpolation;
 }
 export const DEFAULT_DISPLAY: PlotDisplay = {
   width: 1.6, gradient: false, shape: "none", size: 5, fill: "line", outline: 1,
+  internal: "linear", external: "none",
 };
 /** The least and most each number may be, in pixels. */
 export const DISPLAY_BOUNDS = { width: [0.5, 8], size: [2, 16], outline: [0.5, 4] } as const;
@@ -429,12 +474,20 @@ export function outlineOf(d: PlotDisplay): number {
 }
 
 /** p.394's *Gradient*: the area under a plot's line, down to the frame's
- * foot; "" with no readings. */
-export function areaOf(readings: readonly Reading[], extent: Extent, frame: Frame): string {
-  const points = placed(readings, extent, frame);
-  if (points.length === 0) return "";
-  return `${pathOf(readings, extent, frame)}L${at(points.at(-1)!.x)},${at(frame.height)}` +
-    `L${at(points[0]!.x)},${at(frame.height)}Z`;
+ * foot; "" with no line. */
+export function areaOf(
+  readings: readonly Reading[], extent: Extent, frame: Frame, how: Interpolation = LINEAR,
+): string {
+  const corners = cornersOf(placed(readings, extent, frame), frame, how);
+  if (corners.length === 0) return "";
+  return `${pathOf(readings, extent, frame, how)}L${at(corners.at(-1)!.x)},${at(frame.height)}` +
+    `L${at(corners[0]!.x)},${at(frame.height)}Z`;
+}
+
+/** The points' shape as drawn: with no line and no shape a plot would not be
+ * seen, so its readings are circles. */
+export function shownShape(d: PlotDisplay): PointShape {
+  return d.shape === "none" && d.internal === "none" ? "circle" : d.shape;
 }
 
 /** One point's marker, `size` across and centred on it; "" for none. */

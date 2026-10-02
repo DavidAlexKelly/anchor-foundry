@@ -5,7 +5,7 @@
  * geometry is `series-analysis.ts`'s. */
 
 import {
-  areaOf, eventSpan, markersOf, outlineOf, pathOf, scaleOf, timesOf, valueAt,
+  areaOf, eventSpan, markersOf, outlineOf, pathOf, scaleOf, shownShape, timesOf, valueAt,
   type AxisSettings, type PlotDisplay, type Reading, type Scale, type SeriesEvent,
 } from "./series-analysis";
 
@@ -121,20 +121,20 @@ export function SeriesAnalysisChart({ canvas, plots, axes, events = [] }: {
                     <stop offset="100%" stopColor={p.color} stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <path data-gradient={p.id} d={areaOf(p.readings, extentFor(p.axis)!, frame)} stroke="none"
+                <path data-gradient={p.id} d={areaOf(p.readings, extentFor(p.axis)!, frame, p.display)} stroke="none"
                       fill={`url(#series-${canvas}-gradient-${n})`} />
               </g>
             ))}
             {plots.map((p) => extentFor(p.axis) && (
-              <path key={p.id} data-plot={p.id} d={pathOf(p.readings, extentFor(p.axis)!, frame)} fill="none"
+              <path key={p.id} data-plot={p.id} d={pathOf(p.readings, extentFor(p.axis)!, frame, p.display)} fill="none"
                     stroke={p.color} strokeWidth={p.display.width}
                     strokeDasharray={p.dashed ? "5 3" : undefined}>
                 <title>{p.label}</title>
               </path>
             ))}
-            {plots.map((p) => p.display.shape !== "none" && extentFor(p.axis) && (
+            {plots.map((p) => shownShape(p.display) !== "none" && extentFor(p.axis) && (
               <path key={`points-${p.id}`} data-points={p.id}
-                    d={markersOf(p.readings, extentFor(p.axis)!, frame, p.display.shape, p.display.size)}
+                    d={markersOf(p.readings, extentFor(p.axis)!, frame, shownShape(p.display), p.display.size)}
                     fill={p.display.fill === "line" ? p.color : p.display.fill === "white" ? "#fff" : "none"}
                     stroke={p.color} strokeWidth={outlineOf(p.display)} />
             ))}
