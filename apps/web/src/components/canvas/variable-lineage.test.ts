@@ -59,6 +59,7 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   drawnShapesVariable: "write",
   selectedShapesVariable: "write",
   saveProjectVariable: "read",
+  autoloadVariable: "read",
   // p.225's column visibility (§610): the table reads which columns to show.
   columnsVariable: "read",
   rightClickedVariable: "write",

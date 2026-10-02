@@ -543,6 +543,8 @@ REFERENCE_PROPS = (
     # p.397's default save location on Time Series Analysis (§662): "use a
     # string variable to provide the default save location". Read.
     "saveProjectVariable",
+    # p.397's Autoload analyses (§663): the RIDs of the analyses to load. Read.
+    "autoloadVariable",
     # p.225's variable-backed column visibility on the Object Table (§610):
     # the string array naming which configured columns show, in order.
     "columnsVariable",

@@ -28,8 +28,8 @@ MAX_STATE_BYTES = 256_000
 #: The widget holds 24 plots; a saved view with more was not saved by it.
 MAX_PLOTS = 24
 
-_COLUMNS = """a.id, a.name, a.visibility, a.state, a.created_by, a.created_at, a.updated_at,
-              u.display_name AS created_by_name"""
+_COLUMNS = """a.id, a.project_id, a.name, a.visibility, a.state, a.created_by, a.created_at,
+              a.updated_at, u.display_name AS created_by_name"""
 
 
 class AnalysisError(ValueError):
@@ -86,6 +86,23 @@ async def get(conn: AsyncConnection, project_id: UUID, analysis_id: UUID) -> dic
         f"""SELECT {_COLUMNS} FROM series_analyses a LEFT JOIN users u ON u.id = a.created_by
             WHERE a.project_id = :pid AND a.id = :id""",
         {"pid": str(project_id), "id": str(analysis_id)},
+    )
+    if row is None:
+        raise NotFoundError("time series analysis")
+    return _out(row)
+
+
+async def by_id(conn: AsyncConnection, workspace_id: UUID, analysis_id: UUID) -> dict[str, Any]:
+    """One analysis by its id alone, p.397's RID (§663), in whichever of the
+    workspace's projects it is; whether the reader may see it is RLS's, as it
+    is for the list."""
+    row = await fetch_one(
+        conn,
+        f"""SELECT {_COLUMNS} FROM series_analyses a
+              JOIN projects p ON p.id = a.project_id AND p.workspace_id = :wid
+              LEFT JOIN users u ON u.id = a.created_by
+            WHERE a.id = :id""",
+        {"wid": str(workspace_id), "id": str(analysis_id)},
     )
     if row is None:
         raise NotFoundError("time series analysis")

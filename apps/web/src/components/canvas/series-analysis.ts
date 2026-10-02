@@ -1009,10 +1009,62 @@ export function openedView(raw: unknown, roots: readonly Plot[]): SavedView {
   const sets = (Array.isArray(v.eventSets) ? v.eventSets : []).filter((e): e is EventSet =>
     !!e && typeof e === "object" && typeof (e as EventSet).id === "string"
     && typeof (e as EventSet).label === "string" && typeof (e as EventSet).plot === "string");
+  // The set's roots the view does not name are there to be derived from.
+  const named = new Set(saved.map((p) => p.id));
   return {
-    plots: withRoots(saved, roots),
+    plots: withRoots([...roots.filter((r) => !named.has(r.id)), ...saved], roots),
     canvases: typeof v.canvases === "number" && Number.isInteger(v.canvases) && v.canvases >= 0 ? v.canvases : 0,
     eventSets: sets,
     axes: v.axes && typeof v.axes === "object" && !Array.isArray(v.axes) ? v.axes as Axes : {},
+  };
+}
+
+/** p.397's *Autoload analyses* (§663): "Specify analyses to load
+ * automatically when the widget initializes", by their RIDs - a string
+ * variable naming one, or an array naming several, each at most once. */
+export const MAX_AUTOLOAD = 10;
+
+export function autoloadIdsOf(raw: unknown): string[] {
+  const all = Array.isArray(raw) ? raw : [raw];
+  const out: string[] = [];
+  for (const id of all) {
+    if (typeof id === "string" && id.trim() && !out.includes(id.trim())) out.push(id.trim());
+  }
+  return out.slice(0, MAX_AUTOLOAD);
+}
+
+/** One view with another loaded into it (§663's "Don't clear on load"): its
+ * plots and event sets beside the ones there, under ids of their own where
+ * they would clash; a root both hold, the one there already. */
+export function mergedView(into: SavedView, from: SavedView): SavedView {
+  const taken = new Set(into.plots.map((p) => p.id));
+  const plotRename = new Map<string, string>();
+  let n = into.plots.length + from.plots.length;
+  const fresh = (prefix: string, used: Set<string>) => {
+    do { n += 1; } while (used.has(`${prefix}-${n}`));
+    return `${prefix}-${n}`;
+  };
+  const allIds = new Set([...taken, ...from.plots.map((p) => p.id)]);
+  const kept = from.plots.filter((p) => !(p.root && taken.has(p.id)));
+  for (const p of kept) {
+    if (taken.has(p.id)) {
+      const id = fresh("plot", allIds);
+      allIds.add(id);
+      plotRename.set(p.id, id);
+    }
+  }
+  const renamed = (id: string) => plotRename.get(id) ?? id;
+  const setIds = new Set([...into.eventSets, ...from.eventSets].map((e) => e.id));
+  const intoSets = new Set(into.eventSets.map((e) => e.id));
+  const sets = from.eventSets.map((e) => {
+    const id = intoSets.has(e.id) ? fresh("events", setIds) : e.id;
+    setIds.add(id);
+    return { ...e, id, plot: renamed(e.plot) };
+  });
+  return {
+    plots: [...into.plots, ...kept.map((p) => ({ ...p, id: renamed(p.id), parent: p.parent && renamed(p.parent) }))],
+    canvases: Math.max(into.canvases, from.canvases),
+    eventSets: [...into.eventSets, ...sets],
+    axes: { ...from.axes, ...into.axes },
   };
 }

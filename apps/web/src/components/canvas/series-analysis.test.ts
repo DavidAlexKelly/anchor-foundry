@@ -11,7 +11,7 @@ import {
   MIN_VIEW_MS, defaultRangeOf, inView, pannedRange, timeLabel, zoomedRange, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, pathOf, scaleOf, timesOf, readingsOf, rootOf, rootPlots,
-  statsOf, withAddedRoot, openedView, savedViewOf, addDataSetsOf, objectLabelOf, MAX_ADD_DATA_SETS, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
+  statsOf, withAddedRoot, openedView, savedViewOf, addDataSetsOf, autoloadIdsOf, mergedView, MAX_AUTOLOAD, objectLabelOf, MAX_ADD_DATA_SETS, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
 } from "./series-analysis";
 import type { SeriesTransform } from "./series-transforms";
 
@@ -714,6 +714,12 @@ describe("p.397's saved analysis (§662)", () => {
     expect(back.map((p) => [p.id, !!p.added])).toEqual([["root:i1", false], ["root:i2", false], ["plot-3", false]]);
   });
 
+  it("opens a view naming only what was derived, over the set's roots", () => {
+    const [, , made] = withDerived(roots, "root:i2", [cumulative], 2);
+    const opened = openedView({ plots: [made] }, roots);
+    expect(opened.plots.map((p) => p.id)).toEqual(["root:i1", "root:i2", "plot-3"]);
+  });
+
   it("leaves out what is not a plot, an event set or a count", () => {
     const good = roots[0]!;
     const opened = openedView({
@@ -726,5 +732,39 @@ describe("p.397's saved analysis (§662)", () => {
     expect([opened.canvases, opened.eventSets.length, opened.axes]).toEqual([0, 1, {}]);
     expect(openedView(null, roots)).toEqual({ plots: roots, canvases: 0, eventSets: [], axes: {} });
     expect(openedView({ canvases: 2.5 }, roots).canvases).toBe(0);
+  });
+});
+
+describe("p.397's Autoload analyses (§663)", () => {
+  it("reads one RID or several, each once", () => {
+    expect(autoloadIdsOf("a1")).toEqual(["a1"]);
+    expect(autoloadIdsOf([" a1 ", "a2", "a1", "", 5, null])).toEqual(["a1", "a2"]);
+    expect(autoloadIdsOf(null)).toEqual([]);
+    expect(autoloadIdsOf("  ")).toEqual([]);
+    expect(autoloadIdsOf(Array.from({ length: MAX_AUTOLOAD + 2 }, (_, n) => `a${n}`))).toHaveLength(MAX_AUTOLOAD);
+  });
+
+  it("loads one view beside another, renaming what would clash", () => {
+    const one = withDerived(roots, "root:i1", [cumulative], 2);
+    const oneSets = withEventSet([], one, "plot-3", "gt", 1);
+    const two = withDerived(withDerived(roots, "root:i2", [derivative], 3), "plot-3", [cumulative], 3);
+    const twoSets = withEventSet([], two, "plot-3", "lt", 5);
+    const pump9 = { objectId: "i9", typeId: "t2", property: "flow", objectLabel: "Pump 9" };
+    const merged = mergedView(
+      savedViewOf(withAddedRoot(one, pump9, 1), 2, oneSets, withAxisSetting({}, 1, 1, "log", true)),
+      savedViewOf(withAddedRoot(two, pump9, 1), 3, twoSets, withAxisSetting(withAxisSetting({}, 1, 1, "log", false), 3, 1, "invert", true)));
+    // The roots both hold, once; plot-3 of the second renamed, and what was
+    // derived from it following it.
+    expect(merged.plots.map((p) => [p.id, p.parent])).toEqual([
+      ["root:i1", null], ["root:i2", null], ["plot-3", "root:i1"], ["added:i9:flow", null],
+      ["plot-10", "root:i2"], ["plot-4", "plot-10"]]);
+    expect(merged.eventSets.map((e) => [e.id, e.plot])).toEqual([["events-1", "plot-3"], ["events-11", "plot-10"]]);
+    expect(merged.canvases).toBe(3);
+    expect(merged.axes).toEqual({ "1:1": { log: true }, "3:1": { invert: true } });
+  });
+
+  it("adds nothing twice when a view is loaded into itself", () => {
+    const view = savedViewOf(roots, 0, [], {});
+    expect(mergedView(view, view).plots).toEqual(roots);
   });
 });
