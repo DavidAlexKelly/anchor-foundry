@@ -86,6 +86,9 @@ def test_the_configured_view_renders_instead_of_the_generated_one(page, module):
     open_first_object(page, module)
     expect(page.get_by_test_id("configured-object-view")).to_be_visible()
     expect(page.get_by_test_id("standard-object-view")).to_have_count(0)
+    # `object-views` p.35 (§695): "If only one tab is configured, the tab
+    # title will be hidden".
+    expect(page.get_by_role("tablist", name="Object view tabs")).to_have_count(0)
 
 
 def test_the_object_reaches_the_module_through_its_subject_variable(page, module):
@@ -176,10 +179,10 @@ def test_the_ontology_manager_nominates_a_module_as_the_view(page, api):
     row.get_by_role("button", name="View").click()
     expect(page.get_by_role("dialog")).to_be_visible()
 
-    page.get_by_label("Object view module").select_option(label=f"App {mod.tag}")
+    page.get_by_label("Tab 1 module").select_option(label=f"App {mod.tag}")
     # `v_txt` is a string variable and has no business receiving an object, so
     # it is not offered. Offering it would offer a binding the server refuses.
-    subjects = page.get_by_label("Object view subject variable")
+    subjects = page.get_by_label("Tab 1 subject variable")
     expect(subjects.locator("option")).to_have_text(["Choose…", "This object"])
     subjects.select_option("v_here")
     page.get_by_role("button", name="Save", exact=True).click()

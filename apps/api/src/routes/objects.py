@@ -973,6 +973,17 @@ async def delete_object_type(
 
 
 # ---- configured Object Views (`object-views` p.2-4) --------------------------
+class ObjectViewTab(BaseModel):
+    """One of p.35's tabs: a module and the variable that receives the object.
+    The first tab's id is the view's own."""
+
+    id: UUID
+    title: str
+    canvas_app_id: UUID
+    canvas_app_name: str
+    subject_variable: str
+
+
 class ObjectViewOut(BaseModel):
     """Which Workshop module stands in for this object type's standard view."""
 
@@ -982,6 +993,10 @@ class ObjectViewOut(BaseModel):
     canvas_app_name: str
     form_factor: str
     subject_variable: str
+    title: str = ""
+    """The first tab's title (§695); blank is the module's name."""
+    tabs: list[ObjectViewTab] = []
+    """p.35's tabs in order, the view's own module first (§695)."""
     created_at: datetime
     updated_at: datetime
 
@@ -990,6 +1005,16 @@ class ObjectViewIn(BaseModel):
     canvas_app_id: UUID
     subject_variable: str = Field(min_length=1, max_length=200)
     form_factor: str = Field(default="full", max_length=16)
+
+
+class ObjectViewTabIn(BaseModel):
+    title: str = Field(default="", max_length=100)
+    canvas_app_id: UUID
+    subject_variable: str = Field(min_length=1, max_length=200)
+
+
+class ObjectViewTabsIn(BaseModel):
+    tabs: list[ObjectViewTabIn] = Field(min_length=1, max_length=object_views_service.MAX_TABS)
 
 
 @router.get("/object-types/{type_id}/view", response_model=ObjectViewOut | None)
@@ -1157,6 +1182,37 @@ async def set_object_view(
                 "canvas_app_id": str(body.canvas_app_id),
                 "form_factor": body.form_factor,
             },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ObjectViewOut(**row)
+
+
+@router.put("/object-types/{type_id}/view/tabs", response_model=ObjectViewOut)
+async def set_object_view_tabs(
+    type_id: UUID,
+    body: ObjectViewTabsIn,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ObjectViewOut:
+    """p.35's gear dialog: "add, reorder, rename, and delete Object View tabs",
+    saved as the whole list. The first tab is the view's own module, so this
+    also makes the view when the type has none."""
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        row = await object_views_service.set_tabs(
+            conn, access.workspace_id, type_id,
+            [tab.model_dump() for tab in body.tabs], created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_view.set_tabs",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={"canvas_app_ids": [str(tab.canvas_app_id) for tab in body.tabs]},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )

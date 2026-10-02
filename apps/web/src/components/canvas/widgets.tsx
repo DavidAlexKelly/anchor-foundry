@@ -9775,10 +9775,10 @@ const EmbeddedObjectView = dynamic(
  * p.41's default, and an object set panel is p.41's Charts and List
  * (`object-panels.tsx`).
  *
- * **Not built, and named rather than approximated**: p.262-263's **Hide tabs**,
- * **Go to initial tab on object switch** and **Initial object view tab ID**,
- * because a configured view here is one module rather than a set of tabs;
- * p.263's **Interface configuration**, which is the embedded-module interface
+ * p.262-263's **Hide tabs**, **Go to initial tab on object switch** and
+ * **Initial object view tab ID** are §695's, over `object-views` p.35's tabs.
+ *
+ * **Not built, and named rather than approximated**: p.263's **Interface configuration**, which is the embedded-module interface
  * mapping and belongs with that widget; p.263's **Revert to legacy widget**,
  * there being no legacy one; and p.262's Empty state **icon**, for the reason
  * every icon setting is ○ — there is no icon set to pick from.
@@ -9791,7 +9791,16 @@ export function CanvasObjectViewWidget({
   emptyMessage = "",
   formFactor = "full",
   panelBehavior = "instance",
+  hideTabs = false,
+  goToInitialTab = false,
+  initialTabId = "",
 }: {
+  /** p.262's Hide tabs (§695). */
+  hideTabs?: boolean;
+  /** p.262's Go to initial tab on object switch (§695). */
+  goToInitialTab?: boolean;
+  /** p.263's Initial object view tab ID (§695); blank is the first tab. */
+  initialTabId?: string;
   /** p.261's Form factor (§694). */
   formFactor?: string;
   /** p.263's Panel behavior (§694). */
@@ -9819,6 +9828,15 @@ export function CanvasObjectViewWidget({
     pageSize: 1, variablesPending,
   });
   const instance = setPage.rows?.[0];
+  // p.35's tab the reader picked (§695), held here rather than in the view:
+  // the view is unmounted while the set resolves, and p.262's "Go to initial
+  // tab on object switch" is this widget's setting about its own object.
+  const [pickedTab, setPickedTab] = useState<string | null>(null);
+  const [tabObject, setTabObject] = useState<string | null>(null);
+  if (instance && instance.id !== tabObject) {
+    setTabObject(instance.id);
+    if (goToInitialTab === true) setPickedTab(null);
+  }
   const panel = formFactorOf(formFactor) === "panel";
   // p.263: which of the two panels, by the set's size.
   const shows = panel ? panelShows(panelBehaviorOf(panelBehavior), setPage.total ?? 0) : "instance";
@@ -9868,6 +9886,10 @@ export function CanvasObjectViewWidget({
             // module only. Who may write is the server's to refuse.
             canEdit={mode === "run"}
             formFactor={panel ? "panel" : "full"}
+            hideTabs={hideTabs === true}
+            initialTabId={initialTabId || null}
+            pickedTab={pickedTab}
+            onPickTab={setPickedTab}
           />
         </div>
       )}
@@ -9879,8 +9901,12 @@ function ObjectViewWidgetSettings() {
   const { workspaceId } = useCanvasEnv();
   const {
     objectSetVariable, viewMode, allowToggle, hideHeader, emptyMessage, formFactor, panelBehavior,
+    hideTabs, goToInitialTab, initialTabId,
     actions: { setProp },
   } = useNode((node) => ({
+    hideTabs: node.data.props.hideTabs,
+    goToInitialTab: node.data.props.goToInitialTab,
+    initialTabId: node.data.props.initialTabId,
     formFactor: node.data.props.formFactor,
     panelBehavior: node.data.props.panelBehavior,
     objectSetVariable: node.data.props.objectSetVariable,
@@ -10006,6 +10032,47 @@ function ObjectViewWidgetSettings() {
           The type name and object title above the standard view
         </span>
       </label>
+      {/* p.262-263's tab settings (§695), for a full view of several tabs:
+          "this is only applicable to object views with multiple tabs". */}
+      {formFactorOf(formFactor) === "full" && (view.data?.tabs.length ?? 0) > 1 && (
+        <>
+          <label className="field">
+            <span className="field-label">Initial object view tab</span>
+            <select
+              value={initialTabId ?? ""}
+              data-testid="object-view-initial-tab"
+              onChange={(e) =>
+                setProp((p: { initialTabId: string }) => (p.initialTabId = e.target.value))}
+            >
+              <option value="">The first tab</option>
+              {view.data!.tabs.map((t) => (
+                <option key={t.id} value={t.id}>{t.title}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field canvas-toggle">
+            <input
+              type="checkbox"
+              checked={hideTabs === true}
+              data-testid="object-view-hide-tabs"
+              onChange={(e) =>
+                setProp((p: { hideTabs: boolean }) => (p.hideTabs = e.target.checked))}
+            />
+            <span className="field-label">Hide tabs</span>
+            <span className="field-hint">The reader sees the initial tab only</span>
+          </label>
+          <label className="field canvas-toggle">
+            <input
+              type="checkbox"
+              checked={goToInitialTab === true}
+              data-testid="object-view-initial-on-switch"
+              onChange={(e) =>
+                setProp((p: { goToInitialTab: boolean }) => (p.goToInitialTab = e.target.checked))}
+            />
+            <span className="field-label">Go to initial tab on object switch</span>
+          </label>
+        </>
+      )}
       <label className="field">
         <span className="field-label">Empty state message</span>
         <input
@@ -10027,6 +10094,7 @@ CanvasObjectViewWidget.craft = {
   props: {
     objectSetVariable: null, viewMode: "configured", allowToggle: true,
     hideHeader: false, emptyMessage: "", formFactor: "full", panelBehavior: "instance",
+    hideTabs: false, goToInitialTab: false, initialTabId: "",
   },
   related: { settings: ObjectViewWidgetSettings },
 };

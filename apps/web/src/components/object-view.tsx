@@ -41,6 +41,7 @@ import { canvas as canvasApi, objects as objApi } from "@/lib/api";
 import { CommentsButton } from "@/components/comments-panel";
 import { StandardPanelView } from "@/components/object-panels";
 import { canShowStar, starGlyph, starLabel } from "@/lib/favourites";
+import { shownTab, showsTabStrip } from "@/lib/object-view-tabs";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
 import { CANVAS_RESOLVER } from "@/components/canvas/widgets";
@@ -244,10 +245,25 @@ export function ObjectView({
   canEdit = false,
   dragIcon = false,
   formFactor = "full",
+  hideTabs = false,
+  initialTabId = null,
+  pickedTab: heldTab,
+  onPickTab,
 }: {
   workspaceId: string;
   typeId: string;
   instance: ObjectInstance;
+  /** Workshop p.262's Hide tabs (§695): a configured view of several tabs
+   * shows its initial one with no way to another. */
+  hideTabs?: boolean;
+  /** The reader's tab, held by a caller that outlives this view - Workshop's
+   * widget, which unmounts it while its object set resolves and owns p.262's
+   * "Go to initial tab on object switch". Held here when not given. */
+  pickedTab?: string | null;
+  onPickTab?: (id: string) => void;
+  /** Workshop p.263's "Initial object view tab ID"; the first tab when unset
+   * or gone. */
+  initialTabId?: string | null;
   /** Workshop p.261's Form factor (§694): the panel reads the type's
    * configured *panel* view, and its standard view is p.41's default panel -
    * the prominent properties - rather than the full page. */
@@ -317,6 +333,12 @@ export function ObjectView({
   const shown = (hasDerived || editable) && full.data ? full.data : instance;
 
   const configured = view.data ?? null;
+  // `object-views` p.35's tabs (§695), and the reader's pick among them.
+  const [ownTab, setOwnTab] = useState<string | null>(null);
+  const pickedTab = onPickTab ? (heldTab ?? null) : ownTab;
+  const setPickedTab = onPickTab ?? setOwnTab;
+  const tabs = configured?.tabs ?? [];
+  const tab = shownTab(tabs, pickedTab, initialTabId);
   return (
     <div className="object-view">
       {/* **p.34's star, on the object view rather than literally beside the
@@ -363,14 +385,39 @@ export function ObjectView({
           </button>
         </div>
       )}
-      {configured && !standard ? (
-        <ConfiguredObjectView
-          workspaceId={workspaceId}
-          appId={configured.canvas_app_id}
-          subjectVariable={configured.subject_variable}
-          typeId={typeId}
-          instance={shown}
-        />
+      {configured && !standard && tab ? (
+        <>
+          {showsTabStrip(tabs.length, hideTabs) && (
+            <div className="canvas-tabstrip" role="tablist" aria-label="Object view tabs">
+              {tabs.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={t.id === tab.id}
+                  className={`canvas-tabstrip-tab${t.id === tab.id ? " on" : ""}`}
+                  onClick={() => setPickedTab(t.id)}
+                >
+                  {t.title}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Keyed by the tab and the object. A module's canvas reads its
+              document once, at mount, so another tab's module is another
+              canvas; and the object arrives as a *seed*, applied once, so
+              another object is another module state - without the object in
+              the key a widget whose object changed went on showing the first
+              one (found by §695's test of p.262's object switch). */}
+          <ConfiguredObjectView
+            key={`${tab.id}:${shown.id}`}
+            workspaceId={workspaceId}
+            appId={tab.canvas_app_id}
+            subjectVariable={tab.subject_variable}
+            typeId={typeId}
+            instance={shown}
+          />
+        </>
       ) : formFactor === "panel" ? (
         <StandardPanelView
           workspaceId={workspaceId}
