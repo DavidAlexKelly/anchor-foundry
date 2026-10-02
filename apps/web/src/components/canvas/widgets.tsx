@@ -56,7 +56,8 @@ import {
   autoSelectKey, hasSelection, keysOf, selectionClauses, toggle as toggleKey,
 } from "./object-table-selection";
 import {
-  selectedType, selectionIn, tabIndex, typedSelection, unionParts, unionProperties,
+  combinedColumns, isPicked, pickedClauses, pickedIn, pickOf, selectedType, tabIndex,
+  typedSelection, UNION_PAGE_DEPTH, unionParts, unionProperties, type Picked,
 } from "./union-set";
 import {
   MAX_LAYERS, layerColorOf, layerOpacityOf, layerPoints, layerVisibleOf, layersOf, withLayerSetting,
@@ -156,7 +157,9 @@ import { moved as movedColumn, storageKey as columnsKey, storedChoice, toggled a
   viewerColumnsOf } from "./viewer-columns";
 import { DerivedValue } from "@/components/derived-value";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
-import type { ConditionalRule, ObjectInstance, ObjectTypeDetail } from "@/lib/types";
+import type {
+  ConditionalRule, ObjectInstance, ObjectTypeDetail, ObjectTypeProperty,
+} from "@/lib/types";
 import { latest as latestOf } from "./sparkline";
 import {
   // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
@@ -6124,6 +6127,7 @@ export function CanvasObjectTable({
   seriesRules = null,
   seriesTransforms = null,
   seriesBaselines = null,
+  combineTypes = false,
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
@@ -6225,6 +6229,10 @@ export function CanvasObjectTable({
   customMenu?: boolean;
   menuItems?: unknown;
   rightClickedVariable?: string | null;
+  /** p.225's "Combine multiple object types" (§689): a union in one table
+   * rather than a tab per type. "Not available when Enable inline editing is
+   * set to true", so an inline edit action switches it off. */
+  combineTypes?: boolean;
 }) {
   const {
     id: nodeId,
@@ -6239,10 +6247,13 @@ export function CanvasObjectTable({
   // a set over one type. Which tab is runtime state, like the page.
   const boundSet = useCanvasVariable(objectSetVariable);
   const parts = unionParts(boundSet);
+  // p.225's Combine (§689): the whole union as one page, every type's
+  // objects in one order (`union_reads.page`).
+  const combined = !!parts && combineTypes === true && !inlineEditAction;
   const [tabRequested, setTab] = useState(0);
   const tab = parts ? tabIndex(tabRequested, parts.length) : 0;
-  const setDefinition = parts ? parts[tab] ?? null : boundSet;
-  const tabType = parts ? parts[tab]?.object_type_id ?? null : null;
+  const setDefinition = combined ? boundSet : parts ? parts[tab] ?? null : boundSet;
+  const tabType = parts && !combined ? parts[tab]?.object_type_id ?? null : null;
   const tabTypes = useQueries({
     queries: (parts ?? []).map((part) => ({
       queryKey: ["object-type", part.object_type_id],
@@ -6263,11 +6274,13 @@ export function CanvasObjectTable({
   const { set: setParameter } = useCanvasParameters();
   const activeRaw = useCanvasParameter(activeVariable);
   const selectedRaw = useCanvasParameter(selectedVariable);
-  // A union tab reads back only what its own type wrote (`union-set.ts`).
-  const activeKeys = keysOf(selectionIn(activeRaw, tabType));
-  const selectedKeys = keysOf(selectionIn(selectedRaw, tabType));
-  const selection = (keys: readonly string[]) =>
-    typedSelection(selectionClauses(keys), tabType);
+  // A union tab reads back only what its own type wrote, and a combined
+  // table each object with its type (`union-set.ts`).
+  const activePicked = pickedIn(activeRaw, combined, tabType);
+  const selectedPicked = pickedIn(selectedRaw, combined, tabType);
+  const activeKeys = activePicked.map((p) => p.key);
+  const selection = (picked: readonly Picked[]) => pickedClauses(picked, combined, tabType);
+  const pick = (row: ObjectInstance) => pickOf(row, combined);
   // **Stated, not merely empty.** A variable this widget has never written
   // holds no clauses at all, and no clauses means *no narrowing* - so an
   // "empty" active object would hand every downstream widget the whole table.
@@ -6339,7 +6352,17 @@ export function CanvasObjectTable({
     enabled: !!objectTypeId,
   });
 
-  const all = type.data?.properties ?? [];
+  // A combined table's columns are every type's, one per api name and
+  // display name (p.225), each saying which types' rows it has values for.
+  const loadedTypes = tabTypes.map((t) => t.data);
+  const columnsOfUnion = useMemo(
+    () => combinedColumns(loadedTypes),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loadedTypes.map((t) => t?.id ?? "").join(",")],
+  );
+  const all: (ObjectTypeProperty & { covers?: string[] })[] = combined
+    ? columnsOfUnion
+    : type.data?.properties ?? [];
   // p.174's per-column formatters, read once for the render rather than per
   // cell: this validates every entry, and a twenty-five row page would run it
   // twenty-five times for an answer that cannot differ between rows.
@@ -6416,7 +6439,9 @@ export function CanvasObjectTable({
     ? viewerColumnsOf(offeredColumns, viewerChoice)
     : listed;
   const properties = shownColumns
-    ? shownColumns.map((name) => all.find((p) => p.api_name === name)).filter((p) => !!p)
+    // Every column by that name: a combined table has two under one api name
+    // when the types display it differently (p.225).
+    ? shownColumns.flatMap((name) => all.filter((p) => p.api_name === name))
     : all;
 
   // p.170's calculated columns for whichever type this table is showing.
@@ -6524,7 +6549,9 @@ export function CanvasObjectTable({
   // variable**: the other path is a type narrowed by a search box, which is
   // no set an export can name.
   const { exportObjects } = useCanvasActions();
-  const offersExport = mode === "run" && !!exportCsv && usingSet;
+  // Not from a combined table, which pages to 200 objects (`union_reads`) and
+  // so cannot be read to p.223's 10,000; each tab of a union can.
+  const offersExport = mode === "run" && !!exportCsv && usingSet && !combined;
   // p.243's custom items (§613): "run actions or events on an object that is
   // right-clicked from the object table". Each item is a click the Events
   // panel wires, as a menu button's items are, and it fires with the row's
@@ -6549,8 +6576,8 @@ export function CanvasObjectTable({
     };
   }, [rowMenu]);
 
-  const chooseActive = (key: string) => {
-    if (activeVariable) setParameter(activeVariable, selection([key]));
+  const chooseActive = (row: ObjectInstance) => {
+    if (activeVariable) setParameter(activeVariable, selection([pick(row)]));
   };
 
   // p.224's auto-selection, in an effect because it is a *write* — doing it
@@ -6561,8 +6588,8 @@ export function CanvasObjectTable({
   });
   useEffect(() => {
     if (!activeVariable) return;
-    if (autoKey) {
-      setParameter(activeVariable, selection([autoKey]));
+    if (autoKey && rows?.[0]) {
+      setParameter(activeVariable, selection([pick(rows[0])]));
       return;
     }
     // p.224's "results in an empty active object at load time", written down
@@ -6674,7 +6701,7 @@ export function CanvasObjectTable({
     >
       {/* p.225: "When disabled, each object type will be displayed within its
           own tab" (§686). The section's tabstrip, roles and keys included. */}
-      {parts && parts.length > 0 && (
+      {parts && parts.length > 0 && !combined && (
         <div className="canvas-tabstrip" role="tablist" aria-label="Object types">
           {parts.map((part, i) => (
             <button
@@ -6777,7 +6804,7 @@ export function CanvasObjectTable({
                         aria-label="Select all rows on this page"
                         data-testid="table-select-all"
                         checked={rows.length > 0 && rows.every(
-                          (r) => selectedKeys.includes(r.primary_key),
+                          (r) => isPicked(selectedPicked, r),
                         )}
                         onChange={(e) =>
                           setParameter(selectedVariable, selection(
@@ -6786,11 +6813,10 @@ export function CanvasObjectTable({
                             // the widget cannot keep: it only has the page it
                             // fetched, and the set may be a million rows.
                             e.target.checked
-                              ? Array.from(new Set([
-                                ...selectedKeys, ...rows.map((r) => r.primary_key),
-                              ]))
-                              : selectedKeys.filter(
-                                (k) => !rows.some((r) => r.primary_key === k),
+                              ? [...selectedPicked,
+                                 ...rows.filter((r) => !isPicked(selectedPicked, r)).map(pick)]
+                              : selectedPicked.filter(
+                                (p) => !rows.some((r) => isPicked([p], r)),
                               ),
                           ))}
                       />
@@ -6818,7 +6844,7 @@ export function CanvasObjectTable({
                     )}
                   </th>
                   {properties.map((p, column) => (
-                    <th key={p.api_name} style={stick(column + 1 + leading)}>
+                    <th key={`${p.api_name}:${column}`} style={stick(column + 1 + leading)}>
                       {p.display_name || p.api_name}
                     </th>
                   ))}
@@ -6839,12 +6865,12 @@ export function CanvasObjectTable({
                     key={instance.id}
                     className={[
                       rowsAreClickable ? "row-clickable" : "",
-                      activeKeys.includes(instance.primary_key) ? "row-active" : "",
+                      isPicked(activePicked, instance) ? "row-active" : "",
                     ].filter(Boolean).join(" ") || undefined}
                     // The active row is announced rather than only coloured: a
                     // highlight nobody can hear is not a selection.
                     aria-current={
-                      activeKeys.includes(instance.primary_key) ? "true" : undefined
+                      isPicked(activePicked, instance) ? "true" : undefined
                     }
                     // p.570's drag zone: "Cells in an object table can be
                     // dragged onto compatible drop zones", carrying the
@@ -6864,13 +6890,13 @@ export function CanvasObjectTable({
                       // right-clicked object": set on the right-click, so an
                       // item's events read a variable already settled.
                       if (rightClickedVariable) {
-                        setParameter(rightClickedVariable, selection([instance.primary_key]));
+                        setParameter(rightClickedVariable, selection([pick(instance)]));
                       }
                     } : undefined}
                     onClick={
                       rowsAreClickable
                         ? () => {
-                          chooseActive(instance.primary_key);
+                          chooseActive(instance);
                           runEvents(rowEvents, {
                             ...eventContext,
                             ...selectionOf(instance, effectiveTypeId),
@@ -6905,7 +6931,7 @@ export function CanvasObjectTable({
                         <input
                           type="checkbox"
                           aria-label={`Select ${instance.primary_key}`}
-                          checked={selectedKeys.includes(instance.primary_key)}
+                          checked={isPicked(selectedPicked, instance)}
                           // **Stops the click reaching the row.** Checking a box
                           // is not choosing an active object, and without this
                           // one click would do both — and fire the row's events
@@ -6913,7 +6939,9 @@ export function CanvasObjectTable({
                           onClick={(e) => e.stopPropagation()}
                           onChange={() =>
                             setParameter(selectedVariable, selection(
-                              toggleKey(selectedKeys, instance.primary_key),
+                              isPicked(selectedPicked, instance)
+                                ? selectedPicked.filter((p) => !isPicked([p], instance))
+                                : [...selectedPicked, pick(instance)],
                             ))}
                         />
                       </td>
@@ -6948,9 +6976,13 @@ export function CanvasObjectTable({
                       </div>
                     </td>
                     {properties.map((p, column) => {
-                      const paint = conditionalStyle(
-                        p.conditional_format, instance.properties,
-                      );
+                      // p.225: a combined column has values for the types it
+                      // covers, and is blank for the others' rows.
+                      const covered = !("covers" in p) || !p.covers
+                        || p.covers.includes(String(instance.object_type_id));
+                      const paint = covered
+                        ? conditionalStyle(p.conditional_format, instance.properties)
+                        : undefined;
                       // p.242: "users can edit any modifiable column mapped to
                       // an action parameter" - so a column with no parameter
                       // pointed at it stays a value, in edit mode or out of it.
@@ -6959,7 +6991,7 @@ export function CanvasObjectTable({
                         : undefined;
                       return (
                         <td
-                          key={p.api_name}
+                          key={`${p.api_name}:${column}`}
                           style={{
                             height: minHeight,
                             // p.225's "Conditional formatting colors entire
@@ -6972,7 +7004,7 @@ export function CanvasObjectTable({
                           }}
                         >
                           <div style={cell}>
-                            {parameter ? (
+                            {!covered ? null : parameter ? (
                               <div
                                 data-testid={`edit-${instance.primary_key}-${p.api_name}`}
                                 // A click in a cell is typing, not choosing a
@@ -7256,7 +7288,8 @@ export function CanvasObjectTable({
               <button
                 type="button"
                 className="btn quiet"
-                disabled={offset + rows.length >= total}
+                disabled={offset + rows.length >= total
+                  || (combined && offset + pageSize >= UNION_PAGE_DEPTH)}
                 onClick={() => setOffset(offset + pageSize)}
               >
                 Next
@@ -7266,6 +7299,12 @@ export function CanvasObjectTable({
           {!usingSet && total > rows.length && (
             <p className="canvas-widget-empty">
               Showing the first {rows.length} of {total.toLocaleString()}.
+            </p>
+          )}
+          {combined && total > UNION_PAGE_DEPTH && (
+            <p className="canvas-widget-empty" data-testid="table-combined-depth">
+              A combined table shows the first {UNION_PAGE_DEPTH} of these; narrow it, or turn
+              off Combine to page each type in its own tab.
             </p>
           )}
           {/* p.242: the button lives "in the table footer", and p.243 puts
@@ -7747,8 +7786,10 @@ function ObjectTableSettings() {
     inlineEditAction, inlineEditMapping, inlineEditVariables, inlineEditButtonText,
     inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules, seriesTransforms, seriesBaselines,
     columnsVariable, exportCsv, hideColumnConfig, customMenu, menuItems, rightClickedVariable,
+    combineTypes,
     actions: { setProp },
   } = useNode((node) => ({
+    combineTypes: node.data.props.combineTypes,
     customMenu: node.data.props.customMenu,
     menuItems: node.data.props.menuItems,
     rightClickedVariable: node.data.props.rightClickedVariable,
@@ -8186,6 +8227,28 @@ function ObjectTableSettings() {
           </span>
         </>
       )}
+      {/* p.225's Combine multiple object types (§689): offered over a union,
+          and "not available when Enable inline editing is set to true". */}
+      {unionParts(objectSetVariable ? resolved[objectSetVariable] : undefined) && (
+        <>
+          <label className="field-check">
+            <input
+              type="checkbox"
+              data-testid="table-combine-types"
+              checked={!!combineTypes && !inlineEditAction}
+              disabled={!!inlineEditAction}
+              onChange={(e) =>
+                setProp((p: { combineTypes: boolean }) => (p.combineTypes = e.target.checked))}
+            />
+            <span>Combine multiple object types</span>
+          </label>
+          <span className="field-hint">
+            {inlineEditAction
+              ? "Not available while inline editing is on (p.225)."
+              : "One table rather than a tab per type. Columns with the same name and ID are one column; a combined table pages to 200 objects."}
+          </span>
+        </>
+      )}
       {/* p.225's Hide column configuration (§612). */}
       <label className="field-check">
         <input
@@ -8507,7 +8570,7 @@ CanvasObjectTable.craft = {
     inlineEditButtonText: "",
     inlineEditByDefault: false, inlineEditOneClick: false,
     seriesFormats: null, seriesRules: null, seriesTransforms: null, seriesBaselines: null,
-    columnsVariable: null, exportCsv: false, hideColumnConfig: false,
+    columnsVariable: null, exportCsv: false, hideColumnConfig: false, combineTypes: false,
     customMenu: false, menuItems: null, rightClickedVariable: null,
   },
   related: { settings: ObjectTableSettings },

@@ -20,7 +20,7 @@
  */
 
 import { OBJECT_TYPE_CLAUSE } from "./drag-payload";
-import type { Clause } from "./object-table-selection";
+import { keysOf, selectionClauses, type Clause } from "./object-table-selection";
 
 /** The server's `object_sets.UNION`; a test there reads it out of this file. */
 export const UNION = "union";
@@ -106,3 +106,99 @@ export function selectedType(raw: unknown): string | null {
   ) as Clause | undefined;
   return typeof clause?.value === "string" ? clause.value : null;
 }
+
+// ---- p.225's Combine multiple object types (§689) ---------------------------
+/** > "When enabled, all object types will be displayed within a single table
+ * > and, across object types, property types that share both display names
+ * > and IDs will be combined into a single column." (p.225)
+ *
+ * Every type's properties in type order, one column for each api name and
+ * display name pair, and `covers` the types whose objects have a value
+ * there. A pair shared by two types is one column; the same api name under
+ * two display names is two, each blank for the other type's rows.
+ *
+ * **None until every type has loaded** (`undefined` for one that has not),
+ * for `unionProperties`' reason: columns from some of the types would be
+ * drawn and redrawn. */
+export function combinedColumns<P extends { api_name: string; display_name: string }>(
+  loading: readonly ({ id: string; properties: readonly P[] } | undefined)[],
+): (P & { covers: string[] })[] {
+  if (loading.some((t) => !t)) return [];
+  const columns: (P & { covers: string[] })[] = [];
+  for (const type of loading as readonly { id: string; properties: readonly P[] }[]) {
+    for (const p of type.properties) {
+      const same = columns.find(
+        (c) => c.api_name === p.api_name && c.display_name === p.display_name,
+      );
+      if (same) same.covers.push(type.id);
+      else columns.push({ ...p, covers: [type.id] });
+    }
+  }
+  return columns;
+}
+
+/** Several objects of several types, as one clause (§689): `[type, key]`
+ * pairs. The server's `OBJECTS_CLAUSE`; a test there reads it out of this
+ * file. Written beside the keys' own clause, so everything that reads a
+ * selection's keys still reads them. */
+export const OBJECTS_CLAUSE = "$objects";
+
+/** One selected object: its key, and its type where the key alone is not
+ * enough to say which object it is. */
+export interface Picked {
+  type: string | null;
+  key: string;
+}
+
+/** A selection read back. Over one set, or one tab, the keys (a tab's
+ * already filtered to its own type); in a combined table each object with
+ * its type, from the pairs or from the type the selection names. */
+export function pickedIn(raw: unknown, combined: boolean, tabType: string | null): Picked[] {
+  if (!combined) return keysOf(selectionIn(raw, tabType)).map((key) => ({ type: null, key }));
+  const pairs = Array.isArray(raw)
+    ? (raw.find((c) => !!c && typeof c === "object" && (c as Clause).property === OBJECTS_CLAUSE) as
+        Clause | undefined)
+    : undefined;
+  if (pairs && Array.isArray(pairs.value)) {
+    return pairs.value
+      .filter((pair): pair is [string, string] => Array.isArray(pair) && pair.length === 2)
+      .map(([type, key]) => ({ type: String(type), key: String(key) }));
+  }
+  const type = selectedType(raw);
+  return keysOf(raw).map((key) => ({ type, key }));
+}
+
+/** A selection written: one type's objects as that type's keys, and
+ * several types' as their pairs beside all their keys. */
+export function pickedClauses(
+  picked: readonly Picked[], combined: boolean, tabType: string | null,
+): Clause[] {
+  const keys = picked.map((p) => p.key);
+  if (!combined) return typedSelection(selectionClauses(keys), tabType);
+  const types = [...new Set(picked.map((p) => p.type))];
+  if (types.length > 1) {
+    return [
+      { property: OBJECTS_CLAUSE, op: "in", value: picked.map((p) => [p.type, p.key]) },
+      ...selectionClauses(keys),
+    ];
+  }
+  return typedSelection(selectionClauses(keys), types[0] ?? null);
+}
+
+/** Whether a row is one of these: its key, and its type when the entry has one. */
+export function isPicked(
+  picked: readonly Picked[], row: { primary_key: string; object_type_id?: string | null },
+): boolean {
+  return picked.some((p) => p.key === row.primary_key
+    && (p.type === null || p.type === (row.object_type_id ?? null)));
+}
+
+/** This row as an entry: with its type in a combined table. */
+export function pickOf(
+  row: { primary_key: string; object_type_id?: string | null }, combined: boolean,
+): Picked {
+  return { type: combined ? row.object_type_id ?? null : null, key: row.primary_key };
+}
+
+/** The server's `union_reads.MAX_DEPTH`: how far a combined table pages. */
+export const UNION_PAGE_DEPTH = 200;
