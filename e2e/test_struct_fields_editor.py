@@ -191,7 +191,7 @@ def test_a_struct_with_no_fields_is_refused_before_the_save(page, api, module) -
         # asserting about the layout rather than about p.149. This asks the
         # button directly; the position hazard is recorded where it belongs,
         # beside the button that used to sit underneath.
-        rows.first.get_by_role("button").dispatch_event("click")
+        rows.first.get_by_role("button", name="Remove field 1").dispatch_event("click")
     expect(rows).to_have_count(0)
     expect(page.get_by_test_id("struct-no-fields")).to_be_visible()
 

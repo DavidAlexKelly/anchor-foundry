@@ -5,6 +5,9 @@ import {
   parseStructDefault,
   problem,
   renamedFields,
+  draftsOf,
+  fieldsOf,
+  moved,
   compactRows,
   mainFields,
   structRows,
@@ -70,31 +73,62 @@ describe("problem", () => {
 });
 
 describe("renamedFields", () => {
+  const opened = () => draftsOf(ADDRESS);
+
   it("finds a name that changed in place", () => {
-    const after = [field("road"), ...ADDRESS.slice(1)];
-    expect(renamedFields(ADDRESS, after)).toEqual(["street"]);
+    const after = opened();
+    after[0] = { ...after[0]!, api_name: "road" };
+    expect(renamedFields(after)).toEqual(["street"]);
   });
 
   it("says nothing about a declaration that has not been renamed", () => {
-    expect(renamedFields(ADDRESS, ADDRESS)).toEqual([]);
+    expect(renamedFields(opened())).toEqual([]);
   });
 
   it("does not call a newly added field a rename", () => {
     // p.158's warning is about a name applications already hold. A row that
     // has never been saved has no old name to warn about, and warning anyway
     // would train somebody to ignore the warning.
-    expect(renamedFields(ADDRESS, [...ADDRESS, field("county")])).toEqual([]);
+    expect(renamedFields([...opened(), field("county")])).toEqual([]);
   });
 
   it("says nothing about a struct being declared for the first time", () => {
-    expect(renamedFields(null, ADDRESS)).toEqual([]);
-    expect(renamedFields([], ADDRESS)).toEqual([]);
+    expect(renamedFields([field("street"), field("postal_code")])).toEqual([]);
   });
 
   it("does not warn while a name is being cleared before it is retyped", () => {
     // Emptying the box is the first keystroke of a rename, not a rename. A
     // warning that appears mid-edit is a warning about a state nobody is in.
-    expect(renamedFields(ADDRESS, [field(""), ...ADDRESS.slice(1)])).toEqual([]);
+    const after = opened();
+    after[0] = { ...after[0]!, api_name: "" };
+    expect(renamedFields(after)).toEqual([]);
+  });
+
+  it("does not call a moved field a rename (§676)", () => {
+    // p.169's reorder: matched by position, a field moved up would read as
+    // renamed to its neighbour.
+    expect(renamedFields(moved(opened(), 0, 1))).toEqual([]);
+    expect(renamedFields(moved(opened(), 2, -1))).toEqual([]);
+  });
+});
+
+describe("moving a field (p.169, §676)", () => {
+  it("swaps it with its neighbour, and stays put at either end", () => {
+    const names = (rows: StructField[]) => rows.map((f) => f.api_name);
+    expect(names(moved(ADDRESS, 0, 1))).toEqual(["postal_code", "street", "floors"]);
+    expect(names(moved(ADDRESS, 2, -1))).toEqual(["street", "floors", "postal_code"]);
+    expect(names(moved(ADDRESS, 0, -1))).toEqual(["street", "postal_code", "floors"]);
+    expect(names(moved(ADDRESS, 2, 1))).toEqual(["street", "postal_code", "floors"]);
+    expect(names(moved(ADDRESS, 5, -1))).toEqual(["street", "postal_code", "floors"]);
+    // A row just past the end has a neighbour in range, and is still no row.
+    expect(names(moved(ADDRESS, 3, -1))).toEqual(["street", "postal_code", "floors"]);
+    expect(names(moved(ADDRESS, -1, 1))).toEqual(["street", "postal_code", "floors"]);
+  });
+
+  it("saves without the rows' origins", () => {
+    const rows = draftsOf(ADDRESS);
+    expect(rows[0]!.was).toBe("street");
+    expect(fieldsOf(rows)).toEqual(ADDRESS);
   });
 });
 
