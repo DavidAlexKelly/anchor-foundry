@@ -331,6 +331,10 @@ import {
   INTERNAL_INTERPOLATIONS as SERIES_INTERNAL_INTERPOLATIONS,
   type ExternalInterpolation as SeriesExternalInterpolation,
   type InternalInterpolation as SeriesInternalInterpolation,
+  EVENT_SET_TYPES as SERIES_EVENT_SET_TYPES, EVENT_SET_TYPE_LABELS as SERIES_EVENT_SET_TYPE_LABELS,
+  MAX_CANVASES as MAX_SERIES_CANVASES, MAX_INITIAL_EVENTS as MAX_SERIES_INITIAL_EVENTS,
+  canvasFor as seriesCanvasFor, initialEventSetsOf as seriesInitialEventSetsOf,
+  objectEventsOf as seriesObjectEventsOf, placementOf as seriesPlacementOf,
   type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
@@ -13054,6 +13058,9 @@ export function CanvasSeriesAnalysis({
   limit = 5,
   title = "",
   plotTypes = null,
+  eventSetTypes = null,
+  newPlotCanvas = "input",
+  eventSets: initialEventSets = null,
 }: {
   objectSetVariable?: string | null;
   property?: string | null;
@@ -13063,6 +13070,12 @@ export function CanvasSeriesAnalysis({
   /** p.396's *Customize available plot types*: those offered by New plot, in
    * order; null offers them all. */
   plotTypes?: string[] | null;
+  /** p.396's *Customize available event set types* (§658); null offers both. */
+  eventSetTypes?: string[] | null;
+  /** p.396's *New plot placement* (§658): "input", "new" or a canvas number. */
+  newPlotCanvas?: string | number;
+  /** p.396's *Add initial event sets* (§658). */
+  eventSets?: unknown;
 }) {
   const {
     connectors: { connect, drag },
@@ -13104,6 +13117,27 @@ export function CanvasSeriesAnalysis({
   const readings = plots.map((_, n) => seriesReadingsOf(readingsFor[n]?.data?.points ?? []));
   const colorOf = (n: number) => CHART_PALETTE[n % CHART_PALETTE.length]!;
   const offered = SERIES_PLOT_TYPES.filter((k) => !plotTypes || plotTypes.includes(k));
+  const setTypes = SERIES_EVENT_SET_TYPES.filter((k) => !eventSetTypes || eventSetTypes.includes(k));
+  const placement = seriesPlacementOf(newPlotCanvas);
+  // p.396's initial event sets (§658): the builder's, read from object sets,
+  // shaded on every canvas; the reader may hide one but not change it.
+  const { resolved: resolvedVariables } = useCanvasVariables();
+  const initial = seriesInitialEventSetsOf(initialEventSets);
+  const initialRead = useQueries({
+    queries: initial.map((set) => {
+      const definition = resolvedVariables[set.objectSetVariable];
+      return {
+        queryKey: ["canvas-series-analysis-initial-events", set.objectSetVariable,
+          JSON.stringify(definition ?? null)],
+        queryFn: () => objApi.evaluateObjectSet(workspaceId, definition, { limit: MAX_SERIES_INITIAL_EVENTS }),
+        enabled: !!definition,
+      };
+    }),
+  });
+  const initialEvents = initial.map((set, n) =>
+    seriesObjectEventsOf(initialRead[n]?.data?.instances ?? [], set.start, set.end));
+  const [initialHidden, setInitialHidden] = useState<number[]>([]);
+  const initialColor = (n: number) => CHART_PALETTE[(CHART_PALETTE.length - 1 - n) % CHART_PALETTE.length]!;
   const [draft, setDraft] = useState<{
     parent: string; transforms: SeriesTransform[]; bands?: SeriesBands;
     combine?: { kind: "combine" | "linear_aggregate"; others: string[]; aggregate: "avg" | "min" | "max" | "sum" };
@@ -13186,11 +13220,13 @@ export function CanvasSeriesAnalysis({
             <SeriesAnalysisChart key={canvas} canvas={canvas}
               axes={seriesAxesOf(plots, canvas).map((axis) => ({
                 axis, settings: seriesAxisSettingsOf(axes, canvas, axis) }))}
-              events={eventSets.flatMap((set, n) => {
+              events={[...initial.flatMap((_, n) => initialHidden.includes(n) ? []
+                : [{ id: `initial-${n + 1}`, color: initialColor(n), events: initialEvents[n] ?? [] }]),
+              ...eventSets.flatMap((set, n) => {
                 const at = plots.findIndex((p) => p.id === set.plot);
                 return set.highlight && plots[at]?.canvas === canvas
                   ? [{ id: set.id, color: colorOf(at), events: eventsOfSet[n] ?? [] }] : [];
-              })}
+              })]}
               plots={plots
               .map((p, n) => ({ plot: p, n }))
               .filter(({ plot }) => plot.canvas === canvas)
@@ -13398,13 +13434,13 @@ export function CanvasSeriesAnalysis({
                     onClick={() => setAddedCanvases(Math.max(addedCanvases, ...canvases) + 1)}>
               New canvas
             </button>
-            {eventSets.length < MAX_SERIES_EVENT_SETS && (
+            {setTypes.includes("search") && eventSets.length < MAX_SERIES_EVENT_SETS && (
               <button type="button" className="btn quiet"
                       onClick={() => setEventDraft({ plot: plots[0]!.id, op: "gt", value: "" })}>
                 New event set
               </button>
             )}
-            {eventSets.length < MAX_SERIES_EVENT_SETS && (
+            {setTypes.includes("linked") && eventSets.length < MAX_SERIES_EVENT_SETS && (
               <button type="button" className="btn quiet"
                       onClick={() => setLinkedDraft({ plot: plots[0]!.id, link: "", start: "", end: "" })}>
                 New linked event set
@@ -13478,10 +13514,27 @@ export function CanvasSeriesAnalysis({
               <button type="button" className="btn quiet" onClick={() => setLinkedDraft(null)}>Cancel</button>
             </div>
           )}
-          {eventSets.length > 0 && (
+          {(eventSets.length > 0 || initial.length > 0) && (
             <table className="data-grid" data-testid="series-event-sets" style={{ marginTop: 6 }}>
               <thead><tr><th>Event set</th><th>Events</th><th>Highlight</th><th /></tr></thead>
               <tbody>
+                {initial.map((set, n) => {
+                  const read = initialRead[n]?.data;
+                  return (
+                    <tr key={`initial-${n}`} data-label={set.label} data-initial="">
+                      <td>{set.label}</td>
+                      <td data-stat="events">
+                        {read ? `${seriesEventCount(initialEvents[n] ?? [])}${read.total > read.instances.length ? "+" : ""}` : "…"}
+                      </td>
+                      <td>
+                        <input type="checkbox" aria-label={`Highlight ${set.label}`} checked={!initialHidden.includes(n)}
+                               onChange={(e) => setInitialHidden(e.target.checked
+                                 ? initialHidden.filter((x) => x !== n) : [...initialHidden, n])} />
+                      </td>
+                      <td />
+                    </tr>
+                  );
+                })}
                 {eventSets.map((set, n) => (
                   <tr key={set.id} data-label={set.label}>
                     <td>{set.label}</td>
@@ -13591,17 +13644,18 @@ export function CanvasSeriesAnalysis({
                           : draft.transforms.length === 0 || !!seriesTransformsProblem(draft.transforms)}
                         onClick={() => {
                           const parent = plots.find((p) => p.id === draft.parent);
+                          const canvas = seriesCanvasFor(placement, parent?.canvas ?? 1, canvases);
                           setPlots(draft.eventStats
                             ? withSeriesEventStatistics(plots, draft.parent,
                               searchSets.find((x) => x.id === draft.eventStats!.set),
-                              draft.eventStats.aggregate, parent?.canvas ?? 1)
+                              draft.eventStats.aggregate, canvas)
                             : draft.combine
                             ? withSeriesCombined(plots, draft.parent, draft.combine.others,
-                              draft.combine.aggregate, parent?.canvas ?? 1, draft.combine.kind)
+                              draft.combine.aggregate, canvas, draft.combine.kind)
                             : draft.bands
-                            ? withSeriesBands(plots, draft.parent, draft.bands, parent?.canvas ?? 1)
+                            ? withSeriesBands(plots, draft.parent, draft.bands, canvas)
                             : withSeriesDerived(plots, draft.parent, draft.transforms,
-                              parent?.canvas ?? 1));
+                              canvas));
                           setDraft(null);
                         }}>
                   Add plot
@@ -13622,7 +13676,8 @@ function SeriesAnalysisSettings() {
   const { workspaceId } = useCanvasEnv();
   const { declared } = useCanvasVariables();
   const {
-    objectSetVariable, property, labelProperty, limit, title, plotTypes,
+    objectSetVariable, property, labelProperty, limit, title, plotTypes, eventSetTypes, newPlotCanvas,
+    eventSets,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -13631,7 +13686,13 @@ function SeriesAnalysisSettings() {
     limit: node.data.props.limit,
     title: node.data.props.title,
     plotTypes: node.data.props.plotTypes,
+    eventSetTypes: node.data.props.eventSetTypes,
+    newPlotCanvas: node.data.props.newPlotCanvas,
+    eventSets: node.data.props.eventSets,
   }));
+  const setTypes = SERIES_EVENT_SET_TYPES.filter((k) => !eventSetTypes || eventSetTypes.includes(k));
+  const initial = seriesInitialEventSetsOf(eventSets);
+  const rawInitial: Record<string, unknown>[] = Array.isArray(eventSets) ? eventSets : [];
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   const typeId = (declared[objectSetVariable ?? ""]?.object_set as { object_type_id?: string } | undefined)
     ?.object_type_id ?? null;
@@ -13700,6 +13761,54 @@ function SeriesAnalysisSettings() {
         ))}
       </div>
       <label className="field">
+        <span className="field-label">New plot placement</span>
+        <select aria-label="New plot placement" value={String(seriesPlacementOf(newPlotCanvas))}
+                onChange={(e) => setProp((p: { newPlotCanvas: string | number }) =>
+                  (p.newPlotCanvas = /^\d+$/.test(e.target.value) ? Number(e.target.value) : e.target.value))}>
+          <option value="input">Its input plot's canvas</option>
+          <option value="new">A new canvas</option>
+          {Array.from({ length: MAX_SERIES_CANVASES }, (_, n) => (
+            <option key={n + 1} value={n + 1}>{`Canvas ${n + 1}`}</option>
+          ))}
+        </select>
+      </label>
+      <div className="field" data-testid="series-event-set-types">
+        <span className="field-label">Event set types offered</span>
+        {SERIES_EVENT_SET_TYPES.map((k) => (
+          <label key={k} className="field canvas-toggle">
+            <input type="checkbox" aria-label={`Offer ${SERIES_EVENT_SET_TYPE_LABELS[k]}`} checked={setTypes.includes(k)}
+                   onChange={(e) => setProp((p: { eventSetTypes: string[] | null }) => {
+                     const now = SERIES_EVENT_SET_TYPES.filter((t) => !p.eventSetTypes || p.eventSetTypes.includes(t));
+                     p.eventSetTypes = SERIES_EVENT_SET_TYPES.filter((t) => (t === k ? e.target.checked : now.includes(t)));
+                   })} />
+            <span className="field-label">{SERIES_EVENT_SET_TYPE_LABELS[k]}</span>
+          </label>
+        ))}
+      </div>
+      <div className="field" data-testid="series-initial-event-sets">
+        <span className="field-label">Initial event sets</span>
+        {rawInitial.map((raw, n) => (
+          <SeriesInitialEventSetRow key={n} index={n} raw={raw} sets={setVariables}
+            onChange={(next) => setProp((p: { eventSets: unknown }) => {
+              const all = Array.isArray(p.eventSets) ? [...p.eventSets] : [];
+              if (next === null) all.splice(n, 1); else all[n] = next;
+              p.eventSets = all;
+            })} />
+        ))}
+        {rawInitial.length < MAX_SERIES_EVENT_SETS && (
+          <button type="button" className="btn quiet"
+                  onClick={() => setProp((p: { eventSets: unknown }) => {
+                    p.eventSets = [...(Array.isArray(p.eventSets) ? p.eventSets : []),
+                      { objectSetVariable: "", start: "", end: "", label: "" }];
+                  })}>
+            Add initial event set
+          </button>
+        )}
+        {rawInitial.length > initial.length && (
+          <span className="field-hint">An event set needs an object set and a start property to be shown.</span>
+        )}
+      </div>
+      <label className="field">
         <span className="field-label">Title</span>
         <input type="text" value={title || ""}
                onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))} />
@@ -13709,10 +13818,55 @@ function SeriesAnalysisSettings() {
   );
 }
 
+/** One of p.396's initial event sets in the settings panel (§658): its object
+ * set, the start and end properties of the set's type, and its name. */
+function SeriesInitialEventSetRow({ index, raw, sets, onChange }: {
+  index: number;
+  raw: Record<string, unknown>;
+  sets: { id: string; label: string; object_set?: unknown }[];
+  onChange: (next: Record<string, unknown> | null) => void;
+}) {
+  const { workspaceId } = useCanvasEnv();
+  const variable = typeof raw.objectSetVariable === "string" ? raw.objectSetVariable : "";
+  const typeId = (sets.find((v) => v.id === variable)?.object_set as { object_type_id?: string } | undefined)
+    ?.object_type_id ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const moments = (type.data?.properties ?? []).filter((p) => p.data_type === "timestamp" || p.data_type === "date");
+  const name = `Initial event set ${index + 1}`;
+  const text = (key: string) => (typeof raw[key] === "string" ? raw[key] as string : "");
+  return (
+    <div className="row-actions" data-testid={`series-initial-event-set-${index + 1}`} style={{ flexWrap: "wrap", gap: 4 }}>
+      <select aria-label={`${name} object set`} value={variable}
+              onChange={(e) => onChange({ ...raw, objectSetVariable: e.target.value, start: "", end: "" })}>
+        <option value="">Object set…</option>
+        {sets.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+      </select>
+      <select aria-label={`${name} start`} value={text("start")} disabled={!typeId}
+              onChange={(e) => onChange({ ...raw, start: e.target.value })}>
+        <option value="">Start property…</option>
+        {moments.map((p) => <option key={p.api_name} value={p.api_name}>{p.display_name}</option>)}
+      </select>
+      <select aria-label={`${name} end`} value={text("end")} disabled={!typeId}
+              onChange={(e) => onChange({ ...raw, end: e.target.value })}>
+        <option value="">No end (a moment)</option>
+        {moments.map((p) => <option key={p.api_name} value={p.api_name}>{p.display_name}</option>)}
+      </select>
+      <input aria-label={`${name} label`} value={text("label")} placeholder="Name"
+             onChange={(e) => onChange({ ...raw, label: e.target.value })} />
+      <button type="button" className="btn quiet" aria-label={`Remove ${name.toLowerCase()}`}
+              onClick={() => onChange(null)}>×</button>
+    </div>
+  );
+}
+
 CanvasSeriesAnalysis.craft = {
   displayName: "Time series analysis",
   props: { objectSetVariable: null, property: null, labelProperty: null, limit: 5, title: "",
-    plotTypes: null },
+    plotTypes: null, eventSetTypes: null, newPlotCanvas: "input", eventSets: null },
   related: { settings: SeriesAnalysisSettings },
 };
 

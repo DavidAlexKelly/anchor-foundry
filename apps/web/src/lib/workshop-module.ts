@@ -324,6 +324,8 @@ export const NESTED_REFERENCE_PROPS: Record<string, readonly string[]> = {
   series: ["objectSetVariable", "drilldownVariable"],
   // p.321's annotation layers on the Markdown widget (§637). See the API's copy.
   annotationLayers: ["objectSetVariable"],
+  // p.396's initial event sets on Time Series Analysis (§658). See the API's copy.
+  eventSets: ["objectSetVariable"],
 };
 
 /** Props holding a map of names to variable ids of this module (§598): an

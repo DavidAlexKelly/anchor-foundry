@@ -4,7 +4,8 @@ import {
   MAX_EVENT_SETS, withEventStatistics, eventCount, eventSpan, eventsOf, liveEventSets, withEventSet, withLinkedEventSet,
   DEFAULT_DISPLAY, areaOf,
   DEFAULT_AXIS, MAX_AXES, axesOf, axisOf, axisProblem, axisSettingsOf, fractionOf, newAxisOf, valueAt,
-  withAxisSetting, shownShape, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
+  withAxisSetting, shownShape,
+  canvasFor, initialEventSetsOf, objectEventsOf, placementOf, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, pathOf, scaleOf, timesOf, readingsOf, rootOf, rootPlots,
   statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
@@ -487,5 +488,51 @@ describe("p.395's Interpolation (§657)", () => {
     expect(shownShape(DEFAULT_DISPLAY)).toBe("none");
     expect(shownShape({ ...DEFAULT_DISPLAY, internal: "none" })).toBe("circle");
     expect(shownShape({ ...DEFAULT_DISPLAY, internal: "none", shape: "square" })).toBe("square");
+  });
+});
+
+describe("p.396's Plot options (§658)", () => {
+  it("reads the builder's initial event sets that name a set and a start", () => {
+    expect(initialEventSetsOf([
+      { objectSetVariable: "v_jobs", start: "began", end: "ended", label: " Jobs " },
+      { objectSetVariable: "v_jobs", start: "began", end: "", label: "" },
+      { objectSetVariable: "", start: "began" },
+      { objectSetVariable: "v_jobs", start: "" },
+      { objectSetVariable: 5, start: "began" },
+      null, "junk",
+    ])).toEqual([
+      { objectSetVariable: "v_jobs", start: "began", end: "ended", label: "Jobs" },
+      { objectSetVariable: "v_jobs", start: "began", end: null, label: "v_jobs" },
+    ]);
+    expect(initialEventSetsOf({ objectSetVariable: "v_jobs", start: "began" })).toEqual([]);
+    const many = Array.from({ length: MAX_EVENT_SETS + 2 }, () => ({ objectSetVariable: "v", start: "s" }));
+    expect(initialEventSetsOf(many)).toHaveLength(MAX_EVENT_SETS);
+  });
+
+  it("makes each object an event, a moment where it has no end", () => {
+    const objects = [
+      { properties: { began: "2026-01-02T00:00:00Z", ended: "2026-01-03T00:00:00Z" } },
+      { properties: { began: "2026-01-05T00:00:00Z", ended: null } },
+      { properties: { began: "2026-01-08T00:00:00Z", ended: "2026-01-07T00:00:00Z" } },
+      { properties: { began: "2026-01-09T00:00:00Z", ended: "" } },
+      { properties: { ended: "2026-01-09T00:00:00Z" } },
+    ];
+    const day = (d: number) => Date.parse(`2026-01-0${d}T00:00:00Z`);
+    expect(objectEventsOf(objects, "began", "ended")).toEqual([
+      { start: day(2), end: day(3) }, { start: day(5), end: day(5) }, { start: day(7), end: day(8) },
+      { start: day(9), end: day(9) },
+    ]);
+    expect(objectEventsOf(objects.slice(0, 1), "began", null)).toEqual([{ start: day(2), end: day(2) }]);
+  });
+
+  it("puts a new plot on its input's canvas, a new one, or the builder's", () => {
+    expect(placementOf(undefined)).toBe("input");
+    expect(placementOf("new")).toBe("new");
+    expect(placementOf(3)).toBe(3);
+    for (const junk of [0, 9, 1.5, "3", "elsewhere"]) expect(placementOf(junk)).toBe("input");
+    expect(canvasFor("input", 2, [1, 2])).toBe(2);
+    expect(canvasFor("new", 2, [1, 3])).toBe(4);
+    expect(canvasFor("new", 1, [])).toBe(2);
+    expect(canvasFor(5, 2, [1, 2])).toBe(5);
   });
 });

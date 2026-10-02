@@ -4410,3 +4410,16 @@ def test_a_variable_passed_as_an_action_parameter_is_a_usage() -> None:
     assert wv.usages(layout, variables)["v_note"] == [
         {"node": "tbl", "prop": "inlineEditVariables.note"}]
     assert "v_note" in wv.displayed(layout, variables, {"tbl"})
+
+
+def test_an_initial_event_set_s_object_set_is_a_usage() -> None:
+    """p.396's initial event sets on Time Series Analysis (§658), each "backed
+    by" an object set: the set cannot be deleted from under one, and one
+    naming no set is refused like any binding."""
+    variables = wv.parse({"v_jobs": var("v_jobs", label="Jobs")})
+    layout = {"tsa": {"type": {"resolvedName": "CanvasSeriesAnalysis"}, "props": {"eventSets": [
+        {"objectSetVariable": "v_jobs", "start": "began", "end": None, "label": "Jobs"}]}}}
+    assert wv.usages(layout, variables)["v_jobs"] == [
+        {"node": "tsa", "prop": "eventSets[0].objectSetVariable"}]
+    assert wv.dangling_references(layout, {}) == [
+        {"node": "tsa", "prop": "eventSets[0].objectSetVariable", "variable": "v_jobs"}]
