@@ -41,6 +41,7 @@ import { inlineActionChoices, type InlineAction } from "@/lib/property-inline-ac
 import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
 import { relatedResources, type RelatedDestination } from "@/lib/related-resources";
 import { typeClassesOf } from "@/lib/type-classes";
+import { LastEdited } from "@/components/ontology-history-panel";
 import { bulkApply, classesIn, sharedDataType, toggled, type BulkChange } from "@/lib/property-bulk";
 import type {
   ObjectTypeDetail,
@@ -813,6 +814,7 @@ function VersionHistory({
           )}
         </div>
       )}
+      <LastEdited workspaceId={workspaceId} resourceId={type.id} />
     </>
   );
 }

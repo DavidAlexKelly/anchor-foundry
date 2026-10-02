@@ -39,6 +39,7 @@ from ..lib.cron import next_run_after
 from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
+from ..services import ontology_history as history_service
 from ..services import object_edits as object_edits_service
 from ..services import favourites as favourites_service
 from ..services import datasets as dataset_service
@@ -1332,6 +1333,7 @@ async def plan_ontology_import(
 @router.post("/ontology-import")
 async def apply_ontology_import(
     body: ImportIn,
+    request: Request,
     access: WorkspaceAccess = Depends(require_workspace_role("editor")),
 ) -> dict[str, Any]:
     """Apply what the plan described.
@@ -1341,10 +1343,61 @@ async def apply_ontology_import(
     ontology that can rewrite every type at once.
     """
     async with user_connection(access.auth.user_id) as conn:
-        return await import_service.apply(
+        report = await import_service.apply(
             conn, access.workspace_id, body.document,
             actor_id=access.auth.user_id,
         )
+        # One record for the file, as p.66's save is one save: its entry in
+        # the history says how much it changed.
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="ontology.import",
+            resource_type="ontology",
+            resource_id=None,
+            workspace_id=access.workspace_id,
+            metadata={key: len(report[key]) for key in (
+                "added", "updated", "links_added", "links_updated",
+                "actions_added", "actions_updated")},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return report
+
+
+# ---- the Ontology's history (§683; `ontology-manager` p.8) ------------------
+class OntologyChangeOut(BaseModel):
+    """One saved change: p.8's "when the changes were made and the user who
+    applied them", and what they were made to."""
+
+    id: int
+    action: str
+    resource_type: str
+    resource_id: UUID | None = None
+    #: What it is called now, or what the record called it if it has gone.
+    resource_name: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    user_id: UUID | None = None
+    user_name: str | None = None
+    created_at: datetime
+
+
+@router.get("/ontology-history", response_model=list[OntologyChangeOut])
+async def ontology_history(
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+    resource_id: UUID | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=history_service.MAX_LIMIT),
+    before: int | None = Query(default=None, ge=1),
+) -> list[OntologyChangeOut]:
+    """Viewer, as the ontology itself is: p.8's history is of the ontology
+    anybody here can read, and it names who changed it because the reader's
+    next question is who to ask."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await history_service.history(
+            conn, access.workspace_id, resource_id=resource_id, limit=limit, before=before,
+        )
+    return [OntologyChangeOut(**r) for r in rows]
 
 
 # ---- the Ontology cleanup queue (§325; `ontology-manager` p.68-74) -----------
@@ -2520,6 +2573,7 @@ async def value_type_usage(
 async def update_value_type(
     value_type_id: UUID,
     body: ValueTypeMetadataUpdate,
+    request: Request,
     access: WorkspaceAccess = Depends(require_workspace_role("editor")),
 ) -> ValueTypeOut:
     async with user_connection(access.auth.user_id) as conn:
@@ -2530,6 +2584,18 @@ async def update_value_type(
             display_name=body.display_name,
             description=body.description,
             example_value=body.example_value,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="value_type.update",
+            resource_type="value_type",
+            resource_id=value_type_id,
+            workspace_id=access.workspace_id,
+            metadata={"api_name": row["api_name"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
         )
     return ValueTypeOut(**row)
 
@@ -2808,6 +2874,7 @@ async def get_interface(
 )
 async def create_interface(
     body: InterfaceIn,
+    request: Request,
     access: WorkspaceAccess = Depends(require_workspace_role("editor")),
 ) -> InterfaceDetail:
     """Editor, like every other ontology write. An interface is a claim other
@@ -2822,6 +2889,18 @@ async def create_interface(
             extends=body.extends, status=body.status,
             deprecation=body.deprecation, created_by=access.auth.user_id,
         )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="interface.create",
+            resource_type="interface",
+            resource_id=row["id"],
+            workspace_id=access.workspace_id,
+            metadata={"api_name": body.api_name},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
     return InterfaceDetail(**row)
 
 
@@ -2829,6 +2908,7 @@ async def create_interface(
 async def update_interface(
     interface_id: UUID,
     body: InterfaceUpdate,
+    request: Request,
     access: WorkspaceAccess = Depends(require_workspace_role("editor")),
 ) -> InterfaceDetail:
     async with user_connection(access.auth.user_id) as conn:
@@ -2839,6 +2919,18 @@ async def update_interface(
             extends=body.extends, status=body.status,
             deprecation=body.deprecation,
         )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="interface.update",
+            resource_type="interface",
+            resource_id=interface_id,
+            workspace_id=access.workspace_id,
+            metadata={"api_name": row["api_name"], "properties": len(body.properties)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
     return InterfaceDetail(**row)
 
 
@@ -2848,12 +2940,29 @@ async def update_interface(
 )
 async def delete_interface(
     interface_id: UUID,
+    request: Request,
     access: WorkspaceAccess = Depends(require_workspace_role("editor")),
 ) -> None:
     async with user_connection(access.auth.user_id) as conn:
+        # Read first so the record can name what went: a history entry for a
+        # deleted resource has nothing else to be called by.
+        gone = await interfaces_service.get_interface(conn, access.workspace_id, interface_id)
         await interfaces_service.delete_interface(
             conn, access.workspace_id, interface_id
         )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="interface.delete",
+            resource_type="interface",
+            resource_id=interface_id,
+            workspace_id=access.workspace_id,
+            metadata={"api_name": gone["api_name"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+
 
 
 @router.get(
@@ -2877,6 +2986,7 @@ async def list_implementations(
 async def set_implementations(
     type_id: UUID,
     body: list[ImplementationIn],
+    request: Request,
     access: WorkspaceAccess = Depends(require_workspace_role("editor")),
 ) -> list[ImplementationOut]:
     """The whole list, replacing what was there.
@@ -2892,6 +3002,18 @@ async def set_implementations(
         rows = await interfaces_service.set_implementations(
             conn, access.workspace_id, type_id,
             [e.model_dump() for e in body], created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type.set_interfaces",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={"interfaces": len(body)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
         )
     return [ImplementationOut(**r) for r in rows]
 

@@ -1325,6 +1325,7 @@ async def visible_action_sections(
 async def set_action_sections(
     action_type_id: UUID,
     body: FormIn,
+    request: Request,
     access: WorkspaceAccess = Depends(require_workspace_role("editor")),
 ) -> list[SectionOut]:
     """Replace the Form tab.
@@ -1340,6 +1341,18 @@ async def set_action_sections(
             conn, action_type_id, [s.model_dump() for s in body.sections]
         )
         rows = await sections_service.list_sections(conn, action_type_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="action_type.set_sections",
+            resource_type="action_type",
+            resource_id=action_type_id,
+            workspace_id=access.workspace_id,
+            metadata={"sections": len(body.sections)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
     return [SectionOut(**row) for row in rows]
 
 
