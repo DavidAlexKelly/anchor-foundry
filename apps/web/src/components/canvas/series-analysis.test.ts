@@ -6,6 +6,8 @@ import {
   DEFAULT_AXIS, MAX_AXES, axesOf, axisOf, axisProblem, axisSettingsOf, fractionOf, newAxisOf, valueAt,
   withAxisSetting, shownShape,
   canvasFor, initialEventSetsOf, objectEventsOf, placementOf,
+  AXIS_ROOM, COLLAPSED_ROOM, DEFAULT_TOOLTIP, EDGE_ROOM, axisLayout, hoveredOf, readingAt, significant,
+  tooltipOptionsOf,
   MIN_VIEW_MS, defaultRangeOf, inView, pannedRange, timeLabel, zoomedRange, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, pathOf, scaleOf, timesOf, readingsOf, rootOf, rootPlots,
@@ -597,5 +599,49 @@ describe("p.396's view range (§659)", () => {
     expect(timeLabel(t, DAY, 120)).toBe("01-02 01:00");
     expect(timeLabel(t, 3 * DAY, 120)).toBe("2026-01-02");
     expect(timeLabel(t, 2 * DAY, 0)).toBe("01-01 23:00");
+  });
+});
+
+describe("p.396's Chart options (§660)", () => {
+  const plain = { overlay: false, collapsed: false, boundaries: false };
+
+  it("gives each axis room beside the frame, or none over it, or a sliver collapsed", () => {
+    expect(axisLayout(2, 1, plain)).toEqual({ per: AXIS_ROOM, left: 2 * AXIS_ROOM, right: AXIS_ROOM, ticks: [0, 0.5, 1] });
+    expect(axisLayout(1, 0, plain)).toEqual({ per: AXIS_ROOM, left: AXIS_ROOM, right: EDGE_ROOM, ticks: [0, 0.5, 1] });
+    expect(axisLayout(2, 1, { ...plain, overlay: true })).toMatchObject({ left: EDGE_ROOM, right: EDGE_ROOM });
+    expect(axisLayout(2, 0, { ...plain, collapsed: true }))
+      .toEqual({ per: COLLAPSED_ROOM, left: 2 * COLLAPSED_ROOM, right: EDGE_ROOM, ticks: [] });
+    expect(axisLayout(1, 0, { ...plain, collapsed: true, boundaries: true }).ticks).toEqual([0, 1]);
+    // Boundaries are for collapsed axes.
+    expect(axisLayout(1, 0, { ...plain, boundaries: true }).ticks).toEqual([0, 0.5, 1]);
+  });
+
+  it("reads the builder's tooltip options, keeping the defaults for what is not one", () => {
+    expect(tooltipOptionsOf(null)).toEqual(DEFAULT_TOOLTIP);
+    expect(DEFAULT_TOOLTIP).toEqual({ show: true, values: "all", time: true, wrap: false, digits: 4 });
+    expect(tooltipOptionsOf({ show: false, values: "hovered", time: false, wrap: true, digits: 10 }))
+      .toEqual({ show: false, values: "hovered", time: false, wrap: true, digits: 10 });
+    expect(tooltipOptionsOf({ show: "no", values: "some", time: 0, wrap: 1, digits: 0 })).toEqual(DEFAULT_TOOLTIP);
+    for (const digits of [11, 2.5, "3"]) expect(tooltipOptionsOf({ digits }).digits).toBe(4);
+    expect(tooltipOptionsOf({ digits: 1 }).digits).toBe(1);
+  });
+
+  it("finds the reading nearest a time, the earlier on a tie", () => {
+    const r = [{ t: 0, v: 1 }, { t: 10, v: 2 }, { t: 20, v: 3 }];
+    expect(readingAt(r, 4)).toEqual(r[0]);
+    expect(readingAt(r, 6)).toEqual(r[1]);
+    expect(readingAt(r, 15)).toEqual(r[1]);
+    expect(readingAt(r, 99)).toEqual(r[2]);
+    expect(readingAt([], 5)).toBeNull();
+  });
+
+  it("writes a value to its significant digits, and picks the plot drawn nearest", () => {
+    expect(significant(123.456, 4)).toBe("123.5");
+    expect(significant(123.456, 2)).toBe("120");
+    expect(significant(0.000123456, 3)).toBe("0.000123");
+    expect(significant(20, 4)).toBe("20");
+    expect(hoveredOf([{ id: "a", y: 10 }, { id: "b", y: 50 }], 35)).toBe("b");
+    expect(hoveredOf([{ id: "a", y: 10 }, { id: "b", y: 50 }], 30)).toBe("a");
+    expect(hoveredOf([], 30)).toBeNull();
   });
 });

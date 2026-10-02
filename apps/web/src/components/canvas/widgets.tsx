@@ -337,6 +337,8 @@ import {
   objectEventsOf as seriesObjectEventsOf, placementOf as seriesPlacementOf,
   VIEW_RANGES as SERIES_VIEW_RANGES, defaultRangeOf as seriesDefaultRangeOf, pannedRange as seriesPannedRange,
   timesOf as seriesTimesOf, zoomedRange as seriesZoomedRange, type ViewRange as SeriesViewRange,
+  MAX_DIGITS as MAX_SERIES_DIGITS, TOOLTIP_VALUES as SERIES_TOOLTIP_VALUES,
+  tooltipOptionsOf as seriesTooltipOptionsOf,
   type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
@@ -13070,6 +13072,10 @@ export function CanvasSeriesAnalysis({
   relativeUnit = "week",
   syncXAxes = false,
   utc = false,
+  overlayYAxes = false,
+  collapseYAxes = false,
+  collapsedBoundaries = false,
+  tooltip = null,
 }: {
   objectSetVariable?: string | null;
   property?: string | null;
@@ -13096,6 +13102,12 @@ export function CanvasSeriesAnalysis({
   syncXAxes?: boolean;
   /** p.396's *Enable UTC time format* (§659). */
   utc?: boolean;
+  /** p.396's Y-axis chart options (§660). */
+  overlayYAxes?: boolean;
+  collapseYAxes?: boolean;
+  collapsedBoundaries?: boolean;
+  /** p.396's *Tooltip options* (§660). */
+  tooltip?: unknown;
 }) {
   const {
     connectors: { connect, drag },
@@ -13176,6 +13188,10 @@ export function CanvasSeriesAnalysis({
     windowEndWritten !== undefined ? windowEndWritten : windowEndResolved,
   ), relativeAmount, relativeUnit, loaded);
   const [views, setViews] = useState<Record<string, SeriesViewRange | null>>({});
+  // p.396's Collapse Y-axes by default (§660): the reader expands a canvas's.
+  const [collapsedAxes, setCollapsedAxes] = useState<Record<number, boolean>>({});
+  const collapsedOf = (canvas: number) => collapsedAxes[canvas] ?? !!collapseYAxes;
+  const tooltipOptions = seriesTooltipOptionsOf(tooltip);
   const viewKey = (canvas: number) => (syncXAxes ? "all" : String(canvas));
   const viewOf = (canvas: number) => (viewKey(canvas) in views ? views[viewKey(canvas)]! : defaultView);
   const fullOf = (canvas: number) => seriesTimesOf(plots.flatMap((p, n) => (p.canvas === canvas || syncXAxes
@@ -13276,8 +13292,15 @@ export function CanvasSeriesAnalysis({
                       onClick={() => setView(canvas, undefined)}>
                 Reset view
               </button>
+              <button type="button" className="btn quiet"
+                      aria-label={`Canvas ${canvas} ${collapsedOf(canvas) ? "expand" : "collapse"} axes`}
+                      onClick={() => setCollapsedAxes({ ...collapsedAxes, [canvas]: !collapsedOf(canvas) })}>
+                {collapsedOf(canvas) ? "Expand axes" : "Collapse axes"}
+              </button>
             </div>
             <SeriesAnalysisChart canvas={canvas} view={viewOf(canvas)} utc={utc}
+              overlay={!!overlayYAxes} collapsed={collapsedOf(canvas)} boundaries={!!collapsedBoundaries}
+              tooltip={tooltipOptions}
               axes={seriesAxesOf(plots, canvas).map((axis) => ({
                 axis, settings: seriesAxisSettingsOf(axes, canvas, axis) }))}
               events={[...initial.flatMap((_, n) => initialHidden.includes(n) ? []
@@ -13740,6 +13763,7 @@ function SeriesAnalysisSettings() {
   const {
     objectSetVariable, property, labelProperty, limit, title, plotTypes, eventSetTypes, newPlotCanvas,
     eventSets, viewRange, windowStartVariable, windowEndVariable, relativeAmount, relativeUnit, syncXAxes, utc,
+    overlayYAxes, collapseYAxes, collapsedBoundaries, tooltip,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
@@ -13758,7 +13782,15 @@ function SeriesAnalysisSettings() {
     relativeUnit: node.data.props.relativeUnit,
     syncXAxes: node.data.props.syncXAxes,
     utc: node.data.props.utc,
+    overlayYAxes: node.data.props.overlayYAxes,
+    collapseYAxes: node.data.props.collapseYAxes,
+    collapsedBoundaries: node.data.props.collapsedBoundaries,
+    tooltip: node.data.props.tooltip,
   }));
+  const tips = seriesTooltipOptionsOf(tooltip);
+  const setTip = (key: string, value: unknown) => setProp((p: { tooltip: unknown }) => {
+    p.tooltip = { ...seriesTooltipOptionsOf(p.tooltip), [key]: value };
+  });
   const moments = Object.values(declared).filter((v) => v.kind === "timestamp" || v.kind === "date");
   const setTypes = SERIES_EVENT_SET_TYPES.filter((k) => !eventSetTypes || eventSetTypes.includes(k));
   const initial = seriesInitialEventSetsOf(eventSets);
@@ -13922,6 +13954,46 @@ function SeriesAnalysisSettings() {
                onChange={(e) => setProp((p: { utc: boolean }) => (p.utc = e.target.checked))} />
         <span className="field-label">Enable UTC time format</span>
       </label>
+      {([["overlayYAxes", "Overlay Y-axes", overlayYAxes], ["collapseYAxes", "Collapse Y-axes by default", collapseYAxes],
+        ["collapsedBoundaries", "Display Y-axes boundaries when collapsed", collapsedBoundaries]] as const)
+        .map(([key, label, on]) => (
+          <label key={key} className="field canvas-toggle">
+            <input type="checkbox" aria-label={label} checked={!!on}
+                   disabled={key === "collapsedBoundaries" && !collapseYAxes}
+                   onChange={(e) => setProp((p: Record<string, boolean>) => (p[key] = e.target.checked))} />
+            <span className="field-label">{label}</span>
+          </label>
+        ))}
+      <div className="field" data-testid="series-tooltip-options">
+        <span className="field-label">Tooltip</span>
+        <label className="field canvas-toggle">
+          <input type="checkbox" aria-label="Show tooltip" checked={tips.show}
+                 onChange={(e) => setTip("show", e.target.checked)} />
+          <span className="field-label">Show a tooltip</span>
+        </label>
+        <select aria-label="Tooltip values" value={tips.values} disabled={!tips.show}
+                onChange={(e) => setTip("values", e.target.value)}>
+          {SERIES_TOOLTIP_VALUES.map((v) => (
+            <option key={v} value={v}>{v === "all" ? "Every plot's value" : "The hovered plot's value"}</option>
+          ))}
+        </select>
+        <label className="field canvas-toggle">
+          <input type="checkbox" aria-label="Tooltip time" checked={tips.time} disabled={!tips.show}
+                 onChange={(e) => setTip("time", e.target.checked)} />
+          <span className="field-label">Show the time</span>
+        </label>
+        <label className="field canvas-toggle">
+          <input type="checkbox" aria-label="Tooltip wrap" checked={tips.wrap} disabled={!tips.show}
+                 onChange={(e) => setTip("wrap", e.target.checked)} />
+          <span className="field-label">Wrap text</span>
+        </label>
+        <label className="field">
+          <span className="field-label">Significant digits</span>
+          <input type="number" min={1} max={MAX_SERIES_DIGITS} aria-label="Tooltip significant digits"
+                 value={tips.digits} disabled={!tips.show}
+                 onChange={(e) => setTip("digits", Number(e.target.value))} />
+        </label>
+      </div>
       <label className="field">
         <span className="field-label">Title</span>
         <input type="text" value={title || ""}
@@ -13982,7 +14054,8 @@ CanvasSeriesAnalysis.craft = {
   props: { objectSetVariable: null, property: null, labelProperty: null, limit: 5, title: "",
     plotTypes: null, eventSetTypes: null, newPlotCanvas: "input", eventSets: null, viewRange: "full",
     windowStartVariable: null, windowEndVariable: null, relativeAmount: 2, relativeUnit: "week",
-    syncXAxes: false, utc: false },
+    syncXAxes: false, utc: false, overlayYAxes: false, collapseYAxes: false, collapsedBoundaries: false,
+    tooltip: null },
   related: { settings: SeriesAnalysisSettings },
 };
 
