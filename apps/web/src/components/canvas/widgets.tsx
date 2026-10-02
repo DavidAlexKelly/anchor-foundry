@@ -5336,7 +5336,21 @@ export function CanvasMarkdown({
     return referenceColorOf(type, found?.properties, rules);
   };
   const behavior = referenceSelectionOf(selectionBehavior);
-  const selectedKeys = keysOf(selectedVariable ? parameterValues[selectedVariable] : undefined);
+  const selectedRaw = selectedVariable ? parameterValues[selectedVariable] : undefined;
+  const selectedKeys = keysOf(selectedRaw);
+  // **A selection names its type** (§692): p.320 outputs "that object", and
+  // two types' objects can share a key, so the key alone could be either.
+  // The anchors name types by api name, and a selection by id.
+  const typeIds = useQueries({
+    queries: types.map((t) => ({
+      queryKey: ["markdown-ref-type-id", workspaceId, t.objectType],
+      queryFn: async () => (await objApi.listTypes(workspaceId, null, { q: t.objectType, limit: 50 }))
+        .items.find((found) => found.api_name === t.objectType)?.id ?? null,
+    })),
+  });
+  const idOfType = (apiName: string) =>
+    typeIds[types.findIndex((t) => t.objectType === apiName)]?.data ?? null;
+  const pickedType = selectedType(selectedRaw);
   const onSelect = eventsFor(moduleEvents, nodeId, "row_select");
   // p.319-320's anchor. A type the builder did not configure is not an
   // anchor - p.320: "the object reference will not appear" - and its text is
@@ -5349,7 +5363,8 @@ export function CanvasMarkdown({
     if (!type) return children;
     const index = node.index ?? -1;
     const lit = isReferenceLit(behavior, { index, primaryKey: node.primaryKey },
-      lastAnchor, selectedKeys);
+      lastAnchor,
+      pickedType === null || pickedType === idOfType(node.objectType) ? selectedKeys : []);
     const color = anchorColor(type, node.primaryKey);
     return (
       <button
@@ -5365,7 +5380,8 @@ export function CanvasMarkdown({
           setLastAnchor(index);
           // p.320: "that object will be output into this object set variable".
           if (selectedVariable) {
-            setParameter(selectedVariable, selectionClauses([node.primaryKey]));
+            setParameter(selectedVariable, typedSelection(
+              selectionClauses([node.primaryKey]), idOfType(node.objectType)));
           }
           // p.320's Event on selection, in a running module only: a navigate
           // fired while arranging the page would move the builder off it. A
@@ -10589,6 +10605,8 @@ export function CanvasTimeline({
       const declared = type?.properties ?? [];
       return {
         instances: rows.instances ?? [],
+        // The layer's type, which its selection names (§692).
+        typeId: typeId ?? null,
         properties: declared,
         // p.348's **Object title** is the ontology's title property, not the
         // primary key. An object set page carries neither, so the type is what
@@ -10625,12 +10643,22 @@ export function CanvasTimeline({
     [drawn, rows, order, hidden],
   );
 
-  const chosenKeys = keysOf(activeVariable ? values[activeVariable] : undefined);
-  const chosen = chosenKeys[0] ?? null;
+  // p.349's Active object is "an object set of the currently selected
+  // object", and layers are "across multiple object types" (p.348): a key
+  // alone could be two layers' objects, so the selection names its type
+  // (§692), and an event is chosen when both match.
+  const activeRaw = activeVariable ? values[activeVariable] : undefined;
+  const chosen = keysOf(activeRaw)[0] ?? null;
+  const chosenType = selectedType(activeRaw);
+  const typeOfLayer = (layer: number) => page.data?.[layer]?.typeId ?? null;
+  const isChosen = (key: string, layer: number) => chosen === key
+    && (chosenType === null || chosenType === typeOfLayer(layer));
 
   const pick = (key: string, layer: number) => {
     if (mode !== "run") return;
-    if (activeVariable) set(activeVariable, selectionClauses([key]));
+    if (activeVariable) {
+      set(activeVariable, typedSelection(selectionClauses([key]), typeOfLayer(layer)));
+    }
     // p.349's Override selection event (§616): a layer with its own events
     // fires those *instead of* the widget's, which is the page's "override".
     // The active object is set either way - it is an output, not an event.
@@ -10695,7 +10723,7 @@ export function CanvasTimeline({
                     data-testid="timeline-event"
                     data-layer={String(event.layer)}
                     data-selected={
-                      highlightSelection && chosen === event.key ? "yes" : "no"
+                      highlightSelection && isChosen(event.key, event.layer) ? "yes" : "no"
                     }
                   >
                     {showGaps && previous && (
