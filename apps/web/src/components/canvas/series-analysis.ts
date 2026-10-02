@@ -28,6 +28,7 @@ import {
   FILTER_WORDS, KIND_LABELS, MAX_SPAN, type FilterOperator, type SeriesTransform, type TimeUnit,
   type TransformKind,
 } from "./series-transforms";
+import { instantOf } from "./timeline";
 
 /** p.393's Bollinger bands (§649), which is three plots rather than one
  * transform. */
@@ -209,7 +210,9 @@ export interface Reading { t: number; v: number }
 export function readingsOf(points: readonly { at: unknown; value: unknown }[]): Reading[] {
   const out: Reading[] = [];
   for (const p of points) {
-    const t = typeof p.at === "string" ? Date.parse(p.at) : NaN;
+    // The server's readings name no zone and are UTC: `Date.parse` would read
+    // them in the reader's own zone (§659 found it, in a browser in Tokyo).
+    const t = typeof p.at === "string" ? instantOf(p.at) ?? NaN : NaN;
     const v = p.value === null || p.value === "" ? NaN : Number(p.value);
     if (Number.isFinite(t) && Number.isFinite(v)) out.push({ t, v });
   }
@@ -675,8 +678,8 @@ export interface SeriesEvent { start: number; end: number }
 export function eventsOf(raw: readonly { start: unknown; end: unknown }[]): SeriesEvent[] {
   const out: SeriesEvent[] = [];
   for (const e of raw) {
-    const start = typeof e.start === "string" ? Date.parse(e.start) : NaN;
-    const end = typeof e.end === "string" ? Date.parse(e.end) : NaN;
+    const start = typeof e.start === "string" ? instantOf(e.start) ?? NaN : NaN;
+    const end = typeof e.end === "string" ? instantOf(e.end) ?? NaN : NaN;
     if (Number.isFinite(start) && Number.isFinite(end)) {
       out.push({ start: Math.min(start, end), end: Math.max(start, end) });
     }
@@ -791,4 +794,69 @@ export function withEventStatistics(
   if (next.length === plots.length) return next;
   const made = next[next.length - 1]!;
   return [...next.slice(0, -1), { ...made, label: `${aggregate} of ${from.label} per event of ${set.label}` }];
+}
+
+
+/** p.396's *Default view range* (§659): "The initial view range for time
+ * series charts in the analysis … Full data range … Fixed date range: Use
+ * workshop variables to define absolute start and end dates. Relative date
+ * range: … a range relative to the time when the page was loaded (for
+ * example, "2 weeks ago to now")." The relative range's length is the
+ * builder's number and unit. With p.395's statistics and event count "within
+ * the current view range", and the reader's zoom and pan. */
+export interface ViewRange { from: number; to: number }
+export const VIEW_RANGES = ["full", "fixed", "relative"] as const;
+export type ViewRangeKind = (typeof VIEW_RANGES)[number];
+const UNIT_MS: Record<TimeUnit, number> = {
+  second: 1_000, minute: 60_000, hour: 3_600_000, day: 86_400_000, week: 604_800_000,
+};
+
+/** The view a chart opens on: null for the full data range, and for a fixed
+ * or relative range that is not one. */
+export function defaultRangeOf(
+  kind: unknown, fixed: { start: number | null; end: number | null },
+  amount: unknown, unit: unknown, now: number,
+): ViewRange | null {
+  if (kind === "fixed") {
+    return fixed.start !== null && fixed.end !== null && fixed.start < fixed.end
+      ? { from: fixed.start, to: fixed.end } : null;
+  }
+  if (kind === "relative" && typeof amount === "number" && amount > 0 && Number.isFinite(amount)
+      && typeof unit === "string" && unit in UNIT_MS) {
+    return { from: now - amount * UNIT_MS[unit as TimeUnit], to: now };
+  }
+  return null;
+}
+
+/** The narrowest view a reader may zoom to. */
+export const MIN_VIEW_MS = 1_000;
+
+/** The view `factor` times as wide about its middle - a half to zoom in, two
+ * to zoom out; null, the full range, once it would cover all of `full`. */
+export function zoomedRange(view: ViewRange | null, full: { t0: number; t1: number }, factor: number): ViewRange | null {
+  const at = view ?? { from: full.t0, to: full.t1 };
+  const middle = (at.from + at.to) / 2;
+  const half = Math.max(MIN_VIEW_MS, (at.to - at.from) * factor) / 2;
+  const next = { from: middle - half, to: middle + half };
+  return next.from <= full.t0 && next.to >= full.t1 ? null : next;
+}
+
+/** The view moved by `by` of its own width: a half back is -0.5. */
+export function pannedRange(view: ViewRange | null, full: { t0: number; t1: number }, by: number): ViewRange {
+  const at = view ?? { from: full.t0, to: full.t1 };
+  const step = (at.to - at.from) * by;
+  return { from: at.from + step, to: at.to + step };
+}
+
+/** The readings a view shows. */
+export function inView(readings: readonly Reading[], view: ViewRange | null): Reading[] {
+  return view ? readings.filter((r) => r.t >= view.from && r.t <= view.to) : [...readings];
+}
+
+/** A time on the axis, as a date over more than two days and a date and
+ * hour within them, `offset` minutes from UTC: p.396's *Enable UTC time
+ * format* gives 0, and otherwise the reader's own offset. */
+export function timeLabel(t: number, span: number, offset: number): string {
+  const shifted = new Date(t + offset * 60_000).toISOString();
+  return span > 2 * 86_400_000 ? shifted.slice(0, 10) : shifted.slice(5, 16).replace("T", " ");
 }

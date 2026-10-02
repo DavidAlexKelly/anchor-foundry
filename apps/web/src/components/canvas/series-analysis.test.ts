@@ -5,7 +5,8 @@ import {
   DEFAULT_DISPLAY, areaOf,
   DEFAULT_AXIS, MAX_AXES, axesOf, axisOf, axisProblem, axisSettingsOf, fractionOf, newAxisOf, valueAt,
   withAxisSetting, shownShape,
-  canvasFor, initialEventSetsOf, objectEventsOf, placementOf, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
+  canvasFor, initialEventSetsOf, objectEventsOf, placementOf,
+  MIN_VIEW_MS, defaultRangeOf, inView, pannedRange, timeLabel, zoomedRange, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, pathOf, scaleOf, timesOf, readingsOf, rootOf, rootPlots,
   statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
@@ -534,5 +535,67 @@ describe("p.396's Plot options (§658)", () => {
     expect(canvasFor("new", 2, [1, 3])).toBe(4);
     expect(canvasFor("new", 1, [])).toBe(2);
     expect(canvasFor(5, 2, [1, 2])).toBe(5);
+  });
+});
+
+describe("p.396's view range (§659)", () => {
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+  const now = Date.parse("2026-01-15T00:00:00Z");
+  const none = { start: null, end: null };
+
+  it("opens on the full range, a fixed one, or one relative to the page's loading", () => {
+    expect(defaultRangeOf("full", { start: 1, end: 2 }, 2, "week", now)).toBeNull();
+    expect(defaultRangeOf(undefined, none, 2, "week", now)).toBeNull();
+    expect(defaultRangeOf("fixed", { start: 10, end: 20 }, 2, "week", now)).toEqual({ from: 10, to: 20 });
+    expect(defaultRangeOf("fixed", { start: 20, end: 20 }, 2, "week", now)).toBeNull();
+    expect(defaultRangeOf("fixed", { start: 10, end: null }, 2, "week", now)).toBeNull();
+    expect(defaultRangeOf("fixed", { start: null, end: 10 }, 2, "week", now)).toBeNull();
+    expect(defaultRangeOf("relative", none, 2, "week", now)).toEqual({ from: now - 14 * DAY, to: now });
+    expect(defaultRangeOf("relative", none, 3, "hour", now)).toEqual({ from: now - 3 * HOUR, to: now });
+    for (const [amount, unit] of [[0, "day"], [-1, "day"], [Number.NaN, "day"], ["2", "day"], [2, "fortnight"],
+      [2, null]] as const) {
+      expect(defaultRangeOf("relative", none, amount, unit, now)).toBeNull();
+    }
+  });
+
+  it("zooms about the middle, back to the full range", () => {
+    const full = { t0: 0, t1: 4 * DAY };
+    expect(zoomedRange(null, full, 0.5)).toEqual({ from: DAY, to: 3 * DAY });
+    expect(zoomedRange({ from: DAY, to: 3 * DAY }, full, 0.5)).toEqual({ from: 1.5 * DAY, to: 2.5 * DAY });
+    expect(zoomedRange({ from: DAY, to: 3 * DAY }, full, 2)).toBeNull();
+    // Out from a view off to one side keeps its middle.
+    expect(zoomedRange({ from: 3 * DAY, to: 4 * DAY }, full, 2)).toEqual({ from: 2.5 * DAY, to: 4.5 * DAY });
+    // No narrower than a second.
+    expect(zoomedRange({ from: 0, to: 1_000 }, full, 0.5)).toEqual({ from: 0, to: MIN_VIEW_MS });
+  });
+
+  it("pans by part of the view's own width", () => {
+    const full = { t0: 0, t1: 4 * DAY };
+    expect(pannedRange(null, full, -0.5)).toEqual({ from: -2 * DAY, to: 2 * DAY });
+    expect(pannedRange({ from: DAY, to: 2 * DAY }, full, 0.5)).toEqual({ from: 1.5 * DAY, to: 2.5 * DAY });
+  });
+
+  it("keeps the readings in view, ends included", () => {
+    const r = [{ t: 1, v: 1 }, { t: 2, v: 2 }, { t: 3, v: 3 }];
+    expect(inView(r, { from: 2, to: 3 })).toEqual(r.slice(1));
+    expect(inView(r, null)).toEqual(r);
+    expect(inView(r, null)).not.toBe(r);
+  });
+
+  it("reads the server's zoneless readings and events as UTC", () => {
+    const at = Date.parse("2026-01-01T06:00:00Z");
+    expect(readingsOf([{ at: "2026-01-01T06:00:00", value: 1 }])).toEqual([{ t: at, v: 1 }]);
+    expect(readingsOf([{ at: "2026-01-01T08:00:00+02:00", value: 1 }])).toEqual([{ t: at, v: 1 }]);
+    expect(eventsOf([{ start: "2026-01-01T06:00:00", end: "2026-01-01T06:00:00Z" }]))
+      .toEqual([{ start: at, end: at }]);
+  });
+
+  it("labels a time in UTC or the reader's own offset", () => {
+    const t = Date.parse("2026-01-01T23:00:00Z");
+    expect(timeLabel(t, DAY, 0)).toBe("01-01 23:00");
+    expect(timeLabel(t, DAY, 120)).toBe("01-02 01:00");
+    expect(timeLabel(t, 3 * DAY, 120)).toBe("2026-01-02");
+    expect(timeLabel(t, 2 * DAY, 0)).toBe("01-01 23:00");
   });
 });
