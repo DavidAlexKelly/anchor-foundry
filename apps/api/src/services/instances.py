@@ -294,7 +294,7 @@ async def list_for_type(
         SELECT id, primary_key, properties, updated_at
           FROM object_instances
          WHERE object_type_id = :tid
-         ORDER BY updated_at DESC
+         ORDER BY updated_at DESC, primary_key ASC
          LIMIT :limit OFFSET :offset
         """,
         {"tid": str(object_type_id), "limit": limit, "offset": max(0, offset)},
@@ -377,7 +377,11 @@ async def search(
           FROM object_instances i
           JOIN object_types t ON t.id = i.object_type_id
          WHERE {predicate}
-         ORDER BY i.updated_at DESC
+         -- Tied on the key, and then the type, since a key is unique only
+         -- within its type: rows written in one transaction share an
+         -- `updated_at`, and without these their order is whatever the plan
+         -- gives (the reason `_order_by` ends in `primary_key`).
+         ORDER BY i.updated_at DESC, i.primary_key ASC, i.object_type_id ASC
          LIMIT :limit OFFSET :offset
         """,
         params,
