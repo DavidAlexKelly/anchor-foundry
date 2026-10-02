@@ -55,7 +55,9 @@ import {
 import {
   autoSelectKey, hasSelection, keysOf, selectionClauses, toggle as toggleKey,
 } from "./object-table-selection";
-import { selectionIn, tabIndex, typedSelection, unionParts } from "./union-set";
+import {
+  selectionIn, tabIndex, typedSelection, unionParts, unionProperties,
+} from "./union-set";
 import {
   MAX_LAYERS, layerColorOf, layerOpacityOf, layerPoints, layerVisibleOf, layersOf, withLayerSetting,
   withNewLayer, withoutLayer, type MapLayer,
@@ -723,6 +725,53 @@ CanvasText.craft = {
 };
 
 // ---- Filter List -----------------------------------------------------------
+/** The properties a set can be filtered on: its type's, or for a union (§687)
+ * p.450's Common and Single properties (`unionProperties`). `typeId` is the
+ * set's type, and `null` for a union, which has several. */
+function useSetProperties(workspaceId: string, definition: unknown) {
+  const parts = unionParts(definition);
+  const typeId = parts ? null
+    : (definition as { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  const ids = parts ? parts.map((p) => p.object_type_id) : typeId ? [typeId] : [];
+  const types = useQueries({
+    queries: ids.map((id) => ({
+      queryKey: ["object-type", id],
+      queryFn: () => objApi.getType(workspaceId, id),
+    })),
+  });
+  if (!parts) {
+    return { typeId, properties: types[0]?.data?.properties ?? [], union: null };
+  }
+  const union = unionProperties(types.map((t) =>
+    t.data ? { displayName: t.data.display_name, properties: t.data.properties } : undefined));
+  return { typeId, properties: [...union.common, ...union.single], union };
+}
+
+/** A property picker's options: flat for one type, and for a union in p.450's
+ * two groups. `properties` is what to offer, which may be fewer than the
+ * union's (a viewer's Add filter leaves out the ones shown). */
+function PropertyOptions({ properties, union }: {
+  properties: readonly { api_name: string; display_name: string }[];
+  union: { common: readonly { api_name: string }[]; single: readonly { api_name: string }[] } | null;
+}) {
+  const option = (p: { api_name: string; display_name: string }) => (
+    <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
+  );
+  if (!union) return <>{properties.map(option)}</>;
+  const within = (group: readonly { api_name: string }[]) =>
+    properties.filter((p) => group.some((g) => g.api_name === p.api_name));
+  return (
+    <>
+      {within(union.common).length > 0 && (
+        <optgroup label="Common properties">{within(union.common).map(option)}</optgroup>
+      )}
+      {within(union.single).length > 0 && (
+        <optgroup label="Single properties">{within(union.single).map(option)}</optgroup>
+      )}
+    </>
+  );
+}
+
 /**
  * The canonical Workshop widget (roadmap 1.5, priority 1): property-aware
  * filters over an object set.
@@ -837,14 +886,7 @@ export function CanvasFilterList({
   // resolved value is, so a keyword typed quickly does not lose a letter.
   const resolvedClauses = useCanvasVariable(variable);
   const clauses = clausesOf(chosen !== undefined ? chosen : resolvedClauses);
-  const typeId = (setDefinition as { object_type_id?: string } | undefined)?.object_type_id
-    ?? null;
-  const type = useQuery({
-    queryKey: ["object-type", typeId],
-    queryFn: () => objApi.getType(workspaceId, typeId!),
-    enabled: !!typeId,
-  });
-  const typeProperties = type.data?.properties ?? [];
+  const { properties: typeProperties, union } = useSetProperties(workspaceId, setDefinition);
   const labelOf = (property: string) =>
     typeProperties.find((p) => p.api_name === property)?.display_name || property;
 
@@ -891,9 +933,7 @@ export function CanvasFilterList({
       }}
     >
       <option value="">+ Add filter</option>
-      {addable.map((p) => (
-        <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
-      ))}
+      <PropertyOptions properties={addable} union={union} />
     </select>
   ) : null;
   const filterOf = (spec: FilterSpec) => spec.link ? (
@@ -1480,13 +1520,7 @@ function FilterListSettings() {
   const sets = Object.values(declared).filter((v) => v.kind === "object_set");
   const arrays = Object.values(declared).filter((v) => holdsClauses(v));
   const bound = objectSetVariable ? resolved[objectSetVariable] : undefined;
-  const typeId = (bound as { object_type_id?: string } | undefined)?.object_type_id ?? null;
-  const type = useQuery({
-    queryKey: ["object-type", typeId],
-    queryFn: () => objApi.getType(workspaceId, typeId!),
-    enabled: !!typeId,
-  });
-  const typeProperties = type.data?.properties ?? [];
+  const { typeId, properties: typeProperties, union } = useSetProperties(workspaceId, bound);
   const specs = filtersOf(filters, properties);
   // Written as a list from the first edit on, which is when an older
   // document's `properties` stops being read.
@@ -1638,9 +1672,7 @@ function FilterListSettings() {
                 {!typeProperties.some((p) => p.api_name === spec.property) && (
                   <option value={spec.property}>{spec.property}</option>
                 )}
-                {typeProperties.map((p) => (
-                  <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
-                ))}
+                <PropertyOptions properties={typeProperties} union={union} />
               </select>
               <select
                 aria-label="Filter component"
@@ -1699,9 +1731,7 @@ function FilterListSettings() {
           }}
         >
           <option value="">Add filter…</option>
-          {typeProperties.map((p) => (
-            <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
-          ))}
+          <PropertyOptions properties={typeProperties} union={union} />
           {hops.length > 0 && (
             <optgroup label="Filter on a link">
               {hops.map((h) => (
