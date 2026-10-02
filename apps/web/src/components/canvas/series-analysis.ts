@@ -85,6 +85,9 @@ export interface Plot {
   display?: Partial<PlotDisplay>;
   /** p.394's *Axis*: which of its canvas's axes the plot is on (§656). */
   axis?: number;
+  /** A root the reader added by p.392's *+ Add Data* (§661): it is not the
+   * set's, so the set's changes leave it be, and the reader may remove it. */
+  added?: boolean;
 }
 
 /** One root plot per object, on the first canvas. */
@@ -104,19 +107,57 @@ export function rootPlots(
   }));
 }
 
-/** The roots now in the set, with the derived plots whose roots are still
- * there. A derived plot keeps its canvas and style; a root keeps the reader's
- * canvas and style when its object is still in the set. */
+/** The roots now in the set, with the plots the reader added (§661) and the
+ * derived plots whose roots are still there, in the order they were. A root
+ * still in the set keeps all the reader set on it - canvas, style, display
+ * and axis (§655, §656) - and takes the set's label. */
 export function withRoots(plots: readonly Plot[], roots: readonly Plot[]): Plot[] {
+  // An added root's id is its own (`added:`), so it is never a set root's.
   const kept = new Map(plots.filter((p) => p.root).map((p) => [p.id, p]));
   const nextRoots = roots.map((r) => {
     const was = kept.get(r.id);
-    return was ? { ...r, canvas: was.canvas, style: was.style } : r;
+    return was ? { ...was, label: r.label, root: r.root } : r;
   });
-  const ids = new Set(nextRoots.map((r) => r.id));
-  const derived = plots.filter((p) => !p.root && rootOf(plots, p.id) !== null
-    && ids.has(rootOf(plots, p.id)!.id));
-  return [...nextRoots, ...derived];
+  const ids = new Set([...nextRoots, ...plots.filter((p) => p.added)].map((r) => r.id));
+  const rest = plots.filter((p) => p.added || (!p.root && rootOf(plots, p.id) !== null
+    && ids.has(rootOf(plots, p.id)!.id)));
+  return [...nextRoots, ...rest];
+}
+
+/** p.396's *Add data options* (§661): "Enable users to select time series
+ * data from the Ontology, optionally restricting which object types are
+ * available. To further narrow the available series, apply object set
+ * filters for each object type." The builder's sets, each naming one type and
+ * its filters; none leaves every type open. */
+export const MAX_ADD_DATA_SETS = 10;
+
+export function addDataSetsOf(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    const id = item && typeof item === "object" ? (item as { objectSetVariable?: unknown }).objectSetVariable : null;
+    if (typeof id === "string" && id && !out.includes(id)) out.push(id);
+  }
+  return out.slice(0, MAX_ADD_DATA_SETS);
+}
+
+/** An object as the reader picks it: its title property's value, or its key. */
+export function objectLabelOf(
+  o: { primary_key: unknown; properties: Record<string, unknown> }, title: string | null | undefined,
+): string {
+  const raw = title ? o.properties[title] : null;
+  return raw === null || raw === undefined || raw === "" ? String(o.primary_key) : String(raw);
+}
+
+/** p.392's *+ Add Data* (§661): "Add time series data from the Ontology".
+ * The plots with a root of one object's time series property, under an id no
+ * other has; unchanged when that series is already a root, or at the cap. */
+export function withAddedRoot(plots: readonly Plot[], root: Root, canvas: number): Plot[] {
+  const id = `added:${root.objectId}:${root.property}`;
+  if (plots.length >= MAX_PLOTS || plots.some((p) => p.id === id
+    || (p.root && p.root.objectId === root.objectId && p.root.property === root.property))) return [...plots];
+  return [...plots, { id, label: `${root.objectLabel} ${root.property}`, canvas, style: "solid", root, parent: null,
+    transforms: [], added: true }];
 }
 
 function byId(plots: readonly Plot[]): Map<string, Plot> {
@@ -170,10 +211,11 @@ export function withDerived(
 
 /** The plots without one, and without every plot derived from it: a plot
  * whose input is gone has nothing to be computed from. A root cannot be
- * removed, since the object set controls it. */
+ * removed, since the object set controls it - unless the reader added it
+ * (§661). */
 export function withoutPlot(plots: readonly Plot[], id: string): Plot[] {
   const target = byId(plots).get(id);
-  if (!target || target.root) return [...plots];
+  if (!target || (target.root && !target.added)) return [...plots];
   const gone = new Set([id]);
   let grew = true;
   while (grew) {

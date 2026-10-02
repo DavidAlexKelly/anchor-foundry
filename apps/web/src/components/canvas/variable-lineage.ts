@@ -155,6 +155,8 @@ export const NESTED_PROP_DIRECTION: Record<string, "read" | "write"> = {
   "annotationLayers.objectSetVariable": "read",
   // p.396: an initial event set's object set is read for its events (§658).
   "eventSets.objectSetVariable": "read",
+  // p.396: the sets a reader may add a series from are read (§661).
+  "addDataSets.objectSetVariable": "read",
 };
 
 /** The mapping props' directions (§598). p.241's variables passed as action

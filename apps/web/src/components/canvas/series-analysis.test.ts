@@ -11,7 +11,7 @@ import {
   MIN_VIEW_MS, defaultRangeOf, inView, pannedRange, timeLabel, zoomedRange, displayOf, markerOf, markersOf, outlineOf, pointOptions, withDisplay,
   DEFAULT_BANDS, MAX_COMBINED, MAX_DEVIATIONS, bandsProblem, referenceTo, withBands, withCombined,
   MAX_PLOTS, MAX_ROOTS, PLOT_LABELS, PLOT_TYPES, canvasesOf, chainOf, pathOf, scaleOf, timesOf, readingsOf, rootOf, rootPlots,
-  statsOf, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
+  statsOf, withAddedRoot, addDataSetsOf, objectLabelOf, MAX_ADD_DATA_SETS, withDerived, withPlotSetting, withRoots, withoutPlot, type Plot,
 } from "./series-analysis";
 import type { SeriesTransform } from "./series-transforms";
 
@@ -84,6 +84,31 @@ describe("the analysis's plots (§647)", () => {
     const fromTwo = withDerived(roots, "root:i2", [cumulative], 1);
     expect(withRoots(fromTwo, rootPlots([pumps[0]!], "t1", "pressure")).map((p) => p.id))
       .toEqual(["root:i1"]);
+  });
+
+  it("keeps a root's display and axis as the set changes, and takes its new label (§661)", () => {
+    const set = withPlotSetting(withDisplay(roots, "root:i1", "width", 3), "root:i1", "axis", 2);
+    const next = withRoots(set, rootPlots([{ id: "i1", label: "Pump 1a" }], "t1", "pressure"));
+    expect(next[0]).toMatchObject({ label: "Pump 1a", axis: 2, display: { width: 3 } });
+  });
+
+  it("adds a root of any object's series, which the set's changes leave be (§661)", () => {
+    const pump9 = { objectId: "i9", typeId: "t2", property: "flow", objectLabel: "Pump 9" };
+    const withNine = withDerived(withAddedRoot(roots, pump9, 2), "root:i2", [cumulative], 1);
+    expect(withNine[2]).toEqual({ id: "added:i9:flow", label: "Pump 9 flow", canvas: 2, style: "solid",
+      root: pump9, parent: null, transforms: [], added: true });
+    const derivedNine = withDerived(withNine, "added:i9:flow", [cumulative], 2);
+    const next = withRoots(derivedNine, rootPlots([pumps[1]!], "t1", "pressure"));
+    expect(next.map((p) => p.id)).toEqual(["root:i2", "added:i9:flow", "plot-4", "plot-5"]);
+    // The reader may remove what they added, with what was derived from it.
+    expect(withoutPlot(derivedNine, "added:i9:flow").map((p) => p.id)).toEqual(["root:i1", "root:i2", "plot-4"]);
+    // The same series twice is once, a set's root included, and the cap holds.
+    expect(withAddedRoot(withNine, pump9, 1)).toEqual(withNine);
+    expect(withAddedRoot(roots, { ...roots[0]!.root!, objectLabel: "x" }, 1)).toEqual(roots);
+    expect(withAddedRoot(roots, { ...roots[0]!.root!, property: "flow" }, 1)).toHaveLength(3);
+    let many = roots;
+    while (many.length < MAX_PLOTS) many = withDerived(many, "root:i1", [cumulative], 1);
+    expect(withAddedRoot(many, pump9, 1)).toHaveLength(MAX_PLOTS);
   });
 
   it("finds no root for a broken or circular chain", () => {
@@ -643,5 +668,24 @@ describe("p.396's Chart options (§660)", () => {
     expect(hoveredOf([{ id: "a", y: 10 }, { id: "b", y: 50 }], 35)).toBe("b");
     expect(hoveredOf([{ id: "a", y: 10 }, { id: "b", y: 50 }], 30)).toBe("a");
     expect(hoveredOf([], 30)).toBeNull();
+  });
+});
+
+describe("p.396's Add data options (§661)", () => {
+  it("reads the builder's sets, once each", () => {
+    expect(addDataSetsOf([{ objectSetVariable: "v_a" }, { objectSetVariable: "v_a" }, { objectSetVariable: "" },
+      { objectSetVariable: 3 }, null, "v_b", { objectSetVariable: "v_c" }])).toEqual(["v_a", "v_c"]);
+    expect(addDataSetsOf({ objectSetVariable: "v_a" })).toEqual([]);
+    const many = Array.from({ length: MAX_ADD_DATA_SETS + 3 }, (_, n) => ({ objectSetVariable: `v_${n}` }));
+    expect(addDataSetsOf(many)).toHaveLength(MAX_ADD_DATA_SETS);
+  });
+
+  it("names an object by its title, or its key", () => {
+    const o = { primary_key: "S2", properties: { name: "South sensor", blank: "" } };
+    expect(objectLabelOf(o, "name")).toBe("South sensor");
+    expect(objectLabelOf(o, null)).toBe("S2");
+    expect(objectLabelOf(o, "blank")).toBe("S2");
+    expect(objectLabelOf(o, "gone")).toBe("S2");
+    expect(objectLabelOf({ primary_key: 7, properties: { n: 0 } }, "n")).toBe("0");
   });
 });
