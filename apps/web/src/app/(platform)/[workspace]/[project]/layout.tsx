@@ -78,6 +78,10 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
               <span className="count">{counts ? counts[s.countKey] : "–"}</span>
             </Link>
           ))}
+          {/* p.397's saved analyses (§668): a resource with no count of its own. */}
+          <Link href={`${base}/series-analyses`} aria-current={pathname.startsWith(`${base}/series-analyses`)}>
+            <span>Analyses</span>
+          </Link>
         </nav>
       </aside>
       <section className="content">{children}</section>
