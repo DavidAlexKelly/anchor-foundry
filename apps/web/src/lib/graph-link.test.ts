@@ -60,6 +60,7 @@ describe("a view from a link", () => {
       kinds: ["dataset", "object_type"], selected: ["dataset:9"],
       colouring: "out_of_date", layout: "colour",
       positions: { "dataset:9": { x: 12, y: 340 }, "model:abc": { x: 0, y: 7.5 } },
+      paints: { "dataset:9": "red", "model:abc": "teal" },
     };
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(toParams(view))) {
@@ -72,6 +73,11 @@ describe("a view from a link", () => {
   it("reads moved cards, skipping a part that is not a place (§606)", () => {
     expect(of("pos=dataset:1@10,20&pos=nothing&pos=dataset:2@x,1&pos=@1,2&pos=model:3@5,6"))
       .toEqual({ positions: { "dataset:1": { x: 10, y: 20 }, "model:3": { x: 5, y: 6 } } });
+  });
+
+  it("reads coloured cards, skipping a part with no card (§682)", () => {
+    expect(of("paint=dataset:1@red&paint=nothing&paint=@teal&paint=model:3@green"))
+      .toEqual({ paints: { "dataset:1": "red", "model:3": "green" } });
   });
 
   it("is an empty view when the link says nothing", () => {

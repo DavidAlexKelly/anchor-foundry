@@ -71,6 +71,8 @@ export const COLOURINGS: ColouringOption[] = [
     hint: "p.39: how long ago each was built, in quarters of this graph" },
   { id: "duration", label: "Build duration",
     hint: "p.39: how long each dataset's last build took, in quarters of this graph" },
+  { id: "custom", label: "Custom colour",
+    hint: "p.38: the colours given to selected nodes with the Colour control" },
   { id: "none", label: "No colour",
     hint: "p.38's first option: remove colouring altogether" },
 ];
@@ -96,6 +98,10 @@ export interface ColourableNode {
    *  somebody has been chosen — which `permissionSwatch` reads as "nobody
    *  asked" rather than as "no access" (§210). */
   access?: { role: string | null; via: string } | null;
+  /** p.38's *Custom color* (§682): the colour this view gave the node, from
+   *  `PAINTS`, or absent when it was given none. A view's rather than the
+   *  server's, like `access`. */
+  paint?: string | null;
   origin: string | null;
   /** p.38's Repository (§677): the code repository a model was written in,
    *  or that of the model writing a dataset. */
@@ -277,6 +283,8 @@ export function swatchFor(
       return permissionSwatch(node);
     case "repository":
       return repositorySwatch(node, scale ?? null);
+    case "custom":
+      return paintSwatch(node);
     default:
       return statusSwatch(node);
   }
@@ -313,6 +321,8 @@ const LEGEND_ORDER: Record<string, readonly string[]> = {
   // Every repository by name (a `*` matches a key's prefix), then the nodes
   // no repository wrote.
   repository: ["repo:*", "none"],
+  // The palette's own order, then the nodes nobody coloured.
+  custom: ["paint:teal", "paint:brass", "paint:red", "paint:green", "paint:amber", "unpainted"],
   // Most first - the biggest datasets, the longest since built - then the
   // nodes with nothing to measure.
   rows: ["q3", "q2", "q1", "q0", "none"],
@@ -496,4 +506,56 @@ function repositorySwatch(node: ColourableNode, scale: Scale | null): Swatch {
   if (!name) return { key: "none", label: "Not from a repository", token: QUIET };
   const at = Math.max(0, scale?.repositories?.indexOf(name) ?? 0);
   return { key: `repo:${name}`, label: name, token: CATEGORICAL[at % CATEGORICAL.length]! };
+}
+
+
+// ---- p.38's Custom color (§682) ------------------------------------------------
+/** p.38: "Allows you to select nodes and assign them a color by clicking on
+ * the Color button". **Named colours from tokens both themes carry**, as
+ * `CATEGORICAL` is, so a colour somebody chose stays visible in dark mode; the
+ * names are what a legend and a saved view hold, so a theme can move a token
+ * without a stored view pointing at a colour that is no longer there.
+ * Mirrored by `saved_graphs.PAINTS`, and a test reads this list to keep the
+ * two the same. */
+export const PAINTS: readonly Swatch[] = [
+  { key: "teal", label: "Teal", token: "var(--accent)" },
+  { key: "brass", label: "Brass", token: "var(--brass)" },
+  { key: "red", label: "Red", token: "var(--danger)" },
+  { key: "green", label: "Green", token: "var(--success)" },
+  { key: "amber", label: "Amber", token: "var(--warning)" },
+];
+
+/** A node's given colour, or the quiet swatch for one given none - still a
+ * group, so p.11's layout by colour gathers the uncoloured together. */
+function paintSwatch(node: ColourableNode): Swatch {
+  const paint = PAINTS.find((p) => p.key === node.paint);
+  if (!paint) return { key: "unpainted", label: "No colour given", token: QUIET };
+  return { key: `paint:${paint.key}`, label: paint.label, token: paint.token };
+}
+
+/** The colours a stored view gives, keeping only this palette's. A link is
+ * typed by hand, so a colour this build does not have is dropped rather than
+ * drawn as nothing. */
+export function paintsIn(view: { paints?: unknown } | undefined): Record<string, string> {
+  const raw = view?.paints;
+  // No type check beside this one: the entries of anything else that is not
+  // an object name no colour on the palette, so they are dropped below.
+  if (!raw) return {};
+  const out: Record<string, string> = {};
+  for (const [id, paint] of Object.entries(raw as Record<string, unknown>)) {
+    if (PAINTS.some((p) => p.key === paint)) out[id] = paint as string;
+  }
+  return out;
+}
+
+/** `paints` with each of `ids` given `paint`, or cleared when it is null. */
+export function painted(
+  paints: Readonly<Record<string, string>>, ids: readonly string[], paint: string | null,
+): Record<string, string> {
+  const out = { ...paints };
+  for (const id of ids) {
+    if (paint === null) delete out[id];
+    else out[id] = paint;
+  }
+  return out;
 }

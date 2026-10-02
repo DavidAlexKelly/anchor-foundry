@@ -46,6 +46,10 @@ export function toParams(view: GraphView): Change {
     pos: view.positions && Object.keys(view.positions).length > 0
       ? Object.entries(view.positions).map(([id, at]) => `${id}@${at.x},${at.y}`)
       : undefined,
+    // p.38's custom colours (§682), one `paint` per card as `<node>@<colour>`.
+    paint: view.paints && Object.keys(view.paints).length > 0
+      ? Object.entries(view.paints).map(([id, paint]) => `${id}@${paint}`)
+      : undefined,
   };
 }
 
@@ -88,5 +92,12 @@ export function fromParams(params: URLSearchParams): GraphView {
     }
   }
   if (Object.keys(positions).length > 0) view.positions = positions;
+  // Read as written; `paintsIn` narrows it to the palette.
+  const paints: Record<string, string> = {};
+  for (const entry of params.getAll("paint")) {
+    const at = entry.lastIndexOf("@");
+    if (at > 0) paints[entry.slice(0, at)] = entry.slice(at + 1);
+  }
+  if (Object.keys(paints).length > 0) view.paints = paints;
   return view;
 }

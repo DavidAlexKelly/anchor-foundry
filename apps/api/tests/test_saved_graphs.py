@@ -592,3 +592,54 @@ def test_saving_over_needs_an_editor_and_a_graph_in_this_project(
     kept = client.get(f"/api/workspaces/{fx.workspace}/projects/{other['id']}/saved-graphs",
                       headers=hdr(fx.editor_sub)).json()
     assert kept[0]["view"] == {"query": "kept"}
+
+
+# ---- p.38's Custom color (§682) ---------------------------------------------------
+def test_cards_coloured_by_hand_are_saved_and_given_back(client: TestClient, fx: Fixture) -> None:
+    """p.38: "select nodes and assign them a color by clicking on the Color
+    button". A graph coloured to be sent keeps its colours; none is not stored."""
+    one, two = node(), node()
+    r = client.post(base(fx), headers=hdr(fx.editor_sub), json={
+        "name": f"Painted {uuid.uuid4().hex[:6]}",
+        "view": {"colouring": "custom", "paints": {one: "red", two: "teal"}}})
+    assert r.status_code == 201, r.text
+    assert r.json()["view"] == {"colouring": "custom", "paints": {one: "red", two: "teal"}}
+    r = client.post(base(fx), headers=hdr(fx.editor_sub), json={
+        "name": f"Unpainted {uuid.uuid4().hex[:6]}", "view": {"paints": {}}})
+    assert r.status_code == 201, r.text
+    assert r.json()["view"] == {}
+
+
+@pytest.mark.parametrize("paints,refusal", [
+    (["red"], "map node ids to colours"),
+    ({"not-a-node": "red"}, "is not a node id"),
+    ({"NODE": "purple"}, "'purple' is not a colour (teal, brass, red, green, amber)"),
+    ({"NODE": None}, "is not a colour"),
+])
+def test_a_colour_that_is_not_one_is_refused(
+    client: TestClient, fx: Fixture, paints, refusal: str
+) -> None:
+    if isinstance(paints, dict) and "NODE" in paints:
+        paints = {node(): paints["NODE"]}
+    r = client.post(base(fx), headers=hdr(fx.editor_sub), json={
+        "name": f"Bad paint {uuid.uuid4().hex[:6]}", "view": {"paints": paints}})
+    assert r.status_code == 422, r.text
+    assert refusal in r.text
+
+
+def test_a_saved_graph_colours_no_more_nodes_than_it_may_select(
+    client: TestClient, fx: Fixture,
+) -> None:
+    r = client.post(base(fx), headers=hdr(fx.editor_sub), json={
+        "name": f"Too painted {uuid.uuid4().hex[:6]}",
+        "view": {"paints": {node(): "red" for _ in range(saved_graphs.MAX_SELECTED + 1)}}})
+    assert r.status_code == 422, r.status_code
+    assert f"at most {saved_graphs.MAX_SELECTED} nodes" in r.text
+
+
+def test_the_palette_is_the_browsers() -> None:
+    """`PAINTS` is mirrored from `node-colouring.ts`, as the colourings are."""
+    source = open(WEB_COLOURING).read()
+    block = re.search(r"export const PAINTS: readonly Swatch\[\] = \[(.*?)\n\];", source, re.S)
+    assert block, "node-colouring.ts no longer declares PAINTS"
+    assert tuple(re.findall(r'\{ key: "(.*?)"', block.group(1))) == saved_graphs.PAINTS

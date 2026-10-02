@@ -383,6 +383,15 @@ describe("the view a graph is saved or shared at (p.12, §360)", () => {
       selected: [], column: null, query: "", kinds: [], colouring: "status", layout: "level",
       positions: {},
     })).toEqual({});
+    // §682: so are coloured cards, and none coloured is no record.
+    expect(viewOf({
+      selected: [], column: null, query: "", kinds: [], colouring: "custom", layout: "level",
+      paints: { "dataset:x": "red" },
+    })).toEqual({ colouring: "custom", paints: { "dataset:x": "red" } });
+    expect(viewOf({
+      selected: [], column: null, query: "", kinds: [], colouring: "status", layout: "level",
+      paints: {},
+    })).toEqual({});
   });
 
   it("treats a blank search as no search", () => {
