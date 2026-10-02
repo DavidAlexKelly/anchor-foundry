@@ -56,6 +56,10 @@ import {
   autoSelectKey, hasSelection, keysOf, selectionClauses, toggle as toggleKey,
 } from "./object-table-selection";
 import { UNSUPPORTED_HINT, isUnsupported, omittedOf, valuesForHiding } from "./unsupported-properties";
+import { ObjectSetPanel } from "@/components/object-panels";
+import {
+  FORM_FACTORS as OBJECT_FORM_FACTORS, PANEL_BEHAVIORS, formFactorOf, panelBehaviorOf, panelShows,
+} from "@/lib/object-panels";
 import {
   combinedColumns, isPicked, pickedClauses, pickedIn, pickOf, selectedType, tabIndex,
   typedSelection, UNION_PAGE_DEPTH, unionParts, unionProperties, type Picked,
@@ -9766,11 +9770,12 @@ const EmbeddedObjectView = dynamic(
  * a configured view, a prominent geopoint's map and a derived property to
  * drift, which is the mistake `object-properties.ts` exists to record.
  *
- * **Not built, and named rather than approximated**: p.261's **panel form
- * factor** and p.263's panel behaviours (Object instance / Adaptive / Object
- * set), because two of the three render an *object set* summary that this
- * platform has no such thing as — a "panel" that always showed one object
- * would be the full factor under another name; p.262-263's **Hide tabs**,
+ * p.261's **panel form factor** and p.263's panel behaviours are §694's: an
+ * object instance panel is the type's configured panel view or `object-views`
+ * p.41's default, and an object set panel is p.41's Charts and List
+ * (`object-panels.tsx`).
+ *
+ * **Not built, and named rather than approximated**: p.262-263's **Hide tabs**,
  * **Go to initial tab on object switch** and **Initial object view tab ID**,
  * because a configured view here is one module rather than a set of tabs;
  * p.263's **Interface configuration**, which is the embedded-module interface
@@ -9784,7 +9789,13 @@ export function CanvasObjectViewWidget({
   allowToggle = true,
   hideHeader = false,
   emptyMessage = "",
+  formFactor = "full",
+  panelBehavior = "instance",
 }: {
+  /** p.261's Form factor (§694). */
+  formFactor?: string;
+  /** p.263's Panel behavior (§694). */
+  panelBehavior?: string;
   objectSetVariable?: string | null;
   /** p.261's Object View Mode. */
   viewMode?: string;
@@ -9808,6 +9819,9 @@ export function CanvasObjectViewWidget({
     pageSize: 1, variablesPending,
   });
   const instance = setPage.rows?.[0];
+  const panel = formFactorOf(formFactor) === "panel";
+  // p.263: which of the two panels, by the set's size.
+  const shows = panel ? panelShows(panelBehaviorOf(panelBehavior), setPage.total ?? 0) : "instance";
   // The wrapper below carries no class of its own. The first version gave it
   // `min-width: 0; overflow-x: auto` for §208's reason, and the harness said
   // nothing could tell: `.canvas-frame-area` already carries `min-width: 0` and
@@ -9820,12 +9834,20 @@ export function CanvasObjectViewWidget({
         <p className="canvas-widget-empty">Object view - bind an object set in Settings</p>
       ) : setPage.unresolved ? (
         <p className="canvas-widget-empty">Resolving the object set…</p>
+      ) : shows === "set" && setPage.typeId ? (
+        <div data-testid="object-view-widget" data-panel="set">
+          <ObjectSetPanel
+            workspaceId={workspaceId}
+            definition={setDefinition}
+            typeId={setPage.typeId}
+          />
+        </div>
       ) : !instance || !setPage.typeId ? (
         <p className="canvas-widget-empty" data-testid="object-view-empty">
           {objectViewEmptyMessageOf(emptyMessage)}
         </p>
       ) : (
-        <div data-testid="object-view-widget">
+        <div data-testid="object-view-widget" data-panel={panel ? "instance" : undefined}>
           <EmbeddedObjectView
             workspaceId={workspaceId}
             typeId={setPage.typeId}
@@ -9845,6 +9867,7 @@ export function CanvasObjectViewWidget({
             // property with an inline action is edited in place, in a running
             // module only. Who may write is the server's to refuse.
             canEdit={mode === "run"}
+            formFactor={panel ? "panel" : "full"}
           />
         </div>
       )}
@@ -9855,9 +9878,11 @@ export function CanvasObjectViewWidget({
 function ObjectViewWidgetSettings() {
   const { workspaceId } = useCanvasEnv();
   const {
-    objectSetVariable, viewMode, allowToggle, hideHeader, emptyMessage,
+    objectSetVariable, viewMode, allowToggle, hideHeader, emptyMessage, formFactor, panelBehavior,
     actions: { setProp },
   } = useNode((node) => ({
+    formFactor: node.data.props.formFactor,
+    panelBehavior: node.data.props.panelBehavior,
     objectSetVariable: node.data.props.objectSetVariable,
     viewMode: node.data.props.viewMode,
     allowToggle: node.data.props.allowToggle,
@@ -9901,6 +9926,41 @@ function ObjectViewWidgetSettings() {
       </label>
       </>}
       configuration={<>
+      {/* p.261's Form factor and p.263's Panel behavior (§694). */}
+      <label className="field">
+        <span className="field-label">Form factor</span>
+        <select
+          value={formFactorOf(formFactor)}
+          data-testid="object-view-form-factor"
+          onChange={(e) => setProp((p: { formFactor: string }) => (p.formFactor = e.target.value))}
+        >
+          {Object.entries(OBJECT_FORM_FACTORS).map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
+        </select>
+      </label>
+      {formFactorOf(formFactor) === "panel" && (
+        <label className="field">
+          <span className="field-label">Panel behavior</span>
+          <select
+            value={panelBehaviorOf(panelBehavior)}
+            data-testid="object-view-panel-behavior"
+            onChange={(e) =>
+              setProp((p: { panelBehavior: string }) => (p.panelBehavior = e.target.value))}
+          >
+            {Object.entries(PANEL_BEHAVIORS).map(([key, label]) => (
+              <option key={key} value={key}>{label}</option>
+            ))}
+          </select>
+          <span className="field-hint">
+            {panelBehaviorOf(panelBehavior) === "adaptive"
+              ? "One object shows its panel; none or several show the set's."
+              : panelBehaviorOf(panelBehavior) === "set"
+                ? "The set's panel: its charts and a list, whatever it holds."
+                : "The first object's panel, whatever the set holds."}
+          </span>
+        </label>
+      )}
       <label className="field">
         <span className="field-label">Object view mode</span>
         <select
@@ -9966,7 +10026,7 @@ CanvasObjectViewWidget.craft = {
   displayName: "Object view",
   props: {
     objectSetVariable: null, viewMode: "configured", allowToggle: true,
-    hideHeader: false, emptyMessage: "",
+    hideHeader: false, emptyMessage: "", formFactor: "full", panelBehavior: "instance",
   },
   related: { settings: ObjectViewWidgetSettings },
 };
