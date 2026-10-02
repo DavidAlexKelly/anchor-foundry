@@ -3004,6 +3004,23 @@ export const canvas = {
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/branches/${encodeURIComponent(name)}`,
       { method: "DELETE" },
     ),
+  /** p.618's proposal and its review (§700). */
+  proposeBranch: (wid: string, pid: string, appId: string, name: string) =>
+    request<import("./types").CanvasAppBranchDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/branches/${encodeURIComponent(name)}/propose`,
+      { method: "POST" },
+    ),
+  reviewBranch: (wid: string, pid: string, appId: string, name: string, approve: boolean) =>
+    request<import("./types").CanvasAppBranchDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/branches/${encodeURIComponent(name)}/${approve ? "approve" : "reject"}`,
+      { method: "POST" },
+    ),
+  /** p.617's protected module. Workspace admin only. */
+  setProtection: (wid: string, pid: string, appId: string, on: boolean) =>
+    request<import("./types").CanvasAppDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/protection`,
+      { method: "PUT", body: JSON.stringify({ protected: on }) },
+    ),
   /** Merge into main. 409 while main has moved past the branch's base. */
   mergeBranch: (wid: string, pid: string, appId: string, name: string) =>
     request<import("./types").CanvasAppDetail>(

@@ -30,6 +30,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { ChangelogPanel } from "@/components/canvas/ChangelogPanel";
+import { diffModules } from "@/components/canvas/changelog";
 import {
   describeConflict, rebase, type MergeChoice, type MergeConflict,
 } from "@/components/canvas/module-merge";
@@ -121,6 +122,7 @@ function VersionsDialog({
   projectId,
   app,
   canEdit,
+  canProtect,
   onView,
   onReverted,
   onClose,
@@ -129,6 +131,9 @@ function VersionsDialog({
   projectId: string;
   app: CanvasAppDetail;
   canEdit: boolean;
+  /** Workspace admin: p.617's protection is the check on editors, so it is
+   * not theirs to switch off. */
+  canProtect: boolean;
   onView: (version: number) => void;
   /** Called after a revert, so the canvas can be remounted against the new
    * document — see the comment on `reloadToken`. */
@@ -173,6 +178,10 @@ function VersionsDialog({
   const settings = useMutation({
     mutationFn: (next: { auto_publish_on_save?: boolean; prompt_for_description?: boolean }) =>
       canvasApi.setVersionSettings(workspaceId, projectId, app.id, next),
+    onSuccess: refresh, onError: fail,
+  });
+  const protect = useMutation({
+    mutationFn: (on: boolean) => canvasApi.setProtection(workspaceId, projectId, app.id, on),
     onSuccess: refresh, onError: fail,
   });
 
@@ -308,6 +317,25 @@ function VersionsDialog({
             />
             Always prompt for a description when saving
           </label>
+        </>
+      )}
+      {canProtect && (
+        <>
+          {/* p.617's protected module. Here rather than in Publish because it
+              is about how main changes, which is this dialog's subject. */}
+          <label className="vars-toggle field">
+            <input
+              type="checkbox"
+              checked={app.protected ?? false}
+              data-testid="protect-module"
+              onChange={(e) => protect.mutate(e.target.checked)}
+            />
+            Protect main
+          </label>
+          <p className="login-note" style={{ marginTop: 0 }}>
+            Changes are saved to a branch, proposed, and merged once another editor
+            approves them.
+          </p>
         </>
       )}
     </Dialog>
@@ -492,6 +520,65 @@ function headKey(
   return `${branchName}:${b?.id ?? ""}:${b?.save_count ?? ""}:${b?.base_version ?? ""}`;
 }
 
+/** p.618's "Review proposed changes" (§700).
+ *
+ * > "Within the Changelog tab, reviewers can see the changes made to the
+ * > module. Reviewers can then approve or reject the change by selecting the
+ * > appropriate Approve or Reject button on the left panel in the Review
+ * > proposed changes section." (p.618)
+ *
+ * The changes are §183's changelog between main and the branch - the same
+ * five kinds the Changelog panel uses, because a reviewer reading "moved"
+ * here and "changed" there for the same edit would be reading two products.
+ * Shown only to somebody who may review (`can_review`), so an author never
+ * sees buttons that would refuse them.
+ */
+function ReviewPanel({
+  main,
+  branch,
+  pending,
+  onReview,
+}: {
+  main: Record<string, unknown>;
+  branch: Record<string, unknown>;
+  pending: boolean;
+  onReview: (approve: boolean) => void;
+}) {
+  const changes = diffModules(main, branch);
+  const rows = [
+    ...changes.widgets.map((c) => ({ ...c, section: "Widget" })),
+    ...changes.variables.map((c) => ({ ...c, section: "Variable" })),
+    ...changes.events.map((c) => ({ ...c, section: "Event" })),
+  ];
+  return (
+    <div className="ws-rebase" data-testid="review-panel">
+      <p><strong>Review proposed changes.</strong></p>
+      {rows.length === 0 ? (
+        <p className="sub">This branch makes no changes to main.</p>
+      ) : (
+        <ul>
+          {rows.map((c) => (
+            <li key={`${c.section}:${c.id}`} data-testid="review-change">
+              <span>{c.section} <strong>{c.label}</strong></span>
+              <span>{c.kind}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="row-actions">
+        <button type="button" className="btn" data-testid="approve-branch"
+                disabled={pending} onClick={() => onReview(true)}>
+          Approve
+        </button>
+        <button type="button" className="btn quiet" data-testid="reject-branch"
+                disabled={pending} onClick={() => onReview(false)}>
+          Reject
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** The rebase, in progress (§699; p.619-621).
  *
  * > "While resolving conflicts, you can switch the module between three states
@@ -594,6 +681,7 @@ function ActionBar({
   branches,
   onBranch,
   onMerged,
+  mainDefinition,
   rebasing,
   onRebase,
   onChoose,
@@ -612,6 +700,9 @@ function ActionBar({
   onBranch: (name: string | null) => void;
   /** Main changed underneath the editor - a merge landed on it. */
   onMerged: () => void;
+  /** Main's document, which a reviewer compares the branch against (p.618's
+   * "reviewers can see the changes made to the module"). */
+  mainDefinition: Record<string, unknown>;
   /** A rebase under way (§699), or null. */
   rebasing: {
     mainVersion: number;
@@ -747,6 +838,26 @@ function ActionBar({
     onError: (e: Error) => setFailure(e.message),
   });
 
+  // p.618's proposal and its review (§700).
+  const refreshBranch = async () => {
+    setFailure(null);
+    await queryClient.invalidateQueries({ queryKey: ["canvas-app-branch", app.id] });
+    await queryClient.invalidateQueries({ queryKey: ["canvas-app-branches", app.id] });
+  };
+  const propose = useMutation({
+    mutationFn: (name: string) => canvasApi.proposeBranch(workspaceId, projectId, app.id, name),
+    onSuccess: refreshBranch,
+    onError: (e: Error) => setFailure(e.message),
+  });
+  const review = useMutation({
+    mutationFn: (input: { name: string; approve: boolean }) =>
+      canvasApi.reviewBranch(workspaceId, projectId, app.id, input.name, input.approve),
+    onSuccess: refreshBranch,
+    onError: (e: Error) => setFailure(e.message),
+  });
+  // p.618's merge requirement, said on the button before anybody presses it.
+  const awaitingApproval = !!app.protected && !!branch && branch.proposal_status !== "approved";
+
   const dropBranch = useMutation({
     mutationFn: (name: string) => canvasApi.deleteBranch(workspaceId, projectId, app.id, name),
     onSuccess: async () => {
@@ -783,6 +894,17 @@ function ActionBar({
             {" · "}
           </span>
         )}
+        {branch?.proposal_status && (
+          <span data-testid="proposal-status">
+            {branch.proposal_status === "open"
+              ? "proposal open"
+              : `proposal ${branch.proposal_status}${branch.reviewed_by_name ? ` by ${branch.reviewed_by_name}` : ""}`}
+            {" · "}
+          </span>
+        )}
+        {!branch && app.protected && (
+          <span data-testid="protected-status">protected · </span>
+        )}
         v{app.current_version}
         {app.publish_scope !== "private" && ` · published (${app.publish_scope})`}
         {/* The one thing an author of a published app has to be able to see:
@@ -804,7 +926,9 @@ function ActionBar({
         >
           {enabled ? "Preview" : "Back to editing"}
         </button>
-        {canEdit && enabled && (
+        {/* p.617: "protected Workshop modules show a Save to new branch option
+            instead of Save" - on main, that is the only way to save. */}
+        {canEdit && enabled && (branch || !app.protected) && (
           <button
             type="button"
             className="btn"
@@ -829,7 +953,7 @@ function ActionBar({
         {canEdit && enabled && !branch && (
           <button
             type="button"
-            className="btn quiet"
+            className={app.protected ? "btn" : "btn quiet"}
             disabled={toBranch.isPending}
             onClick={() => {
               const name = window.prompt("Name the branch", "");
@@ -845,15 +969,29 @@ function ActionBar({
             type="button"
             className="btn quiet"
             data-testid="merge-branch"
-            disabled={merge.isPending || branch.needs_rebase}
+            disabled={merge.isPending || branch.needs_rebase || awaitingApproval}
             title={
               branch.needs_rebase
                 ? `Main has changed since this branch was taken from v${branch.base_version}. Rebase it first.`
-                : "Make this branch the next version of main"
+                : awaitingApproval
+                  ? "This module is protected: the branch merges once its proposal is approved."
+                  : "Make this branch the next version of main"
             }
             onClick={() => merge.mutate(branch.name)}
           >
             Merge into main
+          </button>
+        )}
+        {canEdit && branch && branch.proposal_status !== "open"
+          && branch.proposal_status !== "approved" && (
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="propose-branch"
+            disabled={propose.isPending}
+            onClick={() => propose.mutate(branch.name)}
+          >
+            Propose
           </button>
         )}
         {canEdit && enabled && branch?.needs_rebase && !rebasing && (
@@ -895,6 +1033,14 @@ function ActionBar({
           </button>
         )}
       </div>
+      {branch && branch.can_review && !rebasing && (
+        <ReviewPanel
+          main={mainDefinition}
+          branch={branch.definition}
+          pending={review.isPending}
+          onReview={(approve) => review.mutate({ name: branch.name, approve })}
+        />
+      )}
       {branch && rebasing && (
         <RebasePanel
           branch={branch.name}
@@ -911,6 +1057,7 @@ function ActionBar({
           projectId={projectId}
           app={app}
           canEdit={canEdit}
+          canProtect={canPublish}
           onView={onView}
           onReverted={onReverted}
           onClose={() => setShowVersions(false)}
@@ -1558,6 +1705,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           branches={branchesQuery.data ?? []}
           onBranch={setBranchName}
           onMerged={() => setReloadToken((n) => n + 1)}
+          mainDefinition={appQuery.data.definition}
           rebasing={rebasing && merged
             ? { mainVersion: rebasing.mainVersion, conflicts: merged.conflicts,
                 choices: rebasing.choices }

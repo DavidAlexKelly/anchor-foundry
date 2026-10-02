@@ -38,7 +38,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
-from ..lib.errors import ConflictError, NotFoundError
+from ..lib.errors import ConflictError, ForbiddenError, NotFoundError
 
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 MAX_DEFINITION_BYTES = 2 * 1024 * 1024  # flag: conservative day-one cap on a saved layout
@@ -57,6 +57,9 @@ _COLUMN_NAMES = (
     # kind of link that breaks on a rename - the exact thing resource ids exist
     # to prevent. Object types surface theirs the same way.
     "resource_id",
+    # p.617's protection (§700, db 0137): main is changed only by merging a
+    # branch whose proposal was approved.
+    "protected",
 )
 
 
@@ -175,8 +178,17 @@ async def save_definition(
     definition: dict[str, Any],
     created_by: UUID,
     version_description: str = "",
+    through_merge: bool = False,
 ) -> dict[str, Any]:
     existing = await get(conn, project_id, app_id)
+    # p.617: a protected module's main is changed "on a branch rather than
+    # directly to main". A merge is the one way in, and it says so; a revert
+    # is a save like any other and is refused with it.
+    if existing.get("protected") and not through_merge:
+        raise ConflictError(
+            "this module is protected: save your changes to a branch and merge it "
+            "through an approved proposal"
+        )
     payload = json.dumps(definition)
     if len(payload) > MAX_DEFINITION_BYTES:
         raise ValueError(f"layout exceeds the {MAX_DEFINITION_BYTES // (1024 * 1024)} MB size limit")
@@ -404,7 +416,15 @@ _BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 
 _BRANCH_COLUMNS = (
     "b.id, b.name, b.base_version, b.save_count, b.created_by, b.created_at, "
-    "b.updated_at, u.display_name AS created_by_name"
+    "b.updated_at, u.display_name AS created_by_name, "
+    # p.618's proposal (§700, db 0137).
+    "b.proposal_status, b.proposed_by, b.proposed_at, b.reviewed_by, b.reviewed_at, "
+    "b.last_saved_by, r.display_name AS reviewed_by_name"
+)
+_BRANCH_FROM = (
+    "canvas_app_branches b "
+    "LEFT JOIN users u ON u.id = b.created_by "
+    "LEFT JOIN users r ON r.id = b.reviewed_by"
 )
 
 
@@ -436,8 +456,7 @@ async def list_branches(
         conn,
         f"""
         SELECT {_BRANCH_COLUMNS}
-          FROM canvas_app_branches b
-          LEFT JOIN users u ON u.id = b.created_by
+          FROM {_BRANCH_FROM}
          WHERE b.canvas_app_id = :aid
          ORDER BY b.name
         """,
@@ -454,8 +473,7 @@ async def get_branch(
         conn,
         f"""
         SELECT {_BRANCH_COLUMNS}, b.definition
-          FROM canvas_app_branches b
-          LEFT JOIN users u ON u.id = b.created_by
+          FROM {_BRANCH_FROM}
          WHERE b.canvas_app_id = :aid AND b.name = :name
         """,
         {"aid": str(app_id), "name": name},
@@ -501,8 +519,9 @@ async def create_branch(
         conn,
         """
         INSERT INTO canvas_app_branches
-                    (canvas_app_id, name, definition, base_version, save_count, created_by)
-        VALUES (:aid, :name, CAST(:def AS jsonb), :base, 1, :by)
+                    (canvas_app_id, name, definition, base_version, save_count, created_by,
+                     last_saved_by)
+        VALUES (:aid, :name, CAST(:def AS jsonb), :base, 1, :by, :by)
         RETURNING id
         """,
         {"aid": str(app_id), "name": name, "def": payload,
@@ -518,6 +537,7 @@ async def save_branch(
     name: str,
     *,
     definition: dict[str, Any],
+    saved_by: UUID,
     base_version: int | None = None,
 ) -> dict[str, Any]:
     """A save on a branch: its document changes and main's does not.
@@ -539,11 +559,20 @@ async def save_branch(
         UPDATE canvas_app_branches
            SET definition = CAST(:def AS jsonb),
                save_count = save_count + 1,
-               base_version = COALESCE(:base, base_version)
+               base_version = COALESCE(:base, base_version),
+               last_saved_by = :by,
+               -- p.618's review was of the document this save replaces, so a
+               -- proposal goes back to waiting for one. Kept approved, it would
+               -- carry whatever was saved after onto a protected main unread.
+               proposal_status = CASE WHEN proposal_status IS NULL THEN NULL
+                                      ELSE 'open'::branch_proposal_status END,
+               reviewed_by = NULL,
+               reviewed_at = NULL
          WHERE canvas_app_id = :aid AND name = :name
         RETURNING id
         """,
-        {"aid": str(app_id), "name": name, "def": payload, "base": base_version},
+        {"aid": str(app_id), "name": name, "def": payload, "base": base_version,
+         "by": str(saved_by)},
     )
     if row is None:
         raise NotFoundError("branch")
@@ -587,6 +616,15 @@ async def merge_branch(
     if locked is None:
         raise NotFoundError("canvas app")
     branch = await get_branch(conn, project_id, app_id, name)
+    app = await get(conn, project_id, app_id)
+    # p.618's merge requirement on a protected module: an approved proposal.
+    # Checked before the rebase rule so the message names what is missing
+    # first on a module where both are.
+    if app.get("protected") and branch["proposal_status"] != "approved":
+        raise ConflictError(
+            "this module is protected: the branch needs an approved proposal before "
+            "it merges into main"
+        )
     if branch["needs_rebase"]:
         raise ConflictError(
             f"main has changed since branch {name!r} was based on version "
@@ -601,9 +639,89 @@ async def merge_branch(
         definition=definition,
         created_by=created_by,
         version_description=f"Merged branch {name}",
+        through_merge=True,
     )
     await delete_branch(conn, project_id, app_id, name)
     return row
+
+
+def may_review(branch: dict[str, Any], user_id: UUID) -> bool:
+    """p.618's reviewer: not whoever proposed the change and not whoever last
+    saved it - their work is what is being reviewed."""
+    me = str(user_id)
+    return (
+        branch.get("proposal_status") == "open"
+        and str(branch.get("proposed_by") or "") != me
+        and str(branch.get("last_saved_by") or "") != me
+    )
+
+
+async def propose_branch(
+    conn: AsyncConnection, project_id: UUID, app_id: UUID, name: str, *, proposed_by: UUID,
+) -> dict[str, Any]:
+    """p.618: "When you are ready to merge your changes to main, create a
+    proposal." Proposing again restarts the review."""
+    await get(conn, project_id, app_id)
+    row = await fetch_one(
+        conn,
+        """
+        UPDATE canvas_app_branches
+           SET proposal_status = 'open', proposed_by = :by, proposed_at = now(),
+               reviewed_by = NULL, reviewed_at = NULL
+         WHERE canvas_app_id = :aid AND name = :name
+        RETURNING id
+        """,
+        {"aid": str(app_id), "name": name, "by": str(proposed_by)},
+    )
+    if row is None:
+        raise NotFoundError("branch")
+    return await get_branch(conn, project_id, app_id, name)
+
+
+async def review_branch(
+    conn: AsyncConnection, project_id: UUID, app_id: UUID, name: str,
+    *, reviewer: UUID, approve: bool,
+) -> dict[str, Any]:
+    """p.618's Approve and Reject. Only an open proposal is reviewed, and
+    never by the person whose changes it carries."""
+    branch = await get_branch(conn, project_id, app_id, name)
+    if branch["proposal_status"] != "open":
+        raise ConflictError("there is no open proposal on this branch to review")
+    if not may_review(branch, reviewer):
+        raise ForbiddenError(
+            "a proposal is reviewed by someone other than whoever proposed or last saved it"
+        )
+    await fetch_one(
+        conn,
+        """
+        UPDATE canvas_app_branches
+           SET proposal_status = CAST(:status AS branch_proposal_status),
+               reviewed_by = :by, reviewed_at = now()
+         WHERE canvas_app_id = :aid AND name = :name
+        RETURNING id
+        """,
+        {"aid": str(app_id), "name": name, "by": str(reviewer),
+         "status": "approved" if approve else "rejected"},
+    )
+    return await get_branch(conn, project_id, app_id, name)
+
+
+async def set_protection(
+    conn: AsyncConnection, project_id: UUID, app_id: UUID, *, on: bool,
+) -> dict[str, Any]:
+    """p.617's protection switch. The route decides who may use it."""
+    row = await fetch_one(
+        conn,
+        f"""
+        UPDATE canvas_apps SET protected = :on
+         WHERE id = :aid AND project_id = :pid
+        RETURNING {_COLUMNS}, definition
+        """,
+        {"aid": str(app_id), "pid": str(project_id), "on": on},
+    )
+    if row is None:
+        raise NotFoundError("canvas app")
+    return dict(row)
 
 
 # ---- publishing ---------------------------------------------------------------
