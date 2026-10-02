@@ -434,8 +434,13 @@ def points_for_many_sql(
 #: multiple transforms to be chained together." (p.583)
 TRANSFORM_KINDS = (
     "cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula",
-    "filter", "sample", "combine", "event_statistics", "linear_aggregate",
+    "filter", "sample", "combine", "event_statistics", "linear_aggregate", "dsp",
 )
+#: p.393's *DSP filter* (§685): "Butterworth, Chebyshev, or inverse
+#: Chebyshev", designed in `dsp`. The ripple is Chebyshev's passband ripple and
+#: the attenuation inverse Chebyshev's stopband, each in dB.
+MAX_RIPPLE = 20.0
+MAX_ATTENUATION = 120.0
 #: p.393's *Combine time series*: "Merge multiple time series into a single
 #: plot, specifying how to handle overlapping time points (for example, mean,
 #: min, or max)" (§650). The other series are inputs, as a formula's are.
@@ -601,6 +606,8 @@ def parse_transforms(
                     raise ValueError(f"the method must be one of {', '.join(SAMPLE_METHODS)}")
                 parsed = {"kind": kind, "every": _span(item.get("every"), "the step"),
                           "unit": _unit(item.get("unit")), "method": method}
+            elif kind == "dsp":
+                parsed = _parse_dsp(item)
             elif kind == "formula":
                 expression = item.get("expression")
                 if not isinstance(expression, str) or not expression.strip():
@@ -624,6 +631,72 @@ def parse_transforms(
             raise ValueError(f"transform {n}: {exc}") from None
         out.append(parsed)
     return out
+
+
+def _number(raw: Any, what: str) -> float:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+        raise ValueError(f"{what} must be a number")
+    return float(raw)
+
+
+def _parse_dsp(item: dict[str, Any]) -> dict[str, Any]:
+    from . import dsp
+
+    family = item.get("family")
+    if family not in dsp.FAMILIES:
+        raise ValueError(f"the filter must be one of {', '.join(dsp.FAMILIES)}")
+    order = item.get("order")
+    if isinstance(order, bool) or not isinstance(order, int) or not 1 <= order <= dsp.MAX_ORDER:
+        raise ValueError(f"the order must be a whole number from 1 to {dsp.MAX_ORDER}")
+    cutoff = _number(item.get("cutoff"), "the cut-off")
+    if not 0 < cutoff < 1:
+        raise ValueError("the cut-off is a fraction of the Nyquist frequency, between 0 and 1")
+    parsed: dict[str, Any] = {"kind": "dsp", "family": family, "order": order, "cutoff": cutoff}
+    # Each family takes the one setting that shapes it, and only that one.
+    if family == "chebyshev":
+        ripple = _number(item.get("ripple", 1), "the ripple")
+        if not 0 < ripple <= MAX_RIPPLE:
+            raise ValueError(f"the ripple must be above 0 and at most {MAX_RIPPLE:g} dB")
+        parsed["ripple"] = ripple
+    elif family == "inverse_chebyshev":
+        attenuation = _number(item.get("attenuation", 40), "the attenuation")
+        if not 0 < attenuation <= MAX_ATTENUATION:
+            raise ValueError(f"the attenuation must be above 0 and at most {MAX_ATTENUATION:g} dB")
+        parsed["attenuation"] = attenuation
+    # Designed now, so a filter that cannot be run is refused where it is
+    # saved rather than where it is read.
+    dsp.zero_phase_weights(*dsp.design(
+        family, order, cutoff, ripple=parsed.get("ripple", 1.0),
+        attenuation=parsed.get("attenuation", 40.0)))
+    return parsed
+
+
+def _dsp_sql(transform: dict[str, Any], source: str, *, per_series: bool) -> str:
+    """p.393's DSP filter as a weighted sum of each reading's neighbours: the
+    zero-phase form of the designed filter (`dsp.zero_phase_weights`). At the
+    ends the weights that fall off the series are left out and the rest
+    rescaled, so the first reading is not averaged with readings that do not
+    exist."""
+    from . import dsp
+
+    b, a = dsp.design(transform["family"], transform["order"], transform["cutoff"],
+                      ripple=transform.get("ripple", 1.0),
+                      attenuation=transform.get("attenuation", 40.0))
+    weights = dsp.zero_phase_weights(b, a)
+    reach = (len(weights) - 1) // 2
+    table = ", ".join(f"({i - reach}, {w!r})" for i, w in enumerate(weights))
+    s = "series, " if per_series else ""
+    part = "PARTITION BY series " if per_series else ""
+    same = " AND r.series = n.series" if per_series else ""
+    readings = (f"(SELECT {s}at, value, row_number() OVER ({part}ORDER BY at) AS i "
+                f"FROM {source} WHERE value IS NOT NULL)")
+    return (
+        f"SELECT {'r.series, ' if per_series else ''}r.at, "
+        f"sum(n.value * w.weight) / sum(w.weight) AS value "
+        f"FROM {readings} r JOIN {readings} n ON n.i BETWEEN r.i - {reach} AND r.i + {reach}{same} "
+        f"JOIN (VALUES {table}) w(offset_by, weight) ON w.offset_by = n.i - r.i "
+        f"GROUP BY {'r.series, ' if per_series else ''}r.at"
+    )
 
 
 def _epoch_seconds(instant: str) -> float:
@@ -856,6 +929,8 @@ def _transform_sql(
         # p.586: "identical to the input time series, but temporally shifted".
         return (f"SELECT {s}CAST(at AS TIMESTAMP) + INTERVAL ({transform['by']}) "
                 f"{transform['unit'].upper()} AS at, value FROM {source}")
+    if kind == "dsp":
+        return _dsp_sql(transform, source, per_series=per_series)
     if kind == "filter":
         # p.393: keep the points whose reading matches, or remove them. A
         # reading with no value matches nothing either way: a gap is not a

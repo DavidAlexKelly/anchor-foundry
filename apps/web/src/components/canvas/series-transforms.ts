@@ -12,7 +12,7 @@
  * vocabularies are held to the server's by `test_time_series_transforms.py`.
  */
 
-export const TRANSFORM_KINDS = ["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine", "event_statistics", "linear_aggregate"] as const;
+export const TRANSFORM_KINDS = ["cumulative", "periodic", "rolling", "derivative", "integral", "shift", "range", "formula", "filter", "sample", "combine", "event_statistics", "linear_aggregate", "dsp"] as const;
 export type TransformKind = (typeof TRANSFORM_KINDS)[number];
 export const WINDOW_AGGREGATES = ["sum", "avg", "min", "max", "count", "stddev"] as const;
 export type WindowAggregate = (typeof WINDOW_AGGREGATES)[number];
@@ -47,6 +47,17 @@ export type SampleMethod = (typeof SAMPLE_METHODS)[number];
 /** p.393's *Combine time series* (§650): how points that meet at one instant
  * become one. */
 export const COMBINE_AGGREGATES = ["avg", "min", "max", "sum"] as const;
+/** p.393's *DSP filter* (§685): "Butterworth, Chebyshev, or inverse
+ * Chebyshev". The server designs it (`services/dsp.py`) and refuses one it
+ * cannot run; these are what the form offers and checks first. */
+export const DSP_FAMILIES = ["butterworth", "chebyshev", "inverse_chebyshev"] as const;
+export type DspFamily = (typeof DSP_FAMILIES)[number];
+export const DSP_WORDS: Record<DspFamily, string> = {
+  butterworth: "Butterworth", chebyshev: "Chebyshev", inverse_chebyshev: "inverse Chebyshev",
+};
+export const MAX_DSP_ORDER = 8;
+export const MAX_RIPPLE = 20;
+export const MAX_ATTENUATION = 120;
 export type CombineAggregate = (typeof COMBINE_AGGREGATES)[number];
 export const COMBINE_WORDS: Record<CombineAggregate, string> = {
   avg: "mean", min: "minimum", max: "maximum", sum: "sum",
@@ -67,6 +78,13 @@ export type SeriesTransform =
   | { kind: "range"; start: string | null; end: string | null }
   | { kind: "filter"; op: FilterOperator; value: number; keep: boolean }
   | { kind: "sample"; every: number; unit: TimeUnit; method: SampleMethod }
+  | { kind: "dsp"; family: DspFamily; order: number;
+      /** A fraction of the Nyquist frequency of the readings, 0 to 1. */
+      cutoff: number;
+      /** Chebyshev's passband ripple, in dB. */
+      ripple?: number;
+      /** The inverse Chebyshev's stopband attenuation, in dB. */
+      attenuation?: number }
   | { kind: "event_statistics"; aggregate: WindowAggregate; op: FilterOperator; value: number;
       /** The one series whose events are searched, as `e` (§652). */
       inputs?: Record<string, unknown> }
@@ -96,6 +114,7 @@ export const KIND_LABELS: Record<TransformKind, string> = {
   combine: "Combine",
   event_statistics: "Event statistics",
   linear_aggregate: "Linear aggregation",
+  dsp: "DSP filter",
 };
 
 /** A new transform of `kind`, ready to use: p.584's own examples where it
@@ -132,6 +151,8 @@ export function blankTransform(kind: TransformKind): SeriesTransform {
       return { kind, aggregate: "avg", inputs: { y: "" } };
     case "event_statistics":
       return { kind, aggregate: "avg", op: "gt", value: 0, inputs: { e: "" } };
+    case "dsp":
+      return { kind, family: "butterworth", order: 2, cutoff: 0.1 };
   }
 }
 
@@ -178,6 +199,10 @@ export function transformText(t: SeriesTransform): string {
     case "linear_aggregate":
       return `${COMBINE_WORDS[t.aggregate]} with ${Object.keys(t.inputs ?? {}).join(", ") || "nothing"}, ` +
         "each on the line between its readings";
+    case "dsp":
+      return `${DSP_WORDS[t.family]} low-pass, order ${t.order}, cut-off ${t.cutoff} of Nyquist` +
+        (t.family === "chebyshev" ? `, ${t.ripple ?? 1} dB ripple` : "") +
+        (t.family === "inverse_chebyshev" ? `, ${t.attenuation ?? 40} dB down` : "");
   }
 }
 
@@ -215,6 +240,21 @@ export function transformProblem(t: SeriesTransform): string | null {
         ? null : `The step must be a whole number from 1 to ${MAX_SPAN.toLocaleString("en-US")}.`;
     case "filter":
       return Number.isFinite(t.value) ? null : "A filter compares with a number.";
+    case "dsp":
+      if (!whole(t.order) || t.order < 1 || t.order > MAX_DSP_ORDER) {
+        return `The order must be a whole number from 1 to ${MAX_DSP_ORDER}.`;
+      }
+      if (!(t.cutoff > 0 && t.cutoff < 1)) {
+        return "The cut-off is a fraction of the Nyquist frequency, between 0 and 1.";
+      }
+      if (t.family === "chebyshev" && !((t.ripple ?? 1) > 0 && (t.ripple ?? 1) <= MAX_RIPPLE)) {
+        return `The ripple must be above 0 and at most ${MAX_RIPPLE} dB.`;
+      }
+      if (t.family === "inverse_chebyshev"
+          && !((t.attenuation ?? 40) > 0 && (t.attenuation ?? 40) <= MAX_ATTENUATION)) {
+        return `The attenuation must be above 0 and at most ${MAX_ATTENUATION} dB.`;
+      }
+      return null;
     case "shift":
       return whole(t.by) && t.by !== 0 && Math.abs(t.by) <= MAX_SPAN
         ? null
