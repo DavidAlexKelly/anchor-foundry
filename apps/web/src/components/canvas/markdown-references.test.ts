@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  isLit, numberReferences, referenceTypesOf, selectionBehaviorOf, keysToColor, referenceColorOf,
+  isLit, numberReferences, referenceTypesOf, selectionBehaviorOf, keysToColor, referenceColorOf, newReferenceTypeId, overridingTypes, selectionItemOfType,
   type ReferenceType,
 } from "./markdown-references";
 import { parse, parseInline, referenceAttributes } from "./markdown";
 
 /** p.319-320's inline references (§632). */
 
-const STATIC = { colorMode: "static", colorProperty: null, colorRules: null } as const;
+const STATIC = { colorMode: "static", colorProperty: null, colorRules: null, overrideSelection: false,
+  id: null } as const;
 
 describe("p.319's anchor syntax", () => {
   const source = 'Two delays: :objectreference[Alert A00150]{objectType="flight_alert" '
@@ -117,8 +118,10 @@ describe("p.320's Highlight color from the object (§664)", () => {
       { objectType: "ship", colorMode: "rules", colorRules: [red] },
       { objectType: "port", colorMode: "sparkly", colorProperty: "", colorRules: [{ kind: "junk" }] },
     ])).toEqual([
-      { objectType: "alert", color: "#123456", colorMode: "property", colorProperty: "severity", colorRules: null },
-      { objectType: "ship", color: null, colorMode: "rules", colorProperty: null, colorRules: [red] },
+      { objectType: "alert", color: "#123456", colorMode: "property", colorProperty: "severity", colorRules: null,
+        overrideSelection: false, id: null },
+      { objectType: "ship", color: null, colorMode: "rules", colorProperty: null, colorRules: [red],
+        overrideSelection: false, id: null },
       { objectType: "port", color: null, ...STATIC },
     ]);
   });
@@ -139,7 +142,7 @@ describe("p.320's Highlight color from the object (§664)", () => {
 
   it("paints with the fill before the text, and falls back to the static colour", () => {
     const byProperty: ReferenceType = { objectType: "alert", color: "#123456", colorMode: "property",
-      colorProperty: "severity", colorRules: null };
+      colorProperty: "severity", colorRules: null, overrideSelection: false, id: null };
     expect(referenceColorOf(byProperty, { severity: "high" }, [red, amber])).toBe("#dc2626");
     expect(referenceColorOf(byProperty, { severity: "low" }, [red, amber])).toBe("#b45309");
     expect(referenceColorOf(byProperty, { severity: "none" }, [red, amber])).toBe("#123456");
@@ -149,5 +152,24 @@ describe("p.320's Highlight color from the object (§664)", () => {
     expect(referenceColorOf(byRules, { severity: "low" }, [red])).toBe("#b45309");
     // Switched back to static, a type keeps its rules, and they paint nothing.
     expect(referenceColorOf({ ...byRules, colorMode: "static" }, { severity: "low" }, [red])).toBe("#123456");
+  });
+});
+
+describe("p.320's Override event on selection (§665)", () => {
+  it("names a type by an id no type has, and fires as it only when it overrides", () => {
+    const types = referenceTypesOf([
+      { objectType: "ship", id: "rt_2", overrideSelection: true },
+      { objectType: "port", id: "rt_1", overrideSelection: false },
+      { objectType: "dock", overrideSelection: true },
+      { objectType: "pier", id: "nope", overrideSelection: true },
+      { objectType: "quay", id: "rt_5", overrideSelection: "yes" },
+    ]);
+    expect(types.map((t) => [t.id, t.overrideSelection])).toEqual([
+      ["rt_2", true], ["rt_1", false], [null, true], [null, true], ["rt_5", false]]);
+    expect(types.map(selectionItemOfType)).toEqual(["rt_2", null, null, null, null]);
+    expect(overridingTypes(types)).toEqual([{ id: "rt_2", label: "ship" }]);
+    expect(newReferenceTypeId(types)).toBe("rt_6");
+    expect(newReferenceTypeId(types.slice(0, 1))).toBe("rt_3");
+    expect(newReferenceTypeId([])).toBe("rt_1");
   });
 });

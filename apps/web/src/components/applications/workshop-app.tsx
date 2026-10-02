@@ -90,6 +90,9 @@ import type {
 } from "@/lib/types";
 import { buttonTypeOf, itemsOf } from "@/components/canvas/button-items";
 import { layersOf as timelineLayersOf, overridingLayers } from "@/components/canvas/timeline";
+import {
+  overridingTypes as overridingReferenceTypes, referenceTypesOf,
+} from "@/components/canvas/markdown-references";
 
 /** The Versions dialog (Foundry p.191-192).
  *
@@ -1313,8 +1316,13 @@ function CanvasBody({
         // layers are row selections of their own, beside the widget's.
         const layers = name === "CanvasTimeline"
           ? overridingLayers(timelineLayersOf(props.layers)) : [];
+        // p.320's per-type Override event on selection (§665): a Markdown
+        // widget's overriding types are row selections beside its clicks.
+        const types = name === "CanvasMarkdown"
+          ? overridingReferenceTypes(referenceTypesOf(props.referenceTypes)) : [];
         triggers.push({
           id, label: `${node.data.displayName ?? name} · ${label}`, widget: name,
+          ...(types.length ? { selectItems: types } : {}),
           ...(kind !== "inline"
             ? { buttonType: kind, items: itemsOf(props.items).map((i) => ({ id: i.id, label: i.label })) }
             : menu.length
