@@ -30,6 +30,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { ChangelogPanel } from "@/components/canvas/ChangelogPanel";
+import {
+  describeConflict, rebase, type MergeChoice, type MergeConflict,
+} from "@/components/canvas/module-merge";
 import { CheckAccessPanel } from "@/components/canvas/CheckAccessPanel";
 import {
   CanvasEnvProvider, CanvasParameterProvider, useCanvasEnv,
@@ -489,6 +492,81 @@ function headKey(
   return `${branchName}:${b?.id ?? ""}:${b?.save_count ?? ""}:${b?.base_version ?? ""}`;
 }
 
+/** The rebase, in progress (§699; p.619-621).
+ *
+ * > "While resolving conflicts, you can switch the module between three states
+ * > to evaluate outcomes in real time: Main … Branch … Modification: Changes
+ * > you make after beginning the rebase to reconcile differences." (p.608)
+ *
+ * Main and Branch are a choice per conflict, and choosing rebuilds the module
+ * from the three documents; **Modification is the editor itself** - the
+ * canvas under this panel is the merged module, and anything edited there is
+ * what Save keeps. Rebuilding discards those edits, which the panel says,
+ * because p.621's example resolves a conflict by picking a side *first* and
+ * editing after ("first select main, then manually add the Action required
+ * column").
+ */
+function RebasePanel({
+  branch,
+  mainVersion,
+  conflicts,
+  choices,
+  onChoose,
+  onCancel,
+}: {
+  branch: string;
+  mainVersion: number;
+  conflicts: MergeConflict[];
+  choices: Record<string, MergeChoice>;
+  onChoose: (key: string, choice: MergeChoice) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="ws-rebase" data-testid="rebase-panel">
+      <p>
+        <strong>Rebasing {branch} onto main v{mainVersion}.</strong>{" "}
+        {conflicts.length === 0
+          ? "No conflicts: the branch's changes apply to main as they are."
+          : `${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"} - each starts on main's side.`}{" "}
+        Save to finish the rebase.
+      </p>
+      {conflicts.length > 0 && (
+        <ul>
+          {conflicts.map((c) => {
+            const chosen = choices[c.key] ?? "main";
+            return (
+              <li key={c.key} data-testid="rebase-conflict" data-key={c.key}>
+                <span><strong>{c.label}</strong> - {describeConflict(c)}</span>
+                <span role="radiogroup" aria-label={`Resolve ${c.label}`}>
+                  {(["main", "branch"] as const).map((side) => (
+                    <label key={side}>
+                      <input
+                        type="radio"
+                        name={`rebase-${c.key}`}
+                        checked={chosen === side}
+                        onChange={() => onChoose(c.key, side)}
+                      />{" "}
+                      {side === "main" ? "Main" : "Branch"}
+                    </label>
+                  ))}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <p className="sub">
+        Modification: edit the module below as usual. Switching a conflict rebuilds the
+        module from main and the branch, and discards those edits. Variable values follow
+        the saved branch until the rebase is saved.
+      </p>
+      <button type="button" className="btn quiet" onClick={onCancel}>
+        Cancel rebase
+      </button>
+    </div>
+  );
+}
+
 /** The builder's own controls, under the shell's header rather than instead of
  * it. What is left after the breadcrumb and title moved up: the version state,
  * which is Workshop's alone and is the one thing an author of a published
@@ -516,6 +594,10 @@ function ActionBar({
   branches,
   onBranch,
   onMerged,
+  rebasing,
+  onRebase,
+  onChoose,
+  onRebaseEnd,
 }: {
   app: CanvasAppDetail;
   workspaceId: string;
@@ -530,6 +612,16 @@ function ActionBar({
   onBranch: (name: string | null) => void;
   /** Main changed underneath the editor - a merge landed on it. */
   onMerged: () => void;
+  /** A rebase under way (§699), or null. */
+  rebasing: {
+    mainVersion: number;
+    conflicts: MergeConflict[];
+    choices: Record<string, MergeChoice>;
+  } | null;
+  onRebase: () => Promise<void>;
+  onChoose: (key: string, choice: MergeChoice) => void;
+  /** The rebase was saved, or abandoned. */
+  onRebaseEnd: () => void;
   variables: Record<string, WorkshopVariable>;
   events: Record<string, WorkshopEvent>;
   routing: boolean;
@@ -595,10 +687,15 @@ function ActionBar({
     // version descriptions - its record is the merge's description on main.
     mutationFn: async (description: string) => {
       if (branch) {
+        // p.621's "save the module to finish rebasing": the merged document,
+        // and the main version it was merged against as the branch's new base.
         const saved = await canvasApi.saveBranch(
           workspaceId, projectId, app.id, branch.name, currentDocument(),
+          rebasing?.mainVersion,
         );
-        return headKey(saved.name, saved);
+        // With no rebase token: a save on a branch ends any rebase under way,
+        // so the head it lands on is the branch with none open.
+        return `${headKey(saved.name, saved)}:`;
       }
       const saved = await canvasApi.saveDefinition(
         workspaceId, projectId, app.id, currentDocument(), description,
@@ -611,6 +708,10 @@ function ActionBar({
       await queryClient.invalidateQueries({ queryKey: ["canvas-app", app.id] });
       await queryClient.invalidateQueries({ queryKey: ["canvas-app-branch", app.id] });
       await queryClient.invalidateQueries({ queryKey: ["canvas-app-branches", app.id] });
+      // After the refetch, not before: ending the rebase remounts the editor,
+      // and remounting on the branch's previous document would show the rebase
+      // as undone.
+      if (rebasing) onRebaseEnd();
     },
     // The server refuses a cycle or a binding to a variable that is not
     // declared. Surfaced here rather than swallowed: the save did not happen,
@@ -755,6 +856,23 @@ function ActionBar({
             Merge into main
           </button>
         )}
+        {canEdit && enabled && branch?.needs_rebase && !rebasing && (
+          <button
+            type="button"
+            className="btn"
+            data-testid="begin-rebase"
+            onClick={() => {
+              // p.619's "Save before rebasing": "any in-progress edits that
+              // have not been saved will be lost".
+              if (!window.confirm(
+                "Unsaved edits on this branch are not kept through a rebase. Start the rebase?",
+              )) return;
+              onRebase().catch((e: Error) => setFailure(e.message));
+            }}
+          >
+            Rebase onto main
+          </button>
+        )}
         {canEdit && branch && (
           <button
             type="button"
@@ -777,6 +895,16 @@ function ActionBar({
           </button>
         )}
       </div>
+      {branch && rebasing && (
+        <RebasePanel
+          branch={branch.name}
+          mainVersion={rebasing.mainVersion}
+          conflicts={rebasing.conflicts}
+          choices={rebasing.choices}
+          onChoose={onChoose}
+          onCancel={onRebaseEnd}
+        />
+      )}
       {showVersions && (
         <VersionsDialog
           workspaceId={workspaceId}
@@ -1138,10 +1266,25 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     enabled: !!projectId && !!branchName,
   });
   const branch = branchName ? branchQuery.data ?? null : null;
-  // The document the editor works on: the branch's when one is open. Every
-  // reader below takes it from here, so main's document cannot leak into a
-  // branch's editor through a prop somebody forgot.
-  const headDefinition = branchName ? branch?.definition : appQuery.data?.definition;
+  // A rebase in progress (§699; p.619-621): the three documents it merges
+  // and the side each conflict has been given. Held here, beside the branch,
+  // because the document it produces is what the editor shows - and dropped
+  // on a switch of head, since it is a rebase of *that* branch.
+  const [rebasing, setRebasing] = useState<RebaseState | null>(null);
+  useEffect(() => setRebasing(null), [branchName]);
+  const merged = useMemo(
+    () => (rebasing && branch
+      ? rebase(rebasing.base, rebasing.main, branch.definition, rebasing.choices)
+      : null),
+    [rebasing, branch],
+  );
+  // The document the editor works on: the rebase's while one is under way,
+  // else the branch's when one is open. Every reader below takes it from
+  // here, so main's document cannot leak into a branch's editor through a
+  // prop somebody forgot.
+  const headDefinition = merged
+    ? merged.document
+    : branchName ? branch?.definition : appQuery.data?.definition;
 
   // The tab name (p.47). Above the early returns because it is a hook, and
   // fed the *saved* document rather than the editor's live node map: retyping
@@ -1237,16 +1380,16 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // branch save, or a switch of head - and never on a plain refetch, which
   // would discard edits somebody has made but not saved.
   const savedHead = branchName
-    ? headKey(branchName, branch ?? undefined)
+    ? `${headKey(branchName, branch ?? undefined)}:${rebasing?.token ?? ""}`
     : headKey(null, savedVersion);
   // **The head this builder's own Save wrote.** The refetch a Save triggers
   // brings back exactly what was sent, so resetting the panels from it can
   // only lose something: an edit made in the moment between the PUT returning
   // and the refetch landing went back to the saved value, and the next Save
   // wrote the old value over it (#468, a test that kept editing). A revert, a
-  // merge, a switch of head or a first load is a head this builder did not
-  // write, and still resets. Keyed on the head rather than main's version
-  // since §698, because a branch save is the same race.
+  // merge, a switch of head, a rebase or a first load is a head this builder
+  // did not write, and still resets. Keyed on the head rather than main's
+  // version since §698, because a branch save is the same race.
   const ownSave = useRef<string | null>(null);
   useEffect(() => {
     if (!appQuery.data || !headDefinition) return;
@@ -1298,8 +1441,27 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // branch's document - the id, the version main is at and the publish state
   // stay main's, because they are.
   const app: CanvasAppDetail = branch
-    ? { ...appQuery.data, definition: branch.definition }
+    ? { ...appQuery.data, definition: merged?.document ?? branch.definition }
     : appQuery.data;
+
+  // p.619's "Start the rebase": the base is the main version the branch was
+  // taken from, and main is read fresh rather than from the cache - a rebase
+  // onto a main somebody saved past a minute ago is a rebase onto the wrong
+  // thing, and the server would refuse to finish it.
+  const beginRebase = async () => {
+    if (!branch) return;
+    const [main, base] = await Promise.all([
+      canvasApi.get(workspaceId, projectId, appId),
+      branch.base_version > 0
+        ? canvasApi.getVersion(workspaceId, projectId, appId, branch.base_version)
+          .then((v) => v.definition)
+        : Promise.resolve({}),
+    ]);
+    setRebasing({
+      base, main: main.definition, mainVersion: main.current_version,
+      choices: {}, token: Date.now(),
+    });
+  };
 
   // "View this version" (p.191). Rendered instead of the builder rather than
   // inside it: a historic document in an *editable* canvas is one Save away
@@ -1352,7 +1514,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
       // Remounted on a switch of head as well as on a revert: Craft reads
       // `<Frame data>` once, so the other head's document would otherwise
       // never reach the canvas.
-      key={`${reloadToken}:${branchName ?? ""}`}
+      key={`${reloadToken}:${branchName ?? ""}:${rebasing?.token ?? ""}`}
       resolver={CANVAS_RESOLVER}
       enabled={canEdit}
       onRender={CanvasNode}
@@ -1396,6 +1558,15 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           branches={branchesQuery.data ?? []}
           onBranch={setBranchName}
           onMerged={() => setReloadToken((n) => n + 1)}
+          rebasing={rebasing && merged
+            ? { mainVersion: rebasing.mainVersion, conflicts: merged.conflicts,
+                choices: rebasing.choices }
+            : null}
+          onRebase={beginRebase}
+          onChoose={(key, choice) => setRebasing((r) => r && {
+            ...r, choices: { ...r.choices, [key]: choice }, token: Date.now(),
+          })}
+          onRebaseEnd={() => setRebasing(null)}
         />
         <CanvasBody
           hasSavedLayout={hasLayout(app.definition)}
@@ -1432,6 +1603,18 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     </Editor>
     </>
   );
+}
+
+/** A rebase under way (§699): the base and main it merges the branch onto,
+ * the main version that becomes the branch's base when it is saved, and the
+ * side each conflict has been given. `token` changes whenever the merged
+ * document does, which is what remounts the editor on it. */
+interface RebaseState {
+  base: Record<string, unknown>;
+  main: Record<string, unknown>;
+  mainVersion: number;
+  choices: Record<string, MergeChoice>;
+  token: number;
 }
 
 /** The editor sidebar's tabs. Named rather than written twice: the state and
