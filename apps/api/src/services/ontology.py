@@ -29,7 +29,7 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # definitions live in their own module because the worker needs a verbatim
 # copy of them (see that module's docstring).
 from . import (
-    array_properties, conditional_format, derived_properties, link_join_tables,
+    array_properties, conditional_format, derived_properties, link_backing, link_join_tables,
     ontology_status, property_inline_actions,
     property_reducers, shared_properties, struct_fields, value_format,
     value_types,
@@ -1970,6 +1970,53 @@ def _normalise_join(
     return a, b
 
 
+async def _normalise_backing(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    *,
+    from_type_id: Any,
+    to_type_id: Any,
+    from_property: str | None,
+    join_dataset: Any,
+    backing_type_id: UUID | None,
+    from_link_id: UUID | None,
+    to_link_id: UUID | None,
+) -> tuple[str | None, str | None, str | None]:
+    """p.197's backing object type, checked (§666; db 0132): the type, and the
+    link from it to each end. `(None, None, None)` for a link with none.
+
+    p.199's prerequisites are what is checked: the backing type is a third
+    type, and each end has "the many-to-one link types between each side of
+    the link type to the backing object type" - a link joining that end and
+    the backing type on a pair of properties, so a backing object has one
+    property to read for each end."""
+    if backing_type_id is None and from_link_id is None and to_link_id is None:
+        return None, None, None
+    if backing_type_id is None or from_link_id is None or to_link_id is None:
+        raise ValueError(
+            "an object-backed link needs its backing object type and the link from it "
+            "to each end"
+        )
+    if from_property is not None or join_dataset is not None:
+        raise ValueError(
+            "a link is joined on a pair of properties, a join table or a backing object "
+            "type - one of them, each being a whole answer to which objects are linked"
+        )
+    if str(backing_type_id) in (str(from_type_id), str(to_type_id)):
+        raise ValueError("the backing object type is a third type, between the link's two ends")
+    if str(from_link_id) == str(to_link_id):
+        raise ValueError("each end needs its own link to the backing object type")
+    await get_type(conn, workspace_id, backing_type_id)
+    for link_id, end, which in ((from_link_id, from_type_id, "from"), (to_link_id, to_type_id, "to")):
+        row = await get_link_type(conn, workspace_id, link_id)
+        if link_backing.side(row, end_type_id=end, backing_type_id=backing_type_id) is None:
+            raise ValueError(
+                f"the {which} end's backing link must join the backing object type to that "
+                "end on a pair of properties - p.199's many-to-one link"
+            )
+    return str(backing_type_id), str(from_link_id), str(to_link_id)
+
+
 async def _normalise_join_table(
     conn: AsyncConnection,
     workspace_id: UUID,
@@ -2036,13 +2083,45 @@ _LINK_SELECT = """
         SELECT lt.id, lt.api_name, lt.display_name, lt.cardinality, lt.created_at,
                lt.from_property, lt.to_property,
                lt.join_dataset_id, lt.join_from_column, lt.join_to_column,
+               lt.backing_type_id, lt.backing_from_link_id, lt.backing_to_link_id,
+               b.display_name AS backing_display_name,
                lt.from_side_name, lt.to_side_name, lt.status, lt.deprecation,
                lt.from_object_type_id, f.display_name AS from_display_name,
                lt.to_object_type_id, t.display_name AS to_display_name
           FROM link_types lt
           JOIN object_types f ON f.id = lt.from_object_type_id
           JOIN object_types t ON t.id = lt.to_object_type_id
+          LEFT JOIN object_types b ON b.id = lt.backing_type_id
 """
+
+
+async def backing_ends(conn: AsyncConnection, link: dict[str, Any]) -> dict[str, str] | None:
+    """A backed link's four properties (§666; db 0132): each end's, and the
+    backing type's that is compared with it, as its two backing links say
+    now. None for a link that is not backed, or whose backing links no longer
+    join the backing type to its ends by a pair of properties - such a link is
+    unmapped, as one whose join table was deleted is."""
+    if not link.get("backing_type_id") or not link.get("backing_from_link_id") \
+            or not link.get("backing_to_link_id"):
+        return None
+    rows = await fetch_all(
+        conn,
+        """SELECT id, from_object_type_id, to_object_type_id, from_property, to_property
+             FROM link_types WHERE id IN (:a, :b)""",
+        {"a": str(link["backing_from_link_id"]), "b": str(link["backing_to_link_id"])},
+    )
+    by_id = {str(r["id"]): dict(r) for r in rows}
+    near_link = by_id.get(str(link["backing_from_link_id"]))
+    far_link = by_id.get(str(link["backing_to_link_id"]))
+    if near_link is None or far_link is None:
+        return None
+    near = link_backing.side(near_link, end_type_id=link["from_object_type_id"],
+                             backing_type_id=link["backing_type_id"])
+    far = link_backing.side(far_link, end_type_id=link["to_object_type_id"],
+                            backing_type_id=link["backing_type_id"])
+    if near is None or far is None:
+        return None
+    return {"from": near[0], "from_backing": near[1], "to": far[0], "to_backing": far[1]}
 
 
 async def native_property_types(
@@ -2131,7 +2210,8 @@ async def links_for_type(
         _LINK_SELECT
         + """
          WHERE lt.workspace_id = :wid
-           AND (lt.from_property IS NOT NULL OR lt.join_dataset_id IS NOT NULL)
+           AND (lt.from_property IS NOT NULL OR lt.join_dataset_id IS NOT NULL
+                OR lt.backing_type_id IS NOT NULL)
            AND (lt.from_object_type_id = :tid OR lt.to_object_type_id = :tid)
          ORDER BY lt.display_name
         """,
@@ -2144,13 +2224,29 @@ async def links_for_type(
         # the key in hand is the near value and the key arrived at the far one;
         # `join` says which of the table's columns is which (§552).
         through = link["join_dataset_id"] is not None
+        # A backed link's pairs are its backing objects (§666): each end's own
+        # property, as its backing link joins it, is the value in hand.
+        backed = await backing_ends(conn, link)
+        if link.get("backing_type_id") and backed is None:
+            continue
+        ends = (
+            (backed["from"], backed["to"]) if backed is not None
+            else (PRIMARY_KEY_REF, PRIMARY_KEY_REF) if through
+            else (link["from_property"], link["to_property"])
+        )
+
+        def join_of(outbound: bool) -> dict[str, Any] | None:
+            if backed is not None:
+                return link_backing.oriented(link, backed, workspace_id=workspace_id, outbound=outbound)
+            return link_join_tables.oriented(link, outbound=outbound)
+
         if str(link["from_object_type_id"]) == str(type_id):
             out.append({
                 **link,
                 "direction": "outbound",
-                "join": link_join_tables.oriented(link, outbound=True),
-                "near_property": PRIMARY_KEY_REF if through else link["from_property"],
-                "far_property": PRIMARY_KEY_REF if through else link["to_property"],
+                "join": join_of(True),
+                "near_property": ends[0],
+                "far_property": ends[1],
                 "far_type_id": link["to_object_type_id"],
                 "far_type_display_name": link["to_display_name"],
                 # The name of the side you arrive at (Foundry p.192). Going
@@ -2163,9 +2259,9 @@ async def links_for_type(
             out.append({
                 **link,
                 "direction": "inbound",
-                "join": link_join_tables.oriented(link, outbound=False),
-                "near_property": PRIMARY_KEY_REF if through else link["to_property"],
-                "far_property": PRIMARY_KEY_REF if through else link["from_property"],
+                "join": join_of(False),
+                "near_property": ends[1],
+                "far_property": ends[0],
                 "far_type_id": link["from_object_type_id"],
                 "far_type_display_name": link["from_display_name"],
                 "side_name": link["from_side_name"] or link["display_name"],
@@ -2190,6 +2286,9 @@ async def create_link_type(
     join_dataset_id: UUID | None = None,
     join_from_column: str | None = None,
     join_to_column: str | None = None,
+    backing_type_id: UUID | None = None,
+    backing_from_link_id: UUID | None = None,
+    backing_to_link_id: UUID | None = None,
 ) -> dict[str, Any]:
     if not _PROP_API_RE.match(api_name):
         raise ValueError(f"invalid link api_name {api_name!r}")
@@ -2207,6 +2306,11 @@ async def create_link_type(
         conn, workspace_id, cardinality=cardinality, from_property=from_property,
         dataset_id=join_dataset_id, from_column=join_from_column, to_column=join_to_column,
     )
+    backing, backing_from, backing_to = await _normalise_backing(
+        conn, workspace_id, from_type_id=from_type_id, to_type_id=to_type_id,
+        from_property=from_property, join_dataset=join_dataset, backing_type_id=backing_type_id,
+        from_link_id=backing_from_link_id, to_link_id=backing_to_link_id,
+    )
     existing = await fetch_one(
         conn,
         "SELECT 1 AS x FROM link_types WHERE workspace_id=:wid AND api_name=:api",
@@ -2221,13 +2325,15 @@ async def create_link_type(
                                 from_object_type_id, to_object_type_id,
                                 cardinality, created_by, from_property, to_property,
                                 from_side_name, to_side_name,
-                                join_dataset_id, join_from_column, join_to_column)
+                                join_dataset_id, join_from_column, join_to_column,
+                                backing_type_id, backing_from_link_id, backing_to_link_id)
         VALUES (:wid, :api, :name, :from, :to, CAST(:card AS link_cardinality), :by,
-                :fprop, :tprop, :fside, :tside, :jds, :jfrom, :jto)
+                :fprop, :tprop, :fside, :tside, :jds, :jfrom, :jto, :bt, :bfrom, :bto)
         RETURNING id, api_name, display_name, from_object_type_id,
                   to_object_type_id, cardinality, created_at,
                   from_property, to_property, from_side_name, to_side_name,
                   join_dataset_id, join_from_column, join_to_column,
+                  backing_type_id, backing_from_link_id, backing_to_link_id,
                   status, deprecation
         """,
         {
@@ -2245,6 +2351,9 @@ async def create_link_type(
             "jds": join_dataset,
             "jfrom": join_from,
             "jto": join_to,
+            "bt": backing,
+            "bfrom": backing_from,
+            "bto": backing_to,
         },
     )
     assert row is not None
@@ -2271,6 +2380,9 @@ async def set_link_join(
     join_to_column: str | None = None,
     keep_join_table: bool = False,
     deprecation: Any = KEEP_DEPRECATION,
+    backing_type_id: UUID | None = None,
+    backing_from_link_id: UUID | None = None,
+    backing_to_link_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Map (or unmap) the properties a link joins on - or p.197's join table
     (§552), which replaces them - name its two sides, and set its status.
@@ -2308,11 +2420,22 @@ async def set_link_join(
         join_dataset, join_from, join_to = (
             link["join_dataset_id"], link["join_from_column"], link["join_to_column"]
         )
+        # An imported file carries no ids for a backing type either (§326).
+        backing, backing_from, backing_to = (
+            link.get("backing_type_id"), link.get("backing_from_link_id"), link.get("backing_to_link_id")
+        )
     else:
         join_dataset, join_from, join_to = await _normalise_join_table(
             conn, workspace_id, cardinality=str(link["cardinality"]),
             from_property=from_property, dataset_id=join_dataset_id,
             from_column=join_from_column, to_column=join_to_column,
+        )
+        # p.199's "Convert existing links to object-backed link types" (§666).
+        backing, backing_from, backing_to = await _normalise_backing(
+            conn, workspace_id, from_type_id=link["from_object_type_id"],
+            to_type_id=link["to_object_type_id"], from_property=from_property,
+            join_dataset=join_dataset, backing_type_id=backing_type_id,
+            from_link_id=backing_from_link_id, to_link_id=backing_to_link_id,
         )
 
     # p.257: a link type may be no more production-ready than the object types
@@ -2358,6 +2481,8 @@ async def set_link_join(
             "UPDATE link_types SET from_property = :fprop, to_property = :tprop, "
             "       join_dataset_id = :jds, join_from_column = :jfrom, "
             "       join_to_column = :jto, "
+            "       backing_type_id = :bt, backing_from_link_id = :bfrom, "
+            "       backing_to_link_id = :bto, "
             "       deprecation = CAST(:dep AS jsonb), "
             # p.257 caps a link's status by its ends and its foreign keys, so
             # what is stored is the capped value rather than what was asked
@@ -2376,6 +2501,9 @@ async def set_link_join(
          "dep": None if note is None else json.dumps(note),
          "jds": None if join_dataset is None else str(join_dataset),
          "jfrom": join_from, "jto": join_to,
+         "bt": None if backing is None else str(backing),
+         "bfrom": None if backing_from is None else str(backing_from),
+         "bto": None if backing_to is None else str(backing_to),
          "fside": (from_side_name or "").strip() or None,
          "tside": (to_side_name or "").strip() or None,
          "lid": str(link_id), "wid": str(workspace_id)},

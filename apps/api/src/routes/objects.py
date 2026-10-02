@@ -315,6 +315,12 @@ class LinkTypeOut(BaseModel):
     join_dataset_id: UUID | None = None
     join_from_column: str | None = None
     join_to_column: str | None = None
+    # p.197's backing object type, in place of either (§666; db 0132): each of
+    # its objects is one link, reached from each end by the link named.
+    backing_type_id: UUID | None = None
+    backing_display_name: str | None = None
+    backing_from_link_id: UUID | None = None
+    backing_to_link_id: UUID | None = None
     # Per-side labels (Foundry `object-link-types` p.192). NULL falls back to
     # `display_name`, which is what every link type had before sides could be
     # named separately.
@@ -341,6 +347,10 @@ class _JoinTable(BaseModel):
     join_dataset_id: UUID | None = None
     join_from_column: str | None = Field(default=None, max_length=300)
     join_to_column: str | None = Field(default=None, max_length=300)
+    # p.197's backing object type and the link from it to each end (§666).
+    backing_type_id: UUID | None = None
+    backing_from_link_id: UUID | None = None
+    backing_to_link_id: UUID | None = None
 
 
 class LinkTypeCreate(_JoinTable):
@@ -3616,6 +3626,9 @@ async def create_link_type(
             join_dataset_id=body.join_dataset_id,
             join_from_column=body.join_from_column,
             join_to_column=body.join_to_column,
+            backing_type_id=body.backing_type_id,
+            backing_from_link_id=body.backing_from_link_id,
+            backing_to_link_id=body.backing_to_link_id,
         )
         from_type = await ontology_service.get_type(conn, access.workspace_id, body.from_type_id)
         to_type = await ontology_service.get_type(conn, access.workspace_id, body.to_type_id)
@@ -3660,6 +3673,9 @@ async def update_link_join(
             join_dataset_id=body.join_dataset_id,
             join_from_column=body.join_from_column,
             join_to_column=body.join_to_column,
+            backing_type_id=body.backing_type_id,
+            backing_from_link_id=body.backing_from_link_id,
+            backing_to_link_id=body.backing_to_link_id,
             deprecation=(body.deprecation if "deprecation" in body.model_fields_set
                          else ontology_service.KEEP_DEPRECATION),
         )
@@ -3701,6 +3717,8 @@ class LinkedInstances(BaseModel):
     # `matched_value` is this object's key, which the far objects do not hold,
     # so a caller asking for "all of them" must traverse rather than match.
     join_table: bool = False
+    #: Backed by an object type (§666): each linked pair is one backing object.
+    backed: bool = False
     # Why this link could not be followed from here - a join table the reader
     # cannot see, or one whose column has gone. One unfollowable link says so
     # in its own group rather than failing the object's every other link.
@@ -3735,6 +3753,8 @@ class TypeLink(BaseModel):
     near_property: str
     far_property: str
     join_table: bool = False
+    #: Backed by an object type (§666): each linked pair is one backing object.
+    backed: bool = False
 
 
 @router.get("/object-types/{type_id}/links", response_model=list[TypeLink])
@@ -3764,7 +3784,8 @@ async def type_links(
             far_type_display_name=str(link["far_type_display_name"]),
             near_property=str(link["near_property"]),
             far_property=str(link["far_property"]),
-            join_table=link.get("join") is not None,
+            join_table=link.get("join_dataset_id") is not None,
+            backed=bool(link.get("backing_type_id")),
         )
         for link in links
     ]
@@ -3964,7 +3985,8 @@ async def instance_links(
                 far_type_display_name=str(link["far_type_display_name"]),
                 near_property=near,
                 far_property=far,
-                join_table=link.get("join") is not None,
+                join_table=link.get("join_dataset_id") is not None,
+                backed=bool(link.get("backing_type_id")),
                 problem=problem,
                 matched_value=value,
                 total=total,
