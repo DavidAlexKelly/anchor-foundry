@@ -19643,6 +19643,7 @@ export function CanvasActionForm({
   actions: moreActions = [],
   layout: defaultLayout = "form",
   layoutSwitch = false,
+  prefillVariable = null,
 }: {
   actionTypeId?: string | null;
   /** p.512's "Select default layout: Choose between Action Table and Action
@@ -19650,6 +19651,9 @@ export function CanvasActionForm({
   layout?: string;
   /** p.512's end-user "layout switching": readers may flip between the two. */
   layoutSwitch?: boolean;
+  /** p.512's "Pre-fill with variable (table only)": an object set variable
+   * whose objects become the table's rows (§703). */
+  prefillVariable?: string | null;
   /** p.512's "Add item": the further actions, each with its own action,
    * title and defaults (§556, `action-menu.ts`). With any, the form has a
    * selection menu upfront. */
@@ -19718,6 +19722,7 @@ export function CanvasActionForm({
   const [readerLayout, setReaderLayout] = useState<string | null>(null);
   const chosenLayout = layoutSwitch && readerLayout ? readerLayout : defaultLayout;
   const tableRefusals = actionType?.table_refusals ?? [];
+  const prefillSet = useCanvasVariable(prefillVariable);
   const asTable = chosenLayout === "table" && tableRefusals.length === 0;
 
   // **The objects this action can be run against** — and for an interface
@@ -20401,6 +20406,7 @@ export function CanvasActionForm({
             subjects={choosable}
             localDefaults={localDefaultsOf(parameterDefaults)}
             live={live}
+            prefill={prefillVariable && prefillSet ? { definition: prefillSet } : null}
             onSubmitted={(touched, rows) => {
               // p.513's output and its event, once every row went through -
               // the table's "successful action submit".
@@ -20522,6 +20528,7 @@ function ActionFormSettings() {
     moreActions,
     layout,
     layoutSwitch,
+    prefillVariable,
     actions: { setProp },
   } = useNode((node) => ({
     actionTypeId: node.data.props.actionTypeId,
@@ -20533,6 +20540,7 @@ function ActionFormSettings() {
     outputVariable: node.data.props.outputVariable,
     layout: node.data.props.layout,
     layoutSwitch: node.data.props.layoutSwitch,
+    prefillVariable: node.data.props.prefillVariable,
   }));
   const { declared } = useCanvasVariables();
   const objects = Object.values(declared).filter((v) => v.kind === "single_object");
@@ -20695,6 +20703,24 @@ function ActionFormSettings() {
         <span className="field-label">Let readers switch layout</span>
       </label>
       <label className="field">
+        <span className="field-label">Pre-fill rows from</span>
+        <select
+          value={prefillVariable ?? ""}
+          data-testid="action-form-prefill"
+          onChange={(e) => setProp((p: { prefillVariable: string | null }) =>
+            (p.prefillVariable = e.target.value || null))}
+        >
+          <option value="">Nothing - rows are added by hand</option>
+          {Object.values(declared).filter((v) => v.kind === "object_set").map((v) => (
+            <option key={v.id} value={v.id}>{v.label || v.id}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          Table only (p.512): each object in the set becomes a row. Its object type must
+          be this action's.
+        </span>
+      </label>
+      <label className="field">
         <span className="field-label">Form state if invalid</span>
         <select
           value={invalidStateOf(invalidState)}
@@ -20744,7 +20770,7 @@ CanvasActionForm.craft = {
   props: {
     actionTypeId: null, subjectVariable: null, title: "", hideHeader: false,
     parameterDefaults: {}, invalidState: "disabled", outputVariable: null, actions: [],
-    layout: "form", layoutSwitch: false,
+    layout: "form", layoutSwitch: false, prefillVariable: null,
   },
   related: { settings: ActionFormSettings },
 };

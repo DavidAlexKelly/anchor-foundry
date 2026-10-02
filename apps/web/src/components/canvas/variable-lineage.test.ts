@@ -42,6 +42,7 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   // One widget with an edge in each direction.
   groupsVariable: "read",
   outputVariable: "write",
+  prefillVariable: "read",
   // p.568: a drop zone writes what was dropped on it.
   dropVariable: "write",
   endVariable: "write",
