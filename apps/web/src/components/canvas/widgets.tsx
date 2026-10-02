@@ -55,6 +55,7 @@ import {
 import {
   autoSelectKey, hasSelection, keysOf, selectionClauses, toggle as toggleKey,
 } from "./object-table-selection";
+import { UNSUPPORTED_HINT, isUnsupported, omittedOf, valuesForHiding } from "./unsupported-properties";
 import {
   combinedColumns, isPicked, pickedClauses, pickedIn, pickOf, selectedType, tabIndex,
   typedSelection, UNION_PAGE_DEPTH, unionParts, unionProperties, type Picked,
@@ -6088,6 +6089,78 @@ CanvasDatasetTable.craft = {
 };
 
 // ---- Object table (ROADMAP Canvas item 3) -----------------------------------
+/** p.266 and p.596's reveal (§693): an unsupported property is not loaded
+ * with the page, and a reader asks for it - "select Load next to an
+ * unsupported property to reveal its value on demand". One object's read,
+ * once, shared by every cell asking for the same object. */
+function LoadOnDemand({ workspaceId, typeId, instanceId, property, label, emptyText }: {
+  workspaceId: string;
+  typeId: string | null;
+  instanceId: string;
+  property: ObjectTypeProperty;
+  label: string;
+  emptyText?: string;
+}) {
+  const [asked, setAsked] = useState(false);
+  const read = useQuery({
+    queryKey: ["instance", workspaceId, typeId, instanceId],
+    queryFn: () => objApi.getInstance(workspaceId, typeId!, instanceId),
+    enabled: asked && !!typeId,
+  });
+  if (!asked) {
+    return (
+      <button
+        type="button"
+        className="btn quiet canvas-load-property"
+        data-testid={`load-${property.api_name}`}
+        title={UNSUPPORTED_HINT}
+        aria-label={`Load ${property.display_name || property.api_name}`}
+        onClick={(e) => {
+          // A click in a cell is not a click on its row.
+          e.stopPropagation();
+          setAsked(true);
+        }}
+      >
+        {label}
+      </button>
+    );
+  }
+  if (read.isPending) return <span className="canvas-widget-empty">Loading…</span>;
+  if (read.isError) return <span className="canvas-widget-empty">Couldn&apos;t load it.</span>;
+  return (
+    <PropertyValue
+      workspaceId={workspaceId}
+      dataType={property.data_type}
+      valueFormat={property.value_format}
+      structFields={property.struct_fields}
+      value={read.data.properties[property.api_name]}
+      emptyText={emptyText}
+      compact
+    />
+  );
+}
+
+/** p.266's "During configuration, unsupported properties are indicated with a
+ * warning icon and tooltip", beside a widget's choice of properties. */
+function UnsupportedNote({ properties, testId }: {
+  properties: readonly ObjectTypeProperty[];
+  testId: string;
+}) {
+  const heavy = properties.filter(isUnsupported);
+  if (heavy.length === 0) return null;
+  return (
+    <span className="field-hint" data-testid={testId}>
+      {heavy.map((p) => (
+        <span key={p.api_name} title={UNSUPPORTED_HINT} className="canvas-unsupported">
+          ⚠ {p.display_name || p.api_name}{" "}
+        </span>
+      ))}
+      {heavy.length === 1 ? "is" : "are"} loaded on demand: a reader selects Load to see
+      {heavy.length === 1 ? " it" : " them"}.
+    </span>
+  );
+}
+
 /**
  * A table bound to an object *type* rather than a raw dataset - the pattern
  * the roadmap argues real Workshop-style apps are built on, since an ontology
@@ -6329,19 +6402,28 @@ export function CanvasObjectTable({
   // sent as whichever shape the request wants - one ordering still goes as the
   // string the API has always taken.
   const sortRequest = useMemo(() => tableSortsToRequest(tableSortsOf(sort)), [sort]);
-  const setPage = useSetPage(workspaceId, usingSet ? setDefinition : null, {
-    pageSize,
-    sort: sortRequest,
-    variablesPending,
-  });
-  const { offset, setOffset } = setPage;
-
-  const effectiveTypeId = usingSet ? setPage.typeId : objectTypeId;
+  // The set's type, from its definition, read before its page (§693).
+  const effectiveTypeId = usingSet
+    ? (setDefinition as { object_type_id?: string } | undefined)?.object_type_id ?? null
+    : objectTypeId;
   const type = useQuery({
     queryKey: ["object-type", effectiveTypeId],
     queryFn: () => objApi.getType(workspaceId, effectiveTypeId!),
     enabled: !!effectiveTypeId,
   });
+  // p.266 and p.596: "Some large properties, such as Geoshape and Vector,
+  // are not loaded by default to improve performance", and a cell reveals
+  // one on demand. So the page waits for the types that say which (§693).
+  const heavy = omittedOf(combined
+    ? tabTypes.flatMap((t) => t.data?.properties ?? []) : type.data?.properties ?? []);
+  const typesKnown = combined ? tabTypes.every((t) => !!t.data) : !!type.data;
+  const setPage = useSetPage(workspaceId, usingSet && typesKnown ? setDefinition : null, {
+    pageSize,
+    sort: sortRequest,
+    variablesPending,
+    omit: heavy,
+  });
+  const { offset, setOffset } = setPage;
   // p.222's hubble:icon (§671): the property holding each object's image.
   const iconProperty = iconPropertyOf(type.data?.properties ?? []);
 
@@ -7114,6 +7196,16 @@ export function CanvasObjectTable({
                                 )}
                                 emptyText={emptyText}
                                 testId={`derived-${instance.primary_key}-${p.api_name}`}
+                              />
+                            ) : usingSet && isUnsupported(p) ? (
+                              // p.596: "select ... button to reveal its value".
+                              <LoadOnDemand
+                                workspaceId={workspaceId}
+                                typeId={String(instance.object_type_id ?? effectiveTypeId ?? "")}
+                                instanceId={instance.id}
+                                property={p}
+                                label="…"
+                                emptyText={emptyText}
                               />
                             ) : (
                               <PropertyValue
@@ -8032,6 +8124,7 @@ function ObjectTableSettings() {
         <span className="field-hint">
           Property names in the order to show them. Blank shows all of them.
         </span>
+        <UnsupportedNote properties={detail.data?.properties ?? []} testId="table-unsupported" />
       </label>
       {/* p.225's "Variable-backed column visibility" (§610). String arrays
           only - an array of numbers names no column - and an untyped one,
@@ -8924,15 +9017,20 @@ export function CanvasPropertyList({
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending } = useCanvasVariables();
 
+  // The type first: p.266's unsupported properties "are not loaded by
+  // default", so the page leaves them out and a reader loads each (§693).
+  const typeId = (setDefinition as { object_type_id?: string } | undefined)?.object_type_id
+    ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const heavy = omittedOf(type.data?.properties ?? []);
   // p.265: "If the object set contains more than one object, only the first
   // object will be displayed within the widget." One row is all it ever needs.
-  const setPage = useSetPage(workspaceId, setDefinition, {
-    pageSize: 1, variablesPending,
-  });
-  const type = useQuery({
-    queryKey: ["object-type", setPage.typeId],
-    queryFn: () => objApi.getType(workspaceId, setPage.typeId!),
-    enabled: !!setPage.typeId,
+  const setPage = useSetPage(workspaceId, !typeId || type.data ? setDefinition : null, {
+    pageSize: 1, variablesPending, omit: heavy,
   });
 
   // `[0]` and `[length - 1]` are the same expression here, because the fetch
@@ -8942,7 +9040,8 @@ export function CanvasPropertyList({
   const shown = visibleProperties({
     all: type.data?.properties ?? [],
     chosen: properties,
-    values: instance?.properties,
+    // Not hidden as null before it is loaded.
+    values: valuesForHiding(instance?.properties, heavy),
     hideNull: hideNullOf(hideNull),
   });
   const stacked = propertyLayoutOf(layout) === "below";
@@ -8969,14 +9068,25 @@ export function CanvasPropertyList({
             <div className="canvas-property" key={p.api_name} data-testid="property-row">
               <dt>{p.display_name || p.api_name}</dt>
               <dd>
-                <PropertyValue
-                  workspaceId={workspaceId}
-                  dataType={p.data_type}
-                  valueFormat={p.value_format}
-                  structFields={p.struct_fields}
-                  style={conditionalStyle(p.conditional_format, instance.properties)}
-                  value={instance.properties[p.api_name]}
-                />
+                {isUnsupported(p) ? (
+                  // p.266: "select Load next to an unsupported property".
+                  <LoadOnDemand
+                    workspaceId={workspaceId}
+                    typeId={setPage.typeId}
+                    instanceId={instance.id}
+                    property={p}
+                    label="Load"
+                  />
+                ) : (
+                  <PropertyValue
+                    workspaceId={workspaceId}
+                    dataType={p.data_type}
+                    valueFormat={p.value_format}
+                    structFields={p.struct_fields}
+                    style={conditionalStyle(p.conditional_format, instance.properties)}
+                    value={instance.properties[p.api_name]}
+                  />
+                )}
                 {mode === "run" && p.inline_action_type_id && (
                   <PropertyInlineEdit
                     workspaceId={workspaceId}
@@ -9077,6 +9187,7 @@ function PropertyListSettings() {
               (type.data.properties ?? []).map((p) => p.api_name).join(", ")}`
             : "Names in the order to show them. Blank shows all of them."}
         </span>
+        <UnsupportedNote properties={type.data?.properties ?? []} testId="property-list-unsupported" />
       </label>
       <label className="field">
         <span className="field-label">Columns</span>
@@ -12537,17 +12648,19 @@ export function CanvasObjectCards({
   const eventContext = useEventContext(undefined, useOverlayIds());
   const definition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
-  const page = useSetPage(workspaceId, objectSetVariable ? definition : null, {
-    pageSize,
-    sort,
-    variablesPending,
-  });
-
+  // The type first, so p.595's unsupported properties are left out of the
+  // page and loaded on demand (§693).
+  const typeId = (definition as { object_type_id?: string } | undefined)?.object_type_id ?? null;
   const type = useQuery({
-    queryKey: ["object-type", page.typeId],
-    queryFn: () => objApi.getType(workspaceId, page.typeId!),
-    enabled: !!page.typeId,
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
   });
+  const heavy = omittedOf(type.data?.properties ?? []);
+  const page = useSetPage(
+    workspaceId, objectSetVariable && (!typeId || type.data) ? definition : null,
+    { pageSize, sort, variablesPending, omit: heavy },
+  );
   const all = type.data?.properties ?? [];
   const titleProperty = all.find((p) => p.id === type.data?.title_property_id);
   const wanted = String(fields || "")
@@ -12625,15 +12738,26 @@ export function CanvasObjectCards({
                       <div key={p.api_name}>
                         <dt>{p.display_name || p.api_name}</dt>
                         <dd>
-                          <PropertyValue
-                            workspaceId={workspaceId}
-                            dataType={p.data_type}
-                            valueFormat={p.value_format}
-                            structFields={p.struct_fields}
-                            style={conditionalStyle(p.conditional_format, instance.properties)}
-                            value={instance.properties[p.api_name]}
-                            compact
-                          />
+                          {isUnsupported(p) ? (
+                            // p.596: "select Load to reveal its value".
+                            <LoadOnDemand
+                              workspaceId={workspaceId}
+                              typeId={page.typeId}
+                              instanceId={instance.id}
+                              property={p}
+                              label="Load"
+                            />
+                          ) : (
+                            <PropertyValue
+                              workspaceId={workspaceId}
+                              dataType={p.data_type}
+                              valueFormat={p.value_format}
+                              structFields={p.struct_fields}
+                              style={conditionalStyle(p.conditional_format, instance.properties)}
+                              value={instance.properties[p.api_name]}
+                              compact
+                            />
+                          )}
                         </dd>
                       </div>
                     ))}
@@ -12737,6 +12861,7 @@ function ObjectCardsSettings() {
               }`
             : `Comma-separated, at most ${CARD_FIELD_CAP}`}
         </span>
+        <UnsupportedNote properties={type.data?.properties ?? []} testId="cards-unsupported" />
       </label>
       <label className="field">
         <span className="field-label">Cards per page</span>
