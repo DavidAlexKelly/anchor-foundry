@@ -266,7 +266,8 @@ TABLE_WIDGET = "CanvasObjectTable"
 #: p.349's per-layer Override selection event lives on the Timeline (§616).
 TIMELINE_WIDGET = "CanvasTimeline"
 #: p.322's "Create annotations via actions or events" lives on the Markdown
-#: widget (§638): interactions offered on highlighted text, each a click.
+#: widget (§638): interactions offered on highlighted text, each a click, as
+#: are p.322's On hover interactions on an annotation (§669).
 MARKDOWN_WIDGET = "CanvasMarkdown"
 #: The trigger each kind of item belongs to. Everything else's items are
 #: clicks; a timeline's layers are row selections.
@@ -322,15 +323,18 @@ def button_items(layout: Any) -> dict[str, tuple[str, list[str], dict[str, str]]
             # p.322 (§638): the interactions offered on highlighted text, each
             # a click; and p.320's per-type Override event on selection
             # (§665), each a row selection of its own, as a timeline's layers.
-            actions = props.get("highlightActions")
+            # p.322's On hover interactions (§669) are clicks beside them.
+            actions = [
+                *(props.get("highlightActions") if isinstance(props.get("highlightActions"), list) else []),
+                *(props.get("hoverActions") if isinstance(props.get("hoverActions"), list) else []),
+            ]
             types = props.get("referenceTypes")
             overriding = [
                 str(t["id"]) for t in (types if isinstance(types, list) else [])
                 if isinstance(t, dict) and t.get("id") and t.get("overrideSelection") is True
             ]
             out[node_id] = ("highlight", [
-                str(a["id"]) for a in (actions if isinstance(actions, list) else [])
-                if isinstance(a, dict) and a.get("id")
+                str(a["id"]) for a in actions if isinstance(a, dict) and a.get("id")
             ] + overriding, {item: "row_select" for item in overriding})
         # A table falls through here and out: it is not a Button (§613's sweep
         # found a `continue` above could not change an answer).
@@ -506,7 +510,8 @@ def _parse_item(
             and menus.get(node, ("",))[0] == "highlight":
         raise EventError(
             f"event {key!r} fires when Markdown {node!r} is clicked, but its clicks are the "
-            "actions offered on highlighted text - choose which one fires the event"
+            "actions offered on highlighted text or an annotation's hover card - choose which "
+            "one fires the event"
         )
     if item is None:
         # A Menu button's own click opens its menu; an event on it would be a

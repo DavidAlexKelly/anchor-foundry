@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  annotationFormatOf, annotationLayersOf, annotationsOf, segmentsOf, tooltipOf,
+  addHoverAction, annotationColorOf, annotationFormatOf, annotationLayersOf, annotationsOf,
+  hoverActionsOf, markdownClickItems, segmentsOf, tooltipOf,
   type AnnotationLayer,
 } from "./markdown-annotations";
 
@@ -9,7 +10,7 @@ import {
 
 const LAYER: AnnotationLayer = {
   name: "Notes", objectSetVariable: "v_notes", startProperty: "start", endProperty: "end",
-  color: null,
+  color: null, colorMode: "static", colorRules: null,
 };
 
 describe("annotation layers", () => {
@@ -20,8 +21,9 @@ describe("annotation layers", () => {
       { name: "Bad", objectSetVariable: "", color: "red" }, null, 7,
     ])).toEqual([
       { name: "Notes", objectSetVariable: "v_notes", startProperty: "start",
-        endProperty: "end", color: "#ff0000" },
-      { name: "Bad", objectSetVariable: null, startProperty: "", endProperty: "", color: null },
+        endProperty: "end", color: "#ff0000", colorMode: "static", colorRules: null },
+      { name: "Bad", objectSetVariable: null, startProperty: "", endProperty: "", color: null,
+        colorMode: "static", colorRules: null },
     ]);
     expect(annotationLayersOf({})).toEqual([]);
   });
@@ -77,5 +79,49 @@ describe("tooltipOf", () => {
                 properties: { author: "Ada", tag: null, score: 3 } };
     expect(tooltipOf(a, ["author", "tag", "score", "missing"])).toBe("author: Ada\nscore: 3");
     expect(tooltipOf(a, [])).toBe("");
+  });
+});
+
+describe("p.322's Highlight color by rules (§669)", () => {
+  const red = { kind: "standard" as const, property: "severity", comparison: "string" as const,
+    operator: "is_exactly" as const, value: "high", colour: "#ffffff", background: "#dc2626" };
+  const amber = { kind: "standard" as const, property: "severity", comparison: "string" as const,
+    operator: "is_exactly" as const, value: "low", colour: "#b45309" };
+  const at = (properties: Record<string, unknown>) => ({ key: "a", layer: 0, start: 0, end: 1, properties });
+
+  it("reads a layer's colour mode and its rules", () => {
+    const [byRules, other] = annotationLayersOf([
+      { name: "N", colorMode: "rules", colorRules: [red] },
+      { name: "M", colorMode: "property", colorRules: [{ kind: "junk" }] },
+    ]);
+    expect([byRules!.colorMode, byRules!.colorRules]).toEqual(["rules", [red]]);
+    expect([other!.colorMode, other!.colorRules]).toEqual(["static", null]);
+  });
+
+  it("paints with the fill before the text, and falls back to the static colour", () => {
+    const layer = { ...LAYER, color: "#123456", colorMode: "rules" as const, colorRules: [red, amber] };
+    expect(annotationColorOf(layer, at({ severity: "high" }))).toBe("#dc2626");
+    expect(annotationColorOf(layer, at({ severity: "low" }))).toBe("#b45309");
+    expect(annotationColorOf(layer, at({ severity: "none" }))).toBe("#123456");
+    // Switched back to static, a layer keeps its rules, and they paint nothing.
+    expect(annotationColorOf({ ...layer, colorMode: "static" }, at({ severity: "high" }))).toBe("#123456");
+  });
+});
+
+describe("p.322's On hover interactions (§669)", () => {
+  it("are hover_N items, added under an id no other has", () => {
+    const one = addHoverAction([]);
+    expect(one).toEqual([{ id: "hover_1", label: "Interaction 1" }]);
+    expect(addHoverAction([{ id: "hover_2", label: "x" }]).map((i) => i.id)).toEqual(["hover_2", "hover_3"]);
+    expect(hoverActionsOf([{ id: "hover_1", label: "Resolve" }, { id: "i_1", label: "Stray" }, null]))
+      .toEqual([{ id: "hover_1", label: "Resolve" }]);
+  });
+
+  it("are listed after the highlighted-text actions, said as hover ones", () => {
+    expect(markdownClickItems([{ id: "i_1", label: "Annotate" }],
+      [{ id: "hover_1", label: "Resolve" }, { id: "hover_2", label: "" }])).toEqual([
+      { id: "i_1", label: "Annotate" }, { id: "hover_1", label: "On hover: Resolve" },
+      { id: "hover_2", label: "On hover: Interaction" },
+    ]);
   });
 });

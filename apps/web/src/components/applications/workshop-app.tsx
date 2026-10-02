@@ -93,6 +93,7 @@ import { layersOf as timelineLayersOf, overridingLayers } from "@/components/can
 import {
   overridingTypes as overridingReferenceTypes, referenceTypesOf,
 } from "@/components/canvas/markdown-references";
+import { markdownClickItems } from "@/components/canvas/markdown-annotations";
 
 /** The Versions dialog (Foundry p.191-192).
  *
@@ -1308,10 +1309,11 @@ function CanvasBody({
         const kind = name === "CanvasButton" ? buttonTypeOf(props.buttonType) : "inline";
         // p.243's custom right-click menu (§613): a table's menu items are
         // clicks the way a Menu button's are, and only when it is customised.
-        // p.322's actions on highlighted text (§638), the same shape.
+        // p.322's actions on highlighted text (§638), the same shape, and its
+        // On hover interactions (§669) after them.
         const menu = name === "CanvasObjectTable" && props.customMenu
           ? itemsOf(props.menuItems)
-          : name === "CanvasMarkdown" ? itemsOf(props.highlightActions) : [];
+          : name === "CanvasMarkdown" ? markdownClickItems(props.highlightActions, props.hoverActions) : [];
         // p.349's Override selection event (§616): a timeline's overriding
         // layers are row selections of their own, beside the widget's.
         const layers = name === "CanvasTimeline"
