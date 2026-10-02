@@ -119,7 +119,11 @@ def test_the_panel_offers_only_shared_properties_to_sort_by(page, picker) -> Non
     open_builder(page, picker)
     settled(page)
     page.locator(".canvas-tree-row", has_text="Object Dropdown").first.click()
-    values = page.get_by_test_id("dropdown-sort").locator("option").evaluate_all(
+    sort = page.get_by_test_id("dropdown-sort")
+    # Until the union's common properties arrive, the stored `-rank` is shown
+    # as its own "no longer sortable" option; read the list once they have.
+    expect(sort.locator("option[value=rank]")).to_have_count(1)
+    values = sort.locator("option").evaluate_all(
         "options => options.map(o => o.value)")
     assert "rank" in values and "-rank" in values, values
     assert "size" not in values and "-size" not in values, values
