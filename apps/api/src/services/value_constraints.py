@@ -30,18 +30,35 @@ Everything whose base type exists here:
   a substring";
 * **uuid** - string only.
 
-Absent, and each for a reason rather than by omission:
+* p.234's **array** constraints (§681): **range** on its *size* ("For Array
+  properties, the size of the array is constrained"), **unique** ("All
+  elements of the array must be unique") and **nested** ("A value type
+  constraint can be applied to the elements of the array");
+* p.234's **struct** constraint, **elements**: "A mapping between a struct
+  field identifier and a value type reference, where the struct field
+  identifier indicates the struct component to which the referenced value
+  type should be applied."
+
+**Nested and elements both name another value type**, by id. p.234 says so
+for a struct in as many words, and for an array a "value type constraint" is
+one a value type already holds: naming it keeps one definition of `email`
+rather than a copy inside every list of emails. p.230's propagation follows -
+the referenced type's *current* version applies - so a reference is resolved
+where properties are read (`resolve`), not frozen here. **What is referenced
+must be a scalar value type**: an array of arrays does not exist, and a
+reference to an array or struct value type would be a chain for every read to
+follow.
+
+Absent, and for a reason rather than by omission:
 
 * **rid** - p.233's "must be a valid rid" is a Foundry resource identifier.
   This platform's resource ids are UUIDs (db 0032), so `uuid` already covers
   the only shape there is one of; a `rid` that meant "uuid" would be a second
   name for the same check.
-* **array** constraints (uniqueness, nested) and **struct** element
-  constraints - there is no array or struct base type here (§1.1), so both
-  would be settings nothing could carry.
 """
 from __future__ import annotations
 
+import json
 import re
 import uuid as uuid_module
 from datetime import date, datetime, timezone
@@ -50,10 +67,15 @@ from typing import Any
 #: p.233's base type lists, narrowed to the types this platform has.
 ENUM_TYPES = ("string", "boolean", "integer", "float")
 #: Numbers and temporals directly; a string's *length* (p.233).
-RANGE_TYPES = ("integer", "float", "date", "timestamp", "string")
+#: And an array's *size* (p.234).
+RANGE_TYPES = ("integer", "float", "date", "timestamp", "string", "array")
 STRING_ONLY = ("string",)
+ARRAY_ONLY = ("array",)
+STRUCT_ONLY = ("struct",)
+#: What a nested or elements constraint may name (§681): a scalar.
+REFERENCE_TYPES = ("string", "integer", "float", "boolean", "date", "timestamp")
 
-KINDS = ("enum", "range", "regex", "uuid")
+KINDS = ("enum", "range", "regex", "uuid", "unique", "nested", "elements")
 
 #: A regex somebody can post is a regex the API will run on every synced row.
 #: Catastrophic backtracking is a denial of service written as configuration,
@@ -61,6 +83,8 @@ KINDS = ("enum", "range", "regex", "uuid")
 #: that will not compile is refused where somebody can still fix it.
 MAX_REGEX_LENGTH = 500
 MAX_ENUM_VALUES = 500
+MAX_ELEMENT_FIELDS = 100
+_FIELD_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 
 
 class ConstraintError(ValueError):
@@ -90,7 +114,69 @@ def parse(raw: Any, *, base_type: str) -> dict[str, Any] | None:
         return _parse_range(raw, base_type)
     if kind == "regex":
         return _parse_regex(raw, base_type)
+    if kind == "unique":
+        _require_type("unique", base_type, ARRAY_ONLY)
+        return {"kind": "unique"}
+    if kind == "nested":
+        _require_type("nested", base_type, ARRAY_ONLY)
+        return {"kind": "nested", "value_type": _reference(raw.get("value_type"), "nested")}
+    if kind == "elements":
+        return _parse_elements(raw, base_type)
     return _parse_uuid(base_type)
+
+
+def _reference(raw: Any, what: str) -> str:
+    """A value type id, as text. Whether it names one this workspace has is
+    `value_types`' question, since answering it needs the database."""
+    try:
+        return str(uuid_module.UUID(str(raw)))
+    except ValueError:
+        raise ConstraintError(f"a {what} constraint names a value type by id") from None
+
+
+def _parse_elements(raw: dict[str, Any], base_type: str) -> dict[str, Any]:
+    _require_type("elements", base_type, STRUCT_ONLY)
+    fields = raw.get("fields")
+    if not isinstance(fields, dict) or not fields:
+        raise ConstraintError("an elements constraint maps at least one struct field to a value type")
+    if len(fields) > MAX_ELEMENT_FIELDS:
+        raise ConstraintError(f"an elements constraint may map at most {MAX_ELEMENT_FIELDS} fields")
+    out: dict[str, str] = {}
+    for field, ref in fields.items():
+        if not isinstance(field, str) or not _FIELD_RE.match(field):
+            raise ConstraintError(f"{field!r} is not a struct field identifier")
+        out[field] = _reference(ref, "elements")
+    return {"kind": "elements", "fields": out}
+
+
+def references(constraint: dict[str, Any] | None) -> list[str]:
+    """The value type ids a constraint names (§681), in a stable order."""
+    if not constraint:
+        return []
+    if constraint.get("kind") == "nested":
+        return [str(constraint["value_type"])]
+    if constraint.get("kind") == "elements":
+        return sorted(set(map(str, constraint["fields"].values())))
+    return []
+
+
+def resolve(
+    constraint: dict[str, Any] | None, found: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
+    """The constraint with each reference's current rule beside it.
+
+    `found` maps an id to `{"base_type", "constraint"}` as the value type is
+    now (p.230). A reference that no longer resolves is left out, and checks
+    nothing - the value type it named has gone, as a deleted value type
+    unbinds a property (db 0054's `ON DELETE SET NULL`).
+    """
+    if not constraint or not references(constraint):
+        return constraint
+    if constraint["kind"] == "nested":
+        held = found.get(str(constraint["value_type"]))
+        return {**constraint, **({"items": held} if held else {})}
+    return {**constraint, "resolved": {
+        field: found[ref] for field, ref in constraint["fields"].items() if ref in found}}
 
 
 def _require_type(kind: str, base_type: str, allowed: tuple[str, ...]) -> None:
@@ -127,9 +213,10 @@ def _parse_range(raw: dict[str, Any], base_type: str) -> dict[str, Any]:
     maximum = raw.get("maximum")
     if minimum is None and maximum is None:
         raise ConstraintError("a range constraint needs a minimum, a maximum, or both")
-    # A string's range constrains its *length* (p.233), so the bounds are
-    # integers whatever the base type is called.
-    bound_type = "integer" if base_type == "string" else base_type
+    # A string's range constrains its *length* (p.233) and an array's its
+    # *size* (p.234), so the bounds are integers whatever the base type is
+    # called.
+    bound_type = "integer" if base_type in ("string", "array") else base_type
     out: dict[str, Any] = {"kind": "range"}
     if minimum is not None:
         out["minimum"] = _coerce(minimum, bound_type, "minimum")
@@ -142,8 +229,10 @@ def _parse_range(raw: dict[str, Any], base_type: str) -> dict[str, Any]:
                 f"the range minimum ({minimum}) is above its maximum ({maximum}), "
                 "so nothing could satisfy it"
             )
-    if base_type == "string" and out.get("minimum", 0) < 0:
-        raise ConstraintError("a string length cannot be negative")
+    if base_type in ("string", "array") and out.get("minimum", 0) < 0:
+        raise ConstraintError(
+            "a string length cannot be negative" if base_type == "string"
+            else "an array size cannot be negative")
     return out
 
 
@@ -268,7 +357,50 @@ def violation(
         return _range_violation(constraint, base_type, value)
     if kind == "regex":
         return _regex_violation(constraint, value)
+    if kind == "unique":
+        return _unique_violation(value)
+    if kind == "nested":
+        return _nested_violation(constraint, value)
+    if kind == "elements":
+        return _elements_violation(constraint, value)
     return _uuid_violation(value)
+
+
+def _unique_violation(value: Any) -> str | None:
+    if not isinstance(value, list):
+        return f"{value!r} is not a list"
+    seen: set[str] = set()
+    for item in value:
+        # By JSON text, so `1` and `1.0` differ as a dataset writes them and a
+        # struct item compares by its contents.
+        key = json.dumps(item, sort_keys=True)
+        if key in seen:
+            return f"{item!r} appears more than once"
+        seen.add(key)
+    return None
+
+
+def _nested_violation(constraint: dict[str, Any], value: Any) -> str | None:
+    held = constraint.get("items")
+    if held is None:
+        return None
+    if not isinstance(value, list):
+        return f"{value!r} is not a list"
+    for index, item in enumerate(value):
+        why = violation(held["constraint"], held["base_type"], item)
+        if why is not None:
+            return f"item {index + 1}: {why}"
+    return None
+
+
+def _elements_violation(constraint: dict[str, Any], value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return f"{value!r} is not a struct"
+    for field, held in sorted((constraint.get("resolved") or {}).items()):
+        why = violation(held["constraint"], held["base_type"], value.get(field))
+        if why is not None:
+            return f"{field}: {why}"
+    return None
 
 
 def _enum_violation(constraint: dict[str, Any], value: Any) -> str | None:
@@ -297,6 +429,11 @@ def _range_violation(
             return f"{value!r} is not text"
         subject: Any = len(value)
         unit = " characters"
+    elif base_type == "array":
+        if not isinstance(value, list):
+            return f"{value!r} is not a list"
+        subject = len(value)
+        unit = " items"
     else:
         subject = value
         unit = ""
@@ -306,7 +443,7 @@ def _range_violation(
         elif _temporal(str(value), base_type) is None:
             return f"{value!r} is not a valid {base_type}"
 
-    bound_type = "integer" if base_type == "string" else base_type
+    bound_type = "integer" if base_type in ("string", "array") else base_type
     here = _comparable(subject, bound_type)
     if "minimum" in constraint:
         low = _comparable(constraint["minimum"], bound_type)
@@ -339,7 +476,9 @@ def _uuid_violation(value: Any) -> str | None:
     return None
 
 
-def describe(constraint: dict[str, Any] | None) -> str:
+def describe(
+    constraint: dict[str, Any] | None, names: dict[str, str] | None = None
+) -> str:
     """One line a person can read, for a listing that has no room for the
     shape. Deliberately not a re-serialisation: `^[A-Z]{2}$` is what the author
     wrote, and showing it back is more use than "a regex constraint"."""
@@ -363,4 +502,14 @@ def describe(constraint: dict[str, Any] | None) -> str:
         return f"matches {constraint['pattern']}" + (
             " (anywhere)" if constraint.get("substring") else ""
         )
+    if kind == "unique":
+        return "no item twice"
+    known = names or {}
+    if kind == "nested":
+        ref = str(constraint["value_type"])
+        return f"each item is {known.get(ref, 'a deleted value type')}"
+    if kind == "elements":
+        return ", ".join(
+            f"{field} is {known.get(str(ref), 'a deleted value type')}"
+            for field, ref in sorted(constraint["fields"].items()))
     return "a UUID"

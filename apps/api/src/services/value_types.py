@@ -57,12 +57,12 @@ class ValueTypeError(ValueError):
     """A value type that cannot be saved, or an attachment that cannot hold."""
 
 
-def _out(row: Any) -> dict[str, Any]:
+def _out(row: Any, names: dict[str, str] | None = None) -> dict[str, Any]:
     out = dict(row)
     raw = out.get("constraint_json")
     out["constraint"] = json.loads(raw) if isinstance(raw, str) else raw
     out.pop("constraint_json", None)
-    out["constraint_summary"] = value_constraints.describe(out["constraint"])
+    out["constraint_summary"] = value_constraints.describe(out["constraint"], names)
     for key in ("version_number", "usage_count"):
         if key in out and out[key] is not None:
             out[key] = int(out[key])
@@ -99,7 +99,49 @@ async def list_types(
         conn, _SELECT + " WHERE vt.workspace_id = :wid ORDER BY vt.api_name",
         {"wid": str(workspace_id)},
     )
-    return [_out(r) for r in rows]
+    names = {str(r["id"]): str(r["api_name"]) for r in rows}
+    return [_out(r, names) for r in rows]
+
+
+async def _names(conn: AsyncConnection, workspace_id: UUID) -> dict[str, str]:
+    """Every value type's api_name by id, for describing a reference (§681)."""
+    rows = await fetch_all(
+        conn, "SELECT id, api_name FROM value_types WHERE workspace_id = :wid",
+        {"wid": str(workspace_id)},
+    )
+    return {str(r["id"]): str(r["api_name"]) for r in rows}
+
+
+async def current_rules(
+    conn: AsyncConnection, ids: set[str]
+) -> dict[str, dict[str, Any]]:
+    """`{id: {"base_type", "constraint"}}` for each value type as it is now
+    (p.230), which is what a nested or elements reference applies (§681).
+
+    Not filtered by workspace: row-level security already limits it to the
+    value types this reader may see, and every reference was checked against
+    its own workspace when it was saved."""
+    if not ids:
+        return {}
+    rows = await fetch_all(
+        conn,
+        _SELECT + " WHERE vt.id = ANY(CAST(:ids AS uuid[]))",
+        {"ids": "{" + ",".join(sorted(ids)) + "}"},
+    )
+    return {
+        str(r["id"]): {"base_type": str(r["base_type"]), "constraint": _out(r)["constraint"]}
+        for r in rows
+    }
+
+
+async def resolve_constraints(
+    conn: AsyncConnection, constraints: list[dict[str, Any] | None]
+) -> list[dict[str, Any] | None]:
+    """Each constraint with its references' current rules beside it, in one
+    query for all of them (`value_constraints.resolve`)."""
+    ids = {ref for c in constraints for ref in value_constraints.references(c)}
+    found = await current_rules(conn, ids)
+    return [value_constraints.resolve(c, found) for c in constraints]
 
 
 async def get_type(
@@ -111,7 +153,7 @@ async def get_type(
     )
     if row is None:
         raise NotFoundError("value type")
-    return _out(row)
+    return _out(row, await _names(conn, workspace_id))
 
 
 async def by_id(
@@ -130,7 +172,12 @@ async def by_id(
         _SELECT + " WHERE vt.workspace_id = :wid AND vt.id = ANY(CAST(:ids AS uuid[]))",
         {"wid": str(workspace_id), "ids": "{" + ",".join(str(i) for i in ids) + "}"},
     )
-    return {str(r["id"]): _out(r) for r in rows}
+    out = {str(r["id"]): _out(r) for r in rows}
+    # What a nested or elements constraint names, for `check_attachment`.
+    resolved = await resolve_constraints(conn, [t["constraint"] for t in out.values()])
+    for held, constraint in zip(out.values(), resolved):
+        held["resolved_constraint"] = constraint
+    return out
 
 
 async def list_versions(
@@ -150,7 +197,8 @@ async def list_versions(
         """,
         {"vid": str(value_type_id)},
     )
-    return [_out(r) for r in rows]
+    names = await _names(conn, workspace_id)
+    return [_out(r, names) for r in rows]
 
 
 async def create(
@@ -172,6 +220,7 @@ async def create(
     if base_type not in ontology.PROPERTY_TYPES:
         raise ValueTypeError(f"invalid base type {base_type!r}")
     parsed = value_constraints.parse(constraint_raw, base_type=base_type)
+    await _check_references(conn, workspace_id, parsed)
 
     existing = await fetch_one(
         conn,
@@ -255,6 +304,7 @@ async def add_version(
     parsed = value_constraints.parse(
         constraint_raw, base_type=str(current["base_type"])
     )
+    await _check_references(conn, workspace_id, parsed)
     if parsed == current["constraint"]:
         # An append that changes nothing would be a version somebody has to
         # read to discover it says the same thing.
@@ -281,6 +331,18 @@ async def delete(
     how many properties stopped being constrained.
     """
     await get_type(conn, workspace_id, value_type_id)
+    # A value type another one names (§681) is refused rather than unbound:
+    # unbinding a property is visible on its row, and a reference inside
+    # somebody else's constraint that silently stopped checking is not.
+    referrers = [
+        t["api_name"] for t in await list_types(conn, workspace_id)
+        if str(value_type_id) in value_constraints.references(t["constraint"])
+    ]
+    if referrers:
+        raise ConflictError(
+            f"{', '.join(referrers)} applies this value type to its items or "
+            f"fields; change {'that' if len(referrers) == 1 else 'those'} first"
+        )
     await conn.execute(
         text("DELETE FROM value_types WHERE id = :vid"), {"vid": str(value_type_id)}
     )
@@ -328,6 +390,50 @@ def check_attachment(prop: dict[str, Any], value_type: dict[str, Any]) -> None:
             f"{value_type['base_type']}, and this property is "
             f"{prop['data_type']}"
         )
+    # §681: what a nested or elements constraint applies has to fit what the
+    # property holds, for the same reason one level down.
+    resolved = value_type.get("resolved_constraint") or {}
+    items = resolved.get("items") if resolved.get("kind") == "nested" else None
+    if items is not None and str(prop.get("array_of")) != items["base_type"]:
+        raise ValueTypeError(
+            f"{prop['api_name']}: value type {value_type['api_name']!r} applies a "
+            f"{items['base_type']} value type to each item, and this array holds "
+            f"{prop.get('array_of')}"
+        )
+    if resolved.get("kind") == "elements":
+        fields = {str(f.get("api_name")): str(f.get("data_type"))
+                  for f in (prop.get("struct_fields") or [])}
+        for field, held in sorted((resolved.get("resolved") or {}).items()):
+            if fields.get(field) != held["base_type"]:
+                raise ValueTypeError(
+                    f"{prop['api_name']}: value type {value_type['api_name']!r} applies a "
+                    f"{held['base_type']} value type to the field {field!r}, and "
+                    + (f"this struct's {field!r} is {fields[field]}" if field in fields
+                       else "this struct has no such field")
+                )
+
+
+async def _check_references(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    constraint: dict[str, Any] | None,
+) -> None:
+    """Each value type a nested or elements constraint names (§681) must be
+    one of this workspace's, and a scalar - which also rules out naming
+    itself, since only an array or struct value type names anything."""
+    refs = value_constraints.references(constraint)
+    if not refs:
+        return
+    known = await by_id(conn, workspace_id, {UUID(r) for r in refs})
+    for ref in refs:
+        held = known.get(ref)
+        if held is None:
+            raise ValueTypeError(f"no value type {ref} in this workspace")
+        if str(held["base_type"]) not in value_constraints.REFERENCE_TYPES:
+            raise ValueTypeError(
+                f"{held['api_name']} is a {held['base_type']} value type; items and "
+                f"fields take a {', '.join(value_constraints.REFERENCE_TYPES)} one"
+            )
 
 
 async def _append_version(
