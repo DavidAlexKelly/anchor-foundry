@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  isLit, numberReferences, referenceTypesOf, selectionBehaviorOf,
+  isLit, numberReferences, referenceTypesOf, selectionBehaviorOf, keysToColor, referenceColorOf,
+  type ReferenceType,
 } from "./markdown-references";
 import { parse, parseInline, referenceAttributes } from "./markdown";
 
 /** p.319-320's inline references (§632). */
+
+const STATIC = { colorMode: "static", colorProperty: null, colorRules: null } as const;
 
 describe("p.319's anchor syntax", () => {
   const source = 'Two delays: :objectreference[Alert A00150]{objectType="flight_alert" '
@@ -59,8 +62,8 @@ describe("p.320's configuration", () => {
       { objectType: "port", color: "red" },
       { objectType: "" }, null, 3,
     ])).toEqual([
-      { objectType: "ship", color: "#ff0000" },
-      { objectType: "port", color: null },
+      { objectType: "ship", color: "#ff0000", ...STATIC },
+      { objectType: "port", color: null, ...STATIC },
     ]);
     expect(referenceTypesOf("ship")).toEqual([]);
   });
@@ -99,5 +102,52 @@ describe("numberReferences", () => {
       return value;
     });
     expect(found).toEqual([[0, "a"], [1, "b"], [2, "b"], [3, "c"], [4, "d"], [5, "e"]]);
+  });
+});
+
+describe("p.320's Highlight color from the object (§664)", () => {
+  const red = { kind: "standard" as const, property: "severity", comparison: "string" as const,
+    operator: "is_exactly" as const, value: "high", colour: "#ffffff", background: "#dc2626" };
+  const amber = { kind: "standard" as const, property: "severity", comparison: "string" as const,
+    operator: "is_exactly" as const, value: "low", colour: "#b45309" };
+
+  it("reads a type's colour mode, its property and its rules", () => {
+    expect(referenceTypesOf([
+      { objectType: "alert", color: "#123456", colorMode: "property", colorProperty: " severity " },
+      { objectType: "ship", colorMode: "rules", colorRules: [red] },
+      { objectType: "port", colorMode: "sparkly", colorProperty: "", colorRules: [{ kind: "junk" }] },
+    ])).toEqual([
+      { objectType: "alert", color: "#123456", colorMode: "property", colorProperty: "severity", colorRules: null },
+      { objectType: "ship", color: null, colorMode: "rules", colorProperty: null, colorRules: [red] },
+      { objectType: "port", color: null, ...STATIC },
+    ]);
+  });
+
+  it("names each object to read once, for the types coloured by their objects alone", () => {
+    const blocks = parse([
+      ':objectreference[A]{objectType="alert" primaryKey="1"} :objectreference[B]{objectType="alert" primaryKey="2"}',
+      '- :objectreference[A again]{objectType="alert" primaryKey="1"}',
+      '| :objectreference[S]{objectType="ship" primaryKey="9"} |', "|---|",
+      '| :objectreference[P]{objectType="port" primaryKey="3"} |',
+    ].join("\n"), { references: true });
+    const types = referenceTypesOf([
+      { objectType: "alert", colorMode: "property", colorProperty: "severity" },
+      { objectType: "ship", colorMode: "rules", colorRules: [red] }, { objectType: "port" },
+    ]);
+    expect([...keysToColor(blocks, types)]).toEqual([["alert", ["1", "2"]], ["ship", ["9"]]]);
+  });
+
+  it("paints with the fill before the text, and falls back to the static colour", () => {
+    const byProperty: ReferenceType = { objectType: "alert", color: "#123456", colorMode: "property",
+      colorProperty: "severity", colorRules: null };
+    expect(referenceColorOf(byProperty, { severity: "high" }, [red, amber])).toBe("#dc2626");
+    expect(referenceColorOf(byProperty, { severity: "low" }, [red, amber])).toBe("#b45309");
+    expect(referenceColorOf(byProperty, { severity: "none" }, [red, amber])).toBe("#123456");
+    expect(referenceColorOf(byProperty, undefined, [red])).toBe("#123456");
+    expect(referenceColorOf(byProperty, { severity: "high" }, null)).toBe("#123456");
+    const byRules = { ...byProperty, colorMode: "rules" as const, colorRules: [amber] };
+    expect(referenceColorOf(byRules, { severity: "low" }, [red])).toBe("#b45309");
+    // Switched back to static, a type keeps its rules, and they paint nothing.
+    expect(referenceColorOf({ ...byRules, colorMode: "static" }, { severity: "low" }, [red])).toBe("#123456");
   });
 });

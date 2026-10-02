@@ -286,7 +286,8 @@ import {
 } from "./markdown-selection";
 import {
   SELECTION_BEHAVIORS as REFERENCE_SELECTIONS, isLit as isReferenceLit, numberReferences, referenceTypesOf,
-  selectionBehaviorOf as referenceSelectionOf,
+  selectionBehaviorOf as referenceSelectionOf, COLOR_MODES as REFERENCE_COLOR_MODES,
+  keysToColor as referenceKeysToColor, referenceColorOf, type ColorMode as ReferenceColorMode,
 } from "./markdown-references";
 import {
   FORMATS, FORMAT_LABELS, applyFormat, autoRows, type MarkdownFormat,
@@ -5238,6 +5239,41 @@ export function CanvasMarkdown({
   };
   if (references) numberReferences(blocks);
   const types = referenceTypesOf(referenceTypes);
+  // p.320's Highlight color from a property's formatting or rules (§664):
+  // the anchors' objects are read, by type, to be painted.
+  const colorKeys = references ? referenceKeysToColor(blocks, types) : new Map<string, string[]>();
+  const colored = [...colorKeys.keys()];
+  const colorTypeIds = useQueries({
+    queries: colored.map((apiName) => ({
+      queryKey: ["markdown-ref-type-id", workspaceId, apiName],
+      queryFn: async () => (await objApi.listTypes(workspaceId, null, { q: apiName, limit: 50 }))
+        .items.find((t) => t.api_name === apiName)?.id ?? null,
+    })),
+  });
+  const colorTypes = useQueries({
+    queries: colored.map((_, n) => ({
+      queryKey: ["object-type", colorTypeIds[n]?.data ?? null],
+      queryFn: () => objApi.getType(workspaceId, colorTypeIds[n]!.data!),
+      enabled: !!colorTypeIds[n]?.data,
+    })),
+  });
+  const colorObjects = useQueries({
+    queries: colored.map((apiName, n) => ({
+      queryKey: ["markdown-ref-objects", colorTypeIds[n]?.data ?? null, JSON.stringify(colorKeys.get(apiName))],
+      queryFn: () => objApi.evaluateObjectSet(workspaceId, {
+        object_type_id: colorTypeIds[n]!.data!,
+        filters: [{ property: "$primary_key", op: "in", value: colorKeys.get(apiName) }],
+      }, { limit: 200 }),
+      enabled: !!colorTypeIds[n]?.data,
+    })),
+  });
+  const anchorColor = (type: (typeof types)[number], primaryKey: string): string | null => {
+    const n = colored.indexOf(type.objectType);
+    if (n < 0) return type.color;
+    const found = colorObjects[n]?.data?.instances.find((i) => String(i.primary_key) === primaryKey);
+    const rules = colorTypes[n]?.data?.properties.find((p) => p.api_name === type.colorProperty)?.conditional_format;
+    return referenceColorOf(type, found?.properties, rules);
+  };
   const behavior = referenceSelectionOf(selectionBehavior);
   const selectedKeys = keysOf(selectedVariable ? parameterValues[selectedVariable] : undefined);
   const onSelect = eventsFor(moduleEvents, nodeId, "row_select");
@@ -5253,11 +5289,13 @@ export function CanvasMarkdown({
     const index = node.index ?? -1;
     const lit = isReferenceLit(behavior, { index, primaryKey: node.primaryKey },
       lastAnchor, selectedKeys);
+    const color = anchorColor(type, node.primaryKey);
     return (
       <button
         type="button"
         className={`canvas-markdown-ref${lit ? " on" : ""}`}
-        style={type.color ? ({ "--ref-color": type.color } as React.CSSProperties) : undefined}
+        style={color ? ({ "--ref-color": color } as React.CSSProperties) : undefined}
+        data-color={color ?? ""}
         data-testid="markdown-ref"
         data-object-type={node.objectType}
         data-primary-key={node.primaryKey}
@@ -5394,7 +5432,7 @@ function MarkdownSettings() {
     { prop: "selectionEndVariable", label: "Selection end index", kind: "number",
       value: selectionEndVariable },
   ];
-  const writeTypes = (next: { objectType: string; color: string | null }[]) =>
+  const writeTypes = (next: ReturnType<typeof referenceTypesOf>) =>
     setProp((p: { referenceTypes: unknown }) => (p.referenceTypes = next));
 
   return (
@@ -5485,32 +5523,9 @@ function MarkdownSettings() {
           <div className="field" data-testid="markdown-ref-types">
             <span className="field-label">Object types</span>
             {types.map((type, i) => (
-              <div key={i} className="field-inline" data-testid="markdown-ref-type">
-                <input
-                  type="text"
-                  aria-label={`Object type ${i + 1}`}
-                  data-testid="markdown-ref-type-name"
-                  value={type.objectType}
-                  onChange={(e) => writeTypes(types.map((t, j) =>
-                    (j === i ? { ...t, objectType: e.target.value } : t)))}
-                />
-                <input
-                  type="color"
-                  aria-label={`Object type ${i + 1} highlight colour`}
-                  data-testid="markdown-ref-type-color"
-                  value={type.color ?? "#2563eb"}
-                  onChange={(e) => writeTypes(types.map((t, j) =>
-                    (j === i ? { ...t, color: e.target.value } : t)))}
-                />
-                <button
-                  type="button"
-                  className="btn quiet"
-                  aria-label={`Remove object type ${i + 1}`}
-                  onClick={() => writeTypes(types.filter((_, j) => j !== i))}
-                >
-                  ×
-                </button>
-              </div>
+              <MarkdownReferenceTypeRow key={i} index={i} type={type}
+                onChange={(next) => writeTypes(types.map((t, j) => (j === i ? next : t)))}
+                onRemove={() => writeTypes(types.filter((_, j) => j !== i))} />
             ))}
             <div className="field-inline">
               <input
@@ -5521,7 +5536,8 @@ function MarkdownSettings() {
                   const value = e.currentTarget.value.trim();
                   if (e.key !== "Enter" || !value) return;
                   e.preventDefault();
-                  writeTypes([...types, { objectType: value, color: null }]);
+                  writeTypes([...types, { objectType: value, color: null, colorMode: "static",
+                    colorProperty: null, colorRules: null }]);
                   e.currentTarget.value = "";
                 }}
               />
@@ -14027,6 +14043,80 @@ export function CanvasSeriesAnalysis({
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+/** One of p.320's object types on the Markdown widget: its api name and its
+ * Highlight color - static, from a property's Ontology formatting, or the
+ * builder's own rules (§664). The type is read by its api name so its
+ * properties can be offered. */
+function MarkdownReferenceTypeRow({ index, type, onChange, onRemove }: {
+  index: number;
+  type: ReturnType<typeof referenceTypesOf>[number];
+  onChange: (next: ReturnType<typeof referenceTypesOf>[number]) => void;
+  onRemove: () => void;
+}) {
+  const { workspaceId } = useCanvasEnv();
+  const [editing, setEditing] = useState(false);
+  const typeId = useQuery({
+    queryKey: ["markdown-ref-type-id", workspaceId, type.objectType],
+    queryFn: async () => (await objApi.listTypes(workspaceId, null, { q: type.objectType, limit: 50 }))
+      .items.find((t) => t.api_name === type.objectType)?.id ?? null,
+    enabled: type.colorMode !== "static" && !!type.objectType,
+  });
+  const detail = useQuery({
+    queryKey: ["object-type", typeId.data ?? null],
+    queryFn: () => objApi.getType(workspaceId, typeId.data!),
+    enabled: !!typeId.data,
+  });
+  const properties = detail.data?.properties ?? [];
+  const n = index + 1;
+  return (
+    <div className="field" data-testid="markdown-ref-type">
+      <div className="field-inline">
+        <input type="text" aria-label={`Object type ${n}`} data-testid="markdown-ref-type-name"
+               value={type.objectType} onChange={(e) => onChange({ ...type, objectType: e.target.value })} />
+        <input type="color" aria-label={`Object type ${n} highlight colour`} data-testid="markdown-ref-type-color"
+               value={type.color ?? "#2563eb"} onChange={(e) => onChange({ ...type, color: e.target.value })} />
+        <button type="button" className="btn quiet" aria-label={`Remove object type ${n}`} onClick={onRemove}>
+          ×
+        </button>
+      </div>
+      <div className="field-inline">
+        <select aria-label={`Object type ${n} colour from`} value={type.colorMode}
+                onChange={(e) => onChange({ ...type, colorMode: e.target.value as ReferenceColorMode })}>
+          {Object.entries(REFERENCE_COLOR_MODES).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+        </select>
+        {type.colorMode === "property" && (
+          <select aria-label={`Object type ${n} colour property`} value={type.colorProperty ?? ""}
+                  onChange={(e) => onChange({ ...type, colorProperty: e.target.value || null })}>
+            <option value="">Property…</option>
+            {properties.map((p) => (
+              <option key={p.api_name} value={p.api_name}>
+                {p.conditional_format?.length ? p.display_name : `${p.display_name} (no formatting)`}
+              </option>
+            ))}
+          </select>
+        )}
+        {type.colorMode === "rules" && (
+          <button type="button" className="btn quiet" disabled={properties.length === 0}
+                  onClick={() => setEditing(true)}>
+            {type.colorRules?.length ? `Edit ${type.colorRules.length} rule${type.colorRules.length === 1 ? "" : "s"}` : "Add rules"}
+          </button>
+        )}
+      </div>
+      {type.colorMode !== "static" && typeId.data === null && (
+        <span className="field-hint">{`No object type is called ${type.objectType}.`}</span>
+      )}
+      {type.colorMode !== "static" && (
+        <span className="field-hint">The colour above is used where nothing else paints the reference</span>
+      )}
+      {editing && (
+        <ConditionalFormatEditor open onClose={() => setEditing(false)}
+          propertyName={properties[0]?.api_name ?? "value"} properties={properties} value={type.colorRules}
+          onSave={(next) => { onChange({ ...type, colorRules: next }); setEditing(false); }} />
       )}
     </div>
   );

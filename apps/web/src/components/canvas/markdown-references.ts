@@ -15,13 +15,32 @@
  * is here, beside nothing React, so it is tested without a browser.
  */
 
+import type { ConditionalRule } from "@/lib/types";
+import { conditionalStyle } from "../../lib/conditional-format";
 import type { Block, Inline } from "./markdown";
+import { rulesOf } from "./conditional-formats";
+
+/** p.320's Highlight color (§664): "Select a static color, inherit colors
+ * from a property with Ontology formatting, or define custom rules to
+ * determine color." */
+export const COLOR_MODES = {
+  static: "Static colour",
+  property: "From a property's formatting",
+  rules: "Custom rules",
+} as const;
+export type ColorMode = keyof typeof COLOR_MODES;
 
 export interface ReferenceType {
   /** The object type's api_name, as p.319's `objectType="…"` names it. */
   objectType: string;
-  /** p.320's Highlight color, a static one; null for the platform's accent. */
+  /** p.320's Highlight color, a static one; null for the platform's accent.
+   * Also what a property's or the rules' colour falls back to. */
   color: string | null;
+  colorMode: ColorMode;
+  /** The property whose Ontology conditional formatting colours the anchor. */
+  colorProperty: string | null;
+  /** The builder's own rules, §158's grammar, over the object's properties. */
+  colorRules: ConditionalRule[] | null;
 }
 
 /** The configured types, read defensively: a saved document is data. */
@@ -37,7 +56,10 @@ export function referenceTypesOf(raw: unknown): ReferenceType[] {
     seen.add(objectType);
     const color = typeof e.color === "string" && /^#[0-9a-fA-F]{6}$/.test(e.color)
       ? e.color : null;
-    out.push({ objectType, color });
+    const colorMode: ColorMode = e.colorMode === "property" || e.colorMode === "rules" ? e.colorMode : "static";
+    const colorProperty = typeof e.colorProperty === "string" && e.colorProperty.trim()
+      ? e.colorProperty.trim() : null;
+    out.push({ objectType, color, colorMode, colorProperty, colorRules: rulesOf(e.colorRules) });
   }
   return out;
 }
@@ -81,12 +103,20 @@ export function isLit(
  */
 export function numberReferences(blocks: Block[]): number {
   let next = 0;
+  eachReference(blocks, (node) => {
+    node.index = next;
+    next += 1;
+  });
+  return next;
+}
+
+type Reference = Extract<Inline, { kind: "objectref" }>;
+
+/** Every anchor, in reading order. */
+function eachReference(blocks: Block[], visit: (node: Reference) => void): void {
   const inline = (nodes: Inline[]) => {
     for (const node of nodes) {
-      if (node.kind === "objectref") {
-        node.index = next;
-        next += 1;
-      }
+      if (node.kind === "objectref") visit(node);
       if ("children" in node) inline(node.children);
     }
   };
@@ -103,5 +133,31 @@ export function numberReferences(blocks: Block[]): number {
     }
   };
   blocks.forEach(block);
-  return next;
+}
+
+/** The keys each type's anchors name, once each, for the types whose colour
+ * is read from their objects (§664): a static colour needs none of them. */
+export function keysToColor(blocks: Block[], types: readonly ReferenceType[]): Map<string, string[]> {
+  const read = new Set(types.filter((t) => t.colorMode !== "static").map((t) => t.objectType));
+  const out = new Map<string, string[]>();
+  eachReference(blocks, (node) => {
+    if (!read.has(node.objectType)) return;
+    const keys = out.get(node.objectType) ?? [];
+    if (!keys.includes(node.primaryKey)) keys.push(node.primaryKey);
+    out.set(node.objectType, keys);
+  });
+  return out;
+}
+
+/** An anchor's colour: the static one, or the colour its object's properties
+ * are painted by a property's Ontology rules or the builder's, the fill before
+ * the text's; the static colour when nothing paints it or the object is not
+ * read yet. */
+export function referenceColorOf(
+  type: ReferenceType, properties: Record<string, unknown> | undefined,
+  propertyRules: ConditionalRule[] | null | undefined,
+): string | null {
+  if (type.colorMode === "static" || !properties) return type.color;
+  const paint = conditionalStyle(type.colorMode === "property" ? propertyRules : type.colorRules, properties);
+  return paint?.background ?? paint?.colour ?? type.color;
 }
