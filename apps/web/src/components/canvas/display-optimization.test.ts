@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_MOUNT, DEFAULT_UNMOUNT, MOUNTS, UNMEASURED_HEIGHT, UNMOUNTS, keptOffLayout,
-  mayKeep, mountOf, placeholderHeight, shows, unmountOf, watches,
+  DEFAULT_MOUNT, DEFAULT_UNMOUNT, MOUNTS, UNMEASURED_HEIGHT, UNMOUNTS, keptOffLayout, mayKeep, mountOf, placeholderHeight, shows, unmountOf, watches, DISPLAY_NOTE, effectiveDisplay,
 } from "./display-optimization";
 
 /** p.180-182's widget display optimization. */
@@ -142,5 +141,19 @@ describe("p.182's two settings about a closed page (§609)", () => {
     expect(mayKeep({ mount: "on_screen", unmount: "off_screen" })).toBe(false);
     expect(mayKeep({ mount: "eagerly" })).toBe(false);
     expect(mayKeep(undefined)).toBe(false);
+  });
+});
+
+describe("p.181: not supported in loop layouts (§679)", () => {
+  it("takes the defaults inside a loop, and the settings anywhere else", () => {
+    const set = { mount: "on_screen", unmount: "never" };
+    expect(effectiveDisplay(set, true)).toEqual({ mount: "default", unmount: "default" });
+    expect(effectiveDisplay(set, false)).toEqual({ mount: "on_screen", unmount: "never" });
+    expect(effectiveDisplay(undefined, false)).toEqual({ mount: "default", unmount: "default" });
+    expect(effectiveDisplay({ mount: "bogus" }, false).mount).toBe("default");
+  });
+
+  it("says so under the settings", () => {
+    expect(DISPLAY_NOTE).toContain("Loop layout");
   });
 });
