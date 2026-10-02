@@ -6991,6 +6991,7 @@ export function CanvasObjectTable({
                                 style={paint}
                                 value={instance.properties[p.api_name]}
                                 emptyText={emptyText}
+                                compact
                               />
                             )}
                           </div>
@@ -12446,6 +12447,7 @@ export function CanvasObjectCards({
                             structFields={p.struct_fields}
                             style={conditionalStyle(p.conditional_format, instance.properties)}
                             value={instance.properties[p.api_name]}
+                            compact
                           />
                         </dd>
                       </div>

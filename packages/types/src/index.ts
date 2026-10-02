@@ -1833,6 +1833,9 @@ export interface StructField {
    * list (`services/struct_fields.py`), which is why this is not a union
    * here: a second copy would be free to disagree with the one that refuses. */
   data_type: PropertyDataType;
+  /** p.169's struct main field (§674): one of the struct's core values,
+   * which compact views show alone. Absent when off. */
+  main?: boolean;
 }
 
 /** One reducer on an array property (Foundry `object-link-types` p.131–133

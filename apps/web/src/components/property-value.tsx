@@ -17,7 +17,7 @@ import { mediaKind } from "@/components/media-kind";
 import type {
   AttachmentRef, GeoPoint, PropertyDataType, PropertyStyle, StructField, ValueFormat,
 } from "@/lib/types";
-import { structRows } from "@/lib/struct-fields";
+import { compactRows, mainFields, structRows, structTitle } from "@/lib/struct-fields";
 import { GEOSHAPE_PLACEHOLDER, summarise } from "@/lib/geoshape";
 import { cssFor } from "@/lib/conditional-format";
 import { formatValue, isLookup } from "@/lib/value-format";
@@ -148,6 +148,7 @@ export function PropertyValue({
   structFields,
   style: conditional,
   emptyText = "∅",
+  compact = false,
 }: {
   workspaceId: string;
   dataType: PropertyDataType | undefined;
@@ -183,6 +184,10 @@ export function PropertyValue({
    * everywhere. A page about one widget does not get to restyle the rest.
    */
   emptyText?: ReactNode;
+  /** A compact view - p.169's "compact views, like the Object Table and
+   * Object List widgets" (§674) - where a struct shows its main fields
+   * alone and the rest on hover. */
+  compact?: boolean;
 }) {
   // Applied to the empty marker too. A rule whose whole purpose is "colour it
   // grey when the value is null" (p.106) would otherwise be invisible on
@@ -308,6 +313,7 @@ export function PropertyValue({
                 ? "struct" : undefined}
               structFields={structFields}
               value={element}
+              compact={compact}
             />
           </span>
         ))}
@@ -320,10 +326,16 @@ export function PropertyValue({
   // a `json` property gets. Without the declaration it falls through to that
   // JSON, which is what an action form preview and any other caller holding a
   // bare value still see.
-  const rows = dataType === "struct" ? structRows(structFields, value) : null;
+  // p.169's main fields (§674): a compact view shows those alone, and the
+  // whole struct on hover.
+  const main = compact && mainFields(structFields).length > 0;
+  const rows = dataType === "struct"
+    ? (compact ? compactRows(structFields, value) : structRows(structFields, value)) : null;
   if (rows) {
     return (
-      <span className="struct-value" style={paint} data-testid="struct-value">
+      <span className="struct-value" style={paint} data-testid="struct-value"
+        data-main={main ? "true" : undefined}
+        title={main ? structTitle(structFields, value) ?? undefined : undefined}>
         {rows.map(([label, held]) => (
           <span key={label} className="struct-field">
             <span className="struct-field-label">{label}</span>

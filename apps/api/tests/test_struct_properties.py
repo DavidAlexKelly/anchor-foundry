@@ -77,6 +77,28 @@ def test_a_declaration_is_normalised_so_what_is_stored_is_what_was_checked() -> 
            "description": "", "data_type": "string"}]
 
 
+def test_a_main_field_is_kept_only_when_it_is_one() -> None:
+    """p.169's struct main fields (§674): "designate a struct's core value
+    and supplementary metadata". Stored only when on, so a struct declared
+    before it - and every export of one - reads as it always did."""
+    parsed = struct_fields.parse(
+        [{"api_name": "street", "data_type": "string", "main": True},
+         {"api_name": "collected", "data_type": "date", "main": False},
+         {"api_name": "postal_code", "data_type": "string"}],
+        data_type="struct", property_name="address",
+    )
+    assert [f.get("main") for f in parsed] == [True, None, None]
+    assert "main" not in parsed[1]
+    # An array of structs' element is a struct too (§347), with main fields.
+    element = struct_fields.parse([{"api_name": "street", "data_type": "string", "main": True}],
+                                  data_type="array", array_of="struct", property_name="stops")
+    assert element[0]["main"] is True
+    for bad in ("yes", 1, None):
+        with pytest.raises(struct_fields.StructFieldError, match="main must be true or false"):
+            struct_fields.parse([{"api_name": "street", "data_type": "string", "main": bad}],
+                                data_type="struct", property_name="address")
+
+
 def test_the_declared_order_is_kept() -> None:
     """p.154 builds a struct one Add field at a time, so the order is the
     author's statement about the value and not an implementation detail. It is

@@ -176,3 +176,29 @@ export function structRows(
     held[field.api_name] ?? null,
   ]);
 }
+
+/** p.169's struct main fields (§674): the fields that are the struct's core
+ * value, in the order declared. */
+export function mainFields(fields: StructField[] | null | undefined): StructField[] {
+  return (fields ?? []).filter((f) => f.main === true);
+}
+
+/** What a compact view shows of a struct - p.169's "Main fields only: Display
+ * only main fields in compact views like tables or summary cards" - and all
+ * of it where no field is main. `null` for what `structRows` declines. */
+export function compactRows(
+  fields: StructField[] | null | undefined,
+  value: unknown,
+): [string, unknown][] | null {
+  const main = mainFields(fields);
+  return structRows(main.length > 0 ? main : fields, value);
+}
+
+/** The whole struct as one line per field, for p.169's "Main fields with
+ * hover: Show main fields by default and reveal metadata fields on hover". */
+export function structTitle(fields: StructField[] | null | undefined, value: unknown): string | null {
+  const rows = structRows(fields, value);
+  if (!rows) return null;
+  return rows.map(([label, held]) => `${label}: ${held === null || held === "" ? "∅" : String(held)}`)
+    .join("\n");
+}
