@@ -696,6 +696,25 @@ def far_end(link: "Mapping[str, Any]", *, here: str) -> "tuple[str, bool] | None
     return None
 
 
+#: A set over several object types (§686; `workshop` p.450): `{"union": [
+#: definition, ...]}`, each part an ordinary set over one type. Written by the
+#: `union_set` transform and read part by part by the widgets p.221-225 says
+#: show "data on one or multiple object types". Every other read is over one
+#: type, so it refuses a union in a sentence rather than with "needs an
+#: object_type_id", which would send a builder looking for a type they did
+#: choose, several times.
+UNION = "union"
+UNION_REFUSAL = (
+    "this set is a union of several object types, and this reads one type at a "
+    "time; point it at one of the sets the union joins"
+)
+
+
+def _refuse_union(definition: dict[str, Any]) -> None:
+    if UNION in definition and not definition.get("object_type_id"):
+        raise ValueError(UNION_REFUSAL)
+
+
 def object_type_id_of(definition: Any) -> UUID:
     """Just the object type an unvalidated definition names.
 
@@ -710,6 +729,7 @@ def object_type_id_of(definition: Any) -> UUID:
     """
     if not isinstance(definition, dict):
         raise ValueError("an object set definition must be an object")
+    _refuse_union(definition)
     raw = definition.get("object_type_id")
     if not raw:
         raise ValueError("an object set needs an object_type_id")
@@ -809,6 +829,7 @@ def parse(
     """
     if not isinstance(definition, dict):
         raise ValueError("an object set definition must be an object")
+    _refuse_union(definition)
     raw_type = definition.get("object_type_id")
     if not raw_type:
         raise ValueError("an object set needs an object_type_id")
