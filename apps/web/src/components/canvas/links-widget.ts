@@ -220,13 +220,16 @@ export function sortedLinkQuery(
   group: {
     link_type_id: string; far_type_id: string; far_property: string; matched_value: unknown;
     join_table?: boolean;
+    /** §666: through backing objects, from this object's `near_property`. */
+    backed?: boolean;
+    near_property?: string;
   },
   sort: string | undefined,
   nearTypeId?: string,
 ): { definition: unknown; sort: string } | null {
   if (!sort || group.matched_value === null || group.matched_value === undefined) return null;
   const value = String(group.matched_value);
-  if (group.join_table) {
+  if (group.join_table || group.backed) {
     if (!nearTypeId) return null;
     return {
       definition: {
@@ -235,7 +238,9 @@ export function sortedLinkQuery(
           link_type_id: group.link_type_id,
           base: {
             object_type_id: nearTypeId,
-            filters: [{ property: PRIMARY_KEY, op: "eq", value }],
+            // A join table's value is the key; a backed link's is its near
+            // property's, which may be the key too.
+            filters: [{ property: group.backed ? group.near_property ?? PRIMARY_KEY : PRIMARY_KEY, op: "eq", value }],
           },
         },
       },

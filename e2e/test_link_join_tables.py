@@ -50,7 +50,7 @@ def test_the_dialog_backs_a_many_to_many_link_with_a_join_table(page, api, world
     pick_type(page, "link-from-type", {"id": world.flights, "api_name": f"flight_{world.tag}"})
     pick_type(page, "link-to-type", {"id": world.aircraft, "api_name": f"aircraft_{world.tag}"})
     # p.197: a join table is a many-to-many link's, so it is offered for no other.
-    expect(page.get_by_test_id("link-joined-by")).to_have_count(0)
+    expect(page.get_by_test_id("link-joined-by").locator("option[value='join_table']")).to_have_count(0)
     dialog.get_by_label("Cardinality").select_option("many_to_many")
     page.get_by_test_id("link-joined-by").select_option("join_table")
     page.get_by_test_id("link-join-dataset").select_option(world.pairs["id"])

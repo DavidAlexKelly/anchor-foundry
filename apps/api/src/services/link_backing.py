@@ -88,6 +88,16 @@ def _read(row: dict[str, Any], prop: str) -> Any:
     return props.get(prop)
 
 
+async def objects_of(conn: Any, join: dict[str, Any], value: Any, limit: int) -> list[dict[str, Any]]:
+    """The backing objects that link one object, at most `limit`: p.199's
+    "Select a link to view the link's backing object properties" - each is
+    one link, and its properties are what is known about it."""
+    # An object with no value links nothing: `join_filter` drops a None and
+    # answers no values with no objects (a guard for it here survived the
+    # sweep as equivalent).
+    return await _backing_objects(conn, join, [join_key(value)], limit)
+
+
 async def follow(conn: Any, join: dict[str, Any], keys: list[Any]) -> list[str]:
     """The far values the backing objects pair with these near ones.
 

@@ -27,6 +27,7 @@ import { PropertyValue } from "@/components/property-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 import { summarise, visibleProperties } from "@/components/object-properties";
 import { linkSubsetHref } from "@/lib/link-subset";
+import { backingFor } from "@/lib/link-backing";
 import {
   PRIMARY_KEY_REF,
   type LinkedInstances,
@@ -156,7 +157,10 @@ function LinkGroup({
                 is not the one being followed. */}
             {group.join_table
               ? "through a join table"
-              : `${propertyLabel(group.near_property)} = ${propertyLabel(group.far_property)}`}
+              : group.backed
+                // §666: each link is a backing object, which says what is known of it.
+                ? `through ${group.backing_type_display_name ?? "backing objects"}`
+                : `${propertyLabel(group.near_property)} = ${propertyLabel(group.far_property)}`}
           </span>
         </h3>
         <span className="count">
@@ -188,6 +192,8 @@ function LinkGroup({
         <p className="login-note" style={{ margin: "4px 0 0" }}>
           {group.join_table
             ? "The join table pairs this object with nothing."
+            : group.backed
+              ? `No ${group.backing_type_display_name ?? "backing object"} links this object.`
             : group.matched_value === null || group.matched_value === undefined
               ? `No ${propertyLabel(group.near_property)} on this object, so this link points at nothing.`
               : `Nothing matches ${String(group.matched_value)}.`}
@@ -260,6 +266,15 @@ function LinkGroup({
                   Panel
                 </button>
               </div>
+              {/* p.199: "Select a link to view the link's backing object
+                  properties" (§667) - each backing object is one link. */}
+              {backingFor(group, i).map((m) => (
+                <div key={m.id} className="slug" data-testid="link-backing"
+                     style={{ margin: "2px 0 0 12px", fontSize: 12 }}>
+                  {`${group.backing_type_display_name ?? "Backing"} ${m.primary_key}: `}
+                  {Object.entries(m.properties).map(([k, v]) => `${k} ${v === null || v === undefined ? "—" : String(v)}`).join(" · ")}
+                </div>
+              ))}
               {open.has(i.id) && (
                 <LinkedPreview
                   workspaceId={workspaceId}
