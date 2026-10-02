@@ -1175,6 +1175,8 @@ function CanvasEnvBridge({
           // widgets on all the others while an author was arranging them.
           lazy={!enabled}
           branch={branch}
+          // The builder resolves what it is editing, not what was last saved.
+          working
           // Preview only, by the same argument as routing one line up: in
           // edit mode every page is on screen, so a variable choosing one
           // would hide the others from the author arranging them.

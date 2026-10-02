@@ -172,6 +172,9 @@ def test_the_saved_rebase_keeps_mains_new_variables(page, api) -> None:
 
     start_rebase(page, mod)
     expect(page.get_by_test_id("rebase-panel")).to_contain_text("No conflicts")
+    # p.621's "in real time": main's variable has its value in the merged
+    # module before the rebase is saved (§701), not only after.
+    expect(shown(page, "M=x")).to_be_visible()
     page.get_by_role("button", name="Save to branch").click()
     eventually(lambda: branch_of(mod)["base_version"], lambda v: v == 2,
                what="the rebase saved")
