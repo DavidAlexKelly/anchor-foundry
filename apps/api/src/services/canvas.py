@@ -395,6 +395,217 @@ async def set_usage_tracking(
     return dict(row)
 
 
+# ---- branches (§698, db 0136) -----------------------------------------------------
+# p.193: "When developing on a branch, you may need to rebase before merging your
+# Workshop changes into main if main has changed since your last save." A branch
+# is a second head of the same module; `canvas_apps.definition` stays main's.
+
+_BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
+
+_BRANCH_COLUMNS = (
+    "b.id, b.name, b.base_version, b.save_count, b.created_by, b.created_at, "
+    "b.updated_at, u.display_name AS created_by_name"
+)
+
+
+def check_branch_name(name: str) -> str:
+    """The rule 0136's CHECK enforces, said in words before the database says
+    it as a constraint name."""
+    if not _BRANCH_NAME_RE.match(name):
+        raise ValueError(
+            "a branch name is 1-63 letters, digits, '.', '_' or '-', "
+            "starting with a letter or digit"
+        )
+    if name.lower() == "main":
+        raise ValueError("'main' is the module's own head, not a branch name")
+    return name
+
+
+def _with_rebase(row: dict[str, Any], current_version: int) -> dict[str, Any]:
+    """p.193's "if main has changed since your last save", as a field: the
+    branch was taken from (or last rebased onto) a main version that main has
+    saved past."""
+    return {**row, "needs_rebase": int(row["base_version"]) < current_version}
+
+
+async def list_branches(
+    conn: AsyncConnection, project_id: UUID, app_id: UUID
+) -> list[dict[str, Any]]:
+    app = await get(conn, project_id, app_id)
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT {_BRANCH_COLUMNS}
+          FROM canvas_app_branches b
+          LEFT JOIN users u ON u.id = b.created_by
+         WHERE b.canvas_app_id = :aid
+         ORDER BY b.name
+        """,
+        {"aid": str(app_id)},
+    )
+    return [_with_rebase(dict(r), int(app["current_version"])) for r in rows]
+
+
+async def get_branch(
+    conn: AsyncConnection, project_id: UUID, app_id: UUID, name: str
+) -> dict[str, Any]:
+    app = await get(conn, project_id, app_id)
+    row = await fetch_one(
+        conn,
+        f"""
+        SELECT {_BRANCH_COLUMNS}, b.definition
+          FROM canvas_app_branches b
+          LEFT JOIN users u ON u.id = b.created_by
+         WHERE b.canvas_app_id = :aid AND b.name = :name
+        """,
+        {"aid": str(app_id), "name": name},
+    )
+    if row is None:
+        raise NotFoundError("branch")
+    return _with_rebase(dict(row), int(app["current_version"]))
+
+
+def _payload(definition: dict[str, Any]) -> str:
+    payload = json.dumps(definition)
+    if len(payload) > MAX_DEFINITION_BYTES:
+        raise ValueError(f"layout exceeds the {MAX_DEFINITION_BYTES // (1024 * 1024)} MB size limit")
+    return payload
+
+
+async def create_branch(
+    conn: AsyncConnection,
+    project_id: UUID,
+    app_id: UUID,
+    *,
+    name: str,
+    definition: dict[str, Any],
+    created_by: UUID,
+) -> dict[str, Any]:
+    """p.617-618's **Save to new branch**: "Name the branch", and what is saved is
+    the document the builder holds - so the edits somebody made on main before
+    deciding they belonged on a branch go to the branch, not nowhere.
+
+    Based on main's current version, which is the version those edits were
+    made against."""
+    check_branch_name(name)
+    app = await get(conn, project_id, app_id)
+    payload = _payload(definition)
+    taken = await fetch_one(
+        conn,
+        "SELECT 1 AS x FROM canvas_app_branches WHERE canvas_app_id = :aid AND name = :name",
+        {"aid": str(app_id), "name": name},
+    )
+    if taken is not None:
+        raise ConflictError(f"this module already has a branch named {name!r}")
+    await fetch_one(
+        conn,
+        """
+        INSERT INTO canvas_app_branches
+                    (canvas_app_id, name, definition, base_version, save_count, created_by)
+        VALUES (:aid, :name, CAST(:def AS jsonb), :base, 1, :by)
+        RETURNING id
+        """,
+        {"aid": str(app_id), "name": name, "def": payload,
+         "base": int(app["current_version"]), "by": str(created_by)},
+    )
+    return await get_branch(conn, project_id, app_id, name)
+
+
+async def save_branch(
+    conn: AsyncConnection,
+    project_id: UUID,
+    app_id: UUID,
+    name: str,
+    *,
+    definition: dict[str, Any],
+    base_version: int | None = None,
+) -> dict[str, Any]:
+    """A save on a branch: its document changes and main's does not.
+
+    `base_version` is given only by a rebase (§699), which is the one save
+    that moves what the branch is based on - and it must name main's current
+    version, because a rebase onto a main that has since moved again has
+    merged against the wrong ancestor."""
+    app = await get(conn, project_id, app_id)
+    payload = _payload(definition)
+    if base_version is not None and base_version != int(app["current_version"]):
+        raise ConflictError(
+            f"main is at version {app['current_version']}, not {base_version} - "
+            "it changed during the rebase, so rebase again"
+        )
+    row = await fetch_one(
+        conn,
+        """
+        UPDATE canvas_app_branches
+           SET definition = CAST(:def AS jsonb),
+               save_count = save_count + 1,
+               base_version = COALESCE(:base, base_version)
+         WHERE canvas_app_id = :aid AND name = :name
+        RETURNING id
+        """,
+        {"aid": str(app_id), "name": name, "def": payload, "base": base_version},
+    )
+    if row is None:
+        raise NotFoundError("branch")
+    return await get_branch(conn, project_id, app_id, name)
+
+
+async def delete_branch(conn: AsyncConnection, project_id: UUID, app_id: UUID, name: str) -> None:
+    await get(conn, project_id, app_id)
+    row = await fetch_one(
+        conn,
+        "DELETE FROM canvas_app_branches WHERE canvas_app_id = :aid AND name = :name RETURNING id",
+        {"aid": str(app_id), "name": name},
+    )
+    if row is None:
+        raise NotFoundError("branch")
+
+
+async def merge_branch(
+    conn: AsyncConnection,
+    project_id: UUID,
+    app_id: UUID,
+    name: str,
+    *,
+    created_by: UUID,
+) -> dict[str, Any]:
+    """Merge a branch into main: its document becomes main's next version.
+
+    **Refused while main has moved past the branch's base** - p.193: "you may
+    need to rebase before merging … if main has changed since your last save".
+    Merging anyway would replace main with a document that never saw main's
+    newer changes, and they would be gone without anybody having chosen that.
+
+    Main's row is locked first, so a save to main between the check and the
+    merge waits for the merge rather than being overwritten by it.
+    """
+    locked = await fetch_one(
+        conn,
+        "SELECT current_version FROM canvas_apps WHERE id = :aid AND project_id = :pid FOR UPDATE",
+        {"aid": str(app_id), "pid": str(project_id)},
+    )
+    if locked is None:
+        raise NotFoundError("canvas app")
+    branch = await get_branch(conn, project_id, app_id, name)
+    if branch["needs_rebase"]:
+        raise ConflictError(
+            f"main has changed since branch {name!r} was based on version "
+            f"{branch['base_version']} (main is at {locked['current_version']}) - "
+            "rebase the branch before merging it"
+        )
+    definition = branch["definition"]
+    if isinstance(definition, str):
+        definition = json.loads(definition)
+    row = await save_definition(
+        conn, project_id, app_id,
+        definition=definition,
+        created_by=created_by,
+        version_description=f"Merged branch {name}",
+    )
+    await delete_branch(conn, project_id, app_id, name)
+    return row
+
+
 # ---- publishing ---------------------------------------------------------------
 async def set_publish_scope(
     conn: AsyncConnection,

@@ -82,6 +82,8 @@ import {
 } from "@/components/canvas/auto-refresh";
 import { useModuleTitle } from "@/components/canvas/module-title";
 import type {
+  CanvasAppBranch,
+  CanvasAppBranchDetail,
   CanvasAppDetail,
   CanvasPublishScope,
   Group,
@@ -475,6 +477,18 @@ function PublishDialog({
   );
 }
 
+/** Which saved document the editor is on: main at a version, or a branch at
+ * a save. Compared, never parsed - it is what `ownSave` recognises its own
+ * write by (§698). */
+function headKey(
+  branchName: string | null,
+  saved: number | undefined | { id: string; save_count: number; base_version: number },
+): string {
+  if (branchName === null) return `main:${saved ?? ""}`;
+  const b = typeof saved === "object" ? saved : undefined;
+  return `${branchName}:${b?.id ?? ""}:${b?.save_count ?? ""}:${b?.base_version ?? ""}`;
+}
+
 /** The builder's own controls, under the shell's header rather than instead of
  * it. What is left after the breadcrumb and title moved up: the version state,
  * which is Workshop's alone and is the one thing an author of a published
@@ -498,12 +512,24 @@ function ActionBar({
   onView,
   onReverted,
   onSaved,
+  branch,
+  branches,
+  onBranch,
+  onMerged,
 }: {
   app: CanvasAppDetail;
   workspaceId: string;
   projectId: string;
   canEdit: boolean;
   canPublish: boolean;
+  /** The branch being edited (§698), or null for main. When set, `app`'s
+   * definition is the branch's and Save writes to the branch. */
+  branch: CanvasAppBranchDetail | null;
+  branches: CanvasAppBranch[];
+  /** Switch heads: a branch name, or null for main. */
+  onBranch: (name: string | null) => void;
+  /** Main changed underneath the editor - a merge landed on it. */
+  onMerged: () => void;
   variables: Record<string, WorkshopVariable>;
   events: Record<string, WorkshopEvent>;
   routing: boolean;
@@ -531,9 +557,9 @@ function ActionBar({
   kiosk: boolean;
   onView: (version: number) => void;
   onReverted: () => void;
-  /** The version this Save wrote, told to the builder before the refetch it
-   * triggers lands - see `ownSave` there. */
-  onSaved: (version: number) => void;
+  /** The head this Save wrote (`headKey`), told to the builder before the
+   * refetch it triggers lands - see `ownSave` there. */
+  onSaved: (head: string) => void;
 }) {
   const { enabled, actions, query } = useEditor((state) => ({ enabled: state.options.enabled }));
   const [showPublish, setShowPublish] = useState(false);
@@ -541,34 +567,50 @@ function ActionBar({
   const [failure, setFailure] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
+  // The document as the editor holds it. One function because three things
+  // write it - a save to main, a save to a branch, and Save to new branch -
+  // and a copy that left a part out would silently discard it on that path.
+  const currentDocument = () =>
+    moduleFrom(app.definition, {
+      layout: query.getSerializedNodes(),
+      variables,
+      events,
+      routing: { enabled: routing },
+      pageSelection,
+      stateSaving,
+      translations,
+      kiosk: { enabled: kiosk },
+      autoRefresh,
+      derivedProperties,
+      savedColours,
+    });
+
   const save = useMutation({
     // All three parts in one save. The layout comes from Craft.js, the
     // variables and events from their panels, and a save carrying only some of
     // them would silently discard the rest.
-    mutationFn: (description: string) =>
-      canvasApi.saveDefinition(
-        workspaceId,
-        projectId,
-        app.id,
-        moduleFrom(app.definition, {
-          layout: query.getSerializedNodes(),
-          variables,
-          events,
-          routing: { enabled: routing },
-          pageSelection,
-          stateSaving,
-          translations,
-          kiosk: { enabled: kiosk },
-          autoRefresh,
-          derivedProperties,
-          savedColours,
-        }),
-        description,
-      ),
+    //
+    // **On a branch, to the branch** (§698): main's document, version and
+    // viewers are what a branch exists to leave alone. A branch has no
+    // version descriptions - its record is the merge's description on main.
+    mutationFn: async (description: string) => {
+      if (branch) {
+        const saved = await canvasApi.saveBranch(
+          workspaceId, projectId, app.id, branch.name, currentDocument(),
+        );
+        return headKey(saved.name, saved);
+      }
+      const saved = await canvasApi.saveDefinition(
+        workspaceId, projectId, app.id, currentDocument(), description,
+      );
+      return headKey(null, saved.current_version);
+    },
     onSuccess: async (saved) => {
       setFailure(null);
-      onSaved(saved.current_version);
+      onSaved(saved);
       await queryClient.invalidateQueries({ queryKey: ["canvas-app", app.id] });
+      await queryClient.invalidateQueries({ queryKey: ["canvas-app-branch", app.id] });
+      await queryClient.invalidateQueries({ queryKey: ["canvas-app-branches", app.id] });
     },
     // The server refuses a cycle or a binding to a variable that is not
     // declared. Surfaced here rather than swallowed: the save did not happen,
@@ -576,9 +618,70 @@ function ActionBar({
     onError: (e: Error) => setFailure(e.message),
   });
 
+  // p.617-618's **Save to new branch**: "Name the branch", and the document
+  // the builder holds is what the branch starts as - so edits made on main
+  // before deciding they belonged on a branch go with it.
+  const toBranch = useMutation({
+    mutationFn: (name: string) =>
+      canvasApi.createBranch(workspaceId, projectId, app.id, name, currentDocument()),
+    onSuccess: async (made) => {
+      setFailure(null);
+      await queryClient.invalidateQueries({ queryKey: ["canvas-app-branches", app.id] });
+      onBranch(made.name);
+    },
+    onError: (e: Error) => setFailure(e.message),
+  });
+
+  // Merge into main. The server refuses (409) while main has moved past the
+  // branch's base; the button says so before anybody presses it.
+  const merge = useMutation({
+    mutationFn: (name: string) => canvasApi.mergeBranch(workspaceId, projectId, app.id, name),
+    onSuccess: async () => {
+      setFailure(null);
+      await queryClient.invalidateQueries({ queryKey: ["canvas-app", app.id] });
+      await queryClient.invalidateQueries({ queryKey: ["canvas-app-branches", app.id] });
+      onBranch(null);
+      onMerged();
+    },
+    onError: (e: Error) => setFailure(e.message),
+  });
+
+  const dropBranch = useMutation({
+    mutationFn: (name: string) => canvasApi.deleteBranch(workspaceId, projectId, app.id, name),
+    onSuccess: async () => {
+      setFailure(null);
+      await queryClient.invalidateQueries({ queryKey: ["canvas-app-branches", app.id] });
+      onBranch(null);
+    },
+    onError: (e: Error) => setFailure(e.message),
+  });
+
   return (
     <div className="ws-actions">
+      {/* The branch selector (§698; p.617 "use the branch selector to switch to
+          that branch"). Switching heads remounts the editor on the other
+          document, so it is beside Save rather than inside a dialog. */}
+      <select
+        aria-label="Branch"
+        data-testid="branch-select"
+        value={branch?.name ?? ""}
+        onChange={(e) => onBranch(e.target.value || null)}
+      >
+        <option value="">main</option>
+        {branches.map((b) => (
+          <option key={b.id} value={b.name}>{b.name}</option>
+        ))}
+      </select>
       <p className="sub">
+        {branch && (
+          <span data-testid="branch-status">
+            branch {branch.name} · from v{branch.base_version}
+            {/* p.193's "if main has changed since your last save", said where
+                the person who has to rebase will see it. */}
+            {branch.needs_rebase && ` · main is at v${app.current_version}, rebase required`}
+            {" · "}
+          </span>
+        )}
         v{app.current_version}
         {app.publish_scope !== "private" && ` · published (${app.publish_scope})`}
         {/* The one thing an author of a published app has to be able to see:
@@ -619,7 +722,50 @@ function ActionBar({
               save.mutate("");
             }}
           >
-            {save.isPending ? "Saving…" : "Save"}
+            {save.isPending ? "Saving…" : branch ? "Save to branch" : "Save"}
+          </button>
+        )}
+        {canEdit && enabled && !branch && (
+          <button
+            type="button"
+            className="btn quiet"
+            disabled={toBranch.isPending}
+            onClick={() => {
+              const name = window.prompt("Name the branch", "");
+              if (name === null || !name.trim()) return;
+              toBranch.mutate(name.trim());
+            }}
+          >
+            Save to new branch
+          </button>
+        )}
+        {canEdit && branch && (
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="merge-branch"
+            disabled={merge.isPending || branch.needs_rebase}
+            title={
+              branch.needs_rebase
+                ? `Main has changed since this branch was taken from v${branch.base_version}. Rebase it first.`
+                : "Make this branch the next version of main"
+            }
+            onClick={() => merge.mutate(branch.name)}
+          >
+            Merge into main
+          </button>
+        )}
+        {canEdit && branch && (
+          <button
+            type="button"
+            className="btn quiet"
+            disabled={dropBranch.isPending}
+            onClick={() => {
+              if (!window.confirm(`Delete branch ${branch.name}? Its changes are not on main.`)) return;
+              dropBranch.mutate(branch.name);
+            }}
+          >
+            Delete branch
           </button>
         )}
         <button type="button" className="btn quiet" onClick={() => setShowVersions(true)}>
@@ -663,6 +809,7 @@ function CanvasEnvBridge({
   layout,
   pageSelection,
   stateSaving,
+  branch,
   children,
 }: {
   workspaceId: string;
@@ -701,6 +848,8 @@ function CanvasEnvBridge({
    * routing is: p.200 calls this a feature for module *consumers*, and an
    * author arranging widgets has no reading state worth naming. */
   stateSaving?: import("@/lib/types").WorkshopModule["state_saving"];
+  /** The branch being edited (§698), so variables resolve its document. */
+  branch?: string;
   children: React.ReactNode;
 }) {
   const { enabled, actions } = useEditor((state) => ({ enabled: state.options.enabled }));
@@ -750,6 +899,7 @@ function CanvasEnvBridge({
           // answering "what is visible" would name one page and blank the
           // widgets on all the others while an author was arranging them.
           lazy={!enabled}
+          branch={branch}
           // Preview only, by the same argument as routing one line up: in
           // edit mode every page is on screen, so a variable choosing one
           // would hide the others from the author arranging them.
@@ -974,6 +1124,25 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     enabled: !!projectId,
   });
 
+  // The head being edited (§698): null for main, or a branch's name. Read
+  // from `?branch=` once, so a link to a branch opens on it.
+  const [branchName, setBranchName] = useState<string | null>(search.get("branch"));
+  const branchesQuery = useQuery({
+    queryKey: ["canvas-app-branches", appId],
+    queryFn: () => canvasApi.listBranches(workspaceId, projectId!, appId),
+    enabled: !!projectId,
+  });
+  const branchQuery = useQuery({
+    queryKey: ["canvas-app-branch", appId, branchName],
+    queryFn: () => canvasApi.getBranch(workspaceId, projectId!, appId, branchName!),
+    enabled: !!projectId && !!branchName,
+  });
+  const branch = branchName ? branchQuery.data ?? null : null;
+  // The document the editor works on: the branch's when one is open. Every
+  // reader below takes it from here, so main's document cannot leak into a
+  // branch's editor through a prop somebody forgot.
+  const headDefinition = branchName ? branch?.definition : appQuery.data?.definition;
+
   // The tab name (p.47). Above the early returns because it is a hook, and
   // fed the *saved* document rather than the editor's live node map: retyping
   // a header title should not rewrite the tab on every keystroke.
@@ -1064,31 +1233,39 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     { language: string; snapshot: Record<string, unknown> } | null
   >(null);
   const savedVersion = appQuery.data?.current_version;
-  // **The version this builder's own Save wrote.** The refetch a Save triggers
+  // Reseeded when the head's *saved* document changes - a new main version, a
+  // branch save, or a switch of head - and never on a plain refetch, which
+  // would discard edits somebody has made but not saved.
+  const savedHead = branchName
+    ? headKey(branchName, branch ?? undefined)
+    : headKey(null, savedVersion);
+  // **The head this builder's own Save wrote.** The refetch a Save triggers
   // brings back exactly what was sent, so resetting the panels from it can
   // only lose something: an edit made in the moment between the PUT returning
   // and the refetch landing went back to the saved value, and the next Save
-  // wrote the old value over it (#468, a test that kept editing). A revert or
-  // a first load is a version this builder did not write, and still resets.
-  const ownSave = useRef<number | null>(null);
+  // wrote the old value over it (#468, a test that kept editing). A revert, a
+  // merge, a switch of head or a first load is a head this builder did not
+  // write, and still resets. Keyed on the head rather than main's version
+  // since §698, because a branch save is the same race.
+  const ownSave = useRef<string | null>(null);
   useEffect(() => {
-    if (!appQuery.data) return;
-    if (savedVersion === ownSave.current) return;
-    setVariables(variablesOf(appQuery.data.definition));
-    setEvents(eventsOf(appQuery.data.definition));
-    setRouting(routingOf(appQuery.data.definition));
-    setPageSelection(pageSelectionOf(appQuery.data.definition));
-    setStateSaving(stateSavingOf(appQuery.data.definition));
-    setTranslations(translationsOf(appQuery.data.definition));
-    setKiosk(kioskOf(appQuery.data.definition));
-    setAutoRefresh(autoRefreshSettings(autoRefreshOf(appQuery.data.definition)));
+    if (!appQuery.data || !headDefinition) return;
+    if (savedHead === ownSave.current) return;
+    setVariables(variablesOf(headDefinition));
+    setEvents(eventsOf(headDefinition));
+    setRouting(routingOf(headDefinition));
+    setPageSelection(pageSelectionOf(headDefinition));
+    setStateSaving(stateSavingOf(headDefinition));
+    setTranslations(translationsOf(headDefinition));
+    setKiosk(kioskOf(headDefinition));
+    setAutoRefresh(autoRefreshSettings(autoRefreshOf(headDefinition)));
     setDerivedProperties(
-      (derivedPropertiesOf(appQuery.data.definition) as typeof derivedProperties) ?? {},
+      (derivedPropertiesOf(headDefinition) as typeof derivedProperties) ?? {},
     );
     setSavedColours(
-      (savedColoursOf(appQuery.data.definition) as typeof savedColours) ?? [],
+      (savedColoursOf(headDefinition) as typeof savedColours) ?? [],
     );
-  }, [savedVersion, appQuery.data?.id]);
+  }, [savedHead, appQuery.data?.id]);
 
   // A module always lives in a project. A resolved `canvas_app` without one is
   // a registry row that disagrees with its own table, and saying so beats
@@ -1103,7 +1280,26 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     return <div className="state error">Couldn&apos;t load this app. It may have been deleted.</div>;
   }
 
-  const app = appQuery.data;
+  if (branchName && branchQuery.isPending) {
+    return <div className="state">Loading branch {branchName}…</div>;
+  }
+  if (branchName && branchQuery.isError) {
+    return (
+      <div className="state error">
+        Couldn&apos;t load branch {branchName}. It may have been merged or deleted.{" "}
+        <button type="button" className="btn quiet" onClick={() => setBranchName(null)}>
+          Open main
+        </button>
+      </div>
+    );
+  }
+
+  // On a branch, the module *as the editor sees it* is main's row with the
+  // branch's document - the id, the version main is at and the publish state
+  // stay main's, because they are.
+  const app: CanvasAppDetail = branch
+    ? { ...appQuery.data, definition: branch.definition }
+    : appQuery.data;
 
   // "View this version" (p.191). Rendered instead of the builder rather than
   // inside it: a historic document in an *editable* canvas is one Save away
@@ -1153,7 +1349,10 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
       />
     )}
     <Editor
-      key={reloadToken}
+      // Remounted on a switch of head as well as on a revert: Craft reads
+      // `<Frame data>` once, so the other head's document would otherwise
+      // never reach the canvas.
+      key={`${reloadToken}:${branchName ?? ""}`}
       resolver={CANVAS_RESOLVER}
       enabled={canEdit}
       onRender={CanvasNode}
@@ -1172,6 +1371,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
         autoRefresh={autoRefresh}
         derivedProperties={derivedProperties}
         savedColours={savedColours}
+        branch={branchName ?? undefined}
       >
         <ActionBar
           app={app}
@@ -1191,7 +1391,11 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           savedColours={savedColours}
           onView={setViewingVersion}
           onReverted={() => setReloadToken((n) => n + 1)}
-          onSaved={(version) => { ownSave.current = version; }}
+          onSaved={(head) => { ownSave.current = head; }}
+          branch={branch}
+          branches={branchesQuery.data ?? []}
+          onBranch={setBranchName}
+          onMerged={() => setReloadToken((n) => n + 1)}
         />
         <CanvasBody
           hasSavedLayout={hasLayout(app.definition)}

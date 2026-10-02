@@ -3414,6 +3414,27 @@ export interface CanvasAppVersion {
   description: string;
 }
 
+/** A module branch (§698, db 0136): a second head of the same module, whose
+ * document main's viewers never see (Foundry p.193, p.617-621). */
+export interface CanvasAppBranch {
+  id: string;
+  name: string;
+  /** The main version this branch was taken from or last rebased onto. */
+  base_version: number;
+  save_count: number;
+  /** p.193's "if main has changed since your last save": main has saved past
+   * `base_version`, so the branch must be rebased before it merges. */
+  needs_rebase: boolean;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CanvasAppBranchDetail extends CanvasAppBranch {
+  definition: Record<string, unknown>;
+}
+
 export interface CanvasAppShare {
   group_id: string;
   group_name: string;

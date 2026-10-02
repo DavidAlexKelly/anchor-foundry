@@ -68,11 +68,15 @@ export function VariableBridge({
   countViews = false,
   pageSelection,
   stateSaving,
+  branch,
   children,
 }: {
   workspaceId: string;
   projectId: string;
   appId: string;
+  /** The branch the builder is editing (§698). Its document is the one the
+   * server resolves, since a branch may declare variables main does not. */
+  branch?: string;
   /** True on the workspace-wide published route. A published app is reached by
    * someone who may not be in its project at all, so the project-scoped
    * resolve would 404 for exactly the audience it was published to. */
@@ -301,7 +305,8 @@ export function VariableBridge({
         ? canvasApi.evaluatePublishedVariables(
           workspaceId, appId, raw, bound, held, asks, visible, profiler.on)
         : canvasApi.evaluateVariables(
-          workspaceId, projectId, appId, raw, bound, held, asks, visible, profiler.on))
+          workspaceId, projectId, appId, raw, bound, held, asks, visible, profiler.on,
+          branch))
         .then((data) => ({ data, ticket, held, asks, from }));
     },
     onSuccess: ({ data, ticket, held, asks, from }) => {
