@@ -540,6 +540,9 @@ REFERENCE_PROPS = (
     # p.301's Selected shapes on the Map (§641): GeoJSON of the drawn shapes
     # selected, read and written.
     "selectedShapesVariable",
+    # p.397's default save location on Time Series Analysis (§662): "use a
+    # string variable to provide the default save location". Read.
+    "saveProjectVariable",
     # p.225's variable-backed column visibility on the Object Table (§610):
     # the string array naming which configured columns show, in order.
     "columnsVariable",

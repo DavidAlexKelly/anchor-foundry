@@ -18,7 +18,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import _signed_in, open_builder, open_module, save, settled
+from conftest import WEB_BASE, _signed_in, open_builder, open_module, save, settled
 from test_series_column import module  # noqa: F401
 
 
@@ -745,3 +745,105 @@ def test_the_panel_sets_the_add_data_options(page, api, module) -> None:
     props = mod.definition()["layout"]["tsa"]["props"]
     assert props["addData"] is True
     assert props["addDataSets"] == [{"objectSetVariable": "v_all"}]
+
+
+def save_as(page, name: str, visibility: str = "private") -> None:
+    page.get_by_role("button", name="Save as new analysis").click()
+    page.get_by_label("Analysis name").fill(name)
+    page.get_by_label("Analysis visibility").select_option(visibility)
+    page.get_by_test_id("series-save-analysis").get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_test_id("series-analysis-open")).to_contain_text(name)
+
+
+def test_an_analysis_saved_and_opened_again(page, api, module) -> None:
+    """p.397's Enable analysis saving (§662): the view is saved - a derived
+    plot, its canvas and an axis's scale - and opened again over the set."""
+    mod = build(api, module, "Analysis saving", saving=True)
+    open_module(page, mod)
+    rows = page.locator("[data-testid='series-plots'] tbody tr")
+    expect(rows).to_have_count(3)
+    page.get_by_label("New plot").select_option("cumulative")
+    page.get_by_label("Input plot").select_option(label="North sensor")
+    page.get_by_role("button", name="Add plot").click()
+    page.get_by_role("button", name="New canvas").click()
+    page.get_by_label("Cumulative aggregate of North sensor canvas").select_option("2")
+    page.get_by_label("Canvas 1 axis 1 log scale").check()
+    name = f"Sensors {mod.tag}"
+    save_as(page, name)
+    expect(page.get_by_test_id("series-analysis-open")).to_have_text(f"{name} (private)")
+    # A fresh page is the set's plots alone, until the analysis is opened.
+    open_module(page, mod)
+    expect(rows).to_have_count(3)
+    page.get_by_role("button", name="Open analysis").click()
+    page.get_by_label(f"Open {name}").click()
+    expect(rows).to_have_count(4)
+    expect(page.locator("[data-testid='series-canvas-2'] path[data-plot]")).to_have_count(1)
+    expect(page.get_by_label("Canvas 1 axis 1 log scale")).to_be_checked()
+    # Saved over: the derived plot removed, and gone when opened again.
+    page.get_by_label("Remove Cumulative aggregate of North sensor").click()
+    page.get_by_role("button", name="Save analysis").click()
+    open_module(page, mod)
+    page.get_by_role("button", name="Open analysis").click()
+    page.get_by_label(f"Open {name}").click()
+    expect(page.get_by_test_id("series-analysis-open")).to_have_text(f"{name} (private)")
+    expect(rows).to_have_count(3)
+    # One name once.
+    save_as_button = page.get_by_role("button", name="Save as new analysis")
+    save_as_button.click()
+    page.get_by_label("Analysis name").fill(name)
+    page.get_by_test_id("series-save-analysis").get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_test_id("series-save-analysis").get_by_role("alert")).to_contain_text("already have")
+
+
+def test_a_public_analysis_another_reader_opens_but_cannot_save_over(page, viewer_page, api, module) -> None:
+    mod = build(api, module, "Analysis shared", saving=True)
+    open_module(page, mod)
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    public, private = f"Shared {mod.tag}", f"Mine {mod.tag}"
+    save_as(page, public, "public")
+    # Saved over, it stays shared.
+    page.get_by_role("button", name="Save analysis").click()
+    expect(page.get_by_test_id("series-analysis-open")).to_have_text(f"{public} (public)")
+    save_as(page, private)
+    # A viewer has no builder to preview out of: the module's address is the app.
+    viewer_page.goto(f"{WEB_BASE}{mod.url}")
+    settled(viewer_page)
+    viewer_page.get_by_role("button", name="Open analysis").click()
+    listed = viewer_page.locator("[data-testid='series-open-analysis'] tbody tr")
+    expect(listed.filter(has_text=public)).to_have_count(1)
+    expect(listed.filter(has_text=private)).to_have_count(0)
+    viewer_page.get_by_label(f"Open {public}").click()
+    expect(viewer_page.get_by_test_id("series-analysis-open")).to_contain_text(f"{public} (public, by ")
+    expect(viewer_page.get_by_role("button", name="Save analysis")).to_have_count(0)
+    viewer_page.get_by_role("button", name="Save as new analysis").click()
+    expect(viewer_page.get_by_label("Analysis name")).to_have_value(f"{public} copy")
+
+
+def test_no_saving_unless_the_builder_allows_it(page, api, module) -> None:
+    open_module(page, build(api, module, "Analysis not saved"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    expect(page.get_by_role("button", name="Open analysis")).to_have_count(0)
+    expect(page.get_by_role("button", name="Save as new analysis")).to_have_count(0)
+
+
+def test_a_fixed_save_location_offers_no_choice(page, api, module) -> None:
+    open_module(page, build(api, module, "Analysis fixed location", saving=True, fixedSaveLocation=True))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_role("button", name="Save as new analysis").click()
+    expect(page.get_by_label("Save location")).to_have_count(0)
+
+
+def test_the_panel_sets_the_saving_options(page, api, module) -> None:
+    mod = build(api, module, "Analysis saving options")
+    definition = mod.definition()
+    definition["variables"]["v_where"] = {"id": "v_where", "kind": "string", "label": "Where"}
+    mod.define(definition)
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Time series analysis").first.click()
+    page.get_by_label("Enable analysis saving").check()
+    page.get_by_label("Default save location variable").select_option("v_where")
+    page.get_by_label("Don't allow users to choose save location").check()
+    save(page)
+    props = mod.definition()["layout"]["tsa"]["props"]
+    assert (props["saving"], props["saveProjectVariable"], props["fixedSaveLocation"]) == (True, "v_where", True)

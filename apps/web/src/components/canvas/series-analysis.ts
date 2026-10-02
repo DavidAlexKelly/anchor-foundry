@@ -112,14 +112,19 @@ export function rootPlots(
  * still in the set keeps all the reader set on it - canvas, style, display
  * and axis (§655, §656) - and takes the set's label. */
 export function withRoots(plots: readonly Plot[], roots: readonly Plot[]): Plot[] {
-  // An added root's id is its own (`added:`), so it is never a set root's.
   const kept = new Map(plots.filter((p) => p.root).map((p) => [p.id, p]));
+  // A root the set holds is the set's, even one kept as added when an opened
+  // analysis named it and the set did not (§662).
   const nextRoots = roots.map((r) => {
     const was = kept.get(r.id);
-    return was ? { ...was, label: r.label, root: r.root } : r;
+    if (!was) return r;
+    const { added: _added, ...settings } = was;
+    return { ...settings, label: r.label, root: r.root };
   });
-  const ids = new Set([...nextRoots, ...plots.filter((p) => p.added)].map((r) => r.id));
-  const rest = plots.filter((p) => p.added || (!p.root && rootOf(plots, p.id) !== null
+  const setIds = new Set(nextRoots.map((r) => r.id));
+  const added = plots.filter((p) => p.added && !setIds.has(p.id));
+  const ids = new Set([...nextRoots, ...added].map((r) => r.id));
+  const rest = plots.filter((p) => (p.added && !setIds.has(p.id)) || (!p.root && rootOf(plots, p.id) !== null
     && ids.has(rootOf(plots, p.id)!.id)));
   return [...nextRoots, ...rest];
 }
@@ -969,4 +974,45 @@ export function hoveredOf(candidates: readonly { id: string; y: number }[], poin
     if (!best || Math.abs(c.y - pointerY) < Math.abs(best.y - pointerY)) best = c;
   }
   return best?.id ?? null;
+}
+
+
+/** p.397's saved analysis (§662): the view this widget reopens - its plots,
+ * the canvases the reader added, their event sets and axes - never readings,
+ * which are read again. */
+export interface SavedView { plots: Plot[]; canvases: number; eventSets: EventSet[]; axes: Axes }
+
+export function savedViewOf(plots: readonly Plot[], canvases: number, eventSets: readonly EventSet[], axes: Axes): SavedView {
+  return { plots: [...plots], canvases, eventSets: [...eventSets], axes };
+}
+
+function isPlot(raw: unknown): raw is Plot {
+  if (!raw || typeof raw !== "object") return false;
+  const p = raw as Record<string, unknown>;
+  const root = p.root as Record<string, unknown> | null | undefined;
+  return typeof p.id === "string" && typeof p.label === "string" && typeof p.canvas === "number"
+    && (p.style === "solid" || p.style === "dashed") && Array.isArray(p.transforms)
+    && (p.parent === null || typeof p.parent === "string")
+    && (root === null || (!!root && typeof root.objectId === "string" && typeof root.typeId === "string"
+      && typeof root.property === "string" && typeof root.objectLabel === "string"));
+}
+
+/** A saved view opened over the set's roots now: a saved root the set still
+ * holds takes back what the reader set on it, and one it no longer holds is
+ * kept as if the reader had added it (§661), so nothing saved is lost. What
+ * is not a plot, an event set or a number is left out. */
+export function openedView(raw: unknown, roots: readonly Plot[]): SavedView {
+  const v = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const ids = new Set(roots.map((r) => r.id));
+  const saved = (Array.isArray(v.plots) ? v.plots : []).filter(isPlot)
+    .map((p) => (p.root && !ids.has(p.id) ? { ...p, added: true } : p));
+  const sets = (Array.isArray(v.eventSets) ? v.eventSets : []).filter((e): e is EventSet =>
+    !!e && typeof e === "object" && typeof (e as EventSet).id === "string"
+    && typeof (e as EventSet).label === "string" && typeof (e as EventSet).plot === "string");
+  return {
+    plots: withRoots(saved, roots),
+    canvases: typeof v.canvases === "number" && Number.isInteger(v.canvases) && v.canvases >= 0 ? v.canvases : 0,
+    eventSets: sets,
+    axes: v.axes && typeof v.axes === "object" && !Array.isArray(v.axes) ? v.axes as Axes : {},
+  };
 }

@@ -2373,6 +2373,36 @@ export interface ActionDefinitionInput {
   criteria: { message: string; config: Record<string, unknown> }[];
 }
 
+/** Saved time series analyses (§662; `workshop` p.397): a project's, the
+ * caller's own and its public ones. */
+export interface SeriesAnalysis {
+  id: string;
+  name: string;
+  visibility: "private" | "public";
+  state: Record<string, unknown>;
+  created_by: string;
+  created_by_name: string | null;
+  /** The caller's, and so theirs to save over or delete. */
+  mine: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export const seriesAnalyses = {
+  list: (wid: string, pid: string) =>
+    request<SeriesAnalysis[]>(`/workspaces/${wid}/projects/${pid}/series-analyses`),
+  get: (wid: string, pid: string, id: string) =>
+    request<SeriesAnalysis>(`/workspaces/${wid}/projects/${pid}/series-analyses/${id}`),
+  save: (wid: string, pid: string, body: { name: string; visibility: string; state: unknown }) =>
+    request<SeriesAnalysis>(`/workspaces/${wid}/projects/${pid}/series-analyses`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  replace: (wid: string, pid: string, id: string, body: { visibility: string; state: unknown }) =>
+    request<SeriesAnalysis>(`/workspaces/${wid}/projects/${pid}/series-analyses/${id}`, {
+      method: "PUT", body: JSON.stringify(body),
+    }),
+};
+
 /** Somebody's notifications (Foundry `action-types` p.91; §257).
  *
  * **No workspace in the path**, which is p.91's shape rather than a shortcut:
