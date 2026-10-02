@@ -19,6 +19,7 @@ const node = (
   is_focus: false,
   slug: null,
   origin: null,
+  repository_name: null,
   row_count: null,
   current_version: null,
   health_status: null,

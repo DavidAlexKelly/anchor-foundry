@@ -61,6 +61,8 @@ export const COLOURINGS: ColouringOption[] = [
     hint: "Dataset, model or object type" },
   { id: "origin", label: "Resource overview",
     hint: "p.38: the way the resource was created" },
+  { id: "repository", label: "Repository",
+    hint: "p.38: the code repository each was written in" },
   { id: "permissions", label: "Permissions",
     hint: "p.80: what one person can see, chosen under View as" },
   { id: "rows", label: "Row count",
@@ -95,6 +97,9 @@ export interface ColourableNode {
    *  asked" rather than as "no access" (§210). */
   access?: { role: string | null; via: string } | null;
   origin: string | null;
+  /** p.38's Repository (§677): the code repository a model was written in,
+   *  or that of the model writing a dataset. */
+  repository_name: string | null;
   health_status: string | null;
   last_run_status: string | null;
   out_of_date: boolean;
@@ -270,6 +275,8 @@ export function swatchFor(
       return originSwatch(node);
     case "permissions":
       return permissionSwatch(node);
+    case "repository":
+      return repositorySwatch(node, scale ?? null);
     default:
       return statusSwatch(node);
   }
@@ -303,6 +310,9 @@ const LEGEND_ORDER: Record<string, readonly string[]> = {
   // `effective_project_role` could grow one — sorts after everything rather
   // than being dropped, which is the rule every colouring here follows.
   permissions: ["none", "viewer", "editor", "owner", "unasked"],
+  // Every repository by name (a `*` matches a key's prefix), then the nodes
+  // no repository wrote.
+  repository: ["repo:*", "none"],
   // Most first - the biggest datasets, the longest since built - then the
   // nodes with nothing to measure.
   rows: ["q3", "q2", "q1", "q0", "none"],
@@ -340,7 +350,7 @@ export function legendFor(
   }
   const order = LEGEND_ORDER[colouring] ?? [];
   const rank = (key: string) => {
-    const at = order.indexOf(key);
+    const at = order.findIndex((o) => (o.endsWith("*") ? key.startsWith(o.slice(0, -1)) : o === key));
     return at === -1 ? order.length : at;
   };
   return [...seen.values()].sort(
@@ -381,6 +391,9 @@ export interface Scale {
   colouring: string;
   now: number;
   edges: number[];
+  /** p.38's Repository (§677): the graph's repositories by name, each taking
+   *  the colour at its place. */
+  repositories?: string[];
 }
 
 /** What a node measures under a quantitative colouring, or `null` for none:
@@ -409,6 +422,10 @@ export function quantityOf(node: ColourableNode, colouring: string, now: number)
 export function scaleFor(
   nodes: readonly ColourableNode[], colouring: string, now: number = Date.now(),
 ): Scale | null {
+  if (colouring === "repository") {
+    const names = nodes.map((n) => n.repository_name).filter((n): n is string => !!n);
+    return { colouring, now, edges: [], repositories: [...new Set(names)].sort((a, b) => a.localeCompare(b)) };
+  }
   if (!QUANTITATIVE.includes(colouring)) return null;
   const values = nodes.map((n) => quantityOf(n, colouring, now))
     .filter((v): v is number => v !== null).sort((a, b) => a - b);
@@ -460,4 +477,23 @@ export function ageText(ms: number): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return `${hours} h`;
   return `${Math.floor(hours / 24)} days`;
+}
+
+
+// ---- p.38's Repository (§677) ---------------------------------------------------
+/** A colour per repository, from tokens both themes carry; a graph with more
+ * repositories than these reuses them, and the legend names each. */
+export const CATEGORICAL = [
+  "var(--accent)", "var(--brass)", "var(--danger)", "var(--success)",
+  "var(--warning)", "var(--accent-deep)", "var(--danger-deep)", "var(--success-deep)",
+];
+
+/** p.38: "Colors the nodes based on the code repository used to create
+ * them." A repository's colour is its place among the graph's, by name, so
+ * the cards and the legend - reading one scale - agree. */
+function repositorySwatch(node: ColourableNode, scale: Scale | null): Swatch {
+  const name = node.repository_name;
+  if (!name) return { key: "none", label: "Not from a repository", token: QUIET };
+  const at = Math.max(0, scale?.repositories?.indexOf(name) ?? 0);
+  return { key: `repo:${name}`, label: name, token: CATEGORICAL[at % CATEGORICAL.length]! };
 }

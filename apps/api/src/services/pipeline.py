@@ -95,6 +95,10 @@ async def project_graph(
         """
         SELECT d.id, d.name, d.slug, d.origin, d.row_count, d.current_version,
                d.updated_at, d.table_schema,
+               -- `data-lineage` p.38's Repository colouring (§677): the code
+               -- repository of the model that writes this dataset, if any.
+               (SELECT cr.name FROM models m JOIN code_repos cr ON cr.id = m.source_repo_id
+                 WHERE m.output_dataset_id = d.id LIMIT 1) AS repository_name,
                (SELECT v.expectation_results FROM dataset_versions v
                  WHERE v.dataset_id = d.id
                  ORDER BY v.version_number DESC LIMIT 1) AS expectation_results,
@@ -139,6 +143,7 @@ async def project_graph(
         """
         SELECT m.id, m.name, m.language, m.trigger_mode, m.cron_schedule,
                m.output_dataset_id,
+               (SELECT cr.name FROM code_repos cr WHERE cr.id = m.source_repo_id) AS repository_name,
                (SELECT r.status FROM model_runs r WHERE r.model_id = m.id
                  ORDER BY r.queued_at DESC LIMIT 1) AS last_run_status,
                (SELECT r.queued_at FROM model_runs r WHERE r.model_id = m.id
@@ -224,6 +229,7 @@ async def project_graph(
             "name": d["name"],
             "slug": d["slug"],
             "origin": d["origin"],
+            "repository_name": d["repository_name"],
             "row_count": d["row_count"],
             "current_version": d["current_version"],
             "updated_at": d["updated_at"],
@@ -251,6 +257,7 @@ async def project_graph(
             "name": m["name"],
             "slug": None,
             "origin": None,
+            "repository_name": m["repository_name"],
             "row_count": None,
             "current_version": None,
             "updated_at": m["last_run_at"],
@@ -296,6 +303,7 @@ async def project_graph(
                 "name": row["display_name"] or row["api_name"],
                 "slug": row["api_name"],
                 "origin": None,
+                "repository_name": None,
                 "row_count": None,
                 "current_version": None,
                 "updated_at": row["last_synced_at"],
@@ -359,6 +367,7 @@ async def project_graph(
                 # already draws under a name (§351).
                 "slug": row["source_type"],
                 "origin": None,
+                "repository_name": None,
                 "row_count": None,
                 "current_version": None,
                 "updated_at": when,

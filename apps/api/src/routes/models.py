@@ -744,6 +744,9 @@ class GraphNode(BaseModel):
     is_focus: bool = False
     slug: str | None = None
     origin: str | None = None
+    # `data-lineage` p.38's Repository colouring (§677): the code repository a
+    # model was written in, or that of the model writing a dataset.
+    repository_name: str | None = None
     row_count: int | None = None
     current_version: int | None = None
     health_status: str | None = None

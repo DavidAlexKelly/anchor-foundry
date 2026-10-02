@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
+from test_api import ADMIN_DSN, Fixture, LocalVerifier, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 from src.routes import datasets as ds_routes  # noqa: E402
@@ -142,6 +142,34 @@ def test_nodes_carry_the_state_the_view_renders(
 
     aliased = [e for e in g["edges"] if e["to"] == a["id"]]
     assert [e["label"] for e in aliased] == ["raw"]
+
+
+def test_each_node_names_the_repository_it_came_from(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    """`data-lineage` p.38's Repository colouring (§677): "Colors the nodes
+    based on the code repository used to create them." A model authored in a
+    repository names it, and so does the dataset that model writes; an upload
+    and a model written elsewhere name none."""
+    import psycopg
+
+    r = client.post(f"{base(fx)}/repositories", headers=hdr(fx.editor_sub),
+                    json={"name": f"Transforms {fx.tag}"})
+    assert r.status_code == 201, r.text
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE models SET source_repo_id = %s, source_path = 'src/a.sql' WHERE id = %s",
+                     (r.json()["id"], chain["a"]))
+    try:
+        g = graph(client, fx)
+        assert node(g, chain["a_name"], "model")["repository_name"] == f"Transforms {fx.tag}"
+        assert node(g, chain["a_name"], "dataset")["repository_name"] == f"Transforms {fx.tag}"
+        assert node(g, chain["b_name"], "model")["repository_name"] is None
+        assert node(g, chain["b_name"], "dataset")["repository_name"] is None
+        assert node(g, chain["source_name"], "dataset")["repository_name"] is None
+    finally:
+        with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+            conn.execute("UPDATE models SET source_repo_id = NULL, source_path = NULL WHERE id = %s",
+                         (chain["a"],))
 
 
 def test_health_appears_once_something_has_evaluated_it(
