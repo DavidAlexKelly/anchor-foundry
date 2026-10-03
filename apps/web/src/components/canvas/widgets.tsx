@@ -9899,12 +9899,16 @@ export function CanvasObjectViewWidget({
   allowToggle = true,
   hideHeader = false,
   emptyMessage = "",
+  emptyIcon = "",
   formFactor = "full",
   panelBehavior = "instance",
   hideTabs = false,
   goToInitialTab = false,
   initialTabId = "",
 }: {
+  /** p.262's Empty state icon (§709): "Builders can select an icon and
+   * configure a custom message to display." */
+  emptyIcon?: string;
   /** p.262's Hide tabs (§695). */
   hideTabs?: boolean;
   /** p.262's Go to initial tab on object switch (§695). */
@@ -9972,6 +9976,11 @@ export function CanvasObjectViewWidget({
         </div>
       ) : !instance || !setPage.typeId ? (
         <p className="canvas-widget-empty" data-testid="object-view-empty">
+          {emptyIcon.trim() && (
+            <span className="canvas-empty-icon" data-testid="object-view-empty-icon" aria-hidden="true">
+              <IconOrGlyph value={emptyIcon} size={16} />
+            </span>
+          )}
           {objectViewEmptyMessageOf(emptyMessage)}
         </p>
       ) : (
@@ -10010,7 +10019,7 @@ export function CanvasObjectViewWidget({
 function ObjectViewWidgetSettings() {
   const { workspaceId } = useCanvasEnv();
   const {
-    objectSetVariable, viewMode, allowToggle, hideHeader, emptyMessage, formFactor, panelBehavior,
+    objectSetVariable, viewMode, allowToggle, hideHeader, emptyMessage, emptyIcon, formFactor, panelBehavior,
     hideTabs, goToInitialTab, initialTabId,
     actions: { setProp },
   } = useNode((node) => ({
@@ -10024,6 +10033,7 @@ function ObjectViewWidgetSettings() {
     allowToggle: node.data.props.allowToggle,
     hideHeader: node.data.props.hideHeader,
     emptyMessage: node.data.props.emptyMessage,
+    emptyIcon: node.data.props.emptyIcon,
   }));
   const { declared, resolved } = useCanvasVariables();
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
@@ -10194,6 +10204,14 @@ function ObjectViewWidgetSettings() {
             setProp((p: { emptyMessage: string }) => (p.emptyMessage = e.target.value))}
         />
       </label>
+      <label className="field">
+        <span className="field-label">Empty state icon</span>
+        <IconChoice
+          value={emptyIcon}
+          testId="object-view-empty-icon-input"
+          onChange={(next) => setProp((p: { emptyIcon: string }) => (p.emptyIcon = next))}
+        />
+      </label>
       </>}
     />
   );
@@ -10203,7 +10221,7 @@ CanvasObjectViewWidget.craft = {
   displayName: "Object view",
   props: {
     objectSetVariable: null, viewMode: "configured", allowToggle: true,
-    hideHeader: false, emptyMessage: "", formFactor: "full", panelBehavior: "instance",
+    hideHeader: false, emptyMessage: "", emptyIcon: "", formFactor: "full", panelBehavior: "instance",
     hideTabs: false, goToInitialTab: false, initialTabId: "",
   },
   related: { settings: ObjectViewWidgetSettings },
