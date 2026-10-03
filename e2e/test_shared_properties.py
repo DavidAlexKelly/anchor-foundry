@@ -88,11 +88,21 @@ def property_index(page, api_name: str) -> int:
     raise AssertionError(f"no property row for {api_name!r}")
 
 
+def own_row(page, module):
+    """This module's shared property's row. **By name, not by position**: the
+    workspace is shared with every other test file, and one that creates a
+    shared property sorting before `start_date_…` used to hand the tests below
+    a stranger's row."""
+    return page.get_by_test_id("shared-table").locator("tbody tr").filter(
+        has=page.locator(".slug", has_text=re.compile(f"^{module.shared_api_name}$")))
+
+
 def test_a_shared_property_can_be_created_and_attached(page, module) -> None:
     """The whole path: p.180's page, p.181's modal, p.187's dropdown, and
     p.178's globe on the property afterwards."""
     name = f"Start date {uuid.uuid4().hex[:4]}"
     api_name = create_shared(page, module, name)
+    module.shared_api_name = api_name
 
     open_objects(page, module)
     open_type_editor(page, module)
@@ -138,8 +148,8 @@ def test_editing_the_shared_property_renames_it_on_the_object_type(page, module)
     """p.178's reason to exist: "update start date metadata in one place
     instead of on each object type"."""
     open_objects(page, module)
-    row = page.get_by_test_id("shared-table").locator("tbody tr").first
-    api_name = row.locator(".slug").inner_text()
+    row = own_row(page, module)
+    api_name = module.shared_api_name
     row.get_by_role("button", name=f"Edit {api_name}").click()
     page.get_by_test_id("shared-name").fill("Renamed once")
     page.get_by_test_id("shared-visibility").select_option("prominent")
@@ -173,14 +183,14 @@ def test_the_ontology_search_finds_one_and_opens_it(page, module) -> None:
     zero.
     """
     open_objects(page, module)
-    row = page.get_by_test_id("shared-table").locator("tbody tr").first
-    api_name = row.locator(".slug").inner_text()
+    row = own_row(page, module)
+    api_name = module.shared_api_name
 
     # **Named**, because §256 put a second search on this page: the ontology
     # search in the header and the object type table's own. A bare
     # `get_by_role("searchbox")` is two elements now.
     page.get_by_role("searchbox", name="Search the ontology").fill(api_name)
-    hit = page.locator("[data-kind='shared_property']").first
+    hit = page.locator("[data-kind='shared_property']").filter(has_text=api_name).first
     expect(hit).to_be_visible(timeout=15000)
     # No owner to name, so it says how many properties use it instead.
     expect(hit).to_contain_text("used by 1 property")
@@ -213,8 +223,8 @@ def test_usage_names_the_object_type_and_the_property(page, module) -> None:
     """p.191's Usage. Reached from the count on the row, because the moment
     somebody wants it is the moment before they press Delete."""
     open_objects(page, module)
-    row = page.get_by_test_id("shared-table").locator("tbody tr").first
-    api_name = row.locator(".slug").inner_text()
+    row = own_row(page, module)
+    api_name = module.shared_api_name
     row.get_by_role("button", name=f"Usage of {api_name}").click()
     table = page.get_by_test_id("shared-usage-table")
     expect(table).to_contain_text(f"Seed {module.tag}")
@@ -233,8 +243,8 @@ def test_deleting_a_shared_property_leaves_the_property_behind(page, module) -> 
     Runs last, because it removes what the tests above are about.
     """
     open_objects(page, module)
-    row = page.get_by_test_id("shared-table").locator("tbody tr").first
-    api_name = row.locator(".slug").inner_text()
+    row = own_row(page, module)
+    api_name = module.shared_api_name
     row.get_by_role("button", name=f"Delete {api_name}").click()
     # The *row* is gone, which is the claim. Not the table's text: this was
     # the workspace's only shared property, so the table itself unmounts in

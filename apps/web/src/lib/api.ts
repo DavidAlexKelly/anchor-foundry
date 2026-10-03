@@ -1286,6 +1286,9 @@ export interface PropertyInput {
   /** p.91's type classes (§671; db 0133). Sent on every save, for
    * `reducers`' reason: one left out is one a save erases. */
   type_classes?: string[];
+  /** p.248-252's render hints (§724; db 0140). Absent is the default
+   * (Searchable, Selectable, Sortable), so it is sent on every save. */
+  render_hints?: string[];
 }
 
 /** The whole shape, saved as one document — the server's `InterfaceIn` shape
@@ -1337,6 +1340,8 @@ export interface SharedPropertyInput {
   value_format?: import("./types").ValueFormat | null;
   /** p.181 (§723). Left out keeps them on an edit; an empty list clears. */
   type_classes?: string[];
+  /** p.182 (§724), overriding an attached property's (p.188). */
+  render_hints?: string[];
 }
 
 /** Creating or renaming a group (`object-link-types` p.261).

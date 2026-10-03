@@ -17,13 +17,15 @@
 
 import type { PropertyDataType, PropertyVisibility, ValueFormat } from "./types";
 import { withDataType } from "./array-property";
+import { toggledHint, type RenderHint } from "./render-hints";
 
 export type BulkChange =
   | { kind: "data_type"; value: PropertyDataType }
   | { kind: "visibility"; value: PropertyVisibility }
   | { kind: "add_class"; value: string }
   | { kind: "remove_class"; value: string }
-  | { kind: "value_format"; value: ValueFormat | null };
+  | { kind: "value_format"; value: ValueFormat | null }
+  | { kind: "hint"; value: RenderHint; on: boolean };
 
 type Row = {
   data_type: PropertyDataType;
@@ -31,11 +33,13 @@ type Row = {
   visibility?: PropertyVisibility;
   value_format?: ValueFormat | null;
   type_classes?: string[];
+  render_hints?: string[];
   shared_property_id?: string | null;
 };
 
-/** What a shared property holds for its users, and a bulk edit leaves. */
-const INHERITED: BulkChange["kind"][] = ["data_type", "visibility", "value_format"];
+/** What a shared property holds for its users, and a bulk edit leaves -
+ * render hints since §724 (p.188). */
+const INHERITED: BulkChange["kind"][] = ["data_type", "visibility", "value_format", "hint"];
 
 /** The rows with the change made on each selected one, and how many selected
  * rows were left because a shared property holds that setting. */
@@ -62,6 +66,10 @@ export function bulkApply<T extends Row>(
         return { ...row, type_classes: (row.type_classes ?? []).filter((c) => c !== change.value) };
       case "value_format":
         return { ...row, value_format: change.value };
+      case "hint":
+        // One row's checkbox, on every row, so p.250-251's rule holds as it
+        // does there (§724).
+        return { ...row, render_hints: toggledHint(row.render_hints, change.value, change.on) };
     }
   });
   return { rows: out, skipped };

@@ -171,6 +171,9 @@ class PropertyIn(BaseModel):
     inline_action_type_id: UUID | None = None
     # p.91's type classes (§671; db 0133), `kind:name` each.
     type_classes: list[str] | None = None
+    # p.248-252's render hints (§724; db 0140), by key. None is the default
+    # (Searchable, Selectable, Sortable), not none.
+    render_hints: list[str] | None = None
 
 
 class PropertyOut(BaseModel):
@@ -212,6 +215,8 @@ class PropertyOut(BaseModel):
     # Which of those came from the shared property (§723), which a save need
     # not send back and an editor shows as fixed.
     inherited_type_classes: list[str] = []
+    # p.248-252 (§724). A shared property's, when attached (p.188).
+    render_hints: list[str] = []
 
 
 class ObjectTypeGroupRef(BaseModel):
@@ -2762,6 +2767,8 @@ class SharedPropertyOut(BaseModel):
     usage_count: int = 0
     # p.181 (§723): joined with an attached property's own on load (p.188).
     type_classes: list[str] = []
+    # p.182 (§724): overriding an attached property's own (p.188).
+    render_hints: list[str] = []
     created_at: datetime
     updated_at: datetime
 
@@ -2786,6 +2793,7 @@ class SharedPropertyCreate(BaseModel):
     value_format: dict[str, Any] | None = None
     value_type_id: UUID | None = None
     type_classes: list[str] | None = None
+    render_hints: list[str] | None = None
 
 
 class SharedPropertyUpdate(BaseModel):
@@ -2802,6 +2810,7 @@ class SharedPropertyUpdate(BaseModel):
     value_type_id: UUID | None = None
     # Left out keeps them; an empty list clears them.
     type_classes: list[str] | None = None
+    render_hints: list[str] | None = None
 
 
 # ---- interfaces (`object-link-types` p.4, p.53; `ontology` p.60-62) ---------
@@ -3328,6 +3337,7 @@ async def create_shared_property(
             value_type_id=body.value_type_id,
             created_by=access.auth.user_id,
             type_classes_raw=body.type_classes,
+            render_hints_raw=body.render_hints,
         )
         await audit.record(
             conn,
@@ -3378,6 +3388,7 @@ async def update_shared_property(
             value_format_raw=body.value_format,
             value_type_id=body.value_type_id,
             type_classes_raw=body.type_classes,
+            render_hints_raw=body.render_hints,
         )
         await audit.record(
             conn,

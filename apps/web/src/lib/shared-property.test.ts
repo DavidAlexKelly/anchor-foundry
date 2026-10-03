@@ -122,6 +122,11 @@ describe("type classes on a shared property (§723; p.188)", () => {
     expect(ownClasses(["a:b"], [])).toEqual(["a:b"]);
   });
 
+  it("attaching takes the shared property's render hints in place of the property's (§724; p.188)", () => {
+    const on = attached({ ...property(), render_hints: ["keywords"] }, { ...SHARED, render_hints: ["long_text"] });
+    expect(on.render_hints).toEqual(["long_text"]);
+  });
+
   it("attaching shows the union a load will, and detaching keeps it", () => {
     const shared = { ...SHARED, type_classes: ["hubble:icon"] };
     const on = attached({ ...property(), type_classes: ["mine:own"] }, shared);

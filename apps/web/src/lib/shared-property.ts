@@ -24,7 +24,7 @@ import type { SharedProperty } from "@/lib/types";
 /** p.181, p.184 and p.190 give the same list three times. Not `api_name`:
  * p.188 keeps that local so downstream consumers holding it keep working. */
 export const INHERITED = [
-  "display_name", "description", "visibility", "value_format",
+  "display_name", "description", "visibility", "value_format", "render_hints",
 ] as const;
 
 /** The property as it will be once attached to `shared`.
@@ -42,6 +42,9 @@ export function attached(prop: PropertyInput, shared: SharedProperty): PropertyI
     description: shared.description,
     visibility: shared.visibility,
     value_format: shared.value_format,
+    // p.188: "using the shared property will override the configuration
+    // values of the selected property" (§724).
+    render_hints: shared.render_hints,
     // Joined, not replaced (§723; p.188): the form shows what a load will.
     type_classes: withInherited(prop.type_classes ?? [], shared.type_classes ?? []),
   };

@@ -269,6 +269,30 @@ def _parameter_references(parameter: dict[str, Any]):
 #: it does (§714): applying a link sets them only when named.
 LINK_KEPT_IF_ABSENT = ("from_visibility", "to_visibility")
 
+#: A property's fields a file may leave out, kept as the workspace has them
+#: (§724), for the link fields' reason: render hints are newer than files
+#: exported before db 0140, and reading their absence as the default would
+#: turn back on a hint somebody had turned off.
+PROPERTY_KEPT_IF_ABSENT = ("render_hints",)
+
+
+def keep_absent_property_fields(
+    theirs: dict[str, Any], mine: dict[str, Any] | None
+) -> dict[str, Any]:
+    """An object type from a file, with each property's missing
+    `PROPERTY_KEPT_IF_ABSENT` fields taken from the workspace's property of
+    the same name."""
+    if mine is None:
+        return theirs
+    known = {p.get("api_name"): p for p in mine.get("properties") or []}
+    properties = []
+    for prop in theirs.get("properties") or []:
+        current = known.get(prop.get("api_name")) or {}
+        kept = {f: current[f] for f in PROPERTY_KEPT_IF_ABSENT
+                if f in current and f not in prop}
+        properties.append({**prop, **kept})
+    return {**theirs, "properties": properties} if "properties" in theirs else theirs
+
 IMMUTABLE_LINK_FIELDS = (
     ("from_object_type", "the type at its from end"),
     ("to_object_type", "the type at its to end"),
@@ -355,6 +379,9 @@ async def plan(
         key = named(section)
         mine = {key(row): row for row in current[section]}
         theirs = {key(row): row for row in document[section]}
+        if section == "object_types":
+            theirs = {name: keep_absent_property_fields(row, mine.get(name))
+                      for name, row in theirs.items()}
         if section == "link_types":
             # p.217's visibilities (§714) are newer than files exported before
             # db 0138. Applying one that does not name them keeps what the
@@ -439,7 +466,10 @@ async def apply(
         name = kind["api_name"]
         if name in made["sections"]["object_types"]["unchanged"]:
             continue
-        properties = [dict(p) for p in (kind.get("properties") or [])]
+        properties = [
+            dict(p) for p in
+            (keep_absent_property_fields(kind, current.get(name)).get("properties") or [])
+        ]
         if name in current:
             row = await _find_type(conn, workspace_id, name)
             await ontology_service.update_type(

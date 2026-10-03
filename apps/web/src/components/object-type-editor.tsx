@@ -43,6 +43,8 @@ import { inlineActionChoices, type InlineAction } from "@/lib/property-inline-ac
 import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
 import { relatedResources, type RelatedDestination } from "@/lib/related-resources";
 import { typeClassesOf } from "@/lib/type-classes";
+import { RENDER_HINTS, hintLabels, type RenderHint } from "@/lib/render-hints";
+import { RenderHintsChecklist } from "@/components/render-hints-field";
 import { ownClasses, withInherited } from "@/lib/shared-property";
 import { LastEdited } from "@/components/ontology-history-panel";
 import { bulkApply, classesIn, sharedDataType, toggled, type BulkChange } from "@/lib/property-bulk";
@@ -122,6 +124,7 @@ const CARRIED: { [K in keyof Required<PropertyInput>]: true } = {
   deprecation: true,
   inline_action_type_id: true,
   type_classes: true,
+  render_hints: true,
 };
 
 /** One saved property, as the shape a save sends back. */
@@ -183,6 +186,8 @@ export function PropertyRows({
   const structuringRow = structuring === null ? null : properties[structuring];
   const [reducing, setReducing] = useState<number | null>(null);
   const reducingRow = reducing === null ? null : properties[reducing];
+  const [hinting, setHinting] = useState<number | null>(null);
+  const hintingRow = hinting === null ? null : properties[hinting];
   // p.91's bulk edit (§672): the rows selected, by index. A row added or
   // removed renumbers the rest, so the selection starts again.
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -258,6 +263,26 @@ export function PropertyRows({
             onChange(rows);
           }}
         />
+      )}
+      {hintingRow && (
+        // p.248-252's checklist (§724), one property at a time as p.248's
+        // "properties pane of the property editor" is.
+        <Dialog open title={`Render hints for ${hintingRow.api_name || `property ${hinting! + 1}`}`}
+          onClose={() => setHinting(null)}>
+          <p className="field-hint">
+            How applications should treat this property (p.248). Each applies as soon as it
+            is saved: there is no index here to rebuild.
+          </p>
+          <RenderHintsChecklist value={hintingRow.render_hints}
+            onChange={(next) => {
+              const rows = [...properties];
+              rows[hinting!] = { ...hintingRow, render_hints: next };
+              onChange(rows);
+            }} />
+          <div className="row-actions" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+            <button type="button" className="btn primary" onClick={() => setHinting(null)}>Done</button>
+          </div>
+        </Dialog>
       )}
       {sharingRow && workspaceId && (
         <SharedPropertyPicker
@@ -506,6 +531,20 @@ export function PropertyRows({
               Format{prop.value_format ? " •" : ""}
             </button>
           )}
+          {/* p.248's render hints (§724). Disabled while attached, with
+              Format: p.188 says a shared property's "will override the
+              configuration values of the selected property". */}
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: "3px 9px", fontSize: 12 }}
+            aria-label={`Property ${index + 1} render hints`}
+            title={hintLabels(prop.render_hints).join(", ") || "No render hints"}
+            disabled={!!prop.shared_property_id}
+            onClick={() => setHinting(index)}
+          >
+            Hints ({hintLabels(prop.render_hints).length})
+          </button>
           {/* Struct fields (`object-link-types` p.149, p.152–158). Gated on
               the base type for `Format`'s reason and a stronger one: a struct
               is the only type whose declaration is *incomplete* without this
@@ -1306,8 +1345,8 @@ function TypeClassesField({ index, value, inherited = [], onCommit }: {
   );
 }
 
-/** p.91's bulk editing actions (§672), for the selected properties. Render
- * hints are not among them: this platform has none. */
+/** p.91's bulk editing actions (§672), for the selected properties - and
+ * p.91's "Changing render hints" since §724. */
 function PropertyBulkBar({ count, classes, formattable: canFormat, note, onChange, onFormat, onClear }: {
   count: number;
   classes: string[];
@@ -1353,6 +1392,20 @@ function PropertyBulkBar({ count, classes, formattable: canFormat, note, onChang
         <button type="button" className="btn quiet" onClick={() => onChange({ kind: "value_format", value: null })}>
           Remove formatting
         </button>
+        {/* p.91's "Changing render hints" (§724): one hint on or off, on
+            every selected property, as each row's checklist would. */}
+        <select aria-label="Turn a render hint on" value=""
+          onChange={(e) => e.target.value
+            && onChange({ kind: "hint", value: e.target.value as RenderHint, on: true })}>
+          <option value="">Render hint on…</option>
+          {RENDER_HINTS.map((h) => <option key={h.key} value={h.key}>{h.label}</option>)}
+        </select>
+        <select aria-label="Turn a render hint off" value=""
+          onChange={(e) => e.target.value
+            && onChange({ kind: "hint", value: e.target.value as RenderHint, on: false })}>
+          <option value="">Render hint off…</option>
+          {RENDER_HINTS.map((h) => <option key={h.key} value={h.key}>{h.label}</option>)}
+        </select>
         <button type="button" className="btn quiet" onClick={onClear}>Clear selection</button>
       </div>
       {note && <p className="field-hint" role="status">{note}</p>}
