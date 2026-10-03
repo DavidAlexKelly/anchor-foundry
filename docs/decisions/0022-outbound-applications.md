@@ -1,6 +1,6 @@
 # 0022 — Outbound applications: a source called as the person using it
 
-**Status:** decided; §752 builds the grant, §753 the calls that use it, §754 the screens.
+**Status:** built: §752 the grant, §753 the calls that use it, §754 the screens.
 **Parity items:** `docs/parity/data-connection.md` §2 (*Credential-free auth*: "○ for outbound applications"; *Webhooks*: "the OAuth authorization-code grant").
 **Source:** `docs/pal/foundry_data-connection.pdf`, cited `(p.N)`.
 **Follows:** decision 0012 (webhooks), whose calls this authenticates, and §599 (OpenID Connect), the other way a source stores no secret of its own.
@@ -59,3 +59,9 @@ The callers that have a person are webhooks (the test call, a run, an action rul
 
 * p.243's **client-credentials walkthrough** as chained webhook calls: the client-credentials grant is already a REST auth type (`oauth2_client_credentials`), which is what that walkthrough builds by hand.
 * A **registry of outbound applications** shared between sources (§1).
+
+## 6. The screens (§754)
+
+* **The form** asks for `authorize_url` and `oauth_scope` only once `oauth2_authorization_code` is chosen. A source saved with it is **not tested on save**, as every other source is, because the test would be made as the person saving it, who has not authorized it yet. The form offers Authorize instead.
+* **The source** says whether the person looking at it has authorized it, and with what scope. It offers Authorize (or Authorize again) and Revoke **to viewers as well**: a grant is its own person's (§2), and what they may then do with the source is each call's own question.
+* **The return**: the callback sends the browser back to the page it started on, with `authorization=granted|denied|failed` and the reason. The page says it once and takes it off the address.

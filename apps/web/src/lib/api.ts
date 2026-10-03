@@ -612,6 +612,24 @@ export const connections = {
     ),
   remove: (wid: string, pid: string, cid: string) =>
     request<void>(`/workspaces/${wid}/projects/${pid}/connections/${cid}`, { method: "DELETE" }),
+  /** The caller's own authorization of an outbound application's source
+   * (decision 0022; §754). */
+  authorization: (wid: string, pid: string, cid: string) =>
+    request<import("./outbound-app").Grant>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/authorization`,
+    ),
+  /** Begin it: the provider's address to send the browser to, and a cookie
+   * binding the flow to this browser (decision 0022 §3). */
+  authorize: (wid: string, pid: string, cid: string, returnTo: string) =>
+    request<{ authorize_url: string }>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/authorization`,
+      { method: "POST", body: JSON.stringify({ return_to: returnTo }) },
+    ),
+  revokeAuthorization: (wid: string, pid: string, cid: string) =>
+    request<import("./outbound-app").Grant>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/authorization`,
+      { method: "DELETE" },
+    ),
 };
 
 /** Exports (decision 0014; §265 the server, §267 the screen). */

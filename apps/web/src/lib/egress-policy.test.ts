@@ -257,6 +257,21 @@ group("what a source is configured to reach", () => {
     ]);
   });
 
+  test("an outbound application's token endpoint is one, and its authorize URL is not", () => {
+    // Decision 0022 §3: the platform exchanges and refreshes at token_url; the
+    // authorize URL is where the person's browser goes.
+    const found = destinationsFor("rest", {
+      base_url: "https://api.example.com/v2",
+      auth_type: "oauth2_authorization_code",
+      token_url: "https://login.vendor.example.net/oauth/token",
+      authorize_url: "https://accounts.vendor.example.org/authorize",
+    });
+    expect(found.known).toEqual([
+      { label: "Base URL", host: "api.example.com", port: 443 },
+      { label: "Token endpoint", host: "login.vendor.example.net", port: 443 },
+    ]);
+  });
+
   test("a token URL left over from another auth type is not a destination", () => {
     // `RestConfig` keeps `token_url` whatever `auth_type` says, so a source
     // switched to `bearer` can still carry one - and it is not dialled. The
