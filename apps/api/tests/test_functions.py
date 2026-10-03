@@ -458,3 +458,77 @@ def test_an_aggregation_is_capped(monkeypatch) -> None:
     with pytest.raises(engine.FunctionError) as caught:
         engine.run([], "SELECT range, 1 FROM range(3)", {}, {"kind": "aggregation"})
     assert "more than 2 buckets" in str(caught.value)
+
+
+# ---- §773: an action's edit function ----------------------------------------------
+
+def test_an_edit_function_names_objects_and_the_properties_to_set(client, fx, sites) -> None:
+    """`action-types` p.75's Ontology edit function, as SQL: each row an object
+    by its primary key, and the properties to set on it."""
+    table = sites["table"]
+    fn = create(client, fx, sites,
+                sql=f"SELECT __primary_key, capacity + $more AS capacity, 'x' AS region "
+                    f"FROM {table} WHERE region = 'north' ORDER BY 1",
+                parameters=[{"api_name": "more", "data_type": "integer"}],
+                output={"kind": "edits", "object_type_id": sites["type"]["id"]})
+    assert fn.status_code == 201, fn.text
+    got = call(client, fx, fn.json()["id"], {"more": 5}).json()
+    assert got["kind"] == "edits"
+    assert [c["name"] for c in got["columns"]] == ["capacity", "region"]
+    assert got["edits"] == [
+        {"primary_key": "S1", "properties": {"capacity": 15, "region": "x"}},
+        {"primary_key": "S2", "properties": {"capacity": 35, "region": "x"}}]
+
+
+@pytest.mark.parametrize("sql,output,said", [
+    ("SELECT __primary_key, 1 AS nonsense FROM {t}", None,
+     "the query sets 'nonsense', which is not a property of"),
+    ("SELECT __primary_key FROM {t}", None, "then at least one property to set"),
+    ("SELECT __primary_key, 1 AS capacity FROM {t}", {"kind": "edits"},
+     "an edit output names its object type"),
+])
+def test_an_edit_function_that_cannot_hold_is_refused_at_publish(
+    client, fx, sites, sql, output, said
+) -> None:
+    r = create(client, fx, sites, sql=sql.format(t=sites["table"]),
+               output=output or {"kind": "edits", "object_type_id": sites["type"]["id"]})
+    assert r.status_code == 422, r.text
+    assert said in r.text
+
+
+def test_an_edit_function_edits_an_object_once() -> None:
+    with pytest.raises(engine.FunctionError) as caught:
+        engine.run([], "SELECT * FROM (VALUES ('a', 1), ('a', 2)) t(k, v)", {},
+                   {"kind": "edits", "object_type_id": "t"})
+    assert "edits 'a' twice" in str(caught.value)
+
+
+def test_an_edit_row_with_no_key_is_no_edit() -> None:
+    got = engine.run([], "SELECT * FROM (VALUES ('a', 1), (NULL, 2)) t(k, v)", {},
+                     {"kind": "edits", "object_type_id": "t"})
+    assert got["edits"] == [{"primary_key": "a", "properties": {"v": 1}}]
+
+
+def test_edits_are_capped_at_p130_s_limit(monkeypatch) -> None:
+    assert engine.MAX_EDITS == 10_000
+    monkeypatch.setattr(engine, "MAX_EDITS", 2)
+    with pytest.raises(engine.FunctionError) as caught:
+        engine.run([], "SELECT range, 1 AS v FROM range(3)", {},
+                   {"kind": "edits", "object_type_id": "t"})
+    assert "more than 2 edits" in str(caught.value)
+    assert len(engine.run([], "SELECT range, 1 AS v FROM range(2)", {},
+                          {"kind": "edits", "object_type_id": "t"})["edits"]) == 2
+
+
+def test_the_querys_own_error_is_said_as_written() -> None:
+    """p.166's "error intended to be displayed to the user": DuckDB's
+    `error()`, told apart from a built-in's bad input by the query calling it."""
+    with pytest.raises(engine.UserFacingError) as caught:
+        engine.run([], "SELECT error('Closed tickets stay closed')", {},
+                   {"kind": "value", "data_type": "string"})
+    assert str(caught.value) == "Closed tickets stay closed"
+    with pytest.raises(engine.FunctionError) as caught:
+        engine.run([], "SELECT strptime('x', '%Y')", {},
+                   {"kind": "value", "data_type": "string"})
+    assert not isinstance(caught.value, engine.UserFacingError)
+    assert caught.value.args[0].startswith("Invalid Input Error")

@@ -28,6 +28,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { NotifyRuleFields } from "@/components/notify-rule-fields";
+import { FunctionRuleFields } from "@/components/function-rule-fields";
+import { functionRuleOf } from "@/lib/function-rules";
 import { TypePicker } from "@/components/type-picker";
 
 /** What the form calls each parameter, for a sentence a person reads.
@@ -137,6 +139,8 @@ const RULE_KINDS = [
   // p.113: "select Add new rule, then select Webhook". The sixth and last
   // kind the executor runs (§260); §262 is what makes it selectable.
   ["webhook", "Call a webhook"],
+  // p.22's Function rule (§773): an edit function makes every edit.
+  ["function", "Call a function"],
 ];
 
 /** p.63-64's interface link rules (§761, §762): offered on an action on an
@@ -1521,6 +1525,22 @@ export function ActionDefinitionEditor({
                     ) : null;
                   })()}
                 </>
+              )}
+              {r.kind === "function" && (
+                <FunctionRuleFields
+                  workspaceId={workspaceId}
+                  index={i}
+                  subjectTypeId={action.object_type_id ?? null}
+                  parameters={parameters}
+                  config={functionRuleOf(config)}
+                  onChange={(next) => patch(next as unknown as Record<string, unknown>)}
+                  onCreateParameters={(created) => {
+                    if (created.length === 0) return;
+                    setParameters((current) => [...current, ...created.map((c) => ({
+                      ...c, hidden: false,
+                    }))]);
+                  }}
+                />
               )}
               {r.kind === "webhook" && (
                 <WebhookRuleFields

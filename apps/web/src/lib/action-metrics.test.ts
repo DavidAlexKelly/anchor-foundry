@@ -145,11 +145,11 @@ describe("p.166's categories", () => {
   });
 
   it("renders an unknown identifier readably rather than dropping it", () => {
-    // db 0079's CHECK means one cannot arrive today, but p.166 reserves two
-    // more for function-backed actions. A lookup returning "" would silently
-    // remove a bar from a chart that still added up to the count beside it.
-    expect(failureLabel("user_facing_function")).toBe("User facing function");
-    expect(failureHint("user_facing_function")).toBe("");
+    // db 0154's CHECK means one cannot arrive today, but a newer server could
+    // send one. A lookup returning "" would silently remove a bar from a chart
+    // that still added up to the count beside it.
+    expect(failureLabel("quota_exceeded")).toBe("Quota exceeded");
+    expect(failureHint("quota_exceeded")).toBe("");
   });
 });
 

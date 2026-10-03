@@ -50,13 +50,15 @@ HISTORY_DAYS = 7
 #: promise and this is the page.
 HISTORY_LIMIT = 200
 
-#: p.165-166's categories, less the two that need Functions. Ordered as p.165
-#: introduces them, so a screen listing them matches the page.
+#: p.165-166's categories, the two function failures with them since §773.
+#: Ordered as p.165 introduces them, so a screen listing them matches the page.
 FAILURE_CATEGORIES = (
     "invalid_parameter",
     "authentication",
     "scale_limit",
     "side_effect",
+    "function",
+    "user_facing_function",
     "conflict",
     "unclassified",
 )

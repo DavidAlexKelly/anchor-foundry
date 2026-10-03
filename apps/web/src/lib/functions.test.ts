@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { FunctionVersion } from "@/lib/types";
 import {
   blankDraft, blankParameter, bodyOf, compareVersions, draftOf, draftProblem, nextVersion,
+  OUTPUT_KINDS,
   parametersUsed, resultLine, valuesFor, versionKey,
 } from "./functions";
 
@@ -175,5 +176,27 @@ describe("an object set in, a map out (§770)", () => {
     expect(resultLine({ kind: "aggregation", version: "1", buckets: [
       { key: "a", value: 1 }, { key: "b", value: 2 }] })).toBe("2 buckets");
     expect(resultLine({ kind: "aggregation", version: "1" })).toBe("0 buckets");
+  });
+});
+
+describe("an edit function, for an action (§773)", () => {
+  it("is offered, and needs the object type it edits", () => {
+    expect(OUTPUT_KINDS.map((o) => o.kind)).toContain("edits");
+    expect(draftProblem({ ...blankDraft(), sql: "SELECT 1", output: { kind: "edits" } }, null))
+      .toBe("Choose the object type it edits.");
+    expect(draftProblem({ ...blankDraft(), sql: "SELECT 1",
+      output: { kind: "edits", object_type_id: "t" } }, null)).toBeNull();
+  });
+
+  it("sends its object type", () => {
+    expect(bodyOf({ ...blankDraft(), output: { kind: "edits", object_type_id: "t",
+      data_type: "x" } }).output).toEqual({ kind: "edits", object_type_id: "t" });
+  });
+
+  it("counts its edits", () => {
+    const edit = { primary_key: "a", properties: {} };
+    expect(resultLine({ kind: "edits", version: "1", edits: [edit, edit] })).toBe("2 edits");
+    expect(resultLine({ kind: "edits", version: "1", edits: [edit] })).toBe("1 edit");
+    expect(resultLine({ kind: "edits", version: "1" })).toBe("0 edits");
   });
 });

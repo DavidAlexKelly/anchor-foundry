@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import action_metrics, property_reducers
+from ..services import action_functions, object_set_eval
 from ..services import action_defaults, action_log
 from ..services import action_revert
 from ..services import outbound_apps
@@ -2470,6 +2471,7 @@ async def _counted_as(
     dataset_id: UUID | None,
     requested_by: UUID,
     submitted_values: dict[str, Any],
+    narrower: tuple[type[BaseException], str] | None = None,
 ) -> AsyncIterator[None]:
     """Count a refusal raised inside this block as one of p.166's failures
     (§323; `action-types` p.165-166).
@@ -2500,7 +2502,8 @@ async def _counted_as(
             "dataset_id": dataset_id,
             "requested_by": requested_by,
             "submitted_values": submitted_values,
-            "category": category,
+            # `narrower` is a finer category for one kind of refusal (§773).
+            "category": narrower[1] if narrower and isinstance(exc, narrower[0]) else category,
             "message": str(exc),
         }
         raise
@@ -2871,6 +2874,42 @@ async def execute_action(
             # (`bind_parameters` refuses undeclared keys), so this is the only
             # thing that writes it.
             bound.update(writeback_outputs)
+
+            # p.22's Function rule (§773; decision 0018): the function is called
+            # as the submitter, here - after the writeback, so a later edit can
+            # be refused before anything is written - and its edits become the
+            # rules everything below already runs (`action_functions`' note).
+            function_config = action_functions.function_rule(action_type["rules"])
+            if function_config is not None:
+                async with _counted_as(
+                    "function", into=noted,
+                    # p.166's two function failures: the query's own `error()`
+                    # is "intended to be displayed to the user".
+                    narrower=(action_functions.UserFacingError, "user_facing_function"),
+                    **refusal_of,
+                ):
+                    output, result = await action_functions.call(
+                        conn, workspace_id=access.workspace_id, config=function_config,
+                        bound=bound, subject_id=str(body.instance_id),
+                    )
+                    edited_type = str(output["object_type_id"])
+                    found = await object_set_eval.instances_of(
+                        conn, access.workspace_id, {
+                            "object_type_id": edited_type,
+                            "filters": [{"property": "$primary_key", "op": "in",
+                                         "value": [e["primary_key"] for e in result["edits"]]}],
+                        }, limit=len(result["edits"]),
+                    )
+                    function_rules, function_bound = action_functions.edit_rules(
+                        result["edits"], object_type_id=edited_type,
+                        subject_type_id=str(object_type_id),
+                        subject_key=str(instance["primary_key"]),
+                        existing={str(r["primary_key"]): str(r["id"]) for r in found},
+                    )
+                action_type = {**action_type, "rules": [
+                    r for r in action_type["rules"] if str(r.get("kind")) != "function"
+                ] + function_rules}
+                bound.update(function_bound)
 
             # p.62's interface reference parameters, resolved once (§454).
             # **Here, because every reader below needs the same answer**: which

@@ -22,6 +22,8 @@ export const OUTPUT_KINDS: { kind: FunctionOutput["kind"]; label: string }[] = [
   { kind: "map", label: "Values per object" },
   { kind: "aggregation", label: "Values by category, for a chart" },
   { kind: "table", label: "A table" },
+  // action-types p.75's Ontology edit function (§773), for a Function rule.
+  { kind: "edits", label: "Edits to objects, for an action" },
 ];
 
 /** Whether a parameter names an object type: one object, or a set (§770). */
@@ -127,6 +129,9 @@ export function draftProblem(draft: DraftVersion, latest: string | null): string
   if (draft.output.kind === "map" && !draft.output.object_type_id) {
     return "Choose the object type it gives values for.";
   }
+  if (draft.output.kind === "edits" && !draft.output.object_type_id) {
+    return "Choose the object type it edits.";
+  }
   if (!draft.sql.trim()) return "Write the query.";
   const used = parametersUsed(draft.sql);
   const undeclared = used.filter((n) => !seen.has(n));
@@ -142,7 +147,8 @@ export function bodyOf(draft: DraftVersion): Record<string, unknown> {
   if (draft.output.kind === "value" || draft.output.kind === "array") {
     output.data_type = draft.output.data_type;
   }
-  if (draft.output.kind === "object_set" || draft.output.kind === "map") {
+  if (draft.output.kind === "object_set" || draft.output.kind === "map"
+      || draft.output.kind === "edits") {
     output.object_type_id = draft.output.object_type_id;
   }
   return {
@@ -196,6 +202,10 @@ export function resultLine(result: FunctionResult): string {
   if (result.kind === "table") {
     const n = result.rows?.length ?? 0;
     return `${n} ${n === 1 ? "row" : "rows"}${result.truncated ? " (the first of more)" : ""}`;
+  }
+  if (result.kind === "edits") {
+    const n = result.edits?.length ?? 0;
+    return `${n} ${n === 1 ? "edit" : "edits"}`;
   }
   const n = result.kind === "map"
     ? Object.keys(result.entries ?? {}).length : result.values?.length ?? 0;

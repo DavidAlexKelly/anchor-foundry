@@ -46,6 +46,15 @@ export const FAILURE_LABELS: Readonly<Record<string, { label: string; hint: stri
     label: "Side effect",
     hint: "A webhook or side effect failed or is misconfigured.",
   },
+  // p.166's two function failures (§773).
+  function: {
+    label: "Function",
+    hint: "The function backing the action failed.",
+  },
+  user_facing_function: {
+    label: "User-facing function",
+    hint: "The function refused, with a message meant for the person applying it.",
+  },
   conflict: {
     label: "Conflict",
     hint: "A conflict, such as a concurrent modification.",

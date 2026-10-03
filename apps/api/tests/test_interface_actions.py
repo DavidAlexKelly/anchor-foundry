@@ -1604,3 +1604,25 @@ def test_a_type_with_nothing_to_write_refuses_the_modify(
     status_code, refusal = _execute(client, fx, action["id"], narrow["ids"]["F1"],
                                     {"subject": d9, "said": "done"})
     assert "without mapping 'inspection_status'" in refusal, (status_code, refusal)
+
+
+def test_a_function_rule_is_not_built_for_an_interface_action(
+    client: TestClient, fx: Fixture, world: dict
+) -> None:
+    """§773: p.22's Function rule's function edits one object type, and an
+    interface action's object may be any of several."""
+    facility = client.get(f"{wbase(fx)}/object-types/{world['facility']}",
+                          headers=hdr(fx.viewer_sub)).json()
+    fn = client.post(f"{wbase(fx)}/functions", headers=hdr(fx.editor_sub), json={
+        "api_name": f"fn_{uuid.uuid4().hex[:6]}", "display_name": "F", "version": {
+            "version": "1.0.0", "inputs": [world["facility"]], "parameters": [],
+            "output": {"kind": "edits", "object_type_id": world["facility"]},
+            "sql": f"SELECT __primary_key, 'x' AS state FROM {facility['api_name']}"}})
+    assert fn.status_code == 201, fn.text
+    action = _interface_action(client, fx, world, ["last_inspection_date"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={"parameters": [], "criteria": [], "rules": [{"kind": "function", "config": {
+            "function_id": fn.json()["id"], "version": "1.0.0", "inputs": {}}}]})
+    assert r.status_code == 422, r.text
+    assert "not built for an action on an interface" in r.text

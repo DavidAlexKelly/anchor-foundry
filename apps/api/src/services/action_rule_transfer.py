@@ -222,6 +222,10 @@ def outside_ontology(rule: dict[str, Any]) -> list[str]:
         return []
     if kind == "webhook" and config.get("webhook"):
         return ["a webhook"]
+    if kind == "function" and config.get("function_id"):
+        # A function is a workspace's (db 0153), as a webhook is, and the
+        # file carries no functions to build it from (§773).
+        return ["a function"]
     if kind == "notify":
         recipients = config.get("recipients")
         if isinstance(recipients, dict) and str(

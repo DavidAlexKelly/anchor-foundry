@@ -94,18 +94,14 @@ def test_everything_else_is_p166_s_unclassified() -> None:
         assert action_metrics.classify_engine_error(said) == "unclassified", said
 
 
-def test_the_categories_are_p165_s_own_and_the_function_ones_are_absent() -> None:
+def test_the_categories_are_p165_s_own_the_function_ones_included() -> None:
     """p.166 names two categories as "only possible for function-backed
-    actions", and Functions are ○ here.
-
-    A value nothing can produce is a category that sits in every list and never
-    appears, which is §214's control that looks like it works. Asserted rather
-    than left to the comment in db 0079, because the day Functions arrive this
-    line is the one that says the tuple has to grow.
+    actions". They were absent while nothing could produce them (db 0079);
+    §773's Function rule can, so they are here, in p.165-166's order.
     """
-    assert "function" not in action_metrics.FAILURE_CATEGORIES
-    assert "user_facing_function" not in action_metrics.FAILURE_CATEGORIES
-    assert action_metrics.FAILURE_CATEGORIES[-1] == "unclassified"
+    assert action_metrics.FAILURE_CATEGORIES == (
+        "invalid_parameter", "authentication", "scale_limit", "side_effect",
+        "function", "user_facing_function", "conflict", "unclassified")
 
 
 def labelled_categories() -> set[str]:
@@ -792,10 +788,8 @@ def test_a_category_this_platform_cannot_produce_is_refused(
         asyncio.run(action_metrics.record_refusal(
             action_type_id=uuid.uuid4(), instance_id=None, dataset_id=None,
             requested_by=uuid.uuid4(), submitted_values={},
-            category="function", message="a function that does not exist failed",
+            category="outage", message="a category p.166 does not have",
         ))
-    # p.166's two function categories are the realistic mistake — they are on
-    # the page, and absent here on purpose — so the message names what is
-    # allowed rather than only what was wrong.
-    assert "function" in str(refused.value)
+    # The message names what is allowed rather than only what was wrong.
+    assert "outage" in str(refused.value)
     assert "invalid_parameter" in str(refused.value)
