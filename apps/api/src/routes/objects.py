@@ -40,6 +40,7 @@ from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
 from ..services import interface_evaluate
+from ..services import interface_action_control
 from ..services import ontology_history as history_service
 from ..services import object_edits as object_edits_service
 from ..services import favourites as favourites_service
@@ -3066,6 +3067,69 @@ async def get_interface(
             ),
         }
     return InterfaceDetail(**row)
+
+
+class InheritedActionOut(BaseModel):
+    """An action on an interface a type implements, and whether that type has
+    it switched on (§763; p.65)."""
+
+    action_type_id: UUID
+    api_name: str
+    display_name: str
+    interface_id: UUID
+    interface_name: str
+    enabled: bool
+
+
+class InterfaceActionControlIn(BaseModel):
+    #: The inherited actions this type switches off; the whole list.
+    disabled: list[UUID] = Field(default_factory=list, max_length=500)
+
+
+@router.get("/object-types/{type_id}/interface-action-control",
+            response_model=list[InheritedActionOut])
+async def get_interface_action_control(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[InheritedActionOut]:
+    """p.65's Interface action control: the actions this type inherits from
+    its interfaces, each on or off for its own objects."""
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        rows = await interface_action_control.inherited(conn, access.workspace_id, type_id)
+    return [InheritedActionOut(**r) for r in rows]
+
+
+@router.put("/object-types/{type_id}/interface-action-control",
+            response_model=list[InheritedActionOut])
+async def set_interface_action_control(
+    type_id: UUID,
+    body: InterfaceActionControlIn,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> list[InheritedActionOut]:
+    """Editor, like the implementation it qualifies."""
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        try:
+            rows = await interface_action_control.set_disabled(
+                conn, access.workspace_id, type_id, body.disabled,
+                created_by=access.auth.user_id)
+        except interface_action_control.ControlError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type.interface_action_control",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={"disabled": [str(d) for d in body.disabled]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return [InheritedActionOut(**r) for r in rows]
 
 
 class LinkCandidateOut(BaseModel):

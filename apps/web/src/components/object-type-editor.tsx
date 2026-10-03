@@ -1360,8 +1360,77 @@ export function EditObjectTypeDialog({
         </section>
       )}
 
+      <InterfaceActionControl workspaceId={workspaceId} typeId={type.id} />
+
       <VersionHistory workspaceId={workspaceId} type={type} onRestored={onClose} />
     </Dialog>
+  );
+}
+
+/** p.65's Interface action control (§763): "disable interface actions for
+ * specific object types … establishing control over actions inherited from an
+ * interface". Each inherited action is offered for this type's objects or
+ * not; a change is saved as it is made, being its own small document rather
+ * than part of the type's. Absent for a type that inherits none. */
+function InterfaceActionControl({ workspaceId, typeId }: { workspaceId: string; typeId: string }) {
+  const queryClient = useQueryClient();
+  const inherited = useQuery({
+    queryKey: ["interface-action-control", workspaceId, typeId],
+    queryFn: () => objApi.interfaceActionControl(workspaceId, typeId),
+  });
+  const key = ["interface-action-control", workspaceId, typeId];
+  type Row = Awaited<ReturnType<typeof objApi.interfaceActionControl>>[number];
+  const save = useMutation({
+    mutationFn: (disabled: string[]) =>
+      objApi.setInterfaceActionControl(workspaceId, typeId, disabled),
+    // The box shows the choice at once, and goes back if the server refuses.
+    onMutate: (disabled: string[]) => {
+      const before = queryClient.getQueryData<Row[]>(key);
+      queryClient.setQueryData<Row[]>(key, (before ?? []).map((r) => ({
+        ...r, enabled: !disabled.includes(r.action_type_id) })));
+      return { before };
+    },
+    onError: (_error, _disabled, context) => {
+      queryClient.setQueryData(key, context?.before);
+    },
+    onSuccess: async (rows) => {
+      queryClient.setQueryData(key, rows);
+      // The type's action list is what this changes.
+      await queryClient.invalidateQueries({ queryKey: ["action-types"] });
+    },
+  });
+  const rows = inherited.data ?? [];
+  if (rows.length === 0) return null;
+  const off = rows.filter((r) => !r.enabled).map((r) => r.action_type_id);
+  return (
+    <section data-testid="interface-action-control">
+      <h3 style={{ fontSize: 13.5, margin: "18px 0 6px" }}>Interface action control</h3>
+      <p className="field-hint" style={{ marginTop: 0 }}>
+        Actions on this type&apos;s interfaces apply to its objects unless switched off
+        here. Switched off, an action is not offered for these objects and is refused if
+        run against one (p.65).
+      </p>
+      {rows.map((r) => (
+        <label key={r.action_type_id} className="row-actions" style={{ gap: 6 }}>
+          <input
+            type="checkbox"
+            aria-label={`Offer ${r.api_name} for this type`}
+            checked={r.enabled}
+            disabled={save.isPending}
+            onChange={(e) => save.mutate(e.target.checked
+              ? off.filter((id) => id !== r.action_type_id)
+              : [...off, r.action_type_id])}
+          />
+          <span>{r.display_name}</span>
+          <span className="slug">from {r.interface_name}</span>
+        </label>
+      ))}
+      {save.isError && (
+        <p className="field-hint" data-testid="interface-action-control-error">
+          {save.error instanceof ApiError ? save.error.message : "Could not save."}
+        </p>
+      )}
+    </section>
   );
 }
 

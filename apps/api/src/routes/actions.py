@@ -35,6 +35,7 @@ from ..services import action_defaults, action_log
 from ..services import action_revert
 from ..services import outbound_apps
 from ..services import object_edits
+from ..services import interface_action_control
 from ..services import action_choices as choices_service
 from ..services import action_filters as filters_service
 from ..services import action_search_arounds as search_arounds_service
@@ -2642,6 +2643,12 @@ async def execute_action(
                     search_prefix=prefix,
                 )
                 type_name = str(implementation["display_name"])
+                # p.65's Interface action control (§763): a type may switch an
+                # interface action off for its own objects.
+                switched_off = await interface_action_control.refusal(
+                    conn, object_type_id, action_type_id, type_name=type_name)
+                if switched_off:
+                    raise ForbiddenError(switched_off)
                 # p.170 (§675): the implementing properties that present a
                 # reduced or main-field value, which an interface action cannot
                 # write back.

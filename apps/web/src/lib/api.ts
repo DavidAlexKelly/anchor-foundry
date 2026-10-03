@@ -2167,6 +2167,19 @@ export const objects = {
       `/workspaces/${wid}/object-types/${typeId}/interfaces`,
       { method: "PUT", body: JSON.stringify(body) },
     ),
+  /** p.65's Interface action control (§763): the actions a type inherits
+   * from its interfaces, each on or off for its own objects. */
+  interfaceActionControl: (wid: string, typeId: string) =>
+    request<{ action_type_id: string; api_name: string; display_name: string;
+              interface_id: string; interface_name: string; enabled: boolean }[]>(
+      `/workspaces/${wid}/object-types/${typeId}/interface-action-control`,
+    ),
+  setInterfaceActionControl: (wid: string, typeId: string, disabled: string[]) =>
+    request<{ action_type_id: string; api_name: string; display_name: string;
+              interface_id: string; interface_name: string; enabled: boolean }[]>(
+      `/workspaces/${wid}/object-types/${typeId}/interface-action-control`,
+      { method: "PUT", body: JSON.stringify({ disabled }) },
+    ),
   /** For each of the interface's link constraints, the link types that would
    * keep it on this object type, by the save's own rule (§760). */
   linkCandidates: (wid: string, interfaceId: string, typeId: string) =>
