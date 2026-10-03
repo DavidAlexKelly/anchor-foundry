@@ -633,3 +633,27 @@ def test_a_batch_is_capped_and_an_empty_field_is_nothing(client, fx, sites, monk
     r = call(client, fx, fn["id"], {"batch": [{"extra": 1}, {"extra": 2}]})
     assert r.status_code == 422, r.text
     assert "a list of at most 1 entries" in r.text
+
+
+# ---- §780: a set variable's definition for an object_set parameter -------------
+
+def test_an_object_set_parameter_takes_a_sets_definition(client, fx, sites, monkeypatch) -> None:
+    """Workshop p.221's "Use a variable": the set whole, read on the server to
+    the keys it holds, so a widget can pass a set variable as it stands."""
+    from src.services import function_engine
+
+    fn = urgency(client, fx, sites, sql=(
+        f"SELECT __primary_key, capacity AS v FROM {sites['table']} "
+        "WHERE list_contains($shown, __primary_key) ORDER BY 1")).json()
+    north = {"object_type_id": sites["type"]["id"],
+             "filters": [{"property": "region", "op": "eq", "value": "north"}]}
+    r = call(client, fx, fn["id"], {"shown": north})
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["entries"]) == ["S1", "S2"]
+    r = call(client, fx, fn["id"], {"shown": {**north, "object_type_id": str(uuid.uuid4())}})
+    assert r.status_code == 422, r.text
+    assert "the set is of another object type" in r.text
+    monkeypatch.setattr(function_engine, "MAX_ARRAY_ITEMS", 1)
+    r = call(client, fx, fn["id"], {"shown": north})
+    assert r.status_code == 422, r.text
+    assert "holds 2 objects, more than the 1" in r.text
