@@ -1365,6 +1365,9 @@ export interface ValueTypeInput {
   example_value?: string;
   base_type?: import("./types").PropertyDataType;
   constraint?: import("./types").ValueConstraint | null;
+  /** §764. Left out, unchanged; a null `deprecation` clears the note. */
+  status?: import("./types").OntologyStatus;
+  deprecation?: import("./types").Deprecation | null;
 }
 
 /** One row of where a value type is used. p.227 names two attachment points,

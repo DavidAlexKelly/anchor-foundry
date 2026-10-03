@@ -51,9 +51,27 @@ export function kindsFor(baseType: PropertyDataType): ConstraintKind[] {
 }
 
 /** The value types an array's items or a struct's fields may be held to
- * (§681): the scalar ones. */
-export function referable(types: ValueType[]): ValueType[] {
-  return types.filter((t) => REFERENCE_TYPES.includes(t.base_type));
+ * (§681): the scalar ones, less the deprecated ones the stored rule does not
+ * already name (§764) — the server refuses a new reference to one. */
+export function referable(types: ValueType[], keep: string[] = []): ValueType[] {
+  return types.filter(
+    (t) => REFERENCE_TYPES.includes(t.base_type) && takesNewUses(t, keep),
+  );
+}
+
+/** p.229's deprecation, as an offer (§764): a deprecated value type keeps what
+ * already uses it and takes nothing new, so it is offered only where it is
+ * already the choice — leaving it off there would show a select with no entry
+ * matching its own value. */
+export function takesNewUses(type: ValueType, keep: (string | null | undefined)[]): boolean {
+  return type.status !== "deprecated" || keep.includes(type.id);
+}
+
+/** What a deprecated value type may name as its replacement (p.254, p.229's
+ * "creating a new one"): any other value type, less the deprecated ones —
+ * pointing somebody at another value type on its way out is no help. */
+export function replacements(types: ValueType[], self: string): ValueType[] {
+  return types.filter((t) => t.id !== self && t.status !== "deprecated");
 }
 
 /** What a range's bounds mean for this base type.
@@ -148,13 +166,16 @@ function above(high: number | string, low: number | string): boolean {
 export function offerableTo(
   types: ValueType[],
   dataType: PropertyDataType,
+  /** The property's current choice, kept on offer if deprecated (§764). */
+  current: string | null = null,
 ): ValueType[] {
-  return types.filter((t) => t.base_type === dataType);
+  return types.filter((t) => t.base_type === dataType && takesNewUses(t, [current]));
 }
 
 /** How a value type reads on one line, for a picker: the name, and what it
  * actually enforces. `constraint_summary` comes from the server so the two
  * cannot disagree about what a rule says. */
 export function optionLabel(type: ValueType): string {
-  return `${type.display_name} — ${type.constraint_summary}`;
+  const label = `${type.display_name} — ${type.constraint_summary}`;
+  return type.status === "deprecated" ? `${label} (deprecated)` : label;
 }

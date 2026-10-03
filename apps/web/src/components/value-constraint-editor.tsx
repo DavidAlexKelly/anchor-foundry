@@ -88,7 +88,12 @@ export function ValueConstraintEditor({
       ? Object.entries(value.fields).map(([field, ref]) => ({ field, ref }))
       : [],
   );
-  const choices = referable(valueTypes);
+  // What the rule named when the editor opened, which a deprecated value
+  // type keeps (§764).
+  const [named] = useState<string[]>(() =>
+    value?.kind === "nested" ? [value.value_type]
+      : value?.kind === "elements" ? Object.values(value.fields) : []);
+  const choices = referable(valueTypes, named);
 
   if (!kinds.length) {
     return (

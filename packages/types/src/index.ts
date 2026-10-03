@@ -2197,6 +2197,11 @@ export interface ValueType {
   constraint_summary: string;
   /** Across both of p.227's attachment points. */
   usage_count: number;
+  /** p.253-256's status (§764). Deprecated is p.229's advice for a breaking
+   * change: what uses it keeps it, and nothing new takes it. */
+  status: OntologyStatus;
+  /** p.254's note, whose replacement is the value type to use instead. */
+  deprecation: Deprecation | null;
   created_at: string;
   updated_at: string;
 }

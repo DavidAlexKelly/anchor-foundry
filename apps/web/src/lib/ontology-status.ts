@@ -61,7 +61,7 @@ export function statusesFor(
    * `^(active|experimental|deprecated|example)$` with no `promoted` in it. So
    * the option is absent here because it would be a save that fails, not
    * because this list decided so. */
-  kind: "object_type" | "property" | "link_type" | "interface",
+  kind: "object_type" | "property" | "link_type" | "interface" | "value_type",
   /** p.255 also restricts *who* may apply `promoted`: "only users with the
    * `Ontology Owner` role on the ontology level". A workspace is this
    * platform's ontology, so this is workspace admin.
