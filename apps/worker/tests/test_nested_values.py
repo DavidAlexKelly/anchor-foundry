@@ -63,5 +63,7 @@ def test_the_two_copies_are_the_same_code() -> None:
     worker = os.path.join(ROOT, "worker", "src", "anchor_worker", "dataset_engine.py")
     # `merge_transaction` (§747) types an incremental sync the same in both,
     # and `added_rows` (§748) computes an APPEND's rows the same in both.
-    for name in ("json_safe", "json_value", "merge_transaction", "added_rows"):
+    # `combine_parquets` (§750) reads a file sync's files the same in both.
+    for name in ("json_safe", "json_value", "merge_transaction", "added_rows",
+                 "combine_parquets"):
         assert _function(api, name) == _function(worker, name), name

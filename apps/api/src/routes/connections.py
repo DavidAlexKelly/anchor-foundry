@@ -1112,10 +1112,6 @@ async def set_scheduled_sync(
             file_sync_service.check(body.file_transaction or "SNAPSHOT", filters)
         except file_sync_service.FileSyncError as exc:
             raise ConnectorConfigError(str(exc)) from exc
-        if body.cron_schedule:
-            raise ConnectorConfigError(
-                "a file sync runs when asked for now - scheduling one is not built yet"
-            )
     elif not body.source_table:
         raise ConnectorConfigError("a table sync needs a source table")
     next_run_at = next_run_after(body.cron_schedule) if body.cron_schedule else None
