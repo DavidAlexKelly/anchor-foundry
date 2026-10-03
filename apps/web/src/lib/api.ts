@@ -1372,6 +1372,8 @@ export interface SavedSearchInput {
   type_ids?: string[];
   property?: string | null;
   value?: string | null;
+  /** §729: the value as a regular expression on the property. */
+  match?: "regex" | null;
 }
 
 export interface ObjectTypeCreateInput {
@@ -1673,6 +1675,9 @@ export const objects = {
        * typeId, since a property name only means something within a type. */
       property?: string;
       value?: string;
+      /** `ontology` p.130's regular expression (§729): `value` read as a
+       * pattern on `property` rather than matched exactly. */
+      match?: "regex";
       limit?: number;
       offset?: number;
       /** Which application is asking, for p.32's usage counting (§320).
@@ -1687,6 +1692,7 @@ export const objects = {
     if (input.property && input.value !== undefined) {
       search.set("property", input.property);
       search.set("value", input.value);
+      if (input.match) search.set("match", input.match);
     }
     if (input.limit) search.set("limit", String(input.limit));
     if (input.offset) search.set("offset", String(input.offset));

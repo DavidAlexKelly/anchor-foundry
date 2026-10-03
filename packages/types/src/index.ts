@@ -1768,6 +1768,9 @@ export interface SavedSearchDefinition {
   type_ids: string[];
   property: string | null;
   value: string | null;
+  /** `ontology` p.130's regular expression on `property` (§729); absent is
+   * an exact match. */
+  match?: "regex";
 }
 
 export interface SavedSearch {

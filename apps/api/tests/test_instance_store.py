@@ -1258,3 +1258,63 @@ def test_a_shared_property_s_regex_hint_is_the_one_in_force(
                            "render_hints": ["searchable"]})
     assert r.status_code == 200, r.text
     assert client.post(url, headers=hdr(fx.viewer_sub), json=body).status_code == 422
+
+
+@pytest.mark.parametrize("store_name", ["postgres", "opensearch"])
+def test_the_explorer_s_property_filter_takes_a_regular_expression(
+    client: TestClient, fx: Fixture, opensearch: str, store_name: str,
+) -> None:
+    """`ontology` p.130: "Object Explorer from the search bar" (§729) - the
+    property filter's value read as a pattern on the whole value, through the
+    same set a Filter List's regex box asks for."""
+    reset(opensearch)
+    if store_name == "opensearch":
+        instance_store.configure_instance_store(
+            instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin"))
+    try:
+        tag = uuid.uuid4().hex[:6]
+        type_id = _hinted_type(client, fx, tag, ["searchable", "regex"], f"SN-{tag}-0042", "X")
+
+        def explore(prop: str, value: str, match: str | None = "regex"):
+            params = {"type_id": type_id, "property": prop, "value": value,
+                      **({"match": match} if match else {})}
+            return client.get(f"/api/workspaces/{fx.workspace}/object-instances",
+                              headers=hdr(fx.viewer_sub), params=params)
+
+        found = explore("secret", rf"SN-{tag}-\d+")
+        assert found.status_code == 200, found.text
+        assert [i["primary_key"] for i in found.json()["items"]] == [f"X{tag}"]
+        assert found.json()["items"][0]["object_type_id"] == type_id
+        assert explore("secret", r"\d+").json()["total"] == 0
+        # Without `match` the same text is an exact value, and nothing has it.
+        assert explore("secret", rf"SN-{tag}-\d+", None).json()["total"] == 0
+        refused = explore("label", "Lantern.*")
+        assert refused.status_code == 422 and "not indexed for regex search" in refused.text
+        bad = explore("secret", "^SN.*")
+        assert bad.status_code == 422 and "anchors are not supported" in bad.text
+    finally:
+        instance_store.configure_instance_store(None)
+
+
+def test_a_saved_search_keeps_its_regular_expression(client: TestClient, fx: Fixture) -> None:
+    """§729: the match travels with the search, and one that cannot run is
+    refused when saved - as a property filter without its type is."""
+    tid = str(uuid.uuid4())
+    base = {"type_ids": [tid], "property": "code", "value": r"A\d+"}
+    r = client.post(f"/api/workspaces/{fx.workspace}/object-searches", headers=hdr(fx.editor_sub),
+                    json={"name": f"Regex {uuid.uuid4().hex[:6]}", "definition": {**base, "match": "regex"}})
+    assert r.status_code == 201, r.text
+    assert r.json()["definition"]["match"] == "regex"
+    # An exact one stores no `match`, so a search saved before §729 is the
+    # same definition it was.
+    r = client.post(f"/api/workspaces/{fx.workspace}/object-searches", headers=hdr(fx.editor_sub),
+                    json={"name": f"Exact {uuid.uuid4().hex[:6]}", "definition": base})
+    assert r.status_code == 201 and "match" not in r.json()["definition"], r.text
+    r = client.post(f"/api/workspaces/{fx.workspace}/object-searches", headers=hdr(fx.editor_sub),
+                    json={"name": f"Bad {uuid.uuid4().hex[:6]}",
+                          "definition": {**base, "value": "[A", "match": "regex"}})
+    assert r.status_code == 422 and "has no closing ]" in r.text, r.text
+    r = client.post(f"/api/workspaces/{fx.workspace}/object-searches", headers=hdr(fx.editor_sub),
+                    json={"name": f"Alone {uuid.uuid4().hex[:6]}",
+                          "definition": {"q": "x", "match": "regex"}})
+    assert r.status_code == 422 and "searches one property" in r.text, r.text
