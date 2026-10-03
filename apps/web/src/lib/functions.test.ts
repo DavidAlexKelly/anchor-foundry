@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { FunctionVersion } from "@/lib/types";
 import {
   blankDraft, blankParameter, bodyOf, compareVersions, draftOf, draftProblem, editedTypes,
-  editsOver, nextVersion,
+  editsOver, nextVersion, PARAMETER_TYPES,
   OUTPUT_KINDS,
   parametersUsed, resultLine, valuesFor, versionKey,
 } from "./functions";
@@ -266,5 +266,14 @@ describe("an edit function over several types (§783)", () => {
     expect(draftProblem(edits({ object_type_ids: ["a", "a"] }) as never, null))
       .toBe("Name each object type it edits once.");
     expect(draftProblem(edits({ object_type_ids: ["a", "b"] }) as never, null)).toBeNull();
+  });
+});
+
+describe("an attachment parameter (§785)", () => {
+  it("is sent as the reference its upload returned", () => {
+    const ref = { key: "k", filename: "a.txt", content_type: "text/plain", size: 1 };
+    expect(valuesFor([{ api_name: "file", data_type: "attachment", required: true }],
+      { file: JSON.stringify(ref) })).toEqual({ file: ref });
+    expect(PARAMETER_TYPES).toContain("attachment");
   });
 });

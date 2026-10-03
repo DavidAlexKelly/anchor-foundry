@@ -394,14 +394,30 @@ function RunDialog({ workspaceId, fn, onClose }: {
           label={p.api_name}
           hint={`${p.data_type === "object" ? "an object's id"
             : p.data_type === "object_set" ? "primary keys, separated by commas"
+            : p.data_type === "attachment" ? "a file, uploaded as an attachment"
             : p.data_type}${p.required ? "" : ", optional"}`}
         >
-          <input
-            type="text"
-            aria-label={`Value of ${p.api_name}`}
-            value={typed[p.api_name] ?? ""}
-            onChange={(e) => setTyped({ ...typed, [p.api_name]: e.target.value })}
-          />
+          {p.data_type === "attachment" ? (
+            // §785: uploaded as an action's attachment parameter is, and
+            // passed as its reference.
+            <input
+              type="file"
+              aria-label={`Value of ${p.api_name}`}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                void objApi.uploadAttachment(workspaceId, file).then((ref) =>
+                  setTyped((was) => ({ ...was, [p.api_name]: JSON.stringify(ref) })));
+              }}
+            />
+          ) : (
+            <input
+              type="text"
+              aria-label={`Value of ${p.api_name}`}
+              value={typed[p.api_name] ?? ""}
+              onChange={(e) => setTyped({ ...typed, [p.api_name]: e.target.value })}
+            />
+          )}
         </Field>
       ))}
       <div className="row-actions" style={{ justifyContent: "flex-end", marginTop: 12 }}>

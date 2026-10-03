@@ -241,3 +241,32 @@ def test_an_edit_function_over_two_types_is_written_and_run(page, api, world) ->
         [checks, "C2", "create", '{"site":"S3","note":"new"}'])
     expect(edits.locator("tbody tr").nth(2).locator("td")).to_have_text(
         [checks, "C1", "delete", ""])
+
+
+def test_a_function_reads_an_attachment_uploaded_in_the_run_dialog(page, world) -> None:
+    """§785: functions' "Attachments can be passed into functions as inputs",
+    read with `read_attachment` - written in the dialog with an attachment
+    parameter, and run with a file chosen there."""
+    mod = world["mod"]
+    name = f"Words {uuid.uuid4().hex[:4]}"
+    api_name = name.lower().replace(" ", "_")
+    open_objects(page, mod)
+    page.get_by_test_id("new-function").click()
+    page.get_by_test_id("fn-name").fill(name)
+    page.get_by_test_id("fn-add-parameter").click()
+    page.get_by_role("textbox", name="Parameter 1 name").fill("file")
+    page.get_by_label("Parameter 1 type").select_option("attachment")
+    page.get_by_test_id("fn-output-kind").select_option("value")
+    page.get_by_test_id("fn-output-type").select_option("string")
+    page.get_by_test_id("fn-sql").fill("SELECT upper(decode(read_attachment($file)))")
+    expect(page.get_by_test_id("fn-problem")).to_have_count(0)
+    page.get_by_test_id("fn-save").click()
+    expect(page.get_by_test_id(f"fn-version-{api_name}")).to_have_text("1.0.0", timeout=15000)
+    page.get_by_role("button", name=f"Run {api_name}").click()
+    with page.expect_response(lambda r: r.url.endswith("/attachments")
+                              and r.request.method == "POST") as uploaded:
+        page.get_by_label("Value of file").set_input_files(files=[{
+            "name": "note.txt", "mimeType": "text/plain", "buffer": b"quiet please"}])
+    assert uploaded.value.status == 201
+    page.get_by_test_id("fn-run").click()
+    expect(page.get_by_test_id("fn-result-line")).to_have_text("QUIET PLEASE", timeout=15000)

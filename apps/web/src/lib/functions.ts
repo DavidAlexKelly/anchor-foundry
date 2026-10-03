@@ -14,7 +14,10 @@ import type {
 
 /** p.80's Workshop variable types, as the server's `SCALAR_TYPES` has them. */
 export const SCALAR_TYPES = ["string", "integer", "float", "boolean", "date", "timestamp"] as const;
-export const PARAMETER_TYPES = [...SCALAR_TYPES, "object", "object_set", "batch"] as const;
+/** `attachment` (§785) is a file, read in the query with `read_attachment`. */
+export const PARAMETER_TYPES = [
+  ...SCALAR_TYPES, "object", "object_set", "batch", "attachment",
+] as const;
 /** A batch's field types (§779): a scalar or one object. */
 export const BATCH_FIELD_TYPES = [...SCALAR_TYPES, "object"] as const;
 export const OUTPUT_KINDS: { kind: FunctionOutput["kind"]; label: string }[] = [
@@ -228,7 +231,7 @@ export function valuesFor(
     if (raw === "") continue;
     if (p.data_type === "integer" || p.data_type === "float") {
       out[p.api_name] = Number.isFinite(Number(raw)) ? Number(raw) : raw;
-    } else if (p.data_type === "batch") {
+    } else if (p.data_type === "batch" || p.data_type === "attachment") {
       // A batch is typed as its JSON list of entries (§779); text that is not
       // JSON is sent as typed, for the server to refuse by name.
       try {
