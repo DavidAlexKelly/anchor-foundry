@@ -532,7 +532,7 @@ async def test_connection(
     config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
     ok, error = True, None
     try:
-        secret = conn_service.secret_values_for(_secrets, row)
+        secret = await _caller_secret(access, row, policies)
         # §263: the source's allowlist, in scope for the whole operation.
         # `anyio.to_thread.run_sync` copies the context into the worker thread,
         # which is what lets an ambient scope reach a blocking connector.
@@ -586,10 +586,18 @@ async def diagnose_connection(
     connector = get_connector(str(row["source_type"]))
     config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
 
+    # p.31's fifth check, "Check OAuth authorization": an outbound
+    # application's source is tested as the person diagnosing it (§753).
+    try:
+        caller, unauthorized = await _caller_secret(access, row, policies), None
+    except outbound_apps.AuthorizationNeeded as exc:
+        caller, unauthorized = {}, exc
+
     def credentials() -> None:
-        secret = conn_service.secret_values_for(_secrets, row)
+        if unauthorized is not None:
+            raise unauthorized
         with egress.restricted_to(policies):
-            connector.test(config, secret)
+            connector.test(config, caller)
 
     steps = await anyio.to_thread.run_sync(
         diagnose_service.run, str(row["source_type"]), config, policies, credentials
@@ -625,7 +633,7 @@ async def discover_schema(
     connector = get_connector(str(row["source_type"]))
     config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
     try:
-        secret = conn_service.secret_values_for(_secrets, row)
+        secret = await _caller_secret(access, row, policies)
         with egress.restricted_to(policies):
             tables = await anyio.to_thread.run_sync(connector.discover, config, secret)
     except egress.EgressRefused as exc:
@@ -713,7 +721,7 @@ async def preview_table(
     connector = get_connector(str(row["source_type"]))
     config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
     try:
-        secret = conn_service.secret_values_for(_secrets, row)
+        secret = await _caller_secret(access, row, policies)
         with egress.restricted_to(policies):
             sample = await anyio.to_thread.run_sync(
                 functools.partial(
@@ -872,7 +880,7 @@ async def trigger_sync(
     schema_changes: dict[str, Any] | None = None
     tmp_dir = _tempfile.mkdtemp()
     try:
-        secret = conn_service.secret_values_for(_secrets, row)
+        secret = await _caller_secret(access, row, policies)
         # Wrapped per call rather than around the whole `try`, which would
         # reindent a hundred lines to say the same thing.
         with egress.restricted_to(policies):
@@ -1114,6 +1122,18 @@ async def set_scheduled_sync(
             raise ConnectorConfigError(str(exc)) from exc
     elif not body.source_table:
         raise ConnectorConfigError("a table sync needs a source table")
+    if body.cron_schedule:
+        async with user_connection(access.auth.user_id) as conn:
+            scheduled = await conn_service.get(
+                conn, access.workspace_id, access.project_id, connection_id)
+        scheduled_config = (scheduled["config"] if isinstance(scheduled["config"], dict)
+                            else _parse(scheduled["config"]))
+        if outbound_apps.is_outbound(scheduled_config):
+            # Decision 0022 §4: refused when it is set, not every time it fires.
+            raise ConnectorConfigError(
+                "this source is called as the person using it, through its outbound "
+                "application, and a schedule has no person to call it as - sync it "
+                "with Run now instead")
     next_run_at = next_run_after(body.cron_schedule) if body.cron_schedule else None
     async with user_connection(access.auth.user_id) as conn:
         if body.mode == "files":
@@ -1257,7 +1277,7 @@ async def run_scheduled_sync(
     new_cursor_value = schedule["sync_last_cursor_value"]
     tmp_dir = _tempfile.mkdtemp()
     try:
-        secret = conn_service.secret_values_for(_secrets, row)
+        secret = await _caller_secret(access, row, policies)
         cursor_col = schedule["sync_cursor_column"] if mode == "incremental" else None
         source_type = str(row["source_type"])
         # The scheduled half of the same handler shape.
@@ -1465,6 +1485,21 @@ async def _run_file_sync(
         created_dataset=created, dataset=SyncDatasetOut(**dataset) if dataset else None,
         files_taken=[f["path"] for f in taken] if ok else [],
     )
+
+
+async def _caller_secret(
+    access: ProjectAccess, row: dict[str, Any], policies: list[dict[str, Any]] | None,
+) -> dict[str, str]:
+    """The secret a call made by this person sends: the source's own, and an
+    outbound application's person's token beside it (§753; decision 0022)."""
+    secret = conn_service.secret_values_for(_secrets, row)
+    config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
+    if not outbound_apps.is_outbound(config):
+        return secret
+    async with user_connection(access.auth.user_id) as conn:
+        return await outbound_apps.secret_for(
+            conn, _secrets, connection_id=UUID(str(row["id"])), config=config,
+            secret=secret, policies=policies)
 
 
 # ---- outbound applications (decision 0022; `data-connection` p.39-40, p.243) --

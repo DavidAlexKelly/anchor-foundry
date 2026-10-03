@@ -213,3 +213,70 @@ async def revoke(conn: AsyncConnection, gateway: SecretsGateway, connection_id: 
         return False
     gateway.delete_secret(str(row["secret_arn"]))
     return True
+
+
+async def _forget(conn: AsyncConnection, gateway: SecretsGateway, connection_id: UUID) -> None:
+    """Forget a grant that will not work again, **committed now**: the caller
+    is about to raise, and the transaction it raises out of would otherwise
+    take the forgetting back with it."""
+    await revoke(conn, gateway, connection_id)
+    await conn.commit()
+
+
+async def secret_for(
+    conn: AsyncConnection, gateway: SecretsGateway, *, connection_id: UUID,
+    config: dict[str, Any], secret: dict[str, str], policies: list[dict[str, Any]] | None,
+) -> dict[str, str]:
+    """The secret a call made by `conn`'s person sends (§753): the source's
+    own, and for an outbound application the person's access token beside it,
+    refreshed first when it is about to lapse (RFC 6749 §6).
+
+    p.40's two failures are `AuthorizationNeeded`: no grant ("has not
+    completed the interactive authorization flow"), and a refresh the
+    provider refuses ("Credentials expired"), which also forgets the grant,
+    since a refresh token the provider has disowned will not work next time.
+    """
+    if not is_outbound(config):
+        return secret
+    row = await fetch_one(conn, """
+        SELECT user_id, secret_arn FROM outbound_grants WHERE connection_id = :cid
+    """, {"cid": str(connection_id)})
+    if row is None:
+        raise AuthorizationNeeded(
+            "you have not authorized this source: it is called as the person using it, "
+            "through its outbound application - authorize it from the source first")
+    try:
+        values = gateway.get_secret(str(row["secret_arn"]))
+    except KeyError:
+        await _forget(conn, gateway, connection_id)
+        raise AuthorizationNeeded(
+            "your authorization of this source is gone - authorize it again") from None
+    expires = int(values["expires_at"]) if values.get("expires_at") else None
+    if expires is not None and expires - EXPIRY_MARGIN.total_seconds() <= time.time():
+        if not values.get("refresh_token"):
+            await _forget(conn, gateway, connection_id)
+            raise AuthorizationNeeded(
+                "your authorization of this source has expired - authorize it again")
+        form = {"grant_type": "refresh_token", "refresh_token": values["refresh_token"],
+                "client_id": secret.get("client_id", "")}
+        if secret.get("client_secret"):
+            form["client_secret"] = secret["client_secret"]
+        from anyio import to_thread
+
+        from . import egress
+
+        def refresh() -> dict[str, Any]:
+            with egress.restricted_to(policies):
+                return RestConnector().token_request(config, form)
+
+        try:
+            payload = await to_thread.run_sync(refresh)
+        except ConnectorOperationError as exc:
+            await _forget(conn, gateway, connection_id)
+            raise AuthorizationNeeded(
+                f"your authorization of this source has expired and could not be renewed "
+                f"({exc}) - authorize it again") from exc
+        values = _grant_values(payload, previous=values)
+        await _store(conn, gateway, connection_id=connection_id,
+                     user_id=UUID(str(row["user_id"])), values=values)
+    return {**secret, "access_token": values["access_token"]}

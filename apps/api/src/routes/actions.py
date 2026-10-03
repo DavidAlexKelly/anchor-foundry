@@ -33,6 +33,7 @@ from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_pro
 from ..services import action_metrics, property_reducers
 from ..services import action_defaults, action_log
 from ..services import action_revert
+from ..services import outbound_apps
 from ..services import object_edits
 from ..services import action_choices as choices_service
 from ..services import action_filters as filters_service
@@ -2188,11 +2189,24 @@ async def _run_webhooks(
                 conn, UUID(str(connection["id"]))
             )
             values = actions_service.webhook_inputs(config, bound)
+            # p.243: called as the person running the action, with their own
+            # authorization when the source has an outbound application (§753);
+            # not having one is the call's failure, recorded like any other.
+            try:
+                secret = await outbound_apps.secret_for(
+                    conn, connection_routes.secrets_gateway(),
+                    connection_id=UUID(str(connection["id"])),
+                    config=webhook_calls.config_of(connection), secret=secret,
+                    policies=policies)
+                unauthorized = None
+            except outbound_apps.AuthorizationNeeded as exc:
+                unauthorized = str(exc)
             # p.240's limits (§522): a refused execution is a failure like
             # any other, so a writeback refuses the action and a side
             # effect is recorded and passed over.
             async with webhook_limits.limited(webhook) as refused:
-                result = (webhook_calls.result(ok=False, error=refused) if refused
+                result = (webhook_calls.result(ok=False, error=refused or unauthorized)
+                          if refused or unauthorized
                           else await webhook_calls.perform(
                               webhook, connection, secret, values, policies))
         except webhooks_service.WebhookError as exc:

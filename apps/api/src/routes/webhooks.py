@@ -35,7 +35,7 @@ from ..middleware.permissions import (
 )
 from ..services import audit
 from ..services import connections as conn_service
-from ..services import egress_store, webhook_calls, webhook_limits, webhook_store
+from ..services import egress_store, outbound_apps, webhook_calls, webhook_limits, webhook_store
 from ..services import webhooks as webhooks_service
 from . import connections as connection_routes
 
@@ -326,11 +326,23 @@ async def test_webhook(
         policies = await egress_store.for_connection(
             conn, UUID(str(connection["id"]))
         )
+        # p.243: a webhook on an outbound application's source is called as
+        # the person running it, with their own authorization (§753). Not
+        # having one is this call's failure, recorded like any other.
+        try:
+            secret = await outbound_apps.secret_for(
+                conn, connection_routes.secrets_gateway(),
+                connection_id=UUID(str(connection["id"])),
+                config=webhook_calls.config_of(connection), secret=secret, policies=policies)
+            unauthorized = None
+        except outbound_apps.AuthorizationNeeded as exc:
+            unauthorized = str(exc)
 
     try:
         # §522: a test call is an execution, so p.240's limits apply to it.
         async with webhook_limits.limited(webhook) as refused:
-            outcome = (webhook_calls.result(ok=False, error=refused) if refused
+            outcome = (webhook_calls.result(ok=False, error=refused or unauthorized)
+                       if refused or unauthorized
                        else await webhook_calls.perform(
                            webhook, connection, secret, body.values, policies))
     except webhooks_service.WebhookError as exc:
