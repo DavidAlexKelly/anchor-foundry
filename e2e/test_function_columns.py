@@ -59,7 +59,7 @@ def world(api):
     return {"api": api, "mod": mod, "sites": sites, "fn": fn}
 
 
-def module(world, name: str, columns: str, declared: list | None):
+def module(world, name: str, columns: str, declared: list | None, export: bool = False):
     mod = Module(world["api"], name, beside=world["mod"])
     definition = {
         "format": 2,
@@ -70,7 +70,8 @@ def module(world, name: str, columns: str, declared: list | None):
                               "suffixText": ""}},
             "tbl": {"resolvedName": "CanvasObjectTable",
                     "props": {"objectSetVariable": "v_all", "columns": columns,
-                              "pageSize": 25, "activeVariable": None, "autoSelect": False}},
+                              "pageSize": 25, "activeVariable": None, "autoSelect": False,
+                              "exportCsv": export}},
         }),
         "variables": {
             "v_all": {"id": "v_all", "kind": "object_set", "label": "Sites",
@@ -157,3 +158,20 @@ def test_a_function_column_drawn_in_the_panel(page, world):
     open_module(page, mod)
     expect(page.get_by_test_id("function-S2-lvl")).to_have_text("High", timeout=15000)
     expect(page.get_by_test_id("function-S1-lvl")).to_have_text("Low")
+
+
+def test_a_function_column_is_in_the_tables_csv_export(page, world):
+    """p.223: "Enable export to CSV … supports exporting function-backed
+    columns" (§778) - every row's value, computed for the export, under the
+    column's name, in the table's order."""
+    mod = module(world, "Function columns export", "code,level,capacity",
+                 [{**column(world, "level", "level"), "display_name": "Urgency"}], export=True)
+    open_module(page, mod)
+    expect(page.get_by_test_id("function-S2-level")).to_have_text("High", timeout=15000)
+    page.locator("tbody tr").first.click(button="right")
+    with page.expect_download() as waiting:
+        page.get_by_test_id("table-export-csv").click()
+    with open(waiting.value.path(), encoding="utf-8", newline="") as handle:
+        assert handle.read() == (
+            "Key,Code,Urgency,Capacity\r\n"
+            "S1,S1,Low,10\r\nS2,S2,High,30\r\nS3,S3,High,25\r\n")
