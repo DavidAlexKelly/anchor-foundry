@@ -30,6 +30,8 @@ import { ValueFormatEditor, formattable } from "@/components/value-format-editor
 import { PROPERTY_TYPES, PROPERTY_VISIBILITIES } from "@/components/object-type-editor";
 import { ApiError, objects as objApi, type SharedPropertyInput } from "@/lib/api";
 import { typeClassesOf } from "@/lib/type-classes";
+import { hintsOf } from "@/lib/render-hints";
+import { RenderHintsChecklist } from "@/components/render-hints-field";
 import type {
   PropertyDataType,
   PropertyVisibility,
@@ -69,6 +71,8 @@ function SharedPropertyDialog({
   // p.181's type classes (§723), typed as the property row's box is.
   const [classesText, setClassesText] = useState((existing?.type_classes ?? []).join(", "));
   const classes = typeClassesOf(classesText);
+  // p.182's render hints (§724), overriding every user's (p.188).
+  const [hints, setHints] = useState<string[]>(hintsOf(existing?.render_hints));
   const queryClient = useQueryClient();
 
   const body: SharedPropertyInput = {
@@ -78,6 +82,7 @@ function SharedPropertyDialog({
     visibility,
     value_format: valueFormat,
     type_classes: classes.classes,
+    render_hints: hints,
     ...(existing ? {} : { api_name: toApiName(displayName) }),
   };
 
@@ -197,6 +202,10 @@ function SharedPropertyDialog({
           value={classesText}
           onChange={(e) => setClassesText(e.target.value)}
         />
+      </Field>
+      <Field label="Render hints"
+        hint="p.182: how applications treat it. Every property using it takes these in place of its own (p.188).">
+        <RenderHintsChecklist value={hints} onChange={setHints} testId="shared-hint" />
       </Field>
       {classes.bad.length > 0 && (
         <p className="form-error" role="alert" data-testid="shared-type-classes-bad">

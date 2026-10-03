@@ -31,7 +31,8 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 from . import (
     array_properties, conditional_format, derived_properties, link_backing, link_join_tables,
     ontology_status, property_inline_actions,
-    property_reducers, shared_properties, struct_fields, type_classes, value_format,
+    property_reducers, render_hints, shared_properties, struct_fields, type_classes,
+    value_format,
     value_types,
 )
 from .property_values import (  # noqa: F401
@@ -480,6 +481,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
                p.struct_fields, p.array_of, p.reducers,
                p.status, p.deprecation,
                p.shared_property_id, p.inline_action_type_id, p.type_classes,
+               p.render_hints,
                sp.api_name AS shared_property_api_name,
                sp.display_name AS sp_display_name,
                sp.description AS sp_description,
@@ -487,6 +489,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
                sp.visibility AS sp_visibility,
                sp.value_format AS sp_value_format,
                sp.type_classes AS sp_type_classes,
+               sp.render_hints AS sp_render_hints,
                p.value_type_id AS own_value_type_id,
                vt.id AS value_type_id,
                vt.api_name AS value_type_api_name,
@@ -517,6 +520,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
                 "visibility": full["sp_visibility"],
                 "value_format": full["sp_value_format"],
                 "type_classes": full["sp_type_classes"],
+                "render_hints": full["sp_render_hints"],
             }
             if full["shared_property_id"] is not None
             else None
@@ -627,8 +631,9 @@ async def list_properties_for_workspace(
                 "data_type": full["sp_data_type"],
                 "visibility": full["sp_visibility"],
                 "value_format": full["sp_value_format"],
-                # Not read by search, which never wanted classes.
+                # Not read by search, which never wanted classes or hints.
                 "type_classes": full.get("sp_type_classes"),
+                "render_hints": full.get("sp_render_hints"),
             }
             if full["shared_property_id"] is not None
             else None
@@ -836,6 +841,12 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
             prop.get("type_classes"), property_name=api,
             limit=2 * type_classes.MAX_CLASSES,
         )
+        # p.248-252 (§724; db 0140), normalised in place for `value_format`'s
+        # reason. A shared property's override them in `_apply_shared`. None
+        # stays None until the write, which reads it as the default: on an
+        # attached property it has to reach `check_attachment` as "not sent".
+        if prop.get("render_hints") is not None:
+            prop["render_hints"] = render_hints.parse(prop["render_hints"], property_name=api)
 
 
 async def _apply_shared(
@@ -1043,7 +1054,8 @@ async def _write_property_rows(
                                                 reducers,
                                                 shared_property_id,
                                                 value_type_id, status, deprecation,
-                                                inline_action_type_id, type_classes)
+                                                inline_action_type_id, type_classes,
+                                                render_hints)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
                     :required, :descr, :sort, CAST(:vis AS property_visibility),
                     CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly,
@@ -1052,7 +1064,8 @@ async def _write_property_rows(
                     CAST(:reducers AS jsonb),
                     :shared, :valuetype,
                     CAST(:status AS ontology_status), CAST(:depr AS jsonb),
-                    :inline, CAST(:tclasses AS text[]))
+                    :inline, CAST(:tclasses AS text[]),
+                    CAST(:rhints AS text[]))
             RETURNING id
             """,
             {
@@ -1119,6 +1132,9 @@ async def _write_property_rows(
                 "inline": prop.get("inline_action_type_id") or None,
                 # p.91's type classes (§671), as `_validate_properties` left them.
                 "tclasses": list(prop.get("type_classes") or []),
+                # p.248-252 (§724), as `_validate_properties` left them.
+                "rhints": list(prop["render_hints"]) if prop.get("render_hints") is not None
+                else list(render_hints.DEFAULT),
                 "depr": (
                     json.dumps(prop["deprecation"])
                     if prop.get("deprecation") is not None
@@ -1266,7 +1282,8 @@ async def _snapshot_version(
                                'status', p.status,
                                'deprecation', p.deprecation,
                                'inline_action_type_id', p.inline_action_type_id,
-                               'type_classes', p.type_classes)
+                               'type_classes', p.type_classes,
+                               'render_hints', p.render_hints)
                            ORDER BY p.sort_order, p.api_name)
                       FROM object_type_properties p WHERE p.object_type_id = ot.id),
                    '[]'::jsonb),

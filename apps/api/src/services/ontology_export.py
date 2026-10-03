@@ -79,6 +79,8 @@ PROPERTY_FIELDS = (
     "inline_action",
     # p.91's type classes (§671; db 0133): labels, so they travel verbatim.
     "type_classes",
+    # p.248-252's render hints (§724; db 0140), by key, for the same reason.
+    "render_hints",
 )
 
 #: The same decision for the type itself. `resource_id`, `created_at` and
@@ -234,7 +236,7 @@ async def export_ontology(
                p.struct_fields::text AS struct_fields,
                p.array_of::text AS array_of, p.reducers::text AS reducers,
                p.status::text AS status,
-               p.deprecation::text AS deprecation, p.id,
+               p.deprecation::text AS deprecation, p.id, p.render_hints,
                -- p.188's union as loaded (§723), since the file carries no
                -- shared property for an importer to join it with: the
                -- inherited metadata travels as what it is, as the four

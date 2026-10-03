@@ -1983,6 +1983,9 @@ export interface ObjectTypeProperty {
   /** Which of `type_classes` came from the shared property (§723): shown as
    * fixed, and left out of what a save stores. */
   inherited_type_classes?: string[];
+  /** p.248-252's render hints (§724; db 0140), by key - the shared
+   * property's when attached (p.188). */
+  render_hints?: string[];
 }
 
 /** One property definition used by several object types (Foundry
@@ -2012,6 +2015,8 @@ export interface SharedProperty {
   /** p.181's type classes (§723), joined with an attached property's own on
    * load (p.188). */
   type_classes?: string[];
+  /** p.182's render hints (§724), overriding an attached property's (p.188). */
+  render_hints?: string[];
   created_at: string;
   updated_at: string;
 }

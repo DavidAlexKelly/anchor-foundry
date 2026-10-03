@@ -43,10 +43,9 @@ defined anywhere but on the type that has both.
 
 Two divergences, named rather than hidden
 -----------------------------------------
-* Foundry lists **render hints** among shared metadata. They do not exist in
-  this platform - reindex tuning is not a thing this instance store exposes -
-  so they are absent rather than stubbed. `docs/parity/ontology.md` says so.
-  **Type classes** were absent for the same kind of reason until §723: they are
+* **Render hints** (§724) are inherited like the four above: p.188 says "using
+  the shared property will override the configuration values of the selected
+  property". **Type classes** were absent until §723: they are
   shared metadata (p.181) and, unlike the four in `INHERITED`, *joined* rather
   than overridden - p.188 lets an attached property keep editing its own and
   loads the union. See `resolve` and `own_classes`.
@@ -75,7 +74,7 @@ _API_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 #: The fields an attached property takes from its shared property (p.181,
 #: p.184 and p.190 - the same list each time). Not `api_name`: p.188 keeps that
 #: local so downstream consumers holding it keep working.
-INHERITED = ("display_name", "description", "visibility", "value_format")
+INHERITED = ("display_name", "description", "visibility", "value_format", "render_hints")
 
 
 class SharedPropertyError(ValueError):
@@ -96,7 +95,7 @@ async def list_shared(
         """
         SELECT sp.id, sp.api_name, sp.display_name, sp.description,
                sp.data_type, sp.visibility, sp.value_format,
-               sp.value_type_id, sp.type_classes,
+               sp.value_type_id, sp.type_classes, sp.render_hints,
                sp.created_at, sp.updated_at,
                (SELECT count(*) FROM object_type_properties p
                  WHERE p.shared_property_id = sp.id) AS usage_count
@@ -117,7 +116,7 @@ async def get_shared(
         """
         SELECT sp.id, sp.api_name, sp.display_name, sp.description,
                sp.data_type, sp.visibility, sp.value_format,
-               sp.value_type_id, sp.type_classes,
+               sp.value_type_id, sp.type_classes, sp.render_hints,
                sp.created_at, sp.updated_at,
                (SELECT count(*) FROM object_type_properties p
                  WHERE p.shared_property_id = sp.id) AS usage_count
@@ -171,11 +170,13 @@ async def create_shared(
     value_type_id: UUID | None,
     created_by: UUID,
     type_classes_raw: Any = None,
+    render_hints_raw: Any = None,
 ) -> dict[str, Any]:
     _check_definition(
         api_name=api_name, data_type=data_type, visibility=visibility
     )
     classes = _parse_classes(type_classes_raw, api_name)
+    hints = _parse_hints(render_hints_raw, api_name)
     fmt = value_format.parse(
         value_format_raw, data_type=data_type, property_name=api_name
     )
@@ -192,12 +193,14 @@ async def create_shared(
         INSERT INTO shared_properties (workspace_id, api_name, display_name,
                                        description, data_type, visibility,
                                        value_format, value_type_id, created_by,
-                                       type_classes)
+                                       type_classes, render_hints)
         VALUES (:wid, :api, :name, :descr, CAST(:dtype AS property_data_type),
                 CAST(:vis AS property_visibility), CAST(:vfmt AS jsonb),
-                :valuetype, :by, CAST(:tclasses AS text[]))
+                :valuetype, :by, CAST(:tclasses AS text[]),
+                CAST(:rhints AS text[]))
         RETURNING id, api_name, display_name, description, data_type,
                   visibility, value_format, value_type_id, type_classes,
+                  render_hints,
                   created_at, updated_at
         """,
         {
@@ -214,6 +217,7 @@ async def create_shared(
             "valuetype": str(value_type_id) if value_type_id else None,
             "by": str(created_by),
             "tclasses": classes,
+            "rhints": hints,
         },
     )
     assert row is not None
@@ -232,6 +236,7 @@ async def update_shared(
     value_format_raw: Any,
     value_type_id: UUID | None,
     type_classes_raw: Any = None,
+    render_hints_raw: Any = None,
 ) -> dict[str, Any]:
     """Edit the definition. Every object type using it sees the change on its
     next read, which is p.178's "update … in one place".
@@ -240,8 +245,9 @@ async def update_shared(
     it is the stable machine name a consumer holds, and renaming it here would
     break them with no warning that could reach them.
 
-    Type classes left out (`None`) are kept, so a client written before §723
-    does not clear them by saving the name; an empty list clears them.
+    Type classes and render hints left out (`None`) are kept, so a client
+    written before §723 or §724 does not change them by saving the name; an
+    empty list clears them.
     """
     current = await get_shared(conn, workspace_id, shared_id)
     _check_definition(
@@ -268,6 +274,11 @@ async def update_shared(
         if type_classes_raw is None
         else _parse_classes(type_classes_raw, str(current["api_name"]))
     )
+    hints = (
+        list(current["render_hints"])
+        if render_hints_raw is None
+        else _parse_hints(render_hints_raw, str(current["api_name"]))
+    )
     await conn.execute(
         text(
             """
@@ -277,7 +288,8 @@ async def update_shared(
                    visibility = CAST(:vis AS property_visibility),
                    value_format = CAST(:vfmt AS jsonb),
                    value_type_id = :valuetype,
-                   type_classes = CAST(:tclasses AS text[])
+                   type_classes = CAST(:tclasses AS text[]),
+                   render_hints = CAST(:rhints AS text[])
              WHERE id = :sid
             """
         ),
@@ -289,6 +301,7 @@ async def update_shared(
             "vfmt": json.dumps(fmt) if fmt is not None else None,
             "valuetype": str(value_type_id) if value_type_id else None,
             "tclasses": classes,
+            "rhints": hints,
             "sid": str(shared_id),
         },
     )
@@ -418,6 +431,10 @@ def check_attachment(prop: dict[str, Any], shared: dict[str, Any]) -> None:
         if field not in prop:
             continue
         submitted = prop[field]
+        if field == "render_hints" and submitted is None:
+            # A client written before §724 sends none, which `render_hints.parse`
+            # reads as the default rather than as a choice.
+            continue
         if field == "description" and not submitted:
             # A blank description is what a client that never had one sends,
             # and it is indistinguishable from "leave it alone". Every other
@@ -445,7 +462,8 @@ async def by_id(
         conn,
         """
         SELECT id, api_name, display_name, description, data_type,
-               visibility, value_format, value_type_id, type_classes
+               visibility, value_format, value_type_id, type_classes,
+               render_hints
           FROM shared_properties
          WHERE workspace_id = :wid AND id = ANY(CAST(:ids AS uuid[]))
         """,
@@ -494,12 +512,22 @@ def _parse_classes(raw: Any, api_name: str) -> list[str]:
         raise SharedPropertyError(str(exc)) from exc
 
 
+def _parse_hints(raw: Any, api_name: str) -> list[str]:
+    from . import render_hints
+
+    try:
+        return render_hints.parse(raw, property_name=api_name)
+    except ValueError as exc:
+        raise SharedPropertyError(str(exc)) from exc
+
+
 def _out(row: Any) -> dict[str, Any]:
     out = dict(row)
     fmt = out.get("value_format")
     out["value_format"] = json.loads(fmt) if isinstance(fmt, str) else fmt
-    if "type_classes" in out:
-        out["type_classes"] = list(out["type_classes"] or [])
+    for listed in ("type_classes", "render_hints"):
+        if listed in out:
+            out[listed] = list(out[listed] or [])
     if "usage_count" in out:
         out["usage_count"] = int(out["usage_count"])
     return out

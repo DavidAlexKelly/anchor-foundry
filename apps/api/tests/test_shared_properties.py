@@ -554,6 +554,7 @@ SHARED = {
     "data_type": "date",
     "visibility": "prominent",
     "value_format": {"kind": "datetime", "style": "date"},
+    "render_hints": ["keywords"],
 }
 
 
@@ -574,6 +575,8 @@ def test_resolve_overlays_only_the_inherited_fields() -> None:
     assert out["description"] == "When they began"
     assert out["visibility"] == "prominent"
     assert out["value_format"] == SHARED["value_format"]
+    # p.188's override (§724).
+    assert out["render_hints"] == ["keywords"]
     # p.188: the api_name is the property's own, and the three local settings
     # are not on p.181/p.184/p.190's list of shared metadata.
     assert out["api_name"] == "began_on"
@@ -741,7 +744,7 @@ def test_resolve_joins_classes_rather_than_overriding_them() -> None:
     prop = {"api_name": "p", "data_type": "date", "type_classes": ["a:b", "c:d"]}
     shared = {"api_name": "s", "data_type": "date", "display_name": "S",
               "description": "", "visibility": "normal", "value_format": None,
-              "type_classes": ["c:d", "e:f"]}
+              "render_hints": [], "type_classes": ["c:d", "e:f"]}
     out = sp_service.resolve(prop, shared)
     assert out["type_classes"] == ["a:b", "c:d", "e:f"]
     assert out["inherited_type_classes"] == ["c:d", "e:f"]

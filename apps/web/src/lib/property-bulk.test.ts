@@ -65,3 +65,22 @@ describe("the selection", () => {
     expect(toggled(new Set([1, 2]), 2)).toEqual(new Set([1]));
   });
 });
+
+describe("p.91's Changing render hints (§724)", () => {
+  it("turns a hint on or off on every selected row, by the row checklist's rule", () => {
+    const hinted = [
+      { data_type: "string" as const, render_hints: ["keywords"] },
+      { data_type: "string" as const },
+      { data_type: "string" as const, render_hints: [], shared_property_id: "sp" },
+      { data_type: "string" as const, render_hints: [] },
+    ];
+    const on = bulkApply(hinted, new Set([0, 1, 2]), { kind: "hint", value: "regex", on: true });
+    // Searchable comes with it (p.250-251); a row naming none started from the default.
+    expect(on.rows.map((r) => r.render_hints)).toEqual([
+      ["keywords", "searchable", "regex"], ["selectable", "sortable", "searchable", "regex"], [], []]);
+    // The shared property's row keeps its shared property's (p.188).
+    expect(on.skipped).toBe(1);
+    const off = bulkApply(on.rows, new Set([0, 1]), { kind: "hint", value: "searchable", on: false });
+    expect(off.rows.map((r) => r.render_hints).slice(0, 2)).toEqual([["keywords"], []]);
+  });
+});
