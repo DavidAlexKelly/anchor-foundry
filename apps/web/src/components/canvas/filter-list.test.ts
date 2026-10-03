@@ -424,3 +424,18 @@ describe("a linked filter's pill (§621)", () => {
     expect(linkedPillLabel({ property: "" }, null)).toBe("Linked objects · Has link");
   });
 });
+
+describe("a regular expression keyword filter (§728; ontology p.130)", () => {
+  it("is kept as a search type, and writes matches_regex in place of the other two", () => {
+    expect(filtersOf([{ id: "f_1", property: "code", component: "keyword", syntax: "regex" }], "")).toEqual([
+      { id: "f_1", property: "code", component: "keyword", syntax: "regex" }]);
+    const plain = withKeyword([], "code", "SN");
+    const regex = withKeyword(plain, "code", "SN-\\d+", "regex");
+    expect(regex).toEqual([{ property: "code", op: "matches_regex", value: "SN-\\d+" }]);
+    expect(keywordOf(regex, "code")).toBe("SN-\\d+");
+    // One box, one search: the regex replaces the prefix, and blank removes it.
+    expect(withKeyword(regex, "code", " ", "regex")).toEqual([]);
+    expect(withKeyword(regex, "code", "north OR south", true)).toEqual([
+      { property: "code", op: "keyword_query", value: "north OR south" }]);
+  });
+});

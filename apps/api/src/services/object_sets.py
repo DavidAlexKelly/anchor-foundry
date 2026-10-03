@@ -32,6 +32,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, TYPE_CHECKING, Union
 from uuid import UUID
 
+# Pure, as this module is: p.130-131's regular expressions, read once and
+# written for each store (§728).
+from . import regex_search
+
 if TYPE_CHECKING:  # this module imports nothing at runtime, on purpose
     from collections.abc import Mapping
 
@@ -44,6 +48,12 @@ OPERATORS = ("eq", "neq", "in", "starts_with")
 # p.452's advanced keyword syntax, whose value is a query over `starts_with`
 # terms, is `QUERY_OPERATORS` at the end of this module (§543), and p.451's
 # filters on linked objects are `LINK_OPERATORS` there (§545).
+
+# `ontology` p.130-131's regular expression search (§728): a whole-value
+# match on a string property, its value a `regex_search.Pattern`. Whether the
+# property allows it (`object-link-types` p.251's Enable regex queries) needs
+# the ontology, so `object_set_eval` asks.
+REGEX_OPERATORS = ("matches_regex",)
 
 # A filter may address the instance's **primary key** as well as a property,
 # under this name. It is `ontology.PRIMARY_KEY_REF`, restated here so this
@@ -864,9 +874,17 @@ def parse(
             data_type = _orderable_type(prop, op, property_types)
         elif op in GEO_OPERATORS:
             data_type = _boxable_type(prop, op, property_types)
+        elif op in REGEX_OPERATORS:
+            # p.130: "String properties must be indexed for regex search". A
+            # number has no text to match a pattern against.
+            if property_types is not None and prop in property_types \
+                    and property_types[prop] != "string":
+                raise ValueError(
+                    f"{prop!r} is a {property_types[prop]} property; a regular "
+                    "expression searches string properties (ontology p.130)")
         elif op not in OPERATORS and op not in QUERY_OPERATORS and op not in LINK_OPERATORS:
             supported = (*OPERATORS, *QUERY_OPERATORS, *LINK_OPERATORS, *ORDERED_OPERATORS,
-                         *GEO_OPERATORS)
+                         *GEO_OPERATORS, *REGEX_OPERATORS)
             raise ValueError(
                 f"unknown filter operator {op!r} (supported: {', '.join(supported)})"
             )
@@ -918,6 +936,13 @@ def parse(
                 f"filter on {prop!r} has no value - omit the filter rather than "
                 "sending an empty one, so an unset variable cannot silently widen the set"
             )
+        if op in REGEX_OPERATORS:
+            # Read once here, as a query is, so every store asks the same
+            # pattern - and one p.130-131 does not allow says why.
+            try:
+                value = regex_search.parse(value)
+            except regex_search.RegexError as exc:
+                raise ValueError(f"the regular expression on {prop!r}: {exc}") from exc
         if op in QUERY_OPERATORS:
             # Parsed here, as a box is, so every store walks one tree - and a
             # query that does not parse is refused with what is wrong with it.
@@ -1282,6 +1307,9 @@ def _matches_one(actual: Any, f: Filter) -> bool:
         return actual is not None and _text(actual).lower().startswith(_text(f.value).lower())
     if f.op in QUERY_OPERATORS:
         return actual is not None and query_matches(f.value, _text(actual))
+    if f.op in REGEX_OPERATORS:
+        # The whole value (p.130), case and all; no value, no match.
+        return actual is not None and f.value.matches(_text(actual))
     if f.op in LINK_OPERATORS:
         # Another type's objects decide this one, so there is nothing on
         # `properties` to read: the evaluator resolves it to an `in` first.

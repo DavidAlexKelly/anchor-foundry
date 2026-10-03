@@ -32,6 +32,7 @@ import json
 from typing import Any
 from uuid import UUID
 
+from ..lib.db import fetch_all
 from . import link_join_tables
 from . import object_sets
 from . import ontology as ontology_service
@@ -53,6 +54,42 @@ async def declared_types(conn: Any, object_type_id: UUID) -> dict[str, str]:
         for row in await ontology_service.list_properties(conn, object_type_id)
         if row.get("api_name") and row.get("data_type")
     }
+
+
+async def check_regex(conn: Any, object_type_id: UUID, filters: Any) -> None:
+    """Refuse a regular expression on a property not indexed for one (§728).
+
+    > "String properties must be indexed for regex search. To use regular
+    > expression search on a string property, the property must be indexed
+    > for regex search in Ontology Manager… choose the Enable regex queries
+    > option." (`ontology` p.130)
+
+    Here, at the one place every reading of a set resolves its own filters,
+    so a page, a count, a chart and a union part are all asked it. Asks the
+    ontology only when a set holds one, so no other set pays for it. A
+    shared property's hint is the one in force (p.188).
+    """
+    wanted = sorted({f.property for f in filters if f.op in object_sets.REGEX_OPERATORS})
+    if not wanted:
+        return
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT p.api_name
+          FROM object_type_properties p
+          LEFT JOIN shared_properties sp ON sp.id = p.shared_property_id
+         WHERE p.object_type_id = :tid AND p.api_name = ANY(CAST(:names AS text[]))
+           AND 'regex' = ANY(COALESCE(sp.render_hints, p.render_hints))
+        """,
+        {"tid": str(object_type_id), "names": wanted},
+    )
+    indexed = {str(r["api_name"]) for r in rows}
+    refused = [name for name in wanted if name not in indexed]
+    if refused:
+        raise ValueError(
+            ", ".join(refused) + (" is" if len(refused) == 1 else " are")
+            + " not indexed for regex search: turn on the Enable regex queries "
+            "render hint (ontology p.130)")
 
 
 async def resolve_traversal(
@@ -77,6 +114,7 @@ async def resolve_traversal(
 
     Recursive, bounded by `MAX_TRAVERSALS` at parse time.
     """
+    await check_regex(conn, definition.object_type_id, definition.filters)
     if definition.via is None:
         return await resolve_links(conn, store, prefix, workspace_id, definition.object_type_id,
                                    definition.filters)

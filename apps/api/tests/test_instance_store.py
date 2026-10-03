@@ -1187,3 +1187,74 @@ def test_a_shared_property_s_searchable_is_the_one_in_force(
     assert r.status_code == 200, r.text
     assert _explore(client, fx, q=f"Sealed-{tag}")["total"] == 0
     assert _explore(client, fx, q=f"Lantern-{tag}")["total"] == 1
+
+
+@pytest.mark.parametrize("store_name", ["postgres", "opensearch"])
+def test_a_regular_expression_finds_whole_values_on_both_stores(
+    client: TestClient, fx: Fixture, opensearch: str, store_name: str,
+) -> None:
+    """`ontology` p.130's regex search (§728), on a property indexed for it
+    (p.251's Enable regex queries): a whole-value match on both stores - and
+    refused, with p.130's reason, on a property that is not."""
+    reset(opensearch)
+    if store_name == "opensearch":
+        instance_store.configure_instance_store(
+            instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin"))
+    try:
+        tag = uuid.uuid4().hex[:6]
+        type_id = _hinted_type(client, fx, tag, ["searchable", "regex"], f"SN-{tag}-0042", "R")
+
+        def evaluate(prop: str, pattern: str):
+            return client.post(
+                f"/api/workspaces/{fx.workspace}/object-sets/evaluate", headers=hdr(fx.viewer_sub),
+                json={"definition": {"object_type_id": type_id, "filters": [
+                    {"property": prop, "op": "matches_regex", "value": pattern}]}, "limit": 5})
+
+        found = evaluate("secret", rf"SN-{tag}-\d{{4}}")
+        assert found.status_code == 200, found.text
+        assert [i["primary_key"] for i in found.json()["instances"]] == [f"R{tag}"]
+        # The whole value, not a part of it (p.130).
+        assert evaluate("secret", r"\d{4}").json()["instances"] == []
+        assert len(evaluate("secret", r".*\d{4}").json()["instances"]) == 1
+        # Case matters, on both stores as in the reference.
+        assert evaluate("secret", rf"sn-{tag}-\d{{4}}").json()["instances"] == []
+        refused = evaluate("label", "Lantern.*")
+        assert refused.status_code == 422
+        assert "label is not indexed for regex search" in refused.text
+    finally:
+        instance_store.configure_instance_store(None)
+
+
+def test_a_shared_property_s_regex_hint_is_the_one_in_force(
+    client: TestClient, fx: Fixture, opensearch: str,
+) -> None:
+    """p.188's override, read when a set is evaluated (§728): turned off on
+    the shared property after the property was saved."""
+    reset(opensearch)
+    tag = uuid.uuid4().hex[:6]
+    r = client.post(f"/api/workspaces/{fx.workspace}/shared-properties",
+                    headers=hdr(fx.editor_sub),
+                    json={"api_name": f"serial_{tag}", "display_name": "Serial",
+                          "data_type": "string", "render_hints": ["searchable", "regex"]})
+    assert r.status_code == 201, r.text
+    shared = r.json()
+    type_id = _hinted_type(client, fx, tag, None, f"SN-{tag}", "H")
+    got = client.get(f"/api/workspaces/{fx.workspace}/object-types/{type_id}",
+                     headers=hdr(fx.editor_sub)).json()
+    props = [{k: p[k] for k in ("api_name", "data_type")}
+             | ({"shared_property_id": shared["id"]} if p["api_name"] == "secret" else {})
+             for p in got["properties"]]
+    assert client.patch(f"/api/workspaces/{fx.workspace}/object-types/{type_id}",
+                        headers=hdr(fx.editor_sub),
+                        json={"display_name": got["display_name"], "properties": props}
+                        ).status_code == 200
+    body = {"definition": {"object_type_id": type_id, "filters": [
+        {"property": "secret", "op": "matches_regex", "value": "SN-.*"}]}, "limit": 5}
+    url = f"/api/workspaces/{fx.workspace}/object-sets/evaluate"
+    assert client.post(url, headers=hdr(fx.viewer_sub), json=body).status_code == 200
+    r = client.patch(f"/api/workspaces/{fx.workspace}/shared-properties/{shared['id']}",
+                     headers=hdr(fx.editor_sub),
+                     json={"display_name": "Serial", "data_type": "string",
+                           "render_hints": ["searchable"]})
+    assert r.status_code == 200, r.text
+    assert client.post(url, headers=hdr(fx.viewer_sub), json=body).status_code == 422
