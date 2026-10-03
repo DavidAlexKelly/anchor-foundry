@@ -1846,6 +1846,8 @@ class SearchDefinitionIn(BaseModel):
     type_ids: list[UUID] = Field(default_factory=list)
     property: str | None = Field(default=None, max_length=100)
     value: str | None = Field(default=None, max_length=500)
+    # `ontology` p.130's regular expression on `property` (§729).
+    match: str | None = Field(default=None, pattern="^(exact|regex)$")
 
 
 class SearchOut(BaseModel):
@@ -1881,7 +1883,7 @@ def _parsed(body: SearchDefinitionIn) -> dict[str, Any]:
     try:
         return searches_service.parse(
             q=body.q, type_ids=body.type_ids,
-            property_name=body.property, value=body.value,
+            property_name=body.property, value=body.value, match=body.match,
         )
     except searches_service.SearchError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2057,12 +2059,37 @@ async def delete_object_search(
         await searches_service.delete_search(conn, access.workspace_id, search_id)
 
 
+async def _explore_regex(
+    conn: Any, store: Any, prefix: str, type_id: UUID, property_name: str, pattern: str,
+    limit: int, offset: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """The Explorer's property filter as `ontology` p.130's regular expression
+    (§729): the set a Filter List's regex box asks for (§728), so the language,
+    the whole-value rule and p.130's "must be indexed for regex search" are
+    one implementation's, not a second one's. A refusal is a 422 saying why."""
+    try:
+        definition = object_sets.parse(
+            {"object_type_id": str(type_id),
+             "filters": [{"property": property_name, "op": "matches_regex", "value": pattern}]},
+            property_types=await _declared_types(conn, type_id))
+        await object_set_eval.check_regex(conn, type_id, definition.filters)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return await store.evaluate_object_set(
+        search_prefix=prefix, object_type_id=type_id, filters=definition.filters,
+        limit=limit, offset=offset)
+
+
 @router.get("/object-instances", response_model=ExplorerPage)
 async def explore_instances(
     q: str | None = Query(default=None, max_length=200),
     type_id: list[UUID] | None = Query(default=None),
     property: str | None = Query(default=None, max_length=100),
     value: str | None = Query(default=None, max_length=500),
+    # `ontology` p.130: "Object Explorer from the search bar" (§729) - the
+    # value read as a regular expression on the property, not matched exactly.
+    match: str | None = Query(default=None, pattern="^(exact|regex)$"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     application: str = APPLICATION_QUERY,
@@ -2093,7 +2120,7 @@ async def explore_instances(
     try:
         searches_service.parse(
             q=q, type_ids=type_id, property_name=property, value=value,
-            require_criteria=False,
+            require_criteria=False, match=match,
         )
     except searches_service.SearchError as exc:
         raise ValueError(str(exc)) from exc
@@ -2117,18 +2144,23 @@ async def explore_instances(
                 # instances are unreachable either way, and an empty page is
                 # what an unknown id gets whether or not it exists elsewhere.
                 return ExplorerPage(items=[], total=0, limit=limit, offset=offset)
-            rows, total = await store.find_by_property(
-                search_prefix=prefix,
-                object_type_id=type_id[0],
-                # The primary key is a field on the instance, not one of its
-                # properties - same reserved reference link joins use (db 0027).
-                property_name=(
-                    None if property == ontology_service.PRIMARY_KEY_REF else property
-                ),
-                value=value,
-                limit=limit,
-                offset=offset,
-            )
+            if match == "regex":
+                rows, total = await _explore_regex(
+                    conn, store, prefix, type_id[0], property, value or "", limit, offset)
+            else:
+                rows, total = await store.find_by_property(
+                    search_prefix=prefix,
+                    object_type_id=type_id[0],
+                    # The primary key is a field on the instance, not one of
+                    # its properties - same reserved reference link joins use
+                    # (db 0027).
+                    property_name=(
+                        None if property == ontology_service.PRIMARY_KEY_REF else property
+                    ),
+                    value=value,
+                    limit=limit,
+                    offset=offset,
+                )
             # find_by_property is the link-traversal read and returns rows
             # without the type id (its caller always knew it); the explorer's
             # response says what each row is, so fill it back in.

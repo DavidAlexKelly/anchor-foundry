@@ -40,6 +40,9 @@ def parse(
     # an empty search is not. The one place the two callers legitimately
     # differ, named rather than left to each of them to remember.
     require_criteria: bool = True,
+    # How `value` is matched: exactly (absent), or as `ontology` p.130's
+    # regular expression (§729) - "Object Explorer from the search bar".
+    match: str | None = None,
 ) -> dict[str, Any]:
     """The explorer's parameters, checked once for everybody who runs them.
 
@@ -65,6 +68,18 @@ def parse(
             "filtering by a property needs exactly one type_id - a property "
             "name only means something within a type"
         )
+    # `match` is `exact` or `regex` by the time it is here: both routes'
+    # models say so, and a third check of the same thing could not fail.
+    if match == "regex":
+        if property_name is None:
+            raise SearchError("a regular expression searches one property: name it")
+        # Refused when saved, not when opened, as everything else here is.
+        from . import regex_search
+
+        try:
+            regex_search.parse(value)
+        except regex_search.RegexError as exc:
+            raise SearchError(f"the regular expression: {exc}") from exc
     if require_criteria and not q and not ids and property_name is None:
         # A named question with no question in it.
         raise SearchError("a saved search needs something to search for")
@@ -73,6 +88,9 @@ def parse(
         "type_ids": [str(i) for i in ids],
         "property": property_name,
         "value": value,
+        # Only when it is one, so every search saved before §729 is exactly
+        # the definition it was.
+        **({"match": "regex"} if match == "regex" else {}),
     }
 
 

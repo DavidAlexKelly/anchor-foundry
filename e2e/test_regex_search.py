@@ -69,3 +69,57 @@ def test_the_panel_offers_it_only_on_a_property_indexed_for_it(page, api, sites)
     save(page)
     filters = mod.definition()["layout"]["fl"]["props"]["filters"]
     assert filters[1] == {**one("keyword", "code", "f_2"), "syntax": "regex"}, filters
+
+
+# ---- p.130's "Object Explorer from the search bar" (§729) --------------------
+def test_the_explorer_s_property_filter_takes_a_regular_expression(page, sites) -> None:
+    from urllib.parse import quote
+
+    from conftest import WEB_BASE
+
+    base = f"{WEB_BASE}/{sites.workspace_slug}/explore?type={sites.site_type_id}"
+    page.goto(base)
+    rows = page.locator("tbody tr")
+    expect(rows).to_have_count(3, timeout=30000)
+    page.get_by_label("Property name").fill("code")
+    # Controlled by the URL, so it is checked once the link says so.
+    page.get_by_test_id("explorer-regex").click()
+    expect(page.get_by_test_id("explorer-regex")).to_be_checked()
+    page.get_by_label("Property value").fill("SN-[0-9")
+    # Not a pattern yet: said, and not sent.
+    expect(page.get_by_test_id("explorer-regex-problem")).to_contain_text("has no closing ]")
+    expect(rows).to_have_count(3)
+    page.get_by_label("Property value").fill(r"SN-\d{4}")
+    expect(rows).to_have_count(1)
+    expect(rows.first).to_contain_text("A1")
+    # The link carries it, so the question can be sent on.
+    assert "match=regex" in page.url
+    # And a saved search keeps it: saved, cleared, opened again.
+    import uuid
+
+    name = f"Serials {uuid.uuid4().hex[:6]}"
+    page.get_by_role("button", name="Save this search").click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_contain_text(r"code ~ SN-\d{4}")
+    dialog.get_by_label("Name").fill(name)
+    dialog.get_by_role("button", name="Save search").click()
+    expect(page.get_by_role("dialog")).to_have_count(0, timeout=30000)
+    saved = page.get_by_label("Saved searches")
+    # Marked as the search on screen, which compares the match too.
+    expect(saved.locator("li.on").filter(has_text=name)).to_have_count(1, timeout=30000)
+    expect(saved.locator("li").filter(has_text=name)).to_contain_text(r"code ~ SN-\d{4}")
+    page.get_by_role("button", name="Clear", exact=True).click()
+    expect(page.get_by_test_id("explorer-regex")).to_have_count(0)
+    saved.locator(".ox-saved-open").filter(has_text=name).click()
+    expect(page.get_by_test_id("explorer-regex")).to_be_checked(timeout=30000)
+    expect(rows).to_have_count(1)
+    # The same words as an exact match are a different question, and the
+    # saved search is no longer the one on screen.
+    page.get_by_test_id("explorer-regex").click()
+    expect(page.get_by_test_id("explorer-regex")).not_to_be_checked()
+    expect(saved.locator("li.on").filter(has_text=name)).to_have_count(0)
+    page.goto(f"{base}&property=code&value={quote(r'.N-.*')}&match=regex")
+    expect(rows).to_have_count(3, timeout=30000)
+    # A property not indexed for it is refused with p.130's reason.
+    page.goto(f"{base}&property=name&value={quote('P.*')}&match=regex")
+    expect(page.get_by_text("not indexed for regex search")).to_be_visible(timeout=30000)

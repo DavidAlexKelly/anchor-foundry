@@ -77,6 +77,7 @@ import {
 } from "@/lib/explorer-edit";
 import { multipleChoice } from "@/lib/parameter-constraint";
 import { PropertyInput } from "@/components/property-value";
+import { regexProblem } from "@/components/canvas/regex-query";
 import type { ObjectTypeSummary, SavedSearch } from "@/lib/types";
 
 /** The explorer's whole state, and the whole of what a saved search stores.
@@ -87,9 +88,12 @@ export type Criteria = {
   typeIds: string[];
   property: string;
   value: string;
+  /** `ontology` p.130's regular expression (§729): the value is a pattern on
+   * the property, matched against the whole value, rather than the value. */
+  regex: boolean;
 };
 
-const EMPTY: Criteria = { q: "", typeIds: [], property: "", value: "" };
+const EMPTY: Criteria = { q: "", typeIds: [], property: "", value: "", regex: false };
 const PAGE = 25;
 /** Above this many object types the checkbox list gets a filter of its own. */
 const TYPE_FILTER_FROM = 12;
@@ -102,6 +106,7 @@ function fromSaved(search: SavedSearch): Criteria {
     typeIds: search.definition.type_ids ?? [],
     property: search.definition.property ?? "",
     value: search.definition.value ?? "",
+    regex: search.definition.match === "regex",
   };
 }
 
@@ -112,6 +117,9 @@ function toDefinition(criteria: Criteria) {
     type_ids: criteria.typeIds,
     property: paired ? criteria.property.trim() : null,
     value: paired ? criteria.value : null,
+    // Only with the pair it qualifies, and only when it is one - a search
+    // saved before §729 has no `match`, and compares equal to one without.
+    ...(paired && criteria.regex ? { match: "regex" as const } : {}),
   };
 }
 
@@ -139,6 +147,7 @@ function matches(search: SavedSearch, criteria: Criteria): boolean {
     (a.q ?? null) === b.q &&
     (a.property ?? null) === b.property &&
     (a.value ?? null) === b.value &&
+    (a.match === "regex") === ("match" in b) &&
     [...(a.type_ids ?? [])].sort().join(",") === [...b.type_ids].sort().join(",")
   );
 }
@@ -154,7 +163,12 @@ function matches(search: SavedSearch, criteria: Criteria): boolean {
  * somebody to type it again, and the form says it is not in effect.
  */
 function inEffect(criteria: Criteria): Criteria {
-  if (criteria.typeIds.length === 1) return criteria;
+  // A pattern still being typed is not a question either (§729): what the
+  // server would refuse is not sent, and the form says why.
+  if (criteria.typeIds.length === 1
+      && !(criteria.regex && criteria.value !== "" && regexProblem(criteria.value))) {
+    return criteria;
+  }
   return { ...criteria, property: "", value: "" };
 }
 
@@ -163,7 +177,9 @@ function describe(search: SavedSearch): string {
   if (search.definition.q) parts.push(`“${search.definition.q}”`);
   if (search.type_names.length > 0) parts.push(search.type_names.join(", "));
   if (search.definition.property) {
-    parts.push(`${search.definition.property} = ${search.definition.value ?? ""}`);
+    parts.push(search.definition.match === "regex"
+      ? `${search.definition.property} ~ ${search.definition.value ?? ""}`
+      : `${search.definition.property} = ${search.definition.value ?? ""}`);
   }
   return parts.join(" · ");
 }
@@ -189,6 +205,7 @@ export function ObjectExplorer({
     typeIds: url.all("type"),
     property: url.get("property") ?? "",
     value: url.get("value") ?? "",
+    regex: url.get("match") === "regex",
   };
   const pageNo = Math.max(1, Math.trunc(Number(url.get("page"))) || 1);
   const offset = (pageNo - 1) * PAGE;
@@ -293,7 +310,8 @@ export function ObjectExplorer({
         q: applied.q.trim() || undefined,
         typeIds: applied.typeIds,
         ...(applied.property.trim() && applied.value !== ""
-          ? { property: applied.property.trim(), value: applied.value }
+          ? { property: applied.property.trim(), value: applied.value,
+              ...(applied.regex ? { match: "regex" as const } : {}) }
           : {}),
         limit: PAGE,
         offset,
@@ -315,6 +333,7 @@ export function ObjectExplorer({
       // when the query runs and when the search is saved; dropping a value
       // typed before its property name would clear the box under the cursor.
       value: criteria.value || undefined,
+      match: criteria.regex ? "regex" : undefined,
       // Any change to the question starts at its first page. A page number
       // carried over from the previous question is a link to nothing.
       page: page && page > 1 ? String(page) : undefined,
@@ -348,6 +367,7 @@ export function ObjectExplorer({
         ? { property: next.property.trim() || undefined }
         : {}),
       ...(next.value !== undefined ? { value: next.value || undefined } : {}),
+      ...(next.regex !== undefined ? { match: next.regex ? "regex" : undefined } : {}),
       page: undefined,
     });
   }
@@ -612,7 +632,7 @@ export function ObjectExplorer({
           </fieldset>
 
           <fieldset className="ox-exact">
-            <legend>Exact match on one property</legend>
+            <legend>Match on one property</legend>
             {onlyType ? (
               <div className="row-actions">
                 <input
@@ -623,18 +643,37 @@ export function ObjectExplorer({
                   aria-label="Property name"
                   style={{ maxWidth: 200 }}
                 />
-                <span className="slug">=</span>
+                <span className="slug">{criteria.regex ? "~" : "="}</span>
                 <input
                   type="text"
                   value={criteria.value}
                   onChange={(e) => update({ value: e.target.value })}
-                  placeholder="value"
+                  placeholder={criteria.regex ? ".*pump.*" : "value"}
                   aria-label="Property value"
                   style={{ maxWidth: 220 }}
                 />
                 <span className="slug">on {onlyType.display_name}</span>
+                {/* `ontology` p.130: regex search "from the search bar" of
+                    the Object Explorer (§729), on a property indexed for it. */}
+                <label className="field-inline" style={{ gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={criteria.regex}
+                    data-testid="explorer-regex"
+                    onChange={(e) => update({ regex: e.target.checked })}
+                  />
+                  Regular expression
+                </label>
               </div>
-            ) : (
+            ) : null}
+            {onlyType && criteria.regex && criteria.value !== "" && regexProblem(criteria.value) ? (
+              <p className="ox-note" role="status" data-testid="explorer-regex-problem">
+                {/* Not sent until it is a pattern: said here, as the Filter
+                    List's box says it. */}
+                {regexProblem(criteria.value)}
+              </p>
+            ) : null}
+            {onlyType ? null : (
               <p className="ox-note">
                 {criteria.property.trim() !== "" && (
                   <>
@@ -1204,9 +1243,9 @@ function SaveSearchDialog({
           </dd>
           {criteria.property.trim() && (
             <>
-              <dt>Exact match</dt>
+              <dt>{criteria.regex ? "Regular expression" : "Exact match"}</dt>
               <dd>
-                {criteria.property.trim()} = {criteria.value}
+                {criteria.property.trim()} {criteria.regex ? "~" : "="} {criteria.value}
               </dd>
             </>
           )}
