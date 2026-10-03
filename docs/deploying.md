@@ -224,7 +224,45 @@ limit rather than failing the check, on purpose.
 
 ---
 
-## Reference: environment variables
+## Backup and restore (§803)
+
+The stack's three stores are backed up three ways, and a restore is finished
+only when they agree again.
+
+| Store | Backed up by | Restored by |
+|---|---|---|
+| Postgres (RDS) | Automated backups, 14 days (`data-stores.ts`) | Point-in-time restore to a new instance |
+| Data bucket (S3) | Versioning on every object | Nothing, usually - see below |
+| OpenSearch | Not backed up: a projection of the datasets (decision 0008) | Re-syncing the object type sources |
+
+**Why the bucket usually needs nothing.** A dataset version is written to its
+own key (`.../v{n}/data.parquet`) and never over another, so a database
+restored to an earlier point names files the bucket still holds. The exception
+is a file deleted since; the bucket's previous version of that key is the
+repair.
+
+1. Restore the RDS instance to the chosen point in time, as a new instance.
+2. Point the stack's `DATABASE_HOST` at it and redeploy the API and worker.
+3. From an API task, run the check with the owner role's `DATABASE_URL`:
+   `python -m src.services.restore_check [--workspace <uuid>]`. It prints JSON
+   and exits 1 when anything needs repairing:
+   - `missing_current_files` / `missing_version_files` - restore each key's
+     previous S3 version;
+   - `index_unchecked` - types whose file is missing: repair the file, then run
+     the check again;
+   - `stale_index` - each entry names the sources to re-sync.
+4. Run the check again until it says `"ok": true`.
+
+**Rehearsed.** `scripts/rehearse-restore.sh` does the database half against
+any Postgres it can reach: it dumps it, restores the dump into a new database
+beside it, and runs the same check against the copy. Against the development
+database (731 MB, 11,017 workspaces, 66,281 datasets) the dump and restore took
+about 40 seconds. The check over the whole database took about a minute, and
+over its largest workspace (8,460 datasets) about 5 seconds. In that workspace
+it found three datasets whose files had been deleted, which it reported as
+missing files.
+
+
 
 | Variable | Used by | What it is |
 |---|---|---|

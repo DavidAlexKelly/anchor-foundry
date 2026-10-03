@@ -108,6 +108,16 @@ def _merge_mapping(existing: dict, addition: dict) -> dict:
     return out
 
 
+
+def _total(matched: int, track: object) -> dict:
+    """`hits.total` as OpenSearch reports it for this `track_total_hits`."""
+    if track is True:
+        return {"value": matched, "relation": "eq"}
+    cap = 0 if track is False else int(track)  # type: ignore[call-overload]
+    if matched <= cap:
+        return {"value": matched, "relation": "eq"}
+    return {"value": cap, "relation": "gte"}
+
 class MappingError(ValueError):
     """A document or query that contradicts the index's declared mapping.
 
@@ -828,7 +838,10 @@ class Handler(BaseHTTPRequestHandler):
         window = matched[start:start + size]
         response: dict = {
             "hits": {
-                "total": {"value": len(matched), "relation": "eq"},
+                # OpenSearch counts to 10,000 and stops, saying "gte", unless
+                # the search asks for `track_total_hits` (§803) - a fixture
+                # counting everything would let every capped count pass.
+                "total": _total(len(matched), body.get("track_total_hits", 10_000)),
                 # The index the document actually came from, not the pattern
                 # that was asked for. A hit that named the pattern would make a
                 # cross-index search look single-index in every assertion.
@@ -977,9 +990,15 @@ class Handler(BaseHTTPRequestHandler):
         """
         parts = field.split(".")
         values, seen_text = [], False
+        dates = False
         for pair in matched:
             declared = _declared_type(pair[0], field)
-            if kind != "value_count" and declared not in NUMERIC_FIELD_TYPES:
+            if kind in ("min", "max") and declared == "date":
+                # A date's min and max are defined, as epoch milliseconds
+                # with the instant spelled beside them (§803: the watcher's
+                # newest `updated_at` is one).
+                dates = True
+            elif kind != "value_count" and declared not in NUMERIC_FIELD_TYPES:
                 seen_text = True
                 continue
             cursor = pair[2]
@@ -1000,6 +1019,12 @@ class Handler(BaseHTTPRequestHandler):
             # a fixture that reproduces the disagreement rather than smoothing
             # it - see `instance_store.aggregate_object_set`.
             return {"value": 0.0 if kind == "sum" else None}
+        if dates:
+            instants = [datetime.fromisoformat(str(v).replace("Z", "+00:00")) for v in values]
+            chosen = (min if kind == "min" else max)(instants).astimezone(timezone.utc)
+            return {"value": chosen.timestamp() * 1000,
+                    "value_as_string": chosen.strftime("%Y-%m-%dT%H:%M:%S.")
+                    + f"{chosen.microsecond // 1000:03d}Z"}
         numbers = [float(v) for v in values]
         answer = {
             "sum": sum(numbers), "avg": sum(numbers) / len(numbers),

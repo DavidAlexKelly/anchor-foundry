@@ -1342,3 +1342,21 @@ async def test_a_scan_reads_a_whole_type_past_one_page(store) -> None:
     assert len(capped) == 1500
     assert await store.scan_for_type(
         search_prefix=PREFIX, object_type_id=uuid.uuid4(), limit=10) == []
+
+
+@pytest.mark.anyio
+async def test_counts_are_exact_past_ten_thousand(store) -> None:
+    """OpenSearch stops counting at 10,000 unless asked (§803): a type of
+    10,050 objects is counted as 10,050 by the watcher's freshness, the
+    listing's total and a set's count - not "10,000 or more"."""
+    type_id, source_id = uuid.uuid4(), uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    await store.upsert_instances(
+        search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
+        rows=_rows(10_050), synced_at=now, declared=DECLARED,
+    )
+    _newest, count = await store.freshness(search_prefix=PREFIX, object_type_id=type_id)
+    assert count == 10_050
+    _rows_page, total = await store.list_for_type(
+        search_prefix=PREFIX, object_type_id=type_id, limit=5, offset=0)
+    assert total == 10_050

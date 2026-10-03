@@ -311,7 +311,7 @@ Two things worth keeping from this. **The docstring on `sync_app_password` was t
 
 **E.6 — The `export` effect. S.** Refused with its reason (§76) because it needs a download surface the viewer route lacks. Foundry's Button Group treats export as a first-class `On click` target alongside actions, events and URLs (`workshop` p.482) — so this is not an exotic ask.
 
-**E.7 — Backup and restore has never been rehearsed. M.** An untested backup is a hope.
+**E.7 — Backup and restore ~~has never been rehearsed~~. Rehearsed locally (§803), M.** ~~An untested backup is a hope.~~ `scripts/rehearse-restore.sh` dumps the database, restores it beside itself and runs `python -m src.services.restore_check`, which says what the restored database disagrees with: files storage no longer holds, and object types whose index does not match their datasets, with the sources to re-sync. `docs/deploying.md` ("Backup and restore") has the RDS point-in-time steps and the numbers from the rehearsal. Building it found that **every OpenSearch total stopped counting at 10,000** - the object counts, a set's total, and the auto-refresh watcher's count, which would have missed a delete in any type past that size. They are exact now. **Still open:** rehearsing it against a deployed stack's RDS and bucket, which needs one.
 
 ---
 
