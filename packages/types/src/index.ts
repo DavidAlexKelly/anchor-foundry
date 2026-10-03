@@ -1976,8 +1976,13 @@ export interface ObjectTypeProperty {
    * Null when the property is not editable in place. Whether the action still
    * writes it is re-read where it is used (`property-inline-action.ts`). */
   inline_action_type_id?: string | null;
-  /** p.91's type classes (§671; db 0133), `kind:name` each. */
+  /** p.91's type classes (§671; db 0133), `kind:name` each - for a property
+   * on a shared property, p.188's union of its own and the shared
+   * property's (§723). */
   type_classes?: string[];
+  /** Which of `type_classes` came from the shared property (§723): shown as
+   * fixed, and left out of what a save stores. */
+  inherited_type_classes?: string[];
 }
 
 /** One property definition used by several object types (Foundry
@@ -2004,6 +2009,9 @@ export interface SharedProperty {
   /** The value type constraining every property that uses this shared
    * property (`object-link-types` p.227), or null. */
   value_type_id: string | null;
+  /** p.181's type classes (§723), joined with an attached property's own on
+   * load (p.188). */
+  type_classes?: string[];
   created_at: string;
   updated_at: string;
 }

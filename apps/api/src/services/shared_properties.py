@@ -43,10 +43,13 @@ defined anywhere but on the type that has both.
 
 Two divergences, named rather than hidden
 -----------------------------------------
-* Foundry lists **type classes** and **render hints** among shared metadata.
-  Neither exists in this platform - there is no application here reading a type
-  class, and reindex tuning is not a thing this instance store exposes - so
-  they are absent rather than stubbed. `docs/parity/ontology.md` says so.
+* Foundry lists **render hints** among shared metadata. They do not exist in
+  this platform - reindex tuning is not a thing this instance store exposes -
+  so they are absent rather than stubbed. `docs/parity/ontology.md` says so.
+  **Type classes** were absent for the same kind of reason until §723: they are
+  shared metadata (p.181) and, unlike the four in `INHERITED`, *joined* rather
+  than overridden - p.188 lets an attached property keep editing its own and
+  loads the union. See `resolve` and `own_classes`.
 * **A shared property in use cannot change its base type.** Foundry's edit page
   lists base type as editable and does not say what happens to the object types
   using it. Cascading would retype every attached property silently, which is
@@ -93,7 +96,7 @@ async def list_shared(
         """
         SELECT sp.id, sp.api_name, sp.display_name, sp.description,
                sp.data_type, sp.visibility, sp.value_format,
-               sp.value_type_id,
+               sp.value_type_id, sp.type_classes,
                sp.created_at, sp.updated_at,
                (SELECT count(*) FROM object_type_properties p
                  WHERE p.shared_property_id = sp.id) AS usage_count
@@ -114,7 +117,7 @@ async def get_shared(
         """
         SELECT sp.id, sp.api_name, sp.display_name, sp.description,
                sp.data_type, sp.visibility, sp.value_format,
-               sp.value_type_id,
+               sp.value_type_id, sp.type_classes,
                sp.created_at, sp.updated_at,
                (SELECT count(*) FROM object_type_properties p
                  WHERE p.shared_property_id = sp.id) AS usage_count
@@ -167,10 +170,12 @@ async def create_shared(
     value_format_raw: Any,
     value_type_id: UUID | None,
     created_by: UUID,
+    type_classes_raw: Any = None,
 ) -> dict[str, Any]:
     _check_definition(
         api_name=api_name, data_type=data_type, visibility=visibility
     )
+    classes = _parse_classes(type_classes_raw, api_name)
     fmt = value_format.parse(
         value_format_raw, data_type=data_type, property_name=api_name
     )
@@ -186,12 +191,13 @@ async def create_shared(
         """
         INSERT INTO shared_properties (workspace_id, api_name, display_name,
                                        description, data_type, visibility,
-                                       value_format, value_type_id, created_by)
+                                       value_format, value_type_id, created_by,
+                                       type_classes)
         VALUES (:wid, :api, :name, :descr, CAST(:dtype AS property_data_type),
                 CAST(:vis AS property_visibility), CAST(:vfmt AS jsonb),
-                :valuetype, :by)
+                :valuetype, :by, CAST(:tclasses AS text[]))
         RETURNING id, api_name, display_name, description, data_type,
-                  visibility, value_format, value_type_id,
+                  visibility, value_format, value_type_id, type_classes,
                   created_at, updated_at
         """,
         {
@@ -207,6 +213,7 @@ async def create_shared(
             # constraint without choosing one itself.
             "valuetype": str(value_type_id) if value_type_id else None,
             "by": str(created_by),
+            "tclasses": classes,
         },
     )
     assert row is not None
@@ -224,6 +231,7 @@ async def update_shared(
     visibility: str,
     value_format_raw: Any,
     value_type_id: UUID | None,
+    type_classes_raw: Any = None,
 ) -> dict[str, Any]:
     """Edit the definition. Every object type using it sees the change on its
     next read, which is p.178's "update … in one place".
@@ -231,6 +239,9 @@ async def update_shared(
     `api_name` is not a parameter, for `object_types.api_name`'s reason (0003):
     it is the stable machine name a consumer holds, and renaming it here would
     break them with no warning that could reach them.
+
+    Type classes left out (`None`) are kept, so a client written before §723
+    does not clear them by saving the name; an empty list clears them.
     """
     current = await get_shared(conn, workspace_id, shared_id)
     _check_definition(
@@ -252,6 +263,11 @@ async def update_shared(
         data_type=data_type,
         property_name=str(current["api_name"]),
     )
+    classes = (
+        list(current["type_classes"])
+        if type_classes_raw is None
+        else _parse_classes(type_classes_raw, str(current["api_name"]))
+    )
     await conn.execute(
         text(
             """
@@ -260,7 +276,8 @@ async def update_shared(
                    data_type = CAST(:dtype AS property_data_type),
                    visibility = CAST(:vis AS property_visibility),
                    value_format = CAST(:vfmt AS jsonb),
-                   value_type_id = :valuetype
+                   value_type_id = :valuetype,
+                   type_classes = CAST(:tclasses AS text[])
              WHERE id = :sid
             """
         ),
@@ -271,6 +288,7 @@ async def update_shared(
             "vis": visibility,
             "vfmt": json.dumps(fmt) if fmt is not None else None,
             "valuetype": str(value_type_id) if value_type_id else None,
+            "tclasses": classes,
             "sid": str(shared_id),
         },
     )
@@ -288,8 +306,27 @@ async def delete_shared(
     normal outcome. The properties keep their last inherited metadata because
     the columns were written at save time - see db 0053 - so what reverts is
     the *link*, not the configuration somebody had.
+
+    **Type classes are the exception to "written at save time"** (§723): an
+    attached property stores only its own, and loads the shared property's by
+    joining them (p.188). So the shared property's are written into each user
+    here, before the link goes, or the revert would quietly drop them.
     """
-    await get_shared(conn, workspace_id, shared_id)
+    current = await get_shared(conn, workspace_id, shared_id)
+    if current["type_classes"]:
+        await conn.execute(
+            text(
+                """
+                UPDATE object_type_properties p
+                   SET type_classes = p.type_classes || ARRAY(
+                           SELECT c FROM unnest(CAST(:tclasses AS text[]))
+                                         WITH ORDINALITY AS t(c, n)
+                            WHERE c <> ALL(p.type_classes) ORDER BY n)
+                 WHERE p.shared_property_id = :sid
+                """
+            ),
+            {"tclasses": list(current["type_classes"]), "sid": str(shared_id)},
+        )
     await conn.execute(
         text("DELETE FROM shared_properties WHERE id = :sid"),
         {"sid": str(shared_id)},
@@ -319,7 +356,31 @@ def resolve(
     # row written before the shared property's type was corrected cannot claim
     # a type its own formatter disagrees with.
     merged["data_type"] = shared["data_type"]
+    # p.188: "the resulting set of type classes will be a union of those from
+    # the property and its associated shared property" - the property's own
+    # first, then the shared property's it does not already have. Which came
+    # from where is reported beside it, so an editor can show the inherited
+    # ones as fixed and a save can leave them out (`own_classes`).
+    inherited = list(shared.get("type_classes") or [])
+    own = list(prop.get("type_classes") or [])
+    merged["type_classes"] = own + [c for c in inherited if c not in own]
+    merged["inherited_type_classes"] = inherited
     return merged
+
+
+def own_classes(submitted: Any, shared: dict[str, Any]) -> list[str]:
+    """What an attached property stores of the classes a save sent: those the
+    shared property does not already give it.
+
+    A save sends back what a read returned, which is p.188's union; storing it
+    whole would copy the shared property's classes onto the object type, and a
+    class later removed from the shared property would stay wherever a save
+    had happened in between. So the inherited ones are taken out here rather
+    than refused - unlike the four `INHERITED` fields, nothing about sending
+    them disagrees with the shared property.
+    """
+    inherited = set(shared.get("type_classes") or [])
+    return [c for c in (submitted or []) if c not in inherited]
 
 
 def check_base_type(prop: dict[str, Any], shared: dict[str, Any]) -> None:
@@ -384,7 +445,7 @@ async def by_id(
         conn,
         """
         SELECT id, api_name, display_name, description, data_type,
-               visibility, value_format, value_type_id
+               visibility, value_format, value_type_id, type_classes
           FROM shared_properties
          WHERE workspace_id = :wid AND id = ANY(CAST(:ids AS uuid[]))
         """,
@@ -424,10 +485,21 @@ def _check_definition(*, api_name: str, data_type: str, visibility: str) -> None
         )
 
 
+def _parse_classes(raw: Any, api_name: str) -> list[str]:
+    from . import type_classes
+
+    try:
+        return type_classes.parse(raw, property_name=api_name)
+    except ValueError as exc:
+        raise SharedPropertyError(str(exc)) from exc
+
+
 def _out(row: Any) -> dict[str, Any]:
     out = dict(row)
     fmt = out.get("value_format")
     out["value_format"] = json.loads(fmt) if isinstance(fmt, str) else fmt
+    if "type_classes" in out:
+        out["type_classes"] = list(out["type_classes"] or [])
     if "usage_count" in out:
         out["usage_count"] = int(out["usage_count"])
     return out

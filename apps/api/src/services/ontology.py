@@ -486,6 +486,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
                sp.data_type AS sp_data_type,
                sp.visibility AS sp_visibility,
                sp.value_format AS sp_value_format,
+               sp.type_classes AS sp_type_classes,
                p.value_type_id AS own_value_type_id,
                vt.id AS value_type_id,
                vt.api_name AS value_type_api_name,
@@ -515,6 +516,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
                 "data_type": full["sp_data_type"],
                 "visibility": full["sp_visibility"],
                 "value_format": full["sp_value_format"],
+                "type_classes": full["sp_type_classes"],
             }
             if full["shared_property_id"] is not None
             else None
@@ -625,6 +627,8 @@ async def list_properties_for_workspace(
                 "data_type": full["sp_data_type"],
                 "visibility": full["sp_visibility"],
                 "value_format": full["sp_value_format"],
+                # Not read by search, which never wanted classes.
+                "type_classes": full.get("sp_type_classes"),
             }
             if full["shared_property_id"] is not None
             else None
@@ -824,7 +828,14 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
             prop.get("deprecation"), prop["status"]
         )
         # p.91 (§671; db 0133), normalised in place for `value_format`'s reason.
-        prop["type_classes"] = type_classes.parse(prop.get("type_classes"), property_name=api)
+        # A save sends back what a read returned, and for an attached
+        # property that is p.188's union of two lists (§723) - so the shape is
+        # checked here and the count where the shared property's are taken
+        # out, in `_apply_shared`.
+        prop["type_classes"] = type_classes.parse(
+            prop.get("type_classes"), property_name=api,
+            limit=2 * type_classes.MAX_CLASSES,
+        )
 
 
 async def _apply_shared(
@@ -868,6 +879,7 @@ async def _apply_shared(
         raw = prop.get("shared_property_id")
         if not raw:
             prop["shared_property_id"] = None
+            type_classes.check_count(prop["type_classes"], property_name=str(prop["api_name"]))
             continue
         shared = known.get(str(raw))
         if shared is None:
@@ -880,7 +892,13 @@ async def _apply_shared(
             # A fresh attach still has to satisfy p.181's base type rule; only
             # the inherited-metadata refusal is what the moment excuses.
             shared_properties.check_base_type(prop, shared)
+        submitted = prop.get("type_classes")
         prop.update(shared_properties.resolve(prop, shared))
+        # p.188's union is what is *loaded*; what is stored is the property's
+        # own, so the shared property's stay its to change.
+        prop["type_classes"] = shared_properties.own_classes(submitted, shared)
+        del prop["inherited_type_classes"]
+        type_classes.check_count(prop["type_classes"], property_name=str(prop["api_name"]))
 
 
 async def _apply_value_types(

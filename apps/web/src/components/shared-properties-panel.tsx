@@ -29,6 +29,7 @@ import { Dialog, Field } from "@/components/dialog";
 import { ValueFormatEditor, formattable } from "@/components/value-format-editor";
 import { PROPERTY_TYPES, PROPERTY_VISIBILITIES } from "@/components/object-type-editor";
 import { ApiError, objects as objApi, type SharedPropertyInput } from "@/lib/api";
+import { typeClassesOf } from "@/lib/type-classes";
 import type {
   PropertyDataType,
   PropertyVisibility,
@@ -65,6 +66,9 @@ function SharedPropertyDialog({
   );
   const [valueFormat, setValueFormat] = useState(existing?.value_format ?? null);
   const [formatting, setFormatting] = useState(false);
+  // p.181's type classes (§723), typed as the property row's box is.
+  const [classesText, setClassesText] = useState((existing?.type_classes ?? []).join(", "));
+  const classes = typeClassesOf(classesText);
   const queryClient = useQueryClient();
 
   const body: SharedPropertyInput = {
@@ -73,6 +77,7 @@ function SharedPropertyDialog({
     data_type: dataType,
     visibility,
     value_format: valueFormat,
+    type_classes: classes.classes,
     ...(existing ? {} : { api_name: toApiName(displayName) }),
   };
 
@@ -183,6 +188,21 @@ function SharedPropertyDialog({
           </button>
         </Field>
       )}
+      <Field label="Type classes"
+        hint="p.181: kind:name labels applications read. Every property using it loads these beside its own (p.188).">
+        <input
+          type="text"
+          data-testid="shared-type-classes"
+          placeholder="hubble:icon, team:hr"
+          value={classesText}
+          onChange={(e) => setClassesText(e.target.value)}
+        />
+      </Field>
+      {classes.bad.length > 0 && (
+        <p className="form-error" role="alert" data-testid="shared-type-classes-bad">
+          {`Not kind:name: ${classes.bad.join(", ")}`}
+        </p>
+      )}
       {save.isError && (
         <p className="field-hint" data-testid="shared-error">
           {save.error instanceof ApiError ? save.error.message : "Could not save."}
@@ -194,7 +214,7 @@ function SharedPropertyDialog({
           type="button"
           className="btn primary"
           data-testid="shared-save"
-          disabled={!displayName.trim() || save.isPending}
+          disabled={!displayName.trim() || classes.bad.length > 0 || save.isPending}
           onClick={() => save.mutate()}
         >
           Save

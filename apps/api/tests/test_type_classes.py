@@ -103,6 +103,15 @@ def test_a_property_keeps_its_type_classes(client, fx) -> None:
     assert classes_of(client, fx, kind)["picture"] == []
 
 
+def test_a_property_of_its_own_keeps_the_count_of_twenty(client, fx) -> None:
+    """The parse allows forty, for an attached property's union (§723); a
+    property with no shared property is still held to twenty."""
+    kind = new_type(client, fx, uuid.uuid4().hex[:6])
+    many = [f"k:n{i}" for i in range(type_classes.MAX_CLASSES + 1)]
+    r = saved(client, fx, kind, many)
+    assert r.status_code == 422 and "more than 20" in r.text, r.text
+
+
 def test_a_class_not_kind_name_is_refused_by_its_property(client, fx) -> None:
     kind = new_type(client, fx, uuid.uuid4().hex[:6])
     r = saved(client, fx, kind, ["icon"])

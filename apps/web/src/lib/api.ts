@@ -1335,6 +1335,8 @@ export interface SharedPropertyInput {
   data_type: import("./types").PropertyDataType;
   visibility?: import("./types").PropertyVisibility;
   value_format?: import("./types").ValueFormat | null;
+  /** p.181 (§723). Left out keeps them on an edit; an empty list clears. */
+  type_classes?: string[];
 }
 
 /** Creating or renaming a group (`object-link-types` p.261).

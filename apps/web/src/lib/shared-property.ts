@@ -42,7 +42,24 @@ export function attached(prop: PropertyInput, shared: SharedProperty): PropertyI
     description: shared.description,
     visibility: shared.visibility,
     value_format: shared.value_format,
+    // Joined, not replaced (§723; p.188): the form shows what a load will.
+    type_classes: withInherited(prop.type_classes ?? [], shared.type_classes ?? []),
   };
+}
+
+/** p.188: "When the property is loaded, the resulting set of type classes
+ * will be a union of those from the property and its associated shared
+ * property" - its own first, then the shared property's it lacks. The
+ * server's `shared_properties.resolve`, for the form between edit and save. */
+export function withInherited(own: readonly string[], inherited: readonly string[]): string[] {
+  return [...own, ...inherited.filter((c) => !own.includes(c))];
+}
+
+/** The classes a property edits itself (§723): p.188's "You can still add,
+ * delete, or edit type classes" is about these, and the shared property's
+ * stay the shared property's to change. */
+export function ownClasses(all: readonly string[], inherited: readonly string[]): string[] {
+  return all.filter((c) => !inherited.includes(c));
 }
 
 /** p.188's Detach: "remove the association between the property and the shared

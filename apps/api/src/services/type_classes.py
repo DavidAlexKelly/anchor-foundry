@@ -18,10 +18,14 @@ MAX_CLASSES = 20
 MAX_LENGTH = 100
 
 
-def parse(raw: Any, *, property_name: str) -> list[str]:
+def parse(raw: Any, *, property_name: str, limit: int = MAX_CLASSES) -> list[str]:
     """The type classes as stored: trimmed, each once, in the order given.
     None is none; anything but a list of `kind:name` strings is refused, by
-    the property it was on."""
+    the property it was on.
+
+    `limit` is wider only where a save may carry p.188's union of a property's
+    own classes and its shared property's (§723); what is stored is still held
+    to `MAX_CLASSES` (`check_count`)."""
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -38,6 +42,11 @@ def parse(raw: Any, *, property_name: str) -> list[str]:
             )
         if name not in out:
             out.append(name)
-    if len(out) > MAX_CLASSES:
-        raise ValueError(f"{property_name!r} has more than {MAX_CLASSES} type classes")
+    if len(out) > limit:
+        raise ValueError(f"{property_name!r} has more than {limit} type classes")
     return out
+
+
+def check_count(classes: list[str], *, property_name: str) -> None:
+    if len(classes) > MAX_CLASSES:
+        raise ValueError(f"{property_name!r} has more than {MAX_CLASSES} type classes")

@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PropertyInput } from "@/lib/api";
 import type { SharedProperty } from "@/lib/types";
-import { attached, detached, offerableTo } from "./shared-property";
+import { attached, detached, offerableTo, ownClasses, withInherited } from "./shared-property";
 
 const SHARED: SharedProperty = {
   id: "sp1",
@@ -111,5 +111,23 @@ describe("offerableTo", () => {
     // The alternative - falling back to the whole list - is offering a save
     // p.181 refuses, which is the trap this function exists to avoid.
     expect(offerableTo([SHARED, other], "string")).toEqual([]);
+  });
+});
+
+describe("type classes on a shared property (§723; p.188)", () => {
+  it("joins the shared property's after the property's own, each once", () => {
+    expect(withInherited(["a:b", "c:d"], ["c:d", "e:f"])).toEqual(["a:b", "c:d", "e:f"]);
+    expect(withInherited([], ["e:f"])).toEqual(["e:f"]);
+    expect(ownClasses(["a:b", "c:d", "e:f"], ["c:d", "e:f"])).toEqual(["a:b"]);
+    expect(ownClasses(["a:b"], [])).toEqual(["a:b"]);
+  });
+
+  it("attaching shows the union a load will, and detaching keeps it", () => {
+    const shared = { ...SHARED, type_classes: ["hubble:icon"] };
+    const on = attached({ ...property(), type_classes: ["mine:own"] }, shared);
+    expect(on.type_classes).toEqual(["mine:own", "hubble:icon"]);
+    expect(detached(on).type_classes).toEqual(["mine:own", "hubble:icon"]);
+    // A shared property from before §723 has none to add.
+    expect(attached(property(), SHARED).type_classes).toEqual([]);
   });
 });

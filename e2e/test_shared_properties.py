@@ -254,3 +254,58 @@ def test_deleting_a_shared_property_leaves_the_property_behind(page, module) -> 
     expect(page.get_by_label(f"Property {index} is shared")).to_have_count(0)
     # p.188's disabling is gone with the association it came from.
     expect(page.get_by_label(f"Property {index} visibility")).to_be_enabled()
+
+
+def test_a_shared_property_s_type_classes_join_the_property_s_own(page, api) -> None:
+    """§723. p.181 puts type classes on a shared property, and p.188 joins them
+    with the property's: "You can still add, delete, or edit type classes.
+    When the property is loaded, the resulting set of type classes will be a
+    union of those from the property and its associated shared property."
+
+    What needs a browser: the dialog saving them, and the property row showing
+    the shared property's as fixed beside a box that holds only its own - from
+    the moment of attaching, before any save."""
+    people = Module(api, "Shared classes")
+    type_id = people.object_type(
+        columns=["id", "name", "began"], rows=PEOPLE, key="id", title="name",
+        types={"began": "date"},
+    )
+    name = f"Joined on {uuid.uuid4().hex[:4]}"
+    open_objects(page, people)
+    page.get_by_test_id("new-shared-property").click()
+    page.get_by_test_id("shared-name").fill(name)
+    page.get_by_test_id("shared-type").select_option("date")
+    page.get_by_test_id("shared-type-classes").fill("hubble:icon, nope")
+    # Said, and not saved.
+    expect(page.get_by_test_id("shared-type-classes-bad")).to_have_text("Not kind:name: nope")
+    expect(page.get_by_test_id("shared-save")).to_be_disabled()
+    page.get_by_test_id("shared-type-classes").fill("hubble:icon, team:hr")
+    page.get_by_test_id("shared-save").click()
+    api_name = name.lower().replace(" ", "_")
+    expect(page.get_by_test_id("shared-table")).to_contain_text(api_name)
+
+    open_type_editor(page, people)
+    index = property_index(page, "began")
+    page.get_by_role("button", name=f"Property {index} shared").click()
+    page.get_by_test_id("shared-choice").select_option(label=f"{name} ({api_name})")
+    page.get_by_test_id("shared-apply").click()
+    expect(page.get_by_test_id(f"property-{index - 1}-inherited-classes")).to_have_text(
+        "+ hubble:icon, team:hr (shared)")
+    box = page.get_by_label(f"Property {index} type classes")
+    expect(box).to_have_value("")
+    box.fill("mine:own")
+    box.press("Tab")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    got = api.call("GET", f"/workspaces/{people.workspace_id}/object-types/{type_id}")
+    began = next(p for p in got["properties"] if p["api_name"] == "began")
+    assert began["type_classes"] == ["mine:own", "hubble:icon", "team:hr"]
+    assert began["inherited_type_classes"] == ["hubble:icon", "team:hr"]
+
+    # Opened again, the box still holds only its own.
+    open_objects(page, people)
+    open_type_editor(page, people)
+    index = property_index(page, "began")
+    expect(page.get_by_label(f"Property {index} type classes")).to_have_value("mine:own")
+    expect(page.get_by_test_id(f"property-{index - 1}-inherited-classes")).to_be_visible()

@@ -607,3 +607,161 @@ def test_a_field_that_is_absent_is_not_an_edit() -> None:
     """A client sending only the fields it cares about is not contradicting
     anything."""
     sp_service.check_attachment({"api_name": "began_on", "data_type": "date"}, SHARED)
+
+
+# ---- type classes (§723; p.181, p.188) --------------------------------------
+def test_a_property_loads_the_union_of_its_classes_and_its_shared_property_s(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.188: "When the property is loaded, the resulting set of type classes
+    will be a union of those from the property and its associated shared
+    property." Its own first, each once, and which ones were inherited said
+    beside them."""
+    shared = make_shared(client, fx, type_classes=["hubble:icon", "team:hr"])
+    assert shared["type_classes"] == ["hubble:icon", "team:hr"]
+    created = make_type(client, fx, [
+        {"api_name": "name", "data_type": "string"},
+        {"api_name": "began_on", "data_type": "date", "shared_property_id": shared["id"],
+         "type_classes": ["mine:own", "team:hr"]},
+    ])
+    prop = prop_of(read_type(client, fx, created["id"]), "began_on")
+    # `team:hr` is the shared property's, so it is not stored twice - it
+    # comes in the shared property's order rather than where it was sent.
+    assert prop["type_classes"] == ["mine:own", "hubble:icon", "team:hr"]
+    assert prop["inherited_type_classes"] == ["hubble:icon", "team:hr"]
+    # An unattached property inherits nothing.
+    assert prop_of(read_type(client, fx, created["id"]), "name")["inherited_type_classes"] == []
+
+
+def test_a_class_removed_from_the_shared_property_leaves_every_user(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The union is taken on load, not stored.** A save sends back what it
+    read - the union - so a store that kept it would copy the shared
+    property's classes onto the object type, and removing one from the shared
+    property would leave it wherever somebody had saved in between."""
+    shared = make_shared(client, fx, type_classes=["hubble:icon"])
+    created = make_type(client, fx, [
+        {"api_name": "name", "data_type": "string"},
+        {"api_name": "began_on", "data_type": "date", "shared_property_id": shared["id"],
+         "type_classes": ["mine:own"]},
+    ])
+    # The editor's round trip, carrying the union back.
+    assert save_type(client, fx, read_type(client, fx, created["id"])).status_code == 200
+    r = client.patch(f"{wbase(fx)}/shared-properties/{shared['id']}",
+                     headers=hdr(fx.editor_sub),
+                     json={"display_name": "Start date", "data_type": "date",
+                           "visibility": "normal", "type_classes": ["other:one"]})
+    assert r.status_code == 200, r.text
+    prop = prop_of(read_type(client, fx, created["id"]), "began_on")
+    assert prop["type_classes"] == ["mine:own", "other:one"]
+
+
+def test_an_attached_property_still_edits_its_own_classes(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.188: "You can still add, delete, or edit type classes" - unlike the
+    four inherited fields, which an attached property is refused."""
+    shared = make_shared(client, fx, type_classes=["hubble:icon"])
+    created = make_type(client, fx, [
+        {"api_name": "name", "data_type": "string"},
+        {"api_name": "began_on", "data_type": "date", "shared_property_id": shared["id"]},
+    ])
+    detail = read_type(client, fx, created["id"])
+    prop_of(detail, "began_on")["type_classes"] = ["added:here"]
+    r = save_type(client, fx, detail)
+    assert r.status_code == 200, r.text
+    prop = prop_of(read_type(client, fx, created["id"]), "began_on")
+    assert prop["type_classes"] == ["added:here", "hubble:icon"]
+
+
+def test_leaving_classes_out_of_an_edit_keeps_them(client: TestClient, fx: Fixture) -> None:
+    shared = make_shared(client, fx, type_classes=["hubble:icon"])
+    body = {"display_name": "Renamed", "data_type": "date", "visibility": "normal"}
+    r = client.patch(f"{wbase(fx)}/shared-properties/{shared['id']}",
+                     headers=hdr(fx.editor_sub), json=body)
+    assert r.json()["type_classes"] == ["hubble:icon"]
+    r = client.patch(f"{wbase(fx)}/shared-properties/{shared['id']}",
+                     headers=hdr(fx.editor_sub), json={**body, "type_classes": []})
+    assert r.json()["type_classes"] == []
+
+
+def test_a_class_that_is_not_kind_name_is_refused_on_a_shared_property(
+    client: TestClient, fx: Fixture
+) -> None:
+    r = client.post(f"{wbase(fx)}/shared-properties", headers=hdr(fx.editor_sub), json={
+        "api_name": f"bad_{uuid.uuid4().hex[:6]}", "display_name": "Bad",
+        "data_type": "date", "type_classes": ["no-colon"]})
+    assert r.status_code == 422, r.text
+    assert "kind:name" in r.text
+
+
+def test_a_full_union_can_be_saved_back(client: TestClient, fx: Fixture) -> None:
+    """Twenty classes of its own and twenty inherited is forty on load, and the
+    round trip of that read must not be refused for the count."""
+    from src.services import type_classes
+
+    limit = type_classes.MAX_CLASSES
+    shared = make_shared(client, fx, type_classes=[f"s:n{i}" for i in range(limit)])
+    created = make_type(client, fx, [
+        {"api_name": "name", "data_type": "string"},
+        {"api_name": "began_on", "data_type": "date", "shared_property_id": shared["id"],
+         "type_classes": [f"o:n{i}" for i in range(limit)]},
+    ])
+    detail = read_type(client, fx, created["id"])
+    assert len(prop_of(detail, "began_on")["type_classes"]) == 2 * limit
+    assert save_type(client, fx, detail).status_code == 200
+    # But no more than twenty of its own.
+    prop_of(detail, "began_on")["type_classes"] = [f"o:n{i}" for i in range(limit + 1)]
+    r = save_type(client, fx, detail)
+    assert r.status_code == 422 and "more than" in r.text, r.text
+
+
+def test_deleting_the_shared_property_keeps_its_classes_on_its_users(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.185's revert keeps "the last inherited metadata" (db 0053), and type
+    classes are the one inherited field not written at save time - so the
+    delete writes them."""
+    shared = make_shared(client, fx, type_classes=["hubble:icon", "both:ways"])
+    created = make_type(client, fx, [
+        {"api_name": "name", "data_type": "string"},
+        {"api_name": "began_on", "data_type": "date", "shared_property_id": shared["id"],
+         "type_classes": ["mine:own", "both:ways"]},
+    ])
+    r = client.delete(f"{wbase(fx)}/shared-properties/{shared['id']}",
+                      headers=hdr(fx.editor_sub))
+    assert r.status_code == 204, r.text
+    prop = prop_of(read_type(client, fx, created["id"]), "began_on")
+    assert prop["type_classes"] == ["mine:own", "hubble:icon", "both:ways"]
+    assert prop["inherited_type_classes"] == []
+
+
+def test_resolve_joins_classes_rather_than_overriding_them() -> None:
+    prop = {"api_name": "p", "data_type": "date", "type_classes": ["a:b", "c:d"]}
+    shared = {"api_name": "s", "data_type": "date", "display_name": "S",
+              "description": "", "visibility": "normal", "value_format": None,
+              "type_classes": ["c:d", "e:f"]}
+    out = sp_service.resolve(prop, shared)
+    assert out["type_classes"] == ["a:b", "c:d", "e:f"]
+    assert out["inherited_type_classes"] == ["c:d", "e:f"]
+    assert sp_service.own_classes(out["type_classes"], shared) == ["a:b"]
+    assert sp_service.own_classes(None, shared) == []
+
+
+def test_an_export_carries_the_classes_a_property_loads(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The file names no shared property for an importer to join with, so the
+    union travels - as the four inherited fields travel as written."""
+    shared = make_shared(client, fx, type_classes=["hubble:icon"])
+    created = make_type(client, fx, [
+        {"api_name": "name", "data_type": "string"},
+        {"api_name": "began_on", "data_type": "date", "shared_property_id": shared["id"],
+         "type_classes": ["mine:own"]},
+    ])
+    r = client.get(f"{wbase(fx)}/ontology-export", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    exported = next(t for t in r.json()["object_types"] if t["api_name"] == created["api_name"])
+    prop = next(p for p in exported["properties"] if p["api_name"] == "began_on")
+    assert prop["type_classes"] == ["mine:own", "hubble:icon"]
