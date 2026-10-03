@@ -7,7 +7,8 @@
 
 The grid's rules are `function-pivot.test.ts`'. What needs a browser: a
 function's table drawn as a pivot with p.338's totals, its input following a
-module variable a Numeric Input writes, and the pivot set up in the panel.
+module variable a Numeric Input writes, p.340's expandable rows opened and
+closed, and the pivot set up in the panel.
 """
 from __future__ import annotations
 
@@ -45,7 +46,17 @@ def world(api):
                 f"FROM {slug} WHERE capacity >= $minimum "
                 "GROUP BY GROUPING SETS ((region, status), (region), (status), ()) "
                 "ORDER BY region NULLS LAST, status NULLS LAST")})
-    return {"api": api, "mod": mod, "fn": fn}
+    # p.340-341's levels of expansion are ROLLUP's rows: a region, a region and
+    # a status, and a region, a status and a site.
+    deep = api.call("POST", f"/workspaces/{mod.workspace_id}/functions", {
+        "api_name": f"pivot_deep_{mod.tag}", "display_name": "Capacity by level",
+        "version": {
+            "version": "1.0.0", "inputs": [sites], "parameters": [],
+            "output": {"kind": "table"},
+            "sql": (f"SELECT region, status, id, sum(capacity) AS total FROM {slug} "
+                    "GROUP BY ROLLUP (region, status, id) "
+                    "ORDER BY region NULLS LAST, status NULLS LAST, id NULLS LAST")}})
+    return {"api": api, "mod": mod, "fn": fn, "deep": deep}
 
 
 def build(world, name: str, pivot: dict) -> Module:
@@ -70,7 +81,7 @@ def build(world, name: str, pivot: dict) -> Module:
 
 def lines(page) -> list[list[str]]:
     grid = page.get_by_test_id("pivot-function-grid")
-    return [row.locator("th, td").all_inner_texts()
+    return [[t.strip() for t in row.locator("th, td").all_inner_texts()]
             for row in grid.locator("tbody tr").all()]
 
 
@@ -97,6 +108,34 @@ def test_a_functions_table_is_a_pivot_with_its_totals(page, world) -> None:
     expect(grid.locator("tbody tr")).to_have_count(2, timeout=15000)
     expect(grid.locator("thead th")).to_have_text(["region", "closed", "Total"])
     assert lines(page) == [["east", "180", "180"], ["Total", "180", "180"]]
+
+
+def test_expandable_rows_open_one_level_at_a_time(page, world) -> None:
+    mod = build(world, "Function pivot expandable", {
+        "fn": {"function_id": world["deep"]["id"], "version": None, "inputs": {}},
+        "fnRows": "region", "fnExpand": "status, id", "fnColumn": "", "fnValues": "total"})
+    open_module(page, mod)
+    grid = page.get_by_test_id("pivot-function-grid")
+    expect(grid.locator("thead th")).to_have_text(["region", "status › id", "total"],
+                                                  timeout=20000)
+    assert lines(page) == [
+        ["east", "▸", "90"], ["north", "▸", "20"], ["south", "▸", "10"],
+        ["Total", "120"]]
+    # The total's label spans the row field and the expandable column.
+    expect(grid.locator("tbody tr").last.locator("th")).to_have_attribute("colspan", "2")
+    page.get_by_role("button", name="Expand north", exact=True).click()
+    expect(grid.locator("tbody tr")).to_have_count(5)
+    assert lines(page) == [
+        ["east", "▸", "90"], ["north", "▾", "20"], ["", "▸ open", "20"],
+        ["south", "▸", "10"], ["Total", "120"]]
+    page.get_by_role("button", name="Expand north / open").click()
+    expect(grid.locator("tbody tr")).to_have_count(7)
+    assert lines(page)[2:5] == [["", "▾ open", "20"], ["", "S1", "10"], ["", "S3", "10"]]
+    # Closing a line hides every line under it.
+    page.get_by_role("button", name="Collapse north", exact=True).click()
+    expect(grid.locator("tbody tr")).to_have_count(4)
+    expect(page.get_by_role("button", name="Expand north", exact=True)).to_have_attribute(
+        "aria-expanded", "false")
 
 
 def test_two_values_each_get_a_column(page, world) -> None:
@@ -147,15 +186,18 @@ def test_a_function_pivot_set_up_in_the_panel(page, world) -> None:
     page.get_by_label("Pivot minimum from").select_option("v_min")
     expect(page.get_by_test_id("pivot-settings-problem")).to_have_count(0)
     page.get_by_label("Pivot row fields").fill("region")
+    page.get_by_label("Pivot expandable rows").fill("id")
+    expect(page.get_by_label("Pivot expandable rows")).to_have_value("id")
     page.get_by_label("Pivot column field").fill("status")
     page.get_by_label("Pivot value fields").fill("total")
     save(page)
     props = mod.definition()["layout"]["pivot"]["props"]
     assert props["fn"] == {"function_id": world["fn"]["id"], "version": None,
                            "inputs": {"minimum": {"variable": "v_min"}}}
-    assert (props["fnRows"], props["fnColumn"], props["fnValues"]) == (
-        "region", "status", "total")
+    assert (props["fnRows"], props["fnExpand"], props["fnColumn"], props["fnValues"]) == (
+        "region", "id", "status", "total")
 
     open_module(page, mod)
-    expect(page.get_by_test_id("pivot-function-grid").locator("tbody tr")).to_have_count(
-        4, timeout=20000)
+    # This function's table has no site field to open a region into.
+    expect(page.get_by_test_id("pivot-function-problem")).to_have_text(
+        "The function gives no field id.", timeout=20000)

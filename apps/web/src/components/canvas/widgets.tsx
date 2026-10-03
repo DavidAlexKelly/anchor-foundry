@@ -13888,6 +13888,8 @@ export function CanvasPivotTable(props: Parameters<typeof ObjectSetPivotTable>[0
    * inputs. Null reads the object set. */
   fn?: unknown;
   fnRows?: string;
+  /** p.340's expandable rows, outermost first (§782). */
+  fnExpand?: string;
   fnColumn?: string;
   fnValues?: string;
 }) {
@@ -13898,7 +13900,8 @@ export function CanvasPivotTable(props: Parameters<typeof ObjectSetPivotTable>[0
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       <FunctionPivotView
         fn={fn}
-        fields={pivotFieldsOf(props.fnRows ?? "", props.fnColumn ?? "", props.fnValues ?? "")}
+        fields={pivotFieldsOf(props.fnRows ?? "", props.fnColumn ?? "", props.fnValues ?? "",
+                              props.fnExpand ?? "")}
         title={props.title ?? ""}
       />
     </div>
@@ -14138,9 +14141,9 @@ function PivotHeading({
 
 function PivotTableSettings() {
   const {
-    fn, fnRows, fnColumn, fnValues, title, actions: { setProp },
+    fn, fnRows, fnExpand, fnColumn, fnValues, title, actions: { setProp },
   } = useNode((node) => ({
-    fn: node.data.props.fn, fnRows: node.data.props.fnRows,
+    fn: node.data.props.fn, fnRows: node.data.props.fnRows, fnExpand: node.data.props.fnExpand,
     fnColumn: node.data.props.fnColumn, fnValues: node.data.props.fnValues,
     title: node.data.props.title,
   }));
@@ -14170,6 +14173,7 @@ function PivotTableSettings() {
         <FunctionPivotSettings
           fn={layer}
           rows={fnRows ?? ""}
+          expand={fnExpand ?? ""}
           column={fnColumn ?? ""}
           values={fnValues ?? ""}
           onChange={(next) => setProp((p: Record<string, unknown>) => {
@@ -14326,7 +14330,7 @@ CanvasPivotTable.craft = {
   props: {
     objectSetVariable: null, rowProperty: null, columnProperty: null,
     drilldownVariable: null, title: "",
-    fn: null, fnRows: "", fnColumn: "", fnValues: "",
+    fn: null, fnRows: "", fnExpand: "", fnColumn: "", fnValues: "",
   },
   related: { settings: PivotTableSettings },
 };
