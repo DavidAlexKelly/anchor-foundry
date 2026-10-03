@@ -61,6 +61,9 @@ ORDERS = [
 ]
 
 
+SITE_COLOUR, ORDER_COLOUR = "#7a3b8a", "#3b8a5a"
+
+
 @pytest.fixture(scope="module")
 def ontology(api):
     mod = Module(api, "Timeline")
@@ -74,6 +77,9 @@ def ontology(api):
         # prominent and `name` is not, so a default layer shows one and not the
         # other. A type with everything prominent could not tell the two apart.
         visibility={"region": "prominent"},
+        # p.348's Default colour is the ontology's (§713), so the two types
+        # carry different ones.
+        colour=SITE_COLOUR,
     )
     # **A second module in the same project**, because `object_type` names its
     # dataset after the module's tag - so two types on one module collide on the
@@ -83,6 +89,7 @@ def ontology(api):
     mod.order_type_id = orders.object_type(
         columns=["ref", "placed", "total"], rows=ORDERS, key="ref", title="ref",
         types={"placed": "date"},
+        colour=ORDER_COLOUR,
     )
     return mod
 
@@ -342,8 +349,8 @@ def test_the_legend_can_be_turned_off(page, api, ontology) -> None:
 
 def test_a_layer_keeps_its_own_colour(page, api, ontology) -> None:
     """The one thing p.348 says layers are for is telling several types apart on
-    one timeline, so two layers drawn identically is the widget failing at its
-    purpose."""
+    one timeline - and p.348's Default colour is "the default color set in the
+    ontology for the object's icon" (§713), so each layer is its type's."""
     mod = build(api, ontology, "Timeline colours", layers=[
         {"label": "Sites", "objectSetVariable": "v_sites", "dateProperty": "seen"},
         {"label": "Orders", "objectSetVariable": "v_orders", "dateProperty": "placed"},
@@ -353,9 +360,12 @@ def test_a_layer_keeps_its_own_colour(page, api, ontology) -> None:
 
     first = page.locator("[data-testid='timeline-event'][data-layer='0'] .canvas-timeline-mark")
     second = page.locator("[data-testid='timeline-event'][data-layer='1'] .canvas-timeline-mark")
-    a = first.first.evaluate("el => getComputedStyle(el).backgroundColor")
-    b = second.first.evaluate("el => getComputedStyle(el).backgroundColor")
-    assert a != b, (a, b)
+    expect(first.first).to_have_css("background-color", "rgb(122, 59, 138)")
+    expect(second.first).to_have_css("background-color", "rgb(59, 138, 90)")
+    # And the legend's swatches say the same.
+    swatches = page.get_by_test_id("timeline-legend").locator(".canvas-timeline-swatch")
+    expect(swatches.nth(0)).to_have_css("background-color", "rgb(122, 59, 138)")
+    expect(swatches.nth(1)).to_have_css("background-color", "rgb(59, 138, 90)")
 
 
 def test_the_icon_is_the_type_s_custom_or_none(page, api, ontology) -> None:
