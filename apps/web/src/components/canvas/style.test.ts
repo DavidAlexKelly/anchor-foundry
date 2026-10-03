@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  BACKGROUND_PRESETS, BORDERS, LIGHT_TEXT_BELOW, PADDINGS,
+  BACKGROUND_PRESETS, BORDERS, DARK_BACKGROUND_PRESETS, LIGHT_TEXT_BELOW, PADDINGS,
   backgroundChoice, isDarkBackground, paddingFor, relativeLuminance, resolveBackground,
   textColourChoice,
   schemeFor, styleFor,
@@ -47,6 +47,23 @@ describe("p.62's padding scale", () => {
 describe("resolveBackground", () => {
   it("resolves a preset name to its colour", () => {
     expect(resolveBackground("shade-3")).toBe(BACKGROUND_PRESETS["shade-3"]);
+  });
+
+  it("reads p.58's dark ladder when the module is dark", () => {
+    // p.58: "five preset shades for both light mode and dark mode". The
+    // same name, a different colour: a section saved as `shade-3` stays
+    // the third step of whichever theme the viewer toggled to (p.91).
+    const dark = { palette: [], scheme: "dark" as const };
+    const light = { palette: [], scheme: "light" as const };
+    expect(resolveBackground("shade-3", dark)).toBe(DARK_BACKGROUND_PRESETS["shade-3"]);
+    expect(resolveBackground("shade-3", light)).toBe(BACKGROUND_PRESETS["shade-3"]);
+    expect(resolveBackground("transparent", dark)).toBeNull();
+    // Each dark step is dark - the text rule (p.59-60) turns it light.
+    for (const [name, colour] of Object.entries(DARK_BACKGROUND_PRESETS)) {
+      if (name !== "transparent") expect(isDarkBackground(colour)).toBe(true);
+    }
+    // A custom hex is the author's colour in either theme.
+    expect(resolveBackground("#123456", dark)).toBe("#123456");
   });
 
   it("treats transparent and unset as the same nothing", () => {

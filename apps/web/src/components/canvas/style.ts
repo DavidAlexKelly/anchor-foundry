@@ -20,14 +20,15 @@
  * That is a decision about a colour, not a colour, and it is the thing here
  * that can be wrong in a way nobody notices until a module is unreadable.
  *
- * **Two divergences, named rather than implied.** There is no dark-mode preset
- * ladder: p.58 offers "five preset shades for both light mode and dark mode",
- * and this platform has one theme, so a dark ladder would be five swatches
- * that look wrong on every page they appear on. Adding a dark theme is a
- * platform-wide decision and not Workshop's to make. And there are no
- * Blueprint colour shortcuts (p.58, p.59), because Blueprint is Palantir's own
- * design system and is not a dependency here; a custom hex reaches the same
- * colours by typing them.
+ * **p.58's "five preset shades for both light mode and dark mode"** (§722):
+ * the same five names resolve to a second ladder when the module is in p.91's
+ * dark mode, so a section a builder set to "Shade" stays a shade of the page
+ * it is on rather than a pale block on a dark one.
+ *
+ * **One divergence, named rather than implied**: there are no Blueprint colour
+ * shortcuts (p.58, p.59), because Blueprint is Palantir's own design system
+ * and is not a dependency here; a custom hex reaches the same colours by
+ * typing them.
  */
 
 import { isHex, normaliseHex } from "./hex";
@@ -49,6 +50,21 @@ export const BACKGROUND_PRESETS = {
 } as const;
 
 export type BackgroundPreset = keyof typeof BACKGROUND_PRESETS;
+
+/** p.58's dark-mode ladder (§722): the light ladder mirrored about the page.
+ * Light runs White, Paper (the page), then three steps darker; dark runs one
+ * step darker than its page, the page itself, then three steps lighter - each
+ * the same distance from the page, in the direction that reads as further
+ * from it. `shade-2` is the module's dark page (`--module-dark` in
+ * globals.css), as light's is the platform's paper. */
+export const DARK_BACKGROUND_PRESETS: Record<BackgroundPreset, string> = {
+  transparent: "",
+  "shade-1": "#101a23",
+  "shade-2": "#16232f",
+  "shade-3": "#22323f",
+  "shade-4": "#2e4050",
+  "shade-5": "#4a6074",
+};
 
 export const BACKGROUND_LABELS: Record<BackgroundPreset, string> = {
   transparent: "Transparent",
@@ -143,7 +159,8 @@ export function resolveBackground(
   // reports nothing.
   if (referenced !== null) return referenced ?? null;
   if (value in BACKGROUND_PRESETS) {
-    return BACKGROUND_PRESETS[value as BackgroundPreset] || null;
+    const ladder = saved?.scheme === "dark" ? DARK_BACKGROUND_PRESETS : BACKGROUND_PRESETS;
+    return ladder[value as BackgroundPreset] || null;
   }
   if (isHex(value)) return normaliseHex(value);
   const raw = value.trim();

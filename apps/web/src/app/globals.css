@@ -65,6 +65,14 @@
   color: var(--ink);
 }
 
+/* p.91's dark theme (§722) paints the module's own canvas, not the platform
+   around it: `--paper` is transparent under `[data-scheme="dark"]` so a dark
+   *section* shows its own colour, which left a dark *module* drawing light
+   text on the light page beneath it. The colour is p.58's dark ladder's
+   `shade-2`, its page (style.ts). */
+:root { --module-dark: #16232f; }
+.module-scheme[data-scheme="dark"] .canvas-frame-area { background: var(--module-dark); }
+
 * { box-sizing: border-box; }
 
 html, body {

@@ -474,7 +474,7 @@ export function VariableBridge({
               `display: contents` so it changes no layout: a module whose
               widgets suddenly sat inside an extra box would be a theme toggle
               that moved things. */}
-          <div data-scheme={scheme} data-testid="module-scheme"
+          <div className="module-scheme" data-scheme={scheme} data-testid="module-scheme"
             style={{ display: "contents" }}>
             {children}
           </div>
