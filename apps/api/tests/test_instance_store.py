@@ -1318,3 +1318,27 @@ def test_a_saved_search_keeps_its_regular_expression(client: TestClient, fx: Fix
                     json={"name": f"Alone {uuid.uuid4().hex[:6]}",
                           "definition": {"q": "x", "match": "regex"}})
     assert r.status_code == 422 and "searches one property" in r.text, r.text
+
+
+@pytest.mark.anyio
+async def test_a_scan_reads_a_whole_type_past_one_page(store) -> None:
+    """§768's `scan_for_type`, for a function's inputs: `search_after` over
+    (source, key), so it is not bounded by a page, it crosses sources, and it
+    stops at the limit asked for."""
+    type_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    for source_id in (uuid.uuid4(), uuid.uuid4()):
+        await store.upsert_instances(
+            search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
+            rows=_rows(1100), synced_at=now, declared=DECLARED,
+        )
+    everything = await store.scan_for_type(
+        search_prefix=PREFIX, object_type_id=type_id, limit=5000)
+    assert len(everything) == 2200
+    assert len({row["id"] for row in everything}) == 2200
+    assert {"id", "primary_key", "properties"} <= set(everything[0])
+    capped = await store.scan_for_type(
+        search_prefix=PREFIX, object_type_id=type_id, limit=1500)
+    assert len(capped) == 1500
+    assert await store.scan_for_type(
+        search_prefix=PREFIX, object_type_id=uuid.uuid4(), limit=10) == []

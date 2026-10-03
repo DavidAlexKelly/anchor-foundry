@@ -55,7 +55,15 @@ Foundry describes Functions as logic "executed on the server side in an isolated
 
 **Decision required.** Either accept that these specific widget features stay unimplemented and mark them so, or bring a minimal Functions runtime into scope: a TypeScript or Python function, registered against the ontology, callable from a widget. The specs below assume **the minimal runtime**, and every line that depends on it is tagged `[fn]` so the decision can be reversed by grep.
 
-**The options are written up in `docs/decisions/0018-functions-runtime.md`**, which is proposed and not yet decided. Decision 0004 rules out running a function beside the API's credentials, and the isolated runner it built starts a Fargate task per call, which is too slow for a table column. The choice is between declining these features, SQL functions run inline in DuckDB, and a warm isolated runner service. Until the owner decides, the `[fn]` rows stay ○.
+**The options are written up in `docs/decisions/0018-functions-runtime.md`**, decided as option B in §768: SQL functions over the ontology, run inline in DuckDB behind the transform preview's sandbox. Decision 0004 rules out running a function beside the API's credentials, and the isolated runner it built starts a Fargate task per call, which is too slow for a table column. B was taken under the owner's instruction to choose without stopping, and it adds no infrastructure, so it is reversible. The `[fn]` rows are built on it one consumer at a time and keep their tag, so the divergence stays findable by grep.
+
+**§768 built the registry and the call** (db 0153; `services/functions.py`, `services/function_engine.py`, `/workspaces/{id}/functions`):
+- A function has semantic versions its author names (`functions` p.49-50). They are immutable, and each must be greater than the last.
+- A version declares typed parameters (p.80's variable types, plus an object), the object types its SQL reads, and an output: a value, an array, an object set, or a table.
+- It is checked by running it against empty inputs before it is saved, which catches a misspelt column at publish time.
+- A call reads its inputs through the instance store as the caller (p.77). The store gained `scan_for_type`, a whole-type read that pages with `search_after` on OpenSearch.
+- The SQL runs behind the transform preview's sandbox, plus three more guards: exactly one SELECT, a timeout that interrupts the connection, and a cap of 10,000 objects per type, which is refused by name rather than silently truncated.
+- Sweep 41/41, after four tests the first pass lacked: a null key in an object set, the object cap, the input cap, and whitespace-only SQL.
 
 ---
 

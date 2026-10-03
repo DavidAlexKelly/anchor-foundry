@@ -1,6 +1,6 @@
 # 0018 — A runtime for Functions
 
-**Status:** proposed, for the owner to decide
+**Status:** decided: **B**, SQL functions run inline (§768). It was taken under the owner's standing instruction to choose the next roadmap step without stopping to confirm. It adds no infrastructure, so it is reversed by removing the `functions` tables and their consumers.
 **Roadmap:** `docs/parity/README.md`'s "one hard dependency we did not choose",
 and every row tagged `[fn]`
 **Builds on:** `0004-running-customer-code.md`
@@ -82,5 +82,39 @@ find. A function's registry, its versions, and the widget and action plumbing
 that call it are the same under B and C. So if the owner later wants
 TypeScript or Python, C replaces the executor rather than the feature.
 
-This is a recommendation, not a decision. Until the owner chooses, the `[fn]`
-rows stay ○.
+## Decision, and what B is here (§768)
+
+B, as recommended. What follows is the shape, so the four consumer units
+(§770 onwards) build on one thing.
+
+* **A function** is a workspace resource: `api_name`, display name and
+  description, and **versions**. Following `functions` p.49-50, a version is a
+  semantic version the author chooses ("Versions for function releases are
+  chosen by their publishers and are immutable after creation"). A new one
+  must be greater than every earlier one. A consumer names the version it
+  calls.
+* **A version** carries:
+  * typed **parameters**, in the scalar types of p.80's variable mapping plus
+    an object reference;
+  * the **object types it reads**, each loaded as a table named by its
+    `api_name`;
+  * an **output kind**;
+  * the **SQL**.
+  Parameters are bound as `$name`, never interpolated.
+* **The outputs are p.80's**: a value (boolean, string, number, date,
+  timestamp), an array of one of those, an object set (the rows' first column
+  is primary keys), and a table for the test run. Each consumer unit adds the
+  shape it needs, such as an Object Table column's key-to-value map.
+* **The boundary is the transform preview's.** The SQL runs in an in-memory
+  DuckDB connection after the inputs are materialised and
+  `enable_external_access` is switched off. It has a memory limit, a
+  per-type row cap, and a timeout that interrupts the connection. The inputs
+  are read through the instance store under the caller's own access, so a
+  function sees what its caller may see (p.77's "differing access to
+  individual objects").
+* **Divergence, stated:** Foundry's functions are TypeScript and Python and
+  can call APIs (p.2). These are SQL over the ontology and call nothing.
+  Ontology edits, which function-backed actions need (p.81), are the awkward
+  case named above, and that unit decides them. Option C remains the way to
+  Foundry's languages: it replaces the executor, not the registry or the
+  consumers.

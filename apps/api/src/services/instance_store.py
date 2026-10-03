@@ -167,6 +167,18 @@ class InstanceStoreGateway(Protocol):
         self, *, search_prefix: str, object_type_id: UUID, limit: int, offset: int
     ) -> tuple[list[dict[str, Any]], int]: ...
 
+    async def scan_for_type(
+        self, *, search_prefix: str, object_type_id: UUID, limit: int
+    ) -> list[dict[str, Any]]:
+        """Up to `limit` of a type's objects, in one pass (§768).
+
+        For a function's inputs, which read a whole type: `list_for_type`'s
+        pages are a browser's, fifty at a time, and a function over ten
+        thousand objects would be two hundred queries. Ordered by identity,
+        so the same objects come back in the same order.
+        """
+        ...
+
     async def get_instance(
         self, *, search_prefix: str, object_type_id: UUID, instance_id: str
     ) -> dict[str, Any] | None: ...
@@ -810,6 +822,34 @@ class OpenSearchInstanceStore:
         ]
         total = int(resp["hits"]["total"]["value"])
         return rows, total
+
+    async def scan_for_type(
+        self, *, search_prefix: str, object_type_id: UUID, limit: int
+    ) -> list[dict[str, Any]]:
+        # `search_after` rather than `from`, so the scan is not bounded by the
+        # result window; the sort is the object's identity, (source, key).
+        index = _index_name(search_prefix, object_type_id)
+        rows: list[dict[str, Any]] = []
+        after: list[Any] | None = None
+        while len(rows) < limit:
+            body: dict[str, Any] = {
+                "query": {"term": {"object_type_id": str(object_type_id)}},
+                "sort": [{"source_id": "asc"}, {"primary_key": "asc"}],
+                "size": min(1000, limit - len(rows)),
+            }
+            if after is not None:
+                body["search_after"] = after
+            resp = await self._client.search(index=index, body=body, ignore_unavailable=True)
+            hits = resp["hits"]["hits"]
+            if not hits:
+                break
+            rows.extend(
+                {"id": h["_id"], "primary_key": h["_source"]["primary_key"],
+                 "properties": h["_source"]["properties"]}
+                for h in hits
+            )
+            after = hits[-1]["sort"]
+        return rows
 
     async def get_instance(
         self, *, search_prefix: str, object_type_id: UUID, instance_id: str
@@ -1491,6 +1531,23 @@ class PostgresInstanceStore:
         return await instances_service.list_for_type(
             self._conn, object_type_id, limit=limit, offset=offset
         )
+
+    async def scan_for_type(
+        self, *, search_prefix: str, object_type_id: UUID, limit: int
+    ) -> list[dict[str, Any]]:
+        from ..lib.db import fetch_all
+
+        rows = await fetch_all(
+            self._conn,
+            """
+            SELECT id, primary_key, properties FROM object_instances
+             WHERE object_type_id = :tid
+             ORDER BY source_id, primary_key
+             LIMIT :limit
+            """,
+            {"tid": str(object_type_id), "limit": int(limit)},
+        )
+        return [dict(r) for r in rows]
 
     async def get_instance(
         self, *, search_prefix: str, object_type_id: UUID, instance_id: str
