@@ -75,3 +75,37 @@ export function draftsOf(view: {
     subject_variable: tab.subject_variable,
   }));
 }
+
+/** workshop p.263's **Interface configuration** (§710): "a mapping from the
+ * current module's variables to an object view tab's module interface".
+ *
+ * Held flat as `{"<tab id>:<external id>": host variable id}` - one map for
+ * every tab of the view, so it joins the catalogue of mapping props the
+ * server and the browser already read as references (`MAPPING_REFERENCE_PROPS`)
+ * rather than needing a nested reader of its own. */
+export function interfaceKey(tabId: string, externalId: string): string {
+  return `${tabId}:${externalId}`;
+}
+
+/** One tab's bindings, as `CanvasParameterProvider`'s link wants them: the
+ * tab module's variable id -> the host's. An external ID the module no longer
+ * publishes drops out, as an embed's does; so does the view's subject, which
+ * the object itself supplies (p.261) and a mapping must not outvote. */
+export function tabBindings(
+  mapping: Record<string, unknown> | null | undefined,
+  tabId: string,
+  declared: Record<string, { id: string; external_id?: string | null; interface?: unknown }>,
+  subjectVariable: string,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const prefix = `${tabId}:`;
+  for (const [key, hostVid] of Object.entries(mapping ?? {})) {
+    if (!key.startsWith(prefix) || typeof hostVid !== "string" || !hostVid) continue;
+    const externalId = key.slice(prefix.length);
+    const target = Object.values(declared).find(
+      (v) => v.interface && v.external_id === externalId,
+    );
+    if (target && target.id !== subjectVariable) out[target.id] = hostVid;
+  }
+  return out;
+}
