@@ -19,7 +19,7 @@ import type { OntologyStatus } from "@/lib/types";
 import {
   canDelete, deleteBlockedReason, promoteBlockedReason, propagationWarning,
   statusesFor, wantsDeprecationNote, weakest,
-  deprecationSummary, linkCapNote,
+  deprecationSummary, linkCapNote, propertyCapNote,
 } from "./ontology-status";
 
 function props(...pairs: [string, OntologyStatus][]) {
@@ -212,5 +212,19 @@ describe("a link's status (§631)", () => {
     expect(deprecationSummary({ deadline: "2027-01-31T00:00:00Z" })).toBe("by 2027-01-31");
     expect(deprecationSummary({ reason: " Use the roster ", deadline: "2027-01-31" }))
       .toBe("Use the roster, by 2027-01-31");
+  });
+});
+
+describe("propertyCapNote (§732; p.256)", () => {
+  it("says when a property set above its type will be kept at the type's", () => {
+    expect(propertyCapNote("active", "experimental")).toBe(
+      "Saved as Experimental: a property is no more ready than its object type, which is Experimental (p.256).");
+    expect(propertyCapNote("active", "deprecated")).toContain("Saved as Deprecated");
+  });
+
+  it("says nothing when the choice stands", () => {
+    expect(propertyCapNote("active", "active")).toBeNull();
+    expect(propertyCapNote("experimental", "promoted")).toBeNull();
+    expect(propertyCapNote("deprecated", "active")).toBeNull();
   });
 });

@@ -153,3 +153,20 @@ export function deprecationSummary(note: Deprecation | null | undefined): string
   if (!reason && !deadline) return null;
   return [reason, deadline ? `by ${deadline}` : null].filter(Boolean).join(", ");
 }
+
+/** What a property's status will be once its object type is saved (§732),
+ * as a sentence, or null when it keeps what was chosen.
+ *
+ * p.256's propagation runs on every save of the type and only lowers, so a
+ * property set above its type is stored at the type's. Said beside the
+ * choice, because the alternative is a save that quietly keeps less than was
+ * asked - the same reason p.257's link cap is said rather than applied
+ * silently (§631). */
+export function propertyCapNote(
+  property: OntologyStatus, type: OntologyStatus,
+): string | null {
+  const kept = weakest(property, type);
+  return kept === property
+    ? null
+    : `Saved as ${STATUS_LABELS[kept]}: a property is no more ready than its object type, which is ${STATUS_LABELS[type]} (p.256).`;
+}

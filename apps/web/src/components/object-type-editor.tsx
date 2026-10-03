@@ -52,9 +52,11 @@ import type {
   ObjectTypeDetail,
   ObjectTypeImpact,
   ObjectTypeProperty,
+  OntologyStatus,
   PropertyDataType,
   PropertyVisibility,
 } from "@/lib/types";
+import { STATUS_LABELS, propertyCapNote, wantsDeprecationNote } from "@/lib/ontology-status";
 
 // Exported so the shared property dialog offers the same list. A second copy
 // would be a base type this editor knows about and that one does not, which is
@@ -147,6 +149,7 @@ export function PropertyRows({
   objectTypeId,
   effectiveValueTypes,
   inlineActions,
+  typeStatus = "experimental",
 }: {
   properties: PropertyInput[];
   onChange: (next: PropertyInput[]) => void;
@@ -164,6 +167,10 @@ export function PropertyRows({
   /** The action types on this object type, for §594's inline action
    * (`workshop` p.266). Absent on the create dialog, where none can exist. */
   inlineActions?: readonly (InlineAction & { id: string; display_name?: string | null })[];
+  /** The object type's status as the form holds it (§732), so a property's
+   * own can say when p.256 will keep it lower. Absent on the create dialog,
+   * whose type is `experimental` until it exists. */
+  typeStatus?: OntologyStatus;
 }) {
   // Which row's formatter is open, by index. One dialog rather than one per
   // row: only one can be open, and a dialog per property is a dialog per
@@ -188,6 +195,8 @@ export function PropertyRows({
   const reducingRow = reducing === null ? null : properties[reducing];
   const [hinting, setHinting] = useState<number | null>(null);
   const hintingRow = hinting === null ? null : properties[hinting];
+  const [statusing, setStatusing] = useState<number | null>(null);
+  const statusingRow = statusing === null ? null : properties[statusing];
   // p.91's bulk edit (§672): the rows selected, by index. A row added or
   // removed renumbers the rest, so the selection starts again.
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -281,6 +290,45 @@ export function PropertyRows({
             }} />
           <div className="row-actions" style={{ justifyContent: "flex-end", marginTop: 12 }}>
             <button type="button" className="btn primary" onClick={() => setHinting(null)}>Done</button>
+          </div>
+        </Dialog>
+      )}
+      {statusingRow && (
+        // p.253: "Every object type, property, link type, action, or
+        // interface in the Ontology has a status" - a property's own, with
+        // p.254's note (§732). It was carried and propagated, and set
+        // nowhere one property at a time.
+        <Dialog open title={`Status of ${statusingRow.api_name || `property ${statusing! + 1}`}`}
+          onClose={() => setStatusing(null)}>
+          <StatusField
+            kind="property"
+            value={statusingRow.status ?? "experimental"}
+            deprecation={statusingRow.deprecation ?? null}
+            // One update for the status and the note it may clear: the
+            // field reports both in turn, and two writes from one render's
+            // rows would have the second put the old status back.
+            onChange={(next) => {
+              const rows = [...properties];
+              rows[statusing!] = {
+                ...statusingRow, status: next,
+                deprecation: wantsDeprecationNote(next) ? statusingRow.deprecation ?? null : null,
+              };
+              onChange(rows);
+            }}
+            onDeprecationChange={(next) => {
+              if (next === null) return;  // cleared with the status, above
+              const rows = [...properties];
+              rows[statusing!] = { ...statusingRow, deprecation: next };
+              onChange(rows);
+            }}
+          />
+          {propertyCapNote(statusingRow.status ?? "experimental", typeStatus) && (
+            <p className="field-hint" data-testid="property-status-capped">
+              {propertyCapNote(statusingRow.status ?? "experimental", typeStatus)}
+            </p>
+          )}
+          <div className="row-actions" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+            <button type="button" className="btn primary" onClick={() => setStatusing(null)}>Done</button>
           </div>
         </Dialog>
       )}
@@ -544,6 +592,16 @@ export function PropertyRows({
             onClick={() => setHinting(index)}
           >
             Hints ({hintLabels(prop.render_hints).length})
+          </button>
+          {/* p.253's status of this one property (§732). */}
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: "3px 9px", fontSize: 12 }}
+            aria-label={`Property ${index + 1} status`}
+            onClick={() => setStatusing(index)}
+          >
+            {STATUS_LABELS[prop.status ?? "experimental"]}
           </button>
           {/* Struct fields (`object-link-types` p.149, p.152–158). Gated on
               the base type for `Format`'s reason and a stronger one: a struct
@@ -1203,6 +1261,7 @@ export function EditObjectTypeDialog({
             properties={properties}
             workspaceId={workspaceId}
             objectTypeId={type.id}
+            typeStatus={status}
             effectiveValueTypes={Object.fromEntries(
               type.properties.map((p) => [p.api_name, p.effective_value_type_id]),
             )}

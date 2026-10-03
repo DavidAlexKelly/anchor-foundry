@@ -78,6 +78,7 @@ import {
 import { multipleChoice } from "@/lib/parameter-constraint";
 import { PropertyInput } from "@/components/property-value";
 import { regexProblem } from "@/components/canvas/regex-query";
+import { StatusBadge } from "@/components/status-field";
 import type { ObjectTypeSummary, SavedSearch } from "@/lib/types";
 
 /** The explorer's whole state, and the whole of what a saved search stores.
@@ -608,6 +609,9 @@ export function ObjectExplorer({
                     <TypeGlyph type={t} />
                   </span>
                   <span>{t.display_name}</span>
+                  {/* p.253: "These statuses are viewable in Object Explorer,
+                      Object Views, and Workshop" (§732). */}
+                  <StatusBadge status={t.status} />
                 </label>
               ))}
             </div>
