@@ -101,6 +101,19 @@ def test_a_hover_interaction_runs_on_the_hovered_annotation(page, api) -> None:
     expect(card).to_have_count(0)
 
 
+def test_a_hover_interaction_with_an_icon_draws_it(page, api) -> None:
+    """p.323's Icon: "Set the icon displayed for an on-hover interaction. …
+    The title appears when hovering over the interaction icon." (§707)"""
+    open_module(page, build(api, "Annotation hover icon",
+                            hoverActions=[{"id": "hover_1", "label": "Resolve", "icon": "tick"}]))
+    marks = page.get_by_test_id("markdown-annotation")
+    expect(marks).to_have_text(["Newark", "rarely"], timeout=20000)
+    marks.first.hover()
+    button = page.get_by_test_id("markdown-annotation-hover").get_by_role("button", name="Resolve")
+    expect(button.locator("svg")).to_have_attribute("data-icon", "tick")
+    expect(button).to_have_attribute("title", "Resolve")
+
+
 def test_no_hover_card_without_interactions(page, api) -> None:
     open_module(page, build(api, "Annotation no hover"))
     marks = page.get_by_test_id("markdown-annotation")
@@ -118,11 +131,12 @@ def test_the_panel_sets_the_colour_rules_and_interactions(page, api) -> None:
     expect(page.get_by_test_id("markdown-annotation-rules")).to_be_enabled()
     page.get_by_test_id("markdown-hover-add").click()
     page.get_by_label("Hover interaction 1 title").fill("Resolve")
+    page.get_by_test_id("markdown-hover-icon-0-name").select_option("tick")
     page.get_by_role("button", name="Save", exact=True).click()
     settled(page)
     eventually(lambda: mod.definition()["layout"]["md"]["props"],
                lambda p: (p["annotationLayers"][0].get("colorMode"), p.get("hoverActions"))
-               == ("rules", [{"id": "hover_1", "label": "Resolve"}]),
+               == ("rules", [{"id": "hover_1", "label": "Resolve", "icon": "tick"}]),
                what="the colour's source and the interaction, saved")
     # The Events panel offers the interaction as one of the widget's clicks.
     page.get_by_role("button", name="Events (0)").click()

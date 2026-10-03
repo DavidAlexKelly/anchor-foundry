@@ -61,7 +61,7 @@ export interface Step {
   label: string;
   /** p.313's "Is completed": the id of a boolean variable. */
   completedVariable?: string;
-  /** p.313's Icon. A *name*, drawn as a mark — see the widget. */
+  /** p.313's Icon: a name from the icon set or typed characters (§707). */
   icon?: string;
 }
 

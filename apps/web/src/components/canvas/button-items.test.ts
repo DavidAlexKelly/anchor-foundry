@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  addItem, buttonTypeOf, duplicateItem, itemsOf, newItemId, removeItem, renameItem,
+  addItem, buttonTypeOf, duplicateItem, itemsOf, newItemId, removeItem, renameItem, setItemIcon,
 } from "./button-items";
 
 const two = [{ id: "i_1", label: "CSV" }, { id: "i_2", label: "Copy" }];
@@ -56,5 +56,19 @@ describe("removeItem and renameItem", () => {
   it("removes by id and renames by id, leaving the rest", () => {
     expect(removeItem(two, "i_1")).toEqual([two[1]]);
     expect(renameItem(two, "i_2", "Clipboard")).toEqual([two[0], { id: "i_2", label: "Clipboard" }]);
+  });
+});
+
+describe("setItemIcon", () => {
+  const two = [{ id: "i_1", label: "Note" }, { id: "i_2", label: "Flag", icon: "flag" }];
+
+  it("sets one item's icon and leaves the rest", () => {
+    expect(setItemIcon(two, "i_1", "edit")).toEqual([
+      { id: "i_1", label: "Note", icon: "edit" }, two[1]]);
+  });
+
+  it("removes an icon cleared to nothing rather than keeping an empty one", () => {
+    expect(setItemIcon(two, "i_2", "")).toEqual([two[0], { id: "i_2", label: "Flag" }]);
+    expect(setItemIcon(two, "i_2", "  ")).toEqual([two[0], { id: "i_2", label: "Flag" }]);
   });
 });

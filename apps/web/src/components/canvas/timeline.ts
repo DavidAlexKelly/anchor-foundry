@@ -312,6 +312,16 @@ export function showsIcon(layer: Layer): boolean {
   return iconModeOf(layer.iconMode) !== "none";
 }
 
+/** The icon a layer's events draw (§707): p.349's "Default: use the default
+ * icon set in the ontology for the object", "None: show no icon", "Custom:
+ * manually override and set the icon". `null` draws the mark bare. */
+export function layerIcon(layer: Layer, ontologyIcon?: string | null): string | null {
+  const mode = iconModeOf(layer.iconMode);
+  if (mode === "none") return null;
+  const chosen = mode === "custom" ? layer.icon : ontologyIcon;
+  return (chosen ?? "").trim() || null;
+}
+
 /** p.348's Event title, for one object.
  *
  * `object` is the object's own title (what §210's Object Set Title resolves),

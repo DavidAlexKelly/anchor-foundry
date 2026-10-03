@@ -16,19 +16,20 @@ from __future__ import annotations
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, save, settled
 from test_markdown_selection import SELECT
 
 TEXT = "I *think* this **sentence** is ~pretty good~"
 
 
-def build(api, name: str) -> Module:
+def build(api, name: str, icon: str | None = None) -> Module:
     mod = Module(api, name)
     mod.define({
         "format": 2,
         "layout": layout({
             "md": {"resolvedName": "CanvasMarkdown", "props": {
-                "text": TEXT, "highlightActions": [{"id": "h_1", "label": "Annotate"}]}},
+                "text": TEXT, "highlightActions": [
+                    {"id": "h_1", "label": "Annotate", **({"icon": icon} if icon else {})}]}},
             "out": {"resolvedName": "CanvasText", "props": {
                 "tag": "p", "text": "LAST=[{{v_last}}]"}},
         }),
@@ -50,6 +51,30 @@ def test_an_action_runs_on_the_highlighted_text(page, api) -> None:
     expect(action).to_have_text("Annotate")
     action.click()
     expect(page.get_by_text("LAST=[think* this **sentence@3-25]")).to_be_visible()
+
+
+def test_an_action_with_an_icon_draws_it_and_keeps_its_title(page, api) -> None:
+    """p.323's Icon: "Set the icon displayed on text highlighting. … The title
+    appears on hover over the icon." (§707)"""
+    open_module(page, build(api, "Markdown highlight icon", icon="edit"))
+    expect(page.get_by_test_id("markdown")).to_contain_text("sentence", timeout=20000)
+    page.evaluate(SELECT, ["think", "sentence", 8])
+    action = page.get_by_role("button", name="Annotate")
+    expect(action.locator("svg")).to_have_attribute("data-icon", "edit")
+    expect(action).to_have_text("")
+    action.click()
+    expect(page.get_by_text("LAST=[think* this **sentence@3-25]")).to_be_visible()
+
+
+def test_the_panel_chooses_an_action_s_icon(page, api) -> None:
+    mod = build(api, "Markdown highlight icon panel")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Markdown").first.click()
+    page.get_by_test_id("markdown-highlight-icon-0-name").select_option("flag")
+    save(page)
+    actions = mod.definition()["layout"]["md"]["props"]["highlightActions"]
+    assert actions == [{"id": "h_1", "label": "Annotate", "icon": "flag"}], actions
 
 
 def test_the_events_panel_offers_each_action(page, api) -> None:
