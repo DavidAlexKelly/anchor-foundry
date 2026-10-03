@@ -327,6 +327,48 @@ def ingest_to_parquet(src_path: str, extension: str, dest_path: str) -> tuple[li
         con.close()
 
 
+def combine_parquets(
+    parts: list[tuple[str, str]], dest_path: str
+) -> tuple[list[ColumnSchema], int]:
+    """One Parquet from several, in order: the files an uploaded dataset holds
+    (§746; `dataset-preview` p.10), each already read on its own.
+
+    `parts` is `(filename, parquet path)`. **The schemas must agree**, column
+    for column, and a part that does not is named in the refusal rather than
+    unioned in: a dataset has one schema, and widening it to take a file that
+    disagrees would be decision 0002's silent widening. The upload route
+    refuses such a file before it is kept; this is what still catches a
+    re-parse whose options read two files differently.
+    """
+    if not parts:
+        raise DatasetEngineError("there is no file to read")
+    con = duckdb.connect()
+    try:
+        schemas = [
+            (name, [(str(r[0]), str(r[1])) for r in con.execute(
+                f"DESCRIBE SELECT * FROM read_parquet({path!r})").fetchall()])
+            for name, path in parts
+        ]
+        first_name, first = schemas[0]
+        for name, schema in schemas[1:]:
+            if schema != first:
+                raise DatasetEngineError(
+                    f"{name} does not read with the same columns as {first_name}, "
+                    "so the two cannot be one dataset"
+                )
+        paths = ", ".join(repr(path) for _name, path in parts)
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        try:
+            con.execute(f"CREATE VIEW combined AS SELECT * FROM read_parquet([{paths}])")
+            con.execute(f"COPY combined TO '{dest_path}' (FORMAT parquet)")
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+        row_count = int(con.execute("SELECT count(*) FROM combined").fetchone()[0])
+        return [ColumnSchema(name=n, data_type=t) for n, t in first], row_count
+    finally:
+        con.close()
+
+
 def diff_schemas(
     previous: list[dict[str, str]] | None, current: list[ColumnSchema]
 ) -> dict[str, Any] | None:

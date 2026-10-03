@@ -7,6 +7,7 @@ import {
   whyNotParseable,
   DELIMITED_ONLY,
   isJsonFile,
+  storedOptions,
 } from "./parse-options";
 
 describe("whether a dataset can be parsed again", () => {
@@ -154,5 +155,36 @@ describe("JSON and Parquet files (§510)", () => {
 
   it("names the switches only a delimited file has", () => {
     expect(DELIMITED_ONLY).toEqual(["header", "drop_bad_rows"]);
+  });
+});
+
+describe("the options a dataset is read with now (§746)", () => {
+  it("is the defaults when nothing is stored", () => {
+    expect(storedOptions(null)).toEqual(DEFAULT_OPTIONS);
+    expect(storedOptions(undefined)).toEqual(DEFAULT_OPTIONS);
+  });
+
+  it("takes what was stored over the defaults", () => {
+    expect(storedOptions({
+      delimiter: "^", quote: null, header: false, skip_lines: 2, null_values: ["NA"],
+      drop_bad_rows: true, encoding: "latin-1", add_file_path: true,
+      add_imported_at: false, add_row_number: true,
+    })).toEqual({
+      delimiter: "^", quote: null, header: false, skip_lines: 2, null_values: ["NA"],
+      drop_bad_rows: true, encoding: "latin-1", add_file_path: true,
+      add_imported_at: false, add_row_number: true,
+    });
+  });
+
+  it("ignores a key it does not know and a value of the wrong type", () => {
+    const read = storedOptions({ escape: "\\", header: "no", skip_lines: "2", delimiter: 5,
+      null_values: ["NA", 3] });
+    expect(read).toEqual({ ...DEFAULT_OPTIONS, null_values: ["NA"] });
+    expect(read).not.toHaveProperty("escape");
+  });
+
+  it("does not share the defaults' list", () => {
+    storedOptions(null).null_values.push("x");
+    expect(DEFAULT_OPTIONS.null_values).toEqual([]);
   });
 });

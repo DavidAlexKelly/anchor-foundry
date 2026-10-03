@@ -54,7 +54,7 @@ _COLUMNS = """
     id, project_id, workspace_id, name, slug, description, origin,
     connection_id, s3_location, table_schema, row_count, current_version,
     schema_policy, forked_from_dataset_id, forked_from_version,
-    original_filename, created_by, created_at, updated_at
+    original_filename, parse_options, created_by, created_at, updated_at
 """
 
 # Migration 0023 enforces the schema policy in a BEFORE INSERT trigger on
@@ -166,6 +166,10 @@ async def create_from_upload(
         },
     )
     assert row is not None  # parent-checking policy: RETURNING safe
+    if original_filename:
+        # The dataset's first file (db 0143; §746): p.10's later uploads are
+        # read beside it, or replace it if they share its name.
+        await record_file(conn, dataset_id, original_filename, created_by, version_number=1)
     await fetch_one(
         conn,
         """
@@ -476,22 +480,78 @@ async def list_versions(
     )
 
 
-async def original_upload_key(
+async def record_file(
+    conn: AsyncConnection, dataset_id: UUID, filename: str, uploaded_by: UUID | None,
+    *, version_number: int,
+) -> None:
+    """One of the files an uploaded dataset holds (db 0143; §746), new or
+    replaced. A replaced one takes the new upload's time, author and version,
+    and so moves to the end of the order the files are read in: it is the
+    newest upload."""
+    await conn.execute(
+        _text(
+            """
+            INSERT INTO dataset_files (dataset_id, filename, uploaded_by, version_number)
+            VALUES (:did, :name, :by, :version)
+            ON CONFLICT (dataset_id, filename) DO UPDATE
+                SET uploaded_by = EXCLUDED.uploaded_by, uploaded_at = now(),
+                    version_number = EXCLUDED.version_number
+            """
+        ),
+        {"did": str(dataset_id), "name": filename,
+         "by": str(uploaded_by) if uploaded_by else None, "version": version_number},
+    )
+
+
+async def set_parse_options(
+    conn: AsyncConnection, dataset_id: UUID, options: dict[str, Any] | None
+) -> None:
+    """The options a dataset is now read with (db 0143; `dataset-preview`
+    p.24), or None for the default read - kept so a file added later is read
+    the way the ones already there were (§746)."""
+    import json
+
+    await conn.execute(
+        _text("UPDATE datasets SET parse_options = CAST(:options AS jsonb) WHERE id = :did"),
+        {"did": str(dataset_id), "options": json.dumps(options) if options is not None else None},
+    )
+
+
+async def list_files(
     conn: AsyncConnection, project_id: UUID, dataset_id: UUID
-) -> str:
-    """Where the file somebody uploaded still is (§362; migration 0090).
+) -> list[dict[str, Any]]:
+    """The files a dataset holds, for the dataset page (§746) - none for a
+    dataset that was not uploaded, which is not an error to *list*, only to
+    read again (`upload_files`)."""
+    await get(conn, project_id, dataset_id)
+    return await fetch_all(
+        conn,
+        """
+        SELECT f.filename, f.uploaded_at, f.version_number, u.display_name AS uploaded_by_name
+          FROM dataset_files f LEFT JOIN users u ON u.id = f.uploaded_by
+         WHERE f.dataset_id = :did
+         ORDER BY f.uploaded_at, f.filename
+        """,
+        {"did": str(dataset_id)},
+    )
+
+
+async def upload_files(
+    conn: AsyncConnection, project_id: UUID, dataset_id: UUID
+) -> list[tuple[str, str]]:
+    """Every file an uploaded dataset holds, as `(filename, storage key)`, in
+    the order they joined it (§362, §746; migrations 0090, 0143).
 
     **The bytes were always kept and could never be found.** The upload route
     has written them to `{prefix}original/{filename}` since the first upload,
-    with "export everything §11 includes what you gave us" beside it — and the
-    filename went nowhere, the export route serves the Parquet, and
-    `StorageGateway` has no way to list a prefix. db 0090 records the name so
-    the copy that was already being paid for becomes reachable.
+    and db 0090 recorded the name so the copy that was already being paid for
+    became reachable. p.10 then made a dataset several files (db 0143), and
+    this reads every one, because a re-parse or a new version is all of them.
 
-    Refuses, rather than returning a key that will 404, in the two cases where
+    Refuses, rather than returning keys that will 404, in the two cases where
     there is no original at all: a dataset built by a model or filled by a sync
     was never uploaded, and one uploaded before db 0090 kept no name. The
-    second is the honest cost of not guessing — a filename rebuilt by
+    second is the honest cost of not guessing - a filename rebuilt by
     convention would point at a file that may not be there, and the error would
     arrive as a missing object rather than as an explanation.
     """
@@ -501,15 +561,21 @@ async def original_upload_key(
             f"this dataset came from a {row['origin']}, so there is no uploaded "
             "file to read again - it is rebuilt by whatever produces it"
         )
-    filename = row["original_filename"]
-    if not filename:
+    names = [str(r["filename"]) for r in await fetch_all(
+        conn,
+        "SELECT filename FROM dataset_files WHERE dataset_id = :did "
+        "ORDER BY uploaded_at, filename",
+        {"did": str(dataset_id)},
+    )]
+    if not names:
         raise ConflictError(
             "this dataset was uploaded before the original file was recorded, "
             "so it cannot be parsed again. Uploading the file again makes a "
             "dataset that can be."
         )
     ws_prefix = await workspace_s3_prefix(conn, UUID(str(row["workspace_id"])))
-    return f"{storage_prefix(ws_prefix, dataset_id)}original/{filename}"
+    prefix = storage_prefix(ws_prefix, dataset_id)
+    return [(name, f"{prefix}original/{name}") for name in names]
 
 
 async def roll_back(

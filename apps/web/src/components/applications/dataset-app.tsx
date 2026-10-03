@@ -29,11 +29,12 @@ import { branchName, whyNotBranchable } from "@/lib/branch-from-version";
 import { nextSyncNote, rollbackSummary, whyNotRollbackable } from "@/lib/dataset-rollback";
 import { madeByText, originHref } from "@/lib/dataset-origin";
 import { bytesText } from "@/lib/bytes";
+import { uploadIntent, uploadedText } from "@/lib/dataset-files";
 import { NO_SCHEDULES, scheduleName, scheduleWhen } from "@/lib/dataset-schedules";
 import { currentBytes, sizeText } from "@/lib/dataset-size";
 import {
-  DEFAULT_OPTIONS,
   ENCODINGS,
+  storedOptions,
   describeOptions,
   parseNullMarkers,
   whyNotParseable,
@@ -178,6 +179,8 @@ function PreviewTab({
   version: number | null;
 }) {
   const [parsing, setParsing] = useState(false);
+  const [picked, setPicked] = useState<File | null>(null);
+  const [dragging, setDragging] = useState(false);
   const preview = useQuery({
     // The version is part of the key: without it, switching versions would
     // serve the previous one's rows from cache under a banner naming the new.
@@ -190,6 +193,18 @@ function PreviewTab({
     queryKey: ["ds-detail", did],
     queryFn: () => datasetApi.get(wid, pid, did),
   });
+  const uploaded = detail.data?.origin === "upload";
+  const files = useQuery({
+    queryKey: ["ds-files", did],
+    queryFn: () => datasetApi.files(wid, pid, did),
+    enabled: uploaded,
+  });
+  const project = useQuery({
+    queryKey: ["project", wid, pid],
+    queryFn: () => platformApi.project(wid, pid),
+    enabled: uploaded,
+  });
+  const editor = canEditProject(project.data?.effective_role ?? "viewer");
   if (preview.isPending) return <p className="state">Loading rows…</p>;
   if (preview.isError) return <p className="state error">{(preview.error as Error).message}</p>;
   // p.24 puts the Edit Schema UI on the preview tab, which is the right place
@@ -201,8 +216,30 @@ function PreviewTab({
   // apologised would be §214's shape.
   const cannotParse = detail.data ? whyNotParseable(detail.data) : "";
   const offerParsing = version === null && detail.data !== undefined && cannotParse === "";
+  const held = (files.data ?? []).map((f) => f.filename);
+  // p.10's upload into this dataset: an uploaded one that still has its
+  // files, read as it is now, by somebody who may change it.
+  const offerUpload = version === null && editor && held.length > 0;
   return (
-    <>
+    <div
+      data-testid="ds-drop"
+      className={dragging ? "ds-drop on" : "ds-drop"}
+      // p.11: "Drag and drop the file into the dataset preview window."
+      onDragOver={(event) => {
+        if (!offerUpload) return;
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      // No drop without the dragover above accepting it, and the panel is
+      // shown only where an upload is offered.
+      onDrop={(event) => {
+        setDragging(false);
+        event.preventDefault();
+        const dropped = event.dataTransfer.files[0];
+        if (dropped) setPicked(dropped);
+      }}
+    >
       <p className="soft ds-note">
         {preview.data.truncated
           ? `First ${preview.data.rows.length} rows of ${preview.data.total_rows.toLocaleString()}.`
@@ -220,18 +257,126 @@ function PreviewTab({
             </button>
           </>
         )}
+        {offerUpload && (
+          <>
+            {" "}
+            <label className="btn quiet" data-testid="file-upload">
+              Upload file
+              <input
+                type="file"
+                hidden
+                data-testid="file-upload-input"
+                onChange={(event) => {
+                  const chosen = event.target.files?.[0];
+                  if (chosen) setPicked(chosen);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+          </>
+        )}
       </p>
+      {picked && offerUpload && (
+        <UploadFilePanel
+          wid={wid}
+          pid={pid}
+          did={did}
+          held={held}
+          file={picked}
+          onClose={() => setPicked(null)}
+        />
+      )}
       {parsing && offerParsing && (
         <ParsePanel
           wid={wid}
           pid={pid}
           did={did}
           filename={detail.data?.original_filename ?? ""}
+          filenames={held}
+          stored={detail.data?.parse_options}
           onDone={() => setParsing(false)}
         />
       )}
       <Table result={preview.data} />
-    </>
+    </div>
+  );
+}
+
+/** p.10's upload into an existing dataset, said before it happens (§746).
+ *
+ *  **Confirmed, not sent on pick**, because the name decides between replacing
+ *  a file and adding one, and a replace takes rows away: the sentence says
+ *  which before the press. The columns are the server's to check, and its
+ *  refusal is shown as it says it.
+ */
+function UploadFilePanel({
+  wid,
+  pid,
+  did,
+  held,
+  file,
+  onClose,
+}: {
+  wid: string;
+  pid: string;
+  did: string;
+  held: string[];
+  file: File;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const intent = uploadIntent(held, file.name);
+  const send = useMutation({
+    mutationFn: () => datasetApi.uploadFile(wid, pid, did, file),
+    onSuccess: async () => {
+      await Promise.all(
+        ["ds-preview", "ds-versions", "ds-profile", "ds-detail", "ds-retention", "ds-files"].map(
+          (key) => queryClient.invalidateQueries({ queryKey: [key, did] }),
+        ),
+      );
+    },
+  });
+  return (
+    <div className="ds-parse" data-testid="file-upload-panel" data-mode={intent.mode}>
+      {send.isSuccess ? (
+        <p className="login-note" data-testid="file-uploaded" style={{ margin: 0 }}>
+          {uploadedText(send.data)}{" "}
+          <button type="button" className="btn quiet" onClick={onClose}>
+            Close
+          </button>
+        </p>
+      ) : (
+        <>
+          <p className="soft ds-note" style={{ marginTop: 0 }} data-testid="file-intent">
+            {intent.text}
+          </p>
+          {send.isError && (
+            <div className="form-error" data-testid="file-upload-error">
+              {(send.error as Error).message}
+            </div>
+          )}
+          <div className="dialog-actions" style={{ justifyContent: "flex-start" }}>
+            <button
+              type="button"
+              className="btn"
+              data-testid="file-upload-confirm"
+              disabled={intent.mode === "refused" || send.isPending}
+              onClick={() => send.mutate()}
+            >
+              {send.isPending ? "Uploading…" : intent.mode === "update" ? "Replace" : "Add"}
+            </button>
+            <button
+              type="button"
+              className="btn quiet"
+              data-testid="file-upload-cancel"
+              onClick={onClose}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -249,16 +394,23 @@ function ParsePanel({
   pid,
   did,
   filename,
+  filenames,
+  stored,
   onDone,
 }: {
   wid: string;
   pid: string;
   did: string;
   filename: string;
+  /** Every file the dataset holds (§746): a re-parse reads them all. */
+  filenames: string[];
+  stored: Record<string, unknown> | null | undefined;
   onDone: () => void;
 }) {
-  const [options, setOptions] = useState<ParseOptions>(DEFAULT_OPTIONS);
-  const [nulls, setNulls] = useState("");
+  // Opens on the read that is on screen (§746): the stored options, which a
+  // file added later is read with too.
+  const [options, setOptions] = useState<ParseOptions>(() => storedOptions(stored));
+  const [nulls, setNulls] = useState(() => storedOptions(stored).null_values.join("\n"));
   const queryClient = useQueryClient();
   const sent = () => ({ ...options, null_values: parseNullMarkers(nulls) });
 
@@ -293,8 +445,10 @@ function ParsePanel({
   return (
     <div className="ds-parse" data-testid="parse-panel">
       <p className="soft ds-note" style={{ marginTop: 0 }}>
-        Read <strong>{filename}</strong> again. The file is the one you
-        uploaded; this changes how it is read, not what it says.
+        Read <strong data-testid="parse-files">{(filenames.length ? filenames : [filename]).join(", ")}</strong>{" "}
+        again. {filenames.length > 1 ? "The files are the ones" : "The file is the one"} you
+        uploaded; this changes how {filenames.length > 1 ? "they are" : "it is"} read, not what{" "}
+        {filenames.length > 1 ? "they say" : "it says"}.
       </p>
       <div className="ds-parse-grid">
         {!json && (<>
@@ -1201,6 +1355,12 @@ function DetailsTab({ wid, pid, did, rid }: { wid: string; pid: string; did: str
     queryKey: ["ds-schedules", did],
     queryFn: () => datasetApi.schedules(wid, pid, did),
   });
+  // The files an uploaded dataset is read from (§746; p.10).
+  const files = useQuery({
+    queryKey: ["ds-files", did],
+    queryFn: () => datasetApi.files(wid, pid, did),
+    enabled: detail.data?.origin === "upload",
+  });
   if (detail.isPending) return <p className="state">Loading…</p>;
   if (detail.isError) return <p className="state error">{(detail.error as Error).message}</p>;
 
@@ -1239,6 +1399,24 @@ function DetailsTab({ wid, pid, did, rid }: { wid: string; pid: string; did: str
                   <Link href={originHref(input.resource_id)}>{input.name}</Link>
                 </span>
               ))}
+            </dd>
+          </div>
+        )}
+        {files.data && files.data.length > 0 && (
+          <div>
+            <dt>Files</dt>
+            <dd>
+              <ul className="ds-files" data-testid="ds-files">
+                {files.data.map((f) => (
+                  <li key={f.filename} data-testid="ds-file">
+                    {f.filename}{" "}
+                    <span className="soft">
+                      — v{f.version_number}
+                      {f.uploaded_by_name ? `, ${f.uploaded_by_name}` : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </dd>
           </div>
         )}

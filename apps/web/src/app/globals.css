@@ -1160,6 +1160,8 @@ button { font: inherit; cursor: pointer; }
 /* The parsing-options panel (§362). Sits above the preview table it is about
    to change, so it is boxed rather than floated: a dialog would hide the rows
    somebody is comparing against. */
+.ds-files { list-style: none; margin: 0; padding: 0; }
+.ds-drop.on { outline: 2px dashed var(--accent); outline-offset: 4px; border-radius: 8px; }
 .ds-parse { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin: 0 0 14px; }
 .ds-parse-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 14px; }
 .ds-parse-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
