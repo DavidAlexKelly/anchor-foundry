@@ -4555,3 +4555,33 @@ def test_a_markdown_type_that_overrides_is_a_row_selection_of_its_own() -> None:
     # The highlight action is still a click, and the widget's own selection stands.
     assert we.parse(markdown_event("h_note"), layout=layout, variables=variables)["e_1"].item == "h_note"
     assert we.parse(markdown_event(on="row_select"), layout=layout, variables=variables)["e_1"].item is None
+
+
+# ---- §774: what a function's inputs read --------------------------------------
+
+def test_a_functions_inputs_are_references() -> None:
+    """A pivot's or a chart layer's function reads its inputs' variables, so
+    they are computed when it is on screen and cannot be deleted under it."""
+    props = {"fn": {"function_id": "f", "inputs": {
+                 "minimum": {"variable": "v_min"}, "region": {"value": "north"},
+                 "bad": "v_x", "empty": {"variable": ""}}},
+             "series": [{"fn": None}, {"fn": {"inputs": {"cut": {"variable": "v_cut"}}}},
+                        "odd", {"fn": {"inputs": ["v_list"]}}]}
+    assert wv.references(props) == [("fn.inputs.minimum", "v_min"),
+                                    ("series[1].fn.inputs.cut", "v_cut")]
+    assert wv.references({"fn": "v_min"}) == []
+
+
+def test_a_variable_only_a_function_reads_is_computed_when_shown() -> None:
+    variables = wv.parse({
+        "v_min": {"id": "v_min", "kind": "number", "label": "Min", "default": 1},
+        "v_twice": {"id": "v_twice", "kind": "number", "label": "Twice", "derivation": {
+            "transform": "add", "inputs": ["v_min", "v_min"]}},
+    })
+    layout = {"ROOT": {"nodes": ["p"]},
+              "p": {"type": {"resolvedName": "CanvasPivotTable"}, "props": {
+                  "fn": {"function_id": "f", "inputs": {"m": {"variable": "v_twice"}}}}}}
+    assert wv.displayed(layout, variables, {"p"}) == {"v_twice", "v_min"}
+    assert wv.dangling_references(
+        {"p": {"props": {"fn": {"inputs": {"m": {"variable": "v_gone"}}}}}}, variables) == [
+        {"node": "p", "prop": "fn.inputs.m", "variable": "v_gone"}]

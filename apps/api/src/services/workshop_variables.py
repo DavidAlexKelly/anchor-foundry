@@ -695,6 +695,23 @@ def references(props: Any) -> list[tuple[str, str]]:
             for key, ref in mapping.items():
                 if isinstance(ref, str) and ref:
                     found.append((f"{prop}.{key}", ref))
+    # **A function's inputs** (§771, §774): `{"variable": id}` per parameter,
+    # under a pivot's `fn` or a chart layer's. Missed, a variable read only by
+    # a function was never computed on a lazy page, and the call went without
+    # it; and it could be deleted from under the widget.
+    calls = [("fn", props.get("fn"))]
+    series = props.get("series")
+    if isinstance(series, list):
+        calls += [(f"series[{i}].fn", s.get("fn")) for i, s in enumerate(series)
+                  if isinstance(s, dict)]
+    for where, call in calls:
+        inputs = call.get("inputs") if isinstance(call, dict) else None
+        if not isinstance(inputs, dict):
+            continue
+        for name, source in inputs.items():
+            ref = source.get("variable") if isinstance(source, dict) else None
+            if isinstance(ref, str) and ref:
+                found.append((f"{where}.inputs.{name}", ref))
     return found
 
 
