@@ -23,7 +23,7 @@ from playwright.sync_api import expect
 
 from api import Module, layout, object_set
 
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, save, settled
 
 LONG = ("Alpha " * 40).strip()
 
@@ -270,6 +270,23 @@ def test_an_empty_table_says_so_in_p224s_words(page, api) -> None:
     settled(page)
 
     expect(page.get_by_test_id("table-empty-state")).to_have_text("No objects found")
+    # "By Default, the widget will display a generic table icon alongside" it
+    # (p.224; §719).
+    expect(page.get_by_test_id("table-empty-icon").locator("svg")).to_have_attribute(
+        "data-icon", "th-list")
+
+
+def test_a_custom_empty_icon_and_message(page, api) -> None:
+    """p.224: "To customize the display icon and message, select the Custom
+    option" (§719)."""
+    mod = build_empty(api, "Table empty custom icon", {
+        "emptyMode": "custom", "emptyMessage": "All clear", "emptyIcon": "tick-circle",
+    })
+    open_module(page, mod)
+    settled(page)
+    expect(page.get_by_test_id("table-empty-state")).to_have_text("All clear")
+    expect(page.get_by_test_id("table-empty-icon").locator("svg")).to_have_attribute(
+        "data-icon", "tick-circle")
 
 
 def test_a_custom_empty_message_replaces_it(page, api) -> None:
@@ -280,6 +297,8 @@ def test_a_custom_empty_message_replaces_it(page, api) -> None:
     settled(page)
 
     expect(page.get_by_test_id("table-empty-state")).to_have_text("Nothing to review today")
+    # Custom with no icon named draws the message alone.
+    expect(page.get_by_test_id("table-empty-icon")).to_have_count(0)
 
 
 def test_narrow_headers_are_shorter(page, api) -> None:
@@ -365,8 +384,15 @@ def test_the_custom_fields_appear_only_with_their_toggles(page, api) -> None:
     expect(page.get_by_test_id("table-empty-message")).to_have_count(0)
     expect(page.get_by_test_id("table-no-value-text")).to_have_count(0)
 
+    expect(page.get_by_test_id("table-empty-icon-input-name")).to_have_count(0)
     page.get_by_test_id("table-empty-mode").select_option("custom")
     expect(page.get_by_test_id("table-empty-message")).to_be_visible()
+    # p.224's Custom icon (§719), chosen here and kept.
+    page.get_by_test_id("table-empty-icon-input-name").select_option("flag")
+    save(page)
+    node = next(n for n in mod.definition()["layout"].values()
+                if n["type"]["resolvedName"] == "CanvasObjectTable")
+    assert node["props"]["emptyIcon"] == "flag", node["props"]
 
     page.get_by_test_id("table-custom-no-value").check()
     expect(page.get_by_test_id("table-no-value-text")).to_be_visible()

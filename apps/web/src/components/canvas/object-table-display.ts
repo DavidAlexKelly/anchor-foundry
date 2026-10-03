@@ -164,6 +164,17 @@ export function emptyMessageOf(mode: unknown, custom: unknown): string {
   return typeof custom === "string" && custom.trim() ? custom : DEFAULT_EMPTY_MESSAGE;
 }
 
+/** p.224's empty state icon (§719): "By Default, the widget will display a
+ * generic table icon … To customize the display icon and message, select
+ * the Custom option." The set's table icon by default; the author's when
+ * Custom, and none when Custom names none. */
+export const DEFAULT_EMPTY_ICON = "th-list";
+
+export function emptyIconOf(mode: unknown, custom: unknown): string | null {
+  if (emptyModeOf(mode) !== "custom") return DEFAULT_EMPTY_ICON;
+  return typeof custom === "string" && custom.trim() ? custom.trim() : null;
+}
+
 // ---- empty cells ------------------------------------------------------------
 
 /** p.224: "By default, 'No value' will be displayed."

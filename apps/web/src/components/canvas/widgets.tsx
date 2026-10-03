@@ -69,7 +69,7 @@ import {
   withNewLayer, withoutLayer, type MapLayer,
 } from "./map-layer";
 import {
-  DEFAULT_LINES, EMPTY_MODES, MAX_LINES, cellStyle, emptyMessageOf, emptyModeOf,
+  DEFAULT_LINES, EMPTY_MODES, MAX_LINES, cellStyle, emptyIconOf, emptyMessageOf, emptyModeOf,
   fillsCellOf, fitColumnsOf, frozenOf, linesOf, narrowHeadersOf, noValueOf,
   rowMinHeight, stickyLefts, wrapOf,
 } from "./object-table-display";
@@ -3830,7 +3830,9 @@ export function CanvasNumericInput({
           {label && <span className="field-label">{label}</span>}
           <span className="canvas-number-row">
             {prefix.trim() && (
-              <span className="canvas-number-affix" aria-hidden="true">{prefix.trim()}</span>
+              <span className="canvas-number-affix" aria-hidden="true" data-testid="numeric-prefix-shown">
+                <IconOrGlyph value={prefix} max={40} />
+              </span>
             )}
             <input
               // `text`, not `number`: a number input hides what was typed when
@@ -3845,7 +3847,9 @@ export function CanvasNumericInput({
               onChange={(e) => write(e.target.value)}
             />
             {unit && (
-              <span className="canvas-number-affix" aria-hidden="true">{unit}</span>
+              <span className="canvas-number-affix" aria-hidden="true" data-testid="numeric-suffix-shown">
+                <IconOrGlyph value={unit} max={40} />
+              </span>
             )}
             {allowReset && canReset(stored) && (
               <button
@@ -3935,12 +3939,13 @@ function NumericInputSettings() {
       </label>
       <label className="field">
         <span className="field-label">Unit prefix</span>
-        <input
-          type="text"
-          value={prefix || ""}
+        {/* p.468: "read-only text or icon of choice" (§719). */}
+        <IconChoice
+          value={prefix}
           placeholder="$"
-          data-testid="numeric-prefix"
-          onChange={(e) => setProp((p: { prefix: string }) => (p.prefix = e.target.value))}
+          max={40}
+          testId="numeric-prefix"
+          onChange={(next) => setProp((p: { prefix: string }) => (p.prefix = next))}
         />
       </label>
       <label className="field">
@@ -3951,7 +3956,7 @@ function NumericInputSettings() {
           onChange={(e) => setProp((p: { suffix: string }) => (p.suffix = e.target.value))}
         >
           <option value="none">None</option>
-          <option value="text">Text</option>
+          <option value="text">Text or icon</option>
           <option value="percent">Percent sign</option>
         </select>
         {/* p.468 is explicit that this is not a display option, so it is said
@@ -3965,13 +3970,15 @@ function NumericInputSettings() {
       </label>
       {suffix === "text" && (
         <label className="field">
-          <span className="field-label">Suffix text</span>
-          <input
-            type="text"
-            value={suffixLabel || ""}
+          <span className="field-label">Suffix text or icon</span>
+          {/* p.468: "The suffix can be text, an icon of choice, or a percent
+              sign" (§719). */}
+          <IconChoice
+            value={suffixLabel}
             placeholder="kg"
-            data-testid="numeric-suffix-text"
-            onChange={(e) => setProp((p: { suffixText: string }) => (p.suffixText = e.target.value))}
+            max={40}
+            testId="numeric-suffix-text"
+            onChange={(next) => setProp((p: { suffixText: string }) => (p.suffixText = next))}
           />
         </label>
       )}
@@ -6308,6 +6315,7 @@ export function CanvasObjectTable({
   valueWrap = false,
   frozenColumns = 0,
   emptyMode = "default",
+  emptyIcon = "",
   emptyMessage = "",
   customNoValue = false,
   noValueText = "",
@@ -6398,6 +6406,8 @@ export function CanvasObjectTable({
   valueWrap?: boolean;
   frozenColumns?: number;
   emptyMode?: string;
+  /** p.224's Custom empty state icon (§719). */
+  emptyIcon?: string;
   emptyMessage?: string;
   customNoValue?: boolean;
   noValueText?: string;
@@ -6957,6 +6967,15 @@ export function CanvasObjectTable({
               than announce a zero. */}
           {total === 0 ? (
             <p className="canvas-widget-empty" data-testid="table-empty-state">
+              {/* p.224: "By Default, the widget will display a generic table
+                  icon alongside a 'No objects found' message. To customize
+                  the display icon and message, select the Custom option"
+                  (§719). */}
+              {emptyIconOf(emptyMode, emptyIcon) && (
+                <span className="canvas-empty-icon" data-testid="table-empty-icon" aria-hidden="true">
+                  <IconOrGlyph value={emptyIconOf(emptyMode, emptyIcon)} size={16} />
+                </span>
+              )}
               {emptyMessageOf(emptyMode, emptyMessage)}
             </p>
           ) : (
@@ -8003,7 +8022,7 @@ function ObjectTableSettings() {
     objectTypeId, filterProperty, filterParameter, searchParameter,
     objectSetVariable, pageSize, columns, sort,
     activeVariable, autoSelect, multiSelect, selectedVariable,
-    lines, valueWrap, frozenColumns, emptyMode, emptyMessage,
+    lines, valueWrap, frozenColumns, emptyMode, emptyMessage, emptyIcon,
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
     inlineEditAction, inlineEditMapping, inlineEditVariables, inlineEditButtonText,
     inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules, seriesTransforms, seriesBaselines,
@@ -8033,6 +8052,7 @@ function ObjectTableSettings() {
     lines: node.data.props.lines,
     valueWrap: node.data.props.valueWrap,
     frozenColumns: node.data.props.frozenColumns,
+    emptyIcon: node.data.props.emptyIcon,
     emptyMode: node.data.props.emptyMode,
     emptyMessage: node.data.props.emptyMessage,
     customNoValue: node.data.props.customNoValue,
@@ -8642,10 +8662,18 @@ function ObjectTableSettings() {
             onChange={(e) =>
               setProp((p: { emptyMessage: string }) => (p.emptyMessage = e.target.value))}
           />
-          {/* p.224's Custom option also takes an icon. There is no icon picker
-              on this platform - the same reason p.468's icon suffix is ○ - so
-              the message is the half that can be honoured. */}
           <span className="field-hint">Blank falls back to “No objects found”</span>
+        </label>
+      )}
+      {emptyModeOf(emptyMode) === "custom" && (
+        <label className="field">
+          <span className="field-label">Icon</span>
+          {/* p.224's Custom "display icon" (§719); none draws the message alone. */}
+          <IconChoice
+            value={emptyIcon}
+            testId="table-empty-icon-input"
+            onChange={(next) => setProp((p: { emptyIcon: string }) => (p.emptyIcon = next))}
+          />
         </label>
       )}
       <label className="field canvas-toggle">
@@ -8786,7 +8814,7 @@ CanvasObjectTable.craft = {
     searchParameter: null, pageSize: 25, columns: "", sort: "recent",
     activeVariable: null, autoSelect: true, multiSelect: false,
     selectedVariable: null, lines: DEFAULT_LINES, valueWrap: false,
-    frozenColumns: 0, emptyMode: "default", emptyMessage: "",
+    frozenColumns: 0, emptyMode: "default", emptyMessage: "", emptyIcon: "",
     customNoValue: false, noValueText: "", fitColumns: true,
     narrowHeaders: false, formatFillsCell: false,
     inlineEditAction: null, inlineEditMapping: null, inlineEditVariables: null,
