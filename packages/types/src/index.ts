@@ -2223,6 +2223,27 @@ export type OntologyStatus =
   | "deprecated"
   | "example";
 
+/** p.255's proposal to promote an object type (§767): "Other users must
+ * submit a proposal for review and approval by an `Ontology Owner`". */
+export interface PromotionRequest {
+  id: string;
+  object_type_id: string;
+  object_type_api_name: string;
+  object_type_name: string;
+  object_type_status: OntologyStatus;
+  requested_by: string | null;
+  requested_by_name: string;
+  reason: string;
+  state: "pending" | "approved" | "rejected" | "withdrawn";
+  decided_by: string | null;
+  decided_by_name: string;
+  decision_note: string;
+  decided_at: string | null;
+  created_at: string;
+  /** Whether the caller asked, which is who may withdraw it. */
+  mine: boolean;
+}
+
 /** p.254: why a resource is being deprecated, when it is expected to go, and
  * what replaces it. Null on anything not deprecated — the server refuses it
  * elsewhere and clears it when a resource stops being deprecated. */

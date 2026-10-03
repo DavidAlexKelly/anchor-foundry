@@ -41,6 +41,7 @@ from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_pro
 from ..services import audit
 from ..services import interface_evaluate
 from ..services import interface_action_control
+from ..services import promotion_requests
 from ..services import ontology_history as history_service
 from ..services import object_edits as object_edits_service
 from ..services import favourites as favourites_service
@@ -3139,6 +3140,162 @@ async def set_interface_action_control(
             user_agent=request.headers.get("user-agent"),
         )
     return [InheritedActionOut(**r) for r in rows]
+
+
+class PromotionRequestOut(BaseModel):
+    """p.255's proposal to promote an object type, and what became of it
+    (§767)."""
+
+    id: UUID
+    object_type_id: UUID
+    object_type_api_name: str
+    object_type_name: str
+    object_type_status: str
+    requested_by: UUID | None = None
+    requested_by_name: str = ""
+    reason: str = ""
+    state: str
+    decided_by: UUID | None = None
+    decided_by_name: str = ""
+    decision_note: str = ""
+    decided_at: datetime | None = None
+    created_at: datetime
+    #: Whether the caller asked, which is who may withdraw it.
+    mine: bool = False
+
+
+class PromotionRequestIn(BaseModel):
+    reason: str = Field(default="", max_length=2000)
+
+
+class PromotionDecisionIn(BaseModel):
+    note: str = Field(default="", max_length=2000)
+
+
+@router.get("/promotion-requests", response_model=list[PromotionRequestOut])
+async def list_promotion_requests(
+    pending: bool = True,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[PromotionRequestOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await promotion_requests.list_requests(
+            conn, access.workspace_id, access.auth.user_id, pending_only=pending)
+    return [PromotionRequestOut(**r) for r in rows]
+
+
+@router.post("/object-types/{type_id}/promotion-requests",
+             response_model=PromotionRequestOut, status_code=status.HTTP_201_CREATED)
+async def request_promotion(
+    type_id: UUID,
+    body: PromotionRequestIn,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> PromotionRequestOut:
+    """p.255: "Other users must submit a proposal for review and approval"."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await promotion_requests.submit(
+            conn, workspace_id=access.workspace_id, type_id=type_id,
+            requested_by=access.auth.user_id, workspace_role=access.role,
+            reason=body.reason)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            # Against the object type, so its history says who asked and who
+            # answered (§683).
+            action="object_type.promotion_requested",
+            resource_type="object_type",
+            resource_id=row["object_type_id"],
+            workspace_id=access.workspace_id,
+            metadata={"request_id": str(row["id"]), "api_name": row["object_type_api_name"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return PromotionRequestOut(**row)
+
+
+@router.post("/promotion-requests/{request_id}/approve", response_model=PromotionRequestOut)
+async def approve_promotion(
+    request_id: UUID,
+    body: PromotionDecisionIn,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("admin")),
+) -> PromotionRequestOut:
+    """p.255's "approval by an Ontology Owner": a workspace admin's."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await promotion_requests.approve(
+            conn, workspace_id=access.workspace_id, request_id=request_id,
+            decided_by=access.auth.user_id, workspace_role=access.role, note=body.note)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            # Against the object type, so its history says who asked and who
+            # answered (§683).
+            action="object_type.promotion_approved",
+            resource_type="object_type",
+            resource_id=row["object_type_id"],
+            workspace_id=access.workspace_id,
+            metadata={"request_id": str(row["id"]), "api_name": row["object_type_api_name"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return PromotionRequestOut(**row)
+
+
+@router.post("/promotion-requests/{request_id}/reject", response_model=PromotionRequestOut)
+async def reject_promotion(
+    request_id: UUID,
+    body: PromotionDecisionIn,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("admin")),
+) -> PromotionRequestOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await promotion_requests.reject(
+            conn, workspace_id=access.workspace_id, request_id=request_id,
+            decided_by=access.auth.user_id, note=body.note)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            # Against the object type, so its history says who asked and who
+            # answered (§683).
+            action="object_type.promotion_rejected",
+            resource_type="object_type",
+            resource_id=row["object_type_id"],
+            workspace_id=access.workspace_id,
+            metadata={"request_id": str(row["id"]), "api_name": row["object_type_api_name"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return PromotionRequestOut(**row)
+
+
+@router.post("/promotion-requests/{request_id}/withdraw", response_model=PromotionRequestOut)
+async def withdraw_promotion(
+    request_id: UUID,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> PromotionRequestOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await promotion_requests.withdraw(
+            conn, workspace_id=access.workspace_id, request_id=request_id,
+            caller=access.auth.user_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            # Against the object type, so its history says who asked and who
+            # answered (§683).
+            action="object_type.promotion_withdrawn",
+            resource_type="object_type",
+            resource_id=row["object_type_id"],
+            workspace_id=access.workspace_id,
+            metadata={"request_id": str(row["id"]), "api_name": row["object_type_api_name"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return PromotionRequestOut(**row)
 
 
 class LinkCandidateOut(BaseModel):

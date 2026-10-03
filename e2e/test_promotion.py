@@ -142,3 +142,67 @@ def test_promoting_shows_the_badge_and_survives_an_editors_save(
         f"/workspaces/{module.workspace_id}/object-types/{module.object_type_id}",
     )
     assert after["status"] == "promoted", after
+
+
+def test_an_editor_asks_for_promotion_and_an_admin_approves(
+    page, editor_page, module, api
+) -> None:
+    """p.255's second sentence (§767): "Other users must submit a proposal for
+    review and approval by an `Ontology Owner`". The editor asks where the
+    status field leaves `promoted` out; the admin answers on the ontology
+    page; the type is then promoted, and there is nothing left to ask."""
+    tag = uuid.uuid4().hex[:6]
+    slug = f"asked_{tag}"
+    type_id = module.object_type(columns=["id", "name"], rows=ROWS, key="id",
+                                 title="name", slug=slug)
+    url = f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}/objects"
+
+    def edit(on) -> None:
+        on.goto(url)
+        find_type_row(on, slug).get_by_role("button", name="Edit").click()
+        expect(on.get_by_test_id("status-select")).to_be_visible(timeout=15000)
+
+    # An admin promotes directly, so is offered no proposal.
+    edit(page)
+    expect(page.get_by_test_id("promote-blocked")).to_have_count(0)
+    expect(page.get_by_test_id("promotion-request")).to_have_count(0)
+
+    edit(editor_page)
+    editor_page.get_by_test_id("promotion-reason").fill("Every dashboard reads it")
+    editor_page.get_by_test_id("promotion-ask").click()
+    waiting = editor_page.get_by_test_id("promotion-waiting")
+    expect(waiting).to_contain_text("waiting for an admin", timeout=15000)
+    expect(waiting).to_contain_text("Every dashboard reads it")
+    expect(editor_page.get_by_test_id("promotion-withdraw")).to_be_visible()
+
+    page.goto(url)
+    row = page.get_by_test_id(f"promotion-row-{slug}")
+    expect(row).to_contain_text("Every dashboard reads it", timeout=30000)
+    row.get_by_role("textbox", name=f"Note on {slug}").fill("Agreed")
+    row.get_by_role("button", name=f"Approve promotion of {slug}").click()
+    expect(page.get_by_test_id(f"promotion-row-{slug}")).to_have_count(0, timeout=15000)
+
+    detail = api.call("GET", f"/workspaces/{module.workspace_id}/object-types/{type_id}")
+    assert (detail["status"], detail["visibility"]) == ("promoted", "prominent"), detail
+    answered = next(r for r in api.call(
+        "GET", f"/workspaces/{module.workspace_id}/promotion-requests?pending=false")
+        if r["object_type_id"] == type_id)
+    assert (answered["state"], answered["decision_note"]) == ("approved", "Agreed")
+
+    # Promoted now, so the editor has nothing left to ask.
+    edit(editor_page)
+    expect(editor_page.get_by_test_id("status-select")).to_have_value("promoted")
+    expect(editor_page.get_by_test_id("promotion-request")).to_have_count(0)
+
+
+def test_an_editor_withdraws_what_they_asked(editor_page, module) -> None:
+    tag = uuid.uuid4().hex[:6]
+    slug = f"withdrawn_{tag}"
+    module.object_type(columns=["id", "name"], rows=ROWS, key="id", title="name", slug=slug)
+    editor_page.goto(f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}/objects")
+    find_type_row(editor_page, slug).get_by_role("button", name="Edit").click()
+    editor_page.get_by_test_id("promotion-ask").click()
+    expect(editor_page.get_by_test_id("promotion-waiting")).to_contain_text(
+        "giving no reason", timeout=15000)
+    editor_page.get_by_test_id("promotion-withdraw").click()
+    expect(editor_page.get_by_test_id("promotion-reason")).to_be_visible(timeout=15000)

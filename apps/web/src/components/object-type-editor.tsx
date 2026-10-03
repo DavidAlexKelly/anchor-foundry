@@ -30,6 +30,7 @@ import { ICONS, ICON_NAMES } from "@/lib/icons";
 import { DerivedPropertyEditor } from "@/components/derived-property-editor";
 import { SharedPropertyPicker } from "@/components/shared-property-picker";
 import { StatusField } from "@/components/status-field";
+import { PromotionRequestControl } from "@/components/promotion-requests";
 import { StructFieldsEditor } from "@/components/struct-fields-editor";
 import { PropertyReducerEditor } from "@/components/property-reducer-editor";
 import {
@@ -1213,6 +1214,14 @@ export function EditObjectTypeDialog({
             api_name: p.api_name,
             status: p.status ?? "experimental",
           }))}
+          canPromote={canPromote}
+        />
+        {/* p.255's other half (§767): where `promoted` is left out, the
+            proposal an admin can approve. */}
+        <PromotionRequestControl
+          workspaceId={workspaceId}
+          typeId={type.id}
+          status={type.status ?? "experimental"}
           canPromote={canPromote}
         />
         {/* p.261: "Groups can also be added directly to object types by
