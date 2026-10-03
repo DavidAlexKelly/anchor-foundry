@@ -131,3 +131,88 @@ def test_the_panel_offers_the_form_factor_and_behavior(page, api, customers) -> 
     page.get_by_test_id("object-view-form-factor").select_option("panel")
     behavior = page.get_by_test_id("object-view-panel-behavior")
     expect(behavior.locator("option")).to_have_text(["Object instance", "Adaptive", "Object set"])
+
+
+# ---- p.41's configured object set panel (§744) -------------------------------
+def set_panel_module(api, customers, name: str):
+    """A module that receives a set: a table over its `object_set` variable,
+    so what is drawn is the set the panel was handed."""
+    view = Module(api, name, beside=customers)
+    view.define({
+        "format": 2,
+        "layout": layout({
+            "txt": {"resolvedName": "CanvasText", "props": {"tag": "p", "text": "SET PANEL"}},
+            "tbl": {"resolvedName": "CanvasObjectTable",
+                    "props": {"objectSetVariable": "v_many", "columns": "id,name", "pageSize": 25}},
+        }),
+        "variables": {
+            "v_many": {"id": "v_many", "kind": "object_set", "label": "The customers",
+                       "object_set": object_set(customers.type_id)},
+            "v_one": {"id": "v_one", "kind": "single_object", "label": "One customer"},
+        },
+        "events": {},
+    })
+    api.call("PUT", f"{view.base}/canvas-apps/{view.app_id}/publish", {"scope": "workspace"})
+    return view
+
+
+def test_a_configured_set_panel_receives_the_set(page, api, customers) -> None:
+    """p.41: "object set panels display multiple objects as an object set". The
+    type's `panel_set` module is drawn in place of the default panel, holding
+    the widget's set - C1 and C3, not the module's own default of all three."""
+    view = set_panel_module(api, customers, "Set panel module")
+    api.call("PUT", f"/workspaces/{view.workspace_id}/object-types/{customers.type_id}/view",
+             {"canvas_app_id": view.app_id, "subject_variable": "v_many",
+              "form_factor": "panel_set"})
+    try:
+        mod = build(api, customers, "Set panel configured", ["C1", "C3"], {"panelBehavior": "set"})
+        open_module(page, mod)
+        panel = page.get_by_test_id("configured-set-panel")
+        expect(panel).to_contain_text("SET PANEL")
+        expect(panel.locator("tbody tr")).to_have_count(2)
+        expect(panel.locator("tbody")).to_contain_text("Alpha")
+        expect(panel.locator("tbody")).to_contain_text("Gamma")
+        expect(panel.locator("tbody")).not_to_contain_text("Beta")
+        expect(page.get_by_test_id("object-set-panel")).to_have_count(0)
+        # One object is still the instance panel's (adaptive), not the set's.
+        one = build(api, customers, "Set panel adaptive one", ["C2"], {"panelBehavior": "adaptive"})
+        open_module(page, one)
+        expect(page.get_by_test_id("standard-panel-view")).to_contain_text("Beta")
+        expect(page.get_by_test_id("configured-set-panel")).to_have_count(0)
+    finally:
+        api.call("DELETE", f"/workspaces/{view.workspace_id}/object-types/{customers.type_id}/view"
+                 "?form_factor=panel_set")
+
+
+def test_the_view_dialog_configures_an_object_set_panel(page, api, customers) -> None:
+    """p.42: "select Object instance from the top ribbon before choosing Object
+    set from the dropdown menu" - here the dialog's Form factor. The module's
+    variables offered are its object set ones, since that is what arrives."""
+    from conftest import WEB_BASE
+    from ontology_page import find_type_row
+
+    view = set_panel_module(api, customers, "Set panel dialog module")
+    page.goto(f"{WEB_BASE}/{customers.workspace_slug}/{customers.project_slug}/objects")
+    find_type_row(page, f"seed_{customers.tag}")
+    row = page.locator("tr", has_text=f"Seed {customers.tag}").filter(
+        has=page.get_by_role("button", name="View"))
+    row.get_by_role("button", name="View").click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_be_visible()
+    dialog.get_by_test_id("object-view-form").select_option("panel_set")
+    expect(dialog.get_by_label("Tab 1 title")).to_have_count(0)
+    dialog.get_by_label("Panel module").select_option(view.app_id)
+    subjects = dialog.get_by_label("Panel subject variable")
+    expect(subjects.locator("option")).to_have_text(["Choose…", "The customers"])
+    subjects.select_option("v_many")
+    dialog.get_by_role("button", name="Save", exact=True).click()
+    expect(dialog).to_have_count(0)
+    try:
+        stored = api.call("GET", f"/workspaces/{customers.workspace_id}/object-types/"
+                                 f"{customers.type_id}/view?form_factor=panel_set")
+        assert (stored["canvas_app_id"], stored["subject_variable"]) == (view.app_id, "v_many")
+        assert api.call("GET", f"/workspaces/{customers.workspace_id}/object-types/"
+                               f"{customers.type_id}/view") is None
+    finally:
+        api.call("DELETE", f"/workspaces/{customers.workspace_id}/object-types/{customers.type_id}/view"
+                 "?form_factor=panel_set")

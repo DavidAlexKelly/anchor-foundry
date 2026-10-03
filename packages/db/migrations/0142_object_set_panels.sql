@@ -1,0 +1,24 @@
+-- ============================================================================
+-- 0142_object_set_panels.sql
+-- Parity `docs/parity/ontology.md` §4.2's Panel row; Foundry `object-views`
+-- p.37-42 (§744).
+--
+-- > "There are two types of configured panel Object Views you can build to
+-- > display one or multiple objects of an object type: object instance panels
+-- > display individual objects, while object set panels display multiple
+-- > objects as an object set." (p.41)
+--
+-- 0046 gave a type one view per form factor and two form factors. A configured
+-- *object set* panel is a third: a module that receives the set rather than
+-- one object, shown where an application selects several objects of one type
+-- (p.38). Its own form factor rather than a flag on the panel row, because a
+-- type may have both - an instance panel for one object and a set panel for
+-- several - and `UNIQUE (object_type_id, form_factor)` is what keeps each to
+-- one module.
+--
+-- `subject_variable` keeps its meaning: the variable that receives what is
+-- being viewed. For this form factor that is an `object_set` variable, checked
+-- in Python at save time as the `single_object` one is for the other two.
+-- ============================================================================
+
+ALTER TYPE object_view_form_factor ADD VALUE IF NOT EXISTS 'panel_set';

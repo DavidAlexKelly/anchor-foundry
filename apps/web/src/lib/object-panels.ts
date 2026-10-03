@@ -101,3 +101,22 @@ export type FormFactor = keyof typeof FORM_FACTORS;
 export function formFactorOf(raw: unknown): FormFactor {
   return raw === "panel" ? "panel" : "full";
 }
+
+/** The three views a type may configure (§744; `object-views` p.35, p.41-42):
+ * the full view, p.41's object instance panel and its object set panel. The
+ * editor's form factor, and the server's `object_view_form_factor`. */
+export const VIEW_FORMS = {
+  full: "Full",
+  panel: "Panel · object instance",
+  panel_set: "Panel · object set",
+} as const;
+export type ViewForm = keyof typeof VIEW_FORMS;
+
+export function viewFormOf(raw: unknown): ViewForm {
+  return typeof raw === "string" && Object.hasOwn(VIEW_FORMS, raw) ? raw as ViewForm : "full";
+}
+
+/** What a view of this form receives: one object, or the set (p.41). */
+export function subjectKindOf(form: ViewForm): "single_object" | "object_set" {
+  return form === "panel_set" ? "object_set" : "single_object";
+}

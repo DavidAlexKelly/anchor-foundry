@@ -2,8 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   PANEL_CHARTS, formFactorOf, keyProperties, panelBehaviorOf, panelChartProperties,
-  panelListProperties, panelShows,
-} from "./object-panels";
+  panelListProperties, panelShows, VIEW_FORMS, subjectKindOf, viewFormOf } from "./object-panels";
 
 /** p.41's default panels and p.263's panel behaviours (§694). */
 
@@ -62,5 +61,22 @@ describe("p.263's panel behaviours", () => {
     expect(panelBehaviorOf("nope")).toBe("instance");
     expect(formFactorOf("panel")).toBe("panel");
     expect(formFactorOf(undefined)).toBe("full");
+  });
+});
+
+
+describe("the three views a type may configure (§744)", () => {
+  it("reads a form, and anything else as the full view", () => {
+    expect(viewFormOf("panel_set")).toBe("panel_set");
+    expect(viewFormOf("panel")).toBe("panel");
+    expect(viewFormOf("sidebar")).toBe("full");
+    expect(viewFormOf(undefined)).toBe("full");
+    expect(Object.keys(VIEW_FORMS)).toEqual(["full", "panel", "panel_set"]);
+  });
+
+  it("has the set panel receive a set and the others one object (p.41)", () => {
+    expect(subjectKindOf("panel_set")).toBe("object_set");
+    expect(subjectKindOf("panel")).toBe("single_object");
+    expect(subjectKindOf("full")).toBe("single_object");
   });
 });
