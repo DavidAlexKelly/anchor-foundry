@@ -142,6 +142,40 @@ def restore(
     return values, sorted(missing)
 
 
+def orphaned(
+    states: list[dict[str, Any]],
+    before: dict[str, workshop_variables.Variable],
+    after: dict[str, workshop_variables.Variable],
+) -> list[dict[str, Any]]:
+    """p.203's warning, said before the save that causes it (§740).
+
+    > "Variable values are stored within a saved state via their external ID.
+    > As a result, modifying a variable's external ID after state saving has
+    > been configured may cause previously configured states to reload
+    > unsuccessfully." (`workshop` p.203)
+
+    **A warning and not a refusal**, because p.203's next sentence is that
+    modifying an external ID "allows a module's configuration to change over
+    time while supporting state saving" - it is something a builder is meant
+    to be able to do. What they should not do is not know. So this names each
+    external ID that the module saves *now* and would stop saving, with the
+    states that hold a value for it - the ones `restore` would report as
+    `missing` the next time they open.
+
+    Only keys this save loses: a state already holding a key nothing reads
+    (an earlier rename) is not news, and repeating it on every save would teach
+    a builder to click through the warning that matters.
+    """
+    lost = set(workshop_variables.savable_variables(before)) - set(
+        workshop_variables.savable_variables(after))
+    held: dict[str, list[str]] = {}
+    for state in states:
+        for key in state.get("values") or {}:
+            if key in lost:
+                held.setdefault(key, []).append(str(state["name"]))
+    return [{"external_id": key, "states": names} for key, names in sorted(held.items())]
+
+
 async def save_state(
     conn: AsyncConnection,
     *,

@@ -29,6 +29,7 @@ import { Editor, Element, Frame, useEditor } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
+import { heldBy, strandedSummary, type OrphanedKey } from "@/lib/state-impact";
 import { ChangelogPanel } from "@/components/canvas/ChangelogPanel";
 import { diffModules } from "@/components/canvas/changelog";
 import {
@@ -748,6 +749,8 @@ function ActionBar({
   const [showPublish, setShowPublish] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // p.203's warning (§740): the save waiting on it, and what it would strand.
+  const [stranded, setStranded] = useState<{ description: string; keys: OrphanedKey[] } | null>(null);
   const queryClient = useQueryClient();
 
   // The document as the editor holds it. One function because three things
@@ -809,6 +812,25 @@ function ActionBar({
     // and a Save button that goes quiet is a Save button people trust wrongly.
     onError: (e: Error) => setFailure(e.message),
   });
+
+  // p.203: "modifying a variable's external ID after state saving has been
+  // configured may cause previously configured states to reload
+  // unsuccessfully". Asked before a save to main, which is what the states
+  // are opened against; a branch's save changes nothing they read. A failed
+  // question saves anyway - the warning is a courtesy, and a save blocked by
+  // it would be a save lost to it.
+  const beginSave = async (description: string) => {
+    if (!branch) {
+      const keys = await canvasApi
+        .stateImpact(workspaceId, projectId, app.id, currentDocument())
+        .catch(() => []);
+      if (keys.length > 0) {
+        setStranded({ description, keys });
+        return;
+      }
+    }
+    save.mutate(description);
+  };
 
   // p.617-618's **Save to new branch**: "Name the branch", and the document
   // the builder holds is what the branch starts as - so edits made on main
@@ -941,10 +963,10 @@ function ActionBar({
               if (app.prompt_for_description) {
                 const said = window.prompt("What changed in this version?", "");
                 if (said === null) return;  // cancelled the prompt, not the save
-                save.mutate(said);
+                void beginSave(said);
                 return;
               }
-              save.mutate("");
+              void beginSave("");
             }}
           >
             {save.isPending ? "Saving…" : branch ? "Save to branch" : "Save"}
@@ -1065,6 +1087,43 @@ function ActionBar({
       )}
       {showPublish && (
         <PublishDialog workspaceId={workspaceId} projectId={projectId} app={app} onClose={() => setShowPublish(false)} />
+      )}
+      {stranded && (
+        <Dialog open title="Saved states will not fully reopen" onClose={() => setStranded(null)}>
+          <div data-testid="state-impact">
+            <p>{strandedSummary(stranded.keys)}</p>
+            <ul>
+              {stranded.keys.map((k) => (
+                <li key={k.external_id} data-testid="state-impact-key">
+                  <code>{k.external_id}</code> — held by {heldBy(k.states)}
+                </li>
+              ))}
+            </ul>
+            <p className="field-hint">
+              A saved state keeps values by external ID, so one this module no
+              longer saves is left out when the state is opened (p.203). Keep the
+              external ID on whichever variable replaces it and the states carry on.
+            </p>
+            <div className="form-actions">
+              <button type="button" className="btn quiet" data-testid="state-impact-cancel"
+                onClick={() => setStranded(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn"
+                data-testid="state-impact-save"
+                onClick={() => {
+                  const description = stranded.description;
+                  setStranded(null);
+                  save.mutate(description);
+                }}
+              >
+                Save anyway
+              </button>
+            </div>
+          </div>
+        </Dialog>
       )}
     </div>
   );
