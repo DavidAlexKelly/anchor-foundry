@@ -323,6 +323,7 @@ import {
 import {
   FORMATS, FORMAT_LABELS, applyFormat, autoRows, type MarkdownFormat,
 } from "./markdown-editor";
+import { markdownOf } from "./markdown-dom";
 import { SeriesCell } from "./SeriesCell";
 import {
   COLUMN_BASELINE_KINDS, baselineFor, baselinesByColumn, withColumnBaseline, type ColumnBaseline,
@@ -4165,11 +4166,25 @@ export function CanvasTextInput({
  * selection (`markdown-editor.ts`), and the rich view is the Markdown widget's
  * own renderer, so it shows exactly what the toolbar wrote.
  *
- * **The rich view is a preview, not an editor**, and opens on the raw view:
- * p.466's "formatted preview with inline editing" needs a rich-text editor
- * this platform does not have, and a view nobody can type into is not the
- * one to open on. The toolbar formats the raw text, which is what p.466's
- * "without needing to know Markdown syntax" asks of it. */
+ * **The rich view is edited in place (§789)**, p.466's "formatted preview
+ * with inline editing": the rendering is `contentEditable`, and each edit is
+ * read back as Markdown (`markdown-dom.ts`). It is drawn again only when the
+ * text changes from elsewhere - the raw view, or the variable - since
+ * redrawing under somebody's caret would move it. In the rich view the
+ * toolbar is the browser's own editing commands, whose elements the reading
+ * back knows. */
+const RICH_COMMANDS: Record<MarkdownFormat, [string, string?]> = {
+  bold: ["bold"],
+  italic: ["italic"],
+  strikethrough: ["strikeThrough"],
+  code: ["code"],
+  heading: ["formatBlock", "H1"],
+  bullets: ["insertUnorderedList"],
+  numbers: ["insertOrderedList"],
+  quote: ["formatBlock", "BLOCKQUOTE"],
+  link: ["createLink", "https://"],
+};
+
 function MarkdownTextEditor({ label, text, placeholder, autoSize, onText }: {
   label: string;
   text: string;
@@ -4179,7 +4194,38 @@ function MarkdownTextEditor({ label, text, placeholder, autoSize, onText }: {
 }) {
   const [rich, setRich] = useState(false);
   const area = React.useRef<HTMLTextAreaElement | null>(null);
+  const editable = React.useRef<HTMLDivElement | null>(null);
+  // What the rich view last wrote, so its own edit is not drawn again.
+  const wrote = React.useRef<string | null>(null);
+  const [drawn, setDrawn] = useState({ text, epoch: 0 });
+  useEffect(() => {
+    if (text !== wrote.current && text !== drawn.text) {
+      setDrawn((was) => ({ text, epoch: was.epoch + 1 }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text]);
+  const readBack = () => {
+    if (!editable.current) return;
+    const next = markdownOf(editable.current);
+    wrote.current = next;
+    onText(next);
+  };
   const press = (format: MarkdownFormat) => {
+    if (rich) {
+      const [command, value] = RICH_COMMANDS[format];
+      editable.current?.focus();
+      if (command === "code") {
+        // No command makes code: the selection's text, as one code element.
+        const selected = window.getSelection()?.toString() ?? "";
+        const code = document.createElement("code");
+        code.textContent = selected || "code";
+        document.execCommand("insertHTML", false, code.outerHTML);
+      } else {
+        document.execCommand(command, false, value);
+      }
+      // The command's own input event reads it back.
+      return;
+    }
     const el = area.current;
     const out = applyFormat(text, el?.selectionStart ?? text.length,
       el?.selectionEnd ?? text.length, format);
@@ -4201,9 +4247,8 @@ function MarkdownTextEditor({ label, text, placeholder, autoSize, onText }: {
             className="btn quiet"
             data-testid={`md-${format}`}
             aria-label={FORMAT_LABELS[format]}
-            title={rich ? "Switch to Markdown to format" : FORMAT_LABELS[format]}
-            disabled={rich}
-            // Before the textarea loses its selection to the button.
+            title={FORMAT_LABELS[format]}
+            // Before the text loses its selection to the button.
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => press(format)}
           >
@@ -4224,10 +4269,22 @@ function MarkdownTextEditor({ label, text, placeholder, autoSize, onText }: {
         </button>
       </div>
       {rich ? (
-        <div data-testid="md-rich" className="canvas-markdown">
-          {text.trim()
-            ? <MarkdownView blocks={parseMarkdown(text, { breaks: true })} align="left" />
-            : <p className="canvas-widget-empty">{placeholder || "Nothing written yet"}</p>}
+        <div
+          key={drawn.epoch}
+          ref={editable}
+          data-testid="md-rich"
+          className="canvas-markdown md-rich-edit"
+          role="textbox"
+          aria-multiline="true"
+          aria-label={label || "Text input"}
+          contentEditable
+          suppressContentEditableWarning
+          data-placeholder={placeholder || "Nothing written yet"}
+          onInput={readBack}
+        >
+          {drawn.text.trim()
+            ? <MarkdownView blocks={parseMarkdown(drawn.text, { breaks: true })} align="left" />
+            : null}
         </div>
       ) : (
         <textarea
