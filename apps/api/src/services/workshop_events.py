@@ -97,7 +97,13 @@ EFFECTS = (
     # export of the objects in the object set to either Excel or the user's
     # clipboard", with an optional file name and choice of properties (§459).
     "export",
+    # p.489-490's Function-backed export: "take a Function and its inputs, and
+    # download the output into a specified file type" (§775).
+    "export_function",
 )
+
+#: p.489's "Supported file types are CSV, TXT, JSON, XML, PDF, DOCX, and XLSX".
+EXPORT_FILE_TYPES = ("csv", "txt", "json", "xml", "pdf", "docx", "xlsx")
 
 # The formats an `export` may write. p.489 names Excel and the clipboard;
 # Excel is written as CSV here, which is the format p.489 itself falls back
@@ -614,7 +620,10 @@ def _check_export(eid: str, config: dict[str, Any], declared: dict[str, Any]) ->
                 f"event {eid!r} exports {len(properties)} properties; at most "
                 f"{MAX_EXPORT_PROPERTIES}"
             )
-    name = config.get("file_name")
+    _check_file_name(eid, config.get("file_name"))
+
+
+def _check_file_name(eid: str, name: Any) -> None:
     if name is not None:
         # A name, not a path: the browser decides where a download goes, and a
         # separator in the name is either stripped or an attempt at somewhere.
@@ -623,6 +632,35 @@ def _check_export(eid: str, config: dict[str, Any], declared: dict[str, Any]) ->
                 f"event {eid!r}: an export file name is a plain name of at most 120 "
                 "characters, without / or \\"
             )
+
+
+def _check_export_function(eid: str, config: dict[str, Any], declared: dict[str, Any]) -> None:
+    """p.489-490's Function-backed export, as far as a saved document can be
+    checked (§775): a function, a file type of p.489's seven, inputs each a
+    declared variable or a value, and a plain file name. That the function
+    returns a string (p.490) is said when it is called, by the browser."""
+    function_id = config.get("function_id")
+    if not function_id or not isinstance(function_id, str):
+        raise EventError(f"event {eid!r}: a function-backed export names its function")
+    version = config.get("version")
+    if version is not None and not isinstance(version, str):
+        raise EventError(f"event {eid!r}: a function-backed export's version is a string")
+    if config.get("file_type", "csv") not in EXPORT_FILE_TYPES:
+        raise EventError(
+            f"event {eid!r}: export file type {config.get('file_type')!r} is not one of "
+            f"{', '.join(EXPORT_FILE_TYPES)}")
+    inputs = config.get("inputs", {})
+    if not isinstance(inputs, dict):
+        raise EventError(f"event {eid!r}: a function-backed export's inputs are an object")
+    for name, source in inputs.items():
+        if not isinstance(source, dict) or ("variable" in source) == ("value" in source):
+            raise EventError(
+                f"event {eid!r}: input {name!r} is a variable or a value")
+        if "variable" in source and declared and source["variable"] not in declared:
+            raise EventError(
+                f"event {eid!r}: input {name!r} reads {source['variable']!r}, which this "
+                "module does not declare")
+    _check_file_name(eid, config.get("file_name"))
 
 
 def _parse_effect(
@@ -860,6 +898,8 @@ def _parse_effect(
                 )
     elif kind == "export":
         _check_export(eid, config, declared)
+    elif kind == "export_function":
+        _check_export_function(eid, config, declared)
     elif kind == "switch_tab":
         # **p.84's event, and the one Layout event that writes its variable.**
         # That difference lives in the browser (`tab-selection.ts` and

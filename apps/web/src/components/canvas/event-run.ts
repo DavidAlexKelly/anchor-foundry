@@ -25,6 +25,8 @@
  * document and concerns itself with *when* things happen.
  */
 
+import { isExportFileType, type ExportFileType } from "../../lib/function-export";
+import { inputsOf, inputValues } from "./function-inputs";
 import { collapseState, nextCollapsed } from "./collapse";
 import { interfaceQuery } from "./routing";
 import { asTabName, tabLabels } from "./tab-selection";
@@ -52,6 +54,15 @@ export interface ExportRequest {
   format: "csv" | "clipboard";
   fileName: string | null;
   properties: string[] | null;
+}
+
+export interface FunctionExportRequest {
+  functionId: string;
+  /** Null calls the newest (`functions` p.49). */
+  version: string | null;
+  values: Record<string, unknown>;
+  fileType: ExportFileType;
+  fileName: string | null;
 }
 
 export interface EventContext {
@@ -123,6 +134,9 @@ export interface EventContext {
    * `run_action` reads its subject; fetching the rows and saying how it went
    * is the capability's job, since both need the network. */
   exportObjects?: (config: ExportRequest) => void;
+  /** p.489-490's Function-backed export (§775): call the function and
+   * download its output as the file type chosen. */
+  exportFunction?: (request: FunctionExportRequest) => void;
   /** The module's variables as last resolved. Read by `run_action` to find
    * the object its subject variable holds, when this click did not set it. */
    variables?: Record<string, unknown>;
@@ -366,6 +380,19 @@ export function run(
           properties: Array.isArray(config.properties)
             ? config.properties.filter((p): p is string => typeof p === "string")
             : null,
+        });
+      } else if (effect.type === "export_function") {
+        // p.489's Function-backed export (§775): its inputs read as
+        // `export`'s set is, this click's writes first.
+        const functionId = typeof config.function_id === "string" ? config.function_id : "";
+        if (!functionId || !context.exportFunction) continue;
+        context.exportFunction({
+          functionId,
+          version: typeof config.version === "string" && config.version ? config.version : null,
+          values: inputValues(inputsOf(config.inputs),
+                              { ...(context.variables ?? {}), ...written }),
+          fileType: isExportFileType(config.file_type) ? config.file_type : "csv",
+          fileName: typeof config.file_name === "string" ? config.file_name : null,
         });
       } else if (effect.type === "open_url") {
         const url = typeof config.url === "string"

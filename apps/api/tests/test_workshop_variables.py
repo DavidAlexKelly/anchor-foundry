@@ -1127,6 +1127,55 @@ def test_an_export_file_name_is_a_name_not_a_path() -> None:
     assert export_event({"variable": "v_sites", "file_name": "x" * 120})["e_1"].effects
 
 
+def export_function_event(config: dict):
+    return we.parse(
+        {"e_1": event("e_1", effects=[{"type": "export_function", "config": config}])},
+        layout={"btn": node({})}, variables=wv.parse(export_vars()),
+    )
+
+
+def test_a_function_backed_export_is_accepted() -> None:
+    """p.489: "Function-backed exports take a Function and its inputs, and
+    download the output into a specified file type" (§775)."""
+    for file_type in we.EXPORT_FILE_TYPES:
+        events = export_function_event({
+            "function_id": "f", "version": "1.0.0", "file_type": file_type,
+            "file_name": "report", "inputs": {"region": {"variable": "v_name"},
+                                              "minimum": {"value": 3}}})
+        assert events["e_1"].effects[0].type == "export_function"
+    assert export_function_event({"function_id": "f", "version": None})["e_1"].effects
+
+
+@pytest.mark.parametrize("config,said", [
+    ({}, "names its function"),
+    ({"function_id": 3}, "names its function"),
+    ({"function_id": "f", "version": 1}, "version is a string"),
+    ({"function_id": "f", "file_type": "exe"}, "is not one of csv, txt, json, xml, pdf"),
+    ({"function_id": "f", "inputs": []}, "inputs are an object"),
+    ({"function_id": "f", "inputs": {"a": "v_name"}}, "is a variable or a value"),
+    ({"function_id": "f", "inputs": {"a": {"variable": "v_name", "value": 1}}},
+     "is a variable or a value"),
+    ({"function_id": "f", "inputs": {"a": {}}}, "is a variable or a value"),
+    ({"function_id": "f", "inputs": {"a": {"variable": "v_gone"}}}, "does not declare"),
+    ({"function_id": "f", "file_name": "../x"}, "plain name"),
+])
+def test_a_function_backed_export_that_cannot_run_is_refused(config, said) -> None:
+    with pytest.raises(we.EventError, match=said):
+        export_function_event(config)
+
+
+def test_the_export_file_types_are_the_browsers() -> None:
+    """p.489's seven, kept in a Python tuple and a TypeScript array."""
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))
+    src = open(os.path.join(root, "apps", "web", "src", "lib", "function-export.ts")).read()
+    block = re.search(r"EXPORT_FILE_TYPES = \[(.*?)\] as const", src, re.S)
+    assert block, "EXPORT_FILE_TYPES not found in function-export.ts"
+    assert tuple(re.findall(r'"([a-z]+)"', block.group(1))) == we.EXPORT_FILE_TYPES
+
+
 def test_an_action_needs_an_object_to_act_on() -> None:
     with pytest.raises(we.EventError, match="variable holding the object"):
         we.parse({"e_1": event("e_1", effects=[
