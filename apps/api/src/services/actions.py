@@ -2503,7 +2503,9 @@ _UNSUPPORTED_PARAMETER_TYPES: dict[str, str] = {}
 #: checked here.
 _RULE_KINDS = frozenset(
     {"modify_object", "create_object", "delete_object", "create_link",
-     "delete_link", "notify", "webhook"}
+     "delete_link", "notify", "webhook",
+     # p.63-64's, on an action on an interface (§761; db 0149).
+     "create_interface_link", "delete_interface_link"}
 )
 
 #: `action-types` p.105-107's two ways to configure a webhook in an action. The
@@ -3216,6 +3218,150 @@ def _check_array_of(name: str, data_type: str, array_of: Any) -> None:
         )
 
 
+def _check_interface_link_rule(
+    config: dict[str, Any],
+    interface_links: dict[str, dict[str, Any]] | None,
+    parameters: list[dict[str, Any]],
+) -> None:
+    """p.63-64's interface link rule, as far as a definition can be checked
+    (§761; decision 0024 §3).
+
+    > "Select the interface link constraint defined on the interface. If the
+    > link constraint is between two interfaces, both the source and
+    > destination parameters will be … interface reference parameters. If the
+    > link constraint is between an interface and an object type, the source
+    > will be an interface reference parameter and the destination will be an
+    > object reference parameter." (p.63)
+
+    The source is this action's own object, which is an interface's object by
+    construction. The destination is the parameter `object` names, and it
+    must be of the kind p.63 says: a reference to that interface, or to that
+    object type.
+    """
+    if interface_links is None:
+        raise ValueError(
+            "an interface link rule creates or deletes a link an interface declares, so it "
+            "belongs to an action on an interface (action-types p.63)")
+    name = str(config.get("link", ""))
+    constraint = interface_links.get(name)
+    if constraint is None:
+        raise ValueError(f"an interface link rule names {name!r}, which this interface "
+                         "does not declare as a link")
+    param_name = str(config.get("object", ""))
+    parameter = next((p for p in parameters if str(p.get("api_name")) == param_name), None)
+    if parameter is None:
+        raise ValueError(
+            "an interface link rule needs an `object` naming the parameter that says which "
+            "object is at the other end")
+    if constraint.get("target_interface_id"):
+        if str(parameter.get("interface_id") or "") != str(constraint["target_interface_id"]):
+            raise ValueError(
+                f"{name!r} links to an interface's objects, so {param_name!r} must be an "
+                "interface reference to that interface (action-types p.63)")
+    elif str(parameter.get("object_type_id") or "") != str(constraint["target_object_type_id"]):
+        # Only an `object` parameter may name a type (checked above), so
+        # matching the type is matching the kind.
+        raise ValueError(
+            f"{name!r} links to one object type's objects, so {param_name!r} must be an "
+            "object reference to that type (action-types p.63)")
+
+
+def interface_link_rules(
+    rules: list[dict[str, Any]],
+    *,
+    link_mapping: dict[str, list[str]],
+    link_types: dict[str, dict[str, Any]],
+    subject_type_id: str,
+    subject: dict[str, Any],
+    destinations: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """An interface action's link rules, in this object's own type's words
+    (§761; decision 0024 §3): the rename `rules_for_implementation` does for
+    properties, done for links.
+
+    Each `create_interface_link` / `delete_interface_link` becomes the
+    `create_link` / `delete_link` rules of the concrete link types this
+    object's type keeps the constraint with (`link_mapping`), so the executor
+    that writes links is the one there already was. Returns the rules and the
+    values they read that no parameter supplies.
+
+    * **None** kept: refused, as an optional property left unmapped is - the
+      action would otherwise do different things on different types.
+    * **Create with several**: refused, p.63's "If there are multiple
+      concrete link implementations on the object type for the link
+      constraint, the action will fail."
+    * **Delete with several**: each, p.64's "the action will attempt to delete
+      all the concrete link implementations" - each only where the two
+      objects are linked through it now, since clearing a key that points
+      elsewhere would delete some other link.
+
+    Which object holds the key decides the rename. A join table is written
+    from either end with the destination named. A key on the destination is
+    the far side, with the destination named. A key on this object is the
+    near side, written with the destination's own `to_property` value,
+    which `destinations` supplies and the returned values carry.
+    """
+    out: list[dict[str, Any]] = []
+    values: dict[str, Any] = {}
+    for rule in rules:
+        kind = str(rule.get("kind"))
+        if kind not in ("create_interface_link", "delete_interface_link"):
+            out.append(rule)
+            continue
+        config = _json(rule.get("config")) or {}
+        name = str(config.get("link", ""))
+        param = str(config.get("object", ""))
+        concrete = [link_types[i] | {"id": i} for i in link_mapping.get(name, [])
+                    if i in link_types]
+        if not concrete:
+            raise InterfaceSubjectError(
+                f"this object's type keeps the link {name!r} with no link type of its own, "
+                "so the action cannot create or delete it here")
+        if kind == "create_interface_link" and len(concrete) > 1:
+            raise InterfaceSubjectError(
+                f"this object's type keeps the link {name!r} with several link types, and "
+                "an action cannot choose which to create (action-types p.63)")
+        destination = destinations.get(param)
+        for link in concrete:
+            base = {"kind": "create_link" if kind == "create_interface_link" else "delete_link",
+                    "position": rule.get("position")}
+            if link.get("join_from_column"):
+                out.append({**base, "config": {"link_type": link["id"], "object": param}})
+                continue
+            near = str(link["from_object_type_id"]) == subject_type_id
+            if not near:
+                # The key is the destination's, pointing at this object.
+                if kind == "delete_interface_link" and destination is not None \
+                        and _link_key(destination, str(link["from_property"] or "")) \
+                        != _link_key(subject, str(link["to_property"] or "")):
+                    continue
+                out.append({**base, "config": {"link_type": link["id"], "object": param}})
+                continue
+            wanted = (None if destination is None
+                      else _link_key(destination, str(link["to_property"] or "")))
+            if kind == "delete_interface_link":
+                if wanted is None or _link_key(subject, str(link["from_property"] or "")) != wanted:
+                    continue
+                out.append({**base, "config": {"link_type": link["id"]}})
+                continue
+            if wanted is None:
+                raise InterfaceSubjectError(
+                    f"the object at the other end of {name!r} has no value for the property "
+                    "this link joins on, so nothing can be linked to it")
+            slot = f"__interface_link_{len(values)}"
+            values[slot] = wanted
+            out.append({**base, "config": {"link_type": link["id"], "target": slot}})
+    return out, values
+
+
+def _link_key(obj: dict[str, Any], prop: str) -> Any:
+    """What an object holds for a link's property: its primary key for
+    `$primary_key`, else the property's value."""
+    if prop == "$primary_key":
+        return obj.get("primary_key")
+    return (obj.get("properties") or {}).get(prop)
+
+
 def _validate_definition(
     *,
     parameters: list[dict[str, Any]],
@@ -3227,8 +3373,13 @@ def _validate_definition(
     workspace_properties: dict[str, dict[str, str]],
     webhooks: dict[str, dict[str, Any]] | None = None,
     reference_properties: dict[str, set[str]] | None = None,
+    interface_links: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Refuse a definition that could not be executed, at save time.
+
+    `interface_links` is the interface's effective link constraints by name
+    when the action is on an interface (§761), and None when it is on an
+    object type, which has none to name.
 
     `reference_properties` is `{interface reference parameter: its interface's
     effective property names}`, which a modify rule changing an object named
@@ -3490,6 +3641,9 @@ def _validate_definition(
                 )
             except notifications_service.NotificationError as exc:
                 raise ValueError(str(exc)) from exc
+            continue
+        if kind in ("create_interface_link", "delete_interface_link"):
+            _check_interface_link_rule(config, interface_links, parameters)
             continue
         if kind in ("create_link", "delete_link"):
             link = (link_types or {}).get(str(config.get("link_type", "")))
@@ -3785,6 +3939,7 @@ async def set_definition(
     # properties, so a rule naming a property of one implementing type is
     # refused with the message any unknown property gets. A separate check
     # would be a second list of what an interface has.
+    interface_links: dict[str, dict[str, Any]] | None = None
     if action_type["object_type_id"] is not None:
         subject_id = UUID(str(action_type["object_type_id"]))
         property_types = {
@@ -3804,6 +3959,10 @@ async def set_definition(
         property_types = {
             str(p["api_name"]): str(p["data_type"])
             for p in interface["effective_properties"]
+        }
+        # §761: the links its rules may create and delete, inherited ones too.
+        interface_links = {
+            str(c["api_name"]): c for c in interface.get("effective_link_constraints") or []
         }
     # p.45's one difference between an override condition and a submission
     # criterion: "only parameters which appear above the current parameter in
@@ -4017,6 +4176,7 @@ async def set_definition(
         # narrows this to what the caller can see.
         webhooks=await webhooks_by_id(conn, workspace_id),
         reference_properties=await _reference_properties(conn, workspace_id, parameters),
+        interface_links=interface_links,
     )
 
     # **The refusal decision 0007 names.** Checked against what is *going*, not

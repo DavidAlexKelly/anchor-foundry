@@ -1,6 +1,6 @@
 # 0024 — Link constraints on interfaces
 
-**Status:** decided; built: §759 the model and its checks, §760 the screens. §761 builds the action rules that use it.
+**Status:** decided; built: §759 the model and its checks, §760 the screens, §761 the action rules that use it (§762 their editor).
 **Parity items:** `docs/parity/ontology.md` §1.5 (*Interfaces*: "○: links on an interface"), §5 (*Actions on interfaces*: "○: p.63-64's create and delete interface link rules").
 **Source:** `docs/pal/foundry_ontology.pdf` p.60; `docs/pal/foundry_action-types.pdf` p.63-64, cited `(p.N)`.
 **Follows:** §251's interfaces (db 0065), which took the Interfaces row's "design it from the fragments and mark what was guessed". This decision does the same for links.
@@ -52,4 +52,4 @@ As with properties, editing an interface does not re-check its implementations. 
 ## 3. What uses it
 
 * **§760**: the Ontology Manager's interface editor declares constraints, and the implementation panel picks each one's link types.
-* **§761**: p.63-64's Create and Delete interface link rules.
+* **§761**: p.63-64's Create and Delete interface link rules, renamed at submission into `create_link` / `delete_link` on the object's own type's concrete link types. A create with several fails (p.63); a delete takes each that joins the two objects now (p.64). **§762**: the rules in the action editor.
