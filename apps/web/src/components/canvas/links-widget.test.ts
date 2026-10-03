@@ -4,6 +4,7 @@ import {
   LINK_MODES, MAX_DEFAULT_EXPAND, chosenOf, defaultExpandOf, initiallyExpanded, labelFor,
   linkKey, modeOf, objectViewHref, previewOf, previewProperties, sortOf, sortedLinkQuery,
   titleOf, toggleExpanded, visibleLinks,
+  MAX_LINK_DEPTH, expandsFurther,
 } from "./links-widget";
 
 /** p.268-272's Links widget. */
@@ -306,5 +307,13 @@ describe("p.272's Display properties in object preview (§549)", () => {
     ]);
     expect(previewOf([{ key: "a:outbound", preview: ["x"] }], "a:outbound")).toEqual(["x"]);
     expect(previewOf([{ key: "a:outbound" }], "a:outbound")).toBeUndefined();
+  });
+});
+
+describe("expandsFurther (§712)", () => {
+  it("opens linked objects to their links down to the bound, and no further", () => {
+    expect(expandsFurther(1)).toBe(true);
+    expect(expandsFurther(MAX_LINK_DEPTH - 1)).toBe(true);
+    expect(expandsFurther(MAX_LINK_DEPTH)).toBe(false);
   });
 });

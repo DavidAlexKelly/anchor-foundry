@@ -264,3 +264,17 @@ export const LINK_PAGE = 10;
 export function sortOf(chosen: readonly ChosenLink[], key: string): string | undefined {
   return chosen.find((c) => c.key === key)?.sort;
 }
+
+/** p.268's further exploration (§712): "The Flight Alert's linked Departure
+ * Airport has been expanded further in this screenshot to show its links".
+ * A linked object opens to its own links, and theirs, to this many levels
+ * below the widget's object - links run in cycles (a person's manager's
+ * reports include the person), so an unbounded tree is one a reader could
+ * expand forever. */
+export const MAX_LINK_DEPTH = 4;
+
+/** Whether an object `depth` levels below the widget's object may open to
+ * its own links; the widget's object is level 0, its linked objects level 1. */
+export function expandsFurther(depth: number): boolean {
+  return depth < MAX_LINK_DEPTH;
+}
