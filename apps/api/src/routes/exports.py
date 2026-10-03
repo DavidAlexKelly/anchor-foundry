@@ -109,6 +109,9 @@ class RunOut(BaseModel):
     error: str | None
     started_at: datetime
     finished_at: datetime | None
+    # What the run did, in a sentence (§748; db 0145): what a transactional
+    # mode sent, or why nothing was. None for runs before it was kept.
+    detail: str | None = None
 
 
 class RunPage(BaseModel):
@@ -326,12 +329,30 @@ async def run_export(
     except (NotFoundError, FileNotFoundError, StorageKeyError, OSError):
         parquet_path = None
 
+    # Every version's type and key (§748): a transactional mode reads the ones
+    # since its last run, and the version before each APPEND. The bytes are
+    # resolved only for the versions a run sends, inside the export's thread.
+    async with user_connection(access.auth.user_id) as conn:
+        history = await ds_service.list_versions(
+            conn, access.project_id, UUID(str(export["dataset_id"])))
+    keys = {int(v["version_number"]): v["s3_manifest_key"] for v in history}
+
+    def path_of(number: int) -> str | None:
+        # A version with no key is a missing file like any other.
+        try:
+            return dataset_routes.storage().local_path(str(keys.get(number)))
+        except (FileNotFoundError, StorageKeyError, OSError):
+            return None
+
     outcome = await export_runs.perform(
         export, connection, secret,
         parquet_path=parquet_path,
         dataset_version=version,
         dataset_schema=list(dataset["table_schema"] or []),
         policies=policies,
+        versions=[{"version_number": int(v["version_number"]),
+                   "transaction_type": v["transaction_type"]} for v in history],
+        path_of=path_of,
     )
 
     async with user_connection(access.auth.user_id) as conn:

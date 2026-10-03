@@ -18,10 +18,12 @@
  * list of exports and a list somebody can act on.
  */
 
-/** p.195-196's six, minus the four that need a transaction log this platform
- * does not keep (decision 0014 §2). The server's `exports.MODES` is the same
- * pair; this list exists so a picker cannot offer a seventh. */
-export const MODES = ["mirror", "full"] as const;
+/** p.195-196's six (§748; decision 0020 §4). The server's `exports.MODES` is
+ * the same list; this one exists so a picker cannot offer a seventh. The last
+ * four are read from the dataset's transaction types (db 0144). */
+export const MODES = [
+  "mirror", "full", "efficient_mirror", "incremental", "incremental_truncate", "append_only",
+] as const;
 
 export type ExportMode = (typeof MODES)[number];
 
@@ -34,6 +36,23 @@ export type ExportMode = (typeof MODES)[number];
 export const MODE_LABELS: Record<ExportMode, string> = {
   mirror: "Replace the table each run, so it always matches the dataset",
   full: "Append the whole dataset each run — the table keeps every run's rows",
+  efficient_mirror:
+    "Keep the table equal to the dataset, sending only new rows where it can (recommended)",
+  incremental:
+    "Send only rows added since the last run; a rewritten dataset is sent again in full, which duplicates",
+  incremental_truncate: "Clear the table, then send only rows added since the last run",
+  append_only: "Send only rows added since the last run, and fail rather than send anything else",
+};
+
+/** What each mode does to the table, for a one-line summary. The server's
+ *  `exports._VERBS`. */
+const VERBS: Record<ExportMode, string> = {
+  mirror: "replaces",
+  full: "appends to",
+  efficient_mirror: "mirrors into",
+  incremental: "appends new rows to",
+  incremental_truncate: "clears and appends new rows to",
+  append_only: "appends new rows to",
 };
 
 /** Which source types can be a destination, and as which kind (p.17, p.192).
@@ -211,7 +230,10 @@ export function summarise(row: {
   const table = String(row.destination.table ?? "");
   const schema = String(row.destination.schema ?? "");
   const where = schema ? `${schema}.${table}` : table;
-  return `${row.mode === "mirror" ? "replaces" : "appends to"} ${where}`;
+  const verb = (MODES as readonly string[]).includes(row.mode ?? "")
+    ? VERBS[row.mode as ExportMode]
+    : "appends to";
+  return `${verb} ${where}`;
 }
 
 /** **p.192's question, answered on the row.**

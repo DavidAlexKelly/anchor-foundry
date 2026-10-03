@@ -118,23 +118,113 @@ def test_a_file_export_may_not_carry_one() -> None:
         )
 
 
-def test_the_absent_modes_are_absent_on_purpose() -> None:
-    """**The four of p.195-196's six that this platform cannot mean.**
-
-    Each of them is defined over a transaction log `dataset_versions` does not
-    keep - "unexported *transactions* from the current view", or a `SNAPSHOT` /
-    `APPEND` / `UPDATE` / `DELETE` transaction type. Decision 0014 §2 carries
-    the table.
-
-    This asserts the *absence*, which is the only way it stays a decision. A
-    dropdown that grew "export incrementally" would offer a setting that could
-    not do what its name says, and nothing else in the build would notice.
-    """
-    assert set(exports.MODES) == {"mirror", "full"}
-    for absent in ("incremental", "incremental_truncate", "incremental_append_only"):
-        assert absent not in exports.MODES
-    # And every mode offered has a label, so a picker cannot show a bare enum.
+def test_all_six_modes_and_a_label_for_each() -> None:
+    """p.195-196's six (§748). Decision 0014 §2 built two and asserted the
+    other four's absence, because they are defined over transactions
+    `dataset_versions` did not keep; decision 0020 (db 0144) gave it them."""
+    assert exports.MODES == ("mirror", "full", "efficient_mirror", "incremental",
+                             "incremental_truncate", "append_only")
+    assert set(exports.TRANSACTIONAL) == set(exports.MODES) - {"mirror", "full"}
+    # Every mode offered has a label, so a picker cannot show a bare enum.
     assert set(exports.MODE_LABELS) == set(exports.MODES)
+
+
+def test_the_browser_offers_exactly_the_modes_the_server_accepts() -> None:
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(os.path.join(root, "web", "src", "lib", "export-form.ts"), encoding="utf-8").read()
+    listed = re.search(r"export const MODES = \[(.*?)\] as const", source, re.S).group(1)
+    assert tuple(re.findall(r'"([a-z_]+)"', listed)) == exports.MODES
+
+
+# ---- §748: what a transactional mode sends ------------------------------------------
+def v(number: int, kind: str) -> dict:
+    return {"version_number": number, "transaction_type": kind}
+
+
+HISTORY = [v(1, "SNAPSHOT"), v(2, "APPEND"), v(3, "APPEND")]
+
+
+def test_a_first_run_sends_the_whole_view() -> None:
+    for mode in exports.TRANSACTIONAL:
+        sending = exports.plan(mode, None, HISTORY)
+        assert (sending.whole, sending.added, sending.refusal) == (3, (), None), mode
+    # Only the two that clear the table say so on a first run.
+    assert exports.plan("efficient_mirror", None, HISTORY).truncate is True
+    assert exports.plan("incremental_truncate", None, HISTORY).truncate is True
+    assert exports.plan("incremental", None, HISTORY).truncate is False
+    assert exports.plan("append_only", None, HISTORY).truncate is False
+
+
+def test_later_appends_send_only_the_rows_they_added() -> None:
+    for mode in exports.TRANSACTIONAL:
+        sending = exports.plan(mode, 1, HISTORY)
+        assert (sending.whole, sending.added, sending.refusal) == (None, (2, 3), None), mode
+    assert exports.plan("efficient_mirror", 1, HISTORY).truncate is False
+    assert exports.plan("incremental_truncate", 1, HISTORY).truncate is True
+    assert exports.plan("efficient_mirror", 2, HISTORY).added == (3,)
+
+
+def test_nothing_new_is_a_skip() -> None:
+    for mode in exports.TRANSACTIONAL:
+        assert exports.plan(mode, 3, HISTORY).skip is True, mode
+        assert exports.plan(mode, 9, HISTORY).skip is True, mode
+    assert exports.plan("incremental", 2, HISTORY).skip is False
+
+
+def test_a_new_view_is_sent_whole_and_only_efficient_mirror_clears_for_it() -> None:
+    """p.195: "truncating the external table when there is a SNAPSHOT
+    transaction"; p.196's incremental "may produce duplicate records in the
+    target table if the upstream dataset has a SNAPSHOT transaction"."""
+    history = HISTORY + [v(4, "SNAPSHOT"), v(5, "APPEND")]
+    mirror = exports.plan("efficient_mirror", 3, history)
+    assert (mirror.truncate, mirror.whole, mirror.added) == (True, 5, ())
+    plain = exports.plan("incremental", 3, history)
+    assert (plain.truncate, plain.whole) == (False, 5)
+    # Already past the new view's start: its appends only.
+    assert exports.plan("efficient_mirror", 4, history).added == (5,)
+
+
+def test_an_unexported_update_in_the_current_view_is_refused() -> None:
+    """p.195-196: "This mode does not support UPDATE and DELETE transactions"."""
+    history = HISTORY + [v(4, "UPDATE")]
+    for mode in ("efficient_mirror", "incremental", "incremental_truncate"):
+        refused = exports.plan(mode, 3, history).refusal
+        assert refused and refused.startswith("v4 is an UPDATE transaction"), mode
+        assert "mirror export" in refused
+    # An UPDATE an earlier view held, or one already exported, is no obstacle.
+    assert exports.plan("efficient_mirror", 4, history + [v(5, "APPEND")]).added == (5,)
+    later = history + [v(5, "SNAPSHOT")]
+    assert exports.plan("incremental", 3, later).whole == 5
+
+
+def test_append_only_fails_on_anything_but_an_append_after_its_first_run() -> None:
+    """p.196: "failing if there is a SNAPSHOT, UPDATE, or DELETE transaction
+    (after the first run)"."""
+    for kind in ("SNAPSHOT", "UPDATE"):
+        refused = exports.plan("append_only", 3, HISTORY + [v(4, "APPEND"), v(5, kind)]).refusal
+        assert refused and refused.startswith(f"v5 is a {kind} transaction"), kind
+    # Its first run takes a view whatever it holds.
+    assert exports.plan("append_only", None, [v(1, "SNAPSHOT"), v(2, "UPDATE")]).whole == 2
+
+
+def test_a_dataset_with_no_snapshot_begins_its_view_at_its_first_version() -> None:
+    """p.26: "If there is no SNAPSHOT transaction present, then take the
+    earliest transaction" - a listener's archive."""
+    archive = [v(1, "APPEND"), v(2, "APPEND")]
+    assert exports.plan("efficient_mirror", 1, archive).added == (2,)
+    assert exports.plan("efficient_mirror", None, archive).whole == 2
+
+
+def test_a_dataset_with_no_versions_is_refused() -> None:
+    assert exports.plan("incremental", None, []).refusal
+
+
+def test_what_a_run_sent_is_said() -> None:
+    assert exports.sent(exports.Plan(truncate=True, whole=5)) == (
+        "cleared the table, then sent the whole view at v5")
+    assert exports.sent(exports.Plan(added=(2, 3))) == "sent the rows v2, v3 added"
 
 
 # ---- p.197's refusals -------------------------------------------------------------
@@ -244,9 +334,11 @@ def test_a_file_export_skips_an_unchanged_version() -> None:
     assert exports.should_skip(None, last_version=3, current_version=4) is False
 
 
-def test_only_mirror_truncates() -> None:
+def test_only_mirror_and_incremental_truncate_always_truncate() -> None:
     assert exports.truncates("mirror") is True
+    assert exports.truncates("incremental_truncate") is True
     assert exports.truncates("full") is False
+    assert exports.truncates("efficient_mirror") is False, "only for a new view - plan's"
     assert exports.truncates(None) is False
 
 
@@ -337,6 +429,12 @@ def test_a_summary_says_which_way_round_the_mode_is() -> None:
     assert exports.summarise(
         {"kind": "file", "destination": {"prefix": "exports/orders"}}
     ) == "files to exports/orders"
+    assert exports.summarise(
+        {"kind": "table", "mode": "efficient_mirror", "destination": {"table": "t"}}
+    ) == "mirrors into t"
+    assert exports.summarise(
+        {"kind": "table", "mode": "incremental_truncate", "destination": {"table": "t"}}
+    ) == "clears and appends new rows to t"
 
 
 def test_the_browser_offers_exactly_the_destinations_the_server_accepts() -> None:

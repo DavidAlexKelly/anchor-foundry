@@ -59,6 +59,8 @@ def perform(
     dataset_version: int,
     dataset_schema: list,
     policies=None,
+    versions=None,
+    path_of=None,
 ) -> dict:
     """Write the dataset's current version to the destination, or say why not.
 
@@ -69,11 +71,23 @@ def perform(
     one failing must not end the others (§263 found exactly that bug in the
     sync op, where `EgressRefused` was not a `ConnectorError` and so escaped an
     enumerated `except`).
+
+    A transactional mode (§748) sends what `exports.plan` says from
+    `versions` and `path_of`, as the API copy does.
     """
     started = time.monotonic()
+    mode = export.get("mode")
+    sending = None
+    if export["kind"] == "table" and mode in exports_service.TRANSACTIONAL:
+        sending = exports_service.plan(str(mode), export.get("last_version"), versions or [])
+        if sending.refusal:
+            return result(
+                ok=False, dataset_version=dataset_version, error=sending.refusal,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
 
-    if exports_service.should_skip(
-        export.get("mode"), export.get("last_version"), dataset_version
+    if sending.skip if sending is not None else exports_service.should_skip(
+        mode, export.get("last_version"), dataset_version
     ):
         # p.192's June 2025 behaviour, and the reason a scheduled export is
         # where it matters most: a cron that fires hourly against a dataset
@@ -106,7 +120,16 @@ def perform(
                     duration_ms=int((time.monotonic() - started) * 1000),
                     detail=f"wrote {written}",
                 )
-            rows = _put_rows(connector, config, secret, export, parquet_path, dataset_schema)
+            if sending is not None:
+                rows = _put_plan(connector, config, secret, export, sending,
+                                 path_of or (lambda _version: None), dataset_schema)
+                return result(
+                    ok=True, dataset_version=dataset_version, rows_written=rows,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    detail=exports_service.sent(sending),
+                )
+            rows = _put_rows(connector, config, secret, export, parquet_path, dataset_schema,
+                             truncate=exports_service.truncates(mode))
             return result(
                 ok=True, dataset_version=dataset_version, rows_written=rows,
                 duration_ms=int((time.monotonic() - started) * 1000),
@@ -143,7 +166,35 @@ def _put_file(connector, config, secret, export, parquet_path: str, dataset_vers
     )
 
 
-def _put_rows(connector, config, secret, export, parquet_path: str, dataset_schema: list) -> int:
+def _put_plan(connector, config, secret, export, sending, path_of,
+              dataset_schema: list) -> int:
+    """A transactional mode's run (§748) - see the API copy."""
+    if sending.whole is not None:
+        path = path_of(sending.whole)
+        if path is None:
+            raise ConnectorError(
+                f"v{sending.whole} has no stored file, so its rows cannot be exported")
+        return _put_rows(connector, config, secret, export, path, dataset_schema,
+                         truncate=sending.truncate)
+    pairs = []
+    for version in sending.added:
+        new, previous = path_of(version), path_of(version - 1)
+        if new is None or previous is None:
+            gone = version if new is None else version - 1
+            raise ConnectorError(
+                f"v{gone} is no longer stored, so the rows v{version} added cannot be told "
+                "apart from the ones before. A mirror export sends the dataset as it is"
+            )
+        pairs.append((version, new, previous))
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = os.path.join(tmp, "added.parquet")
+        dataset_engine.added_rows(pairs, dest)
+        return _put_rows(connector, config, secret, export, dest, dataset_schema,
+                         truncate=sending.truncate)
+
+
+def _put_rows(connector, config, secret, export, parquet_path: str, dataset_schema: list, *,
+              truncate: bool) -> int:
     """p.195's table export, with p.197's 1:1 check before anything is written.
 
     **The column list comes from the CSV's own header**, because Postgres'
@@ -173,12 +224,12 @@ def _put_rows(connector, config, secret, export, parquet_path: str, dataset_sche
             return connector.export_rows(
                 config, secret, schema=schema_name, table=table,
                 columns=[str(c["name"]) for c in dataset_schema], csv_path=csv_path,
-                truncate=exports_service.truncates(export.get("mode")),
+                truncate=truncate,
             )
         return connector.export_rows(
             config, secret, schema=schema_name, table=table,
             columns=columns, csv_path=csv_path,
-            truncate=exports_service.truncates(export.get("mode")),
+            truncate=truncate,
         )
 
 

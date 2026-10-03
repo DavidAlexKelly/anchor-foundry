@@ -97,11 +97,22 @@ group("what the picker offers", () => {
 });
 
 group("the modes", () => {
-  test("two, and no more", () => {
-    // Decision 0014 §2: the other four of p.195-196's six are defined over a
-    // transaction log `dataset_versions` does not keep.
-    expect([...MODES]).toEqual(["mirror", "full"]);
-    expect(Object.keys(MODE_LABELS).sort()).toEqual(["full", "mirror"]);
+  test("p.195-196's six, and no more", () => {
+    // Decision 0014 §2 built two; decision 0020 gave versions the transaction
+    // types the other four are defined over (§748).
+    expect([...MODES]).toEqual([
+      "mirror", "full", "efficient_mirror", "incremental", "incremental_truncate", "append_only",
+    ]);
+    expect(Object.keys(MODE_LABELS).sort()).toEqual([...MODES].sort());
+  });
+
+  test("each incremental mode says what it does with a rewritten dataset", () => {
+    // p.196: "may produce duplicate records … if the upstream dataset has a
+    // SNAPSHOT transaction", and the append-only mode's "fail".
+    expect(MODE_LABELS.incremental).toContain("duplicates");
+    expect(MODE_LABELS.append_only).toContain("fail");
+    expect(MODE_LABELS.efficient_mirror).toContain("recommended");
+    expect(MODE_LABELS.incremental_truncate).toContain("Clear the table");
   });
 
   test("full's label says what p.195 warns about", () => {
@@ -206,6 +217,12 @@ group("what a list says", () => {
       .toBe("replaces public.orders");
     expect(summarise({ kind: "table", mode: "full", destination: { schema: "", table: "orders" } }))
       .toBe("appends to orders");
+    const to = (mode: string) => summarise({ kind: "table", mode, destination: { table: "t" } });
+    expect(to("efficient_mirror")).toBe("mirrors into t");
+    expect(to("incremental")).toBe("appends new rows to t");
+    expect(to("incremental_truncate")).toBe("clears and appends new rows to t");
+    expect(to("append_only")).toBe("appends new rows to t");
+    expect(to("nonsense")).toBe("appends to t");
     expect(summarise({ kind: "file", mode: null, destination: { prefix: "exports/orders" } }))
       .toBe("files to exports/orders");
   });

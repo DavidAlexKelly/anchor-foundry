@@ -5,18 +5,18 @@ what is legal and what will happen. No database and no socket — `export_store`
 holds the rows and `export_runs` makes the call, the same three-way split every
 feature here uses.
 
-**Two modes, not p.195-196's six.** Four of them are defined over a transaction
-log this platform does not keep: every one says "unexported *transactions* from
-the current view", or names a `SNAPSHOT` / `APPEND` / `UPDATE` / `DELETE`
-transaction type, and `dataset_versions` is a "snapshot per sync/upload" with
-no transaction type on it at all. Decision 0014 §2 carries the table. The gap is
-in the dataset model, not here.
+**All six of p.195-196's modes.** Decision 0014 §2 built two, because the
+other four are defined over transactions - "unexported *transactions* from the
+current view", or a `SNAPSHOT` / `APPEND` / `UPDATE` / `DELETE` type - and
+`dataset_versions` had none. Decision 0020 (db 0144) gave every version its
+type, and `plan` is what the four read from it (§748).
 
 `data-connection` pages are `p.N`.
 """
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 #: p.193's export types, minus streaming. p.17 pairs each with the sync it
@@ -32,7 +32,16 @@ KINDS = ("table", "file")
 #:              option will almost always result in duplicates in the external
 #:              table. This option can be useful when external systems consume
 #:              and remove rows after each run" (p.195)
-MODES = ("mirror", "full")
+#:
+#: and p.195-196's four over transactions (§748), whose sending is `plan`'s:
+#:
+#:   'efficient_mirror'     - "Efficiently mirror dataset to external table
+#:                            (recommended)"
+#:   'incremental'          - "Export incrementally"
+#:   'incremental_truncate' - "Export incrementally with truncation"
+#:   'append_only'          - "Export incrementally and fail if not APPEND"
+MODES = ("mirror", "full", "efficient_mirror", "incremental", "incremental_truncate",
+         "append_only")
 
 #: Shown beside each in a picker. p.195's own wording, because a mode whose
 #: consequence is "almost always result in duplicates" should say so where
@@ -40,6 +49,13 @@ MODES = ("mirror", "full")
 MODE_LABELS: dict[str, str] = {
     "mirror": "Replace the table each run, so it always matches the dataset",
     "full": "Append the whole dataset each run, without clearing the table",
+    "efficient_mirror": ("Keep the table equal to the dataset, sending only new rows "
+                         "where it can (recommended)"),
+    "incremental": ("Send only rows added since the last run; a rewritten dataset is "
+                    "sent again in full, which duplicates"),
+    "incremental_truncate": "Clear the table, then send only rows added since the last run",
+    "append_only": ("Send only rows added since the last run, and fail rather than send "
+                    "anything else"),
 }
 
 #: Which source types can be an export destination, by kind. p.192: "Data
@@ -214,6 +230,93 @@ def missing_columns(
     ]
 
 
+#: p.195-196's four modes defined over transactions (§748; decision 0020 §4).
+#: Each reads the versions since the export's last one, by type.
+TRANSACTIONAL = ("efficient_mirror", "incremental", "incremental_truncate", "append_only")
+
+
+@dataclass(frozen=True)
+class Plan:
+    """What one run of a transactional mode writes (§748).
+
+    `whole` is a version whose entire view is sent, `added` the APPEND
+    versions whose added rows are, and `refusal` the sentence when the run
+    must not write at all.
+    """
+
+    skip: bool = False
+    truncate: bool = False
+    whole: int | None = None
+    added: tuple[int, ...] = ()
+    refusal: str | None = None
+
+
+def plan(mode: str, last_version: int | None, versions: list[dict[str, Any]]) -> Plan:
+    """p.195-196's four transactional modes, given the dataset's versions as
+    `{version_number, transaction_type}`.
+
+    **The current view** is p.26's: it begins at the latest SNAPSHOT, or at
+    the first version when there is none. The versions not yet exported are
+    the ones after `last_version`.
+
+    * efficient_mirror: "incrementally exporting any unexported transactions
+      from the current dataset view and truncating the external table when
+      there is a SNAPSHOT transaction" (p.195).
+    * incremental: "Exports only unexported transactions from the current view
+      without truncating the target table" (p.196).
+    * incremental_truncate: "truncates (drops) the target table, then exports
+      only transactions from the current view that have not previously been
+      exported" (p.196).
+    * append_only: "failing if there is a SNAPSHOT, UPDATE, or DELETE
+      transaction (after the first run)" (p.196).
+
+    The first three "do not support UPDATE … transactions" (p.195-196): an
+    UPDATE among the versions a run would send rows of is refused, with
+    mirror named. One inside a view sent whole is not, since the view is
+    sent as it now is.
+    """
+    ordered = sorted(versions, key=lambda v: int(v["version_number"]))
+    if not ordered:
+        return Plan(refusal="this dataset has no versions yet, so there is nothing to export")
+    newest = int(ordered[-1]["version_number"])
+    if last_version is not None and last_version >= newest:
+        return Plan(skip=True)
+    snapshots = [int(v["version_number"]) for v in ordered if v["transaction_type"] == "SNAPSHOT"]
+    start = snapshots[-1] if snapshots else int(ordered[0]["version_number"])
+    unexported = [v for v in ordered if int(v["version_number"]) > (last_version or 0)]
+
+    if mode == "append_only" and last_version is not None:
+        for v in unexported:
+            if v["transaction_type"] != "APPEND":
+                return Plan(refusal=(
+                    f"v{v['version_number']} is a {v['transaction_type']} transaction, and this "
+                    "export takes only APPENDs after its first run. Nothing was exported, so "
+                    "the table has no duplicates; a mirror export would send the dataset as it is"))
+        return Plan(added=tuple(int(v["version_number"]) for v in unexported))
+
+    new_view = last_version is None or last_version < start
+    truncate = mode == "incremental_truncate" or (mode == "efficient_mirror" and new_view)
+    if new_view:
+        # Nothing of this view is in the table yet, so all of it is sent, and
+        # what its versions were is already in what it is.
+        return Plan(truncate=truncate, whole=newest)
+    for v in unexported:
+        if v["transaction_type"] == "UPDATE":
+            return Plan(refusal=(
+                f"v{v['version_number']} is an UPDATE transaction: it changed rows that may "
+                "already be in the table, and an incremental export can only add rows. A "
+                "mirror export replaces the table with the dataset as it is"))
+    return Plan(truncate=truncate, added=tuple(int(v["version_number"]) for v in unexported))
+
+
+def sent(sending: Plan) -> str:
+    """What a transactional run sent, for its line in the history (p.206)."""
+    cleared = "cleared the table, then " if sending.truncate else ""
+    if sending.whole is not None:
+        return f"{cleared}sent the whole view at v{sending.whole}"
+    return f"{cleared}sent the rows {', '.join(f'v{v}' for v in sending.added)} added"
+
+
 def should_skip(mode: str | None, last_version: int | None, current_version: int) -> bool:
     """p.192's June 2025 behaviour: nothing new to export is a success.
 
@@ -232,14 +335,24 @@ def should_skip(mode: str | None, last_version: int | None, current_version: int
 
 
 def truncates(mode: str | None) -> bool:
-    """Whether this run clears the target first (p.195).
+    """Whether a run of this mode clears the target first (p.195) - always,
+    for these two; `efficient_mirror` does only when `plan` says a new view
+    began, and is not counted here.
 
     A function rather than `mode == "mirror"` at the call site, because it is
     the one property that decides whether the destination credentials need
     permission Foundry cannot check for (p.197, p.203) — and a rule spelled out
     at two call sites is a rule that can differ at one of them.
     """
-    return mode == "mirror"
+    return mode in ("mirror", "incremental_truncate")
+
+
+#: What each mode does to the table, for a one-line summary.
+_VERBS = {
+    "mirror": "replaces", "full": "appends to", "efficient_mirror": "mirrors into",
+    "incremental": "appends new rows to", "incremental_truncate": "clears and appends new rows to",
+    "append_only": "appends new rows to",
+}
 
 
 def summarise(export: dict[str, Any]) -> str:
@@ -249,5 +362,5 @@ def summarise(export: dict[str, Any]) -> str:
         return f"files to {place.get('prefix', '')}"
     table = place.get("table", "")
     where = f"{place['schema']}.{table}" if place.get("schema") else table
-    verb = "replaces" if truncates(export.get("mode")) else "appends to"
+    verb = _VERBS.get(str(export.get("mode")), "appends to")
     return f"{verb} {where}"

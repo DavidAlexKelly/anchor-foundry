@@ -1084,6 +1084,9 @@ export interface ExportRun {
   error: string | null;
   started_at: string;
   finished_at: string | null;
+  /** What the run did, in a sentence (§748; db 0145): what a transactional
+   *  mode sent. Null for runs before it was kept. */
+  detail?: string | null;
 }
 
 export interface SourceTypeInfo {

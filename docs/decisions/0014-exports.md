@@ -62,6 +62,8 @@ Four of the six name transaction types in their definition. Two do not, and thos
 
 **This is a dataset-model gap, not an export gap, and it is the honest place to record it.** Adding transaction types to `dataset_versions` would unlock four modes here and would change every writer in the platform. That is a migration and a decision of its own, not something to smuggle in behind an export dropdown.
 
+**Since built (§747, §748): decision 0020** is that decision. db 0144 typed every version, and the four modes above read it.
+
 ### 3. "Nothing new to export" is a success, and it is not a mode
 
 p.192's June 2025 change: an export with nothing to export succeeds rather than failing. That is exactly expressible — an export records the last dataset version it wrote, and a run finding that version unchanged succeeds having written nothing.
