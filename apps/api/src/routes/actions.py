@@ -2803,13 +2803,14 @@ async def execute_action(
             # per implementation until one answers, and `_interface_subject` is
             # the same walk the subject takes.
             parameter_types: dict[str, str] = {}
+            references: dict[str, dict[str, Any]] = {}
             for parameter in action_type["parameters"]:
                 constrained = choices_service.interface_of(parameter)
                 name = str(parameter["api_name"])
                 named_id = bound.get(name)
                 if not constrained or not named_id:
                     continue
-                found_type, _row, _impl = await _interface_subject(
+                found_type, _row, implementation = await _interface_subject(
                     conn,
                     workspace_id=access.workspace_id,
                     interface_id=UUID(constrained),
@@ -2817,6 +2818,28 @@ async def execute_action(
                     search_prefix=prefix,
                 )
                 parameter_types[name] = str(found_type)
+                # §742: what a modify rule through this reference needs to
+                # write in the object's own type's words - p.62's "'Modify'
+                # rules on an interface can modify any object of the configured
+                # interface".
+                interface = await interfaces_service.get_interface(
+                    conn, access.workspace_id, UUID(constrained))
+                references[name] = {
+                    "object_type_id": str(found_type),
+                    "property_mapping": implementation["property_mapping"],
+                    "type_name": str(implementation["display_name"]),
+                    "interface_name": str(interface["display_name"]),
+                    "presented": {
+                        str(p["api_name"]): through
+                        for p in await ontology_service.list_properties(conn, found_type)
+                        if (through := property_reducers.presented_through(p))
+                    },
+                }
+            if references:
+                # An implementation that cannot take the write refuses it as
+                # the subject's rename does (`InterfaceSubjectError`).
+                action_type = {**action_type, "rules": actions_service.rules_for_references(
+                    action_type["rules"], references=references)}
             deletions = actions_service.object_deletions(
                 bound, rules=action_type["rules"],
                 default_object_type_id=object_type_id,

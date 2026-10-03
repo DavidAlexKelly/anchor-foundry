@@ -1065,11 +1065,23 @@ export function ActionDefinitionEditor({
           // — which since §451 may be an interface, and then there is no type
           // id at all: `String(null)` is `"null"`, and the picker would have
           // asked for an object type by that name.
+          // p.62's interface reference (§742): a rule naming one, and no type,
+          // writes an object of whichever type implements the interface, in
+          // the interface's vocabulary.
+          const referenced = !config.object_type && config.object
+            ? parameters.find((p) => p.api_name === config.object && p.interface_id)
+            : undefined;
+          // The type id stays the action's own when a reference is named:
+          // the interface below is what the property picker offers then
+          // (dropping it to "" survived the sweep as equivalent).
           const ruleTypeId = String(
             config.object_type ?? action.object_type_id ?? "",
           );
-          const ruleInterfaceId =
-            config.object_type ? null : action.interface_id ?? null;
+          const ruleInterfaceId = config.object_type ? null
+            : referenced ? referenced.interface_id ?? null
+            : action.interface_id ?? null;
+          const references = parameters.filter(
+            (p) => p.data_type === "object" && !!p.interface_id);
           /** Point the rule at another type, or back at the subject.
            *
            * Both fields move together: an `object_type` with no `object` names
@@ -1135,6 +1147,25 @@ export function ActionDefinitionEditor({
                         onChange={retarget}
                       />
                     </Field>
+                    {/* p.62: "'Modify' rules on an interface can modify any
+                        object of the configured interface", and "'Delete'
+                        action rules can have an 'interface reference'
+                        parameter assigned to them" (§742, §454). */}
+                    {!config.object_type && references.length > 0 && (
+                      <Field label="…or through">
+                        <select
+                          value={referenced ? String(config.object) : ""}
+                          aria-label={`Rule ${i + 1} interface reference`}
+                          onChange={(e) => patch(e.target.value
+                            ? { object: e.target.value } : {})}
+                        >
+                          <option value="">Not through a reference</option>
+                          {references.map((p) => (
+                            <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    )}
                     {!!config.object_type && (
                       <Field label="Which one">
                         <select
