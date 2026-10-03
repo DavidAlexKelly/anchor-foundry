@@ -36,6 +36,8 @@
  * and `MAX_TERMS` is what keeps the fan-out bounded.
  */
 
+import { iconNamed } from "../../lib/icons";
+
 /** How many terms one widget may carry.
  *
  * **A cap on a hand-typed list is really a cap on requests**, since each term
@@ -51,9 +53,16 @@ export interface Term {
   value: string;
   /** p.475's "Display name". */
   label: string;
-  /** p.475's Icon. One or two characters — there is no icon library here, the
-   * same ○ every icon setting in this file carries. */
+  /** p.475's Icon: a name from the icon set (§706), kept whole, or one or
+   * two typed characters. */
   icon: string;
+}
+
+/** An icon as a setting holds it: a name from the set whole, anything else
+ * cut to the one or two characters a glyph is. */
+function glyphOrName(raw: string): string {
+  const trimmed = raw.trim();
+  return iconNamed(trimmed) ? trimmed : trimmed.slice(0, 2);
 }
 
 /** One configured term, read from what the document holds.
@@ -76,7 +85,7 @@ export function termOf(raw: unknown): Term | null {
   return {
     value,
     label: typeof t.label === "string" ? t.label.trim() : "",
-    icon: typeof t.icon === "string" ? t.icon.trim().slice(0, 2) : "",
+    icon: typeof t.icon === "string" ? glyphOrName(t.icon) : "",
   };
 }
 

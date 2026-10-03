@@ -50,6 +50,7 @@ def buttons(api):
             "b_old_danger": button("Old danger", style="danger"),
             "b_old_quiet": button("Old quiet", style="quiet"),
             "b_icons": button("Icons", leftIcon="←", rightIcon="→", description="Goes both ways"),
+            "b_named": button("Named", leftIcon="airplane", rightIcon="tick"),
             "b_tag": button("Tag", tag=True),
             "b_large": button("Large", large=True),
             "b_fill": button("Fill", fill=True),
@@ -129,6 +130,15 @@ def test_icons_either_side_and_a_tooltip(page, buttons) -> None:
     icons = page.get_by_role("button", name="Icons")
     expect(icons).to_have_text("←Icons→")
     expect(icons).to_have_attribute("title", "Goes both ways")
+
+
+def test_icons_from_the_set_either_side(page, buttons) -> None:
+    """p.486's Left and Right icon, chosen from the icon set (§706)."""
+    open_module(page, buttons)
+    named = page.get_by_role("button", name="Named")
+    expect(named.locator(".btn-icon--left svg")).to_have_attribute("data-icon", "airplane")
+    expect(named.locator(".btn-icon--right svg")).to_have_attribute("data-icon", "tick")
+    expect(named).to_have_text("Named")
 
 
 def test_tag_large_and_fill(page, buttons) -> None:

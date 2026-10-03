@@ -232,6 +232,13 @@ def test_read_only_shows_the_filters_and_takes_none(page, api, sites) -> None:
     expect(page.get_by_test_id("search-bar-icon")).to_have_text("🔎")
 
 
+def test_the_icon_from_the_set(page, api, sites) -> None:
+    """p.473's Icon, chosen from the icon set (§706)."""
+    open_module(page, build(api, sites, "Search bar named icon", icon="search"))
+    expect(page.get_by_test_id("search-bar-icon").locator("svg")).to_have_attribute(
+        "data-icon", "search", timeout=30000)
+
+
 def test_the_placeholder_and_help(page, api, sites) -> None:
     open_module(page, build(api, sites, "Search bar help", placeholder="Find a site",
                             showHelpIcon=True))

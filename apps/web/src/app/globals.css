@@ -3955,3 +3955,8 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   min-width: 0;
 }
 .object-view-tab > legend { padding: 0 4px; font-weight: 600; font-size: 13px; }
+
+/* §706: an icon setting - a choice from the set, or typed characters. */
+.icon-choice { display: inline-flex; align-items: center; gap: 6px; }
+.icon-choice select { max-width: 11rem; }
+.icon-choice input[type="text"] { width: 4.5rem; }

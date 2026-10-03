@@ -267,7 +267,7 @@ import {
 } from "./filter-list";
 import { keywordQueryProblem } from "./keyword-query";
 import { swatch } from "@/lib/object-type-icon";
-import { TypeGlyph } from "@/components/icon";
+import { IconChoice, IconOrGlyph, TypeGlyph } from "@/components/icon";
 import {
   MAX_DRAGGED_OBJECTS, OBJECT_MEDIA_TYPE, OBJECT_SET_MEDIA_TYPE, carriesPayload, collectKeys,
   droppedClauses, objectPayload, objectSetPayload,
@@ -2693,7 +2693,7 @@ export function CanvasSearchBar({
   /** p.473's Show search help icon: the query syntax, said in place, since
    * there is no documentation site here to link to. */
   showHelpIcon?: boolean;
-  /** p.473's Icon, as a glyph (§445's reading of p.47: no icon library). */
+  /** p.473's Icon: a name from the icon set or typed characters (§706). */
   icon?: string;
   /** p.473's Link types available (§578), and for Custom list the links. */
   linkScope?: string;
@@ -2820,7 +2820,7 @@ export function CanvasSearchBar({
           style={{ display: fillWidth ? "flex" : "inline-flex", flexWrap: "wrap", gap: 6,
             alignItems: "center", width: fillWidth ? "100%" : undefined }}
         >
-          {icon ? <span aria-hidden="true" data-testid="search-bar-icon">{icon.slice(0, 2)}</span> : null}
+          {icon ? <span aria-hidden="true" data-testid="search-bar-icon"><IconOrGlyph value={icon} /></span> : null}
           {showTypePill && (
             <span className="canvas-pill is-type" data-testid="filter-pill-type">
               {type.data?.display_name || type.data?.api_name || "Object type"}
@@ -3138,12 +3138,10 @@ function SearchBarSettings() {
       </label>
       <label className="field">
         <span className="field-label">Icon</span>
-        <input
-          type="text"
-          maxLength={2}
-          value={icon ?? ""}
-          data-testid="search-bar-icon-input"
-          onChange={(e) => setProp((p: { icon: string }) => (p.icon = e.target.value))}
+        <IconChoice
+          value={icon}
+          testId="search-bar-icon-input"
+          onChange={(next) => setProp((p: { icon: string }) => (p.icon = next))}
         />
       </label>
       {toggles.map(([key, label, checked]) => (
@@ -3221,8 +3219,8 @@ CanvasSearchBar.craft = {
  * terms a setting worth having: an author writes the vocabulary they want the
  * viewer to think in, and the data says which parts of it are populated today.
  *
- * ○ for p.475's **Icon** as an icon: there is no icon library here, so it is one
- * or two characters — the same ○ every icon setting in this file carries.
+ * p.475's **Icon** is a name from the icon set or one or two typed characters
+ * (§706), as every icon setting in this file is.
  */
 export function CanvasProminentTerms({
   objectSetVariable = null,
@@ -3323,7 +3321,7 @@ export function CanvasProminentTerms({
                 onClick={() => pick(term.value)}
               >
                 {term.icon ? (
-                  <span className="canvas-term-icon" aria-hidden="true">{term.icon}</span>
+                  <span className="canvas-term-icon" aria-hidden="true"><IconOrGlyph value={term.icon} /></span>
                 ) : null}
                 <span className="canvas-term-label">{termLabelOf(term)}</span>
                 <span className="canvas-term-count" data-testid="prominent-term-count">
@@ -3471,13 +3469,11 @@ function ProminentTermsSettings() {
               data-testid={`term-label-${index}`}
               onChange={(e) => edit(index, { label: e.target.value })}
             />
-            <input
-              type="text"
+            <IconChoice
               value={term.icon}
               placeholder="icon"
-              maxLength={2}
-              data-testid={`term-icon-${index}`}
-              onChange={(e) => edit(index, { icon: e.target.value })}
+              testId={`term-icon-${index}`}
+              onChange={(next) => edit(index, { icon: next })}
             />
             <button
               type="button"
@@ -22054,8 +22050,8 @@ export function CanvasSection({
    * drag on the page would be a surprise. */
   dropHandling?: boolean;
   /** p.566's Drop label and Drop icon: what the zone shows while something
-   * droppable is over it. The icon is typed, as the header's is, because this
-   * platform has no icon set to choose from. */
+   * droppable is over it. The icon is a name from the set or up to four typed
+   * characters (§706). */
   dropLabel?: string;
   dropIcon?: string;
   /** p.568's Output object set: where the dropped objects are written, as the
@@ -22370,7 +22366,7 @@ export function CanvasSection({
         // payload is over it. Drawn over the section's contents rather than in
         // place of them, so what is being dropped onto stays visible.
         <div className="canvas-drop-overlay" data-testid={`drop-overlay-${nodeId}`}>
-          {dropIcon.trim() && <span aria-hidden="true">{dropIcon.trim()}</span>}
+          {dropIcon.trim() && <span aria-hidden="true"><IconOrGlyph value={dropIcon} max={4} /></span>}
           <span>{dropLabel.trim() || "Drop here"}</span>
         </div>
       )}
@@ -22386,7 +22382,7 @@ export function CanvasSection({
         >
           {headerIcon.trim() && (
             <span className="canvas-section-header-icon" aria-hidden="true">
-              {headerIcon.trim().slice(0, 2)}
+              <IconOrGlyph value={headerIcon} />
             </span>
           )}
           <div className="canvas-section-header-text">
@@ -22767,12 +22763,11 @@ function SectionSettings() {
         <>
           <label className="field">
             <span className="field-label">Header icon</span>
-            <input
-              value={headerIcon ?? ""}
-              maxLength={2}
+            <IconChoice
+              value={headerIcon}
               placeholder="◎"
-              data-testid="section-header-icon"
-              onChange={(e) => setProp((p: { headerIcon: string }) => (p.headerIcon = e.target.value))}
+              testId="section-header-icon"
+              onChange={(next) => setProp((p: { headerIcon: string }) => (p.headerIcon = next))}
             />
           </label>
           <label className="field">
@@ -22881,14 +22876,13 @@ function SectionSettings() {
           </label>
           <label className="field">
             <span className="field-label">Drop icon</span>
-            <input
-              value={dropIcon ?? ""}
+            <IconChoice
+              value={dropIcon}
               placeholder="+"
-              maxLength={4}
-              data-testid="section-drop-icon"
-              onChange={(e) => setProp((p: { dropIcon: string }) => (p.dropIcon = e.target.value))}
+              max={4}
+              testId="section-drop-icon"
+              onChange={(next) => setProp((p: { dropIcon: string }) => (p.dropIcon = next))}
             />
-            <span className="field-hint">A character or emoji; this platform has no icon set</span>
           </label>
           <label className="field">
             <span className="field-label">Output object set</span>
@@ -23003,12 +22997,10 @@ export function CanvasHeader({
   /** p.47's application logo: *"Enable an application logo by choosing an icon
    * or uploading an image. **Icon:** Choose an icon and an icon color."*
    *
-   * **A glyph, not a picker** (§445) — the divergence `workshop.md` already
-   * records for a Button and a Page, applied where p.47 names it: this
-   * platform has no icon library, so a logo is one or two characters an author
-   * types. The *behaviour* p.47 describes is faithful; the library is not
-   * built, and an emoji or an initial is a mark somebody recognises where an
-   * empty square is not.
+   * **An icon from the set, or one or two typed characters** (§445, §706):
+   * §445 built the glyph when this platform had no icon set, and §706 lets
+   * p.47's "Choose an icon" choose from the one decision 0019 added. An emoji
+   * or an initial still works, since it is a mark somebody recognises.
    *
    * p.47's **Image** half is `logoImage` (§472). */
   icon?: string;
@@ -23127,7 +23119,7 @@ export function CanvasHeader({
             data-testid="header-logo"
             style={{ color: resolveBackground(iconColour, saved) ?? undefined }}
           >
-            {mark.text}
+            <IconOrGlyph value={mark.text} size={18} />
           </span>
         )}
         {mark?.kind === "image" && (
@@ -23277,16 +23269,15 @@ function HeaderSettings() {
           rather than by typing a word and watching it cut in half (§337). */}
       <label className="field">
         <span className="field-label">Logo</span>
-        <input
-          value={icon ?? ""}
-          maxLength={2}
+        <IconChoice
+          value={icon}
           placeholder="◎"
-          data-testid="header-icon"
-          onChange={(e) => setProp((p: { icon: string }) => (p.icon = e.target.value))}
+          testId="header-icon"
+          onChange={(next) => setProp((p: { icon: string }) => (p.icon = next))}
         />
         <span className="field-hint">
-          One or two characters — an emoji or an initial. There is no icon
-          library here; it stays visible when a vertical header is collapsed.
+          An icon, or one or two characters — an emoji or an initial. It stays
+          visible when a vertical header is collapsed.
         </span>
       </label>
       {icon?.trim() && (
@@ -23672,12 +23663,11 @@ function PageSettings() {
       </label>
       <label className="field">
         <span className="field-label">Icon</span>
-        <input
-          value={icon ?? ""}
-          maxLength={2}
-          data-testid="page-icon"
+        <IconChoice
+          value={icon}
+          testId="page-icon"
           placeholder={(title ?? "P").charAt(0).toUpperCase()}
-          onChange={(e) => setProp((p: { icon: string }) => (p.icon = e.target.value))}
+          onChange={(next) => setProp((p: { icon: string }) => (p.icon = next))}
         />
         {/* The tab is what carries it, which is why it is configured on the
             page rather than on the Tabs widget: one Tabs widget draws a button
@@ -23887,7 +23877,7 @@ export function CanvasTabs() {
             go(page.id);
           }}
         >
-          {collapsed ? glyphFor(page.icon, page.title) : page.title}
+          {collapsed ? <IconOrGlyph value={glyphFor(page.icon, page.title)} /> : page.title}
         </button>
       ))}
     </nav>
@@ -24033,7 +24023,7 @@ export function CanvasButton({
           onClick={() => fireItem(item.id)}
         >
           {item.leftIcon?.trim() && (
-            <span className="btn-icon btn-icon--left" aria-hidden="true">{item.leftIcon.trim()}</span>
+            <span className="btn-icon btn-icon--left" aria-hidden="true"><IconOrGlyph value={item.leftIcon} /></span>
           )}
           {interpolate(item.label, resolved)}
         </button>
@@ -24059,7 +24049,7 @@ export function CanvasButton({
         {kind === "menu" && (
           <>
             {leftIcon.trim() && (
-              <span className="btn-icon btn-icon--left" aria-hidden="true">{leftIcon.trim()}</span>
+              <span className="btn-icon btn-icon--left" aria-hidden="true"><IconOrGlyph value={leftIcon} /></span>
             )}
             {text}{" "}
           </>
@@ -24086,7 +24076,7 @@ export function CanvasButton({
               }}
             >
               {leftIcon.trim() && (
-                <span className="btn-icon btn-icon--left" aria-hidden="true">{leftIcon.trim()}</span>
+                <span className="btn-icon btn-icon--left" aria-hidden="true"><IconOrGlyph value={leftIcon} /></span>
               )}
               {text}
             </button>
@@ -24124,14 +24114,14 @@ export function CanvasButton({
           if (wired.length > 0) runEvents(wired, eventContext);
         }}
       >
-        {collapsed ? glyphFor(icon || leftIcon, label) : (
+        {collapsed ? <IconOrGlyph value={glyphFor(icon || leftIcon, label)} /> : (
           <>
             {leftIcon.trim() && (
-              <span className="btn-icon btn-icon--left" aria-hidden="true">{leftIcon.trim()}</span>
+              <span className="btn-icon btn-icon--left" aria-hidden="true"><IconOrGlyph value={leftIcon} /></span>
             )}
             {text}
             {rightIcon.trim() && (
-              <span className="btn-icon btn-icon--right" aria-hidden="true">{rightIcon.trim()}</span>
+              <span className="btn-icon btn-icon--right" aria-hidden="true"><IconOrGlyph value={rightIcon} /></span>
             )}
           </>
         )}
@@ -24328,12 +24318,11 @@ function ButtonSettings() {
       </label>
       <label className="field">
         <span className="field-label">Icon</span>
-        <input
-          value={icon ?? ""}
-          maxLength={2}
-          data-testid="button-icon"
+        <IconChoice
+          value={icon}
+          testId="button-icon"
           placeholder={(label ?? "B").charAt(0).toUpperCase()}
-          onChange={(e) => setProp((p: { icon: string }) => (p.icon = e.target.value))}
+          onChange={(next) => setProp((p: { icon: string }) => (p.icon = next))}
         />
         <span className="field-hint">
           Shown instead of the label in a collapsed header. Blank uses the first letter.
@@ -24341,22 +24330,20 @@ function ButtonSettings() {
       </label>
       <label className="field">
         <span className="field-label">Left icon</span>
-        <input
-          value={leftIcon ?? ""}
-          maxLength={2}
-          data-testid="button-left-icon"
-          onChange={(e) => setProp((p: { leftIcon: string }) => (p.leftIcon = e.target.value))}
+        <IconChoice
+          value={leftIcon}
+          testId="button-left-icon"
+          onChange={(next) => setProp((p: { leftIcon: string }) => (p.leftIcon = next))}
         />
       </label>
       <label className="field">
         <span className="field-label">Right icon</span>
-        <input
-          value={rightIcon ?? ""}
-          maxLength={2}
-          data-testid="button-right-icon"
-          onChange={(e) => setProp((p: { rightIcon: string }) => (p.rightIcon = e.target.value))}
+        <IconChoice
+          value={rightIcon}
+          testId="button-right-icon"
+          onChange={(next) => setProp((p: { rightIcon: string }) => (p.rightIcon = next))}
         />
-        <span className="field-hint">A character or emoji either side of the label</span>
+        <span className="field-hint">An icon or a character either side of the label</span>
       </label>
       <label className="field">
         <span className="field-label">Description</span>
