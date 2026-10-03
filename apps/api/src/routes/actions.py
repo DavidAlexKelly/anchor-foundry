@@ -244,6 +244,8 @@ class ActionTypeOut(BaseModel):
     #: draw the toggle in the state it is actually in — a switch that always
     #: renders on is §214's control that looks like it works.
     allow_revert: bool = True
+    #: p.235's type classes (§730; db 0141), `kind:name` each.
+    type_classes: list[str] = Field(default_factory=list)
     #: p.168's action type version, and the action log this type writes to
     #: (§554; db 0116) - null until one is turned on.
     version: int = 1
@@ -335,6 +337,8 @@ class ActionTypeUpdate(BaseModel):
     #: p.7's "adding a Description in the Overview tab". An empty string is a
     #: real value here and clears it; `None` is what means "leave it alone".
     description: str | None = Field(default=None, max_length=2000)
+    #: p.235's type classes (§730). Left out, unchanged; an empty list clears.
+    type_classes: list[str] | None = None
     status: str | None = None
     deprecation: dict[str, Any] | None = None
     #: p.154's "Allow revert after action submission" toggle, which sits beside
@@ -634,7 +638,8 @@ async def update_action_type(
     (§345). A request that changes neither writes neither.
     """
     async with user_connection(access.auth.user_id) as conn:
-        named = body.display_name is not None or body.description is not None
+        named = (body.display_name is not None or body.description is not None
+                 or body.type_classes is not None)
         if named:
             await actions_service.rename_action_type(
                 conn,
@@ -642,6 +647,7 @@ async def update_action_type(
                 action_type_id,
                 display_name=body.display_name,
                 description=body.description,
+                type_classes_raw=body.type_classes,
             )
             await audit.record(
                 conn,

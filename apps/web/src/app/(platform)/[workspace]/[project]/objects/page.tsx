@@ -13,6 +13,7 @@ import {
   objects as objApi,
   type PropertyInput,
 } from "@/lib/api";
+import { typeClassesOf } from "@/lib/type-classes";
 import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ActionOverviewDialog } from "@/components/action-overview-dialog";
 import { ObjectViewEditor } from "@/components/object-view-editor";
@@ -680,6 +681,9 @@ function LinkJoinDialog({
   const [toVisibility, setToVisibility] = useState<LinkVisibility>(link.to_visibility ?? "normal");
   const [fromVisibility, setFromVisibility] = useState<LinkVisibility>(
     link.from_visibility ?? "normal");
+  // p.235's type classes (§730), typed as a property's box is.
+  const [classesText, setClassesText] = useState((link.type_classes ?? []).join(", "));
+  const classes = typeClassesOf(classesText);
   const queryClient = useQueryClient();
   const throughTable = link.cardinality === "many_to_many" && joinBy === "join_table";
   const throughBacking = joinBy === "backing";
@@ -696,6 +700,7 @@ function LinkJoinDialog({
         deprecation: status === "deprecated" ? deprecation : null,
         from_visibility: fromVisibility,
         to_visibility: toVisibility,
+        type_classes: classes.classes,
       }),
     onSuccess: async (saved) => {
       await queryClient.invalidateQueries({ queryKey: ["link-types", workspaceId] });
@@ -781,6 +786,22 @@ function LinkJoinDialog({
             </select>
           </Field>
         ))}
+        {/* `object-link-types` p.235: "Type classes can be applied to
+            properties, link types, and action types" (§730). */}
+        <Field label="Type classes"
+          hint="kind:name labels applications read, such as hierarchy:parent (p.237).">
+          <input
+            data-testid="link-type-classes"
+            value={classesText}
+            placeholder="hierarchy:parent"
+            onChange={(e) => setClassesText(e.target.value)}
+          />
+        </Field>
+        {classes.bad.length > 0 && (
+          <div className="form-error" data-testid="link-type-classes-bad">
+            {`Not kind:name: ${classes.bad.join(", ")}`}
+          </div>
+        )}
         {/* p.253-256's status for a link type, and p.254's note when it is
             deprecated (§631). */}
         <StatusField
@@ -798,7 +819,8 @@ function LinkJoinDialog({
         )}
         <div className="form-actions">
           <button type="button" className="btn quiet" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn" disabled={save.isPending || halfJoin || !!tableProblem}>
+          <button type="submit" className="btn"
+            disabled={save.isPending || halfJoin || !!tableProblem || classes.bad.length > 0}>
             {save.isPending ? "Saving…" : "Save join"}
           </button>
         </div>

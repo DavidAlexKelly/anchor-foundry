@@ -267,7 +267,11 @@ def _parameter_references(parameter: dict[str, Any]):
 #: file nor the workspace, which is worse than refusing (§340).
 #: A link's fields a file may leave out, kept as the workspace has them when
 #: it does (§714): applying a link sets them only when named.
-LINK_KEPT_IF_ABSENT = ("from_visibility", "to_visibility")
+LINK_KEPT_IF_ABSENT = ("from_visibility", "to_visibility", "type_classes")
+
+#: An action's, for the same reason (§730): type classes are newer than files
+#: exported before db 0141.
+ACTION_KEPT_IF_ABSENT = ("type_classes",)
 
 #: A property's fields a file may leave out, kept as the workspace has them
 #: (§724), for the link fields' reason: render hints are newer than files
@@ -382,12 +386,14 @@ async def plan(
         if section == "object_types":
             theirs = {name: keep_absent_property_fields(row, mine.get(name))
                       for name, row in theirs.items()}
-        if section == "link_types":
-            # p.217's visibilities (§714) are newer than files exported before
-            # db 0138. Applying one that does not name them keeps what the
-            # workspace has, so planning it compares against the same.
+        if section in ("link_types", "action_types"):
+            # p.217's visibilities (§714) and p.235's type classes (§730) are
+            # newer than files exported before db 0138 and 0141. Applying one
+            # that does not name them keeps what the workspace has, so
+            # planning it compares against the same.
+            kept = LINK_KEPT_IF_ABSENT if section == "link_types" else ACTION_KEPT_IF_ABSENT
             theirs = {
-                name: {**{field: mine[name][field] for field in LINK_KEPT_IF_ABSENT
+                name: {**{field: mine[name][field] for field in kept
                           if name in mine and field in mine[name] and field not in row},
                        **row}
                 for name, row in theirs.items()
@@ -647,6 +653,8 @@ async def _apply_links(
             to_side_name=link.get("to_side_name"),
             from_visibility=link.get("from_visibility"),
             to_visibility=link.get("to_visibility"),
+            # None when the file is older than db 0141, which keeps them.
+            type_classes_raw=link.get("type_classes"),
             status=link.get("status"),
             deprecation=link.get("deprecation"),
             # The file names no join table (it would be a dataset id), so a
@@ -760,6 +768,8 @@ async def _apply_actions(
                 conn, workspace_id, action_type_id,
                 display_name=action.get("display_name"),
                 description=action.get("description") or "",
+                # None from a file older than db 0141, which keeps them.
+                type_classes_raw=action.get("type_classes"),
             )
             updated.append(where)
         else:
@@ -781,6 +791,10 @@ async def _apply_actions(
                 created_by=actor_id,
             )
             action_type_id = UUID(str(row["id"]))
+            if action.get("type_classes") is not None:
+                await actions_service.rename_action_type(
+                    conn, workspace_id, action_type_id,
+                    type_classes_raw=action.get("type_classes"))
             added.append(where)
 
         await actions_service.set_definition(

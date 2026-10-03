@@ -341,6 +341,8 @@ class LinkTypeOut(BaseModel):
     # named separately.
     from_side_name: str | None = None
     to_side_name: str | None = None
+    # p.235's type classes (§730; db 0141), `kind:name` each.
+    type_classes: list[str] = []
     # p.217's per-side visibility (§714; db 0138): normal, prominent or hidden,
     # for the same side the name of the same name labels.
     from_visibility: str = "normal"
@@ -388,6 +390,8 @@ class LinkTypeCreate(_JoinTable):
     # unchanged on an edit.
     from_visibility: str | None = Field(default=None, pattern="^(normal|prominent|hidden)$")
     to_visibility: str | None = Field(default=None, pattern="^(normal|prominent|hidden)$")
+    # p.235's type classes (§730). Left out, none on create.
+    type_classes: list[str] | None = None
     # p.253's developmental state. Defaults to unchanged, and what is stored
     # is p.257's cap rather than what was asked for.
     status: str | None = Field(
@@ -408,6 +412,8 @@ class LinkJoinUpdate(_JoinTable):
     # unchanged on an edit.
     from_visibility: str | None = Field(default=None, pattern="^(normal|prominent|hidden)$")
     to_visibility: str | None = Field(default=None, pattern="^(normal|prominent|hidden)$")
+    # p.235's type classes (§730). Left out, unchanged; an empty list clears.
+    type_classes: list[str] | None = None
     # p.253's developmental state. Defaults to unchanged, and what is stored is
     # p.257's cap rather than what was asked for.
     status: str | None = Field(
@@ -3892,6 +3898,7 @@ async def create_link_type(
             backing_to_link_id=body.backing_to_link_id,
             from_visibility=body.from_visibility,
             to_visibility=body.to_visibility,
+            type_classes_raw=body.type_classes,
         )
         from_type = await ontology_service.get_type(conn, access.workspace_id, body.from_type_id)
         to_type = await ontology_service.get_type(conn, access.workspace_id, body.to_type_id)
@@ -3941,6 +3948,7 @@ async def update_link_join(
             backing_to_link_id=body.backing_to_link_id,
             from_visibility=body.from_visibility,
             to_visibility=body.to_visibility,
+            type_classes_raw=body.type_classes,
             deprecation=(body.deprecation if "deprecation" in body.model_fields_set
                          else ontology_service.KEEP_DEPRECATION),
         )

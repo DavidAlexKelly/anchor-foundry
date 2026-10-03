@@ -20,7 +20,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { actions as actionApi, ApiError } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
-import { overviewEdit, overviewRefusal } from "@/lib/action-overview";
+import { overviewEdit, overviewRefusal, type OverviewEdit } from "@/lib/action-overview";
 import type { ActionType } from "@/lib/types";
 
 export function ActionOverviewDialog({
@@ -35,12 +35,13 @@ export function ActionOverviewDialog({
   const saved = {
     display_name: action.display_name,
     description: action.description ?? "",
+    type_classes: (action.type_classes ?? []).join(", "),
   };
   const [draft, setDraft] = useState(saved);
   const queryClient = useQueryClient();
 
   const saving = useMutation({
-    mutationFn: (edit: { display_name?: string; description?: string }) =>
+    mutationFn: (edit: OverviewEdit) =>
       actionApi.rename(workspaceId, action.id, edit),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["action-types"] });
@@ -69,6 +70,16 @@ export function ActionOverviewDialog({
           rows={3}
           value={draft.description}
           onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+        />
+      </Field>
+      <Field label="Type classes"
+        hint="kind:name labels applications read, such as actions:generate_uuid (p.235)."
+      >
+        <input
+          data-testid="action-overview-classes"
+          value={draft.type_classes}
+          placeholder="actions:generate_uuid"
+          onChange={(e) => setDraft({ ...draft, type_classes: e.target.value })}
         />
       </Field>
       {/* The api_name is shown and not editable: it is what every saved

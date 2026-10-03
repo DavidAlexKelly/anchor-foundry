@@ -89,3 +89,23 @@ describe("what the screen refuses before asking (§345)", () => {
     })).toBe("");
   });
 });
+
+describe("type classes on the Overview (§730; object-link-types p.235)", () => {
+  const classed = { ...saved, type_classes: "actions:generate_uuid" };
+
+  it("sends them only when the list changed, as it would be stored", () => {
+    expect(overviewEdit(classed, { ...classed, type_classes: " actions:generate_uuid ," })).toBeNull();
+    expect(overviewEdit(classed, { ...classed, type_classes: "actions:generate_uuid, team:x" }))
+      .toEqual({ type_classes: ["actions:generate_uuid", "team:x"] });
+    // Emptied is a change, and clears them.
+    expect(overviewEdit(classed, { ...classed, type_classes: "" })).toEqual({ type_classes: [] });
+    // An Overview without them is one with none.
+    expect(overviewEdit(saved, { ...saved, type_classes: "" })).toBeNull();
+  });
+
+  it("refuses what is not kind:name, and names it", () => {
+    expect(overviewRefusal({ ...classed, type_classes: "actions:generate_uuid, uuid" }))
+      .toBe("Not kind:name: uuid");
+    expect(overviewRefusal(classed)).toBe("");
+  });
+});
