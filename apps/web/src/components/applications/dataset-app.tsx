@@ -40,6 +40,7 @@ import {
   parseNullMarkers,
   parseDateFormats,
   dateFormatsText,
+  optionsProblem,
   whyNotParseable,
   DELIMITED_ONLY,
   isJsonFile,
@@ -417,6 +418,7 @@ function ParsePanel({
   const [dates, setDates] = useState(() => dateFormatsText(storedOptions(stored).date_formats));
   const queryClient = useQueryClient();
   const dated = parseDateFormats(dates);
+  const problem = dated.problem || optionsProblem(options);
   const sent = () => ({
     ...options, null_values: parseNullMarkers(nulls), date_formats: dated.formats,
   });
@@ -546,6 +548,7 @@ function ParsePanel({
           ["add_file_path", "Add a file path column"],
           ["add_imported_at", "Add an import time column"],
           ["add_row_number", "Add a row number column"],
+          ["add_byte_offset", "Add a byte offset column"],
         ] as const).filter(([key]) => !json || !DELIMITED_ONLY.includes(key)).map(([key, label]) => (
           <label key={key}>
             <input
@@ -559,8 +562,8 @@ function ParsePanel({
         ))}
       </div>
 
-      {dated.problem && (
-        <p className="form-error" data-testid="parse-dates-problem">{dated.problem}</p>
+      {problem && (
+        <p className="form-error" data-testid="parse-problem">{problem}</p>
       )}
       {willDo.length > 0 && (
         <p className="soft ds-note" data-testid="parse-summary">
@@ -579,7 +582,7 @@ function ParsePanel({
           type="button"
           className="btn quiet"
           data-testid="parse-preview"
-          disabled={rehearse.isPending || dated.problem !== ""}
+          disabled={rehearse.isPending || problem !== ""}
           onClick={() => rehearse.mutate()}
         >
           Preview

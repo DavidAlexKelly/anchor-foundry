@@ -1397,6 +1397,8 @@ export interface DatasetParseOptions {
   add_file_path?: boolean;
   add_imported_at?: boolean;
   add_row_number?: boolean;
+  /** p.14's "byte offset for row" (§766). */
+  add_byte_offset?: boolean;
   /** p.26 `dateFormat` (§765): column name to JodaTime pattern. */
   date_formats?: Record<string, string>;
 }

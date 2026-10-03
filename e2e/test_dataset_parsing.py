@@ -219,7 +219,7 @@ def test_date_formats_reach_the_parse_and_are_kept(page, api) -> None:
     page.get_by_test_id("parse-again").click()
     dates = page.get_by_test_id("parse-dates")
     dates.fill("when MM/dd/yyyy")
-    expect(page.get_by_test_id("parse-dates-problem")).to_contain_text("is not column: pattern")
+    expect(page.get_by_test_id("parse-problem")).to_contain_text("is not column: pattern")
     expect(page.get_by_test_id("parse-preview")).to_be_disabled()
     dates.fill("when: MM/dd/yyyy ww")
     page.get_by_test_id("parse-preview").click()
@@ -236,6 +236,30 @@ def test_date_formats_reach_the_parse_and_are_kept(page, api) -> None:
     assert after["parse_options"]["date_formats"] == {"when": "MM/dd/yyyy"}
     page.get_by_test_id("parse-again").click()
     expect(page.get_by_test_id("parse-dates")).to_have_value("when: MM/dd/yyyy")
+
+
+def test_a_byte_offset_says_where_each_row_began(page, api) -> None:
+    """p.14's "byte offset for row" (§766). The switch reaches the parse, the
+    column says where each record began (the second row's, after a quoted
+    line break), and dropping rows alongside it is named before Preview."""
+    fixture = uploaded(api, b'id,note\n1,"two\nlines"\n2,plain\n', "notes.csv")
+    open_preview(page, fixture)
+    page.get_by_test_id("parse-again").click()
+    page.get_by_test_id("parse-add_byte_offset").check()
+    page.get_by_test_id("parse-drop_bad_rows").check()
+    expect(page.get_by_test_id("parse-problem")).to_contain_text(
+        "rows that do not fit are dropped")
+    expect(page.get_by_test_id("parse-preview")).to_be_disabled()
+    page.get_by_test_id("parse-drop_bad_rows").uncheck()
+    expect(page.get_by_test_id("parse-summary")).to_contain_text("a byte offset column added")
+    page.get_by_test_id("parse-preview").click()
+    result = page.get_by_test_id("parse-result")
+    expect(result.locator("thead th").nth(2)).to_contain_text("byte_offset")
+    expect(result.locator("tbody tr").nth(0).locator("td").nth(2)).to_have_text("8")
+    expect(result.locator("tbody tr").nth(1).locator("td").nth(2)).to_have_text("22")
+    page.get_by_test_id("parse-apply").click()
+    expect(page.get_by_test_id("parse-panel")).to_have_count(0)
+    assert [c["name"] for c in dataset(fixture)["table_schema"]] == ["id", "note", "byte_offset"]
 
 
 def test_a_dataset_nothing_uploaded_is_not_offered_the_panel(page, api) -> None:
@@ -285,7 +309,8 @@ def test_a_json_file_is_offered_only_what_applies_and_reads_as_json(page, api) -
     open_preview(page, fixture)
     page.get_by_test_id("parse-again").click()
     for absent in ("parse-delimiter", "parse-quote", "parse-skip", "parse-nulls",
-                   "parse-header", "parse-drop_bad_rows", "parse-dates"):
+                   "parse-header", "parse-drop_bad_rows", "parse-dates",
+                   "parse-add_byte_offset"):
         expect(page.get_by_test_id(absent)).to_have_count(0)
     expect(page.get_by_test_id("parse-encoding")).to_be_visible()
 
