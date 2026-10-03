@@ -96,7 +96,7 @@ import {
   chosenOf as linkChosenOf, defaultExpandOf, initiallyExpanded, labelFor,
   linkKey, modeOf as linkModeOf, toggleExpanded, visibleLinks,
   LINK_PAGE, objectViewHref, previewOf as linkPreviewOf, previewProperties,
-  sortOf as linkSortOf, sortedLinkQuery, titleOf,
+  sortOf as linkSortOf, sortedLinkQuery, titleOf, expandsFurther,
   type ChosenLink,
 } from "./links-widget";
 import { linkSubsetHref } from "@/lib/link-subset";
@@ -9389,6 +9389,8 @@ export function CanvasLinksWidget({
   // The Explorer's address is by slug, and a module is addressed by id.
   const slug = useWorkspaceById(workspaceId).workspace?.slug ?? null;
   const [previewing, setPreviewing] = useState<string | null>(null);
+  // p.268's further exploration (§712): which linked objects are open.
+  const [expandedObjects, setExpandedObjects] = useState<string[]>([]);
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending } = useCanvasVariables();
 
@@ -9400,10 +9402,14 @@ export function CanvasLinksWidget({
   const instance = setPage.rows?.[0];
   // The same query key the Object Explorer's traversal dialog uses, so a
   // reader who opens both pays for one request.
+  // p.268's "input object set which may contain one or more object types"
+  // (§712): the object's own type, which a union's rows carry (§688) and a
+  // one-type set's rows may not, where the set's is the same answer.
+  const objectTypeId = instance?.object_type_id ?? setPage.typeId;
   const linkQuery = useQuery({
-    queryKey: ["instance-links", workspaceId, setPage.typeId, instance?.id],
-    queryFn: () => objApi.instanceLinks(workspaceId, setPage.typeId!, instance!.id, "workshop"),
-    enabled: !!setPage.typeId && !!instance,
+    queryKey: ["instance-links", workspaceId, objectTypeId, instance?.id],
+    queryFn: () => objApi.instanceLinks(workspaceId, objectTypeId!, instance!.id, "workshop"),
+    enabled: !!objectTypeId && !!instance,
   });
 
   const chosen = linkChosenOf(links);
@@ -9425,7 +9431,7 @@ export function CanvasLinksWidget({
   // there is none to ask for, whatever an older configuration left behind.
   const specifying = linkModeOf(linkMode) === "specify";
   const sortedAsks = visible.map((g) =>
-    specifying ? sortedLinkQuery(g, linkSortOf(chosen, linkKey(g)), setPage.typeId ?? undefined)
+    specifying ? sortedLinkQuery(g, linkSortOf(chosen, linkKey(g)), objectTypeId ?? undefined)
       : null);
   const sortedPages = useQueries({
     queries: sortedAsks.map((ask) => ({
@@ -9523,6 +9529,13 @@ export function CanvasLinksWidget({
                             onMouseLeave={previewOnHover === true
                               ? () => setPreviewing(null) : undefined}
                           >
+                            <LinkObjectExpand
+                              depth={1}
+                              open={expandedObjects.includes(`${key}/${i.id}`)}
+                              title={title}
+                              onToggle={() => setExpandedObjects(
+                                toggleExpanded(expandedObjects, `${key}/${i.id}`))}
+                            />
                             <span data-testid="link-object-title">{title}</span>
                             {openObjects === true && slug && (
                               <a
@@ -9547,6 +9560,16 @@ export function CanvasLinksWidget({
                                 ))}
                               </dl>
                             )}
+                            {expandedObjects.includes(`${key}/${i.id}`) && (
+                              <NestedLinks
+                                workspaceId={workspaceId}
+                                typeId={group.far_type_id}
+                                instanceId={i.id}
+                                depth={1}
+                                slug={slug}
+                                openObjects={openObjects === true}
+                              />
+                            )}
                           </li>
                         );
                       })}
@@ -9565,6 +9588,141 @@ export function CanvasLinksWidget({
         </ul>
       )}
     </div>
+  );
+}
+
+/** p.268's further exploration (§712): one linked object's own links, below
+ * it, each opening to its objects and each of those to *its* links, to
+ * `MAX_LINK_DEPTH`. p.272's specified-link configuration is about the
+ * starting set's links, so a level below shows all of an object's links,
+ * folded until asked for, in the store's order. */
+function NestedLinks({ workspaceId, typeId, instanceId, depth, slug, openObjects }: {
+  workspaceId: string;
+  typeId: string;
+  instanceId: string;
+  /** The level of the object these are the links *of*: 1 for a linked object. */
+  depth: number;
+  slug: string | null;
+  openObjects: boolean;
+}) {
+  const links = useQuery({
+    queryKey: ["instance-links", workspaceId, typeId, instanceId],
+    queryFn: () => objApi.instanceLinks(workspaceId, typeId, instanceId, "workshop"),
+  });
+  const groups = links.data ?? [];
+  const farIds = [...new Set(groups.map((g) => g.far_type_id))];
+  const farTypes = useQueries({
+    queries: farIds.map((id) => ({
+      queryKey: ["object-type", id],
+      queryFn: () => objApi.getType(workspaceId, id),
+    })),
+  });
+  const farType = (id: string) => farTypes[farIds.indexOf(id)]?.data;
+  const [open, setOpen] = useState<string[]>([]);
+  const [expanded, setExpanded] = useState<string[]>([]);
+  if (links.isPending) return <p className="canvas-link-empty">Following links…</p>;
+  if (groups.length === 0) {
+    return <p className="canvas-link-empty" data-testid="link-nested-none">No links</p>;
+  }
+  return (
+    <ul className="canvas-links canvas-links--nested" data-testid="links-nested" data-depth={depth}>
+      {groups.map((group) => {
+        const key = linkKey(group);
+        const isOpen = open.includes(key);
+        return (
+          <li className="canvas-link-group" key={key} data-testid="link-group">
+            <button
+              type="button"
+              className="canvas-link-header"
+              aria-expanded={isOpen}
+              data-testid={`link-toggle-${key}`}
+              onClick={() => setOpen(toggleExpanded(open, key))}
+            >
+              <span className="canvas-link-caret" aria-hidden>{isOpen ? "▾" : "▸"}</span>
+              <span className="canvas-link-label" data-testid="link-label">{group.side_name}</span>
+              <span className="canvas-link-count">
+                {group.total} {group.far_type_display_name}
+              </span>
+            </button>
+            {isOpen && (group.items.length === 0 ? (
+              <p className="canvas-link-empty" data-testid="link-empty">
+                Nothing on the other side of this link
+              </p>
+            ) : (
+              <ul className="canvas-link-objects">
+                {group.items.map((i) => {
+                  const far = farType(group.far_type_id);
+                  const title = titleOf(i, far?.properties
+                    .find((p) => p.id === far.title_property_id)?.api_name);
+                  const row = `${key}/${i.id}`;
+                  return (
+                    <li key={i.id} data-testid="link-object">
+                      <LinkObjectExpand
+                        depth={depth + 1}
+                        open={expanded.includes(row)}
+                        title={title}
+                        onToggle={() => setExpanded(toggleExpanded(expanded, row))}
+                      />
+                      <span data-testid="link-object-title">{title}</span>
+                      {openObjects && slug && (
+                        <a
+                          className="canvas-link-open"
+                          data-testid="link-object-open"
+                          href={objectViewHref(slug, group.far_type_id, i.id)}
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label={`Open ${title}`}
+                        >
+                          Open
+                        </a>
+                      )}
+                      {expanded.includes(row) && (
+                        <NestedLinks
+                          workspaceId={workspaceId}
+                          typeId={group.far_type_id}
+                          instanceId={i.id}
+                          depth={depth + 1}
+                          slug={slug}
+                          openObjects={openObjects}
+                        />
+                      )}
+                    </li>
+                  );
+                })}
+                {group.total > group.items.length && (
+                  <li className="canvas-link-more">
+                    Showing {group.items.length} of {group.total}
+                  </li>
+                )}
+              </ul>
+            ))}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** The control that opens a linked object to its own links (§712), absent
+ * at the depth bound. */
+function LinkObjectExpand({ depth, open, title, onToggle }: {
+  depth: number;
+  open: boolean;
+  title: string;
+  onToggle: () => void;
+}) {
+  if (!expandsFurther(depth)) return null;
+  return (
+    <button
+      type="button"
+      className="canvas-link-expand"
+      aria-expanded={open}
+      aria-label={`${open ? "Hide" : "Show"} the links of ${title}`}
+      data-testid="link-object-expand"
+      onClick={onToggle}
+    >
+      {open ? "▾" : "▸"}
+    </button>
   );
 }
 

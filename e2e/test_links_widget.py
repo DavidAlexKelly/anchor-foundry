@@ -159,7 +159,8 @@ def section(page, label: str):
 
 
 def header(page, label: str):
-    return section(page, label).get_by_role("button")
+    # The section's own header, not a linked object's expand control (§712).
+    return section(page, label).locator("[data-testid^='link-toggle-']").first
 
 
 def test_it_lists_every_link_of_the_object(page, api, seed) -> None:
@@ -679,3 +680,77 @@ def test_a_sort_left_behind_by_specify_mode_is_not_applied_to_every_link(page, a
     header(page, "Direct reports").click()
     expect(page.get_by_test_id("link-object-title")).to_have_count(PREVIEW_LIMIT)
     assert "Report 12" not in reports_titles(page)[:1], reports_titles(page)
+
+
+def test_a_linked_object_opens_to_its_own_links(page, api, seed) -> None:
+    """p.268: "The Flight Alert's linked Departure Airport has been expanded
+    further in this screenshot to show its links" (§712). Two levels down
+    here: Ada's department, its employees, and one employee's manager."""
+    mod = build(api, seed, "Links nested")
+    open_module(page, mod)
+    settled(page)
+    expect_labels(page, SERVER_ORDER)
+    dept = section(page, "Department")
+    dept.locator("[data-testid^='link-toggle-']").first.click()
+    eng = dept.get_by_test_id("link-object").filter(has_text="Engineering")
+    eng.get_by_test_id("link-object-expand").click()
+    level1 = eng.get_by_test_id("links-nested")
+    expect(level1).to_have_attribute("data-depth", "1")
+    # Ada and the six even-numbered reports work in Engineering.
+    employees = level1.get_by_test_id("link-group").filter(has_text="Employees")
+    expect(employees.locator(".canvas-link-count")).to_contain_text("7")
+    employees.locator("[data-testid^='link-toggle-']").first.click()
+    report = employees.get_by_test_id("link-object").filter(
+        has=page.get_by_test_id("link-object-title").get_by_text("Report 2", exact=True))
+    report.get_by_test_id("link-object-expand").click()
+    level2 = report.get_by_test_id("links-nested")
+    expect(level2).to_have_attribute("data-depth", "2")
+    manager = level2.get_by_test_id("link-group").filter(has_text="Manager")
+    manager.locator("[data-testid^='link-toggle-']").first.click()
+    expect(manager.get_by_test_id("link-object-title")).to_have_text(["Ada"])
+
+    # Down to the bound: Ada (3), her department (4) - whose objects open no
+    # further, since links run in cycles and the tree would never end.
+    ada = manager.get_by_test_id("link-object").first
+    ada.get_by_test_id("link-object-expand").click()
+    level3 = ada.get_by_test_id("links-nested")
+    expect(level3).to_have_attribute("data-depth", "3")
+    dept3 = level3.get_by_test_id("link-group").filter(has_text="Department").first
+    dept3.locator("[data-testid^='link-toggle-']").first.click()
+    eng4 = dept3.get_by_test_id("link-object").filter(has_text="Engineering").first
+    expect(eng4).to_be_visible()
+    expect(eng4.get_by_test_id("link-object-expand")).to_have_count(0)
+
+    # Folding the object away takes its links with it.
+    eng.get_by_test_id("link-object-expand").first.click()
+    expect(eng.get_by_test_id("links-nested")).to_have_count(0)
+
+
+def test_the_input_set_may_hold_more_than_one_type(page, api, seed) -> None:
+    """p.268: "Choose the input object set which may contain one or more object
+    types" (§712). A union names no single type, so the object's own is what
+    its links are asked of - here a department, through a union with people."""
+    mod = Module(api, "Links union", beside=seed.module)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "lw": {"resolvedName": "CanvasLinksWidget",
+                   "props": {"objectSetVariable": "v_all", "linkMode": "all",
+                             "links": [], "defaultExpand": 0}},
+        }),
+        "variables": {
+            "v_people": {"id": "v_people", "kind": "object_set", "label": "Nobody",
+                         "object_set": object_set(seed.person_type,
+                                                  [{"property": "id", "op": "eq", "value": "nobody"}])},
+            "v_depts": {"id": "v_depts", "kind": "object_set", "label": "Engineering",
+                        "object_set": object_set(seed.dept_type,
+                                                 [{"property": "code", "op": "eq", "value": "ENG"}])},
+            "v_all": {"id": "v_all", "kind": "object_set", "label": "Both",
+                      "derivation": {"transform": "union_set", "inputs": ["v_people", "v_depts"]}},
+        },
+        "events": {},
+    })
+    open_module(page, mod)
+    settled(page)
+    expect_labels(page, ["Employees"])
+    expect(section(page, "Employees").locator(".canvas-link-count")).to_contain_text("7")
