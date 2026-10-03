@@ -1434,6 +1434,32 @@ def write_rows(
         con.close()
 
 
+def add_columns(
+    parquet_path: str, columns: list[str], dest_path: str,
+) -> tuple[list[ColumnSchema], int]:
+    """The same rows with these text columns added, empty - what an action
+    log needs when its action gains a parameter after the log was made
+    (§792). A column the file already has is left as it is."""
+    con = duckdb.connect()
+    try:
+        try:
+            con.execute(f"CREATE TABLE t AS SELECT * FROM read_parquet({parquet_path!r})")
+            have = {row[0] for row in con.execute("DESCRIBE t").fetchall()}
+            for column in columns:
+                if column not in have:
+                    con.execute(f"ALTER TABLE t ADD COLUMN {_quote_column(column)} VARCHAR")
+            described = con.execute("DESCRIBE t").fetchall()
+            schema = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
+            row_count = int(con.execute("SELECT count(*) FROM t").fetchone()[0])
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            con.execute(f"COPY t TO '{dest_path}' (FORMAT parquet)")
+            return schema, row_count
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+    finally:
+        con.close()
+
+
 def has_pair(parquet_path: str, from_column: str, to_column: str, pair: tuple[str, str]) -> bool:
     """Whether a join table holds this link now (§553), compared as text as
     `join_keys` reads one - what an undo asks before it reverses a link."""

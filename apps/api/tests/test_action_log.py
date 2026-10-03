@@ -329,9 +329,9 @@ def test_an_action_that_edits_only_another_object_logs_only_that_one(
     assert json.loads(got["edited_objects"]) == ["A2"]
 
 
-def test_a_parameter_added_after_the_log_is_left_out_of_it(client, fx, world) -> None:
-    """The log's columns are fixed when it is made; a value for a parameter
-    with no column is not written anywhere rather than failing the run."""
+def test_a_parameter_added_after_the_log_is_logged_too(client, fx, world) -> None:
+    """The definition's save gives the log its column (§792; until then a
+    parameter added later was left out)."""
     action_id = make_action(client, fx, world, parameters=[STATUS], rules=[
         {"kind": "modify_object", "config": {"property": "status", "parameter": "status"}}])
     made = client.post(f"{pbase(fx)}/actions/{action_id}/log", headers=hdr(fx.editor_sub)).json()
@@ -349,7 +349,7 @@ def test_a_parameter_added_after_the_log_is_left_out_of_it(client, fx, world) ->
                           "values": {"status": "muted", "reason": "noise"}})
     assert r.status_code == 200 and r.json()["ok"], r.text
     got = objects(client, fx, made["log_object_type_id"])[r.json()["run_id"]]["properties"]
-    assert got["param_status"] == "muted" and "param_reason" not in got, got
+    assert (got["param_status"], got["param_reason"]) == ("muted", "noise"), got
 
 
 def test_a_log_can_be_made_again_after_its_type_is_deleted(client, fx, world) -> None:
