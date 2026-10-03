@@ -1436,6 +1436,9 @@ class ImportIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     document: dict[str, Any]
+    #: p.66's "recreate the entire working state" (§799): remove what the
+    #: plan named as absent from the file. Off unless the person ticks it.
+    delete_absent: bool = False
 
 
 @router.post("/ontology-import/plan")
@@ -1468,7 +1471,7 @@ async def apply_ontology_import(
     async with user_connection(access.auth.user_id) as conn:
         report = await import_service.apply(
             conn, access.workspace_id, body.document,
-            actor_id=access.auth.user_id,
+            actor_id=access.auth.user_id, delete_absent=body.delete_absent,
         )
         # One record for the file, as p.66's save is one save: its entry in
         # the history says how much it changed.

@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   appliedSummary,
   exportFilename,
+  hasAbsent,
   leftAloneWarning,
 
   originNote,
@@ -120,6 +121,47 @@ describe("what the import will not do", () => {
   it("says nothing when the file leaves nothing out", () => {
     // Absent rather than reassuring somebody about a risk they do not have.
     expect(leftAloneWarning(plan())).toBe("");
+    expect(leftAloneWarning(plan(), true)).toBe("");
+    expect(hasAbsent(plan())).toBe(false);
+  });
+
+  const leaving = (over: Partial<Record<"object_types" | "link_types" | "action_types",
+    string[]>>) => plan({
+    sections: {
+      object_types: section({ absent_from_file: over.object_types ?? [] }),
+      link_types: section({ absent_from_file: over.link_types ?? [] }),
+      action_types: section({ absent_from_file: over.action_types ?? [] }),
+    },
+  });
+
+  it("counts every kind left out, links and actions too (§799)", () => {
+    const all = leaving({ object_types: ["a", "b"], link_types: ["l"], action_types: ["x"] });
+    expect(hasAbsent(all)).toBe(true);
+    expect(leftAloneWarning(all)).toBe(
+      "2 object types, 1 link type and 1 action type in this workspace are not in the file "
+      + "and will be left alone. Tick \"Delete what the file leaves out\" to remove them "
+      + "with the import, or delete them from Ontology cleanup.");
+    expect(leftAloneWarning(leaving({ action_types: ["x"] })))
+      .toMatch(/^1 action type in this workspace is not in the file/);
+    expect(leftAloneWarning(leaving({ link_types: ["l", "m"] })))
+      .toMatch(/^2 link types in this workspace are not/);
+    expect(hasAbsent(leaving({ link_types: ["l"] }))).toBe(true);
+  });
+
+  it("says what ticking the box deletes, objects included (§799)", () => {
+    expect(leftAloneWarning(leaving({ object_types: ["a"], action_types: ["x"] }), true)).toBe(
+      "Applying deletes 1 object type and 1 action type that are not in the file, "
+      + "and every object of that type. This cannot be undone.");
+    expect(leftAloneWarning(leaving({ object_types: ["a", "b"] }), true))
+      .toContain("every object of those types");
+    // No object type goes, so no objects do.
+    expect(leftAloneWarning(leaving({ link_types: ["l"] }), true)).toBe(
+      "Applying deletes 1 link type that is not in the file. This cannot be undone.");
+  });
+
+  it("does not call a file with something left out nothing to apply", () => {
+    expect(planHeadline(leaving({ link_types: ["l"] })))
+      .toBe("Everything in this file matches the ontology as it is.");
   });
 });
 
@@ -197,6 +239,16 @@ describe("what an import applied (§340, §344)", () => {
     expect(appliedSummary(report())).not.toContain("action type");
     expect(appliedSummary(report({ added: [], links_added: ["l1"] })))
       .not.toContain("object type");
+  });
+
+  it("says what it deleted, kind by kind (§799)", () => {
+    const deleted = { object_types: ["a"], link_types: [], action_types: ["x", "y"] };
+    expect(appliedSummary(report({ deleted }))).toBe(
+      "Applied 1 object type (1 new, 0 updated). Deleted 1 object type and 2 action types.");
+    expect(appliedSummary(report({ added: [], deleted }))).toBe(
+      "Deleted 1 object type and 2 action types.");
+    expect(appliedSummary(report({ added: [], deleted: {
+      object_types: [], link_types: [], action_types: [] } }))).toBe("Nothing needed applying.");
   });
 
   it("says so when nothing needed applying", () => {
