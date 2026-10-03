@@ -387,6 +387,32 @@ def test_axes_their_range_scale_side_and_unit(page, api, module) -> None:
     expect(canvas.locator("g[data-axis='2'] text[data-tick='0.5']")).to_have_text("900")
 
 
+def test_an_axis_converts_its_readings_to_another_unit(page, api, module) -> None:
+    """p.394's "Allows unit conversion (for example, meters to kilometers) or
+    custom label overrides" (§733). South reads a flat 900; said to be metres
+    and shown in kilometres, its axis, its line's scale and its statistics
+    read 0.9 - and another plot's axis is untouched."""
+    open_module(page, build(api, module, "Analysis units"))
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_label("South sensor axis").select_option("new")
+    canvas = page.locator("[data-testid='series-canvas-1']")
+    expect(stat(page, "South sensor", "max")).to_have_text("900")
+    page.get_by_label("Canvas 1 axis 2 unit").fill("m")
+    page.get_by_label("Canvas 1 axis 2 display as").fill("km")
+    expect(canvas.locator("g[data-axis='2'] text[data-unit]")).to_have_text("km")
+    expect(stat(page, "South sensor", "max")).to_have_text("0.9")
+    expect(canvas.locator("g[data-axis='2'] text[data-tick='0.5']")).to_have_text("0.9")
+    expect(stat(page, "North sensor", "max")).to_have_text("40")
+    # Different kinds are said, and nothing converts.
+    page.get_by_label("Canvas 1 axis 2 display as").fill("kg")
+    expect(page.get_by_test_id("series-unit-problem")).to_have_text("m and kg measure different things.")
+    expect(stat(page, "South sensor", "max")).to_have_text("900")
+    expect(canvas.locator("g[data-axis='2'] text[data-unit]")).to_have_text("m")
+    # A custom label converts nothing either, and says what conversion needs.
+    page.get_by_label("Canvas 1 axis 2 unit").fill("widgets")
+    expect(page.get_by_test_id("series-unit-problem")).to_contain_text("needs the readings' own unit")
+
+
 def test_interpolation_inside_and_beyond_the_readings(page, api, module) -> None:
     """p.395's Interpolation (§657). North's four readings joined in steps
     turn at three more corners; held beyond them, the line runs from the

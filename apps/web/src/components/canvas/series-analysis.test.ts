@@ -446,7 +446,7 @@ describe("p.394-395's Axis options (§656)", () => {
     expect(axisSettingsOf(axes, 1, 2)).toEqual({ ...DEFAULT_AXIS, log: true, unit: "kPa".repeat(8) });
     expect(axisSettingsOf(axes, 1, 1)).toEqual(DEFAULT_AXIS);
     expect(axisSettingsOf(axes, 2, 2)).toEqual(DEFAULT_AXIS);
-    expect(DEFAULT_AXIS).toEqual({ unit: "", auto: true, min: null, max: null, log: false, invert: false,
+    expect(DEFAULT_AXIS).toEqual({ unit: "", display: "", auto: true, min: null, max: null, log: false, invert: false,
       align: "left" });
   });
 
