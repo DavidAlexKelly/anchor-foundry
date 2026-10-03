@@ -108,7 +108,7 @@ group("p.30's related resources", () => {
       none,
       [],
       [],
-      [{ interface_id: "i1", api_name: "inspectable", display_name: "", property_mapping: {} }],
+      [{ interface_id: "i1", api_name: "inspectable", display_name: "", property_mapping: {}, link_mapping: {} }],
       [{ id: "g1", api_name: "sales", display_name: "Sales" }],
     );
     expect(sections).toEqual([
@@ -153,7 +153,7 @@ group("p.30's related resources", () => {
       { id: TYPE, properties: [prop("x", "s1")] },
       [link({})],
       [{ id: "a", api_name: "a", display_name: "", object_type_id: TYPE }],
-      [{ interface_id: "i", api_name: "i", display_name: "", property_mapping: {} }],
+      [{ interface_id: "i", api_name: "i", display_name: "", property_mapping: {}, link_mapping: {} }],
       [{ id: "g", api_name: "g", display_name: "" }],
     ).map((s) => s.title);
     expect(titles).toEqual(["Link types", "Action types", "Interfaces", "Shared properties", "Groups"]);

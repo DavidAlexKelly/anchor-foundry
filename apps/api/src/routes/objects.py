@@ -2911,6 +2911,27 @@ class InterfacePropertyOut(BaseModel):
     required: bool = True
 
 
+class InterfaceLinkConstraintIn(BaseModel):
+    """A link an interface promises (§759; decision 0024; `action-types`
+    p.63): to another interface's objects or to one object type's."""
+
+    api_name: str = Field(min_length=1, max_length=100)
+    display_name: str | None = Field(default=None, max_length=200)
+    description: str = Field(default="", max_length=1000)
+    target_interface_id: UUID | None = None
+    target_object_type_id: UUID | None = None
+    required: bool = True
+
+
+class InterfaceLinkConstraintOut(BaseModel):
+    api_name: str
+    display_name: str
+    description: str = ""
+    target_interface_id: UUID | None = None
+    target_object_type_id: UUID | None = None
+    required: bool = True
+
+
 class InterfaceIn(BaseModel):
     """The whole shape, saved as one document — `set_definition`'s shape and
     its reason: the properties and the extension list constrain each other."""
@@ -2921,6 +2942,7 @@ class InterfaceIn(BaseModel):
     properties: list[InterfacePropertyIn] = Field(default_factory=list, max_length=100)
     # p.53: "interfaces may extend any number of other interfaces".
     extends: list[UUID] = Field(default_factory=list, max_length=10)
+    link_constraints: list[InterfaceLinkConstraintIn] = Field(default_factory=list, max_length=50)
     status: str = Field(
         default="experimental",
         pattern="^(active|experimental|deprecated|example)$",
@@ -2937,6 +2959,9 @@ class InterfaceUpdate(BaseModel):
     description: str = Field(default="", max_length=2000)
     properties: list[InterfacePropertyIn] = Field(default_factory=list, max_length=100)
     extends: list[UUID] = Field(default_factory=list, max_length=10)
+    #: Omitted means unchanged (§759), so a client that predates link
+    #: constraints does not delete them by saving.
+    link_constraints: list[InterfaceLinkConstraintIn] | None = Field(default=None, max_length=50)
     status: str | None = Field(
         default=None, pattern="^(active|experimental|deprecated|example)$"
     )
@@ -2977,6 +3002,10 @@ class InterfaceDetail(BaseModel):
     # implementation is checked against — resolved here rather than by the
     # browser, because it is the server that refuses.
     effective_properties: list[InterfacePropertyOut] = Field(default_factory=list)
+    #: Its link constraints (§759), and with every ancestor's, which is what
+    #: an implementation is checked against.
+    link_constraints: list[InterfaceLinkConstraintOut] = Field(default_factory=list)
+    effective_link_constraints: list[InterfaceLinkConstraintOut] = Field(default_factory=list)
     #: The object types that implement it, with their names (§453). **On the
     #: detail and not the summary**, which is where `implementation_count`
     #: lives: a listing wants to know *how many*, and only somebody looking at
@@ -2994,6 +3023,10 @@ class ImplementationIn(BaseModel):
     # which keys are legal depends on the interface's *effective* shape, which
     # this model cannot see.
     property_mapping: dict[str, str] = Field(default_factory=dict)
+    #: `{link constraint: [link type id, …]}` (§759; p.64's "multiple concrete
+    #: link implementations"). Omitted means as stored, so a client that
+    #: predates link constraints does not drop them by saving.
+    link_mapping: dict[str, list[UUID]] | None = None
 
 
 class ImplementationOut(BaseModel):
@@ -3001,6 +3034,7 @@ class ImplementationOut(BaseModel):
     api_name: str
     display_name: str
     property_mapping: dict[str, str] = Field(default_factory=dict)
+    link_mapping: dict[str, list[UUID]] = Field(default_factory=dict)
 
 
 @router.get("/interfaces", response_model=list[InterfaceSummary])
@@ -3053,6 +3087,7 @@ async def create_interface(
             description=body.description,
             properties=[p.model_dump() for p in body.properties],
             extends=body.extends, status=body.status,
+            link_constraints=[c.model_dump(mode="json") for c in body.link_constraints],
             deprecation=body.deprecation, created_by=access.auth.user_id,
         )
         await audit.record(
@@ -3083,6 +3118,8 @@ async def update_interface(
             display_name=body.display_name, description=body.description,
             properties=[p.model_dump() for p in body.properties],
             extends=body.extends, status=body.status,
+            link_constraints=(None if body.link_constraints is None
+                              else [c.model_dump(mode="json") for c in body.link_constraints]),
             deprecation=body.deprecation,
         )
         await audit.record(
