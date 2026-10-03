@@ -13965,7 +13965,11 @@ export function CanvasSeriesAnalysis({
         : await seriesAnalysisApi.save(workspaceId, saveDraft!.location,
           { name: saveDraft!.name.trim(), visibility: saveDraft!.visibility, state: viewNow() });
       setCurrentAnalysis({ ...saved, project: over && currentAnalysis ? currentAnalysis.project : saveDraft!.location });
-      setSaveDraft(null);
+      // Only a save from the draft closes it. Saving over opened none, and
+      // clearing one here threw away a "Save as new analysis" somebody had
+      // opened while that request was in flight - a CI run caught the Save
+      // button detaching under the click.
+      if (!over) setSaveDraft(null);
       setSaveError("");
     } catch (error) {
       setSaveError(error instanceof ApiError ? error.message : "Couldn't save this analysis.");

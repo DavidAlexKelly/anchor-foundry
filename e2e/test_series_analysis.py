@@ -819,6 +819,34 @@ def test_a_public_analysis_another_reader_opens_but_cannot_save_over(page, viewe
     expect(viewer_page.get_by_label("Analysis name")).to_have_value(f"{public} copy")
 
 
+def test_saving_over_does_not_close_a_save_as_new_opened_meanwhile(page, api, module) -> None:
+    """A save over opens no draft, so it must not close one: finishing after
+    "Save as new analysis" was opened used to clear that draft under the
+    person typing into it (found as a CI flake, the Save button detaching).
+    The save over is held until the draft is open, so the order is certain."""
+    mod = build(api, module, "Analysis held save", saving=True)
+    open_module(page, mod)
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    save_as(page, f"Held {mod.tag}")
+    held = []
+    page.route(re.compile(r".*/series-analyses/.*"),
+               lambda route: held.append(route) if route.request.method == "PUT" else route.continue_())
+    page.get_by_role("button", name="Save analysis").click()
+    page.wait_for_timeout(300)
+    page.get_by_role("button", name="Save as new analysis").click()
+    expect(page.get_by_label("Analysis name")).to_be_visible()
+    assert held, "the save over was not held"
+    held[0].continue_()
+    page.unroute(re.compile(r".*/series-analyses/.*"))
+    page.wait_for_timeout(500)
+    # Still open, and it saves.
+    save_as_open = page.get_by_test_id("series-save-analysis")
+    expect(save_as_open).to_be_visible()
+    page.get_by_label("Analysis name").fill(f"Second {mod.tag}")
+    save_as_open.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_test_id("series-analysis-open")).to_contain_text(f"Second {mod.tag}")
+
+
 def test_no_saving_unless_the_builder_allows_it(page, api, module) -> None:
     open_module(page, build(api, module, "Analysis not saved"))
     expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
