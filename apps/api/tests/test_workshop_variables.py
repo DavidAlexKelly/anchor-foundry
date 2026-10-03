@@ -4434,6 +4434,27 @@ def test_a_variable_passed_as_an_action_parameter_is_a_usage() -> None:
     assert "v_note" in wv.displayed(layout, variables, {"tbl"})
 
 
+def test_a_variable_mapped_into_an_object_view_tab_is_a_usage() -> None:
+    """p.263's Interface configuration (§710): a host variable mapped into a
+    configured view tab's interface is used, computed when the widget shows,
+    and refused when it is gone - as an embed's mapping is."""
+    props = {"objectSetVariable": "v_all",
+             "viewInterface": {"tab-1:region": "v_region", "tab-1:unset": ""}}
+    assert wv.references(props) == [
+        ("objectSetVariable", "v_all"), ("viewInterface.tab-1:region", "v_region")]
+    variables = wv.parse({
+        "v_all": {"id": "v_all", "kind": "object_set", "label": "All",
+                  "object_set": {"object_type_id": TYPE_ID, "filters": []}},
+        "v_region": var("v_region", label="Region"),
+    })
+    layout = {"ov": node(props)}
+    assert wv.usages(layout, variables)["v_region"] == [
+        {"node": "ov", "prop": "viewInterface.tab-1:region"}]
+    assert "v_region" in wv.displayed(layout, variables, {"ov"})
+    assert wv.dangling_references(layout, {"v_all": variables["v_all"]}) == [
+        {"node": "ov", "prop": "viewInterface.tab-1:region", "variable": "v_region"}]
+
+
 def test_an_initial_event_set_s_object_set_is_a_usage() -> None:
     """p.396's initial event sets on Time Series Analysis (§658), each "backed
     by" an object set: the set cannot be deleted from under one, and one

@@ -41,7 +41,7 @@ import { canvas as canvasApi, objects as objApi } from "@/lib/api";
 import { CommentsButton } from "@/components/comments-panel";
 import { StandardPanelView } from "@/components/object-panels";
 import { canShowStar, starGlyph, starLabel } from "@/lib/favourites";
-import { shownTab, showsTabStrip } from "@/lib/object-view-tabs";
+import { shownTab, showsTabStrip, tabBindings } from "@/lib/object-view-tabs";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
 import { CANVAS_RESOLVER } from "@/components/canvas/widgets";
@@ -65,18 +65,32 @@ function ReadOnlyFrame({ definition }: { definition: Record<string, unknown> }) 
   );
 }
 
+/** A host module's variables passed into a configured view's tabs - workshop
+ * p.263's Interface configuration (§710). `mapping` is the widget's flat
+ * `{"<tab id>:<external id>": host variable}`; `values` and `set` are the
+ * host's, so a mapped variable is one value seen from both modules (p.127). */
+export interface ViewInterfaceLink {
+  mapping: Record<string, unknown>;
+  values: Record<string, unknown>;
+  set: (name: string, value: unknown) => void;
+}
+
 function ConfiguredObjectView({
   workspaceId,
   appId,
+  tabId,
   subjectVariable,
   typeId,
   instance,
+  link,
 }: {
   workspaceId: string;
   appId: string;
+  tabId: string;
   subjectVariable: string;
   typeId: string;
   instance: ObjectInstance;
+  link?: ViewInterfaceLink;
 }) {
   const app = useQuery({
     queryKey: ["published-canvas-app", appId],
@@ -105,6 +119,7 @@ function ConfiguredObjectView({
 
   const definition = readerLayout(app.data.definition);
   const declared = variablesOf(app.data.definition);
+  const bindings = link ? tabBindings(link.mapping, tabId, declared, subjectVariable) : {};
   return (
     <div data-testid="configured-object-view" data-app={appId}>
       <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
@@ -116,6 +131,7 @@ function ConfiguredObjectView({
               needs. A primary key alone would be a reference nobody could
               write through. */}
           <CanvasParameterProvider
+            link={link ? { bindings, values: link.values, set: link.set } : undefined}
             seed={{
               [subjectVariable]: {
                 id: instance.id,
@@ -136,7 +152,7 @@ function ConfiguredObjectView({
               // definition for it must stand aside - Foundry's precedence rule
               // for a mapped variable (p.122, p.127), which is the same
               // situation an embed is in.
-              bound={[subjectVariable]}
+              bound={[subjectVariable, ...Object.keys(bindings)]}
             >
               <ReadOnlyFrame definition={definition} />
             </VariableBridge>
@@ -249,7 +265,10 @@ export function ObjectView({
   initialTabId = null,
   pickedTab: heldTab,
   onPickTab,
+  interfaceLink,
 }: {
+  /** Workshop p.263's Interface configuration (§710), from the widget. */
+  interfaceLink?: ViewInterfaceLink;
   workspaceId: string;
   typeId: string;
   instance: ObjectInstance;
@@ -413,7 +432,9 @@ export function ObjectView({
             key={`${tab.id}:${shown.id}`}
             workspaceId={workspaceId}
             appId={tab.canvas_app_id}
+            tabId={tab.id}
             subjectVariable={tab.subject_variable}
+            link={interfaceLink}
             typeId={typeId}
             instance={shown}
           />

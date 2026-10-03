@@ -347,7 +347,7 @@ export const NESTED_REFERENCE_PROPS: Record<string, readonly string[]> = {
  * embed's interface mapping (p.127) and p.241's variables passed as action
  * parameters. Mirrors `MAPPING_REFERENCE_PROPS` in
  * `services/workshop_variables.py`. */
-export const MAPPING_REFERENCE_PROPS: readonly string[] = ["interface", "inlineEditVariables"];
+export const MAPPING_REFERENCE_PROPS: readonly string[] = ["interface", "inlineEditVariables", "viewInterface"];
 
 export interface Reference {
   /** `objectSetVariable`, or `steps[1].completedVariable` for a nested one. */

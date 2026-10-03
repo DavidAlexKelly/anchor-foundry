@@ -633,8 +633,10 @@ NESTED_REFERENCE_PROPS: dict[str, tuple[str, ...]] = {
 #: An embed's interface mapping (p.127) was the first and was read by a case
 #: of its own; p.241's variables passed as action parameters (an Object
 #: Table's `{parameter: variable}`) is the second, which is what makes it a
-#: catalogue. Mirrored in `workshop-module.ts`.
-MAPPING_REFERENCE_PROPS: tuple[str, ...] = ("interface", "inlineEditVariables")
+#: catalogue. p.263's Object View Interface configuration (§710) is the third:
+#: `{"<tab id>:<external id>": variable}`, an embed's mapping per view tab.
+#: Mirrored in `workshop-module.ts`.
+MAPPING_REFERENCE_PROPS: tuple[str, ...] = ("interface", "inlineEditVariables", "viewInterface")
 
 
 def references(props: Any) -> list[tuple[str, str]]:

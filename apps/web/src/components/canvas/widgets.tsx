@@ -268,6 +268,7 @@ import {
 import { keywordQueryProblem } from "./keyword-query";
 import { swatch } from "@/lib/object-type-icon";
 import { IconChoice, IconOrGlyph, TypeGlyph } from "@/components/icon";
+import { interfaceKey } from "@/lib/object-view-tabs";
 import {
   MAX_DRAGGED_OBJECTS, OBJECT_MEDIA_TYPE, OBJECT_SET_MEDIA_TYPE, carriesPayload, collectKeys,
   droppedClauses, objectPayload, objectSetPayload,
@@ -9900,6 +9901,7 @@ export function CanvasObjectViewWidget({
   hideHeader = false,
   emptyMessage = "",
   emptyIcon = "",
+  viewInterface = {},
   formFactor = "full",
   panelBehavior = "instance",
   hideTabs = false,
@@ -9909,6 +9911,9 @@ export function CanvasObjectViewWidget({
   /** p.262's Empty state icon (§709): "Builders can select an icon and
    * configure a custom message to display." */
   emptyIcon?: string;
+  /** p.263's Interface configuration (§710): this module's variables passed
+   * into the view's tabs, `{"<tab id>:<external id>": variable id}`. */
+  viewInterface?: Record<string, string>;
   /** p.262's Hide tabs (§695). */
   hideTabs?: boolean;
   /** p.262's Go to initial tab on object switch (§695). */
@@ -9934,7 +9939,8 @@ export function CanvasObjectViewWidget({
   } = useNode();
   const { workspaceId, mode } = useCanvasEnv();
   const setDefinition = useCanvasVariable(objectSetVariable);
-  const { pending: variablesPending } = useCanvasVariables();
+  const { pending: variablesPending, resolved: hostValues } = useCanvasVariables();
+  const { set: setHostVariable } = useCanvasParameters();
 
   // p.261: "only the first object will be shown if the object set contains
   // multiple objects."
@@ -10009,9 +10015,92 @@ export function CanvasObjectViewWidget({
             initialTabId={initialTabId || null}
             pickedTab={pickedTab}
             onPickTab={setPickedTab}
+            // p.263's Interface configuration (§710), both ways as p.127's is.
+            interfaceLink={{ mapping: viewInterface, values: hostValues, set: setHostVariable }}
           />
         </div>
       )}
+    </div>
+  );
+}
+
+/** p.263's **Interface configuration** (§710): "Defines a mapping from the
+ * current module's variables to an object view tab's module interface …
+ * select a tab that has a module interface defined and populate the
+ * interface." Each tab of the bound set's type's view, with the variables its
+ * module publishes; the view's subject is the object itself, so it is not
+ * offered. The type is the one the widget's set names - p.263's "adding an
+ * object type to the mapping" is that choice, made by the set. */
+function ViewInterfaceFields({ typeId, formFactor }: { typeId: string; formFactor: string }) {
+  const { workspaceId } = useCanvasEnv();
+  const {
+    mapping,
+    actions: { setProp },
+  } = useNode((node) => ({ mapping: (node.data.props.viewInterface ?? {}) as Record<string, string> }));
+  const hostVariables = useCanvasVariables().declared;
+  const view = useQuery({
+    queryKey: ["object-view", workspaceId, typeId, formFactor],
+    queryFn: () => objApi.getView(workspaceId, typeId, formFactor),
+  });
+  const tabs = view.data?.tabs ?? [];
+  const modules = useQueries({
+    queries: tabs.map((tab) => ({
+      queryKey: ["published-canvas-app", tab.canvas_app_id],
+      queryFn: () => canvasApi.getPublished(workspaceId, tab.canvas_app_id),
+    })),
+  });
+  if (view.isPending) return null;
+  if (!view.data) {
+    return (
+      <p className="field-hint" data-testid="object-view-interface-none">
+        This object type has no configured view, so there is no interface to pass into.
+      </p>
+    );
+  }
+  return (
+    <div className="field" data-testid="object-view-interface">
+      <span className="field-label">Interface configuration</span>
+      {tabs.map((tab, index) => {
+        const definition = modules[index]?.data?.definition;
+        const published = Object.values(definition ? variablesOf(definition) : {})
+          .filter((v) => v.interface && v.external_id && v.id !== tab.subject_variable);
+        return (
+          <div key={tab.id} className="field">
+            <span className="field-hint">{tab.title || tab.canvas_app_name}</span>
+            {definition && published.length === 0 && (
+              <span className="field-hint">This tab&apos;s module publishes no interface.</span>
+            )}
+            {published.map((variable) => {
+              const key = interfaceKey(tab.id, variable.external_id!);
+              const compatible = Object.values(hostVariables).filter((h) => h.kind === variable.kind);
+              return (
+                <label key={key} className="field">
+                  <span className="field-label">
+                    {variable.interface?.display_name || variable.label}
+                  </span>
+                  <select
+                    value={mapping[key] ?? ""}
+                    data-testid={`object-view-map-${variable.external_id}`}
+                    onChange={(e) =>
+                      setProp((p: { viewInterface?: Record<string, string> }) => {
+                        const next = { ...(p.viewInterface ?? {}) };
+                        if (e.target.value) next[key] = e.target.value;
+                        else delete next[key];
+                        p.viewInterface = next;
+                      })
+                    }
+                  >
+                    <option value="">Not passed — it uses its own definition</option>
+                    {compatible.map((h) => (
+                      <option key={h.id} value={h.id}>{h.label}</option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -10212,6 +10301,7 @@ function ObjectViewWidgetSettings() {
           onChange={(next) => setProp((p: { emptyIcon: string }) => (p.emptyIcon = next))}
         />
       </label>
+      {typeId && <ViewInterfaceFields typeId={typeId} formFactor={formFactorOf(formFactor)} />}
       </>}
     />
   );
@@ -10221,7 +10311,8 @@ CanvasObjectViewWidget.craft = {
   displayName: "Object view",
   props: {
     objectSetVariable: null, viewMode: "configured", allowToggle: true,
-    hideHeader: false, emptyMessage: "", emptyIcon: "", formFactor: "full", panelBehavior: "instance",
+    hideHeader: false, emptyMessage: "", emptyIcon: "", viewInterface: {}, formFactor: "full",
+    panelBehavior: "instance",
     hideTabs: false, goToInitialTab: false, initialTabId: "",
   },
   related: { settings: ObjectViewWidgetSettings },

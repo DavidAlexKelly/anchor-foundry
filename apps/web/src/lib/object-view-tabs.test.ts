@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  MAX_TABS, draftsOf, moveTab, shownTab, showsTabStrip, tabsProblem, type TabDraft,
+  MAX_TABS, draftsOf, interfaceKey, moveTab, shownTab, showsTabStrip, tabBindings, tabsProblem,
+  type TabDraft,
 } from "./object-view-tabs";
 
 const tabs = [{ id: "a" }, { id: "b" }, { id: "c" }];
@@ -77,5 +78,29 @@ describe("draftsOf", () => {
       { title: "", canvas_app_id: "m1", subject_variable: "v1" },
       { title: "Second", canvas_app_id: "m2", subject_variable: "v2" },
     ]);
+  });
+});
+
+describe("tabBindings", () => {
+  const declared = {
+    v_obj: { id: "v_obj", external_id: "object", interface: {} },
+    v_reg: { id: "v_reg", external_id: "region", interface: {} },
+    v_private: { id: "v_private", external_id: "hidden" },
+  };
+
+  it("binds a tab's interface variables to the host's, by external ID", () => {
+    expect(tabBindings({ [interfaceKey("t1", "region")]: "h_region" }, "t1", declared, "v_obj"))
+      .toEqual({ v_reg: "h_region" });
+  });
+
+  it("reads only its own tab's keys", () => {
+    expect(tabBindings({ "t2:region": "h_region" }, "t1", declared, "v_obj")).toEqual({});
+  });
+
+  it("drops what the module does not publish, a blank, and the subject", () => {
+    expect(tabBindings({
+      "t1:gone": "h_x", "t1:hidden": "h_y", "t1:region": "", "t1:object": "h_obj",
+    }, "t1", declared, "v_obj")).toEqual({});
+    expect(tabBindings(null, "t1", declared, "v_obj")).toEqual({});
   });
 });
