@@ -2820,6 +2820,9 @@ export const canvas = {
     profile?: boolean,
     /** The branch being edited (§698): resolve its document, not main's. */
     branch?: string,
+    /** The builder's working variables and events (§701), resolved in place of
+     * the saved ones so an edit has a value before it is saved. */
+    working?: { variables: Record<string, unknown>; events: Record<string, unknown> },
   ) =>
     request<{
       values: Record<string, unknown>;
@@ -2839,6 +2842,7 @@ export const canvas = {
           ...(visible === undefined ? {} : { visible }),
           ...(profile ? { profile: true } : {}),
           ...(branch ? { branch } : {}),
+          ...(working ? { working } : {}),
           // p.138-139's "the user's local timezone" (§596).
           time_zone: viewerZone(),
         }),

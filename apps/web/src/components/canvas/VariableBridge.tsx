@@ -69,6 +69,7 @@ export function VariableBridge({
   pageSelection,
   stateSaving,
   branch,
+  working = false,
   children,
 }: {
   workspaceId: string;
@@ -77,6 +78,11 @@ export function VariableBridge({
   /** The branch the builder is editing (§698). Its document is the one the
    * server resolves, since a branch may declare variables main does not. */
   branch?: string;
+  /** The builder (§701): send `declared` and `events` as the draft to resolve,
+   * so a variable configured a moment ago - or brought in by a rebase not
+   * saved yet - has a value before anybody saves. Off for readers, whose
+   * module *is* the saved one. */
+  working?: boolean;
   /** True on the workspace-wide published route. A published app is reached by
    * someone who may not be in its project at all, so the project-scoped
    * resolve would 404 for exactly the audience it was published to. */
@@ -306,7 +312,8 @@ export function VariableBridge({
           workspaceId, appId, raw, bound, held, asks, visible, profiler.on)
         : canvasApi.evaluateVariables(
           workspaceId, projectId, appId, raw, bound, held, asks, visible, profiler.on,
-          branch))
+          branch,
+          working ? { variables: declared, events: events ?? {} } : undefined))
         .then((data) => ({ data, ticket, held, asks, from }));
     },
     onSuccess: ({ data, ticket, held, asks, from }) => {
@@ -343,6 +350,10 @@ export function VariableBridge({
   });
 
   const serialised = JSON.stringify(values);
+  // In the builder the draft is an input too (§701): editing a variable's
+  // definition changes what everything resolves to, the same as a reader
+  // changing a value does.
+  const draft = working ? JSON.stringify([declared, events ?? {}]) : "";
   useEffect(() => {
     if (!enabled) {
       setPending(false);
@@ -352,7 +363,7 @@ export function VariableBridge({
     const timer = setTimeout(() => resolve.mutate(values), DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serialised, enabled, appId, (bound ?? []).join(","), recomputeTick, visibleKey]);
+  }, [serialised, draft, enabled, appId, (bound ?? []).join(","), recomputeTick, visibleKey]);
 
   // And running an action (roadmap 1.3), by the same argument.
   const queryClient = useQueryClient();

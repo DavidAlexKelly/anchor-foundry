@@ -191,6 +191,11 @@ class ShareOut(BaseModel):
     group_name: str
 
 
+class WorkingIn(BaseModel):
+    variables: dict[str, Any] = Field(default_factory=dict)
+    events: dict[str, Any] = Field(default_factory=dict)
+
+
 class EvaluateVariablesIn(BaseModel):
     """What the viewer has set. Values for derived variables are ignored - a
     derived variable is a function of its inputs (see the service)."""
@@ -226,6 +231,11 @@ class EvaluateVariablesIn(BaseModel):
     # a branch can declare variables main does not have, and resolving main's
     # would draw the branch's layout against the wrong module.
     branch: str | None = Field(default=None, max_length=63)
+    # The builder's *working* variables and events (§701), resolved in place of
+    # the saved ones so a variable configured a moment ago - or brought in by a
+    # rebase that is not saved yet (p.621's "evaluate outcomes in real time") -
+    # has a value without a save first. Editors only: it is their draft.
+    working: "WorkingIn | None" = None
     #: p.75's lazy rule (§392): the layout node ids currently on screen. The
     #: server expands these into the variables they need, inputs included, and
     #: computes nothing else.
@@ -1163,10 +1173,25 @@ async def evaluate_variables(
         # *store* needs them too, to know what to cast.
         property_types = await _workspace_property_types(conn, access.workspace_id)
         document = _parse_json(row["definition"])
+        variables = None
+        if body.working is not None and access.role != "viewer":
+            # A draft that does not validate yet - a variable half-configured
+            # in its panel - resolves as saved rather than blanking the canvas
+            # under the person configuring it. It takes effect once it is whole.
+            drafted = {**document, "variables": body.working.variables,
+                       "events": body.working.events}
+            try:
+                variables = variables_service.validate_module(
+                    drafted, property_types=property_types
+                )
+                document = drafted
+            except variables_service.VariableError:
+                variables = None
         try:
-            variables = variables_service.validate_module(
-                document, property_types=property_types
-            )
+            if variables is None:
+                variables = variables_service.validate_module(
+                    document, property_types=property_types
+                )
         except variables_service.VariableError as exc:
             # A saved app whose document no longer validates. Reachable: the
             # module could have been written before a rule existed, or by

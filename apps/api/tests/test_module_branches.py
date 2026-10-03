@@ -328,3 +328,46 @@ def test_variables_resolve_against_the_branch_being_edited(
     missing = client.post(f"{base(fx)}/{app_id}/variables/evaluate",
                           headers=hdr(fx.viewer_sub), json={"branch": "nope"})
     assert missing.status_code == 404, missing.text
+
+
+# ---- §701: the builder resolves the variables it is editing -------------------
+def note_variable(default: str) -> dict:
+    return {"v_note": {"id": "v_note", "kind": "string", "label": "Note", "default": default}}
+
+
+def test_an_editor_resolves_their_working_variables(client: TestClient, fx: Fixture) -> None:
+    """p.621's "evaluate outcomes in real time": a variable in the builder's
+    draft - configured a moment ago, or brought in by a rebase not saved yet -
+    has a value before anybody saves."""
+    app_id = new_module(client, fx)
+    r = client.post(f"{base(fx)}/{app_id}/variables/evaluate", headers=hdr(fx.editor_sub),
+                    json={"working": {"variables": note_variable("drafted"), "events": {}}})
+    assert r.status_code == 200, r.text
+    assert r.json()["values"]["v_note"] == "drafted"
+
+
+def test_a_viewers_draft_is_not_theirs_to_resolve(client: TestClient, fx: Fixture) -> None:
+    """A viewer's module is the saved one: they cannot edit it, so there is no
+    draft of theirs to resolve."""
+    app_id = new_module(client, fx)
+    r = client.post(f"{base(fx)}/{app_id}/variables/evaluate", headers=hdr(fx.viewer_sub),
+                    json={"working": {"variables": note_variable("drafted"), "events": {}}})
+    assert r.status_code == 200, r.text
+    assert "v_note" not in r.json()["values"]
+
+
+def test_a_draft_that_does_not_validate_resolves_as_saved(client: TestClient, fx: Fixture) -> None:
+    """A variable half-configured in its panel must not blank the canvas under
+    the person configuring it: the saved document resolves until the draft is
+    whole."""
+    app_id = new_module(client, fx)
+    saved = doc("x")
+    saved["variables"] = note_variable("saved")
+    client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+               json={"definition": saved})
+    broken = {"v_bad": {"id": "v_bad", "kind": "string", "label": "Bad",
+                        "derivation": {"transform": "concat", "inputs": ["v_missing"]}}}
+    r = client.post(f"{base(fx)}/{app_id}/variables/evaluate", headers=hdr(fx.editor_sub),
+                    json={"working": {"variables": broken, "events": {}}})
+    assert r.status_code == 200, r.text
+    assert r.json()["values"]["v_note"] == "saved"
