@@ -163,10 +163,10 @@ def test_an_unrelated_edit_does_not_reset_a_propertys_status(page, module, api) 
     the type, so any setting it forgets to carry is silently reset by somebody
     changing a display name.
 
-    There is no per-property status control on this screen, so the setting is
-    made through the API and the *browser* does the unrelated edit - which is
-    exactly the shape of the bug: a value nothing on the page can see, quietly
-    dropped by a page that rewrites everything.
+    The setting is made through the API and the *browser* does the unrelated
+    edit - the shape of the bug: a value the edit does not touch, quietly
+    dropped by a page that rewrites everything. (§732 gave a property its own
+    status control on this form; `test_property_status.py` drives it.)
     """
     base = f"/workspaces/{module.workspace_id}"
     detail = api.call("GET", f"{base}/object-types/{module.object_type_id}")

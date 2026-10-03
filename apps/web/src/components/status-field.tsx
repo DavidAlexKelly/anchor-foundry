@@ -19,7 +19,7 @@
 
 import { Field } from "@/components/dialog";
 import {
-  STATUS_HINTS, STATUS_LABELS, promoteBlockedReason, propagationWarning,
+  STATUS_HINTS, STATUS_LABELS, deprecationSummary, promoteBlockedReason, propagationWarning,
   statusesFor, wantsDeprecationNote,
 } from "@/lib/ontology-status";
 import type { Deprecation, OntologyStatus } from "@/lib/types";
@@ -116,13 +116,19 @@ export function StatusField({
  * `experimental` draws nothing: it is p.256's default, so marking it would put
  * a badge on every row of a new ontology and say nothing by being everywhere.
  */
-export function StatusBadge({ status }: { status: OntologyStatus }) {
+export function StatusBadge({ status, note }: {
+  status: OntologyStatus;
+  /** p.254's deprecation note, said in the tooltip when there is one (§732):
+   * a reader meeting "deprecated" wants why and what replaces it. */
+  note?: Deprecation | null;
+}) {
   if (status === "experimental") return null;
+  const said = status === "deprecated" && note ? deprecationSummary(note) : "";
   return (
     <span
       className="slug"
       data-testid={`status-badge-${status}`}
-      title={STATUS_HINTS[status]}
+      title={said || STATUS_HINTS[status]}
       style={{ marginLeft: 6 }}
     >
       {STATUS_LABELS[status].toLowerCase()}

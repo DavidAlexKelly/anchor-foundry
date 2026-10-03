@@ -49,6 +49,7 @@ import { ReducedValue } from "@/components/reduced-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 import { asViewed, objectViewSections } from "@/components/object-properties";
 import { plot } from "@/components/series-plot";
+import { StatusBadge } from "@/components/status-field";
 import type { ObjectInstance, ObjectTypeProperty, PropertyStyle } from "@/lib/types";
 import { OBJECT_MEDIA_TYPE, objectPayload } from "@/components/canvas/drag-payload";
 
@@ -366,6 +367,9 @@ export function StandardObjectView({
               <TypeGlyph type={type.data} />
             </span>
             {type.data.display_name}
+            {/* p.253: statuses "are viewable in … Object Views" (§732) -
+                p.254's note in the tooltip, when deprecated. */}
+            <StatusBadge status={type.data.status} note={type.data.deprecation} />
           </p>
           <h2 className="sov-title">{title}</h2>
         </header>
@@ -445,7 +449,10 @@ export function StandardObjectView({
           <tbody>
             {normal.map((p) => (
               <tr key={p.api_name} data-property={p.api_name}>
-                <th scope="row">{p.display_name || p.api_name}</th>
+                <th scope="row">
+                  {p.display_name || p.api_name}
+                  <StatusBadge status={p.status ?? "experimental"} note={p.deprecation} />
+                </th>
                 <td>
                   {/* p.131's "in a table or application" (§349; db 0088).
                       **The ordinary list reduces and the prominent cards above
