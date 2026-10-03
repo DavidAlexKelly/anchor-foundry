@@ -27,7 +27,8 @@ from conftest import eventually, no_console_errors, open_module
 def build(api, name: str, *, layout_switch: bool = False, props: dict | None = None,
           events: dict | None = None, variables: dict | None = None,
           prefill: str | None = None, tickets: int = 3,
-          prefill_keys: list[str] | None = None) -> Module:
+          prefill_keys: list[str] | None = None, with_table: bool = False,
+          function_backed: bool = False) -> Module:
     """`prefill`: "same" fills the table from a set of this action's own type
     (p.512), "other" from a set of a second type, which p.512 says must not."""
     mod = Module(api, name)
@@ -55,14 +56,28 @@ def build(api, name: str, *, layout_switch: bool = False, props: dict | None = N
         "display_name": "Set status",
         "editable_properties": ["status"],
     })
+    rules = [{"kind": "modify_object", "config": {"property": "status", "parameter": "status"}}]
+    if function_backed:
+        # p.240's other shape, whose batch is p.131's twenty rows (§776).
+        slug = api.call("GET", f"/workspaces/{mod.workspace_id}/object-types/{type_id}")["api_name"]
+        fn = api.call("POST", f"/workspaces/{mod.workspace_id}/functions", {
+            "api_name": f"fn_{uuid.uuid4().hex[:6]}", "display_name": "F", "version": {
+                "version": "1.0.0", "inputs": [type_id],
+                "parameters": [{"api_name": "ticket", "data_type": "object",
+                                "object_type_id": type_id},
+                               {"api_name": "status", "data_type": "string"}],
+                "output": {"kind": "edits", "object_type_id": type_id},
+                "sql": (f"SELECT __primary_key, $status AS status FROM {slug} "
+                        "WHERE __primary_key = $ticket")}})
+        rules = [{"kind": "function", "config": {
+            "function_id": fn["id"], "version": "1.0.0", "auto_upgrade": False,
+            "inputs": {"ticket": {"subject": True}, "status": {"parameter": "status"}}}}]
     api.call("PUT", f"/workspaces/{mod.workspace_id}/action-types/{action['id']}/definition", {
         "parameters": [
             {"api_name": "status", "display_name": "Status", "data_type": "string",
              "required": True},
         ],
-        "rules": [
-            {"kind": "modify_object", "config": {"property": "status", "parameter": "status"}},
-        ],
+        "rules": rules,
         "criteria": [
             {"message": "Tickets cannot be marked deleted.",
              "config": {"left": {"kind": "parameter", "parameter": "status"},
@@ -70,9 +85,17 @@ def build(api, name: str, *, layout_switch: bool = False, props: dict | None = N
                         "right": {"kind": "value", "value": "deleted"}}},
         ],
     })
+    if with_table:
+        # The module's other reads, which a submission has to refresh.
+        variables = {**(variables or {}), "v_all": {
+            "id": "v_all", "kind": "object_set", "label": "All",
+            "object_set": object_set(type_id)}}
     mod.define({
         "format": 2,
         "layout": layout({
+            **({"tbl": {"resolvedName": "CanvasObjectTable", "props": {
+                "objectSetVariable": "v_all", "columns": "status", "pageSize": 25,
+                "activeVariable": None, "autoSelect": False}}} if with_table else {}),
             "txt": {"resolvedName": "CanvasText",
                     "props": {"tag": "p", "text": "Fired: {{v_done}}"}},
             "frm": {"resolvedName": "CanvasActionForm",
@@ -122,17 +145,74 @@ def test_each_row_is_one_object_and_starts_at_what_it_says(page, api) -> None:
 
 
 def test_every_row_is_submitted(page, api) -> None:
+    """As one batch call (§796; p.512's "batch call limits apply to the table
+    layout"): an action that changes only each row's own object takes the
+    Object Table's batch, so every row lands or none does."""
     mod = build(api, "Action table submit")
     open_module(page, mod)
     fill_row(page, 0, "T1", "closed")
     page.get_by_test_id("action-table-add").click()
     fill_row(page, 1, "T2", "waiting")
+    sent: list[str] = []
+    page.on("request", lambda r: sent.append(r.url.rsplit("/", 1)[-1])
+            if r.method == "POST" and "/actions/" in r.url else None)
     page.get_by_test_id("action-table-submit").click()
     expect(page.get_by_test_id("action-table-done")).to_have_count(2)
     eventually(lambda: statuses(api, mod),
                lambda got: got == {"T1": "closed", "T2": "waiting", "T3": "open"},
                what="both rows written, the third object untouched")
     expect(page.get_by_test_id("action-table-submit")).to_be_disabled()
+    assert [u for u in sent if u.startswith("execute")] == ["execute-batch"], sent
+
+
+def test_a_batch_refreshes_what_the_module_shows(page, api) -> None:
+    mod = build(api, "Action table refresh", with_table=True)
+    open_module(page, mod)
+    table = page.locator(".data-grid").filter(has_text="T1").first
+    expect(table).to_contain_text("open", timeout=15000)
+    fill_row(page, 0, "T1", "archived")
+    page.get_by_test_id("action-table-submit").click()
+    expect(page.get_by_test_id("action-table-done")).to_have_count(1)
+    expect(table).to_contain_text("archived", timeout=15000)
+
+
+def test_a_batch_the_server_refuses_writes_no_row(page, api) -> None:
+    """p.138's whole-or-nothing (§796): a row whose object is gone by the
+    time the batch lands refuses the batch, and the other row is not
+    written either."""
+    mod = build(api, "Action table atomic")
+    open_module(page, mod)
+    fill_row(page, 0, "T1", "closed")
+    page.get_by_test_id("action-table-add").click()
+    fill_row(page, 1, "T2", "waiting")
+    # T2 is deleted after its row was filled, which no pre-check can see.
+    remover = api.call("POST", f"/workspaces/{mod.workspace_id}/action-types", {
+        "object_type_id": mod.type_id, "api_name": f"drop_{uuid.uuid4().hex[:8]}",
+        "display_name": "Drop", "editable_properties": ["status"]})
+    api.call("PUT", f"/workspaces/{mod.workspace_id}/action-types/{remover['id']}/definition",
+             {"parameters": [], "rules": [{"kind": "delete_object", "config": {}}],
+              "criteria": []})
+    t2 = next(i for i in api.call(
+        "GET", f"/workspaces/{mod.workspace_id}/object-types/{mod.type_id}/instances")["items"]
+        if i["primary_key"] == "T2")
+    api.call("POST", f"{mod.base}/actions/{remover['id']}/execute",
+             {"instance_id": t2["id"], "values": {}})
+    page.get_by_test_id("action-table-submit").click()
+    expect(page.get_by_test_id("action-table-problem")).to_have_count(2, timeout=15000)
+    expect(page.get_by_test_id("action-table-done")).to_have_count(0)
+    assert statuses(api, mod)["T1"] == "open"
+
+
+def test_more_rows_than_one_batch_takes_are_refused(page, api) -> None:
+    """p.512's "batch call limits apply to the table layout" (§796): p.131's
+    limit, twenty rows for a function-backed action."""
+    mod = build(api, "Action table limit", prefill="same", tickets=21, function_backed=True)
+    open_module(page, mod)
+    expect(rows(page)).to_have_count(21, timeout=30000)
+    page.get_by_test_id("action-table-submit").click()
+    expect(page.get_by_test_id("action-table-problem").first).to_contain_text(
+        "One submission takes at most 20 rows (action-types p.131).", timeout=60000)
+    expect(page.get_by_test_id("action-table-done")).to_have_count(0)
 
 
 def test_one_object_in_two_rows_sends_nothing(page, api) -> None:

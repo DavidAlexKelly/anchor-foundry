@@ -12,6 +12,7 @@
  * questions with answers, not things to ask a browser.
  */
 
+import type { ActionType } from "@/lib/types";
 import { seedActionForm } from "./pure";
 
 export interface TableParameter {
@@ -225,3 +226,29 @@ export function csvEntries(
     ])),
   }));
 }
+
+/** Whether these rows can go as one batch call (§796): an action the
+ * Object Table's batch takes - every rule changes the row's own object, which
+ * `inline_edit_refusals` says - and every row about an object. */
+export function batchable(
+  actionType: Pick<ActionType, "inline_edit_refusals" | "object_type_id">,
+  rows: readonly Pick<TableRow, "subjectId">[],
+): boolean {
+  return (actionType.inline_edit_refusals ?? []).length === 0 && !!actionType.object_type_id
+    && rows.every((row) => !!row.subjectId);
+}
+
+/** Why these rows cannot go as one batch, or null (§796): p.512's "batch
+ * call limits apply to the table layout", which is p.131's row limit. */
+export function batchProblem(rowCount: number, limit: number): string | null {
+  return rowCount > limit
+    ? `One submission takes at most ${limit} rows (action-types p.131).` : null;
+}
+
+/** What a batch's answer makes of every row it carried: all done, or all
+ * refused with the batch's reason - p.138's whole-or-nothing. */
+export function afterBatch(result: { ok: boolean; error?: string | null }):
+    { status: "done" | "refused"; message?: string } {
+  return result.ok ? { status: "done" } : { status: "refused", message: result.error ?? "Refused." };
+}
+
