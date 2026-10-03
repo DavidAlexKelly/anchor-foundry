@@ -58,6 +58,8 @@ def test_an_instance_panel_shows_the_prominent_properties(page, api, customers) 
     open_module(page, mod)
     panel = page.get_by_test_id("standard-panel-view")
     expect(panel.get_by_test_id("panel-title")).to_have_text("Alpha")
+    # The type's mark, with the named icon its type holds by default (§705).
+    expect(panel.locator(".sov-type svg")).to_have_attribute("data-icon", "cube")
     expect(panel.get_by_test_id("panel-properties")).to_contain_text("north")
     # p.41: prominent properties, so not the others.
     expect(panel).not_to_contain_text("open")

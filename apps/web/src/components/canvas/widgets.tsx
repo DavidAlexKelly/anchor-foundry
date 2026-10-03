@@ -266,7 +266,8 @@ import {
   type Clause, type DayRange, type FilterSpec,
 } from "./filter-list";
 import { keywordQueryProblem } from "./keyword-query";
-import { glyph, swatch } from "@/lib/object-type-icon";
+import { swatch } from "@/lib/object-type-icon";
+import { TypeGlyph } from "@/components/icon";
 import {
   MAX_DRAGGED_OBJECTS, OBJECT_MEDIA_TYPE, OBJECT_SET_MEDIA_TYPE, carriesPayload, collectKeys,
   droppedClauses, objectPayload, objectSetPayload,
@@ -1219,7 +1220,7 @@ function LinkedFilterGroup({ workspaceId, link, linkTo, base, collapsed, childre
       <summary>
         {far.data && (
           <span className="ot-mark" style={{ background: swatch(far.data) }} aria-hidden>
-            {glyph(far.data)}
+            <TypeGlyph type={far.data} />
           </span>
         )}
         {" "}{far.data?.display_name ?? "Linked objects"}
@@ -8927,16 +8928,18 @@ export function CanvasObjectSetTitle({
           } : undefined}
         >
           {showIconOf(showIcon) && (
-            // **A mark in the type's colour, not the named icon**, because this
-            // platform has no icon set - the `icon` field holds a name like
-            // `cube` and nothing has ever drawn one. The name travels as the
-            // accessible label so it is readable rather than merely absent.
+            // The type's mark (§705): its named icon, or the glyph it falls
+            // back to, on its colour - what the Explorer and the object view
+            // draw. The icon's name travels as the accessible label.
             <span
               className="canvas-set-title-icon"
               data-testid="set-title-icon"
-              aria-label={type.data?.icon ?? "object type"}
+              role="img"
+              aria-label={type.data?.icon || "object type"}
               style={{ background: type.data?.colour || "var(--accent)" }}
-            />
+            >
+              {type.data && <TypeGlyph type={type.data} size={11} />}
+            </span>
           )}
           <span>{title}</span>
         </h3>

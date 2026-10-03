@@ -53,26 +53,54 @@ def save(page) -> None:
     expect(page.get_by_role("dialog")).to_have_count(0, timeout=30000)
 
 
-def test_a_type_starts_with_the_stored_foundry_name_and_draws_its_initial(
+def test_a_type_starts_with_the_column_default_and_draws_its_cube(
     page, api, module
 ) -> None:
-    """**The corpus, and why a name is not a glyph.** Every type here was
-    created with `icon = "cube"`, which is a name from a set this platform
-    does not have — drawing two letters of it would put "cu" on every card."""
+    """**The corpus.** Every type here was created with `icon = "cube"`, a
+    name from Foundry's set, and drawn as its initial until §705 gave the
+    platform a set with a cube in it."""
     assert stored(api, module)["icon"] == "cube"
     open_type_editor(page, module)
     preview = page.get_by_test_id("type-mark-preview")
-    expect(preview).to_be_visible(timeout=30000)
-    expect(preview).to_have_text("S")  # "Seed <tag>"
+    expect(preview.locator("svg")).to_have_attribute("data-icon", "cube", timeout=30000)
+    expect(page.get_by_test_id("type-icon-cube")).to_have_attribute("aria-pressed", "true")
+    # The glyph field holds a typed glyph only, not two letters of a name.
+    expect(page.get_by_test_id("type-icon")).to_have_value("")
 
 
-def test_the_field_says_why_the_mark_is_a_letter(page, api, module) -> None:
+def test_a_name_the_set_does_not_have_says_why_the_mark_is_a_letter(page, api) -> None:
     """A stored name is not a problem — the type predates the control — but a
     reader looking at an initial needs to know where it came from (§337)."""
-    open_type_editor(page, module)
+    mod = Module(api, "Type look foreign")
+    mod.object_type(columns=["code", "town"], rows=ROWS, key="code", title="town",
+                    icon="shopping-cart")
+    open_type_editor(page, mod)
+    expect(page.get_by_test_id("type-mark-preview")).to_have_text("S", timeout=30000)
     field = page.get_by_test_id("type-icon").locator("xpath=ancestor::*[contains(@class,'field')][1]")
-    expect(field).to_contain_text("cube", timeout=30000)
+    expect(field).to_contain_text("shopping-cart")
     expect(field).to_contain_text("first letter")
+
+
+def test_an_icon_chosen_from_the_set_is_kept_and_drawn(page, api, module) -> None:
+    """p.15's "Select the default icon" (§705), through to where p.15 says it
+    is displayed."""
+    open_type_editor(page, module)
+    page.get_by_test_id("type-icon-airplane").click()
+    expect(page.get_by_test_id("type-icon-airplane")).to_have_attribute("aria-pressed", "true")
+    expect(page.get_by_test_id("type-icon-cube")).to_have_attribute("aria-pressed", "false")
+    expect(page.get_by_test_id("type-mark-preview").locator("svg")).to_have_attribute(
+        "data-icon", "airplane")
+    save(page)
+    eventually(lambda: stored(api, module)["icon"], lambda i: i == "airplane",
+               what="the icon chosen from the set")
+    page.goto(
+        f"{WEB_BASE}/{module.workspace_slug}/explore?type={module.object_type_id}")
+    mark = page.get_by_test_id(f"type-mark-{module.object_type_id}")
+    expect(mark.locator("svg")).to_have_attribute("data-icon", "airplane", timeout=30000)
+    # And "when a user views an object of this type" (p.15).
+    page.locator("tbody tr").first.get_by_role("button", name="Explore").click()
+    expect(page.get_by_test_id("sov-type-mark").locator("svg")).to_have_attribute(
+        "data-icon", "airplane", timeout=30000)
 
 
 def test_an_icon_and_colour_chosen_here_are_what_the_server_keeps(

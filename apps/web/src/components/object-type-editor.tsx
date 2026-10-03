@@ -24,7 +24,9 @@ import { Dialog, Field } from "@/components/dialog";
 import { ValueFormatEditor, formattable } from "@/components/value-format-editor";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import { copyRulesTo } from "@/lib/copy-format-rules";
-import { MAX_GLYPH, glyph, iconHint, swatch } from "@/lib/object-type-icon";
+import { MAX_GLYPH, iconHint, isIconSetName, swatch } from "@/lib/object-type-icon";
+import { NamedIcon, TypeGlyph } from "@/components/icon";
+import { ICONS, ICON_NAMES } from "@/lib/icons";
 import { DerivedPropertyEditor } from "@/components/derived-property-editor";
 import { SharedPropertyPicker } from "@/components/shared-property-picker";
 import { StatusField } from "@/components/status-field";
@@ -1031,11 +1033,13 @@ export function EditObjectTypeDialog({
               data-testid="type-mark-preview"
               style={{ background: swatch({ colour }) }}
             >
-              {glyph({ display_name: displayName, icon })}
+              <TypeGlyph type={{ display_name: displayName, icon }} />
             </span>
             <input
               type="text"
-              value={icon}
+              // A name chosen below is not something to type over two
+              // characters at a time; the field holds a typed glyph only.
+              value={isIconSetName(icon) ? "" : icon}
               maxLength={MAX_GLYPH}
               placeholder="◆"
               aria-label="Icon"
@@ -1049,6 +1053,24 @@ export function EditObjectTypeDialog({
               data-testid="type-colour"
               onChange={(e) => setColour(e.target.value)}
             />
+          </div>
+          {/* p.15's "Select the default icon" (§705): the set as a grid,
+              each named for a screen reader as it is for the eye. */}
+          <div className="icon-grid" role="group" aria-label="Icons" data-testid="type-icon-grid">
+            {ICON_NAMES.map((name) => (
+              <button
+                key={name}
+                type="button"
+                className={`icon-grid-cell${icon.trim() === name ? " on" : ""}`}
+                aria-pressed={icon.trim() === name}
+                aria-label={ICONS[name].label}
+                title={ICONS[name].label}
+                data-testid={`type-icon-${name}`}
+                onClick={() => setIcon(name)}
+              >
+                <NamedIcon name={name} size={16} />
+              </button>
+            ))}
           </div>
         </Field>
         {/* p.253's developmental state, above the properties because

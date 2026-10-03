@@ -38,7 +38,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { objects as objApi } from "@/lib/api";
-import { glyph, swatch } from "@/lib/object-type-icon";
+import { swatch } from "@/lib/object-type-icon";
+import { TypeGlyph } from "@/components/icon";
 import { MapCanvas } from "@/components/canvas/map";
 import { isGeometry } from "@/lib/geoshape";
 import { toLatLon } from "@/components/canvas/map";
@@ -360,7 +361,7 @@ export function StandardObjectView({
                 event.dataTransfer.effectAllowed = "copy";
               } : undefined}
             >
-              {glyph(type.data)}
+              <TypeGlyph type={type.data} />
             </span>
             {type.data.display_name}
           </p>

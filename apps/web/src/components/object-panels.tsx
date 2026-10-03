@@ -16,7 +16,8 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { objects as objApi } from "@/lib/api";
-import { glyph, swatch } from "@/lib/object-type-icon";
+import { swatch } from "@/lib/object-type-icon";
+import { TypeGlyph } from "@/components/icon";
 import { keyProperties, panelChartProperties, panelListProperties } from "@/lib/object-panels";
 import { PropertyValue } from "@/components/property-value";
 import { conditionalStyle } from "@/lib/conditional-format";
@@ -50,7 +51,7 @@ export function StandardPanelView({ workspaceId, typeId, instance, hideHeader = 
       {!hideHeader && (
         <p className="sov-type">
           <span className="ot-mark" style={{ background: swatch(type.data) }} aria-hidden="true">
-            {glyph(type.data)}
+            <TypeGlyph type={type.data} />
           </span>
           <strong data-testid="panel-title">{title}</strong>
         </p>
