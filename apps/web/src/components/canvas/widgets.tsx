@@ -426,6 +426,7 @@ import {
 } from "./chart-segments";
 import { useAttachmentUrl } from "./use-attachment-url";
 import { HEADER_STYLES, headerCount, headerStyleOf, paddingTarget, styleTarget } from "./section-header";
+import { INNER_SECTION_STYLES, innerStyleOf, ownLook, sectionLook } from "./inner-section-style";
 import {
   DEFAULT_LOGO_HEIGHT, MAX_LOGO_HEIGHT, MIN_LOGO_HEIGHT, headerMark, imageRefOf, logoHeightOf,
   logoPositionOf, logoPositionsFor, type ImageRef,
@@ -642,6 +643,100 @@ function NodeStyleFields({ padding = false, border = false }: {
         })
       }
     />
+  );
+}
+
+/** The p.62 preset a section's parent names for it (§704), read off the
+ * layout tree rather than passed down: "children sections" are the sections
+ * whose parent - a page or a section - names one, and the settings panel asks
+ * the same question of the same tree, so the two cannot disagree about which
+ * sections a preset reaches. */
+function useInheritedSectionStyle(): string | null {
+  const { parent } = useNode((node) => ({ parent: node.data.parent }));
+  const { inherited } = useEditor((state) => {
+    const host = parent ? state.nodes[parent] : undefined;
+    const name = host?.data?.name;
+    const value = name === "CanvasPage" || name === "CanvasSection"
+      ? host?.data?.props?.innerSectionStyle : null;
+    return { inherited: typeof value === "string" ? value : null };
+  });
+  return inherited;
+}
+
+/** p.62's "Inner section style" control, on pages and sections, beside the
+ * padding p.62 puts it with. */
+function InnerSectionStyleField() {
+  const {
+    innerSectionStyle,
+    actions: { setProp },
+  } = useNode((node) => ({ innerSectionStyle: node.data.props.innerSectionStyle }));
+  return (
+    <label className="field">
+      <span className="field-label">Inner section style</span>
+      <select
+        data-testid="inner-section-style"
+        value={innerStyleOf(innerSectionStyle) ? innerSectionStyle : ""}
+        onChange={(e) =>
+          setProp((p: { innerSectionStyle: string | null }) => (
+            p.innerSectionStyle = e.target.value || null))}
+      >
+        <option value="">None</option>
+        {Object.entries(INNER_SECTION_STYLES).map(([key, preset]) => (
+          <option key={key} value={key}>{preset.label}</option>
+        ))}
+      </select>
+      <span className="field-hint">
+        The header format, border and background of the sections directly
+        inside, where they have not set their own
+      </span>
+    </label>
+  );
+}
+
+/** What a section's settings say when its parent names a preset: which of
+ * its own values are hiding it, and a way to let it through. */
+function InheritedSectionStyle() {
+  const inherited = useInheritedSectionStyle();
+  const {
+    own,
+    actions: { setProp },
+  } = useNode((node) => ({
+    own: {
+      headerStyle: node.data.props.headerStyle,
+      border: node.data.props.border,
+      background: node.data.props.background,
+    },
+  }));
+  const preset = innerStyleOf(inherited);
+  if (!preset) return null;
+  const hiding = ownLook(own, inherited);
+  const names = { headerStyle: "header format", border: "border", background: "background" };
+  const words = hiding.map((key) => names[key]);
+  const listed = words.length > 1
+    ? `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}` : words[0];
+  return (
+    <div className="field" data-testid="inherited-section-style">
+      <span className="field-hint">
+        {`The parent's inner section style is ${preset.label}.`}
+        {hiding.length > 0
+          ? ` This section's own ${listed} take${hiding.length === 1 ? "s" : ""} its place.`
+          : " This section takes all of it."}
+      </span>
+      {hiding.length > 0 && (
+        <button
+          type="button"
+          className="btn"
+          data-testid="use-inner-section-style"
+          onClick={() =>
+            setProp((p: Record<string, unknown>) => {
+              for (const key of hiding) p[key] = null;
+            })
+          }
+        >
+          Use {preset.label}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -21925,10 +22020,14 @@ export function CanvasSection({
   showHeader = false,
   headerIcon = "",
   description = "",
-  headerStyle = "block",
+  headerStyle = null,
   headerWidgets = 0,
   children,
 }: {
+  /** p.62's Inner section style (§704) for the sections directly inside -
+   * read by them off the layout tree (`useInheritedSectionStyle`), so this
+   * section does nothing with it itself. */
+  innerSectionStyle?: string | null;
   /** p.13's "toggle on the options for Section Header" (§473): a header
    * with the `title`, an icon and a description, drawn whether or not the
    * section collapses. A collapsible section has always drawn a header of its
@@ -21939,8 +22038,9 @@ export function CanvasSection({
   /** p.28's "subheadings to provide context for section headers as a
    * rendered Description". */
   description?: string;
-  /** p.58's Block, Contained or Floating (`section-header.ts`). */
-  headerStyle?: string;
+  /** p.58's Block, Contained or Floating (`section-header.ts`). Unset is
+   * Block, or the parent's p.62 preset's format (§704). */
+  headerStyle?: string | null;
   /** p.14's (+) "on the right" of a section header (§680): how many of the
    * first children sit in the header rather than the body
    * (`section-header.headerCount`). */
@@ -22211,12 +22311,17 @@ export function CanvasSection({
     commit(resized(index, current + (event.key === forward ? 0.05 : -0.05)));
   };
 
+  // p.62's Inner section style (§704): the parent's preset, under whatever
+  // of these three this section set itself.
+  const look = sectionLook({ headerStyle, border, background }, useInheritedSectionStyle());
   // p.58's header formats. A floating header moves the section's box to the
   // body (`section-header.styleTarget`), so the header sits on the parent.
   const withHeader = showHeader === true;
-  const formatted = headerStyleOf(headerStyle);
-  const { padding: boxPadding, ...boxStyle } =
-    styleFor({ background, padding, customPadding, border }, saved) as React.CSSProperties;
+  const formatted = headerStyleOf(look.headerStyle);
+  const { padding: boxPadding, ...boxStyle } = styleFor(
+    { background: look.background, padding, customPadding, border: look.border }, saved,
+  ) as React.CSSProperties;
+  const bodyBackground = resolveBackground(look.body, saved);
   const boxOnBody = styleTarget(withHeader, formatted) === "body";
   const paddingOnBody = paddingTarget(withHeader, formatted) === "body";
   const toggle = collapsible ? (
@@ -22247,7 +22352,7 @@ export function CanvasSection({
         withHeader ? ` canvas-section--header-${formatted}` : ""}`}
       // p.59-60: "widgets within that section automatically switch between
       // light and dark mode based on the brightness of the background".
-      data-scheme={schemeFor({ background }, saved)}
+      data-scheme={schemeFor({ background: look.background }, saved)}
       style={{
         ...(boxOnBody ? {} : boxStyle),
         ...(paddingOnBody ? {} : { padding: boxPadding }),
@@ -22361,6 +22466,7 @@ export function CanvasSection({
         hidden={shut}
         style={{
           ...(boxOnBody ? boxStyle : {}),
+          ...(bodyBackground ? { background: bodyBackground } : {}),
           ...(paddingOnBody ? { padding: boxPadding } : {}),
           gap,
           ...(direction === "rows" && minHeight > 0 ? { minHeight } : {}),
@@ -22808,6 +22914,8 @@ function SectionSettings() {
         </>
       )}
       <NodeStyleFields padding border />
+      <InheritedSectionStyle />
+      <InnerSectionStyleField />
     </>
   );
 }
@@ -22820,7 +22928,11 @@ CanvasSection.craft = {
     collapsible: false, collapsedByDefault: false, collapsedWhen: null, title: "",
     tabs: "", tabVariable: null,
     dropHandling: false, dropLabel: "", dropIcon: "", dropVariable: null,
-    showHeader: false, headerIcon: "", description: "", headerStyle: "block", headerWidgets: 0,
+    // `headerStyle` unset rather than "block", which draws the same: a stored
+    // "block" is a choice, and would keep a parent's p.62 preset (§704) from
+    // giving this section its header format.
+    showHeader: false, headerIcon: "", description: "", headerStyle: null, headerWidgets: 0,
+    innerSectionStyle: null,
   },
   isCanvas: true,
   related: { settings: SectionSettings },
@@ -23464,6 +23576,9 @@ export function CanvasPage({
   background?: string | null;
   padding?: PaddingName | null;
   customPadding?: readonly [number, number] | null;
+  /** p.62's Inner section style (§704), for the sections directly on the
+   * page; they read it off the layout tree. */
+  innerSectionStyle?: string | null;
   /** The author-set ID this page appears under in the URL, when routing is on
    * (p.197). Read off the layout by `pageIdOf` rather than through props,
    * because the *viewer* needs it for a page it is not rendering; declared
@@ -23588,6 +23703,7 @@ function PageSettings() {
       </label>
       {/* No border: p.60 names "sections and widgets" and stops there. */}
       <NodeStyleFields padding />
+      <InnerSectionStyleField />
     </>
   );
 }
@@ -23596,7 +23712,7 @@ CanvasPage.craft = {
   displayName: "Page",
   props: {
     title: "Page", icon: "", pageId: "",
-    background: null, padding: null, customPadding: null,
+    background: null, padding: null, customPadding: null, innerSectionStyle: null,
   },
   isCanvas: true,
   related: { settings: PageSettings },
