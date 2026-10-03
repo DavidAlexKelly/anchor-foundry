@@ -87,8 +87,10 @@ describe("the Links panel's backing objects (p.199)", () => {
     expect(backingFor(keyed, obj("M3", {})).map((m) => m.primary_key)).toEqual(["M3"]);
   });
 
-  it("opens no subset through backing objects, and sorts them by a hop from the near property", () => {
-    const backed = { far_type_id: "flight", far_property: "$primary_key", matched_value: "1", backed: true };
+  it("opens a subset through backing objects only as a set, and sorts them by a hop from the near property", () => {
+    const backed = { far_type_id: "flight", far_property: "$primary_key", matched_value: "1",
+                     backed: true, link_type_id: "flew", side_name: "Flights" };
+    // No property match can say these objects; §793's set from the object can.
     expect(linkSubsetHref("ws", backed)).toBeNull();
     const query = sortedLinkQuery({ ...backed, link_type_id: "flew", near_property: "tail" }, "name_asc", "aircraft");
     expect(query).toEqual({ sort: "name_asc", definition: { object_type_id: "flight", via: { link_type_id: "flew",

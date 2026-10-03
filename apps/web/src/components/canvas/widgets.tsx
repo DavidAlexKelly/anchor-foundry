@@ -9713,6 +9713,10 @@ export function CanvasLinksWidget({
   // (§712): the object's own type, which a union's rows carry (§688) and a
   // one-type set's rows may not, where the set's is the same answer.
   const objectTypeId = instance?.object_type_id ?? setPage.typeId;
+  // The object the links are followed from, for a link the Explorer opens as
+  // a traversal (§793).
+  const near = objectTypeId && instance
+    ? { typeId: String(objectTypeId), key: String(instance.primary_key) } : null;
   const linkQuery = useQuery({
     queryKey: ["instance-links", workspaceId, objectTypeId, instance?.id],
     queryFn: () => objApi.instanceLinks(workspaceId, objectTypeId!, instance!.id, "workshop"),
@@ -9800,11 +9804,11 @@ export function CanvasLinksWidget({
                     {group.total} {group.far_type_display_name}
                   </span>
                 </button>
-                {exploreLinks === true && slug && linkSubsetHref(slug, group) && (
+                {exploreLinks === true && slug && linkSubsetHref(slug, group, near) && (
                   <a
                     className="canvas-link-explore"
                     data-testid={`link-explore-${key}`}
-                    href={linkSubsetHref(slug, group)!}
+                    href={linkSubsetHref(slug, group, near)!}
                     target="_blank"
                     rel="noreferrer"
                   >

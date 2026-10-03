@@ -81,7 +81,8 @@ def test_the_dialog_backs_a_link_with_an_object_type(page, api, world) -> None:
 
 def test_an_object_lists_what_its_backing_objects_link_it_to(page, api, world) -> None:
     """From aircraft A1, its two flights, each with the manifest that links it
-    and who flew it; and no Explorer link, which could only say a match."""
+    and who flew it; and an Explorer link
+    that opens them as the set a traversal reaches (§793), since a match could not say them."""
     api.call("POST", f"/workspaces/{world.workspace_id}/link-types", {
         "api_name": f"flown_{world.tag}", "display_name": "Flown", "from_type_id": world.aircraft,
         "to_type_id": world.flights, "cardinality": "many_to_many", "from_side_name": "Aircraft",
@@ -95,4 +96,28 @@ def test_an_object_lists_what_its_backing_objects_link_it_to(page, api, world) -
     expect(backing).to_have_count(2)
     expect(backing.filter(has_text="M1")).to_contain_text("pilot Ada")
     expect(backing.filter(has_text="M2")).to_contain_text("pilot Grace")
-    expect(group.first.locator("[data-testid^='link-subset-']")).to_have_count(0)
+    far = world.flights  # opened from an aircraft
+    far_name = api.call("GET", f"/workspaces/{world.workspace_id}/object-types/{far}")[
+        "display_name"]
+    subset = group.first.locator("[data-testid^='link-subset-']")
+    href = subset.get_attribute("href")
+    assert href and "set=" in href, href
+    page.goto(f"{WEB_BASE}{href}")
+    expect(page.get_by_test_id("explorer-link-set")).to_be_visible(timeout=30000)
+    rows = page.locator("tbody tr")
+    expect(rows).to_have_count(2, timeout=15000)
+    for title in ['LHR-JFK', 'JFK-SFO']:
+        expect(rows.filter(has_text=title)).to_have_count(1)
+    expect(rows.filter(has_text='SFO-LHR')).to_have_count(0)
+    # Each row says its type, read before the set is.
+    expect(rows.first).to_contain_text(far_name)
+    # A set is no search, so it is not offered to save.
+    expect(page.get_by_role("button", name="Save this search")).to_have_count(0)
+    # A new question leaves the set behind.
+    page.get_by_role("button", name="Search instead").click()
+    expect(page.get_by_test_id("explorer-link-set")).to_have_count(0)
+    page.goto(f"{WEB_BASE}{href}")
+    expect(page.get_by_test_id("explorer-link-set")).to_be_visible(timeout=30000)
+    page.get_by_role("searchbox").first.fill("anything")
+    page.get_by_role("searchbox").first.press("Enter")
+    expect(page.get_by_test_id("explorer-link-set")).to_have_count(0)

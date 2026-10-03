@@ -482,7 +482,8 @@ export function LinkExplorerDialog({
               workspaceId={workspaceId}
               group={group}
               browseHref={browseHref(group.far_type_id)}
-              subsetHref={linkSubsetHref(workspaceSlug, group)}
+              subsetHref={linkSubsetHref(workspaceSlug, group, {
+                typeId: here.typeId, key: String(here.instance.primary_key) })}
               onOpen={(stop) => setTrail([...trail, stop])}
               onSelect={(stop) =>
                 // Clicking the selected one again puts it away, so the control

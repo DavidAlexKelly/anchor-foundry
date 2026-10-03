@@ -35,14 +35,35 @@ import type { LinkedInstances } from "@/lib/types";
  */
 export function linkSubsetHref(
   workspaceSlug: string,
-  group: Pick<LinkedInstances, "far_type_id" | "far_property" | "matched_value" | "join_table" | "backed">,
+  group: Pick<LinkedInstances, "far_type_id" | "far_property" | "matched_value" | "join_table"
+    | "backed" | "link_type_id" | "side_name">,
+  /** The object the link is followed from: what a link through a join table
+   * or backing objects opens as a traversal (§793). */
+  near?: { typeId: string; key: string } | null,
 ): string | null {
-  if (group.matched_value === null || group.matched_value === undefined) return null;
   // A link through p.197's join table (§552) is not a property match - the
-  // far objects do not hold this object's key - and the Explorer's URL can
-  // only say a match. No link rather than one to the wrong objects.
-  // Nor one through backing objects (§666), for the same reason.
-  if (group.join_table || group.backed) return null;
+  // far objects do not hold this object's key - so it opens as the set a
+  // traversal from this object reaches (§793): the far type's objects `via`
+  // the link from a set of this one. So does one through backing objects
+  // (§666).
+  if (group.join_table || group.backed) {
+    if (!near) return null;
+    const definition = {
+      object_type_id: group.far_type_id,
+      via: {
+        link_type_id: group.link_type_id,
+        base: { object_type_id: near.typeId,
+                filters: [{ property: "$primary_key", op: "eq", value: near.key }] },
+      },
+    };
+    const params = new URLSearchParams({
+      type: group.far_type_id,
+      set: encodeSet(definition),
+      set_label: `${group.side_name} of ${near.key}`,
+    });
+    return `/${workspaceSlug}/explore?${params.toString()}`;
+  }
+  if (group.matched_value === null || group.matched_value === undefined) return null;
   const params = new URLSearchParams({
     type: group.far_type_id,
     property: group.far_property,
@@ -53,3 +74,27 @@ export function linkSubsetHref(
   });
   return `/${workspaceSlug}/explore?${params.toString()}`;
 }
+
+/** An object set definition as one URL parameter: its JSON, base64url. */
+export function encodeSet(definition: unknown): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(definition));
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** The definition `encodeSet` wrote, or null for anything else - a hand-
+ * edited link opens the Explorer's ordinary search rather than failing. */
+export function decodeSet(raw: string | null): { object_type_id: string } | null {
+  if (!raw) return null;
+  try {
+    const binary = atob(raw.replace(/-/g, "+").replace(/_/g, "/"));
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    return typeof (parsed as { object_type_id?: unknown } | null)?.object_type_id === "string"
+      ? parsed as { object_type_id: string } : null;
+  } catch {
+    return null;
+  }
+}
+

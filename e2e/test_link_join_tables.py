@@ -83,8 +83,9 @@ def open_object(page, world, type_id: str, title: str, count: int) -> None:
 
 
 def test_an_object_lists_what_the_join_table_pairs_it_with(page, api, world) -> None:
-    """From the flight two aircraft flew, both of them; and no Explorer link,
-    which could only say a property match - the wrong objects here."""
+    """From the flight two aircraft flew, both of them; and an Explorer link
+    that opens them as the set a traversal reaches (§793), since
+    a property match would say the wrong objects."""
     api.call("POST", f"/workspaces/{world.workspace_id}/link-types", {
         "api_name": f"crewed_{world.tag}", "display_name": "Crewed",
         "from_type_id": world.flights, "to_type_id": world.aircraft,
@@ -96,4 +97,28 @@ def test_an_object_lists_what_the_join_table_pairs_it_with(page, api, world) -> 
     expect(group.first).to_contain_text("2 objects")
     expect(group.first).to_contain_text("G-AAAA")
     expect(group.first).to_contain_text("G-BBBB")
-    expect(group.first.locator("[data-testid^='link-subset-']")).to_have_count(0)
+    far = world.aircraft  # opened from a flight
+    far_name = api.call("GET", f"/workspaces/{world.workspace_id}/object-types/{far}")[
+        "display_name"]
+    subset = group.first.locator("[data-testid^='link-subset-']")
+    href = subset.get_attribute("href")
+    assert href and "set=" in href, href
+    page.goto(f"{WEB_BASE}{href}")
+    expect(page.get_by_test_id("explorer-link-set")).to_be_visible(timeout=30000)
+    rows = page.locator("tbody tr")
+    expect(rows).to_have_count(2, timeout=15000)
+    for title in ['G-AAAA', 'G-BBBB']:
+        expect(rows.filter(has_text=title)).to_have_count(1)
+    expect(rows.filter(has_text='G-CCCC')).to_have_count(0)
+    # Each row says its type, read before the set is.
+    expect(rows.first).to_contain_text(far_name)
+    # A set is no search, so it is not offered to save.
+    expect(page.get_by_role("button", name="Save this search")).to_have_count(0)
+    # A new question leaves the set behind.
+    page.get_by_role("button", name="Search instead").click()
+    expect(page.get_by_test_id("explorer-link-set")).to_have_count(0)
+    page.goto(f"{WEB_BASE}{href}")
+    expect(page.get_by_test_id("explorer-link-set")).to_be_visible(timeout=30000)
+    page.get_by_role("searchbox").first.fill("anything")
+    page.get_by_role("searchbox").first.press("Enter")
+    expect(page.get_by_test_id("explorer-link-set")).to_have_count(0)
