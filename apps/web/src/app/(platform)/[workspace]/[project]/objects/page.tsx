@@ -19,6 +19,7 @@ import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ActionOverviewDialog } from "@/components/action-overview-dialog";
 import { ObjectViewEditor } from "@/components/object-view-editor";
 import { InterfacesPanel } from "@/components/interfaces-panel";
+import { FunctionsPanel } from "@/components/functions-panel";
 import { PromotionRequestsPanel } from "@/components/promotion-requests";
 import { OntologyHistoryPanel } from "@/components/ontology-history-panel";
 import { OntologySearch } from "@/components/ontology-search";
@@ -1846,6 +1847,10 @@ export default function ObjectsPage() {
             openId={openingInterface}
             onOpened={() => setOpeningInterface(null)}
           />
+
+          {/* p.29's sixth home page section (§769): functions, after the
+              resources they read. */}
+          <FunctionsPanel workspaceId={workspace!.id} canEdit={canEditOntology} />
 
           {/* Groups last of the four, because it is the only one that says
               nothing about what an object type *is* - p.261 makes it a way of

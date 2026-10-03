@@ -2223,6 +2223,59 @@ export type OntologyStatus =
   | "deprecated"
   | "example";
 
+/** A function's parameter (§768): p.80's variable types, or an object. */
+export interface FunctionParameter {
+  api_name: string;
+  display_name?: string;
+  data_type: "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "object";
+  object_type_id?: string | null;
+  required: boolean;
+}
+
+/** What a function returns (§768). */
+export interface FunctionOutput {
+  kind: "value" | "array" | "object_set" | "table";
+  data_type?: string;
+  object_type_id?: string;
+}
+
+/** One immutable version (`functions` p.49): what it takes, reads and does. */
+export interface FunctionVersion {
+  id: string;
+  version: string;
+  parameters: FunctionParameter[];
+  inputs: string[];
+  output: FunctionOutput;
+  sql: string;
+  created_at: string;
+}
+
+export interface FunctionSummary {
+  id: string;
+  api_name: string;
+  display_name: string;
+  description: string;
+  latest_version: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FunctionDetail extends FunctionSummary {
+  /** Newest first. */
+  versions: FunctionVersion[];
+}
+
+/** A call's answer, shaped by the version's output (§768). */
+export interface FunctionResult {
+  kind: FunctionOutput["kind"];
+  version: string;
+  value?: unknown;
+  values?: unknown[] | null;
+  columns?: { name: string; data_type: string }[] | null;
+  rows?: unknown[][] | null;
+  truncated?: boolean;
+}
+
 /** p.255's proposal to promote an object type (§767): "Other users must
  * submit a proposal for review and approval by an `Ontology Owner`". */
 export interface PromotionRequest {
