@@ -147,9 +147,9 @@ Foundry's navigation has six regions (`data-lineage` p.6): lineage graph, branch
 
 ## 4. Acceptance tests
 
-- **Impact analysis** — a graph containing a dataset shows the object types backed by it; deleting the mapping removes them from the graph.
-- **Out-of-date** — a dataset whose upstream rebuilt is marked stale; rebuilding clears the mark.
-- **Column search** — a column present in three datasets returns exactly those three.
-- **Branch from transaction** — a branch created from transaction *N* reads the data as of *N*, not as of head.
-- **Branch fallback** — a graph on branch `feature` shows resources that exist only on `main`, in the documented fallback order.
-- **Rollback** — rolling a dataset back to transaction *N* makes head read as *N*, and the rollback itself appears in history.
+- **Impact analysis** — a graph containing a dataset shows the object types backed by it; deleting the mapping removes them from the graph. **✅ §738**: the first half is `apps/api/tests/test_pipeline.py::test_an_object_type_is_downstream_of_every_dataset_backing_it` (§351); the second was untested and is now `test_deleting_the_mapping_takes_the_object_type_off_the_graph`, in a project of its own.
+- **Out-of-date** — a dataset whose upstream rebuilt is marked stale; rebuilding clears the mark. **✅ §738**: the existing tests asserted a stale dataset and a current one, never *the same* dataset both ways. `test_pipeline.py::test_rebuilding_a_stale_dataset_clears_its_mark` builds S → A → a_out → B → b_out, re-runs A (b_out: `input_is_newer`), re-runs B, and finds b_out current.
+- **Column search** — a column present in three datasets returns exactly those three. **✅ §738**, as written, in `e2e/test_pipeline_search.py::test_a_column_in_three_datasets_finds_exactly_those_three`: the column first, last and in the middle of three datasets, and a fourth without it. The existing tests found one dataset in two.
+- **Branch from transaction** — a branch created from transaction *N* reads the data as of *N*, not as of head. **✅ §357**, as `apps/api/tests/test_dataset_forks.py::test_forking_a_named_version_goes_back_to_an_overwritten_state`: a fork of an overwritten version reads that version's rows, not head's. Ticked by §738's audit.
+- **Branch fallback** — a graph on branch `feature` shows resources that exist only on `main`, in the documented fallback order. **Withdrawn**: the branch selector it tests is ○ *by decision* (§2.3's row, Global Branching), so there is nothing to test it against. Its fallback order is recorded on that row for the day the decision changes.
+- **Rollback** — rolling a dataset back to transaction *N* makes head read as *N*, and the rollback itself appears in history. **✅ §361**, in `apps/api/tests/test_dataset_rollback.py`: `test_a_rollback_puts_the_earlier_data_back` and `test_the_history_keeps_the_version_that_was_rolled_away_from`. Ticked by §738's audit.

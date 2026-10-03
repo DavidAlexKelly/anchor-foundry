@@ -197,9 +197,17 @@ def test_drift_is_recorded_on_the_run_that_caused_it(
         )
         conn.execute(f"UPDATE public.{drift_table} SET score = id * 1.5")
 
-    _sync(client, fx, connection_id, drift_table, name)
+    synced = _sync(client, fx, connection_id, drift_table, name)
     changes = _latest_run(client, fx, connection_id)["schema_changes"]
     assert changes is not None, "a dropped, added and retyped column must be reported"
+    # `data-connection.md` §6's other half: the removed column "does not
+    # silently produce nulls" - it is gone from what landed, rather than kept
+    # as a column of nothing.
+    dataset = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/{synced['dataset']['id']}",
+        headers=hdr(fx.viewer_sub),
+    ).json()
+    assert "legacy" not in [c["name"] for c in dataset["table_schema"]], dataset["table_schema"]
     assert [c["name"] for c in changes["removed"]] == ["legacy"]
     assert [c["name"] for c in changes["added"]] == ["score"]
     assert [c["name"] for c in changes["retyped"]] == ["label"]

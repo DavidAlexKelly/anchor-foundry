@@ -1424,3 +1424,80 @@ def test_the_view_as_list_needs_more_than_reading(
 ) -> None:
     r = client.get(f"{base(fx)}/pipeline/viewers", headers=hdr(fx.viewer_sub))
     assert r.status_code == 403, r.text
+
+
+def _own_project(client: TestClient, fx: Fixture, slug: str) -> str:
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.owner_sub),
+        json={"name": f"{slug} {fx.tag}", "slug": f"{slug}-{fx.tag}"},
+    )
+    assert r.status_code == 201, r.text
+    return f"/api/workspaces/{fx.workspace}/projects/{r.json()['id']}"
+
+
+def test_rebuilding_a_stale_dataset_clears_its_mark(client: TestClient, fx: Fixture) -> None:
+    """`datasets-lineage.md` §4: "a dataset whose upstream rebuilt is marked
+    stale; rebuilding clears the mark" - the same dataset, both ways. In its
+    own project, since it rebuilds what `staleness` keeps stale."""
+    pbase = _own_project(client, fx, "rebuild")
+    r = client.post(f"{pbase}/datasets/upload", headers=hdr(fx.owner_sub),
+                    data={"name": f"S {fx.tag}"}, files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")})
+    assert r.status_code == 201, r.text
+    upstream, models = r.json()["id"], {}
+    for step, code in (("a", "SELECT id, val * 2 AS doubled FROM raw"),
+                       ("b", "SELECT id, doubled + 1 AS bumped FROM raw")):
+        r = client.post(f"{pbase}/models", headers=hdr(fx.owner_sub),
+                        json={"name": f"{step.upper()} {fx.tag}", "code": code,
+                              "inputs": [{"dataset_id": upstream, "input_alias": "raw"}]})
+        assert r.status_code == 201, r.text
+        models[step] = r.json()["id"]
+        r = client.post(f"{pbase}/models/{models[step]}/run", headers=hdr(fx.owner_sub))
+        assert r.json()["ok"], r.text
+        upstream = r.json()["output_dataset"]["id"]
+    b_out = f"dataset:{upstream}"
+
+    def state() -> tuple[bool, str | None]:
+        g = client.get(f"{pbase}/pipeline", headers=hdr(fx.owner_sub)).json()
+        n = next(n for n in g["nodes"] if n["id"] == b_out)
+        return n["out_of_date"], n["out_of_date_reason"]
+
+    assert state() == (False, None)
+    client.post(f"{pbase}/models/{models['a']}/run", headers=hdr(fx.owner_sub))
+    assert state() == (True, "input_is_newer")
+    r = client.post(f"{pbase}/models/{models['b']}/run", headers=hdr(fx.owner_sub))
+    assert r.json()["ok"], r.text
+    assert state() == (False, None)
+
+
+def test_deleting_the_mapping_takes_the_object_type_off_the_graph(
+    client: TestClient, fx: Fixture,
+) -> None:
+    """`datasets-lineage.md` §4: "a graph containing a dataset shows the
+    object types backed by it; deleting the mapping removes them from the
+    graph"."""
+    pbase = _own_project(client, fx, "unmap")
+    r = client.post(f"{pbase}/datasets/upload", headers=hdr(fx.owner_sub),
+                    data={"name": f"Depots {fx.tag}"},
+                    files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")})
+    assert r.status_code == 201, r.text
+    dataset_id = r.json()["id"]
+    r = client.post(f"/api/workspaces/{fx.workspace}/object-types", headers=hdr(fx.editor_sub),
+                    json={"api_name": f"Depot{fx.tag}", "display_name": f"Depot {fx.tag}",
+                          "properties": [{"api_name": "id", "data_type": "integer"}]})
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+    r = client.post(f"{pbase}/object-type-sources", headers=hdr(fx.owner_sub),
+                    json={"object_type_id": type_id, "dataset_id": dataset_id,
+                          "primary_key_column": "id", "column_mappings": {"id": "id"}})
+    assert r.status_code == 201, r.text
+    source_id = r.json()["id"]
+
+    def type_nodes() -> list[dict]:
+        g = client.get(f"{pbase}/pipeline", headers=hdr(fx.owner_sub)).json()
+        return [n for n in g["nodes"] if n["kind"] == "object_type"]
+
+    [shown] = type_nodes()
+    assert shown["resource_id"] == type_id
+    r = client.delete(f"{pbase}/object-type-sources/{source_id}", headers=hdr(fx.owner_sub))
+    assert r.status_code == 204, r.text
+    assert type_nodes() == []
