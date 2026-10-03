@@ -6383,6 +6383,7 @@ export function CanvasObjectTable({
   inlineEditByDefault = false,
   inlineEditOneClick = false,
   exportCsv = false,
+  exportExcel = false,
   hideColumnConfig = false,
   customMenu = false,
   menuItems = null,
@@ -6487,6 +6488,8 @@ export function CanvasObjectTable({
   inlineEditOneClick?: boolean;
   /** p.223's "Enable export to CSV": from a row's right-click menu (§611). */
   exportCsv?: boolean;
+  /** p.223's "Enable export to Excel" (§788), beside it. */
+  exportExcel?: boolean;
   /** p.225's "Hide column configuration": no viewer-side Configure columns (§612). */
   hideColumnConfig?: boolean;
   /** p.243's "Customize right-click menu" (§613): the toggle, the menu's items
@@ -6892,7 +6895,7 @@ export function CanvasObjectTable({
   const { exportObjects } = useCanvasActions();
   // Not from a combined table, which pages to 200 objects (`union_reads`) and
   // so cannot be read to p.223's 10,000; each tab of a union can.
-  const offersExport = mode === "run" && !!exportCsv && usingSet && !combined;
+  const offersExport = mode === "run" && (!!exportCsv || !!exportExcel) && usingSet && !combined;
   // p.243's custom items (§613): "run actions or events on an object that is
   // right-clicked from the object table". Each item is a click the Events
   // panel wires, as a menu button's items are, and it fires with the row's
@@ -7636,7 +7639,31 @@ export function CanvasObjectTable({
                   {item.label}
                 </button>
               ))}
-              {offersExport && (<button
+              {offersExport && exportExcel && (<button
+                type="button"
+                role="menuitem"
+                className="btn quiet"
+                data-testid="table-export-excel"
+                onClick={() => {
+                  setRowMenu(null);
+                  // p.223's "Enable export to Excel" (§788): the table's
+                  // property columns. Its derived ones go in the CSV, which
+                  // p.223 says carries them, as p.489's Excel does not.
+                  exportObjects({
+                    variable: objectSetVariable!,
+                    definition: setDefinition,
+                    format: "excel",
+                    fileName: null,
+                    properties: shownColumns
+                      ? [...new Set(shownColumns.filter((n) =>
+                          all.some((p) => p.api_name === n)))]
+                      : properties.map((p) => p.api_name),
+                  });
+                }}
+              >
+                Export to Excel
+              </button>)}
+              {offersExport && exportCsv && (<button
                 type="button"
                 role="menuitem"
                 className="btn quiet"
@@ -8203,8 +8230,8 @@ function ObjectTableSettings() {
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
     inlineEditAction, inlineEditMapping, inlineEditVariables, inlineEditButtonText,
     inlineEditByDefault, inlineEditOneClick, seriesFormats, seriesRules, seriesTransforms, seriesBaselines,
-    columnsVariable, exportCsv, hideColumnConfig, customMenu, menuItems, rightClickedVariable,
-    combineTypes,
+    columnsVariable, exportCsv, exportExcel, hideColumnConfig, customMenu, menuItems,
+    rightClickedVariable, combineTypes,
     actions: { setProp },
   } = useNode((node) => ({
     combineTypes: node.data.props.combineTypes,
@@ -8214,6 +8241,7 @@ function ObjectTableSettings() {
     hideColumnConfig: node.data.props.hideColumnConfig,
     columnsVariable: node.data.props.columnsVariable,
     exportCsv: node.data.props.exportCsv,
+    exportExcel: node.data.props.exportExcel,
     objectTypeId: node.data.props.objectTypeId,
     filterProperty: node.data.props.filterProperty,
     filterParameter: node.data.props.filterParameter,
@@ -8701,6 +8729,21 @@ function ObjectTableSettings() {
           : "Offered when the table reads an object set variable: a table narrowed by a "
             + "search box is not a set an export can name."}
       </span>
+      <label className="field-check">
+        <input
+          type="checkbox"
+          data-testid="table-export-excel-toggle"
+          checked={!!exportExcel}
+          onChange={(e) =>
+            setProp((p: { exportExcel: boolean }) => (p.exportExcel = e.target.checked))}
+        />
+        <span>Enable export to Excel</span>
+      </label>
+      <span className="field-hint">
+        The same rows as an Excel workbook, in the property columns shown; derived
+        columns go in the CSV. Up to 10,000 objects, not p.223&apos;s 200,000: the
+        store reads a set a page at a time, and stops at ten thousand.
+      </span>
       {/* p.243's Customize right-click menu (§613). */}
       <label className="field-check">
         <input
@@ -8999,7 +9042,8 @@ CanvasObjectTable.craft = {
     inlineEditButtonText: "",
     inlineEditByDefault: false, inlineEditOneClick: false,
     seriesFormats: null, seriesRules: null, seriesTransforms: null, seriesBaselines: null,
-    columnsVariable: null, exportCsv: false, hideColumnConfig: false, combineTypes: false,
+    columnsVariable: null, exportCsv: false, exportExcel: false, hideColumnConfig: false,
+    combineTypes: false,
     customMenu: false, menuItems: null, rightClickedVariable: null,
   },
   related: { settings: ObjectTableSettings },
