@@ -10075,10 +10075,9 @@ const EmbeddedObjectView = dynamic(
  * p.262-263's **Hide tabs**, **Go to initial tab on object switch** and
  * **Initial object view tab ID** are §695's, over `object-views` p.35's tabs.
  *
- * **Not built, and named rather than approximated**: p.263's **Interface configuration**, which is the embedded-module interface
- * mapping and belongs with that widget; p.263's **Revert to legacy widget**,
- * there being no legacy one; and p.262's Empty state **icon**, for the reason
- * every icon setting is ○ — there is no icon set to pick from.
+ * p.263's **Interface configuration** is §710's (`viewInterface`) and p.262's
+ * Empty state **icon** §709's. p.263's **Revert to legacy widget** has no
+ * legacy widget here to revert to.
  */
 export function CanvasObjectViewWidget({
   objectSetVariable = null,
@@ -23570,10 +23569,11 @@ const COLLAPSED_WIDGETS = ["CanvasButton", "CanvasTabs"];
 
 /** What to draw where the text used to be.
  *
- * Foundry drops the label and shows the configured icon. With no icon picker,
- * an unset icon falls back to the label's first character rather than to
- * nothing - a collapsed header of blank buttons is worse than an approximate
- * glyph, because there is no way to tell which one is which. */
+ * Foundry drops the label and shows the configured icon (a name from the set
+ * or typed characters, §706). An unset icon falls back to the label's first
+ * character rather than to nothing - a collapsed header of blank buttons is
+ * worse than an approximate glyph, because there is no way to tell which one
+ * is which. */
 function glyphFor(icon: string | undefined, label: string | undefined): string {
   const chosen = (icon ?? "").trim();
   if (chosen) return chosen;
