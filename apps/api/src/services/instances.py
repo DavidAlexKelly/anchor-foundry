@@ -50,6 +50,10 @@ async def workspace_search_prefix(conn: AsyncConnection, workspace_id: UUID) -> 
     return str(row["search_prefix"])
 
 
+#: Rows per upsert statement (§804): large enough that a million-row sync is a
+#: thousand statements, small enough that one is a few megabytes of JSON.
+UPSERT_BATCH = 1000
+
 def _quote_source_column(name: str) -> str:
     """Dataset column names come from uploaded file headers, not a fixed
     identifier grammar - quote-and-escape rather than assume they're safe
@@ -196,24 +200,33 @@ async def upsert_instances(
     dataset's to say, which keeps a sync authoritative over exactly what it
     owns and no more.
     """
-    for primary_key, properties in rows:
+    # **A statement per thousand rows, not per row** (§804). One round trip
+    # per object made a 10,000-row sync take 16 seconds, nearly all of it
+    # waiting on the database. A key repeated within a batch is collapsed to
+    # its later row first, because one `ON CONFLICT DO UPDATE` may not touch a
+    # row twice.
+    for start in range(0, len(rows), UPSERT_BATCH):
+        # The later row of a repeated key wins whole: every row of one sync
+        # carries every mapped key (a null is a key holding None), so this is
+        # what the row-at-a-time loop's merge came to.
+        merged: dict[str, dict[str, Any]] = dict(rows[start:start + UPSERT_BATCH])
         await conn.execute(
             text(
                 """
                 INSERT INTO object_instances
                     (object_type_id, source_id, primary_key, properties, updated_at)
-                VALUES (:tid, :sid, :pk, CAST(:props AS jsonb), :ts)
+                SELECT :tid, :sid, r.pk, r.props, :ts
+                  FROM jsonb_to_recordset(CAST(:rows AS jsonb)) AS r(pk text, props jsonb)
                 ON CONFLICT (source_id, primary_key)
                 DO UPDATE SET
-                    properties = object_instances.properties || EXCLUDED.properties,
-                    updated_at = EXCLUDED.updated_at
+                    -- `updated_at` is the BEFORE UPDATE trigger's to set (db 0012).
+                    properties = object_instances.properties || EXCLUDED.properties
                 """
             ),
             {
                 "tid": str(object_type_id),
                 "sid": str(source_id),
-                "pk": primary_key,
-                "props": json.dumps(properties),
+                "rows": json.dumps([{"pk": pk, "props": props} for pk, props in merged.items()]),
                 "ts": synced_at,
             },
         )
