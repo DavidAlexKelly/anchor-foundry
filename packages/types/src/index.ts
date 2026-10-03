@@ -2868,6 +2868,11 @@ export interface LinkType {
    * here until a traversal picker needed to say which way it was going. */
   from_side_name: string | null;
   to_side_name: string | null;
+  /** p.217's per-side visibility (§714; db 0138), for the side of the same
+   * name: a prominent side shows first in user applications and a hidden one
+   * not at all. Optional for documents and fixtures older than it. */
+  from_visibility?: LinkVisibility;
+  to_visibility?: LinkVisibility;
   /** p.257's *cap*, not a request: a link is stored at the lowest status of
    * its own declaration, its two object types, and the properties it joins
    * on. Asking for `active` on a link between experimental types stores
@@ -2875,6 +2880,9 @@ export interface LinkType {
   status: OntologyStatus;
   deprecation: Deprecation | null;
 }
+
+/** p.217's visibilities for a side of a link type (§714). */
+export type LinkVisibility = "normal" | "prominent" | "hidden";
 
 /** Reserved join reference: the instance's primary key, not a property. */
 export const PRIMARY_KEY_REF = "$primary_key";
@@ -2893,6 +2901,8 @@ export interface TypeLink {
   cardinality: LinkCardinality;
   direction: "outbound" | "inbound";
   side_name: string;
+  /** p.217's visibility of the side arrived at (§714). */
+  side_visibility?: LinkVisibility;
   far_type_id: string;
   far_type_display_name: string;
   near_property: string;
@@ -2919,6 +2929,8 @@ export interface LinkedInstances {
    * `object-link-types` p.192), already resolved against the link's own
    * display name. */
   side_name: string;
+  /** p.217's visibility of the side arrived at (§714). */
+  side_visibility?: LinkVisibility;
   far_type_id: string;
   far_type_display_name: string;
   near_property: string;

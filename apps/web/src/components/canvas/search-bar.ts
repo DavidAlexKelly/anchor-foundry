@@ -74,12 +74,17 @@ export interface Link {
   side_name: string;
   far_type_id: string;
   far_type_display_name: string;
+  /** p.217's visibility of the side this link arrives at (§714). */
+  side_visibility?: string;
 }
 
-/** p.473's Link types available. Prominent and Visible are p.473's too, and
- * are not offered: a link type here has no visibility to choose by. */
+/** p.473's Link types available: "All (Including hidden), Prominent, Visible,
+ * Custom list, or None". Prominent and Visible read p.217's side visibility
+ * (§714), which a link type here had none of before db 0138. */
 export const LINK_SCOPES = {
-  all: "All",
+  all: "All (including hidden)",
+  prominent: "Prominent",
+  visible: "Visible",
   custom: "Custom list",
   none: "None",
 } as const;
@@ -94,6 +99,8 @@ export function availableLinks(
 ): Link[] {
   if (scope === "none") return [];
   if (scope === "custom") return links.filter((l) => custom.includes(l.link_type_id));
+  if (scope === "prominent") return links.filter((l) => l.side_visibility === "prominent");
+  if (scope === "visible") return links.filter((l) => l.side_visibility !== "hidden");
   return [...links];
 }
 

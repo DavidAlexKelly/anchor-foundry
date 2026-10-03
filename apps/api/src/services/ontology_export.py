@@ -109,6 +109,9 @@ LINK_FIELDS = (
     "to_property",
     "from_side_name",
     "to_side_name",
+    # p.217's per-side visibility (§714).
+    "from_visibility",
+    "to_visibility",
     "status",
     "deprecation",
 )
@@ -260,6 +263,7 @@ async def export_ontology(
                lt.cardinality::text AS cardinality,
                lt.from_property, lt.to_property,
                lt.from_side_name, lt.to_side_name,
+               lt.from_visibility, lt.to_visibility,
                lt.status::text AS status, lt.deprecation::text AS deprecation,
                a.api_name AS from_object_type, b.api_name AS to_object_type
           FROM link_types lt

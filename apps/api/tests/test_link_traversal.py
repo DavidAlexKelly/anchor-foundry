@@ -511,3 +511,89 @@ def test_listing_a_types_links_needs_a_visible_type(
     r = client.get(f"{_wbase(fx)}/object-types/{ontology['person']}/links",
                    headers=hdr(fx.outsider_sub))
     assert r.status_code == 404, "outside the workspace: 404, never 403"
+
+
+# ---- p.217's per-side visibility (§714; db 0138) ------------------------------
+def _link(client: TestClient, fx: Fixture, link_id: str, body: dict) -> dict:
+    r = client.patch(f"{_wbase(fx)}/link-types/{link_id}", headers=hdr(fx.editor_sub), json=body)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_side_s_visibility_is_normal_until_set_and_kept_when_not_given(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """p.217: "By default, the Employee and Company sides of the link type will
+    have visibilities normal." An edit that names neither leaves both alone,
+    as it leaves the side names."""
+    joined = {"from_property": "manager_id", "to_property": "$primary_key"}
+    before = _link(client, fx, ontology["reports_to"], joined)
+    assert (before["from_visibility"], before["to_visibility"]) == ("normal", "normal")
+    hidden = _link(client, fx, ontology["reports_to"], {**joined, "to_visibility": "hidden"})
+    assert (hidden["from_visibility"], hidden["to_visibility"]) == ("normal", "hidden")
+    kept = _link(client, fx, ontology["reports_to"], joined)
+    assert kept["to_visibility"] == "hidden"
+
+
+def test_a_visibility_p217_does_not_name_is_refused(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    r = client.patch(
+        f"{_wbase(fx)}/link-types/{ontology['reports_to']}", headers=hdr(fx.editor_sub),
+        json={"from_property": "manager_id", "to_property": "$primary_key",
+              "to_visibility": "secret"},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_hidden_side_is_left_out_and_a_prominent_one_comes_first(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """p.217: "A prominent side of a link type will lead applications to show
+    this side of the link type first to users. A hidden side of a link type
+    will not appear in user applications." The traversal every user
+    application reads applies both; a builder's list of a type's links keeps
+    every side, saying which is which."""
+    tag = ontology["tag"]
+    people = _instances(client, fx, ontology["person"])
+    order = [f"{g['api_name']}:{g['direction']}" for g in client.get(
+        f"{_wbase(fx)}/object-types/{ontology['person']}/instances/{people['1']['id']}/links",
+        headers=hdr(fx.viewer_sub)).json()]
+    # By name, outbound first, before any side says otherwise.
+    assert order == [f"reports_to_{tag}:outbound", f"reports_to_{tag}:inbound",
+                     f"works_in_{tag}:outbound"], order
+
+    _link(client, fx, ontology["reports_to"], {
+        "from_property": "manager_id", "to_property": "$primary_key",
+        "to_visibility": "hidden", "from_visibility": "prominent"})
+    _link(client, fx, ontology["works_in"], {
+        "from_property": "department", "to_property": "$primary_key",
+        "to_visibility": "prominent"})
+    groups = client.get(
+        f"{_wbase(fx)}/object-types/{ontology['person']}/instances/{people['1']['id']}/links",
+        headers=hdr(fx.viewer_sub)).json()
+    shown = [(f"{g['api_name']}:{g['direction']}", g["side_visibility"]) for g in groups]
+    # Manager is hidden; the two prominent sides come first, in their order.
+    assert shown == [(f"reports_to_{tag}:inbound", "prominent"),
+                     (f"works_in_{tag}:outbound", "prominent")], shown
+
+    listed = _type_links(client, fx, ontology["person"])
+    assert listed[f"reports_to_{tag}:outbound"]["side_visibility"] == "hidden"
+    assert listed[f"reports_to_{tag}:inbound"]["side_visibility"] == "prominent"
+
+
+def test_prominence_reorders_only_among_what_is_shown(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """One prominent side moves to the front; the normal ones keep their
+    order behind it."""
+    tag = ontology["tag"]
+    _link(client, fx, ontology["works_in"], {
+        "from_property": "department", "to_property": "$primary_key",
+        "to_visibility": "prominent"})
+    people = _instances(client, fx, ontology["person"])
+    order = [f"{g['api_name']}:{g['direction']}" for g in client.get(
+        f"{_wbase(fx)}/object-types/{ontology['person']}/instances/{people['1']['id']}/links",
+        headers=hdr(fx.viewer_sub)).json()]
+    assert order == [f"works_in_{tag}:outbound", f"reports_to_{tag}:outbound",
+                     f"reports_to_{tag}:inbound"], order

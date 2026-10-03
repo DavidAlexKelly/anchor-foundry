@@ -332,6 +332,10 @@ class LinkTypeOut(BaseModel):
     # named separately.
     from_side_name: str | None = None
     to_side_name: str | None = None
+    # p.217's per-side visibility (§714; db 0138): normal, prominent or hidden,
+    # for the same side the name of the same name labels.
+    from_visibility: str = "normal"
+    to_visibility: str = "normal"
     # p.253's developmental state. What is stored is p.257's cap - a link type
     # may be no more production-ready than the object types it joins or the
     # properties it joins on - so this is the *capped* value, not a request.
@@ -371,6 +375,10 @@ class LinkTypeCreate(_JoinTable):
     # link whose two directions read the same way needs only one name.
     from_side_name: str | None = Field(default=None, min_length=1, max_length=200)
     to_side_name: str | None = Field(default=None, min_length=1, max_length=200)
+    # p.217's per-side visibility (§714). Left out, `normal` on create and
+    # unchanged on an edit.
+    from_visibility: str | None = Field(default=None, pattern="^(normal|prominent|hidden)$")
+    to_visibility: str | None = Field(default=None, pattern="^(normal|prominent|hidden)$")
     # p.253's developmental state. Defaults to unchanged, and what is stored
     # is p.257's cap rather than what was asked for.
     status: str | None = Field(
@@ -387,6 +395,10 @@ class LinkJoinUpdate(_JoinTable):
     to_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
     from_side_name: str | None = Field(default=None, min_length=1, max_length=200)
     to_side_name: str | None = Field(default=None, min_length=1, max_length=200)
+    # p.217's per-side visibility (§714). Left out, `normal` on create and
+    # unchanged on an edit.
+    from_visibility: str | None = Field(default=None, pattern="^(normal|prominent|hidden)$")
+    to_visibility: str | None = Field(default=None, pattern="^(normal|prominent|hidden)$")
     # p.253's developmental state. Defaults to unchanged, and what is stored is
     # p.257's cap rather than what was asked for.
     status: str | None = Field(
@@ -3820,6 +3832,8 @@ async def create_link_type(
             backing_type_id=body.backing_type_id,
             backing_from_link_id=body.backing_from_link_id,
             backing_to_link_id=body.backing_to_link_id,
+            from_visibility=body.from_visibility,
+            to_visibility=body.to_visibility,
         )
         from_type = await ontology_service.get_type(conn, access.workspace_id, body.from_type_id)
         to_type = await ontology_service.get_type(conn, access.workspace_id, body.to_type_id)
@@ -3867,6 +3881,8 @@ async def update_link_join(
             backing_type_id=body.backing_type_id,
             backing_from_link_id=body.backing_from_link_id,
             backing_to_link_id=body.backing_to_link_id,
+            from_visibility=body.from_visibility,
+            to_visibility=body.to_visibility,
             deprecation=(body.deprecation if "deprecation" in body.model_fields_set
                          else ontology_service.KEEP_DEPRECATION),
         )
@@ -3900,6 +3916,9 @@ class LinkedInstances(BaseModel):
     # against `display_name`, so a caller never has to know which side it is on
     # to render a label - which is the same reason `near_property` exists.
     side_name: str
+    #: p.217's visibility of the side arrived at (§714). Never `hidden` here:
+    #: a hidden side "will not appear in user applications".
+    side_visibility: str = "normal"
     far_type_id: UUID
     far_type_display_name: str
     near_property: str
@@ -3946,6 +3965,8 @@ class TypeLink(BaseModel):
     cardinality: str
     direction: str
     side_name: str
+    #: p.217's visibility of the side arrived at (§714), for a builder's choice.
+    side_visibility: str = "normal"
     far_type_id: UUID
     far_type_display_name: str
     near_property: str
@@ -3978,6 +3999,7 @@ async def type_links(
             cardinality=str(link["cardinality"]),
             direction=str(link["direction"]),
             side_name=str(link["side_name"]),
+            side_visibility=str(link.get("side_visibility") or "normal"),
             far_type_id=UUID(str(link["far_type_id"])),
             far_type_display_name=str(link["far_type_display_name"]),
             near_property=str(link["near_property"]),
@@ -4156,7 +4178,10 @@ async def instance_links(
         # Type visibility first, so an object type in a workspace this caller
         # cannot see 404s on the type rather than on the instance - the
         # instance lookup would also miss, but for the wrong reason.
-        links = await ontology_service.links_for_type(conn, access.workspace_id, type_id)
+        # p.217 (§714): a hidden side does not appear here, and a prominent
+        # one comes first. Every caller of this route is a user application.
+        links = ontology_service.user_facing_links(
+            await ontology_service.links_for_type(conn, access.workspace_id, type_id))
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         store = instance_store.store_for(conn)
         instance = await store.get_instance(
@@ -4185,6 +4210,7 @@ async def instance_links(
                 cardinality=str(link["cardinality"]),
                 direction=str(link["direction"]),
                 side_name=str(link["side_name"]),
+                side_visibility=str(link.get("side_visibility") or "normal"),
                 far_type_id=UUID(str(link["far_type_id"])),
                 far_type_display_name=str(link["far_type_display_name"]),
                 near_property=near,

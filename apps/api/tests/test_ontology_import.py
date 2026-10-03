@@ -1319,3 +1319,43 @@ def test_a_viewer_cannot_plan_or_apply(client: TestClient, fx: Fixture) -> None:
         r = client.post(f"{wbase(fx)}{path}", headers=hdr(fx.viewer_sub),
                         json={"document": document})
         assert r.status_code == 403, (path, r.text)
+
+
+def test_a_link_s_visibilities_travel_with_it(client: TestClient, fx: Fixture) -> None:
+    """p.217's per-side visibility (§714) is the link's, so a file carries it
+    and an import applies it."""
+    tag = uuid.uuid4().hex[:8]
+    apply(client, fx, two_types_and_a_link(
+        fx, tag, to_visibility="prominent", from_visibility="hidden")).raise_for_status()
+    made = links_of(client, fx)[f"lnk_{tag}"]
+    assert (made["from_visibility"], made["to_visibility"]) == ("hidden", "prominent")
+
+
+def test_a_file_older_than_link_visibility_changes_none(client: TestClient, fx: Fixture) -> None:
+    """A file exported before db 0138 names no visibility: it plans no change
+    and applies none, keeping what the workspace has."""
+    tag = uuid.uuid4().hex[:8]
+    apply(client, fx, two_types_and_a_link(fx, tag, to_visibility="prominent")).raise_for_status()
+    old = two_types_and_a_link(fx, tag)
+    planned = plan(client, fx, old)
+    assert planned.status_code == 200, planned.text
+    assert planned.json()["sections"]["link_types"]["changed"] == []
+    apply(client, fx, old).raise_for_status()
+    assert links_of(client, fx)[f"lnk_{tag}"]["to_visibility"] == "prominent"
+
+
+def test_a_file_changes_an_existing_link_s_visibility(client: TestClient, fx: Fixture) -> None:
+    tag = uuid.uuid4().hex[:8]
+    apply(client, fx, two_types_and_a_link(fx, tag)).raise_for_status()
+    apply(client, fx, two_types_and_a_link(fx, tag, from_visibility="prominent")).raise_for_status()
+    made = links_of(client, fx)[f"lnk_{tag}"]
+    assert (made["from_visibility"], made["to_visibility"]) == ("prominent", "normal")
+
+
+def test_a_visibility_p217_does_not_name_is_refused_in_a_file(
+    client: TestClient, fx: Fixture
+) -> None:
+    tag = uuid.uuid4().hex[:8]
+    r = apply(client, fx, two_types_and_a_link(fx, tag, to_visibility="secret"))
+    assert r.status_code in (400, 422), r.text
+    assert "visibility" in r.text
