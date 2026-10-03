@@ -787,6 +787,15 @@ class RestConnector:
             if not token:
                 raise ConnectorError("no bearer token stored for this connection")
             return {"Authorization": f"Bearer {token}"}
+        if auth == "oauth2_authorization_code":
+            # An outbound application calls the source as a person (decision
+            # 0022), and a scheduled run has none. Refused rather than sent
+            # down the client-credentials grant below, which would trade the
+            # application's own client id for a token nobody authorized.
+            raise ConnectorError(
+                "this source is called as the person using it, through its outbound "
+                "application, and a scheduled run has no person to call it as"
+            )
         return {"Authorization": f"Bearer {self._oauth_token(config, secret)}"}
 
     def _oauth_token(self, config: dict, secret: dict) -> str:

@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID
 
 import anyio
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
@@ -1467,7 +1467,92 @@ async def _run_file_sync(
     )
 
 
+# ---- outbound applications (decision 0022; `data-connection` p.39-40, p.243) --
+class AuthorizationStart(BaseModel):
+    # Where to come back to on this platform once the provider is done.
+    return_to: str | None = Field(default=None, max_length=500)
+
+
+class AuthorizationStarted(BaseModel):
+    authorize_url: str
+
+
+class GrantOut(BaseModel):
+    """The caller's own authorization of this source, without its tokens."""
+
+    authorized: bool
+    scope: str | None = None
+    expires_at: datetime | None = None
+    granted_at: datetime | None = None
+
+
+def _grant_out(row: dict[str, Any] | None) -> GrantOut:
+    return GrantOut(authorized=row is not None, **(row or {}))
+
+
+@router.post("/{connection_id}/authorization", response_model=AuthorizationStarted)
+async def start_authorization(
+    connection_id: UUID,
+    body: AuthorizationStart,
+    response: Response,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> AuthorizationStarted:
+    """p.39's "interactive authorization flow", begun: where to send the
+    person, and a cookie binding the flow to this browser (decision 0022 §3).
+
+    Viewer, because what it stores is the caller's own authorization and
+    nobody else's: whether they may then use the source is each call's own
+    question.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
+        secret = conn_service.secret_values_for(_secrets, row)
+        url, state = await outbound_apps.start(
+            conn, connection={**row, "config": config}, secret=secret,
+            user_id=access.auth.user_id, return_to=body.return_to,
+        )
+    response.set_cookie(
+        outbound_apps.STATE_COOKIE, state, max_age=int(outbound_apps.STATE_TTL.total_seconds()),
+        httponly=True, samesite="lax", path="/api/oauth",
+        secure=(outbound_apps.redirect_uri() or "").startswith("https://"),
+    )
+    return AuthorizationStarted(authorize_url=url)
+
+
+@router.get("/{connection_id}/authorization", response_model=GrantOut)
+async def get_authorization(
+    connection_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> GrantOut:
+    async with user_connection(access.auth.user_id) as conn:
+        await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        return _grant_out(await outbound_apps.status(conn, connection_id))
+
+
+@router.delete("/{connection_id}/authorization", response_model=GrantOut)
+async def revoke_authorization(
+    connection_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> GrantOut:
+    """Forget the caller's authorization: their tokens and the row."""
+    async with user_connection(access.auth.user_id) as conn:
+        await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        if await outbound_apps.revoke(conn, _secrets, connection_id):
+            await audit.record(
+                conn, organisation_id=access.auth.organisation_id,
+                user_id=access.auth.user_id, action="connection.authorization.revoke",
+                resource_type="connection", resource_id=connection_id,
+                workspace_id=access.workspace_id, project_id=access.project_id,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+    return GrantOut(authorized=False)
+
+
 from ..lib.cron import next_run_after  # noqa: E402
 from sqlalchemy import text as _sql_text  # noqa: E402
 from ..services import datasets as ds_service_for_files  # noqa: E402
+from ..services import outbound_apps  # noqa: E402
 from ..services import file_syncs as file_sync_service  # noqa: E402

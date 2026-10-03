@@ -184,3 +184,17 @@ def test_an_unreachable_api_fails_only_its_own_candidate(
     assert "could not reach the API" in (bad_row["last_error"] or "")
     good_row = _connection_row(good)
     assert good_row["status"] == "ok", good_row["last_error"]
+
+
+def test_a_source_called_as_a_person_is_refused_on_a_schedule() -> None:
+    """Decision 0022 §4: an outbound application's source is called as a
+    person, and a scheduled run has none - refused rather than sent down the
+    client-credentials grant with the application's own client id."""
+    import pytest as _pytest
+
+    from anchor_worker.connectors import ConnectorError, RestConnector
+
+    with _pytest.raises(ConnectorError, match="a scheduled run has no person"):
+        RestConnector()._auth_headers(
+            {"auth_type": "oauth2_authorization_code", "token_url": "https://x.example/t"},
+            {"client_id": "a", "client_secret": "b"})

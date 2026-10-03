@@ -1766,9 +1766,13 @@ class RestConfig(BaseModel):
     # syncs while `source_table` stays a display coordinate like every other
     # connector's.
     resource_path: str = Field(default="", max_length=2048)
-    auth_type: Literal["none", "api_key_header", "bearer", "oauth2_client_credentials"] = "none"
+    auth_type: Literal["none", "api_key_header", "bearer", "oauth2_client_credentials",
+                       "oauth2_authorization_code"] = "none"
     auth_header_name: str = Field(default="X-API-Key", min_length=1, max_length=128)
     token_url: str = Field(default="", max_length=2048)
+    # An outbound application's (decision 0022; `data-connection` p.243):
+    # where the person is sent to authorize, beside `token_url`.
+    authorize_url: str = Field(default="", max_length=2048)
     oauth_scope: str = Field(default="", max_length=512)
     records_path: str = Field(default="", max_length=256)
     pagination: Literal["none", "page_number", "cursor"] = "none"
@@ -1798,12 +1802,28 @@ class RestConnector:
             raise ConnectorConfigError(f"{loc}: {first['msg']}") from exc
 
         _check_url(cleaned["base_url"], cleaned["allow_insecure_http"], field="base_url")
-        if cleaned["auth_type"] == "oauth2_client_credentials":
+        if cleaned["auth_type"] in ("oauth2_client_credentials", "oauth2_authorization_code"):
             if not cleaned["token_url"]:
                 raise ConnectorConfigError(
-                    "token_url: required for oauth2_client_credentials"
+                    f"token_url: required for {cleaned['auth_type']}"
                 )
             _check_url(cleaned["token_url"], cleaned["allow_insecure_http"], field="token_url")
+        if cleaned["auth_type"] == "oauth2_authorization_code":
+            # An outbound application (decision 0022): the person is sent here
+            # to authorize, and the provider sends them back to the platform's
+            # own address - which the deployment has to have said.
+            if not cleaned["authorize_url"]:
+                raise ConnectorConfigError(
+                    "authorize_url: required for oauth2_authorization_code")
+            _check_url(cleaned["authorize_url"], cleaned["allow_insecure_http"],
+                       field="authorize_url")
+            from .outbound_apps import redirect_uri
+
+            if redirect_uri() is None:
+                raise ConnectorConfigError(
+                    "an outbound application needs the platform's public address, and this "
+                    "deployment has not set PLATFORM_PUBLIC_URL"
+                )
         if cleaned["pagination"] == "cursor" and not cleaned["cursor_path"]:
             raise ConnectorConfigError(
                 "cursor_path: required when pagination is 'cursor' - without it "
@@ -1826,6 +1846,17 @@ class RestConnector:
             if not token:
                 raise ConnectorOperationError("no bearer token stored for this connection")
             return {"Authorization": f"Bearer {token}"}
+        if auth == "oauth2_authorization_code":
+            # The calling person's own token (decision 0022), which the caller
+            # resolves from their grant and passes in; a source's own secret
+            # never holds one.
+            token = secret.get("access_token")
+            if not token:
+                raise ConnectorOperationError(
+                    "this source is called as the person using it, through its outbound "
+                    "application, and no one's authorization was given for this call"
+                )
+            return {"Authorization": f"Bearer {token}"}
         return {"Authorization": f"Bearer {self._oauth_token(config, secret)}"}
 
     def _oauth_token(self, config: dict[str, Any], secret: dict[str, str]) -> str:
@@ -1833,11 +1864,6 @@ class RestConnector:
         a sync is a handful of requests over a few seconds, and a cache would
         need invalidation, a clock, and somewhere to live - none of which earn
         their keep before someone has an API that actually rate-limits it."""
-        import json
-        import urllib.error
-        import urllib.parse
-        import urllib.request
-
         client_id = secret.get("client_id")
         client_secret = secret.get("client_secret")
         if not client_id or not client_secret:
@@ -1848,6 +1874,21 @@ class RestConnector:
                 "client_secret": client_secret}
         if config.get("oauth_scope"):
             form["scope"] = config["oauth_scope"]
+        token = self.token_request(config, form).get("access_token")
+        if not token:
+            raise ConnectorOperationError("the token endpoint returned no access_token")
+        return str(token)
+
+    def token_request(self, config: dict[str, Any], form: dict[str, str]) -> dict[str, Any]:
+        """POST a grant to the source's `token_url` and return its JSON - the
+        client-credentials grant's and an outbound application's code and
+        refresh grants (decision 0022) alike.
+        """
+        import json
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
         # **The token endpoint is a second destination** (§263, decision 0013's
         # enforcement table). p.12's own example is a source that needs both —
         # "retrieve credentials from an internet-hosted system, and use said
@@ -1882,10 +1923,9 @@ class RestConnector:
         except ValueError as exc:
             raise ConnectorOperationError("the token endpoint did not return JSON") from exc
 
-        token = payload.get("access_token") if isinstance(payload, dict) else None
-        if not token:
-            raise ConnectorOperationError("the token endpoint returned no access_token")
-        return str(token)
+        if not isinstance(payload, dict):
+            raise ConnectorOperationError("the token endpoint did not return a JSON object")
+        return payload
 
     def _fetch_page(
         self, config: dict[str, Any], secret: dict[str, str], params: dict[str, Any]

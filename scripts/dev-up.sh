@@ -53,6 +53,9 @@ sys.stdout.write(key.private_bytes(serialization.Encoding.PEM,
 fi
 export OIDC_SIGNING_KEY="${OIDC_SIGNING_KEY:-$(cat "$OIDC_KEY_FILE")}"
 export OIDC_ISSUER="${OIDC_ISSUER:-http://localhost:$WEB_PORT/api/oidc}"
+# The platform's public address (decision 0022): where an outbound
+# application's OAuth provider sends a person back to.
+export PLATFORM_PUBLIC_URL="${PLATFORM_PUBLIC_URL:-http://localhost:$WEB_PORT}"
 
 # **`setsid` is Linux-only.** macOS has no such command, so a line written as
 # `setsid nohup ... &` there does not start a detached server - it fails with
