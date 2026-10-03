@@ -38,6 +38,8 @@ import {
   storedOptions,
   describeOptions,
   parseNullMarkers,
+  parseDateFormats,
+  dateFormatsText,
   whyNotParseable,
   DELIMITED_ONLY,
   isJsonFile,
@@ -412,8 +414,12 @@ function ParsePanel({
   // file added later is read with too.
   const [options, setOptions] = useState<ParseOptions>(() => storedOptions(stored));
   const [nulls, setNulls] = useState(() => storedOptions(stored).null_values.join("\n"));
+  const [dates, setDates] = useState(() => dateFormatsText(storedOptions(stored).date_formats));
   const queryClient = useQueryClient();
-  const sent = () => ({ ...options, null_values: parseNullMarkers(nulls) });
+  const dated = parseDateFormats(dates);
+  const sent = () => ({
+    ...options, null_values: parseNullMarkers(nulls), date_formats: dated.formats,
+  });
 
   const rehearse = useMutation({
     mutationFn: () => datasetApi.previewParse(wid, pid, did, sent()),
@@ -516,6 +522,22 @@ function ParsePanel({
           />
         </label>
         )}
+        {!json && (
+        <label className="ds-parse-wide">
+          Date formats
+          {/* p.26's `dateFormat`: a JodaTime pattern per column (§765). */}
+          <textarea
+            data-testid="parse-dates"
+            rows={2}
+            value={dates}
+            placeholder="column: pattern, one per line, e.g. when: dd/MM/yyyy"
+            onChange={(e) => {
+              setDates(e.target.value);
+              rehearse.reset();
+            }}
+          />
+        </label>
+        )}
       </div>
       <div className="ds-parse-switches">
         {([
@@ -537,6 +559,9 @@ function ParsePanel({
         ))}
       </div>
 
+      {dated.problem && (
+        <p className="form-error" data-testid="parse-dates-problem">{dated.problem}</p>
+      )}
       {willDo.length > 0 && (
         <p className="soft ds-note" data-testid="parse-summary">
           Reading it this way: {willDo.join("; ")}.
@@ -554,7 +579,7 @@ function ParsePanel({
           type="button"
           className="btn quiet"
           data-testid="parse-preview"
-          disabled={rehearse.isPending}
+          disabled={rehearse.isPending || dated.problem !== ""}
           onClick={() => rehearse.mutate()}
         >
           Preview

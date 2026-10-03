@@ -1397,6 +1397,8 @@ export interface DatasetParseOptions {
   add_file_path?: boolean;
   add_imported_at?: boolean;
   add_row_number?: boolean;
+  /** p.26 `dateFormat` (§765): column name to JodaTime pattern. */
+  date_formats?: Record<string, string>;
 }
 
 /** What a set of parsing options would produce, without producing it — p.24's

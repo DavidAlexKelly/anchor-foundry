@@ -1142,6 +1142,8 @@ class ParseOptionsIn(BaseModel):
     add_file_path: bool = False
     add_imported_at: bool = False
     add_row_number: bool = False
+    #: p.26 `dateFormat` (§765): column name to JodaTime pattern.
+    date_formats: dict[str, str] = Field(default_factory=dict, max_length=50)
 
     def to_engine(self) -> engine.ParseOptions:
         return engine.ParseOptions(
@@ -1150,6 +1152,7 @@ class ParseOptionsIn(BaseModel):
             null_values=tuple(self.null_values), drop_bad_rows=self.drop_bad_rows,
             encoding=self.encoding, add_file_path=self.add_file_path,
             add_imported_at=self.add_imported_at, add_row_number=self.add_row_number,
+            date_formats=tuple(self.date_formats.items()),
         )
 
 
