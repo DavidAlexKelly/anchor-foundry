@@ -177,6 +177,52 @@ def parse_output(raw: Any) -> dict[str, Any]:
     return {"kind": kind}
 
 
+async def _link_types(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str, Any]]:
+    rows = await fetch_all(conn, """
+        SELECT l.id, l.api_name, l.from_object_type_id, l.to_object_type_id,
+               l.from_property, l.join_dataset_id, l.join_from_column, l.join_to_column,
+               f.api_name AS from_name, t.api_name AS to_name
+          FROM link_types l
+          JOIN object_types f ON f.id = l.from_object_type_id
+          JOIN object_types t ON t.id = l.to_object_type_id
+         WHERE l.workspace_id = :wid
+    """, {"wid": str(workspace_id)})
+    return [dict(r) for r in rows]
+
+
+def _link_edit(
+    links: list[dict[str, Any]], edit: dict[str, Any], type_id: str, name: str,
+    keys: list[str], allowed: list[str],
+) -> dict[str, Any]:
+    """A link edit's link type, resolved (§784): one of this object's type's,
+    to a type the output declares (p.83), and kept in a join table. Which end
+    the object is; a link from a type to itself is from its `from` end, as an
+    action's link rule reads one."""
+    link = next((lt for lt in links if lt["api_name"] == name and type_id in (
+        str(lt["from_object_type_id"]), str(lt["to_object_type_id"]))), None)
+    if link is None:
+        raise FunctionError(f"the function links through {name!r}, which is not a link type "
+                            f"of {edit['object_type']}")
+    end = "from" if str(link["from_object_type_id"]) == type_id else "to"
+    other = str(link["to_object_type_id" if end == "from" else "from_object_type_id"])
+    if other not in allowed:
+        raise FunctionError(
+            f"the function links {edit['object_type']} to "
+            f"{link['to_name' if end == 'from' else 'from_name']}, which is not an object type "
+            "it declares (action-types p.83)")
+    if not link["join_dataset_id"] and link["from_property"]:
+        raise FunctionError(
+            f"{name} matches a property rather than keeping a join table; set "
+            f"{link['from_property']} on {link['from_name']} instead")
+    if not link["join_dataset_id"]:
+        raise FunctionError(f"{name} is not kept in a join table, so a function cannot "
+                            "link through it")
+    return {"link_type_id": str(link["id"]), "dataset_id": str(link["join_dataset_id"]),
+            "from_column": str(link["join_from_column"]),
+            "to_column": str(link["join_to_column"]), "end": end, "other_type_id": other,
+            "keys": keys}
+
+
 def edited_types(output: dict[str, Any]) -> list[str]:
     """The object types an edit output may edit, one or several (§783)."""
     if "object_type_ids" in output:
@@ -571,6 +617,8 @@ async def _edits_by_type(
     types = await _types(conn, workspace_id, set(allowed))
     by_name = {str(t["api_name"]): (type_id, {str(p["api_name"]) for p in t["properties"]})
                for type_id, t in types.items()}
+    links = await _link_types(conn, workspace_id) \
+        if any(e["edit"] in engine.LINK_VERBS for e in edits) else []
     out = []
     for edit in edits:
         found = by_name.get(str(edit["object_type"]))
@@ -579,6 +627,11 @@ async def _edits_by_type(
                 f"the function edits {edit['object_type']}, which is not an object type it "
                 "declares (action-types p.83)")
         type_id, declared = found
+        if edit["edit"] in engine.LINK_VERBS:
+            out.append({**edit, "object_type_id": type_id, "links": [
+                _link_edit(links, edit, type_id, name, keys, allowed)
+                for name, keys in edit["properties"].items()]})
+            continue
         for name in edit["properties"]:
             if name not in declared:
                 raise FunctionError(f"the function sets {name!r}, which is not a property of "
