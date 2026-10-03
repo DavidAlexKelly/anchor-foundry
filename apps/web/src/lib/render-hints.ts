@@ -67,6 +67,14 @@ export function toggledHint(
   return hintsOf([...current]);
 }
 
+/** Whether a property may be grouped by (§727; p.250's Selectable): one
+ * bucket per exact value is an "aggregation on exact term values", on any
+ * base type. The server refuses the rest; a picker offering them would be
+ * offering a refusal. */
+export function isSelectable(property: { render_hints?: readonly string[] | null }): boolean {
+  return hintsOf(property.render_hints ?? null).includes("selectable");
+}
+
 /** The hints by their labels, for a button that says what is set. */
 export function hintLabels(hints: readonly string[] | null | undefined): string[] {
   const chosen = hintsOf(hints);

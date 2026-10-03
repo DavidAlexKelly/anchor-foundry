@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_HINTS, NEEDS_SEARCHABLE, RENDER_HINTS, hintLabels, hintsOf, toggledHint } from "./render-hints";
+import {
+  DEFAULT_HINTS, NEEDS_SEARCHABLE, RENDER_HINTS, hintLabels, hintsOf, isSelectable, toggledHint,
+} from "./render-hints";
 
 describe("render hints (§724; object-link-types p.248-252)", () => {
   it("is p.249-252's table, in its order, with the server's default and rule", () => {
@@ -26,6 +28,14 @@ describe("render hints (§724; object-link-types p.248-252)", () => {
     expect(toggledHint(undefined, "sortable", false)).toEqual(["selectable", "searchable"]);
     // Unticking a dependent leaves Searchable as it was.
     expect(toggledHint(["regex", "searchable"], "regex", false)).toEqual(["searchable"]);
+  });
+
+  it("groups only by a Selectable property, which none named is (§727)", () => {
+    expect(isSelectable({})).toBe(true);
+    expect(isSelectable({ render_hints: null })).toBe(true);
+    expect(isSelectable({ render_hints: ["selectable", "searchable"] })).toBe(true);
+    expect(isSelectable({ render_hints: ["searchable"] })).toBe(false);
+    expect(isSelectable({ render_hints: [] })).toBe(false);
   });
 
   it("says what is set by name", () => {

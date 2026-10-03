@@ -646,6 +646,44 @@ async def list_properties_for_workspace(
     return out
 
 
+async def check_selectable(
+    conn: AsyncConnection, type_id: UUID, property_names: list[str]
+) -> None:
+    """Refuse grouping by a property whose Selectable render hint is off
+    (§727; `object-link-types` p.250).
+
+    > "Selectable - Enable on string properties to allow users to perform
+    > aggregations on this property… Enable on numeric and date properties to
+    > allow users to perform aggregation on exact term values and not only
+    > distributions." (p.250)
+
+    So a group by *any* base type needs it - a group is one bucket per exact
+    value - and a numeric distribution does not. A refusal rather than an
+    empty chart, for the reason a text sort is refused (decision 0006): an
+    answer the hint says not to give, given anyway, is a hint that does
+    nothing. A shared property's hint is the one in force (p.188). A name the
+    type does not declare is left to the read, which answers it as it always
+    has.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT p.api_name, COALESCE(sp.render_hints, p.render_hints) AS hints
+          FROM object_type_properties p
+          LEFT JOIN shared_properties sp ON sp.id = p.shared_property_id
+         WHERE p.object_type_id = :tid AND p.api_name = ANY(CAST(:names AS text[]))
+        """,
+        {"tid": str(type_id), "names": list(property_names)},
+    )
+    refused = sorted(str(r["api_name"]) for r in rows if "selectable" not in (r["hints"] or []))
+    if refused:
+        raise ValueError(
+            ", ".join(refused) + (" is" if len(refused) == 1 else " are")
+            + " not Selectable, so cannot be grouped by: turn its Selectable render "
+            "hint on to aggregate on its values (object-link-types p.250)"
+        )
+
+
 async def search_scopes(
     conn: AsyncConnection, workspace_id: UUID
 ) -> dict[str, list[str]]:

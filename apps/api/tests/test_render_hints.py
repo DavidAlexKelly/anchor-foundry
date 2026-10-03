@@ -258,3 +258,71 @@ def test_a_shared_property_s_hints_follow_the_same_rule(client, fx) -> None:
                      headers=hdr(fx.editor_sub),
                      json={"display_name": "Renamed", "data_type": "string"})
     assert r.json()["render_hints"] == ["keywords"]
+
+
+# ---- §727: Selectable, read where a set is grouped (p.250) ------------------
+def test_grouping_by_a_property_that_is_not_selectable_is_refused(client, fx) -> None:
+    """p.250: Selectable is what lets "users … perform aggregations on this
+    property", and on a number or a date "aggregation on exact term values and
+    not only distributions" - so every group asks for it, a pivot's two axes
+    included, and a distribution does not."""
+    tag = uuid.uuid4().hex[:6]
+    r = client.post(f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub), json={
+        "api_name": f"gauge_{tag}", "display_name": f"Gauge {tag}", "title_property": "name",
+        "properties": [
+            {"api_name": "name", "data_type": "string"},
+            {"api_name": "region", "data_type": "string", "render_hints": ["searchable"]},
+            {"api_name": "reading", "data_type": "integer", "render_hints": ["searchable"]},
+            {"api_name": "site", "data_type": "string"}]})
+    assert r.status_code == 201, r.text
+    kind = r.json()
+    definition = {"object_type_id": kind["id"], "filters": []}
+
+    def group(prop: str):
+        return client.post(f"{wbase(fx)}/object-sets/group", headers=hdr(fx.viewer_sub),
+                           json={"definition": definition, "property": prop})
+
+    for prop in ("region", "reading"):
+        refused = group(prop)
+        assert refused.status_code == 422, refused.text
+        assert f"{prop} is not Selectable" in refused.json()["detail"]
+    assert group("site").status_code == 200
+    r = client.post(f"{wbase(fx)}/object-sets/cross-tab", headers=hdr(fx.viewer_sub),
+                    json={"definition": definition, "row_property": "site",
+                          "column_property": "region"})
+    assert r.status_code == 422 and "region is not Selectable" in r.text, r.text
+    r = client.post(f"{wbase(fx)}/object-sets/cross-tab", headers=hdr(fx.viewer_sub),
+                    json={"definition": definition, "row_property": "site",
+                          "column_property": "name"})
+    assert r.status_code == 200, r.text
+    # A distribution is not an aggregation on exact values.
+    r = client.post(f"{wbase(fx)}/object-sets/distribution", headers=hdr(fx.viewer_sub),
+                    json={"definition": definition, "property": "reading"})
+    assert r.status_code == 200, r.text
+    # A union asks it of each part that has the property.
+    r = client.post(f"{wbase(fx)}/object-sets/group", headers=hdr(fx.viewer_sub),
+                    json={"definition": {"union": [definition, definition]}, "property": "region"})
+    assert r.status_code == 422 and "region is not Selectable" in r.text, r.text
+
+
+def test_a_shared_property_s_selectable_is_the_one_in_force(client, fx) -> None:
+    """p.188, read at group time: turned off on the shared property after the
+    property was saved, the property's own column still says Selectable."""
+    shared = make_shared(client, fx)
+    tag = uuid.uuid4().hex[:6]
+    r = client.post(f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub), json={
+        "api_name": f"dial_{tag}", "display_name": f"Dial {tag}", "title_property": "name",
+        "properties": [{"api_name": "name", "data_type": "string"},
+                       {"api_name": "body", "data_type": "string",
+                        "shared_property_id": shared["id"]}]})
+    assert r.status_code == 201, r.text
+    definition = {"object_type_id": r.json()["id"], "filters": []}
+    body = {"definition": definition, "property": "body"}
+    assert client.post(f"{wbase(fx)}/object-sets/group", headers=hdr(fx.viewer_sub),
+                       json=body).status_code == 200
+    r = client.patch(f"{wbase(fx)}/shared-properties/{shared['id']}", headers=hdr(fx.editor_sub),
+                     json={"display_name": "Body", "data_type": "string",
+                           "render_hints": ["searchable"]})
+    assert r.status_code == 200, r.text
+    assert client.post(f"{wbase(fx)}/object-sets/group", headers=hdr(fx.viewer_sub),
+                       json=body).status_code == 422

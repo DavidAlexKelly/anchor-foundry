@@ -22,6 +22,7 @@ import { WidgetSetup } from "./WidgetSetup";
 import { StyleFields } from "./StyleFields";
 import { refTo } from "./saved-colours";
 import { useSavedColours } from "./use-saved-colours";
+import { isSelectable } from "@/lib/render-hints";
 import {
   resolveBackground, schemeFor, styleFor, textColourChoice,
   type BorderName, type PaddingName, type StyleProps,
@@ -1357,7 +1358,12 @@ function FilterListFilter({
         </button>
       )}
       {picksValues && result.isError && (
-        <p className="canvas-widget-empty">Couldn&apos;t read this property&apos;s values.</p>
+        <p className="canvas-widget-empty" data-testid="filter-values-error">
+          {/* The server's sentence, as the Pie's: a property that is not
+              Selectable (§727) has no values to offer, and says so. */}
+          {result.error instanceof ApiError ? result.error.message
+            : "Couldn't read this property's values."}
+        </p>
       )}
       {picksValues && result.data?.truncated && (
         <p className="canvas-widget-empty">showing the most common values</p>
@@ -10623,7 +10629,10 @@ export function CanvasPieChart({
         <p className="canvas-widget-empty">Counting…</p>
       ) : grouped.isError ? (
         <p className="canvas-widget-empty" data-testid="pie-error">
-          Couldn&apos;t group this object set.
+          {/* The server's sentence when it has one - a property that is not
+              Selectable (§727) is refused by name, and "couldn't" would hide
+              the one thing somebody can fix. */}
+          {grouped.error instanceof ApiError ? grouped.error.message : "Couldn't group this object set."}
         </p>
       ) : (
         <div data-testid="pie-chart" ref={pieRef} className="chart-exportable">
@@ -10731,9 +10740,13 @@ function PieChartSettings() {
           onChange={(e) => setProp((p: { groupBy: string }) => (p.groupBy = e.target.value))}
         >
           <option value="">Choose…</option>
-          {(type.data?.properties ?? []).map((p) => (
-            <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
-          ))}
+          {/* p.250's Selectable (§727): only what may be grouped by - and
+              the current choice, whatever it is, so it is not silently
+              replaced by "Choose…". */}
+          {(type.data?.properties ?? []).filter((p) => isSelectable(p) || p.api_name === groupBy)
+            .map((p) => (
+              <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
+            ))}
         </select>
       </label>
       <label className="field">
@@ -13780,9 +13793,11 @@ function PivotTableSettings() {
           }
         >
           <option value="">Choose…</option>
-          {properties.map((prop) => (
-            <option key={prop.api_name} value={prop.api_name}>{prop.api_name}</option>
-          ))}
+          {/* Each axis is a group, so p.250's Selectable (§727). */}
+          {properties.filter((prop) => isSelectable(prop) || prop.api_name === rowProperty)
+            .map((prop) => (
+              <option key={prop.api_name} value={prop.api_name}>{prop.api_name}</option>
+            ))}
         </select>
       </label>
       <label className="field">
@@ -13799,7 +13814,8 @@ function PivotTableSettings() {
           {/* The row property is not offered here: a cross-tab of a property
               against itself is its own diagonal, and the server refuses it.
               Not offering it beats a control that 422s. */}
-          {properties.filter((prop) => prop.api_name !== rowProperty).map((prop) => (
+          {properties.filter((prop) => prop.api_name !== rowProperty
+            && (isSelectable(prop) || prop.api_name === columnProperty)).map((prop) => (
             <option key={prop.api_name} value={prop.api_name}>{prop.api_name}</option>
           ))}
         </select>
