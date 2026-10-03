@@ -397,9 +397,9 @@ would have turned into a lie with nothing to notice.
 - **The vertical header** — done (`STATUS.md` §119). Orientation, width,
   height, collapsibility and collapsed-by-default, plus the one part of a
   header that is a rule rather than styling: collapsed, only Button and Tabs
-  render, as glyphs with their labels dropped (p.49). There is no icon library,
-  so an icon is one or two characters and falls back to an initial — the
-  behaviour is faithful, the picker is not built.
+  render, as icons with their labels dropped (p.49). An icon is a name from
+  decision 0019's set or one or two typed characters (§705-§706), and an
+  unset one falls back to an initial.
 - **The versions dialog** — done (`STATUS.md` §120). Timestamp, editor name and
   description per version; publish a *named* version; view one read-only with
   the conditional warning banner; revert as a new version with a generated
