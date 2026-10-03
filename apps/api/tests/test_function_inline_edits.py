@@ -126,3 +126,145 @@ def test_the_refusals_and_the_seed_read_the_function_rule() -> None:
     # Without a Function rule the name alone seeds nothing.
     assert actions.seed_from_instance(
         {}, parameters=[{"api_name": "title"}], properties={"title": "T"}, rules=[]) == {}
+
+
+# ---- §779: batched execution (`action-types` p.84-85) ----------------------------
+
+def batched(client, fx, tickets, sql: str | None = None) -> dict:
+    """p.85's example, `updateDestinationBatch(batch: {flight, destination}[])`,
+    as SQL: a batch of a ticket and a title."""
+    t = tickets["api_name"]
+    return publish(client, fx, tickets,
+                   sql or ("SELECT b.ticket AS k, upper(b.title) AS title "
+                           "FROM (SELECT unnest($batch) AS b)"),
+                   parameters=[{"api_name": "batch", "data_type": "batch", "fields": [
+                       {"api_name": "ticket", "data_type": "object",
+                        "object_type_id": tickets["type_id"]},
+                       {"api_name": "title", "data_type": "string"}]}])
+
+
+def batched_action(client, fx, tickets, fn: dict) -> str:
+    act = action(client, fx, tickets)
+    r = define(client, fx, act, [{"kind": "function", "config": {
+        "function_id": fn["id"], "version": "1.0.0", "batched": True,
+        "inputs": {"ticket": {"subject": True}, "title": {"parameter": "title"}}}}], [TITLE])
+    assert r.status_code == 200, r.text
+    return act
+
+
+def test_a_batched_function_takes_the_whole_batch_in_one_call(client, fx, tickets) -> None:
+    act = batched_action(client, fx, tickets, batched(client, fx, tickets))
+    got = client.get(f"{wbase(fx)}/action-types/{act}", headers=hdr(fx.viewer_sub)).json()
+    # p.131: the 20 is for a function "not configured to use batched execution".
+    assert (got["inline_edit_refusals"], got["inline_edit_row_limit"]) == ([], 200)
+    r = batch(client, fx, act, [
+        {"instance_id": tickets["T1"], "values": {"title": "one"}},
+        {"instance_id": tickets["T3"], "values": {"title": "three"}},
+    ])
+    assert r.status_code == 200, r.text
+    after = held(client, fx, tickets["type_id"])
+    assert (after["T1"]["title"], after["T2"]["title"], after["T3"]["title"]) == (
+        "ONE", "No coffee", "THREE")
+
+
+def test_a_single_submission_is_a_batch_of_one(client, fx, tickets) -> None:
+    """p.85: "A single action call will invoke a single function execution
+    with a single entry in the list input parameter"."""
+    act = batched_action(client, fx, tickets, batched(client, fx, tickets))
+    r = client.post(f"{abase(fx)}/{act}/execute", headers=hdr(fx.editor_sub),
+                    json={"instance_id": tickets["T2"], "values": {"title": "solo"}})
+    assert r.status_code == 200, r.text
+    assert held(client, fx, tickets["type_id"])["T2"]["title"] == "SOLO"
+
+
+def test_a_batched_function_may_edit_only_the_batchs_rows(client, fx, tickets) -> None:
+    fn = batched(client, fx, tickets, sql=(
+        f"SELECT __primary_key, 'x' AS title FROM {tickets['api_name']} "
+        "WHERE list_contains((SELECT list(b.ticket) FROM (SELECT unnest($batch) AS b)), "
+        "__primary_key) OR __primary_key = 'T2'"))
+    act = batched_action(client, fx, tickets, fn)
+    r = batch(client, fx, act, [{"instance_id": tickets["T1"], "values": {}}])
+    assert r.status_code == 422, r.text
+    assert "changes only the row it is typed into" in r.text
+    # And a row of the batch it gives nothing for is said, not skipped.
+    fn = batched(client, fx, tickets, sql=(
+        "SELECT b.ticket AS k, b.title AS title FROM (SELECT unnest($batch) AS b) "
+        "WHERE b.ticket <> 'T3'"))
+    act = batched_action(client, fx, tickets, fn)
+    r = batch(client, fx, act, [{"instance_id": tickets["T1"], "values": {"title": "a"}},
+                                {"instance_id": tickets["T3"], "values": {"title": "b"}}])
+    assert r.status_code == 422, r.text
+    assert "made no edit for T3" in r.text
+
+
+def test_batched_must_match_the_function(client, fx, tickets) -> None:
+    fn = batched(client, fx, tickets)
+    act = action(client, fx, tickets)
+    r = define(client, fx, act, [{"kind": "function", "config": {
+        "function_id": fn["id"], "version": "1.0.0",
+        "inputs": {"ticket": {"subject": True}}}}], [TITLE])
+    assert r.status_code == 422, r.text
+    assert "receives a batch, so the rule runs it batched" in r.text
+    plain = publish(client, fx, tickets,
+                    f"SELECT __primary_key, 'x' AS title FROM {tickets['api_name']} "
+                    "WHERE __primary_key = $ticket")
+    r = define(client, fx, act, [{"kind": "function", "config": {
+        "function_id": plain["id"], "version": "1.0.0", "batched": True,
+        "inputs": {"ticket": {"subject": True}}}}], [TITLE])
+    assert r.status_code == 422, r.text
+    assert "receives no batch, so the rule cannot run it batched" in r.text
+    r = define(client, fx, act, [{"kind": "function", "config": {
+        "function_id": fn["id"], "version": "1.0.0", "batched": "yes",
+        "inputs": {"ticket": {"subject": True}}}}], [TITLE])
+    assert "batched is true or false" in r.text
+    # A field it does not have is named like a parameter it does not have.
+    r = define(client, fx, act, [{"kind": "function", "config": {
+        "function_id": fn["id"], "version": "1.0.0", "batched": True,
+        "inputs": {"ticket": {"subject": True}, "colour": {"value": "red"}}}}], [TITLE])
+    assert "takes no parameter colour" in r.text
+
+
+def test_a_newer_release_that_changes_batching_fails_the_action(client, fx, tickets) -> None:
+    fn = batched(client, fx, tickets)
+    r = client.post(f"{wbase(fx)}/functions/{fn['id']}/versions", headers=hdr(fx.editor_sub),
+                    json={"version": "1.1.0", "inputs": [tickets["type_id"]],
+                          "parameters": [{"api_name": "ticket", "data_type": "object",
+                                          "object_type_id": tickets["type_id"]}],
+                          "output": {"kind": "edits", "object_type_id": tickets["type_id"]},
+                          "sql": f"SELECT __primary_key, 'x' AS title "
+                                 f"FROM {tickets['api_name']} WHERE __primary_key = $ticket"})
+    assert r.status_code == 201, r.text
+    act = action(client, fx, tickets)
+    assert define(client, fx, act, [{"kind": "function", "config": {
+        "function_id": fn["id"], "version": "1.0.0", "batched": True, "auto_upgrade": True,
+        "inputs": {"ticket": {"subject": True}}}}], [TITLE]).status_code == 200
+    r = batch(client, fx, act, [{"instance_id": tickets["T1"], "values": {}}])
+    assert r.status_code == 422, r.text
+    assert "changes whether it takes a batch" in r.text
+
+
+def test_the_row_limit_reads_whether_the_rule_is_batched() -> None:
+    batched_rule = {"kind": "function", "config": {"function_id": "f", "batched": True}}
+    assert actions.inline_edit_row_limit({"rules": [batched_rule]}) == 200
+    assert actions.inline_edit_row_limit({"rules": [
+        {"kind": "function", "config": {"function_id": "f", "batched": False}}]}) == 20
+
+
+def test_an_unbatched_function_may_not_edit_a_row_beside_its_own(client, fx, tickets) -> None:
+    """Called once per row (p.84), each call may edit only its own row - even
+    one that is in the same submission."""
+    t = tickets["api_name"]
+    fn = publish(client, fx, tickets,
+                 f"SELECT __primary_key, $title AS title FROM {t} "
+                 f"WHERE region = (SELECT region FROM {t} WHERE __primary_key = $ticket)",
+                 parameters=[{"api_name": "ticket", "data_type": "object",
+                              "object_type_id": tickets["type_id"]},
+                             {"api_name": "title", "data_type": "string"}])
+    act = action(client, fx, tickets)
+    assert define(client, fx, act, [rule(fn, inputs={"ticket": {"subject": True},
+                                                     "title": {"parameter": "title"}})],
+                  [TITLE]).status_code == 200
+    r = batch(client, fx, act, [{"instance_id": tickets["T1"], "values": {"title": "x"}},
+                                {"instance_id": tickets["T2"], "values": {"title": "y"}}])
+    assert r.status_code == 422, r.text
+    assert "changes only the row it is typed into" in r.text

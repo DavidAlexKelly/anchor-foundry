@@ -27,6 +27,8 @@ class FunctionParameter(BaseModel):
     data_type: str
     object_type_id: UUID | None = None
     required: bool = True
+    #: A batch parameter's struct fields (`action-types` p.85; §779).
+    fields: list[Any] | None = None
 
 
 class FunctionVersionIn(BaseModel):

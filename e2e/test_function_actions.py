@@ -69,6 +69,7 @@ def test_a_function_rule_set_up_in_the_dialog_saves_and_runs(page, api):
     stored = definition(api, mod)
     assert [(r["kind"], r["config"]) for r in stored["rules"]] == [("function", {
         "function_id": mod.fn["id"], "version": "1.0.0", "auto_upgrade": False,
+        "batched": False,
         "inputs": {"ticket": {"subject": True}, "reason": {"parameter": "reason"}}})]
     assert [p["api_name"] for p in stored["parameters"]] == ["status", "reason"]
 
@@ -112,3 +113,38 @@ def test_a_value_and_another_source_for_an_input(page, api):
     done = api.call("POST", f"{mod.base}/actions/{mod.action['id']}/execute",
                     {"instance_id": instance["id"], "values": {"reason": "ignored"}})
     assert done["instance"]["properties"]["status"] == "shut: dup"
+
+
+def test_a_batched_function_is_run_batched(page, api):
+    """p.85: "You can then enable batched execution for this function when
+    configuring the action type" (§779) - set when the version picked takes a
+    batch, its fields fed as parameters would be."""
+    mod = build(api, "Function action batched")
+    slug = f"fticket_{mod.tag}"
+    fn = api.call("POST", f"/workspaces/{mod.workspace_id}/functions", {
+        "api_name": f"wrapall_{mod.tag}", "display_name": "Wrap all", "version": {
+            "version": "1.0.0", "inputs": [mod.type_id],
+            "parameters": [{"api_name": "batch", "data_type": "batch", "fields": [
+                {"api_name": "ticket", "data_type": "object", "object_type_id": mod.type_id},
+                {"api_name": "reason", "data_type": "string"}]}],
+            "output": {"kind": "edits", "object_type_id": mod.type_id},
+            "sql": "SELECT b.ticket AS k, 'closed: ' || b.reason AS status "
+                   "FROM (SELECT unnest($batch) AS b)"}})
+    open_editor(page, mod)
+    page.get_by_label("Rule 1 kind").select_option("function")
+    page.get_by_label("Rule 1 function").select_option(fn["id"])
+    page.get_by_label("Rule 1 version").select_option("1.0.0", timeout=15000)
+    expect(page.get_by_test_id("rule-1-batched")).to_be_visible()
+    expect(page.get_by_label("Rule 1 ticket from")).to_have_value("$subject")
+    expect(page.get_by_test_id("rule-1-problem")).to_have_count(0)
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+    config = definition(api, mod)["rules"][0]["config"]
+    assert (config["batched"], config["inputs"]) == (
+        True, {"ticket": {"subject": True}, "reason": {"parameter": "reason"}})
+    instance = api.call(
+        "GET", f"/workspaces/{mod.workspace_id}/object-types/{mod.type_id}/instances",
+    )["items"][0]
+    done = api.call("POST", f"{mod.base}/actions/{mod.action['id']}/execute",
+                    {"instance_id": instance["id"], "values": {"reason": "batched"}})
+    assert done["instance"]["properties"]["status"] == "closed: batched"

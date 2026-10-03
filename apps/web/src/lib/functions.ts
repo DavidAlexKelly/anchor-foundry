@@ -9,12 +9,14 @@
  */
 
 import type {
-  FunctionOutput, FunctionParameter, FunctionResult, FunctionVersion,
+  FunctionBatchField, FunctionOutput, FunctionParameter, FunctionResult, FunctionVersion,
 } from "@/lib/types";
 
 /** p.80's Workshop variable types, as the server's `SCALAR_TYPES` has them. */
 export const SCALAR_TYPES = ["string", "integer", "float", "boolean", "date", "timestamp"] as const;
-export const PARAMETER_TYPES = [...SCALAR_TYPES, "object", "object_set"] as const;
+export const PARAMETER_TYPES = [...SCALAR_TYPES, "object", "object_set", "batch"] as const;
+/** A batch's field types (§779): a scalar or one object. */
+export const BATCH_FIELD_TYPES = [...SCALAR_TYPES, "object"] as const;
 export const OUTPUT_KINDS: { kind: FunctionOutput["kind"]; label: string }[] = [
   { kind: "value", label: "A value" },
   { kind: "array", label: "A list of values" },
@@ -119,6 +121,13 @@ export function draftProblem(draft: DraftVersion, latest: string | null): string
     if (refersToObjects(p.data_type) && !p.object_type_id) {
       return `Choose the object type ${p.api_name} refers to.`;
     }
+    if (p.data_type === "batch") {
+      const said = fieldsProblem(p.api_name, p.fields ?? []);
+      if (said) return said;
+    }
+  }
+  if (draft.parameters.some((p) => p.data_type === "batch") && draft.parameters.length > 1) {
+    return "A batched function receives a single input parameter (action-types p.85).";
   }
   if ((draft.output.kind === "value" || draft.output.kind === "array") && !draft.output.data_type) {
     return "Choose the type of value it returns.";
@@ -141,6 +150,27 @@ export function draftProblem(draft: DraftVersion, latest: string | null): string
   return null;
 }
 
+/** Why a batch's fields cannot hold, or null (§779). */
+export function fieldsProblem(name: string, fields: readonly FunctionBatchField[]): string | null {
+  if (fields.length === 0) return `Give ${name} at least one field.`;
+  const seen = new Set<string>();
+  for (const [index, f] of fields.entries()) {
+    if (!NAME_RE.test(f.api_name)) {
+      return `Field ${index + 1} of ${name} needs a name in lower case, such as ticket.`;
+    }
+    if (seen.has(f.api_name)) return `${name} has two fields called ${f.api_name}.`;
+    seen.add(f.api_name);
+    if (f.data_type === "object" && !f.object_type_id) {
+      return `Choose the object type ${name}.${f.api_name} refers to.`;
+    }
+  }
+  return null;
+}
+
+export function blankField(): FunctionBatchField {
+  return { api_name: "", data_type: "string", object_type_id: null };
+}
+
 /** The request body for a version: only the fields its kinds use. */
 export function bodyOf(draft: DraftVersion): Record<string, unknown> {
   const output: Record<string, unknown> = { kind: draft.output.kind };
@@ -158,6 +188,10 @@ export function bodyOf(draft: DraftVersion): Record<string, unknown> {
       data_type: p.data_type,
       required: p.required,
       ...(refersToObjects(p.data_type) ? { object_type_id: p.object_type_id } : {}),
+      ...(p.data_type === "batch" ? { fields: (p.fields ?? []).map((f) => ({
+        api_name: f.api_name, data_type: f.data_type,
+        ...(f.data_type === "object" ? { object_type_id: f.object_type_id } : {}),
+      })) } : {}),
     })),
     inputs: draft.inputs,
     output,
@@ -178,6 +212,14 @@ export function valuesFor(
     if (raw === "") continue;
     if (p.data_type === "integer" || p.data_type === "float") {
       out[p.api_name] = Number.isFinite(Number(raw)) ? Number(raw) : raw;
+    } else if (p.data_type === "batch") {
+      // A batch is typed as its JSON list of entries (§779); text that is not
+      // JSON is sent as typed, for the server to refuse by name.
+      try {
+        out[p.api_name] = JSON.parse(raw);
+      } catch {
+        out[p.api_name] = raw;
+      }
     } else if (p.data_type === "object_set") {
       // Primary keys, comma separated, as the run dialog takes them.
       out[p.api_name] = raw.split(",").map((k) => k.trim()).filter(Boolean);

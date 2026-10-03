@@ -532,3 +532,104 @@ def test_the_querys_own_error_is_said_as_written() -> None:
                    {"kind": "value", "data_type": "string"})
     assert not isinstance(caught.value, engine.UserFacingError)
     assert caught.value.args[0].startswith("Invalid Input Error")
+
+
+# ---- §779: a batch parameter (`action-types` p.84-85) ----------------------------
+
+def batch_parameter(sites, **over) -> dict:
+    return {"api_name": "batch", "data_type": "batch", "fields": [
+        {"api_name": "site", "data_type": "object", "object_type_id": sites["type"]["id"]},
+        {"api_name": "extra", "data_type": "integer"}], **over}
+
+
+def test_a_batch_is_a_list_of_structs_the_sql_unnests(client, fx, sites) -> None:
+    fn = create(client, fx, sites,
+                sql=(f"SELECT b.site AS k, s.capacity + b.extra AS capacity FROM "
+                     f"(SELECT unnest($batch) AS b) JOIN {sites['table']} s "
+                     "ON s.__primary_key = b.site ORDER BY 1"),
+                parameters=[batch_parameter(sites)],
+                output={"kind": "edits", "object_type_id": sites["type"]["id"]})
+    assert fn.status_code == 201, fn.text
+    ids = {i["primary_key"]: i["id"] for i in client.get(
+        f"{wbase(fx)}/object-types/{sites['type']['id']}/instances",
+        headers=hdr(fx.viewer_sub)).json()["items"]}
+    got = call(client, fx, fn.json()["id"], {"batch": [
+        {"site": ids["S1"], "extra": 1}, {"site": ids["S3"], "extra": 2}]})
+    assert got.status_code == 200, got.text
+    assert got.json()["edits"] == [
+        {"primary_key": "S1", "properties": {"capacity": 11}},
+        {"primary_key": "S3", "properties": {"capacity": 27}}]
+
+
+@pytest.mark.parametrize("values,said", [
+    ({"batch": "S1"}, "a batch is a list of at most"),
+    ({"batch": ["S1"]}, "each entry is an object"),
+    ({"batch": [{"colour": 1}]}, "batch has no field colour"),
+    ({"batch": [{"extra": "lots"}]}, "batch.extra: 'lots' is not a integer"),
+    ({"batch": [{"site": "00000000-0000-0000-0000-000000000000"}]}, "batch.site: no such object"),
+])
+def test_a_batch_is_bound_field_by_field(client, fx, sites, values, said) -> None:
+    fn = create(client, fx, sites,
+                sql="SELECT count(*) FROM (SELECT unnest($batch) AS b)",
+                parameters=[batch_parameter(sites)],
+                output={"kind": "value", "data_type": "integer"}).json()
+    r = call(client, fx, fn["id"], values)
+    assert r.status_code == 422, r.text
+    assert said in r.text
+
+
+@pytest.mark.parametrize("parameters,said", [
+    ([{"api_name": "batch", "data_type": "batch"}], "declares its fields"),
+    ([{"api_name": "batch", "data_type": "batch", "fields": []}], "declares its fields"),
+    ([{"api_name": "batch", "data_type": "batch", "fields": [
+        {"api_name": "x", "data_type": "object",
+         "object_type_id": "00000000-0000-0000-0000-000000000000"}]}],
+     "in this workspace"),
+    ([{"api_name": "batch", "data_type": "batch", "fields": [{"api_name": "x",
+                                                              "data_type": "batch"}]}],
+     "is not a field type"),
+    ([{"api_name": "batch", "data_type": "batch", "fields": [{"api_name": "x",
+                                                              "data_type": "object"}]}],
+     "an object field names its object type"),
+    ([{"api_name": "batch", "data_type": "batch", "fields": [
+        {"api_name": "x", "data_type": "string"}, {"api_name": "x", "data_type": "string"}]}],
+     "two fields are called x"),
+    ([{"api_name": "batch", "data_type": "batch", "fields": [{"api_name": "X Y",
+                                                              "data_type": "string"}]}],
+     "invalid field name"),
+    ([{"api_name": "batch", "data_type": "batch", "fields": ["x"]}], "each field must be"),
+    ([{"api_name": "batch", "data_type": "batch",
+       "fields": [{"api_name": "x", "data_type": "string"}]},
+      {"api_name": "other", "data_type": "string"}], "a single input parameter"),
+])
+def test_a_batch_parameter_that_cannot_hold_is_refused(client, fx, sites, parameters,
+                                                       said) -> None:
+    uses = " ".join(f"${p['api_name']}" for p in parameters if isinstance(p, dict))
+    r = create(client, fx, sites, sql=f"SELECT 1 WHERE {uses} IS NOT NULL",
+               parameters=parameters, output={"kind": "value", "data_type": "integer"})
+    assert r.status_code == 422, r.text
+    assert said in r.text
+
+
+def test_a_batch_field_the_query_misspells_is_refused_at_publish(client, fx, sites) -> None:
+    """The publish-time run is given one entry of the declared fields, so a
+    field the query reads and the batch does not declare is found then."""
+    r = create(client, fx, sites, sql="SELECT b.colour FROM (SELECT unnest($batch) AS b)",
+               parameters=[batch_parameter(sites)],
+               output={"kind": "value", "data_type": "string"})
+    assert r.status_code == 422, r.text
+    assert "colour" in r.text
+
+
+def test_a_batch_is_capped_and_an_empty_field_is_nothing(client, fx, sites, monkeypatch) -> None:
+    fn = create(client, fx, sites,
+                sql="SELECT count(*) FROM (SELECT unnest($batch) AS b) WHERE b.extra IS NULL",
+                parameters=[batch_parameter(sites)],
+                output={"kind": "value", "data_type": "integer"}).json()
+    r = call(client, fx, fn["id"], {"batch": [{"extra": ""}, {"extra": 3}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] == 1
+    monkeypatch.setattr(engine, "MAX_ARRAY_ITEMS", 1)
+    r = call(client, fx, fn["id"], {"batch": [{"extra": 1}, {"extra": 2}]})
+    assert r.status_code == 422, r.text
+    assert "a list of at most 1 entries" in r.text

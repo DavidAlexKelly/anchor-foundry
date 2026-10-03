@@ -3973,6 +3973,7 @@ async def execute_batch(
         edit_order = await _form_order(conn, action_type)
         edit_fields = await _parameter_fields(access, action_type)
         planned: list[dict[str, Any]] = []
+        staged: list[dict[str, Any]] = []
         for edit in body.edits:
             instance = await instance_store.store_for(conn).get_instance(
                 search_prefix=prefix, object_type_id=object_type_id,
@@ -3981,7 +3982,6 @@ async def execute_batch(
             if instance is None:
                 raise NotFoundError("object instance")
             source = await source_for(str(instance["source_id"]))
-            mappings: dict[str, str] = _parse_json(source["column_mappings"])
             stored: dict[str, Any] = _parse_json(instance["properties"])
             bound = actions_service.bind_parameters(
                 actions_service.seed_from_instance(
@@ -3998,32 +3998,59 @@ async def execute_batch(
             actions_service.check_criteria(
                 bound, criteria=action_type["criteria"], user=user
             )
-            row_rules = rules
-            if function_config is not None:
-                # p.84: "the backing function is usually called once per
-                # request in sequence, and all edits are applied atomically at
-                # the end" - called here, row by row, and written below with
-                # every other row (§776).
-                output, result = await action_functions.call(
+            staged.append({"edit": edit, "instance": instance, "source": source,
+                           "stored": stored, "bound": bound,
+                           "key": str(instance["primary_key"]), "rules": rules})
+
+        if function_config is not None:
+            # p.84: "the backing function is usually called once per request in
+            # sequence, and all edits are applied atomically at the end" (§776)
+            # - or, batched, "a single function execution with several entries
+            # in the list input parameter" (p.85; §779). Either way each row
+            # gets the edits for its own object and nothing else, and they are
+            # written below with every other row.
+            if function_config.get("batched"):
+                output, result = await action_functions.call_batch(
                     conn, workspace_id=access.workspace_id, config=function_config,
-                    bound=bound, subject_id=str(edit.instance_id),
+                    requests=[(row["bound"], str(row["edit"].instance_id)) for row in staged],
                 )
-                key = str(instance["primary_key"])
+                answers = [(output, result)] * len(staged)
+            else:
+                answers = [
+                    await action_functions.call(
+                        conn, workspace_id=access.workspace_id, config=function_config,
+                        bound=row["bound"], subject_id=str(row["edit"].instance_id),
+                    )
+                    for row in staged
+                ]
+            keys = {row["key"] for row in staged}
+            for row, (output, result) in zip(staged, answers):
                 if str(output["object_type_id"]) != str(object_type_id) or any(
-                    str(e["primary_key"]) != key for e in result["edits"]
-                ):
+                    str(e["primary_key"]) not in keys for e in result["edits"]
+                ) or (not function_config.get("batched") and any(
+                    str(e["primary_key"]) != row["key"] for e in result["edits"]
+                )):
                     raise ValueError(
                         "an inline edit changes only the row it is typed into "
                         f"(action-types p.136), and the function edits another object "
-                        f"for {key}")
+                        f"for {row['key']}")
+                mine = [e for e in result["edits"] if str(e["primary_key"]) == row["key"]]
+                if not mine:
+                    raise ValueError(f"the function made no edit for {row['key']}, which "
+                                     "this submission edits")
                 function_rules, function_bound = action_functions.edit_rules(
-                    result["edits"], object_type_id=str(object_type_id),
-                    subject_type_id=str(object_type_id), subject_key=key, existing={},
+                    mine, object_type_id=str(object_type_id),
+                    subject_type_id=str(object_type_id), subject_key=row["key"], existing={},
                 )
-                bound = {**bound, **function_bound}
+                row["bound"] = {**row["bound"], **function_bound}
                 # Its edits are the row's whole effect: an action backing
                 # inline edits has no side effect beside its function (p.137).
-                row_rules = function_rules
+                row["rules"] = function_rules
+
+        for row in staged:
+            edit, instance, source = row["edit"], row["instance"], row["source"]
+            stored, bound, row_rules = row["stored"], row["bound"], row["rules"]
+            mappings: dict[str, str] = _parse_json(source["column_mappings"])
             values = actions_service.apply_rules(
                 bound,
                 rules=row_rules,

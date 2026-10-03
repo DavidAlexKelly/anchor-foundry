@@ -200,3 +200,45 @@ describe("an edit function, for an action (§773)", () => {
     expect(resultLine({ kind: "edits", version: "1" })).toBe("0 edits");
   });
 });
+
+describe("a batch parameter (§779)", () => {
+  const batch = { api_name: "batch", data_type: "batch" as const, object_type_id: null,
+    required: true, fields: [{ api_name: "ticket", data_type: "object" as const,
+                               object_type_id: "t" }] };
+
+  it("needs fields that can hold, and to be the only parameter", () => {
+    const draft = { ...blankDraft(), sql: "SELECT $batch", parameters: [batch] };
+    expect(draftProblem(draft, null)).toBeNull();
+    expect(draftProblem({ ...draft, parameters: [{ ...batch, fields: [] }] }, null))
+      .toBe("Give batch at least one field.");
+    expect(draftProblem({ ...draft, parameters: [{ ...batch, fields: [
+      { api_name: "Ticket", data_type: "string" as const }] }] }, null))
+      .toBe("Field 1 of batch needs a name in lower case, such as ticket.");
+    expect(draftProblem({ ...draft, parameters: [{ ...batch, fields: [
+      { api_name: "a", data_type: "string" as const },
+      { api_name: "a", data_type: "string" as const }] }] }, null))
+      .toBe("batch has two fields called a.");
+    expect(draftProblem({ ...draft, parameters: [{ ...batch, fields: [
+      { api_name: "a", data_type: "object" as const, object_type_id: null }] }] }, null))
+      .toBe("Choose the object type batch.a refers to.");
+    expect(draftProblem({ ...draft, sql: "SELECT $batch, $x",
+      parameters: [batch, { ...blankParameter(), api_name: "x" }] }, null))
+      .toBe("A batched function receives a single input parameter (action-types p.85).");
+  });
+
+  it("sends its fields, an object field with its type", () => {
+    const body = bodyOf({ ...blankDraft(), parameters: [{ ...batch, fields: [
+      ...batch.fields, { api_name: "n", data_type: "integer" as const, object_type_id: "x" }] }] });
+    expect(body.parameters).toEqual([{ api_name: "batch", data_type: "batch", required: true,
+      fields: [{ api_name: "ticket", data_type: "object", object_type_id: "t" },
+               { api_name: "n", data_type: "integer" }] }]);
+    expect(bodyOf({ ...blankDraft(), parameters: [{ ...blankParameter(), api_name: "x" }] })
+      .parameters).toEqual([{ api_name: "x", data_type: "string", required: true }]);
+  });
+
+  it("takes a batch typed as JSON", () => {
+    expect(valuesFor([batch], { batch: '[{"ticket": "id"}]' }))
+      .toEqual({ batch: [{ ticket: "id" }] });
+    expect(valuesFor([batch], { batch: "not json" })).toEqual({ batch: "not json" });
+  });
+});
