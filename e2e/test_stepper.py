@@ -29,7 +29,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, save, settled
 
 STEPS = [
     {"label": "Pick a site", "completedVariable": "v_d1", "icon": "search"},
@@ -306,10 +306,9 @@ def test_the_text_template_numbers_every_step(page, api) -> None:
     expect(marks.nth(2)).to_have_text("3")
 
 
-def test_the_icon_template_drops_the_number_and_keeps_the_name(page, api) -> None:
-    """p.313's Icon is a *name*, and this platform has no icon set to draw one
-    from - so the name travels as the mark's accessible label rather than being
-    lost, the call §210's Object Set Title made for the same reason."""
+def test_the_icon_template_draws_the_icon_and_drops_the_number(page, api) -> None:
+    """p.313's Icon, from decision 0019's set (§707), with its name as the
+    mark's accessible label."""
     mod = build(api, "Stepper icons", {"template": "icons"})
     open_module(page, mod)
     settled(page)
@@ -317,6 +316,9 @@ def test_the_icon_template_drops_the_number_and_keeps_the_name(page, api) -> Non
     mark = page.get_by_test_id("step-mark").first
     assert (mark.text_content() or "").strip() == "", mark.text_content()
     expect(mark).to_have_attribute("aria-label", "search")
+    expect(mark.locator("svg")).to_have_attribute("data-icon", "search")
+    expect(page.get_by_test_id("step-mark").nth(2).locator("svg")).to_have_attribute(
+        "data-icon", "tick")
 
 
 def test_show_step_number_puts_the_number_back(page, api) -> None:
@@ -329,8 +331,9 @@ def test_show_step_number_puts_the_number_back(page, api) -> None:
 
     mark = page.get_by_test_id("step-mark").first
     expect(mark).to_have_text("1")
-    # Still an icon step: the number is *also* displayed, so the name stays.
+    # Still an icon step: the number is *also* displayed, beside the icon.
     expect(mark).to_have_attribute("aria-label", "search")
+    expect(mark.locator("svg")).to_have_attribute("data-icon", "search")
 
 
 def test_show_step_number_means_nothing_without_an_order(page, api) -> None:
@@ -460,6 +463,21 @@ def test_the_step_editor_adds_and_removes_steps(page, api) -> None:
     page.get_by_test_id("stepper-remove-0").click()
     expect(steps(page)).to_have_count(3)
     expect(page.get_by_test_id("stepper-label-0")).to_have_value("Confirm details")
+
+
+def test_the_step_editor_chooses_each_step_s_icon(page, api) -> None:
+    """p.313's per-step Icon (§707): shown as the step's choice, and the choice
+    is what the document keeps."""
+    mod = build(api, "Stepper icon editor")
+    open_builder(page, mod)
+    settled(page)
+
+    page.locator(".canvas-tree-row").filter(has_text="Stepper").first.click()
+    expect(page.get_by_test_id("stepper-icon-1-name")).to_have_value("edit")
+    page.get_by_test_id("stepper-icon-1-name").select_option("flag")
+    save(page)
+    icons = [s.get("icon") for s in mod.definition()["layout"]["stp"]["props"]["steps"]]
+    assert icons == ["search", "flag", "tick"], icons
 
 
 @pytest.mark.parametrize("mode", ["linear", "non_linear"])

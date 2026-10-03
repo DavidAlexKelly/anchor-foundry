@@ -358,6 +358,47 @@ def test_a_layer_keeps_its_own_colour(page, api, ontology) -> None:
     assert a != b, (a, b)
 
 
+def test_the_icon_is_the_type_s_custom_or_none(page, api, ontology) -> None:
+    """p.349's Icon override (§707): "Default: use the default icon set in the
+    ontology for the object … None: show no icon … Custom: manually override
+    and set the icon"."""
+    mod = build(api, ontology, "Timeline icons", layers=[
+        {"label": "Sites", "objectSetVariable": "v_sites", "dateProperty": "seen"},
+        {"label": "Orders", "objectSetVariable": "v_orders", "dateProperty": "placed",
+         "iconMode": "custom", "icon": "truck"},
+    ])
+    open_module(page, mod)
+    settled(page)
+    sites = page.locator("[data-testid='timeline-event'][data-layer='0'] .canvas-timeline-mark")
+    orders = page.locator("[data-testid='timeline-event'][data-layer='1'] .canvas-timeline-mark")
+    # The fixture's types hold the column's default icon, `cube`.
+    expect(sites.first.locator("svg")).to_have_attribute("data-icon", "cube")
+    expect(orders.first.locator("svg")).to_have_attribute("data-icon", "truck")
+
+    bare = build(api, ontology, "Timeline no icon", layers=[
+        {"label": "Sites", "objectSetVariable": "v_sites", "dateProperty": "seen",
+         "iconMode": "none"},
+    ])
+    open_module(page, bare)
+    settled(page)
+    expect(page.locator(".canvas-timeline-mark").first).to_be_visible()
+    expect(page.locator(".canvas-timeline-mark svg")).to_have_count(0)
+
+
+def test_the_panel_sets_a_custom_icon(page, api, ontology) -> None:
+    """The Custom mode's icon control appears with Custom and writes the layer."""
+    mod = build(api, ontology, "Timeline icon panel")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row").filter(has_text="Timeline").first.click()
+    expect(page.get_by_test_id("timeline-icon-0-name")).to_have_count(0)
+    page.get_by_test_id("timeline-icon-mode-0").select_option("custom")
+    page.get_by_test_id("timeline-icon-0-name").select_option("flag")
+    save(page)
+    layer = mod.definition()["layout"]["tl"]["props"]["layers"][0]
+    assert (layer["iconMode"], layer["icon"]) == ("custom", "flag"), layer
+
+
 def test_a_static_colour_overrides_the_default(page, api, ontology) -> None:
     mod = build(api, ontology, "Timeline static colour", layers=[
         {"label": "Sites", "objectSetVariable": "v_sites", "dateProperty": "seen",

@@ -24,6 +24,9 @@ export interface ButtonItem {
   label: string;
   leftIcon?: string;
   description?: string;
+  /** p.323's Icon for a Markdown interaction (§707): drawn in place of the
+   * title, which "appears when hovering over the interaction icon". */
+  icon?: string;
 }
 
 export function buttonTypeOf(value: unknown): ButtonType {
@@ -70,4 +73,14 @@ export function removeItem(items: readonly ButtonItem[], id: string): ButtonItem
 
 export function renameItem(items: readonly ButtonItem[], id: string, label: string): ButtonItem[] {
   return items.map((i) => (i.id === id ? { ...i, label } : i));
+}
+
+/** p.323's Icon for one item (§707). An empty one is removed rather than
+ * kept as `""`, so an item without an icon reads the same either way. */
+export function setItemIcon(items: readonly ButtonItem[], id: string, icon: string): ButtonItem[] {
+  return items.map((i) => {
+    if (i.id !== id) return i;
+    const { icon: _old, ...rest } = i;
+    return icon.trim() ? { ...rest, icon } : rest;
+  });
 }

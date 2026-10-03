@@ -5,7 +5,7 @@ import {
   ICON_MODES, ORDERS, ORIENTATIONS, PROPERTY_MODES, TITLE_MODES,
   colourModeOf, eventProperties, eventTitle, eventsOf, gapLabel, iconModeOf,
   instantOf, labelFor,
-  layerColour, layersOf, orderOf, orientationOf, propertyModeOf, showsIcon,
+  layerColour, layerIcon, layersOf, orderOf, orientationOf, propertyModeOf, showsIcon,
   sortFor, titleModeOf, toggleLayer, visibleEvents, type Layer,
   newLayerId, overridingLayers, selectionItemOf,
 } from "./timeline";
@@ -261,6 +261,18 @@ describe("p.349's icon override", () => {
     expect(showsIcon(layer())).toBe(true);
     expect(showsIcon(layer({ iconMode: "custom", icon: "cart" }))).toBe(true);
     expect(showsIcon(layer({ iconMode: "none" }))).toBe(false);
+  });
+
+  it("is the ontology's icon by default, the layer's when custom, none when none (§707)", () => {
+    expect(layerIcon(layer(), "cube")).toBe("cube");
+    expect(layerIcon(layer({ iconMode: "custom", icon: " truck " }), "cube")).toBe("truck");
+    expect(layerIcon(layer({ iconMode: "none", icon: "truck" }), "cube")).toBeNull();
+  });
+
+  it("draws the mark bare when there is no icon to draw", () => {
+    expect(layerIcon(layer(), null)).toBeNull();
+    expect(layerIcon(layer(), "  ")).toBeNull();
+    expect(layerIcon(layer({ iconMode: "custom", icon: "" }), "cube")).toBeNull();
   });
 });
 

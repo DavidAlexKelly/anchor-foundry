@@ -235,7 +235,7 @@ import {
   ORDERS as TIMELINE_ORDERS, ORIENTATIONS as TIMELINE_ORIENTATIONS,
   PROPERTY_MODES as TIMELINE_PROPERTY_MODES, TITLE_MODES as TIMELINE_TITLE_MODES,
   colourModeOf as timelineColourModeOf, eventProperties,
-  eventsOf as timelineEventsOf, gapLabel, iconModeOf as timelineIconModeOf,
+  eventsOf as timelineEventsOf, gapLabel, iconModeOf as timelineIconModeOf, layerIcon,
   labelFor as timelineLabelFor, layerColour, layersOf as timelineLayersOf,
   orderOf as timelineOrderOf, orientationOf as timelineOrientationOf,
   propertyModeOf as timelinePropertyModeOf, showsIcon, sortFor,
@@ -253,7 +253,7 @@ import {
 import { frameRefusal, frameTitle, safeFrameUrl, youtubeEmbedUrl } from "./frame";
 import { buttonLook, customColourOf, intentOf } from "./button-look";
 import {
-  addItem, buttonTypeOf, duplicateItem, itemsOf, removeItem, renameItem,
+  addItem, buttonTypeOf, duplicateItem, itemsOf, removeItem, renameItem, setItemIcon,
 } from "./button-items";
 import {
   FILTER_COMPONENT_LABELS, axisEnds, barWidth, bucketLabel, componentOf, componentsFor,
@@ -5539,7 +5539,8 @@ export function CanvasMarkdown({
                     });
                   }}
                 >
-                  {action.label || "Action"}
+                  {/* p.323: "The title appears on hover over the icon". */}
+                  {action.icon ? <IconOrGlyph value={action.icon} /> : action.label || "Action"}
                 </button>
               ))}
             </div>
@@ -5570,7 +5571,9 @@ export function CanvasMarkdown({
                       });
                     }}
                   >
-                    {action.label || "Interaction"}
+                    {/* p.323: the title "appears when hovering over the
+                        interaction icon". */}
+                    {action.icon ? <IconOrGlyph value={action.icon} /> : action.label || "Interaction"}
                   </button>
                 ))}
               </div>
@@ -5852,6 +5855,12 @@ function MarkdownSettings() {
                     value={action.label}
                     onChange={(e) => setProp((p: { hoverActions: unknown }) =>
                       (p.hoverActions = renameItem(hoverActionsOf(p.hoverActions), action.id, e.target.value)))} />
+                  <IconChoice
+                    value={action.icon}
+                    testId={`markdown-hover-icon-${i}`}
+                    onChange={(next) => setProp((p: { hoverActions: unknown }) =>
+                      (p.hoverActions = setItemIcon(hoverActionsOf(p.hoverActions), action.id, next)))}
+                  />
                   <button type="button" className="btn quiet" aria-label={`Remove hover interaction ${i + 1}`}
                     onClick={() => setProp((p: { hoverActions: unknown }) =>
                       (p.hoverActions = removeItem(hoverActionsOf(p.hoverActions), action.id)))}>
@@ -5889,6 +5898,12 @@ function MarkdownSettings() {
               onChange={(e) => setProp((p: { highlightActions: unknown }) =>
                 (p.highlightActions = renameItem(itemsOf(p.highlightActions), action.id,
                   e.target.value)))}
+            />
+            <IconChoice
+              value={action.icon}
+              testId={`markdown-highlight-icon-${i}`}
+              onChange={(next) => setProp((p: { highlightActions: unknown }) =>
+                (p.highlightActions = setItemIcon(itemsOf(p.highlightActions), action.id, next)))}
             />
             <button
               type="button"
@@ -10572,11 +10587,10 @@ CanvasPieChart.craft = {
  * `NESTED_REFERENCE_PROPS` is what usage scanning, dangling-reference
  * refusal, the lineage graph, paste remapping and page bindings all now walk.
  *
- * **Not built, and named rather than approximated**: p.313's **Icon** is a
- * name, and this platform has no icon set - the icon template draws a mark
- * carrying the configured name as its accessible label, which is the same call
- * §210's Object Set Title made for the same reason. A named-icon picker is one
- * decision for all of them, not a setting on this widget.
+ * p.313's **Icon** is a name from decision 0019's icon set or typed
+ * characters (§707), drawn in the icon template's marks, with the name as the
+ * mark's accessible label. Until §707 there was no set, and the mark carried
+ * only the label.
  */
 export function CanvasStepper({
   steps = [],
@@ -10667,15 +10681,15 @@ export function CanvasStepper({
                   }}
                 >
                   <span
-                    className="canvas-step-mark"
+                    className={`canvas-step-mark${
+                      useIcons && numbered && step.icon ? " canvas-step-mark--both" : ""}`}
                     data-testid="step-mark"
                     style={colour ? { background: colour, borderColor: colour } : undefined}
-                    // p.313's Icon, as a mark: the field holds a name like
-                    // `check` and this platform has no icon set, so the name
-                    // travels as the accessible label rather than being lost.
+                    // p.313's Icon (§707), its name also the accessible label.
                     aria-label={useIcons ? (step.icon || "step") : undefined}
                   >
-                    {!useIcons || numbered ? index + 1 : ""}
+                    {useIcons && step.icon && <IconOrGlyph value={step.icon} size={12} />}
+                    {!useIcons || numbered ? index + 1 : null}
                   </span>
                   <span className="canvas-step-label">{step.label}</span>
                 </button>
@@ -10733,6 +10747,13 @@ function StepperSettings() {
                   <option key={v.id} value={v.id}>{v.label}</option>
                 ))}
               </select>
+              {/* p.313's Icon, drawn by the icon template (§707). */}
+              <IconChoice
+                value={step.icon}
+                testId={`stepper-icon-${index}`}
+                onChange={(next) =>
+                  write(drawn.map((s, i) => (i === index ? { ...s, icon: next } : s)))}
+              />
               <button
                 type="button"
                 className="btn quiet"
@@ -10863,10 +10884,8 @@ CanvasStepper.craft = {
  *   something finer than a node. That is a change to the event system rather
  *   than to this widget, and inventing `select:0` here would make one widget's
  *   private vocabulary out of something four other widgets share.
- * - p.348's **Icon override** draws a mark rather than a named icon, the call
- *   §210 and §219 both made: the field holds a name like `cart` and this
- *   platform has no icon set, so the name travels as the mark's accessible
- *   label rather than being lost.
+ * - p.349's **Icon override** draws its icon in the mark (§707): the object
+ *   type's own by default, the layer's chosen one when Custom, none when None.
  */
 export function CanvasTimeline({
   layers = [],
@@ -10927,6 +10946,7 @@ export function CanvasTimeline({
           instances: [],
           properties: [] as { api_name: string; visibility?: string; id?: string }[],
           titleProperty: null as string | null,
+          typeIcon: null as string | null,
         };
       }
       const typeId = (ask.definition as { object_type_id?: string }).object_type_id;
@@ -10948,6 +10968,9 @@ export function CanvasTimeline({
         // labelled with its key, which is a title only a database has.
         titleProperty:
           declared.find((p) => p.id === type?.title_property_id)?.api_name ?? null,
+        // p.349's Default icon is "set in the ontology for the object"
+        // (§707): the type's own.
+        typeIcon: type?.icon ?? null,
       };
     })),
     enabled: drawn.length > 0 && asked.some((a) => !!a.definition && !!a.sort),
@@ -11049,6 +11072,7 @@ export function CanvasTimeline({
               {events.map((event, index) => {
                 const layer = drawn[event.layer] as TimelineLayer;
                 const colour = layerColour(layer, event.layer, null);
+                const icon = layerIcon(layer, page.data?.[event.layer]?.typeIcon);
                 const previous = events[index - 1];
                 return (
                   <li
@@ -11074,14 +11098,16 @@ export function CanvasTimeline({
                       type="button"
                       className="canvas-timeline-mark"
                       data-testid={`timeline-mark-${event.key}`}
-                      style={colour ? { background: colour, borderColor: colour } : undefined}
+                      style={colour ? { background: colour, borderColor: colour, color: "#fff" } : undefined}
                       aria-label={
                         showsIcon(layer) ? (layer.icon || timelineLabelFor(layer, event.layer))
                           : undefined
                       }
                       disabled={mode !== "run"}
                       onClick={() => pick(event.key, event.layer)}
-                    />
+                    >
+                      {icon && <IconOrGlyph value={icon} size={11} />}
+                    </button>
                     <div className="canvas-timeline-body">
                       <span className="canvas-timeline-when" data-testid="timeline-when">
                         {new Date(event.at).toISOString().slice(0, 10)}
@@ -11271,6 +11297,14 @@ function TimelineSettings() {
                   <option key={key} value={key}>{name}</option>
                 ))}
               </select>
+              {timelineIconModeOf(entry.iconMode) === "custom" && (
+                // p.349's Custom: "manually override and set the icon" (§707).
+                <IconChoice
+                  value={String(entry.icon ?? "")}
+                  testId={`timeline-icon-${index}`}
+                  onChange={(next) => edit(index, { icon: next })}
+                />
+              )}
               {/* p.349's Selection event override (§616). Switching it on
                   gives the layer an id if it has none, in the same act, so
                   there is never an overriding layer an event cannot name. */}
@@ -13931,7 +13965,11 @@ export function CanvasSeriesAnalysis({
         : await seriesAnalysisApi.save(workspaceId, saveDraft!.location,
           { name: saveDraft!.name.trim(), visibility: saveDraft!.visibility, state: viewNow() });
       setCurrentAnalysis({ ...saved, project: over && currentAnalysis ? currentAnalysis.project : saveDraft!.location });
-      setSaveDraft(null);
+      // Only a save from the draft closes it. Saving over opened none, and
+      // clearing one here threw away a "Save as new analysis" somebody had
+      // opened while that request was in flight - a CI run caught the Save
+      // button detaching under the click.
+      if (!over) setSaveDraft(null);
       setSaveError("");
     } catch (error) {
       setSaveError(error instanceof ApiError ? error.message : "Couldn't save this analysis.");
