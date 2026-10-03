@@ -3966,3 +3966,6 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .icon-choice { display: inline-flex; align-items: center; gap: 6px; }
 .icon-choice select { max-width: 11rem; }
 .icon-choice input[type="text"] { width: 4.5rem; }
+
+/* §709: an empty state's icon, beside its message. */
+.canvas-empty-icon { display: inline-flex; vertical-align: middle; margin-right: 6px; }

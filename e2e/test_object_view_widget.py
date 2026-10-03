@@ -23,7 +23,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, save, settled
 
 ROWS = [
     {"id": "C1", "name": "Alpha customer", "region": "north"},
@@ -245,6 +245,34 @@ def test_an_empty_set_shows_the_configured_message(page, api, configured) -> Non
     settled(page)
     expect(page.get_by_test_id("object-view-empty")).to_have_text("Pick a customer first")
     expect(page.get_by_test_id("object-view-widget")).to_have_count(0)
+
+
+def test_an_empty_state_icon_beside_the_message(page, api, configured) -> None:
+    """p.262: "Builders can select an icon and configure a custom message to
+    display" (§709). None unless one is chosen."""
+    bare = build(api, configured, configured.view_type_id, "Object view empty no icon",
+                 who="nobody")
+    open_module(page, bare)
+    settled(page)
+    expect(page.get_by_test_id("object-view-empty")).to_be_visible()
+    expect(page.get_by_test_id("object-view-empty-icon")).to_have_count(0)
+
+    iconic = build(api, configured, configured.view_type_id, "Object view empty icon",
+                   {"emptyIcon": "search", "emptyMessage": "Pick a customer first"}, who="nobody")
+    open_module(page, iconic)
+    settled(page)
+    expect(page.get_by_test_id("object-view-empty-icon").locator("svg")).to_have_attribute(
+        "data-icon", "search")
+    expect(page.get_by_test_id("object-view-empty")).to_have_text("Pick a customer first")
+
+    open_builder(page, bare)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Object view").first.click()
+    page.get_by_test_id("object-view-empty-icon-input-name").select_option("info-sign")
+    save(page)
+    widget = next(n for n in bare.definition()["layout"].values()
+                  if n["type"]["resolvedName"] == "CanvasObjectViewWidget")
+    assert widget["props"]["emptyIcon"] == "info-sign", widget["props"]
 
 
 def test_the_panel_says_whether_the_mode_will_mean_anything(page, api, plain) -> None:
