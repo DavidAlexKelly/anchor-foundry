@@ -1321,3 +1321,216 @@ def test_the_dropdown_says_when_it_has_more_members_than_it_can_hold(
     offer = next(o for o in r.json() if o["parameter"] == "subject")
     assert offer["truncated"] is True, offer["truncated"]
     assert len(offer["items"]) == 50, len(offer["items"])
+
+
+# ---- p.36's filters on an interface reference (§741) -------------------------
+@pytest.fixture(scope="module")
+def narrow(client: TestClient, fx: Fixture) -> dict:
+    """An interface of its own, so its members are these three and no test
+    elsewhere in the file adds to them: Facility's F1 (2020) and F2 (2021),
+    Vehicle's V1 (2021)."""
+    r = client.post(
+        f"{wbase(fx)}/interfaces", headers=hdr(fx.admin_sub),
+        json={"api_name": f"Narrowed{fx.tag}", "display_name": "Narrowed",
+              "properties": INSPECTABLE},
+    )
+    assert r.status_code == 201, r.text
+    interface_id = r.json()["id"]
+    facility = _make_type(client, fx, "NFacility", ["facility_code", "surveyed_on", "state"])
+    vehicle = _make_type(client, fx, "NVehicle", ["vin", "checked_on", "state"])
+    for type_id, mapping in (
+        (facility, {"last_inspection_date": "surveyed_on", "inspection_status": "state"}),
+        (vehicle, {"last_inspection_date": "checked_on", "inspection_status": "state"}),
+    ):
+        assert client.put(
+            f"{wbase(fx)}/object-types/{type_id}/interfaces", headers=hdr(fx.editor_sub),
+            json=[{"interface_id": interface_id, "property_mapping": mapping}],
+        ).status_code == 200
+    _sync(client, fx, facility,
+          b"facility_code,surveyed_on,state\nF1,2020-01-01,due\nF2,2021-06-01,due\n",
+          "facility_code", {"surveyed_on": "surveyed_on", "state": "state"}, "NFacilities")
+    _sync(client, fx, vehicle, b"vin,checked_on,state\nV1,2021-06-01,due\n",
+          "vin", {"checked_on": "checked_on", "state": "state"}, "NVehicles")
+    # A third implementation that calls the date something else again and
+    # answers nothing to the optional `inspection_status`.
+    drone = _make_type(client, fx, "NDrone", ["tail", "flown_on"])
+    assert client.put(
+        f"{wbase(fx)}/object-types/{drone}/interfaces", headers=hdr(fx.editor_sub),
+        json=[{"interface_id": interface_id,
+               "property_mapping": {"last_inspection_date": "flown_on"}}],
+    ).status_code == 200
+    _sync(client, fx, drone, b"tail,flown_on\nD1,2021-06-01\n",
+          "tail", {"flown_on": "flown_on"}, "NDrones")
+    ids = {}
+    for type_id in (facility, vehicle, drone):
+        for item in client.get(f"{wbase(fx)}/object-types/{type_id}/instances",
+                               headers=hdr(fx.viewer_sub)).json()["items"]:
+            ids[item["primary_key"]] = item["id"]
+    return {"interface_id": interface_id, "facility": facility, "vehicle": vehicle,
+            "drone": drone, "ids": ids}
+
+
+def _filtered_reference(client: TestClient, fx: Fixture, narrow: dict,
+                        filters: list[dict], extra_parameters: list[dict] | None = None) -> dict:
+    action = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": narrow["facility"],
+              "api_name": f"fref_{uuid.uuid4().hex[:8]}",
+              "display_name": "Filtered reference", "editable_properties": ["state"]},
+    ).json()
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                *(extra_parameters or []),
+                {"api_name": "subject", "display_name": "Which object", "data_type": "object",
+                 "interface_id": narrow["interface_id"], "dropdown_filters": filters},
+            ],
+            "rules": [{"kind": "delete_object", "config": {"object": "subject"}}],
+            "criteria": [],
+        },
+    )
+    return {"action": action, "response": r}
+
+
+def _offered(client: TestClient, fx: Fixture, action_id: str, values: dict | None = None) -> dict:
+    r = client.post(
+        f"{wbase(fx)}/action-types/{action_id}/parameter-choices",
+        headers=hdr(fx.editor_sub), json={"values": values or {}},
+    )
+    assert r.status_code == 200, r.text
+    return next(c for c in r.json() if c["parameter"] == "subject")
+
+
+def test_a_filter_on_an_interface_reference_is_written_in_the_interfaces_names(
+    client: TestClient, fx: Fixture, narrow: dict
+) -> None:
+    """`action-types` p.36's filters, on p.62's interface reference: the
+    property is the interface's, and each implementation is narrowed by its
+    own name for it (Facility's `surveyed_on`, Vehicle's `checked_on`)."""
+    made = _filtered_reference(client, fx, narrow, [
+        {"property": "last_inspection_date",
+         "values": [{"kind": "value", "value": "2021-06-01"}]}])
+    assert made["response"].status_code == 200, made["response"].text
+    offered = _offered(client, fx, made["action"]["id"])
+    assert sorted(item["primary_key"] for item in offered["items"]) == ["D1", "F2", "V1"], offered
+
+
+def test_a_filter_naming_an_implementations_own_property_is_refused(
+    client: TestClient, fx: Fixture, narrow: dict
+) -> None:
+    """`state` is what both types call the interface's `inspection_status`;
+    a filter written in one implementation's words is not one the interface
+    can rewrite for the others."""
+    made = _filtered_reference(client, fx, narrow, [
+        {"property": "state", "values": [{"kind": "value", "value": "due"}]}])
+    assert made["response"].status_code == 422, made["response"].text
+    assert "interface" in made["response"].text and "'state'" in made["response"].text
+
+
+def test_a_filter_reading_another_parameter_waits_for_it(
+    client: TestClient, fx: Fixture, narrow: dict
+) -> None:
+    made = _filtered_reference(
+        client, fx, narrow,
+        [{"property": "last_inspection_date",
+          "values": [{"kind": "parameter", "parameter": "when"}]}],
+        extra_parameters=[{"api_name": "when", "display_name": "When", "data_type": "string"}],
+    )
+    assert made["response"].status_code == 200, made["response"].text
+    waiting = _offered(client, fx, made["action"]["id"])
+    assert waiting["waiting_for"] == "when" and waiting["items"] == [], waiting
+    narrowed = _offered(client, fx, made["action"]["id"], {"when": "2020-01-01"})
+    assert [i["primary_key"] for i in narrowed["items"]] == ["F1"], narrowed
+
+
+def test_the_object_chosen_is_checked_against_the_same_filter(
+    client: TestClient, fx: Fixture, narrow: dict
+) -> None:
+    """p.34: "The value selected is also validated before the action is
+    executed." An object of an implementing type the filter excludes is
+    refused at submission - and the refusal writes nothing."""
+    made = _filtered_reference(client, fx, narrow, [
+        {"property": "last_inspection_date",
+         "values": [{"kind": "value", "value": "2021-06-01"}]}])
+    assert made["response"].status_code == 200, made["response"].text
+    r = client.post(
+        f"{pbase(fx)}/actions/{made['action']['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": narrow["ids"]["F1"],
+              "values": {"subject": narrow["ids"]["F1"]}},
+    )
+    assert r.status_code in (200, 422), r.text
+    body = r.json()
+    refusal = body.get("error") if r.status_code == 200 else body.get("detail")
+    assert refusal and "is not among the objects 'subject' offers" in str(refusal), body
+    left = client.get(f"{wbase(fx)}/object-types/{narrow['facility']}/instances",
+                      headers=hdr(fx.viewer_sub)).json()["items"]
+    assert sorted(i["primary_key"] for i in left) == ["F1", "F2"]
+
+
+def test_an_unfiltered_interface_reference_still_offers_every_implementation(
+    client: TestClient, fx: Fixture, narrow: dict
+) -> None:
+    made = _filtered_reference(client, fx, narrow, [])
+    assert made["response"].status_code == 200, made["response"].text
+    keys = sorted(i["primary_key"] for i in _offered(client, fx, made["action"]["id"])["items"])
+    assert keys == ["D1", "F1", "F2", "V1"], keys
+
+
+def _execute(client: TestClient, fx: Fixture, action_id: str, subject: str, values: dict) -> tuple[int, str]:
+    r = client.post(
+        f"{pbase(fx)}/actions/{action_id}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": subject, "values": values},
+    )
+    body = r.json()
+    return r.status_code, str(body.get("error") if r.status_code == 200 else body.get("detail") or "")
+
+
+def test_a_type_that_answers_nothing_to_a_filtered_property_is_not_offered_or_accepted(
+    client: TestClient, fx: Fixture, narrow: dict
+) -> None:
+    """The drone maps nothing to the optional `inspection_status`, so no drone
+    can match a filter on it - offered nowhere and refused at submission,
+    rather than read unfiltered (decision 0002's silent widening)."""
+    made = _filtered_reference(client, fx, narrow, [
+        {"property": "inspection_status", "values": [{"kind": "value", "value": "due"}]}])
+    assert made["response"].status_code == 200, made["response"].text
+    keys = sorted(i["primary_key"] for i in _offered(client, fx, made["action"]["id"])["items"])
+    assert keys == ["F1", "F2", "V1"], keys
+    status_code, refusal = _execute(client, fx, made["action"]["id"], narrow["ids"]["F1"],
+                                    {"subject": narrow["ids"]["D1"]})
+    assert "is not among the objects 'subject' offers" in refusal, (status_code, refusal)
+
+
+def test_the_check_reads_the_chosen_objects_own_type(
+    client: TestClient, fx: Fixture, narrow: dict
+) -> None:
+    """The drone's date is `flown_on`, so its check has to be written in the
+    drone's words. Reading another implementation's mapping would ask the
+    drone for a Facility's `surveyed_on`."""
+    made = _filtered_reference(client, fx, narrow, [
+        {"property": "last_inspection_date",
+         "values": [{"kind": "value", "value": "2021-06-01"}]}])
+    status_code, refusal = _execute(client, fx, made["action"]["id"], narrow["ids"]["F1"],
+                                    {"subject": narrow["ids"]["D1"]})
+    assert status_code == 200 and refusal in ("", "None"), refusal
+    left = client.get(f"{wbase(fx)}/object-types/{narrow['drone']}/instances",
+                      headers=hdr(fx.viewer_sub)).json()["items"]
+    assert left == [], "the accepted delete removed the drone"
+
+
+def test_the_check_reads_the_parameter_the_filter_reads(
+    client: TestClient, fx: Fixture, narrow: dict
+) -> None:
+    made = _filtered_reference(
+        client, fx, narrow,
+        [{"property": "last_inspection_date",
+          "values": [{"kind": "parameter", "parameter": "when"}]}],
+        extra_parameters=[{"api_name": "when", "display_name": "When", "data_type": "string"}],
+    )
+    status_code, refusal = _execute(client, fx, made["action"]["id"], narrow["ids"]["F1"],
+                                    {"subject": narrow["ids"]["F2"], "when": "2020-01-01"})
+    assert "is not among the objects 'subject' offers" in refusal, (status_code, refusal)
+    status_code, refusal = _execute(client, fx, made["action"]["id"], narrow["ids"]["F1"],
+                                    {"subject": narrow["ids"]["F2"], "when": "2021-06-01"})
+    assert status_code == 200 and refusal in ("", "None"), refusal

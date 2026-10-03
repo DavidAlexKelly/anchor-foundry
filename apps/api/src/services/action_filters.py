@@ -271,7 +271,7 @@ def check_filters(
         if prop not in declared_properties:
             raise ValueError(
                 f"filter {index} on {name!r} reads {prop!r}, which is not a "
-                "property of the object type this parameter offers"
+                "property of the object type (or interface, §741) this parameter offers"
             )
         sides = [s for s in (entry.get("values") or []) if isinstance(s, dict)]
         if not sides:

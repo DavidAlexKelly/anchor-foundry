@@ -3842,7 +3842,20 @@ async def set_definition(
         # single object reference parameters". One question with two places to
         # look it up, asked once here rather than at each check below.
         offered = parameter.get("object_type_id") or set_type_of(parameter)
-        if not offered:
+        # p.62's interface reference (§741): its filters are written in the
+        # interface's own vocabulary - its effective properties - and rewritten
+        # onto each implementation when the dropdown is read.
+        interface_offered = parameter.get("interface_id")
+        if interface_offered and not offered:
+            from . import interfaces as interfaces_service
+
+            interface = await interfaces_service.get_interface(
+                conn, workspace_id, UUID(str(interface_offered)))
+            offered_properties = {
+                str(p["api_name"]) for p in interface["effective_properties"]}
+        else:
+            offered_properties = None
+        if not offered and offered_properties is None:
             raise ValueError(
                 f"{parameter.get('api_name')!r} has dropdown filters but does "
                 "not say which object type it offers, so there is nothing to "
@@ -3873,7 +3886,8 @@ async def set_definition(
             )
         check_filters(
             parameter,
-            declared_properties=await _properties_of(str(offered)),
+            declared_properties=(offered_properties if offered_properties is not None
+                                 else await _properties_of(str(offered))),
             parameter_names=declared_names,
             object_properties=readable,
         )
