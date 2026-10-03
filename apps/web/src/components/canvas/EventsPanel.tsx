@@ -55,6 +55,9 @@ const TRIGGERS: {
     // card selection" (§527).
     widgets: [
       "CanvasButton", "CanvasTabs", "CanvasMetricCard", "CanvasObjectTable", "CanvasMarkdown",
+      // p.553's events a Bidirectional iframe's application fires (§756),
+      // each an item of the widget, offered only when it asks for some.
+      "CanvasIframe",
     ],
     // p.243's custom right-click menu (§613): a table's clicks are its
     // menu's items, and it is offered only when the menu has some. p.322's
@@ -284,7 +287,8 @@ function triggersFor(
   return TRIGGERS.filter((t) => t.widgets.includes(widget))
     // A table's click is a right-click menu item, so it is not a trigger of a
     // table with none - the server refuses the event (§613).
-    .filter((t) => !((widget === "CanvasObjectTable" || widget === "CanvasMarkdown")
+    .filter((t) => !((widget === "CanvasObjectTable" || widget === "CanvasMarkdown"
+      || widget === "CanvasIframe")
       && t.on === "click" && (node?.items?.length ?? 0) === 0))
     .map((t) => ({
     on: t.on,
