@@ -398,6 +398,7 @@ import {
 } from "./context";
 import { eventsFor, interpolate, run as runEvents, useEventContext } from "./events";
 import { invalidateCanvasReads } from "./refresh";
+import { ActionTable } from "./ActionTable";
 import { describeSet, selectionOf, useOnScreen, useSetPage } from "./object-set";
 import {
   MIN_SHARE, formatWeights, hasValue, holdsClauses, parseWeights, pivotClauses, resizeWeights,
@@ -19640,8 +19641,15 @@ export function CanvasActionForm({
   invalidState = "disabled",
   outputVariable = null,
   actions: moreActions = [],
+  layout: defaultLayout = "form",
+  layoutSwitch = false,
 }: {
   actionTypeId?: string | null;
+  /** p.512's "Select default layout: Choose between Action Table and Action
+   * Form" (§702). */
+  layout?: string;
+  /** p.512's end-user "layout switching": readers may flip between the two. */
+  layoutSwitch?: boolean;
   /** p.512's "Add item": the further actions, each with its own action,
    * title and defaults (§556, `action-menu.ts`). With any, the form has a
    * selection menu upfront. */
@@ -19703,6 +19711,14 @@ export function CanvasActionForm({
     queryFn: () => actionApi.listTypes(workspaceId),
   });
   const actionType = actionTypesQ.data?.find((a) => a.id === actionTypeId) ?? null;
+  // p.511's two layouts (§702). What the builder chose, until a reader flips
+  // it where p.512's layout switching is on. A table only for an action it can
+  // draw - p.511: "some Actions … are not yet usable in the Table" - which the
+  // server says rather than this widget guessing.
+  const [readerLayout, setReaderLayout] = useState<string | null>(null);
+  const chosenLayout = layoutSwitch && readerLayout ? readerLayout : defaultLayout;
+  const tableRefusals = actionType?.table_refusals ?? [];
+  const asTable = chosenLayout === "table" && tableRefusals.length === 0;
 
   // **The objects this action can be run against** — and for an interface
   // action that is every object of every implementing type, which is
@@ -19715,7 +19731,9 @@ export function CanvasActionForm({
   const instancesQ = useQuery({
     queryKey: ["canvas-widget-instances", actionType?.object_type_id],
     queryFn: () => objApi.listInstances(workspaceId, actionType!.object_type_id!, 25, 0),
-    enabled: !!actionType?.object_type_id && !subjectVariable,
+    // A table's rows pick their objects from this list even when the form
+    // would edit a bound one (§702).
+    enabled: !!actionType?.object_type_id && (!subjectVariable || asTable),
   });
   // p.60's list of object types to pick from — the interface's
   // implementations, which the detail read carries (§453). Its own query
@@ -20344,7 +20362,62 @@ export function CanvasActionForm({
           </p>
         )
       )}
-      {actionType && visibleForm && (
+      {actionType && layoutSwitch && (
+        // p.512's "layout switching", for readers.
+        <div className="row-actions" role="group" aria-label="Layout"
+             data-testid="action-layout-switch">
+          {(["form", "table"] as const).map((name) => (
+            <button
+              key={name}
+              type="button"
+              className={chosenLayout === name ? "btn" : "btn quiet"}
+              aria-pressed={chosenLayout === name}
+              onClick={() => setReaderLayout(name)}
+            >
+              {name === "form" ? "Form" : "Table"}
+            </button>
+          ))}
+        </div>
+      )}
+      {actionType && chosenLayout === "table" && tableRefusals.length > 0 && (
+        // Said, and the form drawn instead: an action the table cannot hold
+        // is still an action somebody can submit.
+        <p className="canvas-widget-empty" data-testid="action-table-refused">
+          This action is only available as a form: {tableRefusals.join("; ")}.
+        </p>
+      )}
+      {actionType && visibleForm && asTable && (
+        <div className="card">
+          {!hideActionHeaderOf(hideHeader) && (
+            <h3 style={{ marginTop: 0 }} data-testid="action-form-title">
+              {headerTitleOf(title, actionType.display_name)}
+            </h3>
+          )}
+          <ActionTable
+            key={actionType.id}
+            workspaceId={workspaceId}
+            projectId={projectId}
+            actionType={actionType}
+            subjects={choosable}
+            localDefaults={localDefaultsOf(parameterDefaults)}
+            live={live}
+            onSubmitted={(touched, rows) => {
+              // p.513's output and its event, once every row went through -
+              // the table's "successful action submit".
+              if (outputVariable) {
+                setParameter(outputVariable, outputClauses(
+                  touched, actionType.object_type_id ?? null,
+                ));
+              }
+              const submitted = eventsFor(moduleEvents, nodeId, "submit");
+              if (submitted.length > 0) {
+                runEvents(submitted, { ...eventContext, payload: { rows: rows.length } });
+              }
+            }}
+          />
+        </div>
+      )}
+      {actionType && visibleForm && !asTable && (
         <form
           className="card"
           onSubmit={(e) => {
@@ -20447,6 +20520,8 @@ function ActionFormSettings() {
     invalidState,
     outputVariable,
     moreActions,
+    layout,
+    layoutSwitch,
     actions: { setProp },
   } = useNode((node) => ({
     actionTypeId: node.data.props.actionTypeId,
@@ -20456,6 +20531,8 @@ function ActionFormSettings() {
     hideHeader: node.data.props.hideHeader,
     invalidState: node.data.props.invalidState,
     outputVariable: node.data.props.outputVariable,
+    layout: node.data.props.layout,
+    layoutSwitch: node.data.props.layoutSwitch,
   }));
   const { declared } = useCanvasVariables();
   const objects = Object.values(declared).filter((v) => v.kind === "single_object");
@@ -20592,6 +20669,32 @@ function ActionFormSettings() {
         <span className="field-label">Hide header</span>
       </label>
       <label className="field">
+        <span className="field-label">Default layout</span>
+        <select
+          value={layout === "table" ? "table" : "form"}
+          data-testid="action-form-layout"
+          onChange={(e) => setProp((p: { layout: string }) => (p.layout = e.target.value))}
+        >
+          <option value="form">Action form</option>
+          <option value="table">Action table</option>
+        </select>
+        <span className="field-hint">
+          {(chosenAction?.table_refusals ?? []).length > 0
+            ? `Only as a form: ${(chosenAction?.table_refusals ?? []).join("; ")}`
+            : "A table submits a row per object, after checking every row"}
+        </span>
+      </label>
+      <label className="field" style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+        <input
+          type="checkbox"
+          checked={!!layoutSwitch}
+          data-testid="action-form-layout-switch"
+          onChange={(e) =>
+            setProp((p: { layoutSwitch: boolean }) => (p.layoutSwitch = e.target.checked))}
+        />
+        <span className="field-label">Let readers switch layout</span>
+      </label>
+      <label className="field">
         <span className="field-label">Form state if invalid</span>
         <select
           value={invalidStateOf(invalidState)}
@@ -20641,6 +20744,7 @@ CanvasActionForm.craft = {
   props: {
     actionTypeId: null, subjectVariable: null, title: "", hideHeader: false,
     parameterDefaults: {}, invalidState: "disabled", outputVariable: null, actions: [],
+    layout: "form", layoutSwitch: false,
   },
   related: { settings: ActionFormSettings },
 };

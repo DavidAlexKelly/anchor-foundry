@@ -269,6 +269,10 @@ class ActionTypeOut(BaseModel):
     # own copy of the rules is the seventh copy of a constraint this session has
     # spent four units collapsing.
     inline_edit_refusals: list[str]
+    # p.511's Action table (§702): why it cannot be drawn as one, empty if it
+    # can; and p.131's batch cap, as the most rows a table may hold.
+    table_refusals: list[str] = Field(default_factory=list)
+    table_row_limit: int = 10_000
     # Which parameters a surface should not offer as a column (§324;
     # `action-types` p.137, `workshop` p.241). **Not a refusal**: p.137 lists
     # visibility among the requirements only to say it is allowed, so a hidden
@@ -517,6 +521,9 @@ def _action_type_out(
             "inline_edit_hidden_parameters":
                 actions_service.hidden_inline_parameters(row),
             "inline_edit_row_limit": actions_service.INLINE_EDIT_ROW_LIMIT,
+            # p.511's Action table (§702): why this action is form-only, if it is.
+            "table_refusals": actions_service.table_refusals(row),
+            "table_row_limit": actions_service.TABLE_ROW_LIMIT,
             # jsonb, so it may arrive as text depending on the driver path -
             # the same treatment `config` gets two lines up.
             "deprecation": _parse_json(row.get("deprecation")),

@@ -198,6 +198,9 @@ def test_a_plain_property_edit_is_eligible(
     """
     action = make_action(client, fx, ticket_type_id, ["status", "priority"])
     assert action["inline_edit_refusals"] == []
+    # And p.511's Action table can draw it (§702).
+    assert action["table_refusals"] == []
+    assert action["table_row_limit"] == 10_000
 
 
 def test_a_struct_parameter_is_refused_by_name(
@@ -219,6 +222,8 @@ def test_a_struct_parameter_is_refused_by_name(
     # The eligible parameter is not mentioned: a refusal list that named every
     # parameter would say nothing about which is the problem.
     assert "'status'" not in refusals[0]
+    # p.511's table cannot hold one either, and says which (§702).
+    assert len(action["table_refusals"]) == 1 and "'site'" in action["table_refusals"][0]
 
 
 def test_a_hidden_parameter_is_a_column_not_offered_rather_than_a_refusal(

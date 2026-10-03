@@ -1323,6 +1323,59 @@ def inline_edit_refusals(action_type: dict[str, Any]) -> list[str]:
     return reasons
 
 
+#: `action-types` p.131: "An action can be called a maximum of 10,000 times in
+#: a batch", which `workshop` p.512 says applies to the table layout. A table
+#: holds one row per call, so this is how many rows it may hold.
+TABLE_ROW_LIMIT = 10_000
+
+
+def table_refusals(action_type: dict[str, Any]) -> list[str]:
+    """Why this action cannot be drawn as `workshop` p.511's **Action table**,
+    if it cannot (§702).
+
+    > "There may be some Actions that are not yet usable in the Table because
+    > some feature of the Action is only supported in the Form layout." (p.511)
+
+    That sentence is the licence for this list, and each reason names the
+    feature: a table is a row of cells per submission, and a parameter whose
+    control is more than one value in a cell - or whose control changes as
+    other values do - is drawn by the form alone. **Hidden parameters are not
+    checked**, since a table never draws them: they are seeded from the row's
+    object and sent as they are, as the form does (p.25).
+
+    Not refused, unlike an inline edit: creating, deleting or linking. Each row
+    is its own submission of the whole action, not an edit to a cell.
+    """
+    reasons: list[str] = []
+    if action_type.get("object_type_id") is None and action_type.get("interface_id"):
+        reasons.append(
+            "a table row picks its object from one type's list, and this action is on "
+            "an interface, whose objects may be of several (action-types p.59)"
+        )
+    for parameter in action_type.get("parameters") or []:
+        if parameter.get("hidden"):
+            continue
+        name = str(parameter.get("api_name"))
+        data_type = str(parameter.get("data_type"))
+        if data_type not in INLINE_EDIT_PARAMETER_TYPES:
+            reasons.append(
+                f"{name!r} is a {data_type} parameter, and a table cell holds a single "
+                "primitive value"
+            )
+        if parameter.get("overrides"):
+            reasons.append(
+                f"{name!r} changes with other values (action-types p.45), which a row "
+                "of cells cannot redraw"
+            )
+        if (parameter.get("dropdown_filters") or parameter.get("options_from")
+                or parameter.get("dropdown_search_around")):
+            reasons.append(
+                f"{name!r} offers choices narrowed by the other values (action-types "
+                "p.33), which only the form asks for"
+            )
+    return reasons
+
+
 def hidden_inline_parameters(action_type: dict[str, Any]) -> list[str]:
     """Which parameters a surface should not offer as an editable column
     (§324; `action-types` p.137, `workshop` p.241).
