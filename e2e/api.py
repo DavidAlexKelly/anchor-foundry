@@ -343,6 +343,7 @@ class Module:
         slug: str | None = None,
         icon: str | None = None,
         colour: str | None = None,
+        hints: dict[str, list[str]] | None = None,
     ) -> str:
         """Upload, declare, map and sync - the whole way an object type gets
         instances.
@@ -398,6 +399,9 @@ class Module:
                         # p.94-101). Absent means unformatted, which is what
                         # every property of every other fixture is.
                         **({"value_format": (formats or {})[c]} if c in (formats or {}) else {}),
+                        # p.248-252's render hints (§724). Absent is the
+                        # default, Searchable, Selectable and Sortable.
+                        **({"render_hints": (hints or {})[c]} if c in (hints or {}) else {}),
                         # Ordered conditional formatting rules, first match
                         # wins (`object-link-types` p.102-109).
                         **({"conditional_format": (rules or {})[c]}

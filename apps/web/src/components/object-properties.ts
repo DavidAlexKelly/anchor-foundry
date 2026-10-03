@@ -37,6 +37,52 @@ export function visibleProperties(properties: ObjectTypeProperty[]): {
   };
 }
 
+/** The standard Object View's sections (§725): p.10's split, with p.250's
+ * two render hints that are about Object Views taken out of the table.
+ *
+ * > "Keywords - Enable to highlight this property in its own section when
+ * > displaying properties in Object Views." (`object-link-types` p.250)
+ *
+ * > "Long text - Enable if property values contains a large amount of text.
+ * > For example, Object Views will display this property's values in a more
+ * > readable format." (p.250)
+ *
+ * **Prominent first**: a property somebody made prominent already has the
+ * view's most visible place, and moving it to a section further down because
+ * it also carries a hint would be the hint demoting it. Keywords before Long
+ * text, for the same reason - "highlight" is the stronger claim.
+ *
+ * Separate from `visibleProperties` rather than a change to it: the linked
+ * objects' one-line summary reads that split too, and a keyword is no less a
+ * thing to summarise an object by.
+ */
+export function objectViewSections(properties: ObjectTypeProperty[]): {
+  prominent: ObjectTypeProperty[];
+  keywords: ObjectTypeProperty[];
+  long: ObjectTypeProperty[];
+  normal: ObjectTypeProperty[];
+} {
+  const { prominent, normal } = visibleProperties(properties);
+  const has = (p: ObjectTypeProperty, hint: string) => (p.render_hints ?? []).includes(hint);
+  return {
+    prominent,
+    keywords: normal.filter((p) => has(p, "keywords")),
+    long: normal.filter((p) => !has(p, "keywords") && has(p, "long_text")),
+    normal: normal.filter((p) => !has(p, "keywords") && !has(p, "long_text")),
+  };
+}
+
+/** The property as an Object View formats it (§725). p.249-250's Identifier
+ * is "primary keys and foreign keys that have a numerical base type and don't
+ * need to be formatted or treated as numbers", and "Object Views won't format
+ * the property values as numbers" - so its formatter stands aside there, and
+ * the value is shown as it is stored. */
+export function asViewed(property: ObjectTypeProperty): ObjectTypeProperty {
+  return (property.render_hints ?? []).includes("identifier") && property.value_format
+    ? { ...property, value_format: null }
+    : property;
+}
+
 /** A one-line summary of an instance, for a row somebody might click.
  *
  * **Prominent first, hidden never.** Prominent is the object type saying "this
