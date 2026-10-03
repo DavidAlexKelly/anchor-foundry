@@ -270,6 +270,45 @@ async def members_filters(
     return (NOTHING,) if empty else filters
 
 
+async def keys_of(conn: Any, workspace_id: UUID, raw: Any, *, limit: int) -> list[str]:
+    """The primary keys a set holds, its hop included, for a function's
+    `object_set` parameter fed by a set variable (§772)."""
+    return [str(r["primary_key"]) for r in await instances_of(
+        conn, workspace_id, raw, limit=limit)]
+
+
+async def instances_of(
+    conn: Any, workspace_id: UUID, raw: Any, *, limit: int
+) -> list[dict[str, Any]]:
+    """Every member of a set, its hop included: for a function's set input
+    (§772) and the objects an edit function names (§773).
+
+    Read a page at a time, as a table reads them. **Refused past `limit`**
+    rather than cut short: a function given the first thousand of a larger set
+    answers a question about a different set."""
+    from . import instance_store
+    from . import instances as instances_service
+
+    type_id = object_sets.object_type_id_of(raw)
+    await ontology_service.get_type(conn, workspace_id, type_id)
+    property_types = await declared_types(conn, type_id)
+    definition = object_sets.parse(raw, property_types=property_types)
+    prefix = await instances_service.workspace_search_prefix(conn, workspace_id)
+    store = instance_store.store_for(conn)
+    filters = await members_filters(conn, store, prefix, workspace_id, definition)
+    found: list[dict[str, Any]] = []
+    while True:
+        rows, total = await store.evaluate_object_set(
+            search_prefix=prefix, object_type_id=definition.object_type_id, filters=filters,
+            limit=instance_store.INSTANCE_PAGE_SIZE, offset=len(found))
+        if total > limit:
+            raise ValueError(f"the set holds {total:,} objects, more than the {limit:,} a "
+                             "function is given from a variable")
+        if not rows:
+            return found
+        found.extend(rows)
+
+
 async def aggregate(
     conn: Any, workspace_id: UUID, raw: Any, name: str, property_name: str | None,
 ) -> "tuple[Any, object_sets.Aggregation]":

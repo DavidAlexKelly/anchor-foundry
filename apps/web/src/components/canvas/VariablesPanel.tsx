@@ -41,6 +41,8 @@ import { useEditor } from "@craftjs/core";
 import { useEffect, useMemo, useState } from "react";
 import { canvas as canvasApi, objects as objectsApi } from "@/lib/api";
 import type { WorkshopTransform, WorkshopVariable, WorkshopVariableKind } from "@/lib/types";
+import { FunctionVariableEditor } from "./function-column-editor";
+import { callOf, derivationOf, FUNCTION_KINDS, NO_CALL } from "./function-variables";
 import { newVariableId, usagesOf } from "@/lib/workshop-module";
 import { OPERATOR_LABELS, operatorsFor } from "./filter-clause";
 import { routable as isRoutable, routingHint } from "./routing";
@@ -229,6 +231,10 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   { value: "mgrs", label: "Geo: MGRS from geopoint", arity: "one" },
   // p.139's Object RID (§569).
   { value: "object_rid", label: "Object RID", arity: "one" },
+  // p.73's "Function: For function-backed, dynamically computed variables"
+  // (§772; decision 0018). Its inputs are its parameters, chosen once the
+  // function is, so the slots below are not drawn for it.
+  { value: "function", label: "A function", arity: "its parameters" },
 ];
 
 /** Offered on `time_series_set` variables, and the only thing offered there -
@@ -731,6 +737,7 @@ export function VariablesPanel({
                       />
                     ) : variable.derivation ? (
                       <DerivationEditor
+                        workspaceId={workspaceId}
                         variable={variable}
                         variables={variables}
                         readOnly={readOnly}
@@ -1052,12 +1059,14 @@ function InterfaceEditor({
 }
 
 function DerivationEditor({
+  workspaceId,
   variable,
   variables,
   readOnly,
   onChange,
   onClear,
 }: {
+  workspaceId: string;
   variable: WorkshopVariable;
   variables: Record<string, WorkshopVariable>;
   readOnly: boolean;
@@ -1096,8 +1105,11 @@ function DerivationEditor({
 
   const seriesChain = (derivation.config?.transforms as SeriesTransform[] | undefined) ?? [];
 
-  const slots =
-    arity === "many"
+  // A function's inputs are its parameters, drawn by its own editor.
+  const calling = derivation.transform === "function";
+  const slots = calling
+    ? []
+    : arity === "many"
       ? [...derivation.inputs, ""]
       : Array.from({ length: arity }, (_, i) => derivation.inputs[i] ?? "");
 
@@ -1117,14 +1129,17 @@ function DerivationEditor({
               // derivation nobody configured.
               inputs: [],
               // An aggregation starts as the count its picker shows, rather
-              // than as none, which the server refuses (§617).
-              config: e.target.value === "object_set_aggregation" ? { aggregation: "count" } : {},
+              // than as none, which the server refuses (§617); a function as
+              // the empty call its editor fills (§772).
+              config: e.target.value === "object_set_aggregation" ? { aggregation: "count" }
+                : e.target.value === "function" ? derivationOf(NO_CALL).config : {},
             })
           }
         >
           {(series
             ? [{ value: SERIES_TRANSFORM, label: "A time series on an object" }]
-            : TRANSFORMS
+            // Only to a kind p.80's mapping has a row for.
+            : TRANSFORMS.filter((t) => t.value !== "function" || FUNCTION_KINDS.includes(variable.kind))
           ).map((t) => (
             <option key={t.value} value={t.value}>
               {t.label}
@@ -1153,6 +1168,17 @@ function DerivationEditor({
           </select>
         </label>
       ))}
+
+      {calling && (
+        <FunctionVariableEditor
+          workspaceId={workspaceId}
+          kind={variable.kind}
+          call={callOf(derivation)}
+          choices={candidates}
+          readOnly={readOnly}
+          onChange={(call) => onChange(derivationOf(call))}
+        />
+      )}
 
       {derivation.transform === "concat" && (
         <label>
@@ -1585,6 +1611,7 @@ function ObjectSetEditor({
   const byClauses = transform === "narrow_set";
   const traversing = transform === TRAVERSE;
   const joining = transform === UNION_SET;
+  const fromFunction = transform === "function";
   const joined = variable.derivation?.inputs ?? [];
   // Link types are workspace-wide, and which ones apply depends on the *base*
   // set's type - which is a variable reference, so the answer is only known
@@ -1629,7 +1656,9 @@ function ObjectSetEditor({
       <label>
         This set
         <select
-          value={derived ? (traversing ? "followed" : joining ? "joined" : "narrowed") : "type"}
+          value={derived
+            ? (traversing ? "followed" : joining ? "joined" : fromFunction ? "function" : "narrowed")
+            : "type"}
           disabled={readOnly}
           data-testid="set-source"
           onChange={(e) => {
@@ -1645,6 +1674,9 @@ function ObjectSetEditor({
                 ...rest,
                 derivation: { transform: UNION_SET, inputs: [], config: {} },
               });
+            } else if (e.target.value === "function") {
+              const { object_set: _dropped, ...rest } = variable;
+              onChange({ ...rest, derivation: derivationOf(NO_CALL) });
             } else if (e.target.value === "followed") {
               const { object_set: _dropped, ...rest } = variable;
               onChange({
@@ -1661,6 +1693,8 @@ function ObjectSetEditor({
           <option value="narrowed">Is another set, narrowed</option>
           <option value="followed">Follows a link from another set</option>
           <option value="joined">Joins sets of different object types</option>
+          {/* p.73's function-backed variable (§772): the set a function returns. */}
+          <option value="function">Is what a function returns</option>
         </select>
       </label>
 
@@ -1680,6 +1714,15 @@ function ObjectSetEditor({
             }
           />
         </label>
+      ) : fromFunction ? (
+        <FunctionVariableEditor
+          workspaceId={workspaceId}
+          kind="object_set"
+          call={callOf(variable.derivation!)}
+          choices={Object.values(variables).filter((v) => v.id !== variable.id)}
+          readOnly={readOnly}
+          onChange={(call) => onChange({ ...variable, derivation: derivationOf(call) })}
+        />
       ) : joining ? (
         <fieldset className="vars-union" data-testid="union-parts">
           <legend>Sets to join</legend>

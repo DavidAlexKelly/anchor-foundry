@@ -21,6 +21,8 @@ import type { FunctionInputs } from "./function-inputs";
 import type { FunctionParameter } from "@/lib/types";
 import { columnProblem, objectParameters, versionOf } from "./function-columns";
 import { layerProblem, type FunctionLayer } from "./function-layers";
+import { functionVariableProblem, type FunctionCall } from "./function-variables";
+import type { WorkshopVariableKind } from "@/lib/types";
 
 export function FunctionColumnEditor({ index, objectTypeId, column, onChange }: {
   index: number;
@@ -102,13 +104,17 @@ export function FunctionColumnEditor({ index, objectTypeId, column, onChange }: 
 
 /** Where each parameter's value comes from: a module variable, or a value
  * typed here (§770, §771). `label` prefixes each control's accessible name. */
-export function FunctionInputsFields({ label, parameters, inputs, onChange }: {
+export function FunctionInputsFields({ label, parameters, inputs, onChange, choices }: {
   label: string;
   parameters: FunctionParameter[];
   inputs: FunctionInputs;
   onChange: (next: FunctionInputs) => void;
+  /** The variables offered, when not the module's declared ones: the
+   * Variables panel's own unsaved list, less the variable being edited. */
+  choices?: { id: string; label: string }[];
 }) {
   const { declared } = useCanvasVariables();
+  const offered = choices ?? Object.values(declared);
   return (
     <>
       {parameters.map((p) => {
@@ -129,7 +135,7 @@ export function FunctionInputsFields({ label, parameters, inputs, onChange }: {
               onChange={(e) => setSource(e.target.value ? { variable: e.target.value } : null)}
             >
               <option value="">{p.api_name}: a value</option>
-              {Object.values(declared).map((v) => (
+              {offered.map((v) => (
                 <option key={v.id} value={v.id}>{p.api_name}: {v.label}</option>
               ))}
             </select>
@@ -202,5 +208,72 @@ export function FunctionLayerEditor({ label, layer, onChange }: {
       />
       {issue && <span className="field-hint" data-testid="chart-series-problem">{issue}</span>}
     </>
+  );
+}
+
+/**
+ * A function-backed variable (Workshop p.73; §772): which function, which
+ * version, and each parameter from another variable or a fixed value. What
+ * would stop it resolving is said under it, from `functionVariableProblem`.
+ * The panel is outside the module's variable context, so it passes its own
+ * workspace and the variables it is editing.
+ */
+export function FunctionVariableEditor({ workspaceId, kind, call, choices, readOnly, onChange }: {
+  workspaceId: string;
+  kind: WorkshopVariableKind;
+  call: FunctionCall;
+  choices: { id: string; label: string }[];
+  readOnly: boolean;
+  onChange: (next: FunctionCall) => void;
+}) {
+  const list = useQuery({
+    queryKey: ["functions", workspaceId],
+    queryFn: () => objApi.listFunctions(workspaceId),
+  });
+  const detail = useQuery({
+    queryKey: ["function", call.function_id],
+    queryFn: () => objApi.getFunction(workspaceId, call.function_id),
+    enabled: !!call.function_id,
+  });
+  const version = versionOf(detail.data, call.version);
+  const issue = !call.function_id || detail.data || detail.isError
+    ? functionVariableProblem(kind, call, detail.data) : null;
+  return (
+    <fieldset className="vars-function" disabled={readOnly}>
+      <label>
+        Function
+        <select
+          data-testid="variable-function"
+          value={call.function_id}
+          onChange={(e) => onChange({ function_id: e.target.value, version: null, inputs: {} })}
+        >
+          <option value="">Choose a function…</option>
+          {(list.data ?? []).map((f) => <option key={f.id} value={f.id}>{f.api_name}</option>)}
+        </select>
+      </label>
+      {detail.data && (
+        <label>
+          Version
+          <select
+            data-testid="variable-function-version"
+            value={call.version ?? ""}
+            onChange={(e) => onChange({ ...call, version: e.target.value || null })}
+          >
+            <option value="">Newest ({detail.data.versions[0]?.version})</option>
+            {detail.data.versions.map((v) => (
+              <option key={v.id} value={v.version}>{v.version}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      <FunctionInputsFields
+        label="Function"
+        parameters={version?.parameters ?? []}
+        inputs={call.inputs}
+        choices={choices}
+        onChange={(inputs) => onChange({ ...call, inputs })}
+      />
+      {issue && <span className="field-hint" data-testid="variable-function-problem">{issue}</span>}
+    </fieldset>
   );
 }

@@ -438,6 +438,11 @@ export type WorkshopTransform =
    * is `[setVariable]`; config carries the `aggregation` (p.310's six) and,
    * for all but `count`, the `property` it runs over. */
   | "object_set_aggregation"
+  /** p.73's function-backed variable (§772; decision 0018): a published
+   * function's answer. Inputs are the variables it reads; config names the
+   * `function_id`, its `version` (null for the newest), the `parameters` each
+   * input feeds in order, and the fixed `values`. */
+  | "function"
   /** What the viewer chose for one property, read back out of a filter's
    * clauses (p.444's "reused in widget configurations"). Input is
    * `[clausesVariable]`; config carries the property. `narrow_set` applies
