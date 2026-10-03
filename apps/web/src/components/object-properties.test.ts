@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarise, visibleProperties } from "./object-properties";
+import { asViewed, objectViewSections, summarise, visibleProperties } from "./object-properties";
 import type { ObjectTypeProperty } from "@/lib/types";
 
 function prop(
@@ -50,6 +50,40 @@ describe("visibleProperties", () => {
     // what the type looks like.
     const { normal } = visibleProperties([prop("z"), prop("a"), prop("m")]);
     expect(normal.map((p) => p.api_name)).toEqual(["z", "a", "m"]);
+  });
+});
+
+describe("objectViewSections (§725; object-link-types p.250)", () => {
+  const hinted = (api_name: string, hints: string[], visibility: ObjectTypeProperty["visibility"] = "normal") =>
+    ({ ...prop(api_name, visibility), render_hints: hints });
+
+  it("takes Keywords and Long text out of the table into their own sections", () => {
+    const got = objectViewSections([
+      hinted("title", ["keywords"], "prominent"),
+      hinted("tags", ["keywords", "searchable"]),
+      hinted("notes", ["long_text"]),
+      hinted("both", ["keywords", "long_text"]),
+      hinted("plain", ["searchable"]),
+      prop("unhinted"),
+      hinted("gone", ["keywords"], "hidden"),
+    ]);
+    const names = (ps: ObjectTypeProperty[]) => ps.map((p) => p.api_name);
+    // Prominent keeps its card; hidden stays hidden; Keywords wins over Long text.
+    expect(names(got.prominent)).toEqual(["title"]);
+    expect(names(got.keywords)).toEqual(["tags", "both"]);
+    expect(names(got.long)).toEqual(["notes"]);
+    expect(names(got.normal)).toEqual(["plain", "unhinted"]);
+  });
+});
+
+describe("asViewed (§725; p.249-250's Identifier)", () => {
+  it("drops the formatter of an identifier, and only of one", () => {
+    const formatted = { ...prop("code"), data_type: "integer" as const,
+      value_format: { kind: "number" as const, grouping: true } as ObjectTypeProperty["value_format"] };
+    expect(asViewed({ ...formatted, render_hints: ["identifier"] }).value_format).toBeNull();
+    expect(asViewed({ ...formatted, render_hints: ["searchable"] }).value_format).toEqual(formatted.value_format);
+    const bare = { ...prop("code"), render_hints: ["identifier"] };
+    expect(asViewed(bare)).toBe(bare);
   });
 });
 

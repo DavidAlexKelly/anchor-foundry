@@ -47,7 +47,7 @@ import { PropertyValue } from "@/components/property-value";
 import { PropertyInlineEdit } from "@/components/property-inline-edit";
 import { ReducedValue } from "@/components/reduced-value";
 import { conditionalStyle } from "@/lib/conditional-format";
-import { visibleProperties } from "@/components/object-properties";
+import { asViewed, objectViewSections } from "@/components/object-properties";
 import { plot } from "@/components/series-plot";
 import type { ObjectInstance, ObjectTypeProperty, PropertyStyle } from "@/lib/types";
 import { OBJECT_MEDIA_TYPE, objectPayload } from "@/components/canvas/drag-payload";
@@ -330,8 +330,10 @@ export function StandardObjectView({
     );
   }
 
-  const properties = type.data.properties;
-  const { prominent, normal } = visibleProperties(properties);
+  // p.250's Identifier stands its formatter aside here (§725), before any
+  // section reads it.
+  const properties = type.data.properties.map(asViewed);
+  const { prominent, keywords, long, normal } = objectViewSections(properties);
   const titleProperty = properties.find((p) => p.id === type.data.title_property_id);
   const title = titleProperty
     ? String(instance.properties[titleProperty.api_name] ?? instance.primary_key)
@@ -406,6 +408,32 @@ export function StandardObjectView({
         </div>
       )}
 
+      {/* p.250's Keywords (§725): "highlight this property in its own section
+          when displaying properties in Object Views". Above the table, which
+          is the ordinary place, and below the prominent cards, which are the
+          type's own first choice. */}
+      {keywords.length > 0 && (
+        <section data-testid="sov-keywords" aria-labelledby="sov-keywords-title">
+          <h3 className="sov-section" id="sov-keywords-title">Keywords</h3>
+          <dl className="sov-keywords">
+            {keywords.map((p) => (
+              <div key={p.api_name} className="sov-keyword" data-property={p.api_name}>
+                <dt>{p.display_name || p.api_name}</dt>
+                <dd>
+                  <ReducedValue
+                    workspaceId={workspaceId}
+                    property={p}
+                    instance={instance}
+                    style={conditionalStyle(p.conditional_format, instance.properties)}
+                  />
+                  {editor(p)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
+
       {normal.length > 0 ? (
         <table className="ds-table sov-table" data-testid="sov-normal">
           <thead>
@@ -447,6 +475,28 @@ export function StandardObjectView({
         // the table, and so does one where they are all hidden.
         <p className="canvas-widget-empty">No other properties to show.</p>
       )}
+
+      {/* p.250's Long text (§725): "Object Views will display this
+          property's values in a more readable format" - each in a block of
+          its own under its name, at a reading width with its line breaks
+          kept, rather than squeezed into the table's value column. */}
+      {long.map((p) => (
+        <section key={p.api_name} className="sov-long" data-testid="sov-long"
+          data-property={p.api_name} aria-labelledby={`sov-long-${p.api_name}`}>
+          <h3 className="sov-section" id={`sov-long-${p.api_name}`}>{p.display_name || p.api_name}</h3>
+          <div className="sov-long-text">
+            <PropertyValue
+              workspaceId={workspaceId}
+              dataType={p.data_type}
+              value={instance.properties[p.api_name]}
+              valueFormat={p.value_format}
+              structFields={p.struct_fields}
+              style={conditionalStyle(p.conditional_format, instance.properties)}
+            />
+            {editor(p)}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }
