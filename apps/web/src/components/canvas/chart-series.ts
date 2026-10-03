@@ -31,6 +31,10 @@ import { segmentName, type Segmented } from "./chart-segments";
 import { aggregationOf, aggregationRequest } from "./pie-chart";
 
 export interface SeriesSpec {
+  /** p.280's layer **Title** (§757): "not visible to module users, but is
+   * intended to help builders organize and manage complex Chart XY
+   * configurations that use multiple Layers". The panel's alone. */
+  title: string;
   aggregate: string;
   measure: string | null;
   /** p.282's display override, or "" for the default. */
@@ -42,8 +46,8 @@ export interface SeriesSpec {
   objectSetVariable: string | null;
   /** p.280's layer X axis property (§625), or null for the chart's own. */
   dimension: string | null;
-  /** p.280's **Layer type** (§626): drawn as bars or as a line whatever the
-   * chart's own type is, or null for the chart's. */
+  /** p.280's **Layer type** (§626): drawn as bars, a line or dots (§757)
+   * whatever the chart's own type is, or null for the chart's. */
   kind: LayerKind | null;
   /** p.282's **Selection as filter** for this layer (§628): an array
    * variable a click on its marks writes a clause into, on the layer's own
@@ -54,7 +58,12 @@ export interface SeriesSpec {
   segmentBy: string | null;
 }
 
-export type LayerKind = "bar" | "line";
+/** p.280's three: "Bar Chart, Line Chart, and Scatter Chart". A scatter layer
+ * over the chart's categories is each category's value as a dot, with no line
+ * joining them (§757). */
+export type LayerKind = "bar" | "line" | "scatter";
+
+export const LAYER_KINDS: readonly LayerKind[] = ["bar", "line", "scatter"];
 
 export type AxisSide = "left" | "right";
 
@@ -69,13 +78,14 @@ export function seriesOf(raw: unknown): SeriesSpec[] {
     .filter((s): s is Record<string, unknown> => typeof s === "object" && s !== null)
     .slice(0, MAX_SERIES - 1)
     .map((s) => ({
+      title: typeof s.title === "string" ? s.title.slice(0, 100) : "",
       aggregate: aggregationOf(s.aggregate),
       measure: typeof s.measure === "string" && s.measure !== "" ? s.measure : null,
       name: typeof s.name === "string" ? s.name : "",
       axis: s.axis === "left" ? "left" : "right",
       objectSetVariable: nonEmpty(s.objectSetVariable),
       dimension: nonEmpty(s.dimension),
-      kind: s.kind === "bar" || s.kind === "line" ? s.kind : null,
+      kind: (LAYER_KINDS as readonly unknown[]).includes(s.kind) ? (s.kind as LayerKind) : null,
       drilldownVariable: nonEmpty(s.drilldownVariable),
       segmentBy: nonEmpty(s.segmentBy),
     }));
@@ -93,12 +103,20 @@ export function layerKinds(chart: LayerKind, specs: readonly SeriesSpec[]): Laye
   return [chart, ...specs.map((s) => s.kind ?? chart)];
 }
 
+/** Whether layers of more than one kind meet on the chart, which is what
+ * draws them together over the grouped bars: a chart all of bars, or all of
+ * lines, has a layout of its own. */
+export function mixedKinds(kinds: readonly LayerKind[]): boolean {
+  return kinds.some((k) => k !== "bar") && kinds.some((k) => k !== "line");
+}
+
 /**
- * A grid of series split into what is drawn as bars and what as lines, each
- * keeping its place in the legend (§626). `bars` is the grid of the bar
- * series alone, for the grouped layout; `barAt[i]` and `lineAt[i]` are the
- * legend positions of its i-th bar and line series, which is what colours,
- * names and places each on an axis.
+ * A grid of series split into what is drawn as bars and what across them, as
+ * a line or as dots, each keeping its place in the legend (§626, §757).
+ * `bars` is the grid of the bar series alone, for the grouped layout;
+ * `barAt[i]` and `lineAt[i]` are the legend positions of its i-th bar and
+ * line-or-dots series, which is what colours, names and places each on an
+ * axis.
  */
 export function splitLayers(data: Segmented, kinds: readonly LayerKind[]): {
   bars: Segmented;
@@ -107,7 +125,7 @@ export function splitLayers(data: Segmented, kinds: readonly LayerKind[]): {
 } {
   const barAt: number[] = [];
   const lineAt: number[] = [];
-  data.segments.forEach((_, i) => ((kinds[i] ?? "bar") === "line" ? lineAt : barAt).push(i));
+  data.segments.forEach((_, i) => ((kinds[i] ?? "bar") === "bar" ? barAt : lineAt).push(i));
   return {
     bars: {
       categories: data.categories,

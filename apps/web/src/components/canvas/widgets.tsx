@@ -426,8 +426,9 @@ import {
   Chart, MultiLineChart, PALETTE as CHART_PALETTE, PieChart, SegmentedBarChart, toPoints,
 } from "./charts";
 import {
-  MAX_SERIES, axisSides, drillClauses, drilledLabel as drilledOn, layerKinds, mergeSeries,
+  MAX_SERIES, axisSides, drillClauses, drilledLabel as drilledOn, layerKinds, mergeSeries, mixedKinds,
   canSegment, layeredGrid, segmentsLayer, seriesName as seriesNameOf, seriesOf, seriesRequests, seriesSource,
+  LAYER_KINDS, type LayerKind,
 } from "./chart-series";
 import {
   SEGMENT_LEGEND_POSITIONS, SEGMENT_MODES, segmentLegendPositionOf, segmentModeOf, segmentedFrom,
@@ -19273,7 +19274,7 @@ export function CanvasChart({
   // and lines is drawn as bars with the lines across them.
   const kinds = layerKinds(drawnKind === "line" ? "line" : "bar",
     drawnExtras.map((e) => e.spec));
-  const mixed = kinds.includes("bar") && kinds.includes("line");
+  const mixed = mixedKinds(kinds);
   const extrasPending = extras.some((_, i) => !!extraAsks[i] && !!extraSources[i]
     && (extraSegmented[i] ? extraGrids[i]?.isPending : extraResults[i]?.isPending));
   const sides = axisSides(drawnExtras.map((e) => e.spec), multipleAxes === true);
@@ -20089,6 +20090,16 @@ function ChartSeriesFields({
         const seriesNames = own ? own.map((p) => p.name) : names;
         return (
         <div key={i} className="field-inline" data-testid="chart-series-row">
+          {/* p.280's layer Title (§757): for the builder; nothing draws it. */}
+          <input
+            type="text"
+            aria-label={`Series ${i + 2} title`}
+            data-testid="chart-series-title"
+            placeholder={`Series ${i + 2}`}
+            value={spec.title}
+            maxLength={100}
+            onChange={(e) => write(specs.map((s, j) => (j === i ? { ...s, title: e.target.value } : s)))}
+          />
           <select
             aria-label={`Series ${i + 2} object set`}
             data-testid="chart-series-set"
@@ -20121,13 +20132,14 @@ function ChartSeriesFields({
             data-testid="chart-series-kind"
             value={spec.kind ?? ""}
             onChange={(e) => write(specs.map((s, j) => (j === i
-              ? { ...s, kind: e.target.value === "bar" || e.target.value === "line"
-                  ? e.target.value : null }
+              ? { ...s, kind: (LAYER_KINDS as readonly string[]).includes(e.target.value)
+                  ? e.target.value as LayerKind : null }
               : s)))}
           >
             <option value="">As the chart</option>
             <option value="bar">Bar</option>
             <option value="line">Line</option>
+            <option value="scatter">Scatter</option>
           </select>
           <select
             aria-label={`Series ${i + 2} aggregation`}
@@ -20217,7 +20229,7 @@ function ChartSeriesFields({
         data-testid="chart-add-series"
         disabled={specs.length >= MAX_SERIES - 1}
         onClick={() =>
-          write([...specs, { aggregate: "count", measure: null, name: "", axis: "right",
+          write([...specs, { title: "", aggregate: "count", measure: null, name: "", axis: "right",
                              objectSetVariable: null, dimension: null, kind: null,
                              drilldownVariable: null, segmentBy: null }])}
       >

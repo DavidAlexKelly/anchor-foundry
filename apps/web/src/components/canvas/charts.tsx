@@ -773,7 +773,7 @@ export function SegmentedBarChart({
   // p.280's line layers (§626) come out of the bars' grid, each keeping its
   // place in the legend: `barAt` and `lineAt` map back to it. A bar series
   // with no value for a category has no bar there, which a zero draws as.
-  const layered = mode === "grouped" && !!kinds?.includes("line")
+  const layered = mode === "grouped" && !!kinds?.some((k) => k !== "bar")
     ? splitLayers(data, kinds) : null;
   const barData = layered
     ? { ...layered.bars, values: layered.bars.values.map((row) =>
@@ -863,18 +863,23 @@ export function SegmentedBarChart({
         });
         const name = data.segments[series] ?? "";
         const own = drills?.[series] ?? drill;
+        // p.280's Scatter Chart layer (§757): the dots alone.
+        const scatter = kinds?.[series] === "scatter";
         return (
-          <g key={`l${series}`} data-testid="chart-series-line" data-series={name}>
-            <path
-              d={dots.map((d, i) => `${i ? "L" : "M"} ${d.x} ${d.y}`).join(" ")}
-              fill="none" stroke={PALETTE[series % PALETTE.length]} strokeWidth={2}
-            />
+          <g key={`l${series}`} data-testid={scatter ? "chart-series-dots" : "chart-series-line"}
+             data-series={name}>
+            {!scatter && (
+              <path
+                d={dots.map((d, i) => `${i ? "L" : "M"} ${d.x} ${d.y}`).join(" ")}
+                fill="none" stroke={PALETTE[series % PALETTE.length]} strokeWidth={2}
+              />
+            )}
             {dots.map((dot) => (
               <circle
                 key={dot.category}
                 cx={dot.x}
                 cy={dot.y}
-                r={own ? 5 : 3}
+                r={own || scatter ? 5 : 3}
                 fill={PALETTE[series % PALETTE.length]}
                 opacity={dim(own, dot.category)}
                 {...markProps(own, dot.category)}
@@ -909,7 +914,10 @@ export function SegmentedBarChart({
             transform={`translate(${at.x}, ${at.y})`}
           >
             <title>{sideLabel(segmentName(segment, names), twoAxes ? sides?.[i] : undefined)}</title>
-            {lineAt.includes(i)
+            {kinds?.[i] === "scatter" && lineAt.includes(i)
+              ? <circle cx={5} cy={-4} r={4} fill={PALETTE[i % PALETTE.length]}
+                  data-testid="chart-legend-dot" />
+              : lineAt.includes(i)
               ? <line x1={0} x2={10} y1={-4} y2={-4} strokeWidth={2}
                   stroke={PALETTE[i % PALETTE.length]} data-testid="chart-legend-line" />
               : <rect width={10} height={10} y={-9} fill={PALETTE[i % PALETTE.length]} />}

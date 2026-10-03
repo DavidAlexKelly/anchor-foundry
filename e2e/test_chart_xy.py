@@ -906,7 +906,7 @@ def test_the_panel_adds_and_names_a_series(page, api, sites) -> None:
     expect(page.get_by_test_id("chart-segment-by")).to_be_enabled()
     save(page)
     props = mod.definition()["layout"]["chart"]["props"]
-    assert props["series"] == [{"aggregate": "sum", "measure": "capacity", "name": "Capacity",
+    assert props["series"] == [{"title": "", "aggregate": "sum", "measure": "capacity", "name": "Capacity",
                                 "axis": "right", "objectSetVariable": None,
                                 "dimension": None, "kind": None,
                                 "drilldownVariable": None, "segmentBy": None}], props
@@ -1026,7 +1026,7 @@ def test_the_panel_points_a_series_at_another_set(page, api, sites, tickets) -> 
     page.get_by_test_id("chart-series-measure").select_option("hours")
     save(page)
     props = mod.definition()["layout"]["chart"]["props"]
-    assert props["series"] == [{"aggregate": "sum", "measure": "hours", "name": "",
+    assert props["series"] == [{"title": "", "aggregate": "sum", "measure": "hours", "name": "",
                                 "axis": "right", "objectSetVariable": "v_tickets",
                                 "dimension": "state", "kind": None,
                                 "drilldownVariable": None, "segmentBy": None}], props
@@ -1034,7 +1034,7 @@ def test_the_panel_points_a_series_at_another_set(page, api, sites, tickets) -> 
     page.get_by_test_id("chart-series-set").select_option("")
     page.get_by_role("button", name="Save", exact=True).click()
     eventually(lambda: mod.definition()["layout"]["chart"]["props"]["series"],
-               lambda got: got == [{"aggregate": "sum", "measure": None, "name": "",
+               lambda got: got == [{"title": "", "aggregate": "sum", "measure": None, "name": "",
                                     "axis": "right", "objectSetVariable": None,
                                     "dimension": None, "kind": None,
                                     "drilldownVariable": None, "segmentBy": None}],
@@ -1177,6 +1177,42 @@ def test_a_line_layer_runs_across_the_bars(page, api, sites) -> None:
         ["Count", "Sum of capacity"])
 
 
+def test_a_scatter_layer_is_dots_across_the_bars(page, api, sites) -> None:
+    """p.280's third Layer type, "Scatter Chart" (§757): each category's
+    value as a dot, joined by nothing."""
+    mod = build(api, sites, "Chart XY layer scatter", {
+        "series": [{**SUM_SERIES[0], "kind": "scatter"}]})
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-segment")).to_have_count(2)
+    dots = page.locator("[data-testid='chart-series-dots'][data-series='Sum of capacity']")
+    expect(dots.locator("circle")).to_have_count(2)
+    expect(dots.locator("circle title")).to_have_text(
+        ["open · Sum of capacity: 30", "closed · Sum of capacity: 90"])
+    expect(dots.locator("path")).to_have_count(0)
+    expect(page.get_by_test_id("chart-series-line")).to_have_count(0)
+    # The legend draws it as a dot, not a line.
+    expect(page.get_by_test_id("chart-legend-dot")).to_have_count(1)
+    expect(page.get_by_test_id("chart-legend-line")).to_have_count(0)
+
+
+def test_a_layer_title_is_the_builders_alone(page, api, sites) -> None:
+    """p.280's layer Title: "not visible to module users, but is intended to
+    help builders organize" (§757). Typed in the panel, saved, and drawn
+    nowhere on the chart."""
+    mod = build(api, sites, "Chart XY layer title", {"series": SUM_SERIES})
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row", has_text="Chart").first.click()
+    page.get_by_test_id("chart-series-title").fill("Capacity layer")
+    page.get_by_test_id("chart-series-kind").select_option("scatter")
+    save(page)
+    stored = mod.definition()["layout"]["chart"]["props"]["series"][0]
+    assert (stored["title"], stored["kind"]) == ("Capacity layer", "scatter")
+    open_module(page, mod)
+    expect(page.get_by_test_id("chart-legend-dot")).to_have_count(1)
+    expect(page.locator(".canvas-block svg").get_by_text("Capacity layer")).to_have_count(0)
+
+
 def test_a_bar_layer_under_a_line_chart(page, api, sites) -> None:
     mod = build(api, sites, "Chart XY layer bar", {
         "kind": "line", "series": [{**SUM_SERIES[0], "kind": "bar"}]})
@@ -1217,7 +1253,7 @@ def test_the_panel_sets_a_series_type(page, api, sites) -> None:
     page.locator(".canvas-tree-row", has_text="Chart").first.click()
     kind = page.get_by_test_id("chart-series-kind")
     expect(kind).to_have_value("")
-    expect(kind.locator("option")).to_have_text(["As the chart", "Bar", "Line"])
+    expect(kind.locator("option")).to_have_text(["As the chart", "Bar", "Line", "Scatter"])
     kind.select_option("line")
     # The picker says what the series is now, not what it was.
     expect(kind).to_have_value("line")
