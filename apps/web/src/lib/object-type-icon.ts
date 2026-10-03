@@ -5,20 +5,20 @@
  * > object type; this icon and color will be displayed in user applications
  * > when a user views an object of this type."
  *
- * **The divergence is the one this platform already takes**: there is no icon
- * library here, so an icon is one or two characters an author types — an
- * emoji or an initial — exactly as a Page, a Button and §445's header logo
- * take one. The *behaviour* p.15 describes is faithful; the picker is not
- * built.
+ * **An icon is a name from `lib/icons.ts` or one or two typed characters**
+ * (§705). Until §705 it could only be the second - there was no icon set, so
+ * an icon was an emoji or an initial, as a Page, a Button and §445's header
+ * logo take one - and p.15's "Select the default icon" is the picker over the
+ * first.
  *
  * **And a stored icon may be neither.** `object_types.icon` defaults to
  * `"cube"` and its column is 64 characters wide, because it was written to
- * hold a name from Foundry's set. Every type created before this has one, and
- * rendering `"cube"` as `"cu"` would put two letters of a word nobody chose on
- * every card. So a value that is not one or two characters is read as **a name
- * from a set we do not have**, and the type's own initial is drawn instead —
- * which is `glyphFor`'s rule in `widgets.tsx` for a Button with no icon,
- * reached from the other side.
+ * hold a name from Foundry's set. `cube` is one of ours now; a name from
+ * Foundry's set that is not is still read as a name rather than as text, and
+ * the type's own initial is drawn instead - rendering it as its first two
+ * letters would put part of a word nobody chose on every card. That is
+ * `glyphFor`'s rule in `widgets.tsx` for a Button with no icon, reached from
+ * the other side.
  *
  * **Deliberately not the same function as that one.** A canvas widget's icon
  * prop is *authored* as a glyph, so a long one there is a paste to be trimmed;
@@ -26,6 +26,8 @@
  * input. Two rules, two reasons, said here so the next reader does not merge
  * them.
  */
+
+import { type IconName, iconNamed } from "./icons";
 
 /** How long an icon may be before it is read as a name rather than a glyph. */
 export const MAX_GLYPH = 2;
@@ -38,15 +40,21 @@ export interface Marked {
   colour?: string | null;
 }
 
-/** Whether a stored icon is a name from an icon set this platform does not
- *  have, rather than a glyph somebody typed. */
+/** Whether a stored icon is a name rather than a glyph somebody typed -
+ * one of ours or one from Foundry's set. */
 export function isIconSetName(icon: string | null | undefined): boolean {
   const trimmed = (icon ?? "").trim();
   return trimmed.length > MAX_GLYPH;
 }
 
+/** The named icon to draw for this type (§705), or null when its icon is a
+ * glyph, a blank, or a name this platform's set does not have. */
+export function iconName(type: Marked): IconName | null {
+  return iconNamed(type.icon) ? ((type.icon ?? "").trim() as IconName) : null;
+}
+
 /**
- * What to draw for this type.
+ * What to draw for this type as text, when `iconName` has no icon for it.
  *
  * **Never nothing.** A blank mark beside a name is a rendering fault to look
  * at; the type's own initial is at least true. `"?"` is the last resort, for
@@ -82,11 +90,11 @@ export function swatch(type: Marked): string {
  */
 export function iconProblem(icon: string): string | null {
   const trimmed = icon.trim();
-  if (!trimmed) return null;
+  if (!trimmed || iconNamed(trimmed)) return null;
   if (isIconSetName(trimmed)) {
     return (
-      `One or two characters — an emoji or an initial. There is no icon `
-      + `library here, so a longer name is drawn as the type's first letter.`
+      `“${trimmed}” is not one of the icons here, so the type's first letter `
+      + `is drawn. Choose an icon, or type one or two characters.`
     );
   }
   return null;
@@ -98,11 +106,11 @@ export function iconProblem(icon: string): string | null {
  * the type was made before this platform had a control, the value is what was
  * stored, and the reader needs to know why the mark is a letter. */
 export function storedNameNote(icon: string | null | undefined): string | null {
-  if (!isIconSetName(icon)) return null;
+  if (!isIconSetName(icon) || iconNamed(icon)) return null;
   return (
-    `“${(icon ?? "").trim()}” is an icon name from Foundry's set, which this `
-    + `platform does not have — the type's first letter is drawn instead. `
-    + `Type one or two characters to choose a mark.`
+    `“${(icon ?? "").trim()}” is an icon name from Foundry's set that this `
+    + `platform does not draw — the type's first letter is drawn instead. `
+    + `Choose an icon, or type one or two characters.`
   );
 }
 
@@ -128,4 +136,4 @@ export function iconHint(icon: string, stored: string | null | undefined): strin
 /** What the field says when there is nothing to explain: the rule, and what
  *  an empty field does — which is a choice rather than an omission. */
 export const DEFAULT_HINT =
-  "One or two characters — an emoji or an initial. Blank draws the type's first letter.";
+  "An icon, or one or two characters — an emoji or an initial. Blank draws the type's first letter.";

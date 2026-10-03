@@ -2073,7 +2073,9 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    field holds a name like `cube` and this platform has no icon set to draw one
    from. Round, so it reads as a marker rather than as a missing image. */
 .canvas-set-title-icon {
-  width: 12px; height: 12px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 5px; flex: none;
+  color: #fff; font-size: 11px; line-height: 1;
 }
 
 /* ---- Media preview (p.363-364) -------------------------------------------- */
@@ -3870,6 +3872,19 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .ot-look { align-items: center; gap: 8px; }
 .ot-look input[type="text"] { width: 4.5rem; text-align: center; }
 .ot-look input[type="color"] { width: 2.5rem; height: 1.9rem; padding: 2px; }
+/* §705's icon picker: the set as a grid of squares, the chosen one marked. */
+.icon-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(30px, 1fr));
+  gap: 4px; margin-top: 8px; max-width: 420px;
+}
+.icon-grid-cell {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 30px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); color: var(--ink); cursor: pointer;
+}
+.icon-grid-cell:hover { border-color: var(--accent); }
+.icon-grid-cell.on { border-color: var(--accent); background: var(--accent); color: #fff; }
+.named-icon { flex: none; vertical-align: middle; }
 /* Smaller in the Explorer's chip list than in the editor's preview: these sit
    inline with 12.5px text, and a 22px square beside it would be the loudest
    thing in a list of thirty. */

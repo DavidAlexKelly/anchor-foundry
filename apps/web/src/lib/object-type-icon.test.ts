@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_HINT, MAX_GLYPH, glyph, iconHint, iconProblem, isIconSetName,
+  DEFAULT_HINT, MAX_GLYPH, glyph, iconHint, iconName, iconProblem, isIconSetName,
   storedNameNote, swatch,
 } from "./object-type-icon";
 
@@ -40,9 +40,9 @@ describe("glyph", () => {
   });
 
   it("falls back to the type's initial for a stored Foundry name", () => {
-    // "cube" drawn as "cu" would put two letters of a word nobody chose on
-    // every card in the Explorer.
-    expect(glyph({ display_name: "Ship", icon: "cube" })).toBe("S");
+    // "shopping-cart" drawn as "sh" would put two letters of a word nobody
+    // chose on every card in the Explorer.
+    expect(glyph({ display_name: "Ship", icon: "shopping-cart" })).toBe("S");
   });
 
   it("falls back to the initial when no icon was chosen", () => {
@@ -69,6 +69,22 @@ describe("glyph", () => {
 
   it("upper-cases the initial it falls back to", () => {
     expect(glyph({ display_name: "ship", icon: "cube" })).toBe("S");
+  });
+});
+
+describe("iconName", () => {
+  it("names an icon from this platform's set (§705)", () => {
+    // The column's default, and every type created before §705, now draw
+    // the cube it always named.
+    expect(iconName({ display_name: "Ship", icon: "cube" })).toBe("cube");
+    expect(iconName({ display_name: "Ship", icon: " airplane " })).toBe("airplane");
+  });
+
+  it("is nothing for a glyph, a blank or a name the set does not have", () => {
+    expect(iconName({ display_name: "Ship", icon: "🚢" })).toBeNull();
+    expect(iconName({ display_name: "Ship", icon: "" })).toBeNull();
+    expect(iconName({ display_name: "Ship", icon: null })).toBeNull();
+    expect(iconName({ display_name: "Ship", icon: "shopping-cart" })).toBeNull();
   });
 });
 
@@ -101,7 +117,12 @@ describe("iconProblem", () => {
   it("refuses the paragraph somebody pasted", () => {
     // Stored, read back as a name, and silently drawn as an initial — the
     // field would look broken rather than full.
-    expect(iconProblem("a long description")).toContain("One or two characters");
+    expect(iconProblem("a long description")).toContain("is not one of the icons here");
+  });
+
+  it("says nothing about an icon from the set", () => {
+    expect(iconProblem("cube")).toBeNull();
+    expect(iconProblem("map-marker")).toBeNull();
   });
 });
 
@@ -109,9 +130,13 @@ describe("storedNameNote", () => {
   it("explains a value that came from Foundry's icon set", () => {
     // Not a problem: the type predates the control, and the reader needs to
     // know why the mark is a letter.
-    const said = storedNameNote("cube");
-    expect(said).toContain("cube");
+    const said = storedNameNote("shopping-cart");
+    expect(said).toContain("shopping-cart");
     expect(said).toContain("first letter");
+  });
+
+  it("says nothing about a name the set draws", () => {
+    expect(storedNameNote("cube")).toBeNull();
   });
 
   it("says nothing about a glyph or an empty field", () => {
@@ -126,7 +151,7 @@ describe("iconHint", () => {
     // **The defect the browser suite found.** The editor had the two in a
     // fallback chain, and `iconProblem` matched first on "cube" — so every
     // type in the corpus was told it had typed something wrong.
-    expect(iconHint("cube", "cube")).toContain("icon name from Foundry");
+    expect(iconHint("shopping-cart", "shopping-cart")).toContain("icon name from Foundry");
   });
 
   it("refuses a long value somebody has just put there", () => {
@@ -135,10 +160,12 @@ describe("iconHint", () => {
     // that always returned the plain rule — the refusal and the default read
     // alike until the second clause.
     expect(iconHint("a long description", "cube")).not.toBe(DEFAULT_HINT);
-    expect(iconHint("a long description", "cube")).toContain("no icon library");
+    expect(iconHint("a long description", "cube")).toContain("not one of the icons here");
   });
 
   it("gives the plain rule for an ordinary value", () => {
+    expect(iconHint("cube", "cube")).toBe(DEFAULT_HINT);
+    expect(iconHint("airplane", "cube")).toBe(DEFAULT_HINT);
     expect(iconHint("🚢", "cube")).toBe(DEFAULT_HINT);
     expect(iconHint("", "cube")).toBe(DEFAULT_HINT);
     expect(iconHint("🚢", "🚢")).toBe(DEFAULT_HINT);

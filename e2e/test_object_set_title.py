@@ -220,9 +220,9 @@ def test_the_builder_says_why_a_hidden_widget_is_missing(page, api) -> None:
 
 
 def test_the_icon_is_drawn_only_when_asked_for(page, api) -> None:
-    """p.274's Show icon. **A divergence, stated**: the `icon` field holds a
-    name like `cube` and this platform has no icon set, so what is drawn is a
-    mark in the object type's colour carrying the name as its label."""
+    """p.274's Show icon: the type's mark, in its colour, with its named icon
+    (§705) - the fixture's type holds the column's default, `cube` - and the
+    name as its label."""
     off = build(api, "Set title no icon")
     open_module(page, off)
     settled(page)
@@ -233,6 +233,8 @@ def test_the_icon_is_drawn_only_when_asked_for(page, api) -> None:
     open_module(page, on)
     settled(page)
     expect(page.get_by_test_id("set-title-icon")).to_be_visible()
+    expect(page.get_by_test_id("set-title-icon").locator("svg")).to_have_attribute(
+        "data-icon", "cube")
 
 
 def test_the_override_field_appears_only_when_it_applies(page, api) -> None:

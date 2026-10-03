@@ -36,7 +36,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
 import { ApiError, actions as actionApi, objects as objApi } from "@/lib/api";
-import { glyph, swatch } from "@/lib/object-type-icon";
+import { swatch } from "@/lib/object-type-icon";
+import { TypeGlyph } from "@/components/icon";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import { OBJECT_MEDIA_TYPE, objectPayload } from "@/components/canvas/drag-payload";
@@ -584,7 +585,7 @@ export function ObjectExplorer({
                     style={{ background: swatch(t) }}
                     aria-hidden="true"
                   >
-                    {glyph(t)}
+                    <TypeGlyph type={t} />
                   </span>
                   <span>{t.display_name}</span>
                 </label>
