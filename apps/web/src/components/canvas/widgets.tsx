@@ -23,6 +23,7 @@ import { StyleFields } from "./StyleFields";
 import { refTo } from "./saved-colours";
 import { useSavedColours } from "./use-saved-colours";
 import { isSelectable } from "@/lib/render-hints";
+import { regexProblem } from "./regex-query";
 import {
   resolveBackground, schemeFor, styleFor, textColourChoice,
   type BorderName, type PaddingName, type StyleProps,
@@ -1141,24 +1142,30 @@ export function CanvasFilterList({
  * that parsed stays applied - rather than being sent, refused, and shown as
  * an error by every widget reading the set.
  */
-function AdvancedKeyword({ label, applied, onApply }: {
+function AdvancedKeyword({ label, applied, onApply, problemOf = keywordQueryProblem,
+  testId = "filter-keyword-advanced", placeholder = 'north OR (south AND NOT "south east")' }: {
   label: string;
   applied: string;
   onApply: (text: string) => void;
+  /** §728's regular expression box is this one with `regexProblem`: both
+   * apply what they hold only once it parses. */
+  problemOf?: (text: string) => string | null;
+  testId?: string;
+  placeholder?: string;
 }) {
   const [draft, setDraft] = useState(applied);
-  const problem = draft.trim() ? keywordQueryProblem(draft) : null;
+  const problem = draft.trim() ? problemOf(draft) : null;
   return (
     <>
       <input
         type="search"
         aria-label={label}
-        data-testid="filter-keyword-advanced"
-        placeholder='north OR (south AND NOT "south east")'
+        data-testid={testId}
+        placeholder={placeholder}
         value={draft}
         onChange={(e) => {
           setDraft(e.target.value);
-          if (!e.target.value.trim() || keywordQueryProblem(e.target.value) === null) {
+          if (!e.target.value.trim() || problemOf(e.target.value) === null) {
             onApply(e.target.value);
           }
         }}
@@ -1452,7 +1459,7 @@ function FilterListFilter({
         </>
       )}
 
-      {component === "keyword" && spec.syntax !== "advanced" && (
+      {component === "keyword" && !spec.syntax && (
         <input
           type="search"
           aria-label={label}
@@ -1469,6 +1476,20 @@ function FilterListFilter({
           applied={keywordOf(clauses, property)}
           onApply={(text) => onWrite(
             withKeyword(clauses, property, text, true), text, !!text.trim())}
+        />
+      )}
+      {/* `ontology` p.130: "You can search in the Ontology from Workshop
+          using the filter list" - a regular expression (§728), the whole
+          value, applied once it parses. */}
+      {component === "keyword" && spec.syntax === "regex" && (
+        <AdvancedKeyword
+          label={label}
+          applied={keywordOf(clauses, property)}
+          problemOf={regexProblem}
+          testId="filter-keyword-regex"
+          placeholder=".*pump.*"
+          onApply={(text) => onWrite(
+            withKeyword(clauses, property, text, "regex"), text, !!text.trim())}
         />
       )}
 
@@ -1809,11 +1830,19 @@ function FilterListSettings() {
                   onChange={(e) => writeFilters(specs.map((f) => {
                     if (f.id !== spec.id) return f;
                     const { syntax: _old, ...rest } = f;
-                    return e.target.value === "advanced" ? { ...rest, syntax: "advanced" } : rest;
+                    return e.target.value === "advanced" || e.target.value === "regex"
+                      ? { ...rest, syntax: e.target.value } : rest;
                   }))}
                 >
                   <option value="simple">Starts with</option>
                   <option value="advanced">Advanced syntax</option>
+                  {/* p.130: "the property must be indexed for regex search" -
+                      its Enable regex queries render hint (§728). Offered only
+                      then, or kept when already chosen. */}
+                  {(spec.syntax === "regex" || typeProperties.find(
+                    (p) => p.api_name === spec.property)?.render_hints?.includes("regex")) && (
+                    <option value="regex">Regular expression</option>
+                  )}
                 </select>
               )}
               <button

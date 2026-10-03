@@ -364,6 +364,16 @@ def _match(source: dict, clause: dict, index: str = "") -> bool:
         if insensitive:
             return any(c.lower().startswith(needle.lower()) for c in candidates)
         return any(c.startswith(needle) for c in candidates)
+    if "regexp" in clause:
+        # §728: Lucene's regexp, anchored at both ends, on the whole value.
+        # The gateway writes only the part of Lucene's syntax p.130-131 names,
+        # with every other reserved character escaped - which Python's `re`
+        # reads the same way, so the fixture can use it directly.
+        field, spec = next(iter(clause["regexp"].items()))
+        found = _resolve(source, field)
+        if found is MISSING or found is None:
+            return False
+        return re.fullmatch(str(spec["value"]), str(found)) is not None
     if "terms" in clause:
         field, values = next(iter(clause["terms"].items()))
         found = _resolve(source, field)

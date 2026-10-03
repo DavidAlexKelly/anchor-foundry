@@ -54,8 +54,9 @@ export interface FilterSpec {
   property: string;
   component: FilterComponent;
   /** p.452's search type for a keyword filter (§543): absent is the plain
-   * prefix search, "advanced" the syntax with AND, OR, NOT and brackets. */
-  syntax?: "advanced";
+   * prefix search, "advanced" the syntax with AND, OR, NOT and brackets, and
+   * "regex" `ontology` p.130's regular expression (§728). */
+  syntax?: "advanced" | "regex";
   /** p.451's filter on a link (§545): the link type followed, and the type
    * it reaches from the set's own, whose `property` this filter reads. An
    * empty `property` is p.451's Has link. */
@@ -98,7 +99,8 @@ export function filtersOf(filters: unknown, legacy: unknown): FilterSpec[] {
           || (!!(f as FilterSpec).link && !!(f as FilterSpec).linkTo)))
       .map((f) => ({
         id: f.id as string, property: f.property as string, component: componentOf(f.component),
-        ...(f.syntax === "advanced" ? { syntax: "advanced" as const } : {}),
+        ...(f.syntax === "advanced" || f.syntax === "regex"
+          ? { syntax: f.syntax as "advanced" | "regex" } : {}),
         ...(typeof f.link === "string" && f.link && typeof f.linkTo === "string" && f.linkTo
           ? { link: f.link, linkTo: f.linkTo } : {}),
       }));
@@ -153,7 +155,7 @@ export function toggleValue(
 
 /** A keyword filter's clause: the plain search's prefix, or p.452's
  * advanced query (§543), which is the same prefix terms combined. */
-const KEYWORD_OPS = ["starts_with", "keyword_query"];
+const KEYWORD_OPS = ["starts_with", "keyword_query", "matches_regex"];
 
 export function keywordOf(clauses: readonly Clause[], property: string): string {
   const c = clauses.find((x) => x.property === property && KEYWORD_OPS.includes(x.op));
@@ -163,13 +165,16 @@ export function keywordOf(clauses: readonly Clause[], property: string): string 
 /** p.446's keyword search, as a prefix: `starts_with` is the text operator
  * both stores answer from an index (`object_sets.py`). Blank removes it.
  * **Advanced**, it is p.452's query instead, and replaces a plain one on the
- * same property rather than ANDing with it: one box, one search. */
+ * same property rather than ANDing with it: one box, one search. **A regular
+ * expression** (§728; `ontology` p.130) is `matches_regex`, likewise. */
 export function withKeyword(
-  clauses: readonly Clause[], property: string, text: string, advanced = false,
+  clauses: readonly Clause[], property: string, text: string,
+  syntax: boolean | "advanced" | "regex" = false,
 ): Clause[] {
   const rest = clauses.filter((c) => !(c.property === property && KEYWORD_OPS.includes(c.op)));
   if (!text.trim()) return rest;
-  return [...rest, { property, op: advanced ? "keyword_query" : "starts_with", value: text }];
+  const op = syntax === "regex" ? "matches_regex" : syntax ? "keyword_query" : "starts_with";
+  return [...rest, { property, op, value: text }];
 }
 
 /** `day` moved by whole days, or null when it is not a `YYYY-MM-DD` - which

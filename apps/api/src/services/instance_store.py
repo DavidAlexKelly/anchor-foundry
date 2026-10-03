@@ -943,6 +943,13 @@ class OpenSearchInstanceStore:
                 must.append({"terms": {field: [_text_value(v) for v in f.value]}})
             elif f.op == "starts_with":
                 must.append(_prefix_clause(field, f.value))
+            elif f.op in object_sets.REGEX_OPERATORS:
+                # p.130-131 (§728) as Lucene reads it, which anchors already,
+                # on the `.keyword` subfield `starts_with` uses: the whole
+                # value, as one unanalysed string - p.130's "the index stores
+                # the complete string as a single unanalyzed value".
+                keyword = field if field == "primary_key" else f"{field}.keyword"
+                must.append({"regexp": {keyword: {"value": f.value.lucene}}})
             elif f.op in object_sets.QUERY_OPERATORS:
                 # p.452's advanced syntax (§543): the tree `object_sets` parsed,
                 # as a bool query of the same prefix clauses. A value must be

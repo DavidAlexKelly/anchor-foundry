@@ -828,6 +828,12 @@ def _set_predicate(
             ) + ")")
         elif f.op in object_sets.GEO_OPERATORS:
             where.append(_within_shape_sql(prop, val, f.value, params))
+        elif f.op in object_sets.REGEX_OPERATORS:
+            # p.130-131 (§728), as Postgres's `~` reads it: anchored both
+            # ends, since "Patterns match the full value". No value is NULL,
+            # which keeps the row out.
+            where.append(f"{extract} ~ :{val}")
+            params[val] = f.value.postgres
         elif f.op in object_sets.QUERY_OPERATORS:
             # p.452's advanced syntax (§543): the parsed tree as SQL, each term
             # the anchored ILIKE `starts_with` is. A value must be there to
