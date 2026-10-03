@@ -342,6 +342,7 @@ class Module:
         reducers: dict[str, list[dict]] | None = None,
         slug: str | None = None,
         icon: str | None = None,
+        colour: str | None = None,
     ) -> str:
         """Upload, declare, map and sync - the whole way an object type gets
         instances.
@@ -427,8 +428,9 @@ class Module:
                     for c in columns
                 ],
                 **({"title_property": title} if title else {}),
-                # p.15's icon. Absent means the route's default, `cube`.
+                # p.15's icon and colour. Absent means the route's defaults.
                 **({"icon": icon} if icon else {}),
+                **({"colour": colour} if colour else {}),
             },
         )
         self.object_type_id = declared["id"]

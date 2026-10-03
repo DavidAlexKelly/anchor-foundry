@@ -11214,6 +11214,7 @@ export function CanvasTimeline({
           properties: [] as { api_name: string; visibility?: string; id?: string }[],
           titleProperty: null as string | null,
           typeIcon: null as string | null,
+          typeColour: null as string | null,
         };
       }
       const typeId = (ask.definition as { object_type_id?: string }).object_type_id;
@@ -11235,9 +11236,10 @@ export function CanvasTimeline({
         // labelled with its key, which is a title only a database has.
         titleProperty:
           declared.find((p) => p.id === type?.title_property_id)?.api_name ?? null,
-        // p.349's Default icon is "set in the ontology for the object"
-        // (§707): the type's own.
+        // p.348-349's Default colour and icon are "set in the ontology for
+        // the object" (§707, §713): the type's own.
         typeIcon: type?.icon ?? null,
+        typeColour: type?.colour ?? null,
       };
     })),
     enabled: drawn.length > 0 && asked.some((a) => !!a.definition && !!a.sort),
@@ -11320,7 +11322,10 @@ export function CanvasTimeline({
                   >
                     <span
                       className="canvas-timeline-swatch"
-                      style={{ background: layerColour(layer, index, null) ?? undefined }}
+                      style={{
+                        background: layerColour(layer, index, page.data?.[index]?.typeColour)
+                          ?? undefined,
+                      }}
                     />
                     {timelineLabelFor(layer, index)}
                   </button>
@@ -11338,7 +11343,7 @@ export function CanvasTimeline({
             <ol className="canvas-timeline-track">
               {events.map((event, index) => {
                 const layer = drawn[event.layer] as TimelineLayer;
-                const colour = layerColour(layer, event.layer, null);
+                const colour = layerColour(layer, event.layer, page.data?.[event.layer]?.typeColour);
                 const icon = layerIcon(layer, page.data?.[event.layer]?.typeIcon);
                 const previous = events[index - 1];
                 return (
