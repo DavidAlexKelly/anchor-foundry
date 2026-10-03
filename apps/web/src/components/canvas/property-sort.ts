@@ -76,6 +76,8 @@ export interface Property {
   api_name: string;
   display_name?: string | null;
   data_type?: string | null;
+  /** p.248-252's render hints (§724), absent meaning the default. */
+  render_hints?: readonly string[] | null;
 }
 
 /** Whether a page may be ordered by this property.

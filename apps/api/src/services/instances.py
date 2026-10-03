@@ -345,9 +345,14 @@ async def search(
     object_type_ids: list[UUID] | None,
     limit: int,
     offset: int,
+    scopes: dict[str, list[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Workspace-wide instance search, Postgres edition (roadmap Objects
     item 2).
+
+    `scopes` is `ontology.search_scopes` (§726): a type named there is
+    searched in the properties it lists and its key, and every other type in
+    all its values as before.
 
     **This is substring matching over the properties JSON, not search.** No
     tokenisation, no relevance, no prefix handling beyond what LIKE gives -
@@ -365,7 +370,22 @@ async def search(
     if object_type_ids:
         where.append("i.object_type_id = ANY(CAST(:types AS uuid[]))")
         params["types"] = [str(t) for t in object_type_ids]
-    if query:
+    if query and scopes:
+        # p.251's Searchable (§726). The scoped types' values are read one by
+        # one so a property may be left out; the rest keep the one ILIKE over
+        # the whole document they always had.
+        where.append(
+            "(i.primary_key ILIKE :q OR CASE"
+            " WHEN (CAST(:scopes AS jsonb) -> i.object_type_id::text) IS NOT NULL"
+            " THEN EXISTS (SELECT 1 FROM jsonb_each_text(i.properties) kv"
+            "  WHERE kv.key IN (SELECT jsonb_array_elements_text("
+            "   CAST(:scopes AS jsonb) -> i.object_type_id::text))"
+            "  AND kv.value ILIKE :q)"
+            " ELSE i.properties::text ILIKE :q END)"
+        )
+        params["q"] = f"%{query}%"
+        params["scopes"] = json.dumps(scopes)
+    elif query:
         where.append("(i.properties::text ILIKE :q OR i.primary_key ILIKE :q)")
         params["q"] = f"%{query}%"
     predicate = " AND ".join(where)

@@ -152,9 +152,14 @@ export function labelOf(raw: unknown): string | null {
  * **String properties**, which p.458 says twice and is worth keeping: a search
  * box that silently matched nothing against a number column would look broken
  * rather than restricted.
+ *
+ * **And Searchable ones** (§726; `object-link-types` p.251): "Disable to
+ * improve reindex performance if the property will not be searched or sorted
+ * on in applications". No hints named is the default, which is searchable.
  */
 export function isSearchable(property: Property): boolean {
-  return (property.data_type ?? "string") === "string";
+  return (property.data_type ?? "string") === "string"
+    && (property.render_hints ?? ["searchable"]).includes("searchable");
 }
 
 export interface SearchScope {

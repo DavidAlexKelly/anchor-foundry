@@ -2141,6 +2141,10 @@ async def explore_instances(
                 object_type_ids=type_id,
                 limit=limit,
                 offset=offset,
+                # p.251's Searchable (§726), read from Postgres whichever store
+                # holds the instances: the ontology definition never moved.
+                scopes=(await ontology_service.search_scopes(conn, access.workspace_id))
+                if q else None,
             )
         # Type names come from Postgres whichever store held the instances -
         # the ontology definition never moved.
