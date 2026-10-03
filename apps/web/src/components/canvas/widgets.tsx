@@ -22288,6 +22288,9 @@ export function CanvasSection({
   // the hook order does not depend on a prop somebody can toggle.
   const { collapsed: overrides, setCollapsed } = useCanvasPage();
   const saved = useSavedColours();
+  // Whether this section is on a closed page or in a closed tab, so a tab of
+  // its own stays closed inside one (§711).
+  const offLayout = React.useContext(OffLayout);
   const backing = useCanvasVariable(collapsedWhen);
   const shut = collapsible
     && collapseState(
@@ -22636,9 +22639,11 @@ export function CanvasSection({
                   // switcher in the chrome, and would hide from the author
                   // that they exist. In the running app exactly one shows.
                   //
-                  // `hidden` rather than unmounted, like a collapsed section:
-                  // a table in a tab nobody is looking at should not refetch
-                  // every time somebody comes back to it.
+                  // The panel stays, `hidden`; what is *in* it is closed as a
+                  // closed page's is (§711, below), so a widget remounts when
+                  // its tab comes back - p.182's Default - unless it is set
+                  // to Never unmount, which is the setting for a table that
+                  // should not refetch.
                   hidden: mode === "run" && labels[index] !== showing,
                 }
                 : {})}
@@ -22655,7 +22660,18 @@ export function CanvasSection({
                   : { flexGrow: 0, flexShrink: 0, minWidth: 0 }
               }
             >
-              {child}
+              {tabbed ? (
+                // p.182's Default unmount (§711): a widget "unmounts when its
+                // containing layout is no longer rendered; for example, when
+                // the user switches to another tab or page". A tab not showing
+                // is closed as a closed page is, so its widgets are not
+                // mounted unless one is set to Eagerly mount or Never unmount
+                // - and inside a closed page it stays closed. Run mode only,
+                // which `CanvasNode` already asks: the builder draws every tab.
+                <OffLayout.Provider value={offLayout || labels[index] !== showing}>
+                  {child}
+                </OffLayout.Provider>
+              ) : child}
             </div>
             {/* A handle sits *between* parts, so there is one fewer than there
                 are children — and none at all in a viewer, where the layout is
