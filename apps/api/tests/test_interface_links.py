@@ -303,3 +303,54 @@ def test_a_constraint_listed_with_nothing_is_not_kept_at_all(client, fx, world) 
          "link_mapping": {"members": [world["staff"]["id"]], "desk": []}}])
     assert r.status_code == 200, r.text
     assert r.json()[0]["link_mapping"] == {"members": [world["staff"]["id"]]}
+
+
+def test_the_panel_is_offered_exactly_the_link_types_the_save_takes(client, fx, world) -> None:
+    """§760: `link-candidates` asks the save's own rule, per constraint."""
+    stranger = make_type(client, fx, [])
+    wrong = make_link(client, fx, world["office"]["id"], stranger["id"])
+    to_desk = make_link(client, fx, world["office"]["id"], world["desk"]["id"])
+    r = client.get(f"{wbase(fx)}/interfaces/{world['team_i']['id']}/link-candidates",
+                   headers=hdr(fx.viewer_sub), params={"object_type_id": world["office"]["id"]})
+    assert r.status_code == 200, r.text
+    got = {name: [c["id"] for c in cands] for name, cands in r.json().items()}
+    assert got == {"members": [world["staff"]["id"]], "desk": [to_desk["id"]]}
+    member = r.json()["members"][0]
+    assert member["other_type"] == world["person"]["display_name"]
+    assert wrong["id"] not in got["members"]
+    # Each one offered is one the save keeps.
+    r = implement(client, fx, world["office"]["id"], [
+        {"interface_id": world["team_i"]["id"],
+         "link_mapping": {"members": got["members"], "desk": got["desk"]}}])
+    assert r.status_code == 200, r.text
+
+
+def test_a_link_back_to_the_interface_being_implemented_is_offered(client, fx) -> None:
+    """The panel asks before the type implements the interface: the
+    candidates read it as implementing it, as the save will."""
+    tag = uuid.uuid4().hex[:6]
+    node = client.post(f"{wbase(fx)}/interfaces", headers=hdr(fx.editor_sub), json={
+        "api_name": f"Chain{tag}", "display_name": f"Chain {tag}"}).json()
+    client.put(f"{wbase(fx)}/interfaces/{node['id']}", headers=hdr(fx.editor_sub), json={
+        "display_name": node["display_name"],
+        "link_constraints": [{"api_name": "next", "target_interface_id": node["id"]}]})
+    step = make_type(client, fx, [{"api_name": "ref", "display_name": "Ref",
+                                   "data_type": "string"}])
+    loop = make_link(client, fx, step["id"], step["id"])
+    r = client.get(f"{wbase(fx)}/interfaces/{node['id']}/link-candidates",
+                   headers=hdr(fx.viewer_sub), params={"object_type_id": step["id"]})
+    assert [c["id"] for c in r.json()["next"]] == [loop["id"]]
+
+
+def test_a_candidate_names_the_type_at_its_other_end_from_either_end(client, fx, world) -> None:
+    # A link whose *from* end is the desk, so the office is its "to" end.
+    r = client.post(f"{wbase(fx)}/link-types", headers=hdr(fx.editor_sub), json={
+        "api_name": f"faces_{uuid.uuid4().hex[:6]}", "display_name": "Faces",
+        "from_type_id": world["desk"]["id"], "to_type_id": world["office"]["id"],
+        "cardinality": "one_to_many", "from_property": "id", "to_property": "$primary_key"})
+    assert r.status_code == 201, r.text
+    back = r.json()
+    r = client.get(f"{wbase(fx)}/interfaces/{world['team_i']['id']}/link-candidates",
+                   headers=hdr(fx.viewer_sub), params={"object_type_id": world["office"]["id"]})
+    desk = {c["id"]: c["other_type"] for c in r.json()["desk"]}
+    assert desk[back["id"]] == world["desk"]["display_name"]

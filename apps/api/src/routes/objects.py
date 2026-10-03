@@ -3068,6 +3068,33 @@ async def get_interface(
     return InterfaceDetail(**row)
 
 
+class LinkCandidateOut(BaseModel):
+    """A link type that would keep a link constraint (§760)."""
+
+    id: UUID
+    api_name: str
+    display_name: str
+    #: The type at its other end, by name, for the picker's label.
+    other_type: str = ""
+
+
+@router.get("/interfaces/{interface_id}/link-candidates",
+            response_model=dict[str, list[LinkCandidateOut]])
+async def interface_link_candidates(
+    interface_id: UUID,
+    object_type_id: UUID = Query(...),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> dict[str, list[LinkCandidateOut]]:
+    """For each of the interface's link constraints, the link types that would
+    keep it on this object type (§760; decision 0024 §2): what the
+    implementation panel offers, decided by the rule the save applies, so it
+    never offers a choice the save refuses."""
+    async with user_connection(access.auth.user_id) as conn:
+        found = await interfaces_service.link_candidates(
+            conn, access.workspace_id, interface_id, object_type_id)
+    return {name: [LinkCandidateOut(**c) for c in cands] for name, cands in found.items()}
+
+
 @router.post(
     "/interfaces", response_model=InterfaceDetail,
     status_code=status.HTTP_201_CREATED,

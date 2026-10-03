@@ -1345,6 +1345,15 @@ export interface InterfaceInput {
     required?: boolean;
   }[];
   extends?: string[];
+  /** §759's link constraints. Omitted on an update means unchanged. */
+  link_constraints?: {
+    api_name: string;
+    display_name?: string | null;
+    description?: string;
+    target_interface_id: string | null;
+    target_object_type_id: string | null;
+    required?: boolean;
+  }[];
   status?: string;
   deprecation?: Record<string, unknown> | null;
 }
@@ -2147,11 +2156,23 @@ export const objects = {
   setImplementations: (
     wid: string,
     typeId: string,
-    body: { interface_id: string; property_mapping: Record<string, string> }[],
+    body: {
+      interface_id: string;
+      property_mapping: Record<string, string>;
+      /** §759: omitted means as stored. */
+      link_mapping?: Record<string, string[]>;
+    }[],
   ) =>
     request<import("./types").Implementation[]>(
       `/workspaces/${wid}/object-types/${typeId}/interfaces`,
       { method: "PUT", body: JSON.stringify(body) },
+    ),
+  /** For each of the interface's link constraints, the link types that would
+   * keep it on this object type, by the save's own rule (§760). */
+  linkCandidates: (wid: string, interfaceId: string, typeId: string) =>
+    request<Record<string, { id: string; api_name: string; display_name: string;
+                              other_type: string }[]>>(
+      `/workspaces/${wid}/interfaces/${interfaceId}/link-candidates?object_type_id=${encodeURIComponent(typeId)}`,
     ),
 
   /** Every object of every type that implements this interface (`ontology`

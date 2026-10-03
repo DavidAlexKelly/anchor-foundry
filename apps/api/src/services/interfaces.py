@@ -412,27 +412,43 @@ def check_link_implementation(
             continue
         if len(set(chosen)) != len(chosen):
             raise InterfaceError(f"the link {name!r} lists one link type twice")
-        kind, target = _target(constraint)
         for link_id in chosen:
             link = links.get(link_id)
             if link is None:
                 raise InterfaceError(
                     f"the link {name!r} names a link type this workspace does not have")
-            ends = (str(link["from"]), str(link["to"]))
-            if type_id not in ends:
-                raise InterfaceError(
-                    f"{link['api_name']} does not link this object type, so it cannot "
-                    f"keep {name!r}")
-            other = ends[1] if ends[0] == type_id else ends[0]
-            if kind == "object_type" and other != target:
-                raise InterfaceError(
-                    f"{link['api_name']} links to {names.get(other, other)}, and {name!r} "
-                    f"links to {names.get(target, target)}")
-            if kind == "interface" and target not in implements.get(other, set()):
-                raise InterfaceError(
-                    f"{link['api_name']} links to {names.get(other, other)}, which does not "
-                    f"implement {names.get(target, target)} - {name!r} links to that "
-                    "interface's objects")
+            refusal = refuses(constraint, link, type_id=type_id, implements=implements,
+                              names=names)
+            if refusal:
+                raise InterfaceError(refusal)
+
+
+def refuses(
+    constraint: dict[str, Any],
+    link: dict[str, Any],
+    *,
+    type_id: str,
+    implements: dict[str, set[str]],
+    names: dict[str, str],
+) -> str | None:
+    """Why this link type cannot keep this constraint for this object type,
+    or None when it can: one end is the type, and the other is the target or
+    implements it. One rule for the save and for what the panel offers
+    (`link_candidates`), so the two cannot disagree."""
+    name = str(constraint["api_name"])
+    kind, target = _target(constraint)
+    ends = (str(link["from"]), str(link["to"]))
+    if type_id not in ends:
+        return f"{link['api_name']} does not link this object type, so it cannot keep {name!r}"
+    other = ends[1] if ends[0] == type_id else ends[0]
+    if kind == "object_type" and other != target:
+        return (f"{link['api_name']} links to {names.get(other, other)}, and {name!r} "
+                f"links to {names.get(target, target)}")
+    if kind == "interface" and target not in implements.get(other, set()):
+        return (f"{link['api_name']} links to {names.get(other, other)}, which does not "
+                f"implement {names.get(target, target)} - {name!r} links to that "
+                "interface's objects")
+    return None
 
 
 def parse_properties(raw: Any) -> list[dict[str, Any]]:
@@ -724,6 +740,81 @@ async def implementations_by_type(
                 "link_mapping": _jsonb(row["link_mapping"]),
             }
         )
+    return out
+
+
+async def _link_world(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    graph: dict[str, list[str]],
+    object_type_id: UUID,
+    its_interfaces: list[str],
+) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]], dict[str, str]]:
+    """What a link constraint check reads (§759): the workspace's link types,
+    what every type implements with ancestors (this one's from
+    `its_interfaces`, the list being saved), and names for the sentences."""
+    link_rows = await fetch_all(
+        conn,
+        "SELECT id, api_name, display_name, from_object_type_id, to_object_type_id "
+        "FROM link_types WHERE workspace_id = :wid ORDER BY display_name, api_name",
+        {"wid": str(workspace_id)},
+    )
+    links = {str(r["id"]): {"api_name": r["api_name"], "display_name": r["display_name"],
+                            "from": str(r["from_object_type_id"]),
+                            "to": str(r["to_object_type_id"])} for r in link_rows}
+    others = await fetch_all(
+        conn,
+        """
+        SELECT oti.object_type_id, oti.interface_id FROM object_type_interfaces oti
+          JOIN interfaces i ON i.id = oti.interface_id
+         WHERE i.workspace_id = :wid AND oti.object_type_id <> :tid
+        """,
+        {"wid": str(workspace_id), "tid": str(object_type_id)},
+    )
+    implements: dict[str, set[str]] = {}
+    for row in others:
+        implements.setdefault(str(row["object_type_id"]), set()).update(
+            ancestors(str(row["interface_id"]), graph))
+    implements[str(object_type_id)] = set().union(
+        *(ancestors(iid, graph) for iid in its_interfaces))
+    named = await fetch_all(
+        conn,
+        "SELECT id, display_name FROM object_types WHERE workspace_id = :wid "
+        "UNION ALL SELECT id, display_name FROM interfaces WHERE workspace_id = :wid",
+        {"wid": str(workspace_id)},
+    )
+    names = {str(r["id"]): str(r["display_name"]) for r in named}
+    return links, implements, names
+
+
+async def link_candidates(
+    conn: AsyncConnection, workspace_id: UUID, interface_id: UUID, object_type_id: UUID,
+) -> dict[str, list[dict[str, Any]]]:
+    """For each of the interface's effective link constraints, the link types
+    that would keep it for this object type (§760): what the implementation
+    panel offers, by `refuses`, the rule the save applies. The type is taken
+    to implement what it already does and this interface."""
+    await get_interface(conn, workspace_id, interface_id)
+    _own, graph = await _graph(conn, workspace_id)
+    current = await fetch_all(
+        conn,
+        "SELECT interface_id FROM object_type_interfaces WHERE object_type_id = :tid",
+        {"tid": str(object_type_id)},
+    )
+    its = [str(r["interface_id"]) for r in current] + [str(interface_id)]
+    links, implements, names = await _link_world(conn, workspace_id, graph, object_type_id, its)
+    constraints = effective_link_constraints(
+        str(interface_id), own=await _link_graph(conn, workspace_id), extends=graph)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for constraint in constraints:
+        out[str(constraint["api_name"])] = [
+            {"id": link_id, "api_name": link["api_name"], "display_name": link["display_name"],
+             "other_type": names.get(
+                 link["to"] if link["from"] == str(object_type_id) else link["from"], "")}
+            for link_id, link in links.items()
+            if refuses(constraint, link, type_id=str(object_type_id), implements=implements,
+                       names=names) is None
+        ]
     return out
 
 
@@ -1085,36 +1176,9 @@ async def set_implementations(
     # is known: a link back to this type is kept by what it implements *now*.
     link_own = await _link_graph(conn, workspace_id)
     if any(link_map for _, _, link_map, _ in checked) or link_own:
-        link_rows = await fetch_all(
-            conn,
-            "SELECT id, api_name, from_object_type_id, to_object_type_id "
-            "FROM link_types WHERE workspace_id = :wid",
-            {"wid": str(workspace_id)},
-        )
-        links = {str(r["id"]): {"api_name": r["api_name"], "from": str(r["from_object_type_id"]),
-                                "to": str(r["to_object_type_id"])} for r in link_rows}
-        others = await fetch_all(
-            conn,
-            """
-            SELECT oti.object_type_id, oti.interface_id FROM object_type_interfaces oti
-              JOIN interfaces i ON i.id = oti.interface_id
-             WHERE i.workspace_id = :wid AND oti.object_type_id <> :tid
-            """,
-            {"wid": str(workspace_id), "tid": str(object_type_id)},
-        )
-        implements: dict[str, set[str]] = {}
-        for row in others:
-            implements.setdefault(str(row["object_type_id"]), set()).update(
-                ancestors(str(row["interface_id"]), graph))
-        implements[str(object_type_id)] = set().union(
-            *(ancestors(str(iid), graph) for iid, _, _, _ in checked))
-        named = await fetch_all(
-            conn,
-            "SELECT id, display_name FROM object_types WHERE workspace_id = :wid "
-            "UNION ALL SELECT id, display_name FROM interfaces WHERE workspace_id = :wid",
-            {"wid": str(workspace_id)},
-        )
-        names = {str(r["id"]): str(r["display_name"]) for r in named}
+        links, implements, names = await _link_world(
+            conn, workspace_id, graph, object_type_id,
+            [str(iid) for iid, _, _, _ in checked])
         for interface_id, _, link_map, name in checked:
             check_link_implementation(
                 interface_name=name,

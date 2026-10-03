@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  blankLink, draftLinkOf, linkBody, linksProblem, unkeptRequired,
   NOT_INTERFACE_TYPES, blankProperty, candidates, draftProblem, extendable,
   implementationLabel, interfacePropertyTypes, suggestMapping,
   toInterfaceApiName, toPropertyApiName, unmappedRequired,
@@ -241,5 +242,46 @@ describe("implementationLabel", () => {
   it("counts, and agrees with itself about the plural", () => {
     expect(implementationLabel(1)).toBe("1 object type");
     expect(implementationLabel(3)).toBe("3 object types");
+  });
+});
+
+describe("link constraints (§760; decision 0024)", () => {
+  const saved = {
+    api_name: "members", display_name: "Members", description: "",
+    target_interface_id: "i1", target_object_type_id: null, required: true,
+  };
+
+  it("edits a saved one and sends it back as it was", () => {
+    const draft = draftLinkOf(saved);
+    expect(draft.target).toBe("interface:i1");
+    expect(linkBody(draft)).toEqual({ ...saved, display_name: "Members" });
+    const toType = draftLinkOf({ ...saved, target_interface_id: null, target_object_type_id: "t1" });
+    expect(toType.target).toBe("object_type:t1");
+    expect(linkBody(toType)).toMatchObject({ target_interface_id: null, target_object_type_id: "t1" });
+    expect(draftLinkOf({ ...saved, target_interface_id: null }).target).toBe("");
+  });
+
+  it("sends a blank display name as none, for the server to name it", () => {
+    expect(linkBody({ ...blankLink(), api_name: "x", target: "interface:i" }).display_name).toBeNull();
+    expect(linkBody({ ...blankLink(), target: "interface:" })).toMatchObject(
+      { target_interface_id: null, target_object_type_id: null });
+    expect(blankLink().required).toBe(true);
+  });
+
+  it("names what is wrong with the drafted links", () => {
+    const ok = { ...blankLink(), api_name: "members", target: "interface:i1" };
+    expect(linksProblem([ok])).toBeNull();
+    expect(linksProblem([{ ...ok, api_name: "" }])).toBe("Every link needs a name.");
+    expect(linksProblem([{ ...ok, api_name: "Members" }])).toContain("lowercase");
+    expect(linksProblem([ok, ok])).toBe("Two links are both called members.");
+    expect(linksProblem([{ ...ok, target: "" }])).toBe("Choose what members links to.");
+    expect(linksProblem([{ ...ok, target: "interface:" }])).toBe("Choose what members links to.");
+  });
+
+  it("names the required links nothing keeps", () => {
+    const optional = { ...saved, api_name: "desk", required: false };
+    expect(unkeptRequired([saved, optional], {})).toEqual(["members"]);
+    expect(unkeptRequired([saved, optional], { members: [] })).toEqual(["members"]);
+    expect(unkeptRequired([saved, optional], { members: ["l1"] })).toEqual([]);
   });
 });

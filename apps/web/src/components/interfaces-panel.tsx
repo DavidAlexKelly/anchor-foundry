@@ -35,6 +35,7 @@ import {
   DraftProperty, blankProperty, candidates, draftProblem, extendable,
   implementationLabel, interfacePropertyTypes, suggestMapping,
   toInterfaceApiName, toPropertyApiName, unmappedRequired,
+  type DraftLink, blankLink, draftLinkOf, linkBody, linksProblem, unkeptRequired,
 } from "@/lib/interfaces";
 import {
   canPage, depthNote, readSummary,
@@ -85,6 +86,8 @@ function InterfaceDialog({
   const [deprecation, setDeprecation] = useState<Deprecation | null>(null);
   const [properties, setProperties] = useState<DraftProperty[]>([]);
   const [extendsIds, setExtendsIds] = useState<string[]>([]);
+  // §760's link constraints (decision 0024).
+  const [links, setLinks] = useState<DraftLink[]>([]);
   const queryClient = useQueryClient();
 
   const detail = useQuery({
@@ -128,6 +131,7 @@ function InterfaceDialog({
     setDeprecation(loaded.deprecation);
     setProperties(loaded.properties.map((p) => ({ ...p })));
     setExtendsIds(loaded.extends);
+    setLinks((loaded.link_constraints ?? []).map(draftLinkOf));
   }, [loaded]);
 
   const effectiveApiName = apiNameTouched ? apiName : toInterfaceApiName(displayName);
@@ -145,6 +149,7 @@ function InterfaceDialog({
           required: p.required,
         })),
         extends: extendsIds,
+        link_constraints: links.map(linkBody),
         status,
         deprecation: status === "deprecated" ? (deprecation as Record<string, unknown> | null) : null,
       };
@@ -166,7 +171,11 @@ function InterfaceDialog({
     display_name: displayName,
     api_name: effectiveApiName,
     properties,
-  });
+  }) ?? linksProblem(links);
+
+  function patchLink(i: number, next: Partial<DraftLink>) {
+    setLinks(links.map((l, j) => (j === i ? { ...l, ...next } : l)));
+  }
 
   function patch(i: number, next: Partial<DraftProperty>) {
     setProperties(properties.map((p, j) => (j === i ? { ...p, ...next } : p)));
@@ -370,6 +379,124 @@ function InterfaceDialog({
         </table>
       )}
 
+      {/* §760: p.60's links, as decision 0024's link constraints - each to
+          another interface's objects or to one object type's (p.63). */}
+      <div className="page-head" style={{ marginTop: 16 }}>
+        <div><h2 style={{ fontSize: 14, margin: 0 }}>Links</h2></div>
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="iface-add-link"
+          onClick={() => setLinks([...links, blankLink()])}
+        >
+          Add link
+        </button>
+      </div>
+      {links.length === 0 && (
+        <p className="field-hint" data-testid="iface-no-links">
+          No links. A link here is a promise that every object type implementing
+          this shape links to something - another interface&apos;s objects, or one
+          object type&apos;s.
+        </p>
+      )}
+      {links.length > 0 && (
+        <table className="table" data-testid="iface-link-rows">
+          <thead>
+            <tr>
+              <th>Name</th><th>API name</th><th>Links to</th><th>Required</th>
+              <th aria-label="Actions" />
+            </tr>
+          </thead>
+          <tbody>
+            {links.map((l, i) => {
+              const [kind, target] = l.target.split(":");
+              return (
+                <tr key={i}>
+                  <td>
+                    <input
+                      type="text"
+                      aria-label={`Link ${i + 1} name`}
+                      value={l.display_name}
+                      onChange={(e) => {
+                        const display = e.target.value;
+                        patchLink(i, {
+                          display_name: display,
+                          ...(l.api_name === toPropertyApiName(l.display_name)
+                            ? { api_name: toPropertyApiName(display) }
+                            : {}),
+                        });
+                      }}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="text"
+                      className="slug"
+                      aria-label={`Link ${i + 1} API name`}
+                      value={l.api_name}
+                      onChange={(e) => patchLink(i, { api_name: e.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <select
+                      aria-label={`Link ${i + 1} links to`}
+                      value={kind || ""}
+                      onChange={(e) => patchLink(i, {
+                        target: e.target.value ? `${e.target.value}:` : "" })}
+                    >
+                      <option value="">Choose…</option>
+                      <option value="interface">An interface&apos;s objects</option>
+                      <option value="object_type">One object type&apos;s objects</option>
+                    </select>
+                    {kind === "interface" && (
+                      <select
+                        aria-label={`Link ${i + 1} interface`}
+                        value={target ?? ""}
+                        onChange={(e) => patchLink(i, { target: `interface:${e.target.value}` })}
+                      >
+                        <option value="">Choose…</option>
+                        {/* Itself included: a shape may link to its own kind. */}
+                        {all.map((it) => (
+                          <option key={it.id} value={it.id}>{it.display_name}</option>
+                        ))}
+                      </select>
+                    )}
+                    {kind === "object_type" && (
+                      <TypePicker
+                        workspaceId={workspaceId}
+                        testId={`iface-link-${i + 1}-type`}
+                        value={target ?? ""}
+                        placeholder="Choose…"
+                        onChange={(id) => patchLink(i, { target: `object_type:${id}` })}
+                      />
+                    )}
+                  </td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      aria-label={`Link ${i + 1} required`}
+                      checked={l.required}
+                      onChange={(e) => patchLink(i, { required: e.target.checked })}
+                    />
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn quiet"
+                      style={{ padding: "3px 9px", fontSize: 12 }}
+                      aria-label={`Remove link ${i + 1}`}
+                      onClick={() => setLinks(links.filter((_, j) => j !== i))}
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
       {/* What this shape actually amounts to once the parents are counted.
           Only when it differs from what was declared here, because otherwise
           it is the same table twice. */}
@@ -424,6 +551,8 @@ function ImplementDialog({
 }) {
   const [typeId, setTypeId] = useState("");
   const [mapping, setMapping] = useState<Record<string, string>>({});
+  // §760: which of the type's link types keep each link constraint.
+  const [linkMapping, setLinkMapping] = useState<Record<string, string[]>>({});
   const queryClient = useQueryClient();
 
   const detail = useQuery({
@@ -439,6 +568,14 @@ function ImplementDialog({
     queryKey: ["implementations", workspaceId, typeId],
     queryFn: () => objApi.listImplementations(workspaceId, typeId),
     enabled: !!typeId,
+  });
+  // The link types that would keep each constraint, by the save's own rule:
+  // offering any other is offering a save that fails (§214).
+  const effectiveLinks = detail.data?.effective_link_constraints ?? [];
+  const linkCandidates = useQuery({
+    queryKey: ["link-candidates", workspaceId, iface.id, typeId],
+    queryFn: () => objApi.linkCandidates(workspaceId, iface.id, typeId),
+    enabled: !!typeId && effectiveLinks.length > 0,
   });
 
   const effective = detail.data?.effective_properties ?? [];
@@ -460,6 +597,7 @@ function ImplementDialog({
   useEffect(() => {
     if (!ready) return;
     setMapping(already ? { ...already.property_mapping } : suggestMapping(effective, propertyTypes));
+    setLinkMapping(already ? { ...(already.link_mapping ?? {}) } : {});
     // `effective` and `propertyTypes` are rebuilt every render; the fetched
     // objects they come from are what actually changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -474,7 +612,7 @@ function ImplementDialog({
       // claims have to be sent back or they are withdrawn.
       return objApi.setImplementations(workspaceId, typeId, [
         ...others,
-        { interface_id: iface.id, property_mapping: mapping },
+        { interface_id: iface.id, property_mapping: mapping, link_mapping: linkMapping },
       ]);
     },
     onSuccess: async () => {
@@ -486,6 +624,9 @@ function ImplementDialog({
   });
 
   const missing = unmappedRequired(effective, mapping);
+  const unkept = unkeptRequired(effectiveLinks, linkMapping);
+  // A shape of links alone is a shape (§760); one of nothing is not.
+  const empty = effective.length === 0 && effectiveLinks.length === 0;
 
   return (
     <Dialog open title={`Implement ${iface.api_name}`} onClose={onClose}>
@@ -509,7 +650,7 @@ function ImplementDialog({
         />
       </Field>
 
-      {typeId && effective.length === 0 && (
+      {typeId && empty && (
         <p className="field-hint" data-testid="impl-empty-shape">
           {iface.api_name} declares no properties, so implementing it promises
           nothing. Give it some first.
@@ -567,6 +708,62 @@ function ImplementDialog({
         </table>
       )}
 
+      {typeId && effectiveLinks.length > 0 && linkCandidates.data && (
+        <table className="table" data-testid="impl-link-rows">
+          <thead>
+            <tr><th>Interface link</th><th>Kept by</th></tr>
+          </thead>
+          <tbody>
+            {effectiveLinks.map((c) => {
+              const options = linkCandidates.data[c.api_name] ?? [];
+              const chosen = linkMapping[c.api_name] ?? [];
+              return (
+                <tr key={c.api_name}>
+                  <td>
+                    <strong>{c.display_name}</strong>
+                    <div className="slug">
+                      {c.api_name}
+                      {c.required ? "" : " · optional"}
+                    </div>
+                  </td>
+                  <td data-testid={`impl-link-${c.api_name}`}>
+                    {options.length === 0 ? (
+                      <span className="field-hint" data-testid={`impl-link-none-${c.api_name}`}>
+                        no link type of this object type goes there
+                      </span>
+                    ) : options.map((o) => (
+                      // p.64's "multiple concrete link implementations": a
+                      // constraint may be kept by several.
+                      <label key={o.id} className="row-actions" style={{ gap: 6 }}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Keep ${c.api_name} with ${o.api_name}`}
+                          checked={chosen.includes(o.id)}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                              ? [...chosen, o.id] : chosen.filter((x) => x !== o.id);
+                            setLinkMapping({ ...linkMapping, [c.api_name]: next });
+                          }}
+                        />
+                        <span>{o.display_name}</span>
+                        <span className="slug">to {o.other_type}</span>
+                      </label>
+                    ))}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {typeId && unkept.length > 0 && (
+        <p className="field-hint" data-testid="impl-unkept">
+          {iface.api_name} requires the link{unkept.length === 1 ? "" : "s"}{" "}
+          {unkept.join(", ")}, and no link type of this one keeps{" "}
+          {unkept.length === 1 ? "it" : "them"} yet.
+        </p>
+      )}
       {typeId && missing.length > 0 && (
         <p className="field-hint" data-testid="impl-missing">
           {iface.api_name} requires {missing.join(", ")}, and this type answers
@@ -585,7 +782,7 @@ function ImplementDialog({
           className="btn primary"
           data-testid="impl-save"
           disabled={
-            !typeId || effective.length === 0 || missing.length > 0 || save.isPending
+            !typeId || empty || missing.length > 0 || unkept.length > 0 || save.isPending
           }
           onClick={() => save.mutate()}
         >
