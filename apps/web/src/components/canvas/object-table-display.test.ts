@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_EMPTY_MESSAGE, DEFAULT_LINES, DEFAULT_NO_VALUE, EMPTY_MODES, MAX_LINES,
   cellStyle, emptyMessageOf, emptyModeOf, fillsCellOf, fitColumnsOf, frozenOf,
-  linesOf, narrowHeadersOf, noValueOf, rowMinHeight, stickyLefts, wrapOf,
+  linesOf, narrowHeadersOf, noValueOf, rowMinHeight, stickyLefts, wrapOf, DEFAULT_EMPTY_ICON, emptyIconOf,
 } from "./object-table-display";
 
 /** p.224-225's Display & formatting block. */
@@ -212,5 +212,18 @@ describe("the table-level flags", () => {
     expect(fillsCellOf(undefined)).toBe(false);
     expect(fillsCellOf(true)).toBe(true);
     expect(fillsCellOf(1)).toBe(false);
+  });
+});
+
+describe("emptyIconOf (§719)", () => {
+  it("is the table icon by default, as p.224 says", () => {
+    expect(emptyIconOf("default", "flag")).toBe(DEFAULT_EMPTY_ICON);
+    expect(emptyIconOf(undefined, undefined)).toBe("th-list");
+  });
+
+  it("is the author's when custom, and none when they named none", () => {
+    expect(emptyIconOf("custom", " flag ")).toBe("flag");
+    expect(emptyIconOf("custom", "")).toBeNull();
+    expect(emptyIconOf("custom", undefined)).toBeNull();
   });
 });

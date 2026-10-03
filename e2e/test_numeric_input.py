@@ -21,7 +21,7 @@ from __future__ import annotations
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, save, settled
 
 
 def module_with_button(api, name: str, effects: list[dict], props: dict | None = None):
@@ -265,6 +265,20 @@ def test_a_unit_prefix_and_suffix_are_shown(page, api) -> None:
     expect(affixes.nth(1)).to_have_text("kg")
 
 
+def test_a_unit_prefix_and_suffix_can_be_icons(page, api) -> None:
+    """p.468: the prefix is "read-only text or icon of choice", and the suffix
+    "can be text, an icon of choice, or a percent sign" (§719)."""
+    mod = module_with(api, "Numeric unit icons", {
+        "prefix": "dollar", "suffix": "text", "suffixText": "truck",
+    })
+    open_module(page, mod)
+    settled(page)
+    expect(page.get_by_test_id("numeric-prefix-shown").locator("svg")).to_have_attribute(
+        "data-icon", "dollar")
+    expect(page.get_by_test_id("numeric-suffix-shown").locator("svg")).to_have_attribute(
+        "data-icon", "truck")
+
+
 def test_the_reset_button_appears_only_when_there_is_something_to_clear(page, api) -> None:
     """p.468's "Include option to reset to default value". Over an empty field
     it is a control that does nothing, which reads as a broken one."""
@@ -317,3 +331,16 @@ def test_the_percent_setting_says_what_it_does_to_the_variable(page, api) -> Non
     page.locator(".canvas-tree-row").filter(has_text="Numeric input").first.click()
     page.get_by_test_id("numeric-suffix").select_option("percent")
     expect(page.locator(".field-hint", has_text="divided by 100")).to_be_visible()
+
+
+def test_the_panel_chooses_a_prefix_icon(page, api) -> None:
+    """p.468's "icon of choice" for the prefix, chosen in the panel (§719)."""
+    mod = module_with(api, "Numeric prefix icon panel")
+    open_builder(page, mod)
+    settled(page)
+    page.locator(".canvas-tree-row").filter(has_text="Numeric input").first.click()
+    page.get_by_test_id("numeric-prefix-name").select_option("dollar")
+    save(page)
+    node = next(n for n in mod.definition()["layout"].values()
+                if n["type"]["resolvedName"] == "CanvasNumericInput")
+    assert node["props"]["prefix"] == "dollar", node["props"]
