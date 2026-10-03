@@ -3630,6 +3630,15 @@ export interface ActionBatchResult {
   dataset_versions: Record<string, number>;
 }
 
+/** An Action table's rows sent as one batch call (§800; workshop p.512):
+ * every row's own answer, in order, or none when the batch did not land. */
+export interface ActionRowsResult {
+  ok: boolean;
+  error: string | null;
+  batch_id: string;
+  results: ActionExecuteResult[];
+}
+
 // ---- canvas apps (low-code app builder) --------------------------------------
 export type CanvasPublishScope = "private" | "workspace" | "groups";
 

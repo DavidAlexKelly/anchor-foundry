@@ -1545,6 +1545,7 @@ def _columns(context: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
 async def _write_pairs(
     conn: Any, storage: Any, access: Any, run_id: UUID, dataset_id: str,
     table: dict[str, Any], *, add: list[tuple[str, str]], remove: list[tuple[str, str]],
+    kind: str = "action",
 ) -> tuple[Any, list[dict[str, Any]]]:
     """Stage one join table's links made and removed (§553), and say which
     actually changed - as effects an undo can reverse. `None` staged when
@@ -1573,7 +1574,7 @@ async def _write_pairs(
         parquet_bytes=data,
         schema=schema,
         row_count=rows,
-        produced_by_kind="action",
+        produced_by_kind=kind,
         produced_by_id=run_id,
         created_by=access.auth.user_id,
         # A join table only gains pairs unless one was removed (§747).
@@ -2599,1147 +2600,1311 @@ async def _interface_subject(
     raise NotFoundError("object instance")
 
 
-@project_router.post("/{action_type_id}/execute", response_model=ExecuteResult)
-async def execute_action(
+async def _prepare_row(
+    conn: Any,
+    access: ProjectAccess,
     action_type_id: UUID,
     body: ExecuteRequest,
-    request: Request,
-    access: ProjectAccess = Depends(require_project_role("editor")),
-) -> ExecuteResult:
-    storage = _dataset_storage()
-    # **Where a refusal below notes itself, to be written after this
-    # function's transaction has unwound.** `record_refusal` opens its own
-    # connection — it has to, or the row is rolled back by the exception it
-    # describes — and writing it from inside the block would mean holding
-    # two at once. Thirty concurrent refusals would then be thirty requests
-    # each holding one connection and waiting for a second, which is a pool
-    # deadlock rather than a slow page.
-    noted: dict[str, Any] = {}
-    try:
-        async with user_connection(access.auth.user_id) as conn:
-            action_type = await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
-            prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
-            # The subject's implementation of the interface, for an interface
-            # action; its link mapping renames p.63-64's link rules (§761).
-            implementation: dict[str, Any] | None = None
-            if action_type["object_type_id"] is not None:
-                object_type_id = UUID(str(action_type["object_type_id"]))
-                # The *concrete* type's name, which for an object action is the
-                # subject and for an interface action is whichever
-                # implementation the object turned out to be. Named once here
-                # because the refusals below say it (§451, §337).
-                type_name = str(action_type["object_type_name"] or "this type")
-                instance = await instance_store.store_for(conn).get_instance(
-                    search_prefix=prefix, object_type_id=object_type_id,
-                    instance_id=str(body.instance_id),
-                )
-            else:
-                # `action-types` p.59's interface action (§451). **The subject's
-                # own type is not known until submission** — p.62's interface
-                # reference parameter "shows objects of any type that implements
-                # the interface" — so it is found by asking each implementation
-                # for this instance. A read per implementing type, which is a
-                # handful and bounded by the interface; the store is scoped by
-                # object type on every call by design (`instance_store`'s own
-                # docstring), so a lookup by id alone is not a thing to add for
-                # one caller.
-                object_type_id, instance, implementation = await _interface_subject(
-                    conn,
-                    workspace_id=access.workspace_id,
-                    interface_id=UUID(str(action_type["interface_id"])),
-                    instance_id=str(body.instance_id),
-                    search_prefix=prefix,
-                )
-                type_name = str(implementation["display_name"])
-                # p.65's Interface action control (§763): a type may switch an
-                # interface action off for its own objects.
-                switched_off = await interface_action_control.refusal(
-                    conn, object_type_id, action_type_id, type_name=type_name)
-                if switched_off:
-                    raise ForbiddenError(switched_off)
-                # p.170 (§675): the implementing properties that present a
-                # reduced or main-field value, which an interface action cannot
-                # write back.
-                presented = {
-                    str(p["api_name"]): through
-                    for p in await ontology_service.list_properties(conn, object_type_id)
-                    if (through := property_reducers.presented_through(p))
-                }
-                # p.59's rename, and the only thing that differs from here on.
-                action_type = {
-                    **action_type,
-                    "rules": actions_service.rules_for_implementation(
-                        action_type["rules"],
-                        mapping=implementation["property_mapping"],
-                        interface_name=str(action_type["subject_name"]),
-                        type_name=type_name,
-                        presented=presented,
-                    ),
-                }
-            if instance is None:
-                raise NotFoundError("object instance")
-            # 404s if this instance's source isn't a mapping in this project.
-            source = await ontology_service.get_source(
-                conn, access.project_id, UUID(str(instance["source_id"]))
-            )
-            properties = await ontology_service.list_properties(conn, object_type_id)
-            property_types = {p["api_name"]: p["data_type"] for p in properties}
-            # p.66's struct parameter is coerced against the *property's*
-            # declared fields, which is the one thing its type label does not
-            # carry (§450). Built in the same loop as the types, the way
-            # `coerce_rows` builds it on the sync path.
-            struct_fields = ontology_service.struct_fields_of(properties)
-            array_of = ontology_service.array_of_of(properties)
-            # The subject's properties with no dataset column (p.113). Only the
-            # subject's: a rule writing another object's property is checked
-            # against *that* type's source, and edit-only there is not built.
-            edit_only = ontology_service.edit_only_properties(properties)
-            column_mappings: dict[str, str] = _parse_json(source["column_mappings"])
-            # Normalised, not just checked: a geopoint submitted as "51.5,-0.12"
-            # is stored in the same shape as one that arrived from a sync.
-            # Two steps, because they answer different questions: what did the
-            # caller supply (against the declared parameters), and what do the
-            # rules write with it (against the object type and its mapping).
-            # Everything a refused submission needs to be counted, resolved once.
-            # `source` is already read above, so a refusal names the dataset it
-            # would have written — which is what makes the row look like the run it
-            # nearly was.
-            refusal_of: dict[str, Any] = {
-                "action_type_id": action_type_id,
-                "instance_id": body.instance_id,
-                "dataset_id": UUID(str(source["dataset_id"])),
-                "requested_by": access.auth.user_id,
-                "submitted_values": dict(body.values),
-            }
-            # p.165: "submitted with a parameter or parameters that are not valid
-            # within the context of the action".
-            async with _counted_as("invalid_parameter", into=noted, **refusal_of):
-                # **With the submitter and the form order**, because p.43-46's
-                # overrides are resolved inside this call and both are part of
-                # the question: p.43's justification is required for a manager
-                # and optional for an assignee, and p.45 lets a block read only
-                # the parameters above it (§329).
-                bound = actions_service.bind_parameters(
-                    body.values,
-                    # p.29's defaults from an object (§588), read first.
-                    parameters=await _with_object_defaults(
-                        conn, action_type, body.values,
-                        workspace_id=access.workspace_id, prefix=prefix),
-                    user=await actions_service.criteria_user(conn, access.auth.user_id),
-                    form_order=await _form_order(conn, action_type),
-                    # p.71-72's field constraints (§585).
-                    struct_fields=await _parameter_fields(access, action_type),
-                )
-                # p.34: "The value selected is **also validated** before the
-                # action is executed" (§330). The dropdown offering only
-                # matching objects is a convenience; this is the rule, and it
-                # is counted as p.165's invalid parameter because that is what
-                # it is — an object of the wrong type, or one the submitter
-                # cannot see.
-                await choices_service.check_object_values(
-                    conn,
-                    workspace_id=access.workspace_id,
+    noted: dict[str, Any],
+    *,
+    batch_id: UUID | None = None,
+) -> dict[str, Any]:
+    """One submission, bound, checked and resolved, with its run opened (§800).
+
+    Everything `execute_action` decides before it writes: the parameters
+    bound and validated, p.49-56's criteria, the writeback, the function, every
+    object a rule names found, the creates, modifies, deletes and links worked
+    out, the notifications rendered against the objects as they were, and the
+    run opened. **Nothing is written to a dataset here**, which is what lets
+    `execute_rows` call it for every row of a submission inside one
+    transaction and refuse them all when one is refused - p.84's "all edits are
+    applied atomically at the end of the action call".
+
+    A refusal notes itself in `noted` for the caller to count, as it did when
+    this was inline in `execute_action`.
+    """
+    action_type = await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
+    prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+    # The subject's implementation of the interface, for an interface
+    # action; its link mapping renames p.63-64's link rules (§761).
+    implementation: dict[str, Any] | None = None
+    if action_type["object_type_id"] is not None:
+        object_type_id = UUID(str(action_type["object_type_id"]))
+        # The *concrete* type's name, which for an object action is the
+        # subject and for an interface action is whichever
+        # implementation the object turned out to be. Named once here
+        # because the refusals below say it (§451, §337).
+        type_name = str(action_type["object_type_name"] or "this type")
+        instance = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=object_type_id,
+            instance_id=str(body.instance_id),
+        )
+    else:
+        # `action-types` p.59's interface action (§451). **The subject's
+        # own type is not known until submission** — p.62's interface
+        # reference parameter "shows objects of any type that implements
+        # the interface" — so it is found by asking each implementation
+        # for this instance. A read per implementing type, which is a
+        # handful and bounded by the interface; the store is scoped by
+        # object type on every call by design (`instance_store`'s own
+        # docstring), so a lookup by id alone is not a thing to add for
+        # one caller.
+        object_type_id, instance, implementation = await _interface_subject(
+            conn,
+            workspace_id=access.workspace_id,
+            interface_id=UUID(str(action_type["interface_id"])),
+            instance_id=str(body.instance_id),
+            search_prefix=prefix,
+        )
+        type_name = str(implementation["display_name"])
+        # p.65's Interface action control (§763): a type may switch an
+        # interface action off for its own objects.
+        switched_off = await interface_action_control.refusal(
+            conn, object_type_id, action_type_id, type_name=type_name)
+        if switched_off:
+            raise ForbiddenError(switched_off)
+        # p.170 (§675): the implementing properties that present a
+        # reduced or main-field value, which an interface action cannot
+        # write back.
+        presented = {
+            str(p["api_name"]): through
+            for p in await ontology_service.list_properties(conn, object_type_id)
+            if (through := property_reducers.presented_through(p))
+        }
+        # p.59's rename, and the only thing that differs from here on.
+        action_type = {
+            **action_type,
+            "rules": actions_service.rules_for_implementation(
+                action_type["rules"],
+                mapping=implementation["property_mapping"],
+                interface_name=str(action_type["subject_name"]),
+                type_name=type_name,
+                presented=presented,
+            ),
+        }
+    if instance is None:
+        raise NotFoundError("object instance")
+    # 404s if this instance's source isn't a mapping in this project.
+    source = await ontology_service.get_source(
+        conn, access.project_id, UUID(str(instance["source_id"]))
+    )
+    properties = await ontology_service.list_properties(conn, object_type_id)
+    property_types = {p["api_name"]: p["data_type"] for p in properties}
+    # p.66's struct parameter is coerced against the *property's*
+    # declared fields, which is the one thing its type label does not
+    # carry (§450). Built in the same loop as the types, the way
+    # `coerce_rows` builds it on the sync path.
+    struct_fields = ontology_service.struct_fields_of(properties)
+    array_of = ontology_service.array_of_of(properties)
+    # The subject's properties with no dataset column (p.113). Only the
+    # subject's: a rule writing another object's property is checked
+    # against *that* type's source, and edit-only there is not built.
+    edit_only = ontology_service.edit_only_properties(properties)
+    column_mappings: dict[str, str] = _parse_json(source["column_mappings"])
+    # Normalised, not just checked: a geopoint submitted as "51.5,-0.12"
+    # is stored in the same shape as one that arrived from a sync.
+    # Two steps, because they answer different questions: what did the
+    # caller supply (against the declared parameters), and what do the
+    # rules write with it (against the object type and its mapping).
+    # Everything a refused submission needs to be counted, resolved once.
+    # `source` is already read above, so a refusal names the dataset it
+    # would have written — which is what makes the row look like the run it
+    # nearly was.
+    refusal_of: dict[str, Any] = {
+        "action_type_id": action_type_id,
+        "instance_id": body.instance_id,
+        "dataset_id": UUID(str(source["dataset_id"])),
+        "requested_by": access.auth.user_id,
+        "submitted_values": dict(body.values),
+    }
+    # p.165: "submitted with a parameter or parameters that are not valid
+    # within the context of the action".
+    async with _counted_as("invalid_parameter", into=noted, **refusal_of):
+        # **With the submitter and the form order**, because p.43-46's
+        # overrides are resolved inside this call and both are part of
+        # the question: p.43's justification is required for a manager
+        # and optional for an assignee, and p.45 lets a block read only
+        # the parameters above it (§329).
+        bound = actions_service.bind_parameters(
+            body.values,
+            # p.29's defaults from an object (§588), read first.
+            parameters=await _with_object_defaults(
+                conn, action_type, body.values,
+                workspace_id=access.workspace_id, prefix=prefix),
+            user=await actions_service.criteria_user(conn, access.auth.user_id),
+            form_order=await _form_order(conn, action_type),
+            # p.71-72's field constraints (§585).
+            struct_fields=await _parameter_fields(access, action_type),
+        )
+        # p.34: "The value selected is **also validated** before the
+        # action is executed" (§330). The dropdown offering only
+        # matching objects is a convenience; this is the rule, and it
+        # is counted as p.165's invalid parameter because that is what
+        # it is — an object of the wrong type, or one the submitter
+        # cannot see.
+        await choices_service.check_object_values(
+            conn,
+            workspace_id=access.workspace_id,
+            bound=bound,
+            parameters=action_type["parameters"],
+        )
+        # p.33's other shape, and the same rule read for it (§335).
+        # p.33 does not say a multiple-choice value is validated, and
+        # it belongs anyway: a dropdown narrowed to three regions
+        # beside a check that accepts any string is §214's control
+        # that looks like it works, and the form is a convenience
+        # while this runs whether or not anybody drew one.
+        for parameter in action_type["parameters"]:
+            set_type = options_service.set_type_of(parameter)
+            if set_type is None:
+                continue
+            submitted = bound.get(str(parameter["api_name"]))
+            if submitted is None or submitted == "":
+                # **Nothing was chosen, so nothing is being checked**
+                # (§338). This used to resolve the narrowing anyway and
+                # refuse the whole submission when a filter read a box
+                # nobody had filled in — for a parameter nobody had
+                # filled in either, which is a refusal about a value
+                # that does not exist. `check_object_values` skips an
+                # empty box before it looks at a rule, and the reason is
+                # the same one: an optional parameter left blank means
+                # something, and it is not "this action cannot run". A
+                # required one is refused by the check that is actually
+                # about requiredness, in a sentence that says so.
+                continue
+            try:
+                # **The same narrowing the dropdown used** (§336), so
+                # "which values are offered" and "which are accepted"
+                # cannot come apart — p.34's rule for the other shape,
+                # read for this one.
+                narrowing = filters_service.resolve(
+                    parameter,
                     bound=bound,
-                    parameters=action_type["parameters"],
+                    property_types=await choices_service.property_types_of(
+                        conn, set_type
+                    ),
+                    objects=await choices_service.object_values_of(
+                        conn, parameter,
+                        workspace_id=access.workspace_id,
+                        bound=bound,
+                        parameters=action_type["parameters"],
+                    ),
                 )
-                # p.33's other shape, and the same rule read for it (§335).
-                # p.33 does not say a multiple-choice value is validated, and
-                # it belongs anyway: a dropdown narrowed to three regions
-                # beside a check that accepts any string is §214's control
-                # that looks like it works, and the form is a convenience
-                # while this runs whether or not anybody drew one.
-                for parameter in action_type["parameters"]:
-                    set_type = options_service.set_type_of(parameter)
-                    if set_type is None:
-                        continue
-                    submitted = bound.get(str(parameter["api_name"]))
-                    if submitted is None or submitted == "":
-                        # **Nothing was chosen, so nothing is being checked**
-                        # (§338). This used to resolve the narrowing anyway and
-                        # refuse the whole submission when a filter read a box
-                        # nobody had filled in — for a parameter nobody had
-                        # filled in either, which is a refusal about a value
-                        # that does not exist. `check_object_values` skips an
-                        # empty box before it looks at a rule, and the reason is
-                        # the same one: an optional parameter left blank means
-                        # something, and it is not "this action cannot run". A
-                        # required one is refused by the check that is actually
-                        # about requiredness, in a sentence that says so.
-                        continue
-                    try:
-                        # **The same narrowing the dropdown used** (§336), so
-                        # "which values are offered" and "which are accepted"
-                        # cannot come apart — p.34's rule for the other shape,
-                        # read for this one.
-                        narrowing = filters_service.resolve(
-                            parameter,
-                            bound=bound,
-                            property_types=await choices_service.property_types_of(
-                                conn, set_type
-                            ),
-                            objects=await choices_service.object_values_of(
-                                conn, parameter,
-                                workspace_id=access.workspace_id,
-                                bound=bound,
-                                parameters=action_type["parameters"],
-                            ),
-                        )
-                        # **Asking about this one value rather than reading the
-                        # offer and looking for it** (§338), which is §333's
-                        # move for the other shape: the offer is truncated by
-                        # frequency, so searching it made "is this allowed"
-                        # depend on how many the control can hold. The
-                        # narrowing goes on the walk's outermost set as well,
-                        # because that is where the resolver reads it from.
-                        confirming = options_service.confirming(
-                            parameter, submitted, filters=narrowing,
-                        )
-                        # p.37's walk, on the same side of the same `try` as
-                        # the filters (§337): a walk starting from an empty box
-                        # and a filter reading one are the same unanswered
-                        # question, and one `except` is what keeps them from
-                        # drifting into being answered differently.
-                        definition = search_arounds_service.build(
-                            parameter, object_type_id=UUID(set_type),
-                            filters=confirming,
-                            start_key=await choices_service.start_key_of(
-                                conn, parameter,
-                                workspace_id=access.workspace_id, bound=bound,
-                            ),
-                        )
-                    except filters_service.Unresolved as missing:
-                        # Fails closed, as it does for an object dropdown: the
-                        # filter reads a box nothing supplied, so whether this
-                        # value is in the set is a question nobody can answer.
-                        raise ValueError(
-                            f"{str(parameter['api_name'])!r} is narrowed by "
-                            f"{missing.parameter!r}, which this submission "
-                            "does not supply"
-                        )
-                    allowed, _more = await options_service.options(
-                        conn, parameter, workspace_id=access.workspace_id,
-                        filters=confirming, definition=definition, limit=1,
-                    )
-                    options_service.check_option_values(
-                        parameter, submitted, allowed=allowed,
-                    )
-            # **Before the first rule runs, and before the run is even opened**
-            # (p.49-50). "Refused" and "refused after writing half of it" look the
-            # same to the caller and are very different in the dataset, and our
-            # write-back appends a version per write - so the check has to come
-            # before anything that could leave one behind.
-            #
-            # p.166 calls a submission that "did not pass the security submission
-            # criteria" an authentication failure, which is p.49-50's criteria by
-            # another name.
-            async with _counted_as("authentication", into=noted, **refusal_of):
-                actions_service.check_criteria(
-                    bound,
-                    criteria=action_type["criteria"],
-                    user=await actions_service.criteria_user(conn, access.auth.user_id),
+                # **Asking about this one value rather than reading the
+                # offer and looking for it** (§338), which is §333's
+                # move for the other shape: the offer is truncated by
+                # frequency, so searching it made "is this allowed"
+                # depend on how many the control can hold. The
+                # narrowing goes on the walk's outermost set as well,
+                # because that is where the resolver reads it from.
+                confirming = options_service.confirming(
+                    parameter, submitted, filters=narrowing,
                 )
-            # **p.106's writeback, before anything is written and before the
-            # notifications are even rendered.**
+                # p.37's walk, on the same side of the same `try` as
+                # the filters (§337): a walk starting from an empty box
+                # and a filter reading one are the same unanswered
+                # question, and one `except` is what keeps them from
+                # drifting into being answered differently.
+                definition = search_arounds_service.build(
+                    parameter, object_type_id=UUID(set_type),
+                    filters=confirming,
+                    start_key=await choices_service.start_key_of(
+                        conn, parameter,
+                        workspace_id=access.workspace_id, bound=bound,
+                    ),
+                )
+            except filters_service.Unresolved as missing:
+                # Fails closed, as it does for an object dropdown: the
+                # filter reads a box nothing supplied, so whether this
+                # value is in the set is a question nobody can answer.
+                raise ValueError(
+                    f"{str(parameter['api_name'])!r} is narrowed by "
+                    f"{missing.parameter!r}, which this submission "
+                    "does not supply"
+                )
+            allowed, _more = await options_service.options(
+                conn, parameter, workspace_id=access.workspace_id,
+                filters=confirming, definition=definition, limit=1,
+            )
+            options_service.check_option_values(
+                parameter, submitted, allowed=allowed,
+            )
+    # **Before the first rule runs, and before the run is even opened**
+    # (p.49-50). "Refused" and "refused after writing half of it" look the
+    # same to the caller and are very different in the dataset, and our
+    # write-back appends a version per write - so the check has to come
+    # before anything that could leave one behind.
+    #
+    # p.166 calls a submission that "did not pass the security submission
+    # criteria" an authentication failure, which is p.49-50's criteria by
+    # another name.
+    async with _counted_as("authentication", into=noted, **refusal_of):
+        actions_service.check_criteria(
+            bound,
+            criteria=action_type["criteria"],
+            user=await actions_service.criteria_user(conn, access.auth.user_id),
+        )
+    # **p.106's writeback, before anything is written and before the
+    # notifications are even rendered.**
+    #
+    # Before the write, because that is what the mode *is*: "if the webhook
+    # execution fails, no other changes will be made". Before
+    # `_pending_notifications`, because p.110 says a writeback's outputs
+    # are for "a subsequent logic rule … or use in a subsequent
+    # notification or side effect Webhook" — and a notification rendered
+    # first would substitute an empty string for every one of them.
+    #
+    # Outside the transaction `commit_versions` opens, which decision 0012
+    # §2 records as the non-negotiable part: the alternative holds dataset
+    # row locks across a network call to a system that is already having a
+    # bad day, and buys transactionality p.106 says is not on offer.
+    writeback_outputs, writeback_failure = await _run_webhooks(
+        conn,
+        rules=action_type["rules"],
+        mode="writeback",
+        bound=bound,
+        project_id=access.project_id,
+        workspace_id=access.workspace_id,
+        actor_id=access.auth.user_id,
+        run_id=None,
+    )
+    if writeback_failure:
+        # No run is opened and nothing is written. The message names the
+        # webhook, because "the action failed" about an external system is
+        # not something the person who clicked can act on.
+        #
+        # p.166: "failed due to a webhook or an incorrectly configured side
+        # effect" — its own category, because a webhook that is down is not
+        # something the submitter did wrong, and counting it as an invalid
+        # parameter would send them back to a form that was fine.
+        async with _counted_as("side_effect", into=noted, **refusal_of):
+            raise ValueError(writeback_failure)
+    # p.111's "Writeback response", spelled as a reserved name in the one
+    # namespace every rule kind already reads from. It cannot collide with
+    # a parameter (no dots in an api_name) and cannot be forged by a caller
+    # (`bind_parameters` refuses undeclared keys), so this is the only
+    # thing that writes it.
+    bound.update(writeback_outputs)
+
+    # p.22's Function rule (§773; decision 0018): the function is called
+    # as the submitter, here - after the writeback, so a later edit can
+    # be refused before anything is written - and its edits become the
+    # rules everything below already runs (`action_functions`' note).
+    function_config = action_functions.function_rule(action_type["rules"])
+    # A function's link edits (§784): join table pairs by key.
+    function_links: list[dict[str, Any]] = []
+    if function_config is not None:
+        async with _counted_as(
+            "function", into=noted,
+            # p.166's two function failures: the query's own `error()`
+            # is "intended to be displayed to the user".
+            narrower=(action_functions.UserFacingError, "user_facing_function"),
+            **refusal_of,
+        ):
+            output, result = await action_functions.call(
+                conn, workspace_id=access.workspace_id, config=function_config,
+                bound=bound, subject_id=str(body.instance_id),
+            )
+            # §786: a file it writes into an attachment is stored now.
+            result["edits"] = await action_functions.store_attachments(
+                conn, workspace_id=access.workspace_id, edits=result["edits"])
+            # Which of the objects named are there, a read per type
+            # the edits touch (§783). A key of another type in the
+            # read finds nothing of this one.
+            # A link edit's other ends are objects too (§784).
+            named = [(str(e["object_type_id"]), str(e["primary_key"]))
+                     for e in result["edits"]] + [
+                (link["other_type_id"], other)
+                for e in result["edits"] for link in e.get("links", [])
+                for other in link["keys"]]
+            existing: dict[tuple[str, str], str] = {}
+            keys = list(dict.fromkeys(k for _t, k in named))
+            for edited_type in dict.fromkeys(t for t, _k in named):
+                found = await object_set_eval.instances_of(
+                    conn, access.workspace_id, {
+                        "object_type_id": edited_type,
+                        "filters": [{"property": "$primary_key", "op": "in",
+                                     "value": keys}],
+                    }, limit=len(keys),
+                )
+                existing.update({(edited_type, str(r["primary_key"])): str(r["id"])
+                                 for r in found})
+            function_rules, function_bound = action_functions.edit_rules(
+                result["edits"],
+                subject_type_id=str(object_type_id),
+                subject_key=str(instance["primary_key"]),
+                existing=existing,
+            )
+            function_links = action_functions.link_pairs(result["edits"], there={
+                *existing, *((str(e["object_type_id"]), str(e["primary_key"]))
+                             for e in result["edits"] if e.get("edit") == "create")})
+        action_type = {**action_type, "rules": [
+            r for r in action_type["rules"] if str(r.get("kind")) != "function"
+        ] + function_rules}
+        bound.update(function_bound)
+
+    # p.62's interface reference parameters, resolved once (§454).
+    # **Here, because every reader below needs the same answer**: which
+    # type the named object turned out to be decides what a rule
+    # writes, which source it is checked against and which index row is
+    # updated — and asking three times would be three chances for them
+    # to differ. An interface has no rows of its own, so this is a read
+    # per implementation until one answers, and `_interface_subject` is
+    # the same walk the subject takes.
+    parameter_types: dict[str, str] = {}
+    references: dict[str, dict[str, Any]] = {}
+    for parameter in action_type["parameters"]:
+        constrained = choices_service.interface_of(parameter)
+        name = str(parameter["api_name"])
+        named_id = bound.get(name)
+        if not constrained or not named_id:
+            continue
+        found_type, _row, implementation = await _interface_subject(
+            conn,
+            workspace_id=access.workspace_id,
+            interface_id=UUID(constrained),
+            instance_id=str(named_id),
+            search_prefix=prefix,
+        )
+        parameter_types[name] = str(found_type)
+        # §742: what a modify rule through this reference needs to
+        # write in the object's own type's words - p.62's "'Modify'
+        # rules on an interface can modify any object of the configured
+        # interface".
+        interface = await interfaces_service.get_interface(
+            conn, access.workspace_id, UUID(constrained))
+        references[name] = {
+            "object_type_id": str(found_type),
+            "property_mapping": implementation["property_mapping"],
+            "type_name": str(implementation["display_name"]),
+            "interface_name": str(interface["display_name"]),
+            "presented": {
+                str(p["api_name"]): through
+                for p in await ontology_service.list_properties(conn, found_type)
+                if (through := property_reducers.presented_through(p))
+            },
+        }
+    if references:
+        # An implementation that cannot take the write refuses it as
+        # the subject's rename does (`InterfaceSubjectError`).
+        action_type = {**action_type, "rules": actions_service.rules_for_references(
+            action_type["rules"], references=references)}
+    deletions = actions_service.object_deletions(
+        bound, rules=action_type["rules"],
+        default_object_type_id=object_type_id,
+        parameter_types=parameter_types,
+    )
+    # Read once and handed to everything that needs it: a far-side link
+    # rule names the object type it writes *through its link type*, so the
+    # lookup that resolves the named instance needs this as much as the
+    # one that coerces the value.
+    link_types = await actions_service.link_types_for(conn, access.workspace_id)
+    # p.63-64's interface link rules (§761), renamed into this object's
+    # type's own link rules before anything below reads the rules.
+    if implementation is not None and any(
+        str(r.get("kind")) in ("create_interface_link", "delete_interface_link")
+        for r in action_type["rules"]
+    ):
+        action_type, bound = await _with_interface_links(
+            conn, action_type, bound, implementation=implementation,
+            link_types=link_types, subject_type_id=str(object_type_id),
+            subject=instance, parameter_types=parameter_types, prefix=prefix,
+        )
+
+    # **A named object is looked up before it is written**, and its own
+    # source decides which columns exist - two instances of one type can
+    # come from different mappings, so the type is not enough to answer
+    # "is this property stored anywhere". `get_source` 404s for a source
+    # this project does not map, which is the refusal that stops an action
+    # reaching into a project the caller is not in.
+    modification_contexts: dict[tuple[str, str], dict[str, Any]] = {}
+    modification_rows: dict[tuple[str, str], dict[str, Any]] = {}
+    for target in actions_service.modification_targets(
+        bound,
+        rules=action_type["rules"],
+        default_object_type_id=object_type_id,
+        link_types=link_types,
+    ):
+        key = (target["object_type_id"], target["instance_id"])
+        named = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix,
+            object_type_id=UUID(target["object_type_id"]),
+            instance_id=target["instance_id"],
+        )
+        if named is None:
+            raise NotFoundError("object to change")
+        named_source = await ontology_service.get_source(
+            conn, access.project_id, UUID(str(named["source_id"]))
+        )
+        named_mappings: dict[str, str] = _parse_json(named_source["column_mappings"])
+        named_declared = await ontology_service.list_properties(
+            conn, UUID(target["object_type_id"])
+        )
+        modification_contexts[key] = {
+            "property_types": {
+                p["api_name"]: p["data_type"] for p in named_declared
+            },
+            "struct_fields": ontology_service.struct_fields_of(named_declared),
+            "array_of": ontology_service.array_of_of(named_declared),
+            "mapped_properties": set(named_mappings.values()),
+        }
+        modification_rows[key] = {
+            "source": named_source,
+            "primary_key": str(named["primary_key"]),
+            "mappings": named_mappings,
+            # What it was, for p.402's edit history (§470).
+            "before": _parse_json(named["properties"]),
+        }
+
+    # p.60's Object type parameter, resolved (§453). **Here, after
+    # binding and before anything reads the rules**: everything below
+    # — the targets, the per-type contexts, the coercion, the write —
+    # then sees an ordinary cross-type create, which is a shape they
+    # already handle. A branch inside each would be one decision made
+    # four times.
+    if action_type["interface_id"] is not None:
+        action_type = {
+            **action_type,
+            "rules": actions_service.creation_rules_for_interface(
+                action_type["rules"],
+                bound=bound,
+                implementations={
+                    str(row["object_type_id"]): row
+                    for row in await interfaces_service.implementations_of(
+                        conn, access.workspace_id,
+                        UUID(str(action_type["interface_id"])),
+                    )
+                },
+                interface_name=str(action_type["subject_name"]),
+            ),
+        }
+    # **One context per object type this action creates into.** A rule
+    # creating another type's object has to be checked and coerced against
+    # *that* type and written into *its* dataset - which is the lookup that
+    # kept cross-type creates out of §135, and the first thing to put two
+    # datasets inside one action.
+    sources_by_type: dict[str, dict[str, Any]] = {str(object_type_id): dict(source)}
+    contexts: dict[str, dict[str, Any]] = {
+        str(object_type_id): {
+            "property_types": property_types,
+            # The declarations the other contexts carry, which this one
+            # lacked: a create of the subject's own type coerced a
+            # struct or an array with its label alone (§580).
+            "struct_fields": struct_fields,
+            "array_of": array_of,
+            "mapped_properties": set(column_mappings.values()),
+        }
+    }
+    needed = list(actions_service.creation_targets(
+        action_type["rules"], default_object_type_id=object_type_id
+    ))
+    for deletion in deletions:
+        if deletion["object_type_id"] not in needed:
+            needed.append(deletion["object_type_id"])
+    for target in needed:
+        if target in contexts:
+            continue
+        candidates = [
+            row for row in await ontology_service.list_sources(
+                conn, access.project_id, access.workspace_id
+            )
+            if str(row["object_type_id"]) == target
+        ]
+        if len(candidates) != 1:
+            # None: nothing in this project says where that type's rows
+            # live. Several: nothing says *which* of them a new object
+            # belongs to, and picking one would be a guess written into
+            # somebody's data.
+            raise ValueError(
+                "this action creates an object of a type with "
+                f"{'no' if not candidates else 'more than one'} dataset mapped in "
+                "this project"
+            )
+        target_source = await ontology_service.get_source(
+            conn, access.project_id, UUID(str(candidates[0]["id"]))
+        )
+        target_mappings: dict[str, str] = _parse_json(target_source["column_mappings"])
+        sources_by_type[target] = target_source
+        target_declared = await ontology_service.list_properties(conn, UUID(target))
+        contexts[target] = {
+            "property_types": {
+                p["api_name"]: p["data_type"] for p in target_declared
+            },
+            "struct_fields": ontology_service.struct_fields_of(target_declared),
+            "array_of": ontology_service.array_of_of(target_declared),
+            "mapped_properties": set(target_mappings.values()),
+        }
+
+    # A named object has to be found before it can be removed: the rule
+    # supplies an instance id, and what a dataset needs is a primary key
+    # and the source it belongs to.
+    removals: list[dict[str, Any]] = []
+    for deletion in deletions:
+        if deletion["instance_id"] is None:
+            removals.append({
+                "object_type_id": str(object_type_id),
+                "source": dict(source),
+                "primary_key": str(instance["primary_key"]),
+                "before": _parse_json(instance["properties"]),
+            })
+            continue
+        named = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix,
+            object_type_id=UUID(deletion["object_type_id"]),
+            instance_id=deletion["instance_id"],
+        )
+        if named is None:
+            # Refused rather than skipped: an action that reports success
+            # for an object it could not find is one nobody can tell from
+            # an action that deleted something.
+            raise NotFoundError("object to delete")
+        named_source = await ontology_service.get_source(
+            conn, access.project_id, UUID(str(named["source_id"]))
+        )
+        removals.append({
+            "object_type_id": deletion["object_type_id"],
+            "source": named_source,
+            "primary_key": str(named["primary_key"]),
+            "instance_id": deletion["instance_id"],
+            "before": _parse_json(named["properties"]),
+        })
+        sources_by_type.setdefault(deletion["object_type_id"], named_source)
+
+    creations = actions_service.object_creations(
+        bound,
+        rules=action_type["rules"],
+        contexts=contexts,
+        default_object_type_id=object_type_id,
+    )
+    values = actions_service.apply_rules(
+        bound,
+        rules=action_type["rules"],
+        property_types=property_types,
+        struct_fields=struct_fields,
+        array_of=array_of,
+        mapped_properties=set(column_mappings.values()),
+        edit_only=edit_only,
+        link_types=link_types,
+        writes_links=bool(function_links),
+    )
+    # p.62: "primary key values cannot be modified by any action type.
+    # Therefore, an action will fail on submission…" — which is where
+    # this is, for the reason that sentence gives and because the key is
+    # a *column* on this project's source rather than a property (§451).
+    actions_service.check_primary_key_writes(
+        values,
+        column_mappings={
+            prop: col for col, prop in column_mappings.items()
+        },
+        primary_key_column=str(source["primary_key_column"]),
+        type_name=type_name,
+    )
+    # p.116, at apply time and before anything is written. Only what this
+    # action *writes* is checked on the subject: a required property that
+    # was already empty is indexing's business (it reports), and refusing
+    # here as well would make an object that predates the rule uneditable
+    # by the one action that could fix it.
+    required_by_type = {
+        str(object_type_id): ontology_service.required_properties(properties)
+    }
+
+    async def _required_for(type_id: str) -> set[str]:
+        """Cached per object type: an action can touch several, and each
+        has its own list."""
+        if type_id not in required_by_type:
+            required_by_type[type_id] = ontology_service.required_properties(
+                await ontology_service.list_properties(conn, UUID(type_id))
+            )
+        return required_by_type[type_id]
+
+    actions_service.check_required(values, required=required_by_type[str(object_type_id)])
+    # p.222's constraints, at the same moment and for the same reason.
+    # `constrained_properties` reads the value type's *current* version
+    # (p.230), so an action refused today is refused against the rule in
+    # force today rather than the one that applied when the type was saved.
+    constrained_by_type = {
+        str(object_type_id): ontology_service.constrained_properties(properties)
+    }
+
+    async def _constrained_for(type_id: str):
+        if type_id not in constrained_by_type:
+            constrained_by_type[type_id] = ontology_service.constrained_properties(
+                await ontology_service.list_properties(conn, UUID(type_id))
+            )
+        return constrained_by_type[type_id]
+
+    actions_service.check_constraints(
+        values, constrained_by_type[str(object_type_id)]
+    )
+    # **A create is checked whole.** There is no "already" for a new
+    # object, so a required property absent from the rule is a row born
+    # non-compliant - which is the one case where absence and emptiness
+    # are the same failure.
+    for creation in creations:
+        actions_service.check_required(
+            creation["properties"],
+            required=await _required_for(creation["object_type_id"]),
+            creating=True,
+        )
+        actions_service.check_constraints(
+            creation["properties"],
+            await _constrained_for(creation["object_type_id"]),
+        )
+    modifications = actions_service.object_modifications(
+        bound,
+        rules=action_type["rules"],
+        contexts=modification_contexts,
+        default_object_type_id=object_type_id,
+        link_types=link_types,
+        # A far-side link points the other object at *this* one, so the
+        # value it writes comes from the subject rather than from any
+        # parameter - **as this action leaves it**, which is why `values`
+        # is computed first and laid over the stored properties. An action
+        # that changes the property a link joins on and links on it in the
+        # same submit would otherwise write the old value and create a link
+        # that does not hold the moment the action finishes.
+        subject={
+            "primary_key": str(instance["primary_key"]),
+            "properties": {**_parse_json(instance["properties"]), **values},
+        },
+    )
+    # A named object is checked like the subject: only what this action
+    # writes to it. After `object_modifications`, because that is where the
+    # writes exist.
+    for modification in modifications:
+        actions_service.check_required(
+            modification["properties"],
+            required=await _required_for(modification["object_type_id"]),
+        )
+    # ---- p.89's side effect, decided before anything is written --------
+    #
+    # **The permission check has to happen here**, and p.96 is explicit
+    # about why: in the default mode, a recipient who cannot see the data
+    # means "no data will be edited and no notifications will be sent".
+    # That is not something a caller can honour once it has edited the
+    # data, so the whole of who-gets-what is resolved while the action can
+    # still be refused, and only the insert is left for afterwards.
+    #
+    # The content is rendered here too, for p.92's reason: "Any Ontology
+    # data used for generating notification content will reflect the state
+    # of the Ontology **before** edits of the current Action are applied."
+    # Rendering after the write would be the same code producing a
+    # different, wrong answer - the kind of difference nothing on screen
+    # would show.
+    # Read once, before the write, for the notifications and the log
+    # alike (§586): both are about the objects as they were.
+    pre_edit: dict[str, dict] = {}
+    # The submitter as a log summary's `{{{current_user}}}` names them
+    # (§586), read here while the connection is open.
+    log_actor: dict | None = (
+        await _user_card(conn, access.auth.user_id)
+        if action_type.get("log_summary") else None
+    )
+    if action_type.get("log_object_type_id") or any(
+        str(r.get("kind")) == "notify" for r in action_type["rules"]
+    ):
+        pre_edit = await _pre_edit_objects(
+            conn, action_type=action_type, bound=bound,
+            subject=_parse_json(instance["properties"]),
+            object_type_id=object_type_id, prefix=prefix,
+        )
+    notices = await _pending_notifications(
+        conn,
+        action_type=action_type,
+        objects=pre_edit,
+        # **A new dict, not `values` itself.** p.110 lets a notification
+        # read a writeback's outputs, and rendering is the only thing that
+        # may see them: `values` becomes `column_updates` a few lines down,
+        # keyed by property and mapped through `reverse_map`, so a
+        # `webhook.<output>` key in it would be looked up as a column that
+        # does not exist.
+        values={**values, **writeback_outputs},
+        bound=bound,
+        subject=_parse_json(instance["properties"]),
+        object_type_id=object_type_id,
+        workspace_id=access.workspace_id,
+        actor_id=access.auth.user_id,
+        prefix=prefix,
+    )
+    # p.20's Create link(s) and Delete link on a join table (§553): the
+    # pair each rule makes or removes, by the two objects' keys, and
+    # the join table it goes in. Resolved here, while the action can
+    # still be refused, as every other named object is.
+    join_tables: dict[str, dict[str, Any]] = {}
+    wanted_pairs: list[tuple[dict[str, Any], tuple[str, str]]] = []
+    for pair in actions_service.join_pairs(
+        bound, rules=action_type["rules"], object_type_id=object_type_id,
+        link_types=link_types,
+    ):
+        other = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=UUID(pair["other_type_id"]),
+            instance_id=pair["other_instance_id"],
+        )
+        if other is None:
+            raise NotFoundError("object to link")
+        here, there = str(instance["primary_key"]), str(other["primary_key"])
+        wanted_pairs.append(
+            (pair, (here, there) if pair["subject_end"] == "from" else (there, here)))
+    wanted_pairs += [(pair, pair["keys"]) for pair in function_links]
+    for pair, keys in wanted_pairs:
+        table = join_tables.get(pair["dataset_id"])
+        if table is None:
+            located = await fetch_one(
+                conn, "SELECT s3_location FROM datasets WHERE id = :id",
+                {"id": pair["dataset_id"]},
+            )
+            if located is None:
+                raise NotFoundError("join table")
+            table = join_tables[pair["dataset_id"]] = {
+                "s3_location": str(located["s3_location"]),
+                "from_column": pair["from_column"], "to_column": pair["to_column"],
+                "add": [], "remove": [],
+            }
+        if (table["from_column"], table["to_column"]) != (
+            pair["from_column"], pair["to_column"]
+        ):
+            # Two link types over one dataset, joined on different
+            # columns: one file cannot be written two ways at once.
+            raise ValueError(
+                "this action links through two link types that share a join table "
+                "on different columns, which one write cannot express"
+            )
+        table["add" if pair["kind"] == "create_link" else "remove"].append(keys)
+    # p.167's action log (§554): where this submission's log entry and
+    # its links to the edited objects go. Read now, so an action whose
+    # log the person applying it cannot write is refused before anything
+    # is written - p.167: "users need the appropriate permissions for
+    # the action log object type".
+    log_source, log_edits = await _log_targets(conn, action_type, link_types)
+    run_id = await actions_service.open_run(
+        conn,
+        action_type_id=action_type_id,
+        instance_id=body.instance_id,
+        dataset_id=UUID(str(source["dataset_id"])),
+        requested_by=access.auth.user_id,
+        submitted_values=values,
+        batch_id=batch_id,
+    )
+    return {
+        "instance_id": body.instance_id,
+        "submitted": dict(body.values),
+        "user_id": access.auth.user_id,
+        "action_type": action_type,
+        "bound": bound,
+        "column_mappings": column_mappings,
+        "contexts": contexts,
+        "creations": creations,
+        "edit_only": edit_only,
+        "instance": instance,
+        "join_tables": join_tables,
+        "log_actor": log_actor,
+        "log_edits": log_edits,
+        "log_source": log_source,
+        "modification_contexts": modification_contexts,
+        "modification_rows": modification_rows,
+        "modifications": modifications,
+        "notices": notices,
+        "object_type_id": object_type_id,
+        "pre_edit": pre_edit,
+        "prefix": prefix,
+        "property_types": property_types,
+        "removals": removals,
+        "run_id": run_id,
+        "source": source,
+        "sources_by_type": sources_by_type,
+        "values": values,
+        "writeback_outputs": writeback_outputs,
+    }
+
+
+def _plan_row(
+    p: dict[str, Any],
+    plan: dict[str, dict[str, Any]],
+    join_tables: dict[str, dict[str, Any]],
+) -> None:
+    """What one prepared submission writes, added to `plan` (§800).
+
+    `plan` is one entry per dataset and `join_tables` one per join table,
+    shared by every row of a submission, because every row of one dataset has
+    to land in **one** version (decision 0008). Which objects and pairs this
+    row touches are kept on it - `touches`, `pairs` - so a submission can
+    refuse two rows that edit one object (workshop p.512: "edits do not
+    conflict") and give each run the links it made, for its own undo.
+    """
+    # Its own links, as the pairs it asked for, before the log adds its own.
+    p["pairs"] = {
+        (dataset_key, made, (str(here), str(there)))
+        for dataset_key, table in p["join_tables"].items()
+        for made, wanted in ((True, table["add"]), (False, table["remove"]))
+        for here, there in wanted
+    }
+    action_type = p["action_type"]
+    bound = p["bound"]
+    column_mappings = p["column_mappings"]
+    creations = p["creations"]
+    edit_only = p["edit_only"]
+    instance = p["instance"]
+    log_actor = p["log_actor"]
+    log_edits = p["log_edits"]
+    log_source = p["log_source"]
+    modification_contexts = p["modification_contexts"]
+    modification_rows = p["modification_rows"]
+    modifications = p["modifications"]
+    object_type_id = p["object_type_id"]
+    pre_edit = p["pre_edit"]
+    property_types = p["property_types"]
+    removals = p["removals"]
+    run_id = p["run_id"]
+    source = p["source"]
+    sources_by_type = p["sources_by_type"]
+    values = p["values"]
+    writeback_outputs = p["writeback_outputs"]
+    contexts = p["contexts"]
+    reverse_map = {prop: col for col, prop in column_mappings.items()}
+    # The dataset copy gets the flat form - a Parquet column is a scalar
+    # and a geopoint is not (ontology.column_value).
+    # **Edit-only properties are not in this dict, by definition** (p.113):
+    # they have no column, so there is nothing to append. They are still in
+    # `values`, which is what reaches the instance store below - that split
+    # is the whole of what "edit-only" means in the write path.
+    column_updates = {
+        reverse_map[prop]: ontology_service.column_value(
+            property_types.get(prop, "string"), value
+        )
+        for prop, value in values.items()
+        if prop not in edit_only
+    }
+    # Every row this action writes, in one file (decision 0008). A modify
+    # and a create are two writes and must land as **one** version: three
+    # versions carrying the same `produced_by_id` would be a history that
+    # has to be interpreted, and a failure between them would leave a
+    # dataset nobody asked for.
+    def rows_for(type_id: str) -> list[dict[str, Any]]:
+        """The rows to append to one type's dataset, in its own columns."""
+        target_source = sources_by_type[type_id]
+        mappings: dict[str, str] = _parse_json(target_source["column_mappings"])
+        columns = {prop: col for col, prop in mappings.items()}
+        types = contexts[type_id]["property_types"]
+        return [
+            {
+                str(target_source["primary_key_column"]): creation["primary_key"],
+                **{
+                    columns[prop]: ontology_service.column_value(
+                        types.get(prop, "string"), value
+                    )
+                    for prop, value in creation["properties"].items()
+                },
+            }
+            for creation in creations
+            if creation["object_type_id"] == type_id
+        ]
+
+    # **One entry per dataset, not per rule.** Two rules touching the same
+    # dataset - a modify and a delete of a different row, say - have to
+    # land in one file, or the second staging would collide with the
+    # version the first one just claimed.
+    own: dict[str, dict[str, Any]] = {}
+
+    def entry(target_source: dict[str, Any]) -> dict[str, Any]:
+        return own.setdefault(
+            str(target_source["dataset_id"]),
+            {"source": target_source, "updates": [], "appends": [], "deletes": []},
+        )
+
+    if column_updates:
+        entry(dict(source))["updates"].append(
+            (str(instance["primary_key"]), column_updates)
+        )
+    for modification in modifications:
+        row = modification_rows[
+            (modification["object_type_id"], modification["instance_id"])
+        ]
+        columns = {prop: col for col, prop in row["mappings"].items()}
+        types = modification_contexts[
+            (modification["object_type_id"], modification["instance_id"])
+        ]["property_types"]
+        entry(row["source"])["updates"].append((
+            row["primary_key"],
+            {
+                columns[prop]: ontology_service.column_value(
+                    types.get(prop, "string"), value
+                )
+                for prop, value in modification["properties"].items()
+            },
+        ))
+    for type_id in sources_by_type:
+        rows = rows_for(type_id)
+        if rows:
+            entry(sources_by_type[type_id])["appends"].extend(rows)
+    for removal in removals:
+        entry(removal["source"])["deletes"].append(removal["primary_key"])
+    # p.167's log entry (§554): one row for this submission, and a pair
+    # per edited object of the type the log links to - in this commit,
+    # so a submission and its record cannot disagree.
+    log_row: dict[str, Any] | None = None
+    if log_source is not None:
+        edited = action_log.edited_objects(
+            subject=(object_type_id, str(instance["primary_key"])) if values else None,
+            others=[
+                *((m["object_type_id"], modification_rows[
+                    (m["object_type_id"], m["instance_id"])]["primary_key"])
+                  for m in modifications),
+                *((c["object_type_id"], str(c["primary_key"])) for c in creations),
+                *((r["object_type_id"], str(r["primary_key"])) for r in removals),
+            ],
+        )
+        log_row = action_log.log_row(
+            run_id=run_id, action_type=action_type, user_id=p["user_id"],
+            at=datetime.now(timezone.utc).replace(tzinfo=None),
+            edited=[key for _type, key in edited], bound=bound,
+            columns=set(_parse_json(log_source["column_mappings"])),
+            # p.168's Summary and object reference properties (§586),
+            # from the objects as they were before this write.
+            extra=action_log.extra_columns(
+                summary=action_type.get("log_summary"),
+                references=_parse_json(action_type.get("log_reference_properties")) or {},
+                values={**bound, **writeback_outputs}, objects=pre_edit,
+                actor=log_actor,
+            ),
+        )
+        entry(dict(log_source))["appends"].append(log_row)
+        if log_edits is not None:
+            table = join_tables.setdefault(log_edits["dataset_id"], {
+                **log_edits, "add": [], "remove": [],
+            })
+            table["add"] += [
+                (str(run_id), key) for type_id, key in edited
+                if type_id == log_edits["to_type_id"]
+            ]
+    p["log_row"] = log_row
+    if log_row is not None and log_edits is not None:
+        p["pairs"] |= {
+            (log_edits["dataset_id"], True, (str(run_id), key))
+            for type_id, key in edited if type_id == log_edits["to_type_id"]
+        }
+    p["touches"] = set()
+    for dataset_key, work in own.items():
+        shared = plan.setdefault(
+            dataset_key,
+            {"source": work["source"], "updates": [], "appends": [], "deletes": []},
+        )
+        key_column = str(work["source"]["primary_key_column"])
+        p["touches"] |= {(dataset_key, f"the object {key}") for key, _cells in work["updates"]}
+        p["touches"] |= {(dataset_key, f"the object {key}") for key in work["deletes"]}
+        p["touches"] |= {(dataset_key, f"the object {row.get(key_column)}")
+                         for row in work["appends"]}
+        for part in ("updates", "appends", "deletes"):
+            shared[part].extend(work[part])
+    # A pair made or removed is an edit of the link too: one row linking it
+    # and another unlinking it would be decided by which went second.
+    p["touches"] |= {(dataset_key, f"the link {here} - {there}")
+                     for dataset_key, _made, (here, there) in p["pairs"]}
+
+
+async def _commit_rows(
+    access: ProjectAccess,
+    storage: Any,
+    rows: list[dict[str, Any]],
+    plan: dict[str, dict[str, Any]],
+    join_tables: dict[str, dict[str, Any]],
+    *,
+    produced_by_kind: str,
+    produced_by_id: UUID,
+) -> tuple[dict[str, Any], list[list[dict[str, Any]]]]:
+    """Write what `_plan_row` planned, as one commit, and bring the index
+    along (§800). The committed versions, and per row the links it changed.
+
+    One staged version per dataset and per join table, whichever rows wrote
+    them, and `commit_versions` makes them current together - so a submission
+    of many rows lands whole or not at all, which is the one difference
+    between a batch and a loop.
+    """
+    staged_all = []
+    link_changes: list[list[dict[str, Any]]] = [[] for _ in rows]
+    async with user_connection(access.auth.user_id) as conn:
+        for dataset_key, work in plan.items():
+            work_source = work["source"]
+            work_path = await anyio.to_thread.run_sync(
+                storage.local_path, str(work_source["s3_location"])
+            )
+            with tempfile.TemporaryDirectory() as tmp:
+                dest = os.path.join(tmp, "out.parquet")
+                work_schema, work_rows = await anyio.to_thread.run_sync(
+                    engine.write_rows,
+                    work_path,
+                    str(work_source["primary_key_column"]),
+                    work["updates"],
+                    work["appends"],
+                    dest,
+                    work["deletes"],
+                )
+                with open(dest, "rb") as handle:
+                    work_bytes = handle.read()
+            staged_all.append(
+                await dataset_service.stage_version(
+                    conn, storage,
+                    dataset_id=UUID(dataset_key),
+                    workspace_id=access.workspace_id,
+                    parquet_bytes=work_bytes,
+                    schema=work_schema,
+                    row_count=work_rows,
+                    produced_by_kind=produced_by_kind,
+                    produced_by_id=produced_by_id,
+                    created_by=access.auth.user_id,
+                    # An action that only creates objects (and the
+                    # log's one row) adds to the view (§747).
+                    transaction_type=dataset_service.written_transaction(
+                        work["updates"], work["deletes"]),
+                )
+            )
+        for dataset_key, table in join_tables.items():
+            if dataset_key in plan:
+                raise DatasetEngineError(
+                    "this action writes a join table that also backs an object "
+                    "type it changes, which one version cannot express"
+                )
+            staged, changes = await _write_pairs(
+                conn, storage, access, produced_by_id, dataset_key, table,
+                add=table["add"], remove=table["remove"], kind=produced_by_kind,
+            )
+            for change in changes:
+                # Each link to the run that asked for it, for that run's undo.
+                asked = (dataset_key, change["made"],
+                         (str(change["from_key"]), str(change["to_key"])))
+                owner = next((i for i, row in enumerate(rows) if asked in row["pairs"]), 0)
+                link_changes[owner].append(change)
+            if staged is not None:
+                staged_all.append(staged)
+
+        committed = await dataset_service.commit_versions(conn, staged_all)
+        for p in rows:
+            action_type = p["action_type"]
+            creations = p["creations"]
+            log_row = p["log_row"]
+            log_source = p["log_source"]
+            modifications = p["modifications"]
+            object_type_id = p["object_type_id"]
+            prefix = p["prefix"]
+            removals = p["removals"]
+            run_id = p["run_id"]
+            sources_by_type = p["sources_by_type"]
+            values = p["values"]
+            instance_id = p["instance_id"]
+            if values:
+                await instance_store.store_for(conn).update_properties(
+                    search_prefix=prefix,
+                    # **The type the subject turned out to be**, which for
+                    # an interface action is not the action's own (§451).
+                    # It was `action_type["object_type_id"]` and that is
+                    # `None` there — the write landed in the dataset and
+                    # the index update raised, which is the half of
+                    # decision 0008's ordering that is *meant* to be
+                    # survivable and is still not a thing to leave.
+                    object_type_id=object_type_id,
+                    instance_id=str(instance_id),
+                    properties=values,
+                )
+            for modification in modifications:
+                # Same order and same reasoning as the subject's write above:
+                # the dataset is the record, the index is a projection
+                # (decision 0008), so a failure here leaves an object whose
+                # stored properties are stale until the next sync rather than a
+                # dataset that disagrees with itself.
+                await instance_store.store_for(conn).update_properties(
+                    search_prefix=prefix,
+                    object_type_id=UUID(modification["object_type_id"]),
+                    instance_id=modification["instance_id"],
+                    properties=modification["properties"],
+                )
+            if log_row is not None and log_source is not None:
+                # The log entry findable at once, as a created object is.
+                log_type = UUID(str(action_type["log_object_type_id"]))
+                await instance_store.store_for(conn).upsert_instances(
+                    search_prefix=prefix, object_type_id=log_type,
+                    source_id=UUID(str(log_source["id"])),
+                    rows=[(str(run_id), action_log.properties_of(log_row))],
+                    synced_at=datetime.now(timezone.utc),
+                    declared=await ontology_service.list_properties(conn, log_type),
+                )
+            if removals:
+                # The dataset is the record and the index is a projection
+                # (decision 0008), so the row goes first and the projection
+                # follows. A failure here leaves a findable object whose row is
+                # gone - visible, wrong, and repairable by a re-sync; the
+                # reverse order would lose the object while the row survived.
+                for removal in removals:
+                    await instance_store.store_for(conn).delete_instances(
+                        search_prefix=prefix,
+                        object_type_id=UUID(removal["object_type_id"]),
+                        source_id=UUID(str(removal["source"]["id"])),
+                        primary_keys=[removal["primary_key"]],
+                    )
+            if creations:
+                # The index is a projection (decision 0008) - the dataset above
+                # is the record. Upserted here so a created object is findable
+                # immediately rather than at the next sync; a failure here is
+                # repairable by re-syncing the source, which a half-written
+                # dataset would not be.
+                for type_id, target_source in sources_by_type.items():
+                    rows = [
+                        (creation["primary_key"], creation["properties"])
+                        for creation in creations
+                        if creation["object_type_id"] == type_id
+                    ]
+                    if not rows:
+                        continue
+                    await instance_store.store_for(conn).upsert_instances(
+                        search_prefix=prefix,
+                        object_type_id=UUID(type_id),
+                        source_id=UUID(str(target_source["id"])),
+                        rows=rows,
+                        synced_at=datetime.now(timezone.utc),
+                        # An action creating the *first* object of a type is
+                        # the one path that reaches the store before any sync
+                        # has, so the index it creates has to carry the
+                        # mapping - otherwise `dynamic: "strict"` refuses the
+                        # document that asked for it.
+                        declared=await ontology_service.list_properties(
+                            conn, UUID(type_id)
+                        ),
+                    )
+    return committed, link_changes
+
+
+async def _finish_row(
+    access: ProjectAccess,
+    request: Request,
+    action_type_id: UUID,
+    p: dict[str, Any],
+    *,
+    ok: bool,
+    error: str | None,
+    dataset_version: int | None,
+    link_changes: list[dict[str, Any]],
+    application: str | None,
+    audited: bool = True,
+) -> ExecuteResult:
+    """After the write (§800): the run closed, p.107's side effects and the
+    notifications sent, the undo and the edit history recorded, and what the
+    caller is told. `audited` is off for a row of a batch, which is audited
+    and counted once as the submission it was.
+    """
+    action_type = p["action_type"]
+    bound = p["bound"]
+    creations = p["creations"]
+    instance = p["instance"]
+    instance_id = p["instance_id"]
+    modification_rows = p["modification_rows"]
+    modifications = p["modifications"]
+    notices = p["notices"]
+    object_type_id = p["object_type_id"]
+    prefix = p["prefix"]
+    removals = p["removals"]
+    run_id = p["run_id"]
+    sources_by_type = p["sources_by_type"]
+    submitted = p["submitted"]
+    values = p["values"]
+    async with user_connection(access.auth.user_id) as conn:
+        await actions_service.close_run(
+            conn, run_id, ok=ok, dataset_version=dataset_version, error=error
+        )
+        # **Only when the write succeeded.** A notification saying an object
+        # changed, sent after the change failed, is the one outcome worse than
+        # no notification: the recipient acts on it and finds nothing.
+        if ok:
+            # **p.107's side effects, after the objects changed and unable to
+            # undo that.** "Modifications to Foundry objects will occur before
+            # side effects are applied", and the failure is not shown — so this
+            # is under the same `if ok:` as the notifications, its result is
+            # dropped, and every call is recorded on the run regardless.
             #
-            # Before the write, because that is what the mode *is*: "if the webhook
-            # execution fails, no other changes will be made". Before
-            # `_pending_notifications`, because p.110 says a writeback's outputs
-            # are for "a subsequent logic rule … or use in a subsequent
-            # notification or side effect Webhook" — and a notification rendered
-            # first would substitute an empty string for every one of them.
-            #
-            # Outside the transaction `commit_versions` opens, which decision 0012
-            # §2 records as the non-negotiable part: the alternative holds dataset
-            # row locks across a network call to a system that is already having a
-            # bad day, and buys transactionality p.106 says is not on offer.
-            writeback_outputs, writeback_failure = await _run_webhooks(
+            # Dropped rather than merged into anything: p.110 gives outputs to
+            # a *writeback* only, and there is no subsequent rule here for a
+            # side effect's output to reach.
+            await _run_webhooks(
                 conn,
                 rules=action_type["rules"],
-                mode="writeback",
+                mode="side_effect",
                 bound=bound,
                 project_id=access.project_id,
                 workspace_id=access.workspace_id,
                 actor_id=access.auth.user_id,
-                run_id=None,
+                run_id=run_id,
             )
-            if writeback_failure:
-                # No run is opened and nothing is written. The message names the
-                # webhook, because "the action failed" about an external system is
-                # not something the person who clicked can act on.
-                #
-                # p.166: "failed due to a webhook or an incorrectly configured side
-                # effect" — its own category, because a webhook that is down is not
-                # something the submitter did wrong, and counting it as an invalid
-                # parameter would send them back to a form that was fine.
-                async with _counted_as("side_effect", into=noted, **refusal_of):
-                    raise ValueError(writeback_failure)
-            # p.111's "Writeback response", spelled as a reserved name in the one
-            # namespace every rule kind already reads from. It cannot collide with
-            # a parameter (no dots in an api_name) and cannot be forged by a caller
-            # (`bind_parameters` refuses undeclared keys), so this is the only
-            # thing that writes it.
-            bound.update(writeback_outputs)
-
-            # p.22's Function rule (§773; decision 0018): the function is called
-            # as the submitter, here - after the writeback, so a later edit can
-            # be refused before anything is written - and its edits become the
-            # rules everything below already runs (`action_functions`' note).
-            function_config = action_functions.function_rule(action_type["rules"])
-            # A function's link edits (§784): join table pairs by key.
-            function_links: list[dict[str, Any]] = []
-            if function_config is not None:
-                async with _counted_as(
-                    "function", into=noted,
-                    # p.166's two function failures: the query's own `error()`
-                    # is "intended to be displayed to the user".
-                    narrower=(action_functions.UserFacingError, "user_facing_function"),
-                    **refusal_of,
-                ):
-                    output, result = await action_functions.call(
-                        conn, workspace_id=access.workspace_id, config=function_config,
-                        bound=bound, subject_id=str(body.instance_id),
-                    )
-                    # §786: a file it writes into an attachment is stored now.
-                    result["edits"] = await action_functions.store_attachments(
-                        conn, workspace_id=access.workspace_id, edits=result["edits"])
-                    # Which of the objects named are there, a read per type
-                    # the edits touch (§783). A key of another type in the
-                    # read finds nothing of this one.
-                    # A link edit's other ends are objects too (§784).
-                    named = [(str(e["object_type_id"]), str(e["primary_key"]))
-                             for e in result["edits"]] + [
-                        (link["other_type_id"], other)
-                        for e in result["edits"] for link in e.get("links", [])
-                        for other in link["keys"]]
-                    existing: dict[tuple[str, str], str] = {}
-                    keys = list(dict.fromkeys(k for _t, k in named))
-                    for edited_type in dict.fromkeys(t for t, _k in named):
-                        found = await object_set_eval.instances_of(
-                            conn, access.workspace_id, {
-                                "object_type_id": edited_type,
-                                "filters": [{"property": "$primary_key", "op": "in",
-                                             "value": keys}],
-                            }, limit=len(keys),
-                        )
-                        existing.update({(edited_type, str(r["primary_key"])): str(r["id"])
-                                         for r in found})
-                    function_rules, function_bound = action_functions.edit_rules(
-                        result["edits"],
-                        subject_type_id=str(object_type_id),
-                        subject_key=str(instance["primary_key"]),
-                        existing=existing,
-                    )
-                    function_links = action_functions.link_pairs(result["edits"], there={
-                        *existing, *((str(e["object_type_id"]), str(e["primary_key"]))
-                                     for e in result["edits"] if e.get("edit") == "create")})
-                action_type = {**action_type, "rules": [
-                    r for r in action_type["rules"] if str(r.get("kind")) != "function"
-                ] + function_rules}
-                bound.update(function_bound)
-
-            # p.62's interface reference parameters, resolved once (§454).
-            # **Here, because every reader below needs the same answer**: which
-            # type the named object turned out to be decides what a rule
-            # writes, which source it is checked against and which index row is
-            # updated — and asking three times would be three chances for them
-            # to differ. An interface has no rows of its own, so this is a read
-            # per implementation until one answers, and `_interface_subject` is
-            # the same walk the subject takes.
-            parameter_types: dict[str, str] = {}
-            references: dict[str, dict[str, Any]] = {}
-            for parameter in action_type["parameters"]:
-                constrained = choices_service.interface_of(parameter)
-                name = str(parameter["api_name"])
-                named_id = bound.get(name)
-                if not constrained or not named_id:
-                    continue
-                found_type, _row, implementation = await _interface_subject(
+            for notice in notices:
+                await notification_store.deliver(
                     conn,
                     workspace_id=access.workspace_id,
-                    interface_id=UUID(constrained),
-                    instance_id=str(named_id),
-                    search_prefix=prefix,
+                    user_id=notice["user_id"],
+                    actor_id=access.auth.user_id,
+                    action_run_id=run_id,
+                    content=notice["content"],
                 )
-                parameter_types[name] = str(found_type)
-                # §742: what a modify rule through this reference needs to
-                # write in the object's own type's words - p.62's "'Modify'
-                # rules on an interface can modify any object of the configured
-                # interface".
-                interface = await interfaces_service.get_interface(
-                    conn, access.workspace_id, UUID(constrained))
-                references[name] = {
-                    "object_type_id": str(found_type),
-                    "property_mapping": implementation["property_mapping"],
-                    "type_name": str(implementation["display_name"]),
-                    "interface_name": str(interface["display_name"]),
-                    "presented": {
-                        str(p["api_name"]): through
-                        for p in await ontology_service.list_properties(conn, found_type)
-                        if (through := property_reducers.presented_through(p))
-                    },
-                }
-            if references:
-                # An implementation that cannot take the write refuses it as
-                # the subject's rename does (`InterfaceSubjectError`).
-                action_type = {**action_type, "rules": actions_service.rules_for_references(
-                    action_type["rules"], references=references)}
-            deletions = actions_service.object_deletions(
-                bound, rules=action_type["rules"],
-                default_object_type_id=object_type_id,
-                parameter_types=parameter_types,
+        fresh_instance = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=object_type_id,
+            instance_id=str(instance_id),
+        )
+        updated_instance = fresh_instance or instance
+        # **p.154's Undo needs what the object was, recorded here or nowhere**
+        # (§319). Once the dataset version is committed the appended rows look
+        # like every other row, so nothing later can reconstruct the before —
+        # and the same argument holds for the objects this run created,
+        # deleted or touched besides its subject (§551), which no reader of
+        # `action_runs` could reconstruct afterwards.
+        #
+        # Recorded only for a successful run: a failed one changed nothing, and
+        # a "before" beside a failure would invite an undo of an edit that did
+        # not happen.
+        if ok:
+            await actions_service.record_revert_state(
+                conn, run_id,
+                previous_properties=_parse_json(instance["properties"]),
+                applied_properties=_parse_json(updated_instance["properties"]),
+                # p.156's revert of a delete, and of everything else this
+                # run wrote besides its subject (§551): each object, with
+                # what putting it back needs.
+                effects=_revert_effects(
+                    creations=creations, removals=removals,
+                    modifications=modifications, modification_rows=modification_rows,
+                    sources_by_type=sources_by_type,
+                ) + link_changes,
             )
-            # Read once and handed to everything that needs it: a far-side link
-            # rule names the object type it writes *through its link type*, so the
-            # lookup that resolves the named instance needs this as much as the
-            # one that coerces the value.
-            link_types = await actions_service.link_types_for(conn, access.workspace_id)
-            # p.63-64's interface link rules (§761), renamed into this object's
-            # type's own link rules before anything below reads the rules.
-            if implementation is not None and any(
-                str(r.get("kind")) in ("create_interface_link", "delete_interface_link")
-                for r in action_type["rules"]
-            ):
-                action_type, bound = await _with_interface_links(
-                    conn, action_type, bound, implementation=implementation,
-                    link_types=link_types, subject_type_id=str(object_type_id),
-                    subject=instance, parameter_types=parameter_types, prefix=prefix,
-                )
-
-            # **A named object is looked up before it is written**, and its own
-            # source decides which columns exist - two instances of one type can
-            # come from different mappings, so the type is not enough to answer
-            # "is this property stored anywhere". `get_source` 404s for a source
-            # this project does not map, which is the refusal that stops an action
-            # reaching into a project the caller is not in.
-            modification_contexts: dict[tuple[str, str], dict[str, Any]] = {}
-            modification_rows: dict[tuple[str, str], dict[str, Any]] = {}
-            for target in actions_service.modification_targets(
-                bound,
-                rules=action_type["rules"],
-                default_object_type_id=object_type_id,
-                link_types=link_types,
-            ):
-                key = (target["object_type_id"], target["instance_id"])
-                named = await instance_store.store_for(conn).get_instance(
-                    search_prefix=prefix,
-                    object_type_id=UUID(target["object_type_id"]),
-                    instance_id=target["instance_id"],
-                )
-                if named is None:
-                    raise NotFoundError("object to change")
-                named_source = await ontology_service.get_source(
-                    conn, access.project_id, UUID(str(named["source_id"]))
-                )
-                named_mappings: dict[str, str] = _parse_json(named_source["column_mappings"])
-                named_declared = await ontology_service.list_properties(
-                    conn, UUID(target["object_type_id"])
-                )
-                modification_contexts[key] = {
-                    "property_types": {
-                        p["api_name"]: p["data_type"] for p in named_declared
-                    },
-                    "struct_fields": ontology_service.struct_fields_of(named_declared),
-                    "array_of": ontology_service.array_of_of(named_declared),
-                    "mapped_properties": set(named_mappings.values()),
-                }
-                modification_rows[key] = {
-                    "source": named_source,
-                    "primary_key": str(named["primary_key"]),
-                    "mappings": named_mappings,
-                    # What it was, for p.402's edit history (§470).
-                    "before": _parse_json(named["properties"]),
-                }
-
-            # p.60's Object type parameter, resolved (§453). **Here, after
-            # binding and before anything reads the rules**: everything below
-            # — the targets, the per-type contexts, the coercion, the write —
-            # then sees an ordinary cross-type create, which is a shape they
-            # already handle. A branch inside each would be one decision made
-            # four times.
-            if action_type["interface_id"] is not None:
-                action_type = {
-                    **action_type,
-                    "rules": actions_service.creation_rules_for_interface(
-                        action_type["rules"],
-                        bound=bound,
-                        implementations={
-                            str(row["object_type_id"]): row
-                            for row in await interfaces_service.implementations_of(
-                                conn, access.workspace_id,
-                                UUID(str(action_type["interface_id"])),
-                            )
-                        },
-                        interface_name=str(action_type["subject_name"]),
-                    ),
-                }
-            # **One context per object type this action creates into.** A rule
-            # creating another type's object has to be checked and coerced against
-            # *that* type and written into *its* dataset - which is the lookup that
-            # kept cross-type creates out of §135, and the first thing to put two
-            # datasets inside one action.
-            sources_by_type: dict[str, dict[str, Any]] = {str(object_type_id): dict(source)}
-            contexts: dict[str, dict[str, Any]] = {
-                str(object_type_id): {
-                    "property_types": property_types,
-                    # The declarations the other contexts carry, which this one
-                    # lacked: a create of the subject's own type coerced a
-                    # struct or an array with its label alone (§580).
-                    "struct_fields": struct_fields,
-                    "array_of": array_of,
-                    "mapped_properties": set(column_mappings.values()),
-                }
-            }
-            needed = list(actions_service.creation_targets(
-                action_type["rules"], default_object_type_id=object_type_id
-            ))
-            for deletion in deletions:
-                if deletion["object_type_id"] not in needed:
-                    needed.append(deletion["object_type_id"])
-            for target in needed:
-                if target in contexts:
-                    continue
-                candidates = [
-                    row for row in await ontology_service.list_sources(
-                        conn, access.project_id, access.workspace_id
-                    )
-                    if str(row["object_type_id"]) == target
-                ]
-                if len(candidates) != 1:
-                    # None: nothing in this project says where that type's rows
-                    # live. Several: nothing says *which* of them a new object
-                    # belongs to, and picking one would be a guess written into
-                    # somebody's data.
-                    raise ValueError(
-                        "this action creates an object of a type with "
-                        f"{'no' if not candidates else 'more than one'} dataset mapped in "
-                        "this project"
-                    )
-                target_source = await ontology_service.get_source(
-                    conn, access.project_id, UUID(str(candidates[0]["id"]))
-                )
-                target_mappings: dict[str, str] = _parse_json(target_source["column_mappings"])
-                sources_by_type[target] = target_source
-                target_declared = await ontology_service.list_properties(conn, UUID(target))
-                contexts[target] = {
-                    "property_types": {
-                        p["api_name"]: p["data_type"] for p in target_declared
-                    },
-                    "struct_fields": ontology_service.struct_fields_of(target_declared),
-                    "array_of": ontology_service.array_of_of(target_declared),
-                    "mapped_properties": set(target_mappings.values()),
-                }
-
-            # A named object has to be found before it can be removed: the rule
-            # supplies an instance id, and what a dataset needs is a primary key
-            # and the source it belongs to.
-            removals: list[dict[str, Any]] = []
-            for deletion in deletions:
-                if deletion["instance_id"] is None:
-                    removals.append({
-                        "object_type_id": str(object_type_id),
-                        "source": dict(source),
-                        "primary_key": str(instance["primary_key"]),
-                        "before": _parse_json(instance["properties"]),
-                    })
-                    continue
-                named = await instance_store.store_for(conn).get_instance(
-                    search_prefix=prefix,
-                    object_type_id=UUID(deletion["object_type_id"]),
-                    instance_id=deletion["instance_id"],
-                )
-                if named is None:
-                    # Refused rather than skipped: an action that reports success
-                    # for an object it could not find is one nobody can tell from
-                    # an action that deleted something.
-                    raise NotFoundError("object to delete")
-                named_source = await ontology_service.get_source(
-                    conn, access.project_id, UUID(str(named["source_id"]))
-                )
-                removals.append({
-                    "object_type_id": deletion["object_type_id"],
-                    "source": named_source,
-                    "primary_key": str(named["primary_key"]),
-                    "instance_id": deletion["instance_id"],
-                    "before": _parse_json(named["properties"]),
-                })
-                sources_by_type.setdefault(deletion["object_type_id"], named_source)
-
-            creations = actions_service.object_creations(
-                bound,
-                rules=action_type["rules"],
-                contexts=contexts,
-                default_object_type_id=object_type_id,
+            # p.402's edit history (§470): every object this run changed,
+            # after the write succeeded. The recorder skips a type whose
+            # tracking is off, so this costs one read per object otherwise.
+            edits = object_edits.EditRecorder(
+                conn, workspace_id=access.workspace_id, action_run_id=run_id,
+                edited_by=access.auth.user_id,
             )
-            values = actions_service.apply_rules(
-                bound,
-                rules=action_type["rules"],
-                property_types=property_types,
-                struct_fields=struct_fields,
-                array_of=array_of,
-                mapped_properties=set(column_mappings.values()),
-                edit_only=edit_only,
-                link_types=link_types,
-                writes_links=bool(function_links),
+            # A deleted subject needs no guard here: `updated_instance`
+            # falls back to `instance` when the object is gone, so the
+            # diff is empty and the removal below is its only record. (A
+            # guard for it survived the mutation sweep as equivalent.)
+            await edits.record(
+                object_type_id, str(instance["primary_key"]),
+                _parse_json(instance["properties"]),
+                _parse_json(updated_instance["properties"]),
             )
-            # p.62: "primary key values cannot be modified by any action type.
-            # Therefore, an action will fail on submission…" — which is where
-            # this is, for the reason that sentence gives and because the key is
-            # a *column* on this project's source rather than a property (§451).
-            actions_service.check_primary_key_writes(
-                values,
-                column_mappings={
-                    prop: col for col, prop in column_mappings.items()
-                },
-                primary_key_column=str(source["primary_key_column"]),
-                type_name=type_name,
-            )
-            # p.116, at apply time and before anything is written. Only what this
-            # action *writes* is checked on the subject: a required property that
-            # was already empty is indexing's business (it reports), and refusing
-            # here as well would make an object that predates the rule uneditable
-            # by the one action that could fix it.
-            required_by_type = {
-                str(object_type_id): ontology_service.required_properties(properties)
-            }
-
-            async def _required_for(type_id: str) -> set[str]:
-                """Cached per object type: an action can touch several, and each
-                has its own list."""
-                if type_id not in required_by_type:
-                    required_by_type[type_id] = ontology_service.required_properties(
-                        await ontology_service.list_properties(conn, UUID(type_id))
-                    )
-                return required_by_type[type_id]
-
-            actions_service.check_required(values, required=required_by_type[str(object_type_id)])
-            # p.222's constraints, at the same moment and for the same reason.
-            # `constrained_properties` reads the value type's *current* version
-            # (p.230), so an action refused today is refused against the rule in
-            # force today rather than the one that applied when the type was saved.
-            constrained_by_type = {
-                str(object_type_id): ontology_service.constrained_properties(properties)
-            }
-
-            async def _constrained_for(type_id: str):
-                if type_id not in constrained_by_type:
-                    constrained_by_type[type_id] = ontology_service.constrained_properties(
-                        await ontology_service.list_properties(conn, UUID(type_id))
-                    )
-                return constrained_by_type[type_id]
-
-            actions_service.check_constraints(
-                values, constrained_by_type[str(object_type_id)]
-            )
-            # **A create is checked whole.** There is no "already" for a new
-            # object, so a required property absent from the rule is a row born
-            # non-compliant - which is the one case where absence and emptiness
-            # are the same failure.
-            for creation in creations:
-                actions_service.check_required(
-                    creation["properties"],
-                    required=await _required_for(creation["object_type_id"]),
-                    creating=True,
-                )
-                actions_service.check_constraints(
-                    creation["properties"],
-                    await _constrained_for(creation["object_type_id"]),
-                )
-            modifications = actions_service.object_modifications(
-                bound,
-                rules=action_type["rules"],
-                contexts=modification_contexts,
-                default_object_type_id=object_type_id,
-                link_types=link_types,
-                # A far-side link points the other object at *this* one, so the
-                # value it writes comes from the subject rather than from any
-                # parameter - **as this action leaves it**, which is why `values`
-                # is computed first and laid over the stored properties. An action
-                # that changes the property a link joins on and links on it in the
-                # same submit would otherwise write the old value and create a link
-                # that does not hold the moment the action finishes.
-                subject={
-                    "primary_key": str(instance["primary_key"]),
-                    "properties": {**_parse_json(instance["properties"]), **values},
-                },
-            )
-            # A named object is checked like the subject: only what this action
-            # writes to it. After `object_modifications`, because that is where the
-            # writes exist.
-            for modification in modifications:
-                actions_service.check_required(
-                    modification["properties"],
-                    required=await _required_for(modification["object_type_id"]),
-                )
-            # ---- p.89's side effect, decided before anything is written --------
-            #
-            # **The permission check has to happen here**, and p.96 is explicit
-            # about why: in the default mode, a recipient who cannot see the data
-            # means "no data will be edited and no notifications will be sent".
-            # That is not something a caller can honour once it has edited the
-            # data, so the whole of who-gets-what is resolved while the action can
-            # still be refused, and only the insert is left for afterwards.
-            #
-            # The content is rendered here too, for p.92's reason: "Any Ontology
-            # data used for generating notification content will reflect the state
-            # of the Ontology **before** edits of the current Action are applied."
-            # Rendering after the write would be the same code producing a
-            # different, wrong answer - the kind of difference nothing on screen
-            # would show.
-            # Read once, before the write, for the notifications and the log
-            # alike (§586): both are about the objects as they were.
-            pre_edit: dict[str, dict] = {}
-            # The submitter as a log summary's `{{{current_user}}}` names them
-            # (§586), read here while the connection is open.
-            log_actor: dict | None = (
-                await _user_card(conn, access.auth.user_id)
-                if action_type.get("log_summary") else None
-            )
-            if action_type.get("log_object_type_id") or any(
-                str(r.get("kind")) == "notify" for r in action_type["rules"]
-            ):
-                pre_edit = await _pre_edit_objects(
-                    conn, action_type=action_type, bound=bound,
-                    subject=_parse_json(instance["properties"]),
-                    object_type_id=object_type_id, prefix=prefix,
-                )
-            notices = await _pending_notifications(
-                conn,
-                action_type=action_type,
-                objects=pre_edit,
-                # **A new dict, not `values` itself.** p.110 lets a notification
-                # read a writeback's outputs, and rendering is the only thing that
-                # may see them: `values` becomes `column_updates` a few lines down,
-                # keyed by property and mapped through `reverse_map`, so a
-                # `webhook.<output>` key in it would be looked up as a column that
-                # does not exist.
-                values={**values, **writeback_outputs},
-                bound=bound,
-                subject=_parse_json(instance["properties"]),
-                object_type_id=object_type_id,
-                workspace_id=access.workspace_id,
-                actor_id=access.auth.user_id,
-                prefix=prefix,
-            )
-            # p.20's Create link(s) and Delete link on a join table (§553): the
-            # pair each rule makes or removes, by the two objects' keys, and
-            # the join table it goes in. Resolved here, while the action can
-            # still be refused, as every other named object is.
-            join_tables: dict[str, dict[str, Any]] = {}
-            wanted_pairs: list[tuple[dict[str, Any], tuple[str, str]]] = []
-            for pair in actions_service.join_pairs(
-                bound, rules=action_type["rules"], object_type_id=object_type_id,
-                link_types=link_types,
-            ):
-                other = await instance_store.store_for(conn).get_instance(
-                    search_prefix=prefix, object_type_id=UUID(pair["other_type_id"]),
-                    instance_id=pair["other_instance_id"],
-                )
-                if other is None:
-                    raise NotFoundError("object to link")
-                here, there = str(instance["primary_key"]), str(other["primary_key"])
-                wanted_pairs.append(
-                    (pair, (here, there) if pair["subject_end"] == "from" else (there, here)))
-            wanted_pairs += [(pair, pair["keys"]) for pair in function_links]
-            for pair, keys in wanted_pairs:
-                table = join_tables.get(pair["dataset_id"])
-                if table is None:
-                    located = await fetch_one(
-                        conn, "SELECT s3_location FROM datasets WHERE id = :id",
-                        {"id": pair["dataset_id"]},
-                    )
-                    if located is None:
-                        raise NotFoundError("join table")
-                    table = join_tables[pair["dataset_id"]] = {
-                        "s3_location": str(located["s3_location"]),
-                        "from_column": pair["from_column"], "to_column": pair["to_column"],
-                        "add": [], "remove": [],
-                    }
-                if (table["from_column"], table["to_column"]) != (
-                    pair["from_column"], pair["to_column"]
-                ):
-                    # Two link types over one dataset, joined on different
-                    # columns: one file cannot be written two ways at once.
-                    raise ValueError(
-                        "this action links through two link types that share a join table "
-                        "on different columns, which one write cannot express"
-                    )
-                table["add" if pair["kind"] == "create_link" else "remove"].append(keys)
-            # p.167's action log (§554): where this submission's log entry and
-            # its links to the edited objects go. Read now, so an action whose
-            # log the person applying it cannot write is refused before anything
-            # is written - p.167: "users need the appropriate permissions for
-            # the action log object type".
-            log_source, log_edits = await _log_targets(conn, action_type, link_types)
-            run_id = await actions_service.open_run(
-                conn,
-                action_type_id=action_type_id,
-                instance_id=body.instance_id,
-                dataset_id=UUID(str(source["dataset_id"])),
-                requested_by=access.auth.user_id,
-                submitted_values=values,
-            )
-
-        ok, error = True, None
-        dataset_version: int | None = None
-        # The links this run actually made or removed (§553), for its undo.
-        link_changes: list[dict[str, Any]] = []
-        try:
-            reverse_map = {prop: col for col, prop in column_mappings.items()}
-            # The dataset copy gets the flat form - a Parquet column is a scalar
-            # and a geopoint is not (ontology.column_value).
-            # **Edit-only properties are not in this dict, by definition** (p.113):
-            # they have no column, so there is nothing to append. They are still in
-            # `values`, which is what reaches the instance store below - that split
-            # is the whole of what "edit-only" means in the write path.
-            column_updates = {
-                reverse_map[prop]: ontology_service.column_value(
-                    property_types.get(prop, "string"), value
-                )
-                for prop, value in values.items()
-                if prop not in edit_only
-            }
-            local_path = await anyio.to_thread.run_sync(
-                storage.local_path, str(source["s3_location"])
-            )
-            # Every row this action writes, in one file (decision 0008). A modify
-            # and a create are two writes and must land as **one** version: three
-            # versions carrying the same `produced_by_id` would be a history that
-            # has to be interpreted, and a failure between them would leave a
-            # dataset nobody asked for.
-            def rows_for(type_id: str) -> list[dict[str, Any]]:
-                """The rows to append to one type's dataset, in its own columns."""
-                target_source = sources_by_type[type_id]
-                mappings: dict[str, str] = _parse_json(target_source["column_mappings"])
-                columns = {prop: col for col, prop in mappings.items()}
-                types = contexts[type_id]["property_types"]
-                return [
-                    {
-                        str(target_source["primary_key_column"]): creation["primary_key"],
-                        **{
-                            columns[prop]: ontology_service.column_value(
-                                types.get(prop, "string"), value
-                            )
-                            for prop, value in creation["properties"].items()
-                        },
-                    }
-                    for creation in creations
-                    if creation["object_type_id"] == type_id
-                ]
-
-            # **One entry per dataset, not per rule.** Two rules touching the same
-            # dataset - a modify and a delete of a different row, say - have to
-            # land in one file, or the second staging would collide with the
-            # version the first one just claimed.
-            plan: dict[str, dict[str, Any]] = {}
-
-            def entry(target_source: dict[str, Any]) -> dict[str, Any]:
-                return plan.setdefault(
-                    str(target_source["dataset_id"]),
-                    {"source": target_source, "updates": [], "appends": [], "deletes": []},
-                )
-
-            if column_updates:
-                entry(dict(source))["updates"].append(
-                    (str(instance["primary_key"]), column_updates)
-                )
             for modification in modifications:
                 row = modification_rows[
                     (modification["object_type_id"], modification["instance_id"])
                 ]
-                columns = {prop: col for col, prop in row["mappings"].items()}
-                types = modification_contexts[
-                    (modification["object_type_id"], modification["instance_id"])
-                ]["property_types"]
-                entry(row["source"])["updates"].append((
-                    row["primary_key"],
-                    {
-                        columns[prop]: ontology_service.column_value(
-                            types.get(prop, "string"), value
-                        )
-                        for prop, value in modification["properties"].items()
-                    },
-                ))
-            for type_id in sources_by_type:
-                rows = rows_for(type_id)
-                if rows:
-                    entry(sources_by_type[type_id])["appends"].extend(rows)
-            for removal in removals:
-                entry(removal["source"])["deletes"].append(removal["primary_key"])
-            # p.167's log entry (§554): one row for this submission, and a pair
-            # per edited object of the type the log links to - in this commit,
-            # so a submission and its record cannot disagree.
-            log_row: dict[str, Any] | None = None
-            if log_source is not None:
-                edited = action_log.edited_objects(
-                    subject=(object_type_id, str(instance["primary_key"])) if values else None,
-                    others=[
-                        *((m["object_type_id"], modification_rows[
-                            (m["object_type_id"], m["instance_id"])]["primary_key"])
-                          for m in modifications),
-                        *((c["object_type_id"], str(c["primary_key"])) for c in creations),
-                        *((r["object_type_id"], str(r["primary_key"])) for r in removals),
-                    ],
-                )
-                log_row = action_log.log_row(
-                    run_id=run_id, action_type=action_type, user_id=access.auth.user_id,
-                    at=datetime.now(timezone.utc).replace(tzinfo=None),
-                    edited=[key for _type, key in edited], bound=bound,
-                    columns=set(_parse_json(log_source["column_mappings"])),
-                    # p.168's Summary and object reference properties (§586),
-                    # from the objects as they were before this write.
-                    extra=action_log.extra_columns(
-                        summary=action_type.get("log_summary"),
-                        references=_parse_json(action_type.get("log_reference_properties")) or {},
-                        values={**bound, **writeback_outputs}, objects=pre_edit,
-                        actor=log_actor,
-                    ),
-                )
-                entry(dict(log_source))["appends"].append(log_row)
-                if log_edits is not None:
-                    table = join_tables.setdefault(log_edits["dataset_id"], {
-                        **log_edits, "add": [], "remove": [],
-                    })
-                    table["add"] += [
-                        (str(run_id), key) for type_id, key in edited
-                        if type_id == log_edits["to_type_id"]
-                    ]
-
-            staged_all = []
-            async with user_connection(access.auth.user_id) as conn:
-                for dataset_key, work in plan.items():
-                    work_source = work["source"]
-                    work_path = await anyio.to_thread.run_sync(
-                        storage.local_path, str(work_source["s3_location"])
-                    )
-                    with tempfile.TemporaryDirectory() as tmp:
-                        dest = os.path.join(tmp, "out.parquet")
-                        work_schema, work_rows = await anyio.to_thread.run_sync(
-                            engine.write_rows,
-                            work_path,
-                            str(work_source["primary_key_column"]),
-                            work["updates"],
-                            work["appends"],
-                            dest,
-                            work["deletes"],
-                        )
-                        with open(dest, "rb") as handle:
-                            work_bytes = handle.read()
-                    staged_all.append(
-                        await dataset_service.stage_version(
-                            conn, storage,
-                            dataset_id=UUID(dataset_key),
-                            workspace_id=access.workspace_id,
-                            parquet_bytes=work_bytes,
-                            schema=work_schema,
-                            row_count=work_rows,
-                            produced_by_kind="action",
-                            produced_by_id=run_id,
-                            created_by=access.auth.user_id,
-                            # An action that only creates objects (and the
-                            # log's one row) adds to the view (§747).
-                            transaction_type=dataset_service.written_transaction(
-                                work["updates"], work["deletes"]),
-                        )
-                    )
-                for dataset_key, table in join_tables.items():
-                    if dataset_key in plan:
-                        raise DatasetEngineError(
-                            "this action writes a join table that also backs an object "
-                            "type it changes, which one version cannot express"
-                        )
-                    staged, changes = await _write_pairs(
-                        conn, storage, access, run_id, dataset_key, table,
-                        add=table["add"], remove=table["remove"],
-                    )
-                    link_changes += changes
-                    if staged is not None:
-                        staged_all.append(staged)
-                committed = await dataset_service.commit_versions(conn, staged_all)
-                dataset_version = int(
-                    committed.get(str(source["dataset_id"]), {"current_version": 0})[
-                        "current_version"
-                    ]
-                ) or None
-                if values:
-                    await instance_store.store_for(conn).update_properties(
-                        search_prefix=prefix,
-                        # **The type the subject turned out to be**, which for
-                        # an interface action is not the action's own (§451).
-                        # It was `action_type["object_type_id"]` and that is
-                        # `None` there — the write landed in the dataset and
-                        # the index update raised, which is the half of
-                        # decision 0008's ordering that is *meant* to be
-                        # survivable and is still not a thing to leave.
-                        object_type_id=object_type_id,
-                        instance_id=str(body.instance_id),
-                        properties=values,
-                    )
-                for modification in modifications:
-                    # Same order and same reasoning as the subject's write above:
-                    # the dataset is the record, the index is a projection
-                    # (decision 0008), so a failure here leaves an object whose
-                    # stored properties are stale until the next sync rather than a
-                    # dataset that disagrees with itself.
-                    await instance_store.store_for(conn).update_properties(
-                        search_prefix=prefix,
-                        object_type_id=UUID(modification["object_type_id"]),
-                        instance_id=modification["instance_id"],
-                        properties=modification["properties"],
-                    )
-                if log_row is not None and log_source is not None:
-                    # The log entry findable at once, as a created object is.
-                    log_type = UUID(str(action_type["log_object_type_id"]))
-                    await instance_store.store_for(conn).upsert_instances(
-                        search_prefix=prefix, object_type_id=log_type,
-                        source_id=UUID(str(log_source["id"])),
-                        rows=[(str(run_id), action_log.properties_of(log_row))],
-                        synced_at=datetime.now(timezone.utc),
-                        declared=await ontology_service.list_properties(conn, log_type),
-                    )
-                if removals:
-                    # The dataset is the record and the index is a projection
-                    # (decision 0008), so the row goes first and the projection
-                    # follows. A failure here leaves a findable object whose row is
-                    # gone - visible, wrong, and repairable by a re-sync; the
-                    # reverse order would lose the object while the row survived.
-                    for removal in removals:
-                        await instance_store.store_for(conn).delete_instances(
-                            search_prefix=prefix,
-                            object_type_id=UUID(removal["object_type_id"]),
-                            source_id=UUID(str(removal["source"]["id"])),
-                            primary_keys=[removal["primary_key"]],
-                        )
-                if creations:
-                    # The index is a projection (decision 0008) - the dataset above
-                    # is the record. Upserted here so a created object is findable
-                    # immediately rather than at the next sync; a failure here is
-                    # repairable by re-syncing the source, which a half-written
-                    # dataset would not be.
-                    for type_id, target_source in sources_by_type.items():
-                        rows = [
-                            (creation["primary_key"], creation["properties"])
-                            for creation in creations
-                            if creation["object_type_id"] == type_id
-                        ]
-                        if not rows:
-                            continue
-                        await instance_store.store_for(conn).upsert_instances(
-                            search_prefix=prefix,
-                            object_type_id=UUID(type_id),
-                            source_id=UUID(str(target_source["id"])),
-                            rows=rows,
-                            synced_at=datetime.now(timezone.utc),
-                            # An action creating the *first* object of a type is
-                            # the one path that reaches the store before any sync
-                            # has, so the index it creates has to carry the
-                            # mapping - otherwise `dynamic: "strict"` refuses the
-                            # document that asked for it.
-                            declared=await ontology_service.list_properties(
-                                conn, UUID(type_id)
-                            ),
-                        )
-        except DatasetEngineError as exc:
-            ok, error = False, str(exc)
-
-        async with user_connection(access.auth.user_id) as conn:
-            await actions_service.close_run(
-                conn, run_id, ok=ok, dataset_version=dataset_version, error=error
-            )
-            # **Only when the write succeeded.** A notification saying an object
-            # changed, sent after the change failed, is the one outcome worse than
-            # no notification: the recipient acts on it and finds nothing.
-            if ok:
-                # **p.107's side effects, after the objects changed and unable to
-                # undo that.** "Modifications to Foundry objects will occur before
-                # side effects are applied", and the failure is not shown — so this
-                # is under the same `if ok:` as the notifications, its result is
-                # dropped, and every call is recorded on the run regardless.
-                #
-                # Dropped rather than merged into anything: p.110 gives outputs to
-                # a *writeback* only, and there is no subsequent rule here for a
-                # side effect's output to reach.
-                await _run_webhooks(
-                    conn,
-                    rules=action_type["rules"],
-                    mode="side_effect",
-                    bound=bound,
-                    project_id=access.project_id,
-                    workspace_id=access.workspace_id,
-                    actor_id=access.auth.user_id,
-                    run_id=run_id,
-                )
-                for notice in notices:
-                    await notification_store.deliver(
-                        conn,
-                        workspace_id=access.workspace_id,
-                        user_id=notice["user_id"],
-                        actor_id=access.auth.user_id,
-                        action_run_id=run_id,
-                        content=notice["content"],
-                    )
-            fresh_instance = await instance_store.store_for(conn).get_instance(
-                search_prefix=prefix, object_type_id=object_type_id,
-                instance_id=str(body.instance_id),
-            )
-            updated_instance = fresh_instance or instance
-            # **p.154's Undo needs what the object was, recorded here or nowhere**
-            # (§319). Once the dataset version is committed the appended rows look
-            # like every other row, so nothing later can reconstruct the before —
-            # and the same argument holds for the objects this run created,
-            # deleted or touched besides its subject (§551), which no reader of
-            # `action_runs` could reconstruct afterwards.
-            #
-            # Recorded only for a successful run: a failed one changed nothing, and
-            # a "before" beside a failure would invite an undo of an edit that did
-            # not happen.
-            if ok:
-                await actions_service.record_revert_state(
-                    conn, run_id,
-                    previous_properties=_parse_json(instance["properties"]),
-                    applied_properties=_parse_json(updated_instance["properties"]),
-                    # p.156's revert of a delete, and of everything else this
-                    # run wrote besides its subject (§551): each object, with
-                    # what putting it back needs.
-                    effects=_revert_effects(
-                        creations=creations, removals=removals,
-                        modifications=modifications, modification_rows=modification_rows,
-                        sources_by_type=sources_by_type,
-                    ) + link_changes,
-                )
-                # p.402's edit history (§470): every object this run changed,
-                # after the write succeeded. The recorder skips a type whose
-                # tracking is off, so this costs one read per object otherwise.
-                edits = object_edits.EditRecorder(
-                    conn, workspace_id=access.workspace_id, action_run_id=run_id,
-                    edited_by=access.auth.user_id,
-                )
-                # A deleted subject needs no guard here: `updated_instance`
-                # falls back to `instance` when the object is gone, so the
-                # diff is empty and the removal below is its only record. (A
-                # guard for it survived the mutation sweep as equivalent.)
                 await edits.record(
-                    object_type_id, str(instance["primary_key"]),
-                    _parse_json(instance["properties"]),
-                    _parse_json(updated_instance["properties"]),
+                    UUID(modification["object_type_id"]), row["primary_key"],
+                    row["before"], {**row["before"], **modification["properties"]},
                 )
-                for modification in modifications:
-                    row = modification_rows[
-                        (modification["object_type_id"], modification["instance_id"])
-                    ]
-                    await edits.record(
-                        UUID(modification["object_type_id"]), row["primary_key"],
-                        row["before"], {**row["before"], **modification["properties"]},
-                    )
-                for creation in creations:
-                    await edits.record(
-                        UUID(creation["object_type_id"]), str(creation["primary_key"]),
-                        None, creation["properties"],
-                    )
-                for removal in removals:
-                    await edits.record(
-                        UUID(removal["object_type_id"]), removal["primary_key"],
-                        removal["before"], None,
-                    )
+            for creation in creations:
+                await edits.record(
+                    UUID(creation["object_type_id"]), str(creation["primary_key"]),
+                    None, creation["properties"],
+                )
+            for removal in removals:
+                await edits.record(
+                    UUID(removal["object_type_id"]), removal["primary_key"],
+                    removal["before"], None,
+                )
+        # One record per submission: a batch writes its own (§800).
+        if audited:
             await audit.record(
                 conn,
                 organisation_id=access.auth.organisation_id,
@@ -3750,8 +3915,8 @@ async def execute_action(
                 workspace_id=access.workspace_id,
                 project_id=access.project_id,
                 metadata={
-                    "instance_id": str(body.instance_id), "ok": ok,
-                    "properties": list(body.values.keys()),
+                    "instance_id": str(instance_id), "ok": ok,
+                    "properties": list(submitted.keys()),
                 },
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
@@ -3770,68 +3935,115 @@ async def execute_action(
                         conn,
                         object_type_id=object_type_id,
                         user_id=access.auth.user_id,
-                        application=body.application or "action",
+                        application=application or "action",
                         writes=1,
                     )
                 except Exception:  # noqa: BLE001 - a metric never fails a write
                     pass
-            # **Asked rather than assumed** (§319). The apply path has just written
-            # everything an undo would need, so it is tempting to answer "yes" here
-            # and save a read — but `refusal` is the one place p.154-156's
-            # conditions live, and a second opinion beside it is a second place for
-            # them to drift. Two of them are already true at this instant for some
-            # runs: an action whose type has revert switched off, and one that
-            # created objects alongside its edit.
-            undo_refusal: str | None
-            if ok:
-                # `get_run` joins the action type's own toggle, so the run and
-                # p.155's setting are read in one statement rather than two with a
-                # window between them.
-                run_row = await actions_service.get_run(conn, access.workspace_id, run_id)
-                undo_refusal = action_revert.refusal(
-                    run_row,
-                    action_type=run_row,
-                    actor_id=str(access.auth.user_id),
-                    # The subject as it is: gone, if this run deleted it (§551).
-                    current_properties=(
-                        _parse_json(fresh_instance["properties"]) if fresh_instance else None
-                    ),
-                )
-            else:
-                undo_refusal = "This action did not succeed, so there is nothing to undo."
-        return ExecuteResult(
-            ok=ok,
-            error=error,
-            dataset_version=dataset_version,
-            run_id=run_id,
-            can_undo=undo_refusal is None,
-            undo_refusal=undo_refusal,
-            instance=InstanceOut(
-                **{**updated_instance, "properties": _parse_json(updated_instance["properties"])}
-            ),
-            # p.513's Output object set. **Empty when the write failed**, because
-            # a set naming rows the action did not manage to produce is worse than
-            # an empty one - the reader would act on objects that never changed.
-            touched=[] if not ok else actions_service.touched_objects(
-                # The subject counts only when this action actually wrote to it:
-                # `values` is empty for an action whose every rule targets
-                # somewhere else, and an unchanged row does not belong in a set
-                # describing what changed.
-                subject={
-                    "object_type_id": str(object_type_id),
-                    "primary_key": str(instance["primary_key"]),
-                } if values else None,
-                creations=creations,
-                modifications=[
-                    {
-                        "object_type_id": modification["object_type_id"],
-                        "primary_key": modification_rows[
-                            (modification["object_type_id"], modification["instance_id"])
-                        ]["primary_key"],
-                    }
-                    for modification in modifications
-                ],
-            ),
+        # **Asked rather than assumed** (§319). The apply path has just written
+        # everything an undo would need, so it is tempting to answer "yes" here
+        # and save a read — but `refusal` is the one place p.154-156's
+        # conditions live, and a second opinion beside it is a second place for
+        # them to drift. Two of them are already true at this instant for some
+        # runs: an action whose type has revert switched off, and one that
+        # created objects alongside its edit.
+        undo_refusal: str | None
+        if ok:
+            # `get_run` joins the action type's own toggle, so the run and
+            # p.155's setting are read in one statement rather than two with a
+            # window between them.
+            run_row = await actions_service.get_run(conn, access.workspace_id, run_id)
+            undo_refusal = action_revert.refusal(
+                run_row,
+                action_type=run_row,
+                actor_id=str(access.auth.user_id),
+                # The subject as it is: gone, if this run deleted it (§551).
+                current_properties=(
+                    _parse_json(fresh_instance["properties"]) if fresh_instance else None
+                ),
+            )
+        else:
+            undo_refusal = "This action did not succeed, so there is nothing to undo."
+    return ExecuteResult(
+        ok=ok,
+        error=error,
+        dataset_version=dataset_version,
+        run_id=run_id,
+        can_undo=undo_refusal is None,
+        undo_refusal=undo_refusal,
+        instance=InstanceOut(
+            **{**updated_instance, "properties": _parse_json(updated_instance["properties"])}
+        ),
+        # p.513's Output object set. **Empty when the write failed**, because
+        # a set naming rows the action did not manage to produce is worse than
+        # an empty one - the reader would act on objects that never changed.
+        touched=[] if not ok else actions_service.touched_objects(
+            # The subject counts only when this action actually wrote to it:
+            # `values` is empty for an action whose every rule targets
+            # somewhere else, and an unchanged row does not belong in a set
+            # describing what changed.
+            subject={
+                "object_type_id": str(object_type_id),
+                "primary_key": str(instance["primary_key"]),
+            } if values else None,
+            creations=creations,
+            modifications=[
+                {
+                    "object_type_id": modification["object_type_id"],
+                    "primary_key": modification_rows[
+                        (modification["object_type_id"], modification["instance_id"])
+                    ]["primary_key"],
+                }
+                for modification in modifications
+            ],
+        ),
+    )
+
+
+@project_router.post("/{action_type_id}/execute", response_model=ExecuteResult)
+async def execute_action(
+    action_type_id: UUID,
+    body: ExecuteRequest,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ExecuteResult:
+    storage = _dataset_storage()
+    # **Where a refusal below notes itself, to be written after this
+    # function's transaction has unwound.** `record_refusal` opens its own
+    # connection — it has to, or the row is rolled back by the exception it
+    # describes — and writing it from inside the block would mean holding
+    # two at once. Thirty concurrent refusals would then be thirty requests
+    # each holding one connection and waiting for a second, which is a pool
+    # deadlock rather than a slow page.
+    noted: dict[str, Any] = {}
+    try:
+        async with user_connection(access.auth.user_id) as conn:
+            p = await _prepare_row(conn, access, action_type_id, body, noted)
+
+        ok, error = True, None
+        dataset_version: int | None = None
+        # The links this run actually made or removed (§553), for its undo.
+        link_changes: list[dict[str, Any]] = []
+        try:
+            plan: dict[str, dict[str, Any]] = {}
+            _plan_row(p, plan, p["join_tables"])
+            committed, changes = await _commit_rows(
+                access, storage, [p], plan, p["join_tables"],
+                produced_by_kind="action", produced_by_id=p["run_id"],
+            )
+            dataset_version = int(
+                committed.get(str(p["source"]["dataset_id"]), {"current_version": 0})[
+                    "current_version"
+                ]
+            ) or None
+            link_changes = changes[0]
+        except DatasetEngineError as exc:
+            ok, error = False, str(exc)
+
+        return await _finish_row(
+            access, request, action_type_id, p, ok=ok, error=error,
+            dataset_version=dataset_version, link_changes=link_changes,
+            application=body.application,
         )
     except ValueError:
         if "refusal" in noted:
@@ -4320,3 +4532,167 @@ async def execute_batch(
         ok=ok, error=error, batch_id=batch_id, rows=len(planned),
         dataset_versions=dataset_versions,
     )
+
+
+# ---- an Action table's rows, as one batch call (workshop p.512, §800) --------
+class RowsRequest(BaseModel):
+    """An Action table's rows: one submission of the action per row."""
+
+    # p.131's 10,000 for one batch call, which is a table's rows; a
+    # function-backed action is held to its 20 inside, where it is known.
+    rows: list[ExecuteRequest] = Field(
+        min_length=1, max_length=actions_service.TABLE_ROW_LIMIT
+    )
+    application: str | None = Field(default=None, max_length=50)
+
+
+class RowsResult(BaseModel):
+    """What one batch call did: every row's submission, or none of them.
+
+    `results` is each row's own answer, as `execute` gives it - its run, its
+    undo and the objects it touched - in the order the rows came, and empty
+    when the batch was refused or failed.
+    """
+
+    ok: bool
+    error: str | None
+    batch_id: UUID
+    results: list[ExecuteResult]
+
+
+@project_router.post("/{action_type_id}/execute-rows", response_model=RowsResult)
+async def execute_rows(
+    action_type_id: UUID,
+    body: RowsRequest,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> RowsResult:
+    """Submit an Action table's rows as one batch call (workshop p.512).
+
+    > "When an action is triggered in batches, such as in Workshop inline
+    > edits or in Automate, the backing function is usually called once per
+    > request in sequence, and all edits are applied atomically at the end of
+    > the action call." (`action-types` p.84)
+
+    > "Also note that batch call limits apply to the table layout, as well as
+    > the requirement that edits do not conflict." (workshop p.512)
+
+    `execute-batch` is the Object Table's inline edit, which changes only the
+    row's own object (p.136). This is any action - one that creates, deletes
+    or links as well - and it is `execute` itself, a row at a time, with the
+    write moved to the end: every row is prepared (`_prepare_row`: bound,
+    checked, its function called, its objects found and its run opened) in
+    one transaction, every row's writes are planned together, and only then
+    is anything written, as one commit. A row refused anywhere before that
+    refuses the batch, and its runs are rolled back with it. Two rows that
+    edit one object are refused as p.512's conflict, because the second
+    would be planned against the object as the first found it.
+
+    p.131's limits: 10,000 rows, or 20 for a function-backed action - whose
+    function is called once per row here (p.84's first way), so the higher
+    limit of p.85's batched execution is `execute-batch`'s.
+    """
+    storage = _dataset_storage()
+    batch_id = uuid4()
+    noted: dict[str, Any] = {}
+    try:
+        async with user_connection(access.auth.user_id) as conn:
+            action_type = await actions_service.get_action_type(
+                conn, access.workspace_id, action_type_id
+            )
+            if any(str(r.get("kind")) == "function" for r in action_type["rules"]) and (
+                len(body.rows) > actions_service.FUNCTION_INLINE_EDIT_ROW_LIMIT
+            ):
+                raise ValueError(
+                    "a function-backed action is called at most "
+                    f"{actions_service.FUNCTION_INLINE_EDIT_ROW_LIMIT} times in a batch, "
+                    f"and this submission has {len(body.rows)} rows (action-types p.131)"
+                )
+            prepared = [
+                await _prepare_row(conn, access, action_type_id, row, noted,
+                                   batch_id=batch_id)
+                for row in body.rows
+            ]
+            # Planned inside the transaction that opened the runs, so a
+            # conflict found here rolls them back with everything else.
+            plan: dict[str, dict[str, Any]] = {}
+            join_tables: dict[str, dict[str, Any]] = {}
+            touched: dict[tuple[str, str], int] = {}
+            for index, p in enumerate(prepared):
+                for dataset_key, table in p["join_tables"].items():
+                    shared = join_tables.setdefault(
+                        dataset_key, {**table, "add": [], "remove": []})
+                    if (shared["from_column"], shared["to_column"]) != (
+                        table["from_column"], table["to_column"]
+                    ):
+                        raise ValueError(
+                            "these rows link through two link types that share a join "
+                            "table on different columns, which one write cannot express"
+                        )
+                    shared["add"] += table["add"]
+                    shared["remove"] += table["remove"]
+                _plan_row(p, plan, join_tables)
+                for touch in p["touches"]:
+                    if touch in touched:
+                        raise ValueError(
+                            f"rows {touched[touch] + 1} and {index + 1} both edit "
+                            f"{touch[1]}, and the edits of one batch must not "
+                            "conflict (workshop p.512)"
+                        )
+                    touched[touch] = index
+
+        ok, error = True, None
+        committed: dict[str, Any] = {}
+        link_changes: list[list[dict[str, Any]]] = [[] for _ in prepared]
+        try:
+            committed, link_changes = await _commit_rows(
+                access, storage, prepared, plan, join_tables,
+                produced_by_kind="action_batch", produced_by_id=batch_id,
+            )
+        except DatasetEngineError as exc:
+            ok, error = False, str(exc)
+
+        results = [
+            await _finish_row(
+                access, request, action_type_id, p, ok=ok, error=error,
+                dataset_version=int(committed.get(
+                    str(p["source"]["dataset_id"]), {"current_version": 0}
+                )["current_version"]) or None,
+                link_changes=changes, application=body.application, audited=False,
+            )
+            for p, changes in zip(prepared, link_changes)
+        ]
+        async with user_connection(access.auth.user_id) as conn:
+            # One write and one audit entry for the submission (p.32; §324):
+            # the reader pressed Submit once, and the runs are the per-row
+            # record `batch_id` lets somebody read back.
+            if ok:
+                try:
+                    await usage_service.record(
+                        conn,
+                        object_type_id=prepared[0]["object_type_id"],
+                        user_id=access.auth.user_id,
+                        application=body.application or "workshop",
+                        writes=1,
+                    )
+                except Exception:  # noqa: BLE001 - a metric never fails a write
+                    pass
+            await audit.record(
+                conn,
+                organisation_id=access.auth.organisation_id,
+                user_id=access.auth.user_id,
+                action="action.execute_rows",
+                resource_type="action_type",
+                resource_id=action_type_id,
+                workspace_id=access.workspace_id,
+                project_id=access.project_id,
+                metadata={"batch_id": str(batch_id), "rows": len(prepared), "ok": ok},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+        return RowsResult(ok=ok, error=error, batch_id=batch_id,
+                          results=results if ok else [])
+    except ValueError:
+        if "refusal" in noted:
+            await action_metrics.record_refusal(**noted["refusal"])
+        raise

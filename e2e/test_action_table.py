@@ -28,7 +28,7 @@ def build(api, name: str, *, layout_switch: bool = False, props: dict | None = N
           events: dict | None = None, variables: dict | None = None,
           prefill: str | None = None, tickets: int = 3,
           prefill_keys: list[str] | None = None, with_table: bool = False,
-          function_backed: bool = False) -> Module:
+          function_backed: bool = False, creates: bool = False) -> Module:
     """`prefill`: "same" fills the table from a set of this action's own type
     (p.512), "other" from a set of a second type, which p.512 says must not."""
     mod = Module(api, name)
@@ -72,10 +72,18 @@ def build(api, name: str, *, layout_switch: bool = False, props: dict | None = N
         rules = [{"kind": "function", "config": {
             "function_id": fn["id"], "version": "1.0.0", "auto_upgrade": False,
             "inputs": {"ticket": {"subject": True}, "status": {"parameter": "status"}}}}]
+    if creates:
+        # Opens a follow-up as well: a create, which the inline edit's batch
+        # cannot take, so the rows go as a batch call of rows (§800).
+        rules = rules + [{"kind": "create_object", "config": {
+            "primary_key": "follow",
+            "properties": {"ticket_id": "follow", "status": "status"}}}]
     api.call("PUT", f"/workspaces/{mod.workspace_id}/action-types/{action['id']}/definition", {
         "parameters": [
             {"api_name": "status", "display_name": "Status", "data_type": "string",
              "required": True},
+            *([{"api_name": "follow", "display_name": "Follow-up", "data_type": "string",
+                "required": True}] if creates else []),
         ],
         "rules": rules,
         "criteria": [
@@ -405,3 +413,75 @@ def test_objects_past_the_first_page_can_be_rows(page, api) -> None:
         "name": "rows.csv", "mimeType": "text/csv", "buffer": b"key,status\nT28,closed\n"})
     expect(rows(page)).to_have_count(3)
     assert row_keys(page)[2] == "T28"
+
+
+def fill_follow_up(page, index: int, key: str) -> None:
+    rows(page).nth(index).locator("[data-cell$=':2'] input").fill(key)
+
+
+def drop(api, mod: Module, key: str) -> None:
+    """Delete one ticket behind the table's back, which no pre-check sees."""
+    remover = api.call("POST", f"/workspaces/{mod.workspace_id}/action-types", {
+        "object_type_id": mod.type_id, "api_name": f"drop_{uuid.uuid4().hex[:8]}",
+        "display_name": "Drop", "editable_properties": ["status"]})
+    api.call("PUT", f"/workspaces/{mod.workspace_id}/action-types/{remover['id']}/definition",
+             {"parameters": [], "rules": [{"kind": "delete_object", "config": {}}],
+              "criteria": []})
+    gone = next(i for i in api.call(
+        "GET", f"/workspaces/{mod.workspace_id}/object-types/{mod.type_id}/instances")["items"]
+        if i["primary_key"] == key)
+    api.call("POST", f"{mod.base}/actions/{remover['id']}/execute",
+             {"instance_id": gone["id"], "values": {}})
+
+
+def test_rows_of_an_action_that_creates_go_as_one_batch_call(page, api) -> None:
+    """p.84's "all edits are applied atomically at the end of the action call"
+    for an action the inline edit's batch cannot take (§800): both rows'
+    edits and both follow-ups, and p.513's submit event once."""
+    mod = build(api, "Action table creates", creates=True, events={
+        "e_done": {"id": "e_done", "trigger": {"node": "frm", "on": "submit"},
+                   "effects": [{"type": "set_variable",
+                                "config": {"variable": "v_done", "value": "yes"}}]}})
+    open_module(page, mod)
+    fill_row(page, 0, "T1", "closed")
+    fill_follow_up(page, 0, "F1")
+    page.get_by_test_id("action-table-add").click()
+    fill_row(page, 1, "T2", "waiting")
+    fill_follow_up(page, 1, "F2")
+    sent: list[str] = []
+    page.on("request", lambda r: sent.append(r.url.rsplit("/", 1)[-1])
+            if "/actions/" in r.url and r.method == "POST" else None)
+    page.get_by_test_id("action-table-submit").click()
+    expect(page.get_by_test_id("action-table-done")).to_have_count(2, timeout=15000)
+    expect(page.get_by_text("Fired: yes")).to_be_visible()
+    assert statuses(api, mod) == {"T1": "closed", "T2": "waiting", "T3": "open",
+                                  "F1": "closed", "F2": "waiting"}
+    assert [u for u in sent if u.startswith("execute")] == ["execute-rows"]
+
+
+def test_a_creating_batch_the_server_refuses_writes_no_row(page, api) -> None:
+    """Every row or none (§800): the second row's object is gone by the time
+    the batch lands, so the first row's edit and follow-up are not written."""
+    mod = build(api, "Action table creates atomic", creates=True, events={
+        "e_done": {"id": "e_done", "trigger": {"node": "frm", "on": "submit"},
+                   "effects": [{"type": "set_variable",
+                                "config": {"variable": "v_done", "value": "yes"}}]}})
+    open_module(page, mod)
+    fill_row(page, 0, "T1", "closed")
+    fill_follow_up(page, 0, "F1")
+    page.get_by_test_id("action-table-add").click()
+    fill_row(page, 1, "T2", "waiting")
+    fill_follow_up(page, 1, "F2")
+    drop(api, mod, "T2")
+    page.get_by_test_id("action-table-submit").click()
+    expect(page.get_by_test_id("action-table-problem")).to_have_count(2, timeout=15000)
+    # Refused for the object that went, and nothing else.
+    expect(page.get_by_test_id("action-table-problem").first).to_contain_text(
+        "object instance not found")
+    expect(page.get_by_test_id("action-table-done")).to_have_count(0)
+    assert statuses(api, mod) == {"T1": "open", "T3": "open"}
+    # p.513's "On successful action submit" is for a submit that succeeded.
+    # A wait, because the absence of an event is only seen once it would have
+    # run: the event's effects land a render after the rows are marked.
+    page.wait_for_timeout(1500)
+    expect(page.get_by_text("Fired: yes")).to_have_count(0)

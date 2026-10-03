@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  afterBatch, batchable, batchProblem, csvEntries, csvPlan, csvValue, nextCell, parseCsv, pendingRows, rowFor, rowProblems, tableColumns,
+  afterBatch, batchable, batchProblem, rowsTouched, csvEntries, csvPlan, csvValue, nextCell, parseCsv, pendingRows, rowFor, rowProblems, tableColumns,
   type TableRow,
 } from "./action-table";
 
@@ -188,6 +188,21 @@ describe("a batch's limit and answer (§796)", () => {
     expect(afterBatch({ ok: true })).toEqual({ status: "done" });
     expect(afterBatch({ ok: false, error: "no" })).toEqual({ status: "refused", message: "no" });
     expect(afterBatch({ ok: false })).toEqual({ status: "refused", message: "Refused." });
+  });
+});
+
+describe("what a batch call of rows produced (§800)", () => {
+  const made = (key: string, change = "created") => ({ object_type_id: "t", primary_key: key, change });
+
+  it("is every row's own output, in order", () => {
+    expect(rowsTouched({ ok: true, results: [
+      { touched: [made("a"), made("p1", "modified")] }, { touched: [] }, {}, { touched: [made("b")] },
+    ] })).toEqual([made("a"), made("p1", "modified"), made("b")]);
+  });
+
+  it("is nothing when the batch did not land", () => {
+    expect(rowsTouched({ ok: false, results: [{ touched: [made("a")] }] })).toEqual([]);
+    expect(rowsTouched({ ok: true })).toEqual([]);
   });
 });
 
