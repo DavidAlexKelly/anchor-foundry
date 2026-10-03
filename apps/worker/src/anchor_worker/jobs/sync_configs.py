@@ -73,6 +73,7 @@ def _record_synced_dataset(
     parquet_bytes: bytes,
     schema: list[engine.ColumnSchema],
     row_count: int,
+    transaction_type: str,
     cursor_value: str | None = None,
 ) -> "tuple[UUID, dict | None]":
     """Create-or-version the connection's managed sync dataset. Same shape
@@ -147,11 +148,11 @@ def _record_synced_dataset(
             """
             INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                           table_schema, row_count, produced_by_kind,
-                                          produced_by_id, sync_cursor_value)
-            VALUES (%s, %s, %s, %s, %s, 'sync', %s, %s)
+                                          produced_by_id, sync_cursor_value, transaction_type)
+            VALUES (%s, %s, %s, %s, %s, 'sync', %s, %s, %s)
             """,
             (str(dataset_id), version, parquet_key, schema_json, row_count, str(connection_id),
-             cursor_value),
+             cursor_value, transaction_type),
         )
     except psycopg.Error as exc:
         raise (engine.schema_policy_error(exc) or exc) from exc
@@ -279,9 +280,13 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                         storage_local, new_parquet, primary_key_column, merged_parquet
                     )
                     final_parquet = merged_parquet
+                    # Whether this run replaced a row of the view (§747).
+                    transaction_type = engine.merge_transaction(
+                        storage_local, new_parquet, primary_key_column)
                 else:
                     final_parquet = new_parquet
                     rows_synced = new_row_count
+                    transaction_type = "SNAPSHOT"
 
                 if not nothing_new:
                     with open(final_parquet, "rb") as handle:
@@ -301,6 +306,7 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                             project_id=UUID(str(project_id)), workspace_id=UUID(str(workspace_id)),
                             parquet_bytes=parquet_bytes, schema=schema, row_count=rows_synced,
                             cursor_value=new_cursor_value if mode == "incremental" else None,
+                            transaction_type=transaction_type,
                         )
                     cur.execute(
                         "INSERT INTO sync_runs (connection_id, dataset_id, mode, source_table, "

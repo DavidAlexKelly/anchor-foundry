@@ -108,6 +108,7 @@ async def stage(conn, storage, fx: Fixture, dataset_id: str, body: bytes = b"par
         dataset_id=_uid(dataset_id), workspace_id=_uid(fx.workspace),
         parquet_bytes=body, schema=SCHEMA, row_count=2,
         produced_by_kind="action", produced_by_id=None, created_by=_uid(fx.editor),
+        transaction_type="UPDATE",
     )
 
 
@@ -175,7 +176,7 @@ async def test_two_datasets_commit_together_or_not_at_all(
                 dataset_id=uuid.uuid4(), version=missing.version,
                 parquet_key=missing.parquet_key, schema_json=missing.schema_json,
                 row_count=missing.row_count, produced_by_kind="action",
-                produced_by_id=None, created_by=_uid(fx.editor),
+                produced_by_id=None, created_by=_uid(fx.editor), transaction_type="UPDATE",
             )
             await dataset_service.commit_versions(conn, [good, doomed])
 
@@ -227,7 +228,7 @@ async def test_add_version_still_stages_and_commits_in_one_call(
             dataset_id=_uid(dataset_id), workspace_id=_uid(fx.workspace),
             parquet_bytes=b"one", schema=SCHEMA, row_count=2,
             produced_by_kind="action", produced_by_id=None,
-            created_by=_uid(fx.editor),
+            created_by=_uid(fx.editor), transaction_type="UPDATE",
         )
 
     assert int(updated["current_version"]) == before["current_version"] + 1

@@ -281,8 +281,9 @@ async def run_full_sync(
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                       table_schema, row_count, produced_by_kind,
-                                      produced_by_id, created_by)
-        VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, 'sync', :cid, :by)
+                                      produced_by_id, created_by, transaction_type)
+        VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, 'sync', :cid, :by,
+                'SNAPSHOT')
         RETURNING id
         """,
         {
@@ -394,6 +395,10 @@ async def run_incremental_sync(
             schema, row_count = engine.merge_incremental(
                 existing_local_path, new_parquet, primary_key_column, merged_parquet
             )
+            # Before the bytes go anywhere: whether this run replaced a row
+            # of the view it merged into (§747).
+            transaction = engine.merge_transaction(
+                existing_local_path, new_parquet, primary_key_column)
         except engine.DatasetEngineError as exc:
             raise SyncError(str(exc)) from exc
         with open(merged_parquet, "rb") as handle:
@@ -466,9 +471,10 @@ async def run_incremental_sync(
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                       table_schema, row_count, produced_by_kind,
-                                      produced_by_id, created_by, sync_cursor_value)
+                                      produced_by_id, created_by, sync_cursor_value,
+                                      transaction_type)
         VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, 'sync', :cid, :by,
-                :cursor)
+                :cursor, :transaction)
         RETURNING id
         """,
         {
@@ -478,6 +484,7 @@ async def run_incremental_sync(
             # Where this run got to (migration 0127, §607): what a rollback to
             # this version puts the connection's cursor back to.
             "cursor": new_cursor_value,
+            "transaction": transaction,
         },
     )
     from sqlalchemy import text as _text2

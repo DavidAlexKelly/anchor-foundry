@@ -149,8 +149,9 @@ def version(fx: Fixture, name: str, kind: str | None, producer: str | None) -> s
             (fx.project, fx.workspace, name, f"v-{uuid.uuid4().hex[:10]}")).fetchone()[0]
         conn.execute(
             """INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
-                                             table_schema, row_count, produced_by_kind, produced_by_id)
-               VALUES (%s, 1, 'x', '[]'::jsonb, 0, %s, %s)""", (did, kind, producer))
+                                             table_schema, row_count, produced_by_kind, produced_by_id,
+                                             transaction_type)
+               VALUES (%s, 1, 'x', '[]'::jsonb, 0, %s, %s, 'SNAPSHOT')""", (did, kind, producer))
     return str(did)
 
 

@@ -104,7 +104,7 @@ def append(
                 workspace_id=uuid.UUID(str(fx.workspace)),
                 parquet_bytes=parquet, schema=schema, row_count=rows,
                 produced_by_kind=kind, produced_by_id=None,
-                created_by=uuid.UUID(str(fx.editor)),
+                created_by=uuid.UUID(str(fx.editor)), transaction_type="SNAPSHOT",
             )
 
     return asyncio.run(write())

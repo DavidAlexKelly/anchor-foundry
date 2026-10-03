@@ -61,5 +61,6 @@ def _function(path: str, name: str) -> str:
 def test_the_two_copies_are_the_same_code() -> None:
     api = os.path.join(ROOT, "api", "src", "services", "dataset_engine.py")
     worker = os.path.join(ROOT, "worker", "src", "anchor_worker", "dataset_engine.py")
-    for name in ("json_safe", "json_value"):
+    # `merge_transaction` (§747) types an incremental sync the same in both.
+    for name in ("json_safe", "json_value", "merge_transaction"):
         assert _function(api, name) == _function(worker, name), name

@@ -284,6 +284,39 @@ def test_incremental_sync_first_run_then_merges_new_rows(workspace: dict, source
     # §607 (migration 0127): each version says where the sync had got to when
     # it was written, which is what a rollback to it puts back.
     assert _version_cursors(row["sync_dataset_id"]) == {1: "2", 2: "3"}
+    # §747: the first run is a whole view; the second only added a key.
+    assert _version_types(row["sync_dataset_id"]) == {1: "SNAPSHOT", 2: "APPEND"}
+
+
+def test_an_incremental_run_that_replaces_a_row_is_an_update(
+    workspace: dict, source_database: dict
+) -> None:
+    """Decision 0020 §2: decided per run. A cursor on `val` brings a changed
+    row back under a key the dataset already holds."""
+    cid = _create_connection(
+        workspace, source_database, mode="incremental", dataset_name="replaced_items",
+        primary_key_column="id", cursor_column="val",
+    )
+    run_due_scheduled_syncs(_ctx())
+    src_dsn = for_database(ADMIN_DSN, SOURCE_DB)
+    with psycopg.connect(src_dsn, autocommit=True) as conn:
+        conn.execute("UPDATE public.items SET val = 'z' WHERE id = 1")
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE connections SET sync_next_run_at = NULL WHERE id=%s", (cid,))
+    run_due_scheduled_syncs(_ctx())
+    row = _connection_row(cid)
+    assert row["status"] == "ok", row["last_error"]
+    assert _version_types(row["sync_dataset_id"]) == {1: "SNAPSHOT", 2: "UPDATE"}
+    assert _dataset_rows(row["sync_dataset_id"]) == (2, 2)
+
+
+def _version_types(dataset_id) -> dict:
+    with psycopg.connect(ADMIN_DSN) as conn:
+        rows = conn.execute(
+            "SELECT version_number, transaction_type FROM dataset_versions "
+            "WHERE dataset_id = %s ORDER BY version_number", (str(dataset_id),),
+        ).fetchall()
+    return {int(v): t for v, t in rows}
 
 
 def _version_cursors(dataset_id) -> dict:
@@ -315,6 +348,7 @@ def test_full_sync_replaces_dataset_wholesale(workspace: dict, source_database: 
     assert (version2, count2) == (2, 2)
     # And records no cursor, because it kept none (§607).
     assert _version_cursors(row["sync_dataset_id"]) == {1: None, 2: None}
+    assert _version_types(row["sync_dataset_id"]) == {1: "SNAPSHOT", 2: "SNAPSHOT"}
 
 
 def test_failing_sync_is_recorded_and_schedule_still_advances(workspace: dict, source_database: dict) -> None:

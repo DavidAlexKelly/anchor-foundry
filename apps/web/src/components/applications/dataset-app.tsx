@@ -30,6 +30,7 @@ import { nextSyncNote, rollbackSummary, whyNotRollbackable } from "@/lib/dataset
 import { madeByText, originHref } from "@/lib/dataset-origin";
 import { bytesText } from "@/lib/bytes";
 import { uploadIntent, uploadedText } from "@/lib/dataset-files";
+import { TRANSACTION_MEANING, currentViewText, viewStarts } from "@/lib/dataset-transactions";
 import { NO_SCHEDULES, scheduleName, scheduleWhen } from "@/lib/dataset-schedules";
 import { currentBytes, sizeText } from "@/lib/dataset-size";
 import {
@@ -869,6 +870,8 @@ function HistoryTab({
   // knows it too — the two say the same thing.
   const newest = versions.data[0];
   if (newest === undefined) return <p className="state">No versions recorded yet.</p>;
+  // p.26's views: where each begins, so a row can say it starts one.
+  const starts = viewStarts(versions.data);
 
   return (
     <>
@@ -877,6 +880,7 @@ function HistoryTab({
         written, which is what makes the row counts below comparable — and what
         makes any of them readable years later.
       </p>
+      <p className="soft ds-note" data-testid="current-view">{currentViewText(versions.data)}</p>
       <div className="ds-scroll">
         <table className="ds-table">
           <thead>
@@ -885,6 +889,7 @@ function HistoryTab({
               <th scope="col">Rows</th>
               <th scope="col">Columns</th>
               <th scope="col">Produced by</th>
+              <th scope="col">Transaction</th>
               <th scope="col">Kept</th>
               <th scope="col">When</th>
               <th scope="col"><span className="ds-sr">View</span></th>
@@ -920,6 +925,18 @@ function HistoryTab({
                         {" "}
                         → v{v.rolled_back_to}
                       </span>
+                    )}
+                  </td>
+                  {/* p.22's type, with p.26's consequence beside it: a
+                      SNAPSHOT (or the first version) begins a view. */}
+                  <td
+                    data-testid="transaction"
+                    data-version={v.version_number}
+                    title={TRANSACTION_MEANING[v.transaction_type]}
+                  >
+                    {v.transaction_type}
+                    {starts.includes(v.version_number) && (
+                      <span className="soft"> · new view</span>
                     )}
                   </td>
                   <td>

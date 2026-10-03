@@ -1439,8 +1439,14 @@ export interface DatasetVersion {
    * transactions out instead (`data-lineage` p.70); this says the same thing
    * forwards, without editing the past. */
   rolled_back_to?: number | null;
+  /** How it relates to the version before (§747; `data-integration` p.22):
+   *  a SNAPSHOT begins a new view, an APPEND only adds rows to the one before,
+   *  an UPDATE may also change or remove them. */
+  transaction_type: TransactionType;
   created_at: string;
 }
+
+export type TransactionType = "SNAPSHOT" | "APPEND" | "UPDATE";
 
 export interface TabularResult {
   columns: { name: string; data_type: string }[];

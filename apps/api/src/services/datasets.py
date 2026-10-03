@@ -174,8 +174,9 @@ async def create_from_upload(
         conn,
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
-                                      table_schema, row_count, produced_by_kind, created_by)
-        VALUES (:did, 1, :key, CAST(:schema AS jsonb), :rows, 'upload', :by)
+                                      table_schema, row_count, produced_by_kind, created_by,
+                                      transaction_type)
+        VALUES (:did, 1, :key, CAST(:schema AS jsonb), :rows, 'upload', :by, 'SNAPSHOT')
         RETURNING id
         """,
         {
@@ -310,8 +311,8 @@ async def fork(
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                       table_schema, row_count, produced_by_kind,
-                                      produced_by_id, created_by)
-        VALUES (:did, 1, :key, CAST(:schema AS jsonb), :rows, 'fork', :src, :by)
+                                      produced_by_id, created_by, transaction_type)
+        VALUES (:did, 1, :key, CAST(:schema AS jsonb), :rows, 'fork', :src, :by, 'SNAPSHOT')
         RETURNING id
         """,
         {
@@ -463,7 +464,7 @@ async def list_versions(
         conn,
         """
         SELECT v.id, v.version_number, v.row_count, v.table_schema,
-               v.produced_by_kind, v.s3_manifest_key, v.created_at,
+               v.produced_by_kind, v.s3_manifest_key, v.created_at, v.transaction_type,
                -- Where a rollback took its data from, resolved to the number
                -- the history shows rather than the row id it stores, so the
                -- reader sees "rolled back to v3" instead of a uuid. Foundry
@@ -685,9 +686,10 @@ async def roll_back(
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                       table_schema, row_count, produced_by_kind,
-                                      produced_by_id, created_by, sync_cursor_value)
+                                      produced_by_id, created_by, sync_cursor_value,
+                                      transaction_type)
         VALUES (:did, :v, :key, CAST(:schema AS jsonb), :rows, 'rollback', :src, :by,
-                :cursor)
+                :cursor, 'SNAPSHOT')
         RETURNING id
         """,
         {
@@ -784,6 +786,25 @@ class StagedVersion:
     produced_by_kind: str
     produced_by_id: UUID | None
     created_by: UUID
+    transaction_type: str
+
+
+#: p.22's transaction types, as far as a version here can be one (db 0144;
+#: decision 0020). DELETE is not among them: nothing removes rows without
+#: possibly changing others too, and such a write is an UPDATE.
+TRANSACTION_TYPES = ("SNAPSHOT", "APPEND", "UPDATE")
+
+
+def written_transaction(
+    updates: list[tuple[str, dict[str, Any]]], deletes: list[str] | None,
+) -> str:
+    """What a write of `engine.write_rows`' shape did to the view (§747): an
+    APPEND when it only added rows - `write_rows` refuses an added row whose
+    key is already there - and an UPDATE when it changed or removed any. An
+    update that set nothing changed nothing."""
+    if deletes or any(columns for _key, columns in updates):
+        return "UPDATE"
+    return "APPEND"
 
 
 async def stage_version(
@@ -798,9 +819,17 @@ async def stage_version(
     produced_by_kind: str,
     produced_by_id: UUID | None,
     created_by: UUID,
+    transaction_type: str,
 ) -> StagedVersion:
-    """Write the bytes; touch no metadata."""
+    """Write the bytes; touch no metadata.
+
+    `transaction_type` has no default (§747): a writer says how its version
+    relates to the one before, or it does not write one.
+    """
     import json
+
+    if transaction_type not in TRANSACTION_TYPES:
+        raise ValueError(f"unknown transaction type {transaction_type!r}")
 
     ws_prefix = await workspace_s3_prefix(conn, workspace_id)
     current = await fetch_one(
@@ -820,6 +849,7 @@ async def stage_version(
         produced_by_kind=produced_by_kind,
         produced_by_id=produced_by_id,
         created_by=created_by,
+        transaction_type=transaction_type,
     )
 
 
@@ -878,8 +908,9 @@ async def commit_versions(
                 """
                 INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                               table_schema, row_count, produced_by_kind,
-                                              produced_by_id, created_by)
-                VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, :kind, :pbid, :by)
+                                              produced_by_id, created_by, transaction_type)
+                VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, :kind, :pbid, :by,
+                        :transaction)
                 """
             ),
             {
@@ -887,7 +918,7 @@ async def commit_versions(
                 "key": record.parquet_key, "schema": record.schema_json,
                 "rows": record.row_count, "kind": record.produced_by_kind,
                 "pbid": str(record.produced_by_id) if record.produced_by_id else None,
-                "by": str(record.created_by),
+                "by": str(record.created_by), "transaction": record.transaction_type,
             },
         )
         committed[str(record.dataset_id)] = dict(updated)
@@ -935,7 +966,7 @@ async def create_empty(
         conn, storage, dataset_id=dataset_id, workspace_id=workspace_id,
         parquet_bytes=parquet, schema=[ColumnSchema(name=n, data_type=t) for n, t in columns],
         row_count=0, produced_by_kind=produced_by_kind, produced_by_id=produced_by_id,
-        created_by=by,
+        created_by=by, transaction_type="SNAPSHOT",
     )
     return dataset_id
 
@@ -952,6 +983,7 @@ async def add_version(
     produced_by_kind: str,
     produced_by_id: UUID | None,
     created_by: UUID,
+    transaction_type: str,
 ) -> dict[str, Any]:
     """Append a new version to an already-known dataset in place - the
     simpler single-purpose case where uploads/model-outputs/syncs' own
@@ -968,5 +1000,6 @@ async def add_version(
         dataset_id=dataset_id, workspace_id=workspace_id, parquet_bytes=parquet_bytes,
         schema=schema, row_count=row_count, produced_by_kind=produced_by_kind,
         produced_by_id=produced_by_id, created_by=created_by,
+        transaction_type=transaction_type,
     )
     return (await commit_versions(conn, [record]))[str(dataset_id)]
