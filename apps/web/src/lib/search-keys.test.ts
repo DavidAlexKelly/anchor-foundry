@@ -43,4 +43,11 @@ describe("previewRows", () => {
     // A blank display name falls back to the api_name.
     expect(rows).toContainEqual(["Name", "status"]);
   });
+
+  it("gives a function its versions, which is what its count is (§777)", () => {
+    const rows = previewRows(hit({
+      kind: "function", object_type_id: null, object_type_name: "", usage_count: 2 }));
+    expect(rows).toContainEqual(["Versions", "2"]);
+    expect(rows.map((r) => r[0])).not.toContain("Used by");
+  });
 });

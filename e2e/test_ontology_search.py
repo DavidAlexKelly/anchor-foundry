@@ -236,3 +236,25 @@ def test_the_preview_s_open_button_opens_the_selected_result(page, api):
     expect(preview).to_contain_text(f"if_{word}")
     preview.get_by_test_id("search-preview-open").click()
     expect(page.get_by_role("dialog")).to_contain_text(f"if_{word} objects", timeout=30000)
+
+
+def test_a_function_is_found_and_opens_to_run(page, api, ontology):
+    """p.28's seventh kind (§777): a function, found by name, with its version
+    count where an owner would be, and opened to the dialog that runs it."""
+    sites = ontology.object_type(columns=["id", "n"], rows=[{"id": "1", "n": "4"}], key="id",
+                                 slug=f"fsite_{ontology.word}", types={"n": "integer"})
+    fn = api.call("POST", f"/workspaces/{ontology.workspace_id}/functions", {
+        "api_name": f"total_{ontology.word}", "display_name": "Total n",
+        "version": {"version": "1.0.0", "inputs": [sites],
+                    "output": {"kind": "value", "data_type": "integer"},
+                    "sql": f"SELECT sum(n) FROM fsite_{ontology.word}"}})
+    open_manager(page, ontology)
+    page.get_by_label("Search the ontology").fill(f"total_{ontology.word}")
+    hit = page.get_by_test_id("ontology-search-results").locator("[data-kind='function']")
+    expect(hit).to_contain_text("Function", timeout=15000)
+    expect(hit).to_contain_text("1 version")
+    hit.click()
+    expect(page.get_by_role("dialog").get_by_role(
+        "heading", name=f"Run {fn['api_name']}")).to_be_visible(timeout=15000)
+    page.get_by_test_id("fn-run").click()
+    expect(page.get_by_test_id("fn-result-line")).to_have_text("4", timeout=15000)

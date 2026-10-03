@@ -193,7 +193,9 @@ async def check_version(
 _FN_SELECT = """
     SELECT f.id, f.api_name, f.display_name, f.description, f.created_at, f.updated_at,
            (SELECT v.version FROM function_versions v WHERE v.function_id = f.id
-             ORDER BY v.created_at DESC LIMIT 1) AS latest_version
+             ORDER BY v.created_at DESC LIMIT 1) AS latest_version,
+           (SELECT count(*) FROM function_versions v WHERE v.function_id = f.id)
+             AS version_count
       FROM functions f
 """
 

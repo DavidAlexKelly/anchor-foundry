@@ -2919,7 +2919,9 @@ export interface OntologySearchHit {
     | "action_type"
     | "shared_property"
     | "group"
-    | "interface";
+    | "interface"
+    /** p.28's seventh (§777): a function, owned by no object type. */
+    | "function";
   id: string;
   api_name: string;
   display_name: string;

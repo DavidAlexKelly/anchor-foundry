@@ -4,6 +4,7 @@ import {
   KIND_LABELS,
   destinationFor,
   implementationSummary,
+  versionSummary,
 } from "./search-destination";
 import type { OntologySearchHit } from "./types";
 
@@ -21,6 +22,7 @@ const KINDS: OntologySearchHit["kind"][] = [
   "shared_property",
   "group",
   "interface",
+  "function",
 ];
 
 function hit(over: Partial<OntologySearchHit> = {}): OntologySearchHit {
@@ -61,6 +63,8 @@ describe("where a hit goes", () => {
       .toEqual({ open: "group", id: "g-1" });
     expect(destinationFor(hit({ kind: "interface", id: "i-1", object_type_id: null })))
       .toEqual({ open: "interface", id: "i-1" });
+    expect(destinationFor(hit({ kind: "function", id: "f-1", object_type_id: null })))
+      .toEqual({ open: "function", id: "f-1" });
   });
 
   it("never sends one ownerless kind to another's screen", () => {
@@ -68,11 +72,11 @@ describe("where a hit goes", () => {
     // another finds nothing — which is the shape of failure that is hardest to
     // report, because nothing errors.
     const opened = new Set(
-      (["shared_property", "group", "interface"] as const).map(
+      (["shared_property", "group", "interface", "function"] as const).map(
         (kind) => destinationFor(hit({ kind, object_type_id: null }))!.open,
       ),
     );
-    expect(opened).toEqual(new Set(["shared_property", "group", "interface"]));
+    expect(opened).toEqual(new Set(["shared_property", "group", "interface", "function"]));
   });
 
   it("refuses to guess when an owned kind has no owner", () => {
@@ -103,6 +107,14 @@ describe("what the row calls it", () => {
   it("gives each kind its own word", () => {
     const labels = KINDS.map((k) => KIND_LABELS[k]);
     expect(new Set(labels).size).toBe(labels.length);
+  });
+});
+
+describe("a function's versions (§777)", () => {
+  it("says how many, one included", () => {
+    expect(versionSummary(1)).toBe("1 version");
+    expect(versionSummary(3)).toBe("3 versions");
+    expect(versionSummary(0)).toBe("0 versions");
   });
 });
 

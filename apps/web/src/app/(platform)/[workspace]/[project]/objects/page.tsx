@@ -1265,6 +1265,8 @@ export default function ObjectsPage() {
   // the hit with nowhere to go, so it fell through to the shared property
   // editor and opened an id from another table — silently.
   const [openingInterface, setOpeningInterface] = useState<string | null>(null);
+  // p.28's seventh kind (§777): a function the header search found.
+  const [openingFunction, setOpeningFunction] = useState<string | null>(null);
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
   // `ontology-manager` p.29's other two home-page filters. Separate pieces of
   // state rather than one object, because each is one control and combining
@@ -1443,6 +1445,7 @@ export default function ObjectsPage() {
           onOpenSharedProperty={(sharedId) => setEditingShared(sharedId)}
           onOpenGroup={(groupId) => setOpeningGroup(groupId)}
           onOpenInterface={(interfaceId) => setOpeningInterface(interfaceId)}
+          onOpenFunction={(functionId) => setOpeningFunction(functionId)}
         />
       )}
 
@@ -1850,7 +1853,12 @@ export default function ObjectsPage() {
 
           {/* p.29's sixth home page section (§769): functions, after the
               resources they read. */}
-          <FunctionsPanel workspaceId={workspace!.id} canEdit={canEditOntology} />
+          <FunctionsPanel
+            workspaceId={workspace!.id}
+            canEdit={canEditOntology}
+            openId={openingFunction}
+            onOpened={() => setOpeningFunction(null)}
+          />
 
           {/* Groups last of the four, because it is the only one that says
               nothing about what an object type *is* - p.261 makes it a way of

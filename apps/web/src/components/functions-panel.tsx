@@ -16,7 +16,7 @@
  * patch number, for the author to change.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, Field } from "@/components/dialog";
 import { TypePicker } from "@/components/type-picker";
@@ -452,13 +452,22 @@ function RunDialog({ workspaceId, fn, onClose }: {
   );
 }
 
-export function FunctionsPanel({ workspaceId, canEdit }: {
+export function FunctionsPanel({ workspaceId, canEdit, openId: asked = null, onOpened }: {
   workspaceId: string;
   canEdit: boolean;
+  /** A function the header search found (§777), opened to run: the dialog
+   * that shows what it takes and returns. */
+  openId?: string | null;
+  onOpened?: () => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [versioning, setVersioning] = useState<string | null>(null);
   const [running, setRunning] = useState<string | null>(null);
+  useEffect(() => {
+    if (!asked) return;
+    setRunning(asked);
+    onOpened?.();
+  }, [asked, onOpened]);
   const queryClient = useQueryClient();
   const list = useQuery({
     queryKey: ["functions", workspaceId],
