@@ -165,7 +165,7 @@ import { moved as movedColumn, storageKey as columnsKey, storedChoice, toggled a
 import { DerivedValue } from "@/components/derived-value";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import type {
-  ConditionalRule, ObjectInstance, ObjectTypeDetail, ObjectTypeProperty,
+  ConditionalRule, ObjectInstance, ObjectTypeDetail, ObjectTypeProperty, TypeLink,
 } from "@/lib/types";
 import { latest as latestOf } from "./sparkline";
 import {
@@ -463,6 +463,10 @@ import {
   syncShapes, toggledShape,
 } from "./map-drawn";
 import { perimeterModeOf } from "./map-measure";
+import {
+  hopLabel, locationProperties, pinStart, resultColor, resultLabel, searchAroundLinks, searchAroundOf,
+  searchAroundSet, toolbarStart, type SearchResult, type SearchStart,
+} from "./map-search-around";
 // Aliased on §211's rule: `areaOf` is also §537's chart area option.
 import {
   DRAWN_OPACITY, DRAW_TOOLS, DRAW_TOOL_LABELS, areasOf as mapAreasOf, drawToolsOf, drawnOpacityOf,
@@ -16646,6 +16650,7 @@ export function CanvasMap({
   layers = null,
   geometries = null,
   layerInLegend = true,
+  enableSearchAround = false,
 }: {
   source?: "objects" | "dataset";
   /** An `object_set` variable to plot (roadmap 1.5). When set, this map reads
@@ -16759,6 +16764,9 @@ export function CanvasMap({
   geometries?: unknown;
   /** p.300's Legend visibility for the map's own layer. */
   layerInLegend?: boolean;
+  /** p.303's Enable search around (§734, `map-search-around.ts`): from the
+   * toolbar and a pin's context menu, each result a layer of its own. */
+  enableSearchAround?: boolean;
 }) {
   const {
     id: nodeId,
@@ -17050,6 +17058,77 @@ export function CanvasMap({
     setParameter(found.layer.selectedVariable,
       selectionClauses(toggleKey([...found.keys], String(point.instance.primary_key))));
   };
+  // p.303's search around (§734, `map-search-around.ts`): from the toolbar or
+  // a pin's context menu, each result drawn as a layer of its own until it is
+  // removed. Held by the widget, as a viewer's own exploration is: p.303
+  // gives it no variable to write.
+  const searchAround = usingSet && searchAroundOf(enableSearchAround);
+  const [searchStart, setSearchStart] = useState<SearchStart | null>(null);
+  const [pinMenu, setPinMenu] = useState<{ x: number; y: number; start: SearchStart } | null>(null);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const searchSerial = React.useRef(0);
+  const resultSets = useQueries({
+    queries: searchResults.map((result) => ({
+      queryKey: ["canvas-map-search-around", JSON.stringify(result.definition), limit],
+      queryFn: () => objApi.evaluateObjectSet(workspaceId, result.definition,
+        { limit: Math.min(limit, 200) }),
+      // A refusal (a traversal past the server's depth) is an answer, not a
+      // blip to retry.
+      retry: false,
+    })),
+  });
+  const resultData = searchResults.map((result, n) => {
+    const read = resultSets[n];
+    const pins: MapPoint[] = [];
+    let unplaced = 0;
+    for (const instance of read?.data?.instances ?? []) {
+      const at = toLatLon(instance.properties[result.locationProperty]);
+      if (!at) {
+        unplaced += 1;
+        continue;
+      }
+      const label = result.labelProperty ? instance.properties[result.labelProperty] : null;
+      pins.push({
+        id: `${result.id}:${instance.id}`,
+        label: label === null || label === undefined ? String(instance.primary_key) : String(label),
+        instance: instance as MapPoint["instance"],
+        ...at,
+        // Locked: a result has no Selected objects to write a click into.
+        layer: { id: result.id, color: result.color, opacity: 1, selected: false, locked: true },
+      });
+    }
+    return { result, pins, unplaced, total: read?.data?.total, error: read?.error ?? null,
+      pending: !!read?.isPending };
+  });
+  const resultPins = resultData.flatMap((d) => d.pins);
+  // A pin's type, for its context menu: the map's own layer's, an added
+  // layer's set's, or the type a search around arrived at.
+  const typeOfPin = (point: MapPoint): string | null => {
+    if (!point.layer) {
+      return typeof (setDefinition as { object_type_id?: unknown } | undefined)?.object_type_id === "string"
+        ? (setDefinition as { object_type_id: string }).object_type_id : null;
+    }
+    const result = searchResults.find((r) => r.id === point.layer!.id);
+    if (result) return result.typeId;
+    const layer = addedLayers.find((l) => l.id === point.layer!.id);
+    const definition = layer?.objectSetVariable ? resolvedVariables[layer.objectSetVariable] : undefined;
+    const typeId = (definition as { object_type_id?: unknown } | undefined)?.object_type_id;
+    return typeof typeId === "string" ? typeId : null;
+  };
+  const ownStart = searchAround
+    ? toolbarStart(setDefinition, selectedVariable ? [...selectedKeys] : [], layerLabel ?? "")
+    : null;
+  React.useEffect(() => {
+    if (!pinMenu) return;
+    const close = () => setPinMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    document.addEventListener("click", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [pinMenu]);
   // p.302's "map breadcrumbs": each track as a line under the pins.
   const trackShapes: MapShape[] = tracking
     ? (setPage.data?.instances ?? []).flatMap((instance) => {
@@ -17148,7 +17227,7 @@ export function CanvasMap({
       )}
       {!needs && query.data && (
         <MapCanvas
-          points={[...(layerShown ? points : []), ...layerPins]}
+          points={[...(layerShown ? points : []), ...layerPins, ...resultPins]}
           shapes={[...(layerShown ? [...ownShapes, ...trackShapes] : []), ...layerShapes]}
           color={layerColorOf(layerColor)}
           opacity={layerOpacityOf(layerOpacity)}
@@ -17180,6 +17259,8 @@ export function CanvasMap({
                   color: d.layer.color ?? "var(--accent, #14646e)", count: d.points.length }] : []),
                 ...geometryLegend(d.layer.label || "Objects", d.shapes, d.layer.color),
               ]),
+              ...resultData.map((d) => ({ label: d.result.label, kind: "points" as const,
+                color: d.result.color, count: d.pins.length })),
             ],
           } : null}
           areas={mapAreas}
@@ -17234,7 +17315,28 @@ export function CanvasMap({
                 }
               }
             : undefined}
-          unplaceable={unplaceable + layerData.reduce((n, d) => n + (d.shown ? d.unplaceable : 0), 0)}
+          unplaceable={unplaceable + layerData.reduce((n, d) => n + (d.shown ? d.unplaceable : 0), 0)
+            + resultData.reduce((n, d) => n + d.unplaced, 0)}
+          onPinMenu={searchAround ? (point, at) => {
+            const typeId = typeOfPin(point);
+            if (!typeId || !point.instance) return;
+            setPinMenu({ ...at, start: pinStart(typeId, String(point.instance.primary_key), point.label) });
+          } : undefined}
+          tools={searchAround ? (
+            <button
+              type="button"
+              data-testid="map-search-around"
+              disabled={!ownStart}
+              aria-expanded={searchStart !== null}
+              title={ownStart
+                ? `Follow a link from ${ownStart.label === (layerLabel?.trim() || "Objects")
+                  ? "every object on the layer" : `the ${ownStart.label}`}`
+                : "The map's object set is not over one object type"}
+              onClick={() => setSearchStart(searchStart ? null : ownStart)}
+            >
+              Search around
+            </button>
+          ) : null}
           notYet={notYet}
           total={
             source === "objects"
@@ -17281,6 +17383,80 @@ export function CanvasMap({
                 }
           }
         />
+      )}
+      {searchAround && pinMenu && (
+        <div
+          role="menu"
+          className="card"
+          data-testid="map-pin-menu"
+          style={{ position: "fixed", left: pinMenu.x, top: pinMenu.y, zIndex: 50, padding: 4 }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="btn quiet"
+            data-testid="map-pin-menu-search-around"
+            // The menu closes by the document's click listener above, which
+            // this click reaches too (closing it here as well survived the
+            // sweep as equivalent).
+            onClick={() => setSearchStart(pinMenu.start)}
+          >
+            Search around {pinMenu.start.label}…
+          </button>
+        </div>
+      )}
+      {searchAround && searchStart && (
+        <MapSearchAroundPanel
+          key={JSON.stringify(searchStart.base)}
+          workspaceId={workspaceId}
+          start={searchStart}
+          onCancel={() => setSearchStart(null)}
+          onAdd={(link, locationProperty, labelProperty) => {
+            const n = searchSerial.current++;
+            setSearchResults((now) => [...now, {
+              id: `search-${n}`,
+              label: resultLabel(searchStart, link),
+              typeId: link.far_type_id,
+              definition: searchAroundSet(searchStart, link),
+              locationProperty,
+              labelProperty,
+              color: resultColor(n),
+            }]);
+            setSearchStart(null);
+          }}
+        />
+      )}
+      {searchAround && resultData.length > 0 && (
+        <ul className="card" data-testid="map-search-results"
+          style={{ listStyle: "none", margin: "6px 0 0", padding: "6px 10px" }}>
+          {resultData.map((d) => (
+            <li key={d.result.id} className="row-actions" style={{ gap: 6 }}
+              data-testid="map-search-result">
+              <svg width={10} height={10} aria-hidden="true">
+                <circle cx={5} cy={5} r={4} fill={d.result.color} />
+              </svg>
+              <span>{d.result.label}</span>
+              <span className="slug" data-testid="map-search-result-count">
+                {d.error
+                  ? d.error instanceof ApiError ? d.error.message : "Couldn't follow this link."
+                  : d.pending ? "Loading…"
+                  : `${d.pins.length.toLocaleString()} placed${
+                    d.unplaced > 0 ? `, ${d.unplaced.toLocaleString()} without a usable location` : ""}${
+                    d.total !== undefined && d.total > d.pins.length + d.unplaced
+                      ? `, of ${d.total.toLocaleString()}` : ""}`}
+              </span>
+              <button
+                type="button"
+                className="btn quiet"
+                data-testid="map-search-result-remove"
+                aria-label={`Remove ${d.result.label}`}
+                onClick={() => setSearchResults((now) => now.filter((r) => r.id !== d.result.id))}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
       {/* p.304's Selection panel (§560): the selected objects, or the one
           selected object's details. */}
@@ -17344,6 +17520,91 @@ export function CanvasMap({
             (["12", "24"].includes(timeFormat) ? timeFormat : "local") as TimeFormat)}
         />
       )}
+    </div>
+  );
+}
+
+/** p.303's search around, once started (§734): which link to follow from
+ * the start's type, and - when the type arrived at has several - which
+ * geopoint its objects stand at. */
+function MapSearchAroundPanel({ workspaceId, start, onAdd, onCancel }: {
+  workspaceId: string;
+  start: SearchStart;
+  onAdd: (link: TypeLink, locationProperty: string, labelProperty: string | null) => void;
+  onCancel: () => void;
+}) {
+  const links = useQuery({
+    queryKey: ["object-type-links", start.typeId],
+    queryFn: () => objApi.typeLinks(workspaceId, start.typeId),
+  });
+  const offered = searchAroundLinks(links.data ?? [], start.typeId);
+  const keyOf = (l: TypeLink) => `${l.link_type_id}:${l.direction}`;
+  const [linkKey, setLinkKey] = useState("");
+  const chosen = offered.find((l) => keyOf(l) === linkKey) ?? offered[0];
+  const far = useQuery({
+    queryKey: ["object-type", chosen?.far_type_id],
+    queryFn: () => objApi.getType(workspaceId, chosen!.far_type_id),
+    enabled: !!chosen,
+  });
+  const locations = locationProperties(far.data?.properties ?? []);
+  const [location, setLocation] = useState("");
+  const at = locations.includes(location) ? location : locations[0];
+  const title = far.data?.properties?.find((p) => p.id === far.data?.title_property_id)?.api_name ?? null;
+  return (
+    <div className="card" data-testid="map-search-around-panel" style={{ marginTop: 6, padding: "6px 10px" }}>
+      <strong>Search around {start.label}</strong>
+      {links.isPending ? (
+        <p className="canvas-widget-empty">Loading…</p>
+      ) : offered.length === 0 ? (
+        <p className="canvas-widget-empty" data-testid="map-search-around-no-links">
+          No link types to follow from here.
+        </p>
+      ) : (
+        <>
+          <label className="field">
+            <span className="field-label">Follow</span>
+            <select
+              data-testid="map-search-around-link"
+              value={chosen ? keyOf(chosen) : ""}
+              onChange={(e) => setLinkKey(e.target.value)}
+            >
+              {offered.map((l) => (
+                <option key={keyOf(l)} value={keyOf(l)}>{hopLabel(l)}</option>
+              ))}
+            </select>
+          </label>
+          {far.data && locations.length === 0 && (
+            <p className="canvas-widget-empty" data-testid="map-search-around-nowhere">
+              {far.data.display_name} has no geopoint property, so its objects have nowhere to stand on
+              this map.
+            </p>
+          )}
+          {locations.length > 1 && (
+            <label className="field">
+              <span className="field-label">Place by</span>
+              <select
+                data-testid="map-search-around-location"
+                value={at}
+                onChange={(e) => setLocation(e.target.value)}
+              >
+                {locations.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
+          )}
+        </>
+      )}
+      <div className="row-actions" style={{ gap: 6 }}>
+        <button
+          type="button"
+          className="btn"
+          data-testid="map-search-around-add"
+          disabled={!chosen || !at}
+          onClick={() => chosen && at && onAdd(chosen, at, title)}
+        >
+          Add to map
+        </button>
+        <button type="button" className="btn quiet" onClick={onCancel}>Cancel</button>
+      </div>
     </div>
   );
 }
@@ -17556,8 +17817,10 @@ function MapSettings() {
     selectedShapesVariable, shapeOutputType, enableMeasurements, measurePerimeter, perimeterMode, measureArea, measureLine, lineMode,
     showLegend, legendCollapsed, legendSize, showSelectionPanel, autoZoom, autoZoomSetVariable,
     autoZoomOutsideOnly, boundsVariable, followSetVariable, layers, geometries, layerInLegend,
+    enableSearchAround,
     actions: { setProp },
   } = useNode((node) => ({
+    enableSearchAround: node.data.props.enableSearchAround,
     layers: node.data.props.layers,
     geometries: node.data.props.geometries,
     layerInLegend: node.data.props.layerInLegend,
@@ -18105,6 +18368,8 @@ function MapSettings() {
                 ["showLegend", "Legend", showLegend],
                 ["legendCollapsed", "Collapse legend panel", legendCollapsed],
                 ["showSelectionPanel", "Show selection panel", showSelectionPanel],
+                // p.303's Enable search around (§734).
+                ["enableSearchAround", "Enable search around", enableSearchAround],
                 ["autoZoomOutsideOnly", "Auto zoom only if outside the viewport", autoZoomOutsideOnly],
               ] as const).map(([prop, label, value]) => (
                 <label key={prop} className="field canvas-toggle">
@@ -18409,7 +18674,7 @@ CanvasMap.craft = {
     enableMeasurements: false, measurePerimeter: true, perimeterMode: "total", measureArea: true,
     showLegend: false, legendCollapsed: false, legendSize: "full", showSelectionPanel: false,
     autoZoom: "default", autoZoomSetVariable: null, autoZoomOutsideOnly: false,
-    boundsVariable: null, followSetVariable: null,
+    boundsVariable: null, followSetVariable: null, enableSearchAround: false,
   },
   related: { settings: MapSettings },
 };
