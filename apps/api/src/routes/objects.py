@@ -5259,6 +5259,11 @@ async def group_object_set(
     """
     if object_sets.is_union(body.definition):
         async with user_connection(access.auth.user_id) as conn:
+            # p.250's Selectable (§727), on every part: each is grouped by the
+            # property, and a part that does not declare it is not asked.
+            for part in union_reads.parts_of(body.definition):
+                await ontology_service.check_selectable(
+                    conn, object_sets.object_type_id_of(part), [body.property])
             shown, distinct_total, truncated = await union_reads.group(
                 conn, access.workspace_id, body.definition, body.property, body.limit,
                 body.aggregation)
@@ -5275,6 +5280,8 @@ async def group_object_set(
                 body.aggregation, body.aggregation_property,
                 property_types=property_types,
             )
+            # p.250's Selectable (§727): one bucket per exact value.
+            await ontology_service.check_selectable(conn, type_id, [body.property])
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
@@ -5470,6 +5477,14 @@ async def cross_tab_object_set(
 
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
+        # p.250's Selectable (§727), for both axes: each is a group.
+        try:
+            await ontology_service.check_selectable(
+                conn, definition.object_type_id, [row_property, column_property])
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         store = instance_store.store_for(conn)
         shared = {
