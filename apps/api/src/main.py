@@ -20,6 +20,7 @@ from starlette.requests import Request as StarletteRequest
 from .lib.config import get_settings
 from .lib.db import dispose_engine, get_engine
 from .lib.errors import BreakingChangeError
+from .lib import observability
 from .services.connectors import ConnectorConfigError
 from .services.dataset_engine import DatasetEngineError
 from .services.datasets import SCHEMA_POLICY_SQLSTATE
@@ -113,6 +114,10 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
+
+    # Request ids, access lines, metrics and the unhandled-error record (§802).
+    # After CORS, so it is the outer of the two and times the whole request.
+    observability.install(app)
 
     @app.get("/api/health", include_in_schema=False)
     async def health() -> dict[str, str]:

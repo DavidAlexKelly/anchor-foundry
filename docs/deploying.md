@@ -238,6 +238,18 @@ limit rather than failing the check, on purpose.
 | `VENDOR_ECR_REGISTRY` | provisioning | Registry the customer's ECS tasks pull images from |
 | `PLATFORM_IMAGE_TAG` | provisioning | Image tag to deploy; defaults to `latest` |
 | `CDK_DIR` | provisioning | Path to `infra/cdk`; defaults to `infra/cdk` |
+| `LOG_LEVEL` | platform API | Level for the API's structured `anchor.*` log lines; defaults to `INFO` (§802) |
+| `METRICS_TOKEN` | platform API | When set, `/api/metrics` requires `Authorization: Bearer <token>`; unset, it is open like `/api/health` (§802) |
+
+**What the API emits (§802).** Every response carries `X-Request-ID` (the
+caller's own when it is a safe id, otherwise a new one). Each request writes one
+JSON line to stderr on `anchor.access` with the request id, method, **route
+template** (never the raw path or query), status and duration. An unhandled
+error writes its traceback on `anchor.error` under the same id, and its 500 body
+quotes the id. `/api/metrics` serves Prometheus text: requests by method, route
+and status class, a latency histogram per route, and a count of unhandled
+errors. The counters live in the process, and the image runs one process per
+task, so scrape each task.
 
 Local development of the platform itself (Postgres, the two venvs, the API dev
 server, the web app) is a different setup — see the repository's `STATUS.md`
