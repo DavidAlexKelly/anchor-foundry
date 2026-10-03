@@ -83,6 +83,11 @@ describe("which properties a search runs on", () => {
     expect(isSearchable({ api_name: "x" })).toBe(true);
     expect(isSearchable({ api_name: "x", data_type: "string" })).toBe(true);
     expect(isSearchable({ api_name: "x", data_type: "integer" })).toBe(false);
+    // p.251's Searchable (§726): a string with it off is not searched, and
+    // none named is the default, which has it on.
+    expect(isSearchable({ api_name: "x", data_type: "string", render_hints: ["keywords"] })).toBe(false);
+    expect(isSearchable({ api_name: "x", data_type: "string", render_hints: ["searchable"] })).toBe(true);
+    expect(isSearchable({ api_name: "x", data_type: "string", render_hints: null })).toBe(true);
   });
 });
 

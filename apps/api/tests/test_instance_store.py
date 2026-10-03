@@ -1078,3 +1078,112 @@ async def test_a_sync_keeps_what_the_dataset_cannot_say_opensearch(store) -> Non
 # a real workspace, user and source rather than a bare engine connection - and
 # the same fixture is what makes the *action* that writes an edit-only property
 # testable. Same claim, one place it can actually run.
+
+
+def _hinted_type(client: TestClient, fx: Fixture, tag: str, hints: list[str] | None,
+                 secret: str, prefix: str) -> str:
+    """A mapped type with a `label` and a `secret`, the secret carrying
+    `hints` (§726)."""
+    body = f"code,label,secret\n{prefix}{tag},Lantern-{tag},{secret}\n".encode()
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub), data={"name": f"Hinted {prefix}{tag}"},
+        files={"file": ("hinted.csv", io.BytesIO(body), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    dataset = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"hinted_{prefix.lower()}{tag}", "display_name": f"Hinted {prefix}{tag}",
+              "properties": [{"api_name": "label", "data_type": "string"},
+                             {"api_name": "secret", "data_type": "string",
+                              **({"render_hints": hints} if hints is not None else {})}]},
+    )
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={"object_type_id": type_id, "dataset_id": dataset, "primary_key_column": "code",
+              "column_mappings": {"label": "label", "secret": "secret"}},
+    )
+    assert r.status_code == 201, r.text
+    assert client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/object-type-sources/{r.json()['id']}/sync", headers=hdr(fx.editor_sub),
+    ).status_code == 200
+    return type_id
+
+
+@pytest.mark.parametrize("store_name", ["postgres", "opensearch"])
+def test_the_explorer_does_not_search_a_property_that_is_not_searchable(
+    client: TestClient, fx: Fixture, opensearch: str, store_name: str,
+) -> None:
+    """p.251's Searchable (§726): "Disable to improve reindex performance if
+    the property will not be searched or sorted on in applications." Turned
+    off on one type's `secret`, the same text in the same-named property of a
+    type that left it on is still found - so the scope is per type, as one
+    index holding every type has to make it - and the key and the other
+    properties of the narrowed type still are."""
+    reset(opensearch)
+    if store_name == "opensearch":
+        instance_store.configure_instance_store(
+            instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin"))
+    try:
+        tag = uuid.uuid4().hex[:6]
+        narrowed = _hinted_type(client, fx, tag, ["keywords"], f"Hidden-{tag}", "N")
+        plain = _hinted_type(client, fx, tag, None, f"Hidden-{tag}", "P")
+
+        hidden = _explore(client, fx, q=f"Hidden-{tag}")
+        assert [i["object_type_id"] for i in hidden["items"]] == [plain], hidden
+        assert _explore(client, fx, q=f"Lantern-{tag}", type_id=narrowed)["total"] == 1
+        assert _explore(client, fx, q=f"N{tag}", type_id=narrowed)["total"] == 1
+
+        # Searchable again, and found again.
+        got = client.get(f"/api/workspaces/{fx.workspace}/object-types/{narrowed}",
+                         headers=hdr(fx.editor_sub)).json()
+        props = [{k: p[k] for k in ("api_name", "data_type")}
+                 | {"render_hints": ["searchable"]} for p in got["properties"]]
+        r = client.patch(f"/api/workspaces/{fx.workspace}/object-types/{narrowed}",
+                         headers=hdr(fx.editor_sub),
+                         json={"display_name": got["display_name"], "properties": props})
+        assert r.status_code == 200, r.text
+        assert {i["object_type_id"] for i in _explore(client, fx, q=f"Hidden-{tag}")["items"]} == {
+            plain, narrowed}
+    finally:
+        instance_store.configure_instance_store(None)
+
+
+def test_a_shared_property_s_searchable_is_the_one_in_force(
+    client: TestClient, fx: Fixture, opensearch: str,
+) -> None:
+    """p.188's override, read at search time (§726): a property attached to a
+    shared property whose Searchable is turned off *after* the property was
+    saved is not searched - the property's own column still holds the hints
+    of its last save."""
+    reset(opensearch)
+    tag = uuid.uuid4().hex[:6]
+    r = client.post(f"/api/workspaces/{fx.workspace}/shared-properties",
+                    headers=hdr(fx.editor_sub),
+                    json={"api_name": f"secret_{tag}", "display_name": "Secret",
+                          "data_type": "string"})
+    assert r.status_code == 201, r.text
+    shared = r.json()
+    type_id = _hinted_type(client, fx, tag, None, f"Sealed-{tag}", "S")
+    got = client.get(f"/api/workspaces/{fx.workspace}/object-types/{type_id}",
+                     headers=hdr(fx.editor_sub)).json()
+    props = [{k: p[k] for k in ("api_name", "data_type")}
+             | ({"shared_property_id": shared["id"]} if p["api_name"] == "secret" else {})
+             for p in got["properties"]]
+    assert client.patch(f"/api/workspaces/{fx.workspace}/object-types/{type_id}",
+                        headers=hdr(fx.editor_sub),
+                        json={"display_name": got["display_name"], "properties": props}
+                        ).status_code == 200
+    assert _explore(client, fx, q=f"Sealed-{tag}")["total"] == 1
+    r = client.patch(f"/api/workspaces/{fx.workspace}/shared-properties/{shared['id']}",
+                     headers=hdr(fx.editor_sub),
+                     json={"display_name": "Secret", "data_type": "string",
+                           "render_hints": ["keywords"]})
+    assert r.status_code == 200, r.text
+    assert _explore(client, fx, q=f"Sealed-{tag}")["total"] == 0
+    assert _explore(client, fx, q=f"Lantern-{tag}")["total"] == 1

@@ -65,6 +65,27 @@ INSTANCE_PAGE_SIZE = 50
 MAX_RESULT_WINDOW = 10_000
 
 
+def _scoped_search(query: str, scopes: dict[str, list[str]]) -> dict[str, Any]:
+    """The free-text clause with p.251's Searchable honoured (§726): the key
+    always; every value of a type nobody narrowed; and only the listed
+    properties of a type that `scopes` names. Each type its own `should`,
+    because one index holds them all and a property searchable on one type
+    may not be on another of the same name."""
+    def match(fields: list[str]) -> dict[str, Any]:
+        return {"multi_match": {"query": query, "fields": fields, "type": "phrase_prefix"}}
+
+    should: list[dict[str, Any]] = [
+        match(["primary_key"]),
+        {"bool": {"must_not": [{"terms": {"object_type_id": sorted(scopes)}}],
+                  "must": [match(["properties.*"])]}},
+    ]
+    for type_id, names in sorted(scopes.items()):
+        if names:  # none searchable leaves only the key, above
+            should.append({"bool": {"filter": [{"term": {"object_type_id": type_id}}],
+                                    "must": [match([f"properties.{n}" for n in names])]}})
+    return {"bool": {"should": should, "minimum_should_match": 1}}
+
+
 class InstanceStoreGateway(Protocol):
     """Mirrors the operations services/instances.py performs against
     Postgres, but workspace-scoped explicitly (via ``search_prefix``) rather
@@ -163,6 +184,7 @@ class InstanceStoreGateway(Protocol):
         object_type_ids: list[UUID] | None,
         limit: int,
         offset: int,
+        scopes: dict[str, list[str]] | None = None,
     ) -> tuple[list[dict[str, Any]], int]: ...
 
     async def find_by_property(
@@ -834,9 +856,10 @@ class OpenSearchInstanceStore:
         object_type_ids: list[UUID] | None,
         limit: int,
         offset: int,
+        scopes: dict[str, list[str]] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Workspace-wide instance search (roadmap Objects item 2) - the read
-        the cutover was for. `workspace_id` is accepted and unused here: the
+        the cutover was for. `scopes` is `ontology.search_scopes` (§726). `workspace_id` is accepted and unused here: the
         index *is* the workspace, so scoping is structural. It exists for the
         Postgres store, which has no index to lean on."""
         limit = max(1, min(limit, INSTANCE_PAGE_SIZE))
@@ -851,7 +874,9 @@ class OpenSearchInstanceStore:
             clauses["filter"] = [
                 {"terms": {"object_type_id": [str(t) for t in object_type_ids]}}
             ]
-        if query:
+        if query and scopes:
+            clauses["must"] = [_scoped_search(query, scopes)]
+        elif query:
             # phrase_prefix so a half-typed value still matches, across every
             # property plus the primary key - "search by any property value".
             clauses["must"] = [{
@@ -1482,12 +1507,14 @@ class PostgresInstanceStore:
         object_type_ids: list[UUID] | None,
         limit: int,
         offset: int,
+        scopes: dict[str, list[str]] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         from . import instances as instances_service
 
         return await instances_service.search(
             self._conn, workspace_id=workspace_id, query=query,
             object_type_ids=object_type_ids, limit=limit, offset=offset,
+            scopes=scopes,
         )
 
     async def find_by_property(

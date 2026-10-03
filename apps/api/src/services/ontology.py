@@ -646,6 +646,38 @@ async def list_properties_for_workspace(
     return out
 
 
+async def search_scopes(
+    conn: AsyncConnection, workspace_id: UUID
+) -> dict[str, list[str]]:
+    """The object types a free-text search may not read whole (§726), each
+    with the properties it may read: p.251's Searchable - "Disable to improve
+    reindex performance if the property will not be searched or sorted on in
+    applications".
+
+    **Only the types narrowed by a hint**, so a workspace that never touched
+    one searches exactly as it did - every value of every property. A shared
+    property's hints are the ones in force (p.188), read here rather than off
+    the property's own column, which holds them as of its last save.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT p.object_type_id::text AS type_id,
+               coalesce(array_agg(p.api_name ORDER BY p.sort_order, p.api_name)
+                        FILTER (WHERE 'searchable' = ANY(
+                            COALESCE(sp.render_hints, p.render_hints))), '{}') AS searchable
+          FROM object_type_properties p
+          JOIN object_types ot ON ot.id = p.object_type_id
+          LEFT JOIN shared_properties sp ON sp.id = p.shared_property_id
+         WHERE ot.workspace_id = :wid
+         GROUP BY p.object_type_id
+        HAVING bool_or(NOT ('searchable' = ANY(COALESCE(sp.render_hints, p.render_hints))))
+        """,
+        {"wid": str(workspace_id)},
+    )
+    return {str(r["type_id"]): list(r["searchable"]) for r in rows}
+
+
 def constrained_properties(
     properties: list[dict[str, Any]],
 ) -> dict[str, tuple[str, dict[str, Any]]]:
