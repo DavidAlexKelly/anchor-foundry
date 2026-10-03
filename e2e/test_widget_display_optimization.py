@@ -307,3 +307,96 @@ def test_a_never_unmount_widget_stays_after_its_page_closes(page, api):
     page.get_by_role("button", name="Go B").click()
     for words in (PLAIN, KEPT, EAGER):
         expect(page.get_by_text(words, exact=True)).to_be_visible(timeout=15000)
+
+
+# ---- p.182's Default unmount, across a section's tabs (§711) ----------------
+
+T_HOME, T_PLAIN, T_KEPT, T_EAGER = "On tab one", "Plain on tab two", "Kept on tab two", "Eager on tab two"
+
+
+def two_tabs(api, name: str):
+    """A Tabs section: tab One with a body, tab Two holding one widget of each
+    kind - default, Never unmount, Eagerly mount."""
+    mod = Module(api, name)
+
+    def text(words: str, parent: str, display: dict | None = None) -> dict:
+        spec = {"resolvedName": "CanvasText", "props": {"tag": "p", "text": words},
+                "parent": parent}
+        if display:
+            spec["custom"] = {"display": {"mode": "auto", **display}}
+        return spec
+
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "tabs": {"resolvedName": "CanvasSection", "isCanvas": True,
+                     "props": {"direction": "tabs", "tabs": "One,Two"},
+                     "nodes": ["one", "two"]},
+            "one": text(T_HOME, "tabs"),
+            "two": {"resolvedName": "CanvasSection", "isCanvas": True, "props": {},
+                    "parent": "tabs", "nodes": ["t_plain", "t_kept", "t_eager"]},
+            "t_plain": text(T_PLAIN, "two"),
+            "t_kept": text(T_KEPT, "two", {"unmount": "never"}),
+            "t_eager": text(T_EAGER, "two", {"mount": "eager"}),
+        }),
+        "variables": {},
+        "events": {},
+    })
+    return mod
+
+
+def test_a_tab_s_widgets_unmount_when_another_tab_shows(page, api):
+    """p.182's Default: "The widget unmounts when its containing layout is no
+    longer rendered; for example, when the user switches to another tab or
+    page." Tabs kept every widget mounted until §711; Never unmount and
+    Eagerly mount keep theirs, as on a page."""
+    mod = two_tabs(api, "Display opt tabs")
+    open_module(page, mod)
+    expect(page.get_by_text(T_HOME, exact=True)).to_be_visible(timeout=30000)
+    eventually(lambda: in_document(page, T_EAGER), lambda n: n == 1, what="the eager widget")
+    assert in_document(page, T_PLAIN) == 0
+    assert in_document(page, T_KEPT) == 0
+
+    page.get_by_role("tab", name="Two").click()
+    for words in (T_PLAIN, T_KEPT, T_EAGER):
+        expect(page.get_by_text(words, exact=True)).to_be_visible(timeout=15000)
+
+    page.get_by_role("tab", name="One").click()
+    expect(page.get_by_text(T_HOME, exact=True)).to_be_visible()
+    eventually(lambda: in_document(page, T_PLAIN), lambda n: n == 0, what="the plain widget gone")
+    assert in_document(page, T_KEPT) == 1 and in_document(page, T_EAGER) == 1
+    # The tab one tab replaced is mounted again, as a page coming back is.
+    assert in_document(page, T_HOME) == 1
+
+
+def test_a_tab_on_a_closed_page_stays_closed(page, api):
+    """A Tabs section on a page nobody has opened: its showing tab is still on
+    a closed page, so an ordinary widget there is not mounted - only the eager
+    one beside it, which is what makes the section render at all."""
+    mod = Module(api, "Display opt tab on closed page")
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "pa": {"resolvedName": "CanvasPage", "props": {"title": "A"},
+                   "isCanvas": True, "nodes": ["pa_body"]},
+            "pa_body": {"resolvedName": "CanvasText", "parent": "pa",
+                        "props": {"tag": "p", "text": HOME}},
+            "pb": {"resolvedName": "CanvasPage", "props": {"title": "B"},
+                   "isCanvas": True, "nodes": ["tabs"]},
+            "tabs": {"resolvedName": "CanvasSection", "isCanvas": True, "parent": "pb",
+                     "props": {"direction": "tabs", "tabs": "Only"}, "nodes": ["inner"]},
+            "inner": {"resolvedName": "CanvasSection", "isCanvas": True, "parent": "tabs",
+                      "props": {}, "nodes": ["plain", "eager"]},
+            "plain": {"resolvedName": "CanvasText", "parent": "inner",
+                      "props": {"tag": "p", "text": T_PLAIN}},
+            "eager": {"resolvedName": "CanvasText", "parent": "inner",
+                      "props": {"tag": "p", "text": T_EAGER},
+                      "custom": {"display": {"mode": "auto", "mount": "eager"}}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+    open_module(page, mod)
+    expect(page.get_by_text(HOME, exact=True)).to_be_visible(timeout=30000)
+    eventually(lambda: in_document(page, T_EAGER), lambda n: n == 1, what="the eager widget")
+    assert in_document(page, T_PLAIN) == 0
