@@ -146,6 +146,28 @@ def run(
         sandbox.close()
 
 
+def _map(con: duckdb.DuckDBPyConnection, names: list[str], described: list[Any]) -> dict[str, Any]:
+    """p.221's map from objects to a value or a custom type (§770): the first
+    column is each object's primary key, and every other column a field."""
+    if len(names) < 2:
+        raise FunctionError("a map's query gives each object's primary key and then at "
+                            "least one value")
+    rows = con.execute(
+        f"SELECT * FROM __function_output LIMIT {MAX_ARRAY_ITEMS + 1}").fetchall()
+    if len(rows) > MAX_ARRAY_ITEMS:
+        raise FunctionError(f"the function returned more than {MAX_ARRAY_ITEMS:,} items")
+    entries: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row[0] is None:
+            continue
+        key = str(row[0])
+        if key in entries:
+            raise FunctionError(f"the function gave {key!r} two values; a map has one per object")
+        entries[key] = {name: json_value(value) for name, value in zip(names[1:], row[1:])}
+    return {"kind": "map", "columns": [{"name": r[0], "data_type": r[1]} for r in described[1:]],
+            "entries": entries}
+
+
 def _shape(con: duckdb.DuckDBPyConnection, output: dict[str, Any]) -> dict[str, Any]:
     described = con.execute("DESCRIBE __function_output").fetchall()
     names = [row[0] for row in described]
@@ -157,6 +179,8 @@ def _shape(con: duckdb.DuckDBPyConnection, output: dict[str, Any]) -> dict[str, 
                 "rows": [[json_value(v) for v in row] for row in rows[:MAX_TABLE_ROWS]],
                 "truncated": len(rows) > MAX_TABLE_ROWS}
     first = '"' + names[0].replace('"', '""') + '"'
+    if kind == "map":
+        return _map(con, names, described)
     target = "VARCHAR" if kind == "object_set" else SCALAR_TYPES[str(output["data_type"])]
     try:
         values = [row[0] for row in con.execute(

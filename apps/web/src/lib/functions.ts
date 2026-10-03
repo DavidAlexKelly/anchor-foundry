@@ -14,13 +14,19 @@ import type {
 
 /** p.80's Workshop variable types, as the server's `SCALAR_TYPES` has them. */
 export const SCALAR_TYPES = ["string", "integer", "float", "boolean", "date", "timestamp"] as const;
-export const PARAMETER_TYPES = [...SCALAR_TYPES, "object"] as const;
+export const PARAMETER_TYPES = [...SCALAR_TYPES, "object", "object_set"] as const;
 export const OUTPUT_KINDS: { kind: FunctionOutput["kind"]; label: string }[] = [
   { kind: "value", label: "A value" },
   { kind: "array", label: "A list of values" },
   { kind: "object_set", label: "An object set" },
+  { kind: "map", label: "Values per object" },
   { kind: "table", label: "A table" },
 ];
+
+/** Whether a parameter names an object type: one object, or a set (§770). */
+export function refersToObjects(dataType: string): boolean {
+  return dataType === "object" || dataType === "object_set";
+}
 
 const NAME_RE = /^[a-z][a-z0-9_]{0,99}$/;
 const VERSION_RE = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?$/;
@@ -107,7 +113,7 @@ export function draftProblem(draft: DraftVersion, latest: string | null): string
     }
     if (seen.has(p.api_name)) return `Two parameters are called ${p.api_name}.`;
     seen.add(p.api_name);
-    if (p.data_type === "object" && !p.object_type_id) {
+    if (refersToObjects(p.data_type) && !p.object_type_id) {
       return `Choose the object type ${p.api_name} refers to.`;
     }
   }
@@ -116,6 +122,9 @@ export function draftProblem(draft: DraftVersion, latest: string | null): string
   }
   if (draft.output.kind === "object_set" && !draft.output.object_type_id) {
     return "Choose the object type of the set it returns.";
+  }
+  if (draft.output.kind === "map" && !draft.output.object_type_id) {
+    return "Choose the object type it gives values for.";
   }
   if (!draft.sql.trim()) return "Write the query.";
   const used = parametersUsed(draft.sql);
@@ -132,14 +141,16 @@ export function bodyOf(draft: DraftVersion): Record<string, unknown> {
   if (draft.output.kind === "value" || draft.output.kind === "array") {
     output.data_type = draft.output.data_type;
   }
-  if (draft.output.kind === "object_set") output.object_type_id = draft.output.object_type_id;
+  if (draft.output.kind === "object_set" || draft.output.kind === "map") {
+    output.object_type_id = draft.output.object_type_id;
+  }
   return {
     version: draft.version,
     parameters: draft.parameters.map((p) => ({
       api_name: p.api_name,
       data_type: p.data_type,
       required: p.required,
-      ...(p.data_type === "object" ? { object_type_id: p.object_type_id } : {}),
+      ...(refersToObjects(p.data_type) ? { object_type_id: p.object_type_id } : {}),
     })),
     inputs: draft.inputs,
     output,
@@ -160,6 +171,9 @@ export function valuesFor(
     if (raw === "") continue;
     if (p.data_type === "integer" || p.data_type === "float") {
       out[p.api_name] = Number.isFinite(Number(raw)) ? Number(raw) : raw;
+    } else if (p.data_type === "object_set") {
+      // Primary keys, comma separated, as the run dialog takes them.
+      out[p.api_name] = raw.split(",").map((k) => k.trim()).filter(Boolean);
     } else if (p.data_type === "boolean") {
       out[p.api_name] = raw === "true" ? true : raw === "false" ? false : raw;
     } else {
@@ -178,7 +192,8 @@ export function resultLine(result: FunctionResult): string {
     const n = result.rows?.length ?? 0;
     return `${n} ${n === 1 ? "row" : "rows"}${result.truncated ? " (the first of more)" : ""}`;
   }
-  const n = result.values?.length ?? 0;
-  const noun = result.kind === "object_set" ? "object" : "value";
+  const n = result.kind === "map"
+    ? Object.keys(result.entries ?? {}).length : result.values?.length ?? 0;
+  const noun = result.kind === "array" ? "value" : "object";
   return `${n} ${n === 1 ? noun : `${noun}s`}`;
 }

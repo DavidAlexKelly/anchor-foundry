@@ -340,3 +340,71 @@ def test_a_property_that_is_not_a_scalar_is_its_json_text() -> None:
     assert functions_service._cell({"a": 1}, "struct") == '{"a": 1}'
     assert functions_service._cell("x", "string") == "x"
     assert functions_service._cell(None, "array") is None
+
+
+# ---- §770: the Object Table's shape -----------------------------------------------
+
+def urgency(client, fx, sites, sql: str | None = None):
+    return create(
+        client, fx, sites,
+        sql=sql or (f"SELECT __primary_key, CASE WHEN capacity > 20 THEN 'High' ELSE 'Low' END "
+                    f"AS urgency, capacity * 2 AS doubled FROM {sites['table']} "
+                    "WHERE list_contains($shown, __primary_key)"),
+        output={"kind": "map", "object_type_id": sites["type"]["id"]},
+        parameters=[{"api_name": "shown", "data_type": "object_set",
+                     "object_type_id": sites["type"]["id"]}])
+
+
+def test_a_map_answers_for_the_objects_it_is_given(client, fx, sites) -> None:
+    """p.221's function-backed column: an object set in, a map from each of
+    those objects to its fields out."""
+    r = urgency(client, fx, sites)
+    assert r.status_code == 201, r.text
+    got = call(client, fx, r.json()["id"], {"shown": ["S1", "S3"]}).json()
+    assert got["kind"] == "map"
+    assert [c["name"] for c in got["columns"]] == ["urgency", "doubled"]
+    assert got["entries"] == {"S1": {"urgency": "Low", "doubled": 20},
+                              "S3": {"urgency": "High", "doubled": 50}}
+    assert call(client, fx, r.json()["id"], {"shown": []}).json()["entries"] == {}
+
+
+def test_an_object_set_parameter_is_a_list_of_keys(client, fx, sites) -> None:
+    fn = urgency(client, fx, sites).json()
+    r = call(client, fx, fn["id"], {"shown": "S1"})
+    assert r.status_code == 422, r.text
+    assert "shown: 'S1' is not a object_set" in r.text
+    r = create(client, fx, sites, sql=f"SELECT count(*) FROM {sites['table']} "
+               "WHERE list_contains($shown, __primary_key)",
+               output={"kind": "value", "data_type": "integer"},
+               parameters=[{"api_name": "shown", "data_type": "object_set"}])
+    assert r.status_code == 422, r.text
+    assert "names its object type" in r.text
+
+
+def test_a_map_is_a_key_and_at_least_one_field(client, fx, sites) -> None:
+    # Refused at publish: the save-time run shapes the result too.
+    r = create(client, fx, sites, sql=f"SELECT __primary_key FROM {sites['table']}",
+               output={"kind": "map", "object_type_id": sites["type"]["id"]})
+    assert r.status_code == 422, r.text
+    assert "at least one value" in r.text
+
+
+def test_a_map_has_one_answer_per_object(client, fx, sites) -> None:
+    fn = urgency(client, fx, sites, sql=f"SELECT 'S1' AS k, 1 AS v FROM {sites['table']} "
+                 "WHERE list_contains($shown, __primary_key)").json()
+    r = call(client, fx, fn["id"], {"shown": ["S1", "S2"]})
+    assert r.status_code == 422, r.text
+    assert "gave 'S1' two values" in r.text
+
+
+def test_a_map_output_names_its_object_type(client, fx, sites) -> None:
+    r = create(client, fx, sites, sql=f"SELECT __primary_key, 1 FROM {sites['table']}",
+               output={"kind": "map"})
+    assert r.status_code == 422, r.text
+    assert "an object map output names its object type" in r.text
+
+
+def test_a_map_leaves_out_a_row_with_no_key() -> None:
+    got = engine.run([], "SELECT * FROM (VALUES ('a', 1), (NULL, 2)) t(k, v)", {},
+                     {"kind": "map", "object_type_id": "t"})
+    assert got["entries"] == {"a": {"v": 1}}

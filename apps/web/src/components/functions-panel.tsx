@@ -23,7 +23,7 @@ import { TypePicker } from "@/components/type-picker";
 import { ApiError, objects as objApi } from "@/lib/api";
 import {
   OUTPUT_KINDS, PARAMETER_TYPES, SCALAR_TYPES, blankDraft, blankParameter, bodyOf, draftOf,
-  draftProblem, resultLine, valuesFor, type DraftVersion,
+  draftProblem, refersToObjects, resultLine, valuesFor, type DraftVersion,
 } from "@/lib/functions";
 import type { FunctionDetail, FunctionParameter, FunctionSummary } from "@/lib/types";
 
@@ -103,7 +103,7 @@ function ParameterRow({ workspaceId, index, value, onChange, onRemove }: {
       >
         {PARAMETER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
       </select>
-      {value.data_type === "object" && (
+      {refersToObjects(value.data_type) && (
         <TypePicker
           workspaceId={workspaceId}
           testId={`fn-param-${n}-type`}
@@ -263,19 +263,26 @@ function VersionDialog({ workspaceId, existing, onClose }: {
               {SCALAR_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           )}
-          {draft.output.kind === "object_set" && (
+          {(draft.output.kind === "object_set" || draft.output.kind === "map") && (
             <TypePicker
               workspaceId={workspaceId}
               testId="fn-output-object"
               placeholder="Choose an object type…"
               value={draft.output.object_type_id ?? null}
-              onChange={(id) => set({ output: { kind: "object_set", object_type_id: id } })}
+              onChange={(id) => set({ output: { kind: draft.output.kind, object_type_id: id } })}
             />
           )}
         </div>
       </Field>
       {draft.output.kind === "object_set" && (
         <p className="field-hint">The query's first column is the objects' primary keys.</p>
+      )}
+      {draft.output.kind === "map" && (
+        <p className="field-hint">
+          The query's first column is each object&apos;s primary key, and every other
+          column a value for it — what an Object Table&apos;s function-backed column shows
+          (Workshop p.221).
+        </p>
       )}
 
       <Field label="Query" hint="One SELECT. It runs over the tables above, and nothing else.">
@@ -332,7 +339,9 @@ function RunDialog({ workspaceId, fn, onClose }: {
         <Field
           key={p.api_name}
           label={p.api_name}
-          hint={`${p.data_type === "object" ? "an object's id" : p.data_type}${p.required ? "" : ", optional"}`}
+          hint={`${p.data_type === "object" ? "an object's id"
+            : p.data_type === "object_set" ? "primary keys, separated by commas"
+            : p.data_type}${p.required ? "" : ", optional"}`}
         >
           <input
             type="text"
@@ -357,6 +366,26 @@ function RunDialog({ workspaceId, fn, onClose }: {
             <ul data-testid="fn-result-values">
               {(result.values ?? []).map((v, i) => <li key={i}>{String(v)}</li>)}
             </ul>
+          )}
+          {result.kind === "map" && (
+            <table className="table" data-testid="fn-result-map">
+              <thead>
+                <tr>
+                  <th>Object</th>
+                  {(result.columns ?? []).map((c) => <th key={c.name}>{c.name}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(result.entries ?? {}).map(([key, fields]) => (
+                  <tr key={key}>
+                    <td>{key}</td>
+                    {(result.columns ?? []).map((c) => (
+                      <td key={c.name}>{String(fields[c.name] ?? "")}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
           {result.kind === "table" && (
             <table className="table" data-testid="fn-result-table">

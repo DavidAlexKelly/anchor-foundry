@@ -145,3 +145,30 @@ describe("the request and the run", () => {
       .toBe("2 rows (the first of more)");
   });
 });
+
+describe("an object set in, a map out (§770)", () => {
+  const set = { api_name: "shown", data_type: "object_set" as const, object_type_id: null,
+    required: true };
+
+  it("needs the object type of each", () => {
+    expect(draftProblem({ ...blankDraft(), sql: "SELECT $shown", parameters: [set] }, null))
+      .toBe("Choose the object type shown refers to.");
+    expect(draftProblem({ ...blankDraft(), sql: "SELECT 1", output: { kind: "map" } }, null))
+      .toBe("Choose the object type it gives values for.");
+  });
+
+  it("sends their object types", () => {
+    const body = bodyOf({ ...blankDraft(), parameters: [{ ...set, object_type_id: "t" }],
+      output: { kind: "map", object_type_id: "t", data_type: "x" } });
+    expect(body.parameters).toEqual([
+      { api_name: "shown", data_type: "object_set", required: true, object_type_id: "t" }]);
+    expect(body.output).toEqual({ kind: "map", object_type_id: "t" });
+  });
+
+  it("takes keys separated by commas, and counts a map's objects", () => {
+    expect(valuesFor([set], { shown: " S1, S2 ,, " })).toEqual({ shown: ["S1", "S2"] });
+    expect(resultLine({ kind: "map", version: "1", entries: { a: {}, b: {} } })).toBe("2 objects");
+    expect(resultLine({ kind: "map", version: "1", entries: { a: {} } })).toBe("1 object");
+    expect(resultLine({ kind: "map", version: "1" })).toBe("0 objects");
+  });
+});

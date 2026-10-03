@@ -280,6 +280,10 @@ export interface WorkshopModule {
   derived_properties?: Record<string, (
     | { api_name: string; display_name?: string; kind: "column_math"; expression: string }
     | { api_name: string; display_name?: string; kind: "linked"; derivation: Derivation | null }
+    /** Workshop p.221's function-backed column (§770). */
+    | { api_name: string; display_name?: string; kind: "function"; function_id: string;
+        version: string | null; objects_parameter: string; field: string;
+        inputs: Record<string, { variable: string } | { value: unknown }> }
   )[]>;
   /** p.214's Saved colors: the module-level palette widgets reference (§414).
    *
@@ -2227,14 +2231,17 @@ export type OntologyStatus =
 export interface FunctionParameter {
   api_name: string;
   display_name?: string;
-  data_type: "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "object";
+  data_type: "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "object"
+    /** p.221's ObjectSet parameter (§770): primary keys of one type. */
+    | "object_set";
   object_type_id?: string | null;
   required: boolean;
 }
 
 /** What a function returns (§768). */
 export interface FunctionOutput {
-  kind: "value" | "array" | "object_set" | "table";
+  /** `map` is p.221's object-to-fields map (§770). */
+  kind: "value" | "array" | "object_set" | "table" | "map";
   data_type?: string;
   object_type_id?: string;
 }
@@ -2274,6 +2281,8 @@ export interface FunctionResult {
   columns?: { name: string; data_type: string }[] | null;
   rows?: unknown[][] | null;
   truncated?: boolean;
+  /** A map's answer (§770): primary key to its fields. */
+  entries?: Record<string, Record<string, unknown>> | null;
 }
 
 /** p.255's proposal to promote an object type (§767): "Other users must

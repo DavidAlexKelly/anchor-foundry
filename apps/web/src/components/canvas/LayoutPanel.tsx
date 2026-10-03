@@ -7,6 +7,7 @@ import { linkedSummary, problem as columnMathProblem } from "./derived-columns";
 import type { DerivedColumn, KnownProperty } from "./derived-columns";
 import { useCanvasEnv } from "./context";
 import { DerivedPropertyEditor } from "@/components/derived-property-editor";
+import { FunctionColumnEditor } from "./function-column-editor";
 
 import type { WorkshopEvent, WorkshopModule, WorkshopVariable } from "@/lib/types";
 import { newEventId, newNodeId, newVariableId } from "@/lib/workshop-module";
@@ -144,13 +145,15 @@ function DerivedPropertiesField({
       {chosen && (
         <>
           {columns.map((column, index) => {
+            // A function column says its own (`FunctionColumnEditor`).
             const issue = column.kind === "column_math"
               ? columnMathProblem(
                 column.expression,
                 chosen.properties,
                 columns.filter((_, i) => i !== index),
               )
-              : column.derivation ? null : "Build the chain this column follows.";
+              : column.kind === "linked" && !column.derivation
+                ? "Build the chain this column follows." : null;
             return (
               <div key={index} className="cf-rule">
                 <input
@@ -169,7 +172,7 @@ function DerivedPropertiesField({
                       (i === index && c.kind === "column_math"
                         ? { ...c, expression: e.target.value } : c)))}
                   />
-                ) : (
+                ) : column.kind === "linked" ? (
                   <button
                     type="button"
                     className="btn quiet"
@@ -178,6 +181,13 @@ function DerivedPropertiesField({
                   >
                     {linkedSummary(column.derivation)}
                   </button>
+                ) : (
+                  <FunctionColumnEditor
+                    index={index}
+                    objectTypeId={typeId}
+                    column={column}
+                    onChange={(next) => write(columns.map((c, i) => (i === index ? next : c)))}
+                  />
                 )}
                 <button
                   type="button"
@@ -218,11 +228,24 @@ function DerivedPropertiesField({
             >
               Add a linked property
             </button>
+            <button
+              type="button"
+              className="btn"
+              data-testid="derived-add-function"
+              onClick={() => write([
+                ...columns,
+                { api_name: "", kind: "function", function_id: "", version: null,
+                  objects_parameter: "", field: "", inputs: {} },
+              ])}
+            >
+              Add a function column
+            </button>
           </div>
           <span className="field-hint">
             Column math is arithmetic over this type&rsquo;s own properties (p.170);
             a linked property follows links to other objects and takes a value
-            or an aggregation from them (p.169). Name it in a widget&rsquo;s
+            or an aggregation from them (p.169); a function column shows what a
+            function gives for each object on the page (p.221). Name it in a widget&rsquo;s
             column list to show it. It is calculated for display — filters and
             sorts do not see it (p.172).
           </span>
