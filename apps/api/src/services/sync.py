@@ -497,16 +497,18 @@ async def run_incremental_sync(
 
 
 async def open_run(
-    conn: AsyncConnection, *, connection_id: UUID, source_table: str, requested_by: UUID
+    conn: AsyncConnection, *, connection_id: UUID, source_table: str, requested_by: UUID,
+    mode: str = "full",
 ) -> UUID:
     row = await fetch_one(
         conn,
         """
         INSERT INTO sync_runs (connection_id, mode, source_table, requested_by)
-        VALUES (:cid, 'full', :table, :by)
+        VALUES (:cid, CAST(:mode AS sync_mode), :table, :by)
         RETURNING id
         """,
-        {"cid": str(connection_id), "table": source_table, "by": str(requested_by)},
+        {"cid": str(connection_id), "table": source_table, "by": str(requested_by),
+         "mode": mode},
     )
     assert row is not None
     return UUID(str(row["id"]))

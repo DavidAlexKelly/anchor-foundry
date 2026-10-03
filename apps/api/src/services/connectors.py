@@ -1198,6 +1198,10 @@ def _csv_value(value: Any) -> Any:
 # have a column-level concept to hang it on.
 _S3_KEY_MAX = 1024
 _MAX_DISCOVER_OBJECTS = 500
+#: A file sync's folder, listed whole each run (p.164: "Exclude files already
+#: synced has known scale limitations, as it requires scanning all files on
+#: every sync run"). Past this a sync should name a narrower subfolder.
+_MAX_FOLDER_FILES = 10_000
 # Schema inference downloads the object. Past this, discovery still lists the
 # file (so it can be selected and synced) but reports no columns rather than
 # pulling hundreds of MB to fill in a preview grid.
@@ -1581,6 +1585,65 @@ class S3Connector:
         except Exception as exc:
             raise self._translate(exc, f"{cfg.bucket}/{key}") from exc
         return _s3_timestamp(head.get("LastModified"))
+
+    # ---- file-based syncs (decision 0021; `data-connection` p.160-164) -------
+    def _folder_prefix(self, cfg: S3Config, folder: str) -> str:
+        """The key prefix of a subfolder under the connection's own, refusing
+        one that climbs out of it - the prefix is a trust boundary."""
+        folder = (folder or "").strip("/")
+        if ".." in folder.split("/"):
+            raise SourceReadError(f"invalid folder {folder!r}")
+        return f"{cfg.prefix}{folder + '/' if folder else ''}"
+
+    def list_folder(
+        self, config: dict[str, Any], secret: dict[str, str], *, folder: str,
+    ) -> list[dict[str, Any]]:
+        """Every readable file nested in `folder`, as `{path, size, modified}`
+        with `path` relative to it (p.163: "Syncs will include all nested files
+        and folders from the specified subfolder"). Folder markers and file
+        types no dataset can be read from are left out, as discovery does."""
+        cfg = S3Config(**config)
+        client = self._client(config, secret)
+        base = self._folder_prefix(cfg, folder)
+        out: list[dict[str, Any]] = []
+        try:
+            paginator = client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=cfg.bucket, Prefix=base):
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if key.endswith("/"):
+                        continue
+                    if os.path.splitext(key)[1].lower() not in SUPPORTED_FILE_EXTENSIONS:
+                        continue
+                    out.append({"path": key[len(base):], "size": int(obj.get("Size", 0)),
+                                "modified": _s3_timestamp(obj.get("LastModified"))})
+                    if len(out) > _MAX_FOLDER_FILES:
+                        raise SourceReadError(
+                            f"{folder or 'this folder'} holds more than {_MAX_FOLDER_FILES} "
+                            "files - sync a narrower subfolder, or filter by path"
+                        )
+        except SourceReadError:
+            raise
+        except Exception as exc:
+            raise self._translate(exc, f"bucket {cfg.bucket}") from exc
+        return out
+
+    def fetch_file(
+        self, config: dict[str, Any], secret: dict[str, str], *,
+        folder: str, path: str, dest: str,
+    ) -> None:
+        """One of `list_folder`'s files, downloaded to `dest`."""
+        cfg = S3Config(**config)
+        client = self._client(config, secret)
+        if ".." in path.split("/") or path.startswith("/"):
+            raise SourceReadError(f"invalid file path {path!r}")
+        key = f"{self._folder_prefix(cfg, folder)}{path}"
+        if len(key) > _S3_KEY_MAX:
+            raise SourceReadError(f"invalid file path {path!r}")
+        try:
+            client.download_file(cfg.bucket, key, dest)
+        except Exception as exc:
+            raise self._translate(exc, f"{cfg.bucket}/{key}") from exc
 
     # ---- export (decision 0014; `data-connection` p.193, p.203) --------------
     def export_file(

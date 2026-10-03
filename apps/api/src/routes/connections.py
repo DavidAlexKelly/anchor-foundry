@@ -813,6 +813,8 @@ class SyncResult(BaseModel):
     rows_synced: int
     created_dataset: bool
     dataset: SyncDatasetOut | None
+    # A file sync's run (§749): the paths it took, in the order read.
+    files_taken: list[str] = Field(default_factory=list)
 
 
 class SyncRunOut(BaseModel):
@@ -1042,10 +1044,17 @@ async def sync_runs(
 # "run now" here executes the identical steps inline, same relationship as
 # models' manual run vs. its own scheduled_model_runs job.
 class ScheduledSyncSet(BaseModel):
-    mode: str = Field(pattern="^(full|incremental)$")
+    mode: str = Field(pattern="^(full|incremental|files)$")
     # Bounds and optionality for the same reasons as SyncRequest above.
     source_schema: str = Field(default="public", max_length=1024)
-    source_table: str = Field(min_length=1, max_length=1024)
+    # Required for a table; a file sync (mode `files`, decision 0021) names a
+    # folder instead.
+    source_table: str | None = Field(default=None, min_length=1, max_length=1024)
+    # p.160's subfolder, under the connection's own prefix ("" is the prefix
+    # itself), and p.160's transaction type and p.164's filters.
+    folder: str | None = Field(default=None, max_length=1024)
+    file_transaction: str | None = Field(default=None, pattern="^(SNAPSHOT|APPEND|UPDATE)$")
+    file_filters: dict[str, Any] | None = None
     dataset_name: str | None = Field(default=None, min_length=1, max_length=200)
     primary_key_column: str | None = Field(default=None, min_length=1, max_length=200)
     cursor_column: str | None = Field(default=None, min_length=1, max_length=200)
@@ -1069,6 +1078,8 @@ class ScheduledSyncOut(BaseModel):
     sync_cursor_column: str | None
     sync_last_cursor_value: str | None
     sync_next_run_at: datetime | None
+    sync_file_transaction: str | None = None
+    sync_file_filters: dict[str, Any] | None = None
 
 
 @router.get("/{connection_id}/scheduled-sync", response_model=ScheduledSyncOut)
@@ -1094,14 +1105,41 @@ async def set_scheduled_sync(
         raise ConnectorConfigError(
             "incremental sync needs both a primary key column and a cursor column"
         )
+    filters: dict[str, Any] | None = None
+    if body.mode == "files":
+        try:
+            filters = file_sync_service.parse_filters(body.file_filters)
+            file_sync_service.check(body.file_transaction or "SNAPSHOT", filters)
+        except file_sync_service.FileSyncError as exc:
+            raise ConnectorConfigError(str(exc)) from exc
+        if body.cron_schedule:
+            raise ConnectorConfigError(
+                "a file sync runs when asked for now - scheduling one is not built yet"
+            )
+    elif not body.source_table:
+        raise ConnectorConfigError("a table sync needs a source table")
     next_run_at = next_run_after(body.cron_schedule) if body.cron_schedule else None
     async with user_connection(access.auth.user_id) as conn:
+        if body.mode == "files":
+            source = await conn_service.get(
+                conn, access.workspace_id, access.project_id, connection_id)
+            if source["source_type"] != "s3":
+                raise ConnectorConfigError(
+                    f"a {source['source_type']} source has tables, not files - a file sync "
+                    "reads a folder of an S3 source"
+                )
+        folder = (body.folder or "").strip("/")
         row = await conn_service.set_schedule(
             conn, access.workspace_id, access.project_id, connection_id,
-            mode=body.mode, source_schema=body.source_schema, source_table=body.source_table,
-            dataset_name=body.dataset_name, primary_key_column=body.primary_key_column,
+            mode=body.mode,
+            source_schema=folder if body.mode == "files" else body.source_schema,
+            source_table=None if body.mode == "files" else body.source_table,
+            dataset_name=body.dataset_name or (
+                (folder.rsplit("/", 1)[-1] or "files") if body.mode == "files" else None),
+            primary_key_column=body.primary_key_column,
             cursor_column=body.cursor_column, cron_schedule=body.cron_schedule,
             next_run_at=next_run_at, cursor_start_value=body.cursor_start_value,
+            file_transaction=body.file_transaction or "SNAPSHOT", file_filters=filters,
         )
         await audit.record(
             conn,
@@ -1114,6 +1152,8 @@ async def set_scheduled_sync(
             project_id=access.project_id,
             metadata={
                 "mode": body.mode, "table": f"{body.source_schema}.{body.source_table}",
+                "folder": folder if body.mode == "files" else None,
+                "file_transaction": body.file_transaction, "file_filters": filters,
                 "cron_schedule": body.cron_schedule,
                 "cursor_start_value": body.cursor_start_value,
             },
@@ -1194,6 +1234,11 @@ async def run_scheduled_sync(
         schedule = await conn_service.get_schedule(
             conn, access.workspace_id, access.project_id, connection_id
         )
+    if schedule["sync_mode"] == "files":
+        # A folder (decision 0021), whose run is its own shape: many files,
+        # chosen by filters, committed as one version of its type.
+        return await _run_file_sync(connection_id, schedule, request, access)
+    async with user_connection(access.auth.user_id) as conn:
         if not schedule["sync_source_table"]:
             raise ConnectorConfigError(
                 "no scheduled sync target is configured - set one with PUT .../scheduled-sync first"
@@ -1315,5 +1360,118 @@ async def run_scheduled_sync(
     )
 
 
+async def _run_file_sync(
+    connection_id: UUID, schedule: dict[str, Any], request: Request, access: ProjectAccess,
+) -> SyncResult:
+    """A file sync's run (decision 0021; `data-connection` p.160-164).
+
+    List the folder, take what p.164's filters leave, download each file, and
+    commit them as one version of p.160's transaction type. p.163: "If a sync
+    fails at any point, the transaction is aborted and none of the files from
+    that run are committed" - every file is downloaded and read before
+    `file_syncs.record` writes anything.
+    """
+    folder = str(schedule["sync_source_schema"] or "")
+    transaction = str(schedule["sync_file_transaction"] or "SNAPSHOT")
+    filters = schedule["sync_file_filters"] or {}
+    if isinstance(filters, str):
+        filters = _parse(filters)
+    async with user_connection(access.auth.user_id) as conn:
+        row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        policies = await egress_store.for_connection(conn, connection_id)
+        already = await file_sync_service.seen(conn, connection_id)
+        run_id = await sync_service.open_run(
+            conn, connection_id=connection_id, source_table=folder or "/",
+            requested_by=access.auth.user_id, mode="files",
+        )
+
+    config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
+    ok, error, rows_synced, created = True, None, 0, False
+    dataset: dict[str, Any] | None = None
+    taken: list[dict[str, Any]] = []
+    tmp_dir = _tempfile.mkdtemp()
+    try:
+        secret = conn_service.secret_values_for(_secrets, row)
+        connector = get_connector(str(row["source_type"]))
+        with egress.restricted_to(policies):
+            listing = await anyio.to_thread.run_sync(
+                functools.partial(connector.list_folder, config, secret, folder=folder))
+        taken = file_sync_service.select(listing, filters, already)
+        if sum(int(f["size"]) for f in taken) > sync_service.MAX_SYNC_BYTES:
+            raise SyncError(
+                f"the files this run would take exceed the "
+                f"{sync_service.MAX_SYNC_BYTES // (1024 * 1024)} MB interactive sync limit - "
+                "a limit filter takes them a batch at a time"
+            )
+        downloaded: list[tuple[dict[str, Any], str]] = []
+        for index, f in enumerate(taken):
+            local = _os.path.join(tmp_dir, f"{index}{_os.path.splitext(f['path'])[1].lower()}")
+            with egress.restricted_to(policies):
+                await anyio.to_thread.run_sync(functools.partial(
+                    connector.fetch_file, config, secret, folder=folder, path=f["path"],
+                    dest=local))
+            downloaded.append((f, local))
+        if downloaded:
+            async with user_connection(access.auth.user_id) as conn:
+                dataset, rows_synced, created = await file_sync_service.record(
+                    conn, _dataset_storage(),
+                    connection_id=connection_id, workspace_id=access.workspace_id,
+                    project_id=access.project_id, folder=folder,
+                    dataset_name=str(schedule["sync_dataset_name"] or folder or "files"),
+                    transaction=transaction, taken=downloaded,
+                    requested_by=access.auth.user_id,
+                )
+        elif schedule["sync_dataset_id"]:
+            # Nothing to take: the steady state of an incremental file sync,
+            # and no version - a history entry for nothing would be noise.
+            async with user_connection(access.auth.user_id) as conn:
+                current = await ds_service_for_files.get(
+                    conn, access.project_id, UUID(str(schedule["sync_dataset_id"])))
+                dataset = {k: current[k] for k in
+                           ("id", "name", "slug", "row_count", "current_version")}
+    except (SyncError, ConnectorOperationError, file_sync_service.FileSyncError) as exc:
+        ok, error = False, str(exc)
+    except KeyError:
+        ok, error = False, "stored credentials are missing - update the connection"
+    finally:
+        import shutil as _shutil
+
+        _shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    async with user_connection(access.auth.user_id) as conn:
+        await sync_service.close_run(
+            conn, run_id, ok=ok, rows_synced=rows_synced,
+            dataset_id=UUID(str(dataset["id"])) if dataset else None, error=error,
+        )
+        await conn_service.record_test_result(conn, connection_id, ok=ok, error=error)
+        if ok:
+            await conn.execute(
+                _sql_text("UPDATE connections SET last_synced_at = now() WHERE id = :cid"),
+                {"cid": str(connection_id)},
+            )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="connection.scheduled_sync.run",
+            resource_type="connection",
+            resource_id=connection_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"mode": "files", "ok": ok, "rows": rows_synced,
+                      "files": [f["path"] for f in taken][:100],
+                      "transaction": transaction},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return SyncResult(
+        run_id=run_id, ok=ok, error=error, rows_synced=rows_synced,
+        created_dataset=created, dataset=SyncDatasetOut(**dataset) if dataset else None,
+        files_taken=[f["path"] for f in taken] if ok else [],
+    )
+
+
 from ..lib.cron import next_run_after  # noqa: E402
 from sqlalchemy import text as _sql_text  # noqa: E402
+from ..services import datasets as ds_service_for_files  # noqa: E402
+from ..services import file_syncs as file_sync_service  # noqa: E402
