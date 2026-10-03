@@ -306,6 +306,10 @@ export const AXIS_ALIGNS = ["left", "right"] as const;
 export type AxisAlign = (typeof AXIS_ALIGNS)[number];
 export interface AxisSettings {
   unit: string;
+  /** p.394's unit conversion (§733): the unit the axis shows its readings
+   * in, when `unit` names theirs (`series-units.ts`). Empty is no
+   * conversion. */
+  display: string;
   auto: boolean;
   min: number | null;
   max: number | null;
@@ -314,7 +318,7 @@ export interface AxisSettings {
   align: AxisAlign;
 }
 export const DEFAULT_AXIS: AxisSettings = {
-  unit: "", auto: true, min: null, max: null, log: false, invert: false, align: "left",
+  unit: "", display: "", auto: true, min: null, max: null, log: false, invert: false, align: "left",
 };
 /** Axes on one canvas. */
 export const MAX_AXES = 4;
@@ -345,7 +349,7 @@ export function axisSettingsOf(axes: Axes, canvas: number, axis: number): AxisSe
 export function withAxisSetting<K extends keyof AxisSettings>(
   axes: Axes, canvas: number, axis: number, key: K, value: AxisSettings[K],
 ): Axes {
-  const set = key === "unit" ? (value as string).slice(0, MAX_UNIT) : value;
+  const set = key === "unit" || key === "display" ? (value as string).slice(0, MAX_UNIT) : value;
   const at = `${canvas}:${axis}`;
   return { ...axes, [at]: { ...axes[at], [key]: set } };
 }

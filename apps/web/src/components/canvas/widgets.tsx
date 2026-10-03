@@ -366,6 +366,7 @@ import {
   type EventSet as SeriesEventSet, withEventStatistics as withSeriesEventStatistics,
   type Bands as SeriesBands, type LineStyle as SeriesLineStyle, type Plot as SeriesPlot,
 } from "./series-analysis";
+import { conversionProblem, convertReadings, shownUnit } from "./series-units";
 import { outputClauses } from "./action-output";
 import {
   actionItemsOf, activeIndexOf, menuLabelOf, moreActionsOf, withAddedAction, withMoreAction,
@@ -14204,7 +14205,16 @@ export function CanvasSeriesAnalysis({
       };
     }),
   });
-  const readings = plots.map((_, n) => seriesReadingsOf(readingsFor[n]?.data?.points ?? []));
+  // p.394-395's axes (§656), by canvas and axis - above the readings,
+  // which are converted by them (§733).
+  const [axes, setAxes] = useState<SeriesAxes>({});
+  // p.394's unit conversion (§733): each plot's readings as its axis shows
+  // them, so the line, its scale, the tooltip and the statistics all read
+  // the converted values.
+  const readings = plots.map((plot, n) => {
+    const a = seriesAxisSettingsOf(axes, plot.canvas, seriesAxisOf(plot));
+    return convertReadings(seriesReadingsOf(readingsFor[n]?.data?.points ?? []), a.unit, a.display);
+  });
   const colorOf = (n: number) => CHART_PALETTE[n % CHART_PALETTE.length]!;
   const offered = SERIES_PLOT_TYPES.filter((k) => !plotTypes || plotTypes.includes(k));
   const setTypes = SERIES_EVENT_SET_TYPES.filter((k) => !eventSetTypes || eventSetTypes.includes(k));
@@ -14382,8 +14392,6 @@ export function CanvasSeriesAnalysis({
     const { [viewKey(canvas)]: _was, ...rest } = views;
     setViews(next === undefined ? rest : { ...rest, [viewKey(canvas)]: next });
   };
-  // p.394-395's axes (§656), by canvas and axis.
-  const [axes, setAxes] = useState<SeriesAxes>({});
   // p.392's Time series search (§651): event sets over the plots, each
   // searched by the server over the plot's whole chain.
   const [eventSetsRaw, setEventSets] = useState<SeriesEventSet[]>([]);
@@ -14483,8 +14491,11 @@ export function CanvasSeriesAnalysis({
             <SeriesAnalysisChart canvas={canvas} view={viewOf(canvas)} utc={utc}
               overlay={!!overlayYAxes} collapsed={collapsedOf(canvas)} boundaries={!!collapsedBoundaries}
               tooltip={tooltipOptions}
-              axes={seriesAxesOf(plots, canvas).map((axis) => ({
-                axis, settings: seriesAxisSettingsOf(axes, canvas, axis) }))}
+              axes={seriesAxesOf(plots, canvas).map((axis) => {
+                const s = seriesAxisSettingsOf(axes, canvas, axis);
+                // Labelled with the unit shown, which is the converted one.
+                return { axis, settings: { ...s, unit: shownUnit(s.unit, s.display) } };
+              })}
               events={[...initial.flatMap((_, n) => initialHidden.includes(n) ? []
                 : [{ id: `initial-${n + 1}`, color: initialColor(n), events: initialEvents[n] ?? [] }]),
               ...eventSets.flatMap((set, n) => {
@@ -14619,7 +14630,7 @@ export function CanvasSeriesAnalysis({
           <table className="data-grid" data-testid="series-axes" style={{ marginTop: 6 }}>
             <thead>
               <tr>
-                <th>Axis</th><th>Unit</th><th>Auto scale</th><th>Min</th><th>Max</th><th>Log</th>
+                <th>Axis</th><th>Unit</th><th>Display as</th><th>Auto scale</th><th>Min</th><th>Max</th><th>Log</th>
                 <th>Invert</th><th>Align</th>
               </tr>
             </thead>
@@ -14639,6 +14650,19 @@ export function CanvasSeriesAnalysis({
                     <td>
                       <input aria-label={`${name} unit`} value={a.unit} maxLength={MAX_SERIES_UNIT}
                              style={{ width: 64 }} onChange={(e) => set("unit", e.target.value)} />
+                    </td>
+                    <td>
+                      {/* p.394: "Allows unit conversion (for example, meters
+                          to kilometers)" (§733) - into a unit of the same
+                          kind as the Unit beside it. */}
+                      <input aria-label={`${name} display as`} value={a.display} maxLength={MAX_SERIES_UNIT}
+                             placeholder="km" style={{ width: 64 }}
+                             onChange={(e) => set("display", e.target.value)} />
+                      {conversionProblem(a.unit, a.display) && (
+                        <div className="field-hint" data-testid="series-unit-problem">
+                          {conversionProblem(a.unit, a.display)}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <input type="checkbox" aria-label={`${name} auto scale`} checked={a.auto}
