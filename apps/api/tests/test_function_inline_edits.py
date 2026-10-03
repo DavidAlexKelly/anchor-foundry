@@ -268,3 +268,28 @@ def test_an_unbatched_function_may_not_edit_a_row_beside_its_own(client, fx, tic
                                 {"instance_id": tickets["T2"], "values": {"title": "y"}}])
     assert r.status_code == 422, r.text
     assert "changes only the row it is typed into" in r.text
+
+
+def test_a_function_that_deletes_the_row_is_refused(client, fx, tickets) -> None:
+    """§783's typed edits, through an inline edit: p.136's "modify a single
+    object", so not a delete of the row it is typed into."""
+    t = tickets["api_name"]
+    made = client.post(f"{wbase(fx)}/functions", headers=hdr(fx.editor_sub), json={
+        "api_name": f"fn_{uuid.uuid4().hex[:6]}", "display_name": "F", "version": {
+            "version": "1.0.0", "inputs": [],
+            "parameters": [{"api_name": "ticket", "data_type": "object",
+                            "object_type_id": tickets["type_id"]},
+                           {"api_name": "title", "data_type": "string"}],
+            "output": {"kind": "edits", "object_type_ids": [tickets["type_id"]]},
+            "sql": (f"SELECT '{t}' AS __object_type, $ticket AS __primary_key, "
+                    "'delete' AS __edit, NULL::JSON AS __properties "
+                    "WHERE $title IS NOT NULL")}})
+    assert made.status_code == 201, made.text
+    act = action(client, fx, tickets)
+    assert define(client, fx, act, [rule(made.json(), inputs={
+        "ticket": {"subject": True}, "title": {"parameter": "title"}})],
+        [TITLE]).status_code == 200
+    r = batch(client, fx, act, [{"instance_id": tickets["T1"], "values": {"title": "x"}}])
+    assert r.status_code == 422, r.text
+    assert "changes only the row it is typed into" in r.text
+    assert "T1" in held(client, fx, tickets["type_id"])

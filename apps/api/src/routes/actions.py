@@ -2892,19 +2892,27 @@ async def execute_action(
                         conn, workspace_id=access.workspace_id, config=function_config,
                         bound=bound, subject_id=str(body.instance_id),
                     )
-                    edited_type = str(output["object_type_id"])
-                    found = await object_set_eval.instances_of(
-                        conn, access.workspace_id, {
-                            "object_type_id": edited_type,
-                            "filters": [{"property": "$primary_key", "op": "in",
-                                         "value": [e["primary_key"] for e in result["edits"]]}],
-                        }, limit=len(result["edits"]),
-                    )
+                    # Which of the objects named are there, a read per type
+                    # the edits touch (§783). A key of another type in the
+                    # read finds nothing of this one.
+                    existing: dict[tuple[str, str], str] = {}
+                    keys = list(dict.fromkeys(str(e["primary_key"]) for e in result["edits"]))
+                    for edited_type in dict.fromkeys(
+                            str(e["object_type_id"]) for e in result["edits"]):
+                        found = await object_set_eval.instances_of(
+                            conn, access.workspace_id, {
+                                "object_type_id": edited_type,
+                                "filters": [{"property": "$primary_key", "op": "in",
+                                             "value": keys}],
+                            }, limit=len(keys),
+                        )
+                        existing.update({(edited_type, str(r["primary_key"])): str(r["id"])
+                                         for r in found})
                     function_rules, function_bound = action_functions.edit_rules(
-                        result["edits"], object_type_id=edited_type,
+                        result["edits"],
                         subject_type_id=str(object_type_id),
                         subject_key=str(instance["primary_key"]),
-                        existing={str(r["primary_key"]): str(r["id"]) for r in found},
+                        existing=existing,
                     )
                 action_type = {**action_type, "rules": [
                     r for r in action_type["rules"] if str(r.get("kind")) != "function"
@@ -4025,8 +4033,11 @@ async def execute_batch(
                 ]
             keys = {row["key"] for row in staged}
             for row, (output, result) in zip(staged, answers):
-                if str(output["object_type_id"]) != str(object_type_id) or any(
-                    str(e["primary_key"]) not in keys for e in result["edits"]
+                if any(
+                    str(e["object_type_id"]) != str(object_type_id)
+                    or str(e["primary_key"]) not in keys
+                    or e.get("edit") not in (None, "modify")
+                    for e in result["edits"]
                 ) or (not function_config.get("batched") and any(
                     str(e["primary_key"]) != row["key"] for e in result["edits"]
                 )):
@@ -4039,8 +4050,8 @@ async def execute_batch(
                     raise ValueError(f"the function made no edit for {row['key']}, which "
                                      "this submission edits")
                 function_rules, function_bound = action_functions.edit_rules(
-                    mine, object_type_id=str(object_type_id),
-                    subject_type_id=str(object_type_id), subject_key=row["key"], existing={},
+                    mine, subject_type_id=str(object_type_id), subject_key=row["key"],
+                    existing={},
                 )
                 row["bound"] = {**row["bound"], **function_bound}
                 # Its edits are the row's whole effect: an action backing

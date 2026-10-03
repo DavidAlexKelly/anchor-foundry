@@ -59,6 +59,8 @@ BATCH_FIELD_TYPES = (*engine.SCALAR_TYPES, "object")
 #: p.284; §771): a bucket and a value, or a bucket, a segment and a value.
 #: `edits` is `action-types` p.75's Ontology edit function (§773): a key
 #: column, then one column per property to set, for an action's Function rule.
+#: Over several types (§783) it declares `object_type_ids` and its query gives
+#: `function_engine.TYPED_EDIT_COLUMNS`.
 OUTPUT_KINDS = ("value", "array", "object_set", "table", "map", "aggregation", "edits")
 MAX_PARAMETERS = 20
 MAX_INPUTS = 10
@@ -154,6 +156,18 @@ def parse_output(raw: Any) -> dict[str, Any]:
         if data_type not in engine.SCALAR_TYPES:
             raise FunctionError(f"a {kind} output is one of {', '.join(engine.SCALAR_TYPES)}")
         return {"kind": kind, "data_type": data_type}
+    if kind == "edits" and "object_type_ids" in raw:
+        # p.75's "Create several different types of objects" (§783): the
+        # types it may edit, which is p.83's provenance.
+        listed = raw["object_type_ids"]
+        if not isinstance(listed, list) or not listed \
+                or not all(isinstance(t, str) and t for t in listed):
+            raise FunctionError("an edit output names its object types")
+        if len(set(listed)) != len(listed):
+            raise FunctionError("an edit output names an object type twice")
+        if len(listed) > MAX_INPUTS:
+            raise FunctionError(f"an edit function edits at most {MAX_INPUTS} object types")
+        return {"kind": kind, "object_type_ids": [str(t) for t in listed]}
     if kind in ("object_set", "map", "edits"):
         if not raw.get("object_type_id"):
             said = {"object_set": "an object set", "map": "an object map",
@@ -161,6 +175,13 @@ def parse_output(raw: Any) -> dict[str, Any]:
             raise FunctionError(f"{said} output names its object type")
         return {"kind": kind, "object_type_id": str(raw["object_type_id"])}
     return {"kind": kind}
+
+
+def edited_types(output: dict[str, Any]) -> list[str]:
+    """The object types an edit output may edit, one or several (§783)."""
+    if "object_type_ids" in output:
+        return [str(t) for t in output["object_type_ids"]]
+    return [str(output["object_type_id"])]
 
 
 async def _types(
@@ -208,8 +229,10 @@ async def check_version(
                              if p["data_type"] in ("object", "object_set")),
                   *(f["object_type_id"] for p in parameters for f in p.get("fields", [])
                     if f["data_type"] == "object")}
-    if output["kind"] in ("object_set", "map", "edits"):
+    if output["kind"] in ("object_set", "map"):
         referenced.add(output["object_type_id"])
+    if output["kind"] == "edits":
+        referenced.update(edited_types(output))
     types = await _types(conn, workspace_id, referenced)
     engine.check_sql(sql, [p["api_name"] for p in parameters])
     tables = _tables(inputs, types)
@@ -220,15 +243,20 @@ async def check_version(
         for p in parameters
     }
     dry = await anyio.to_thread.run_sync(lambda: engine.run(tables, sql, params, output))
-    if output["kind"] == "edits":
+    typed = output["kind"] == "edits" and engine.typed_edits([c["name"] for c in dry["columns"]])
+    if output["kind"] == "edits" and len(edited_types(output)) > 1 and not typed:
+        raise FunctionError(engine.TYPED_SHAPE)
+    if output["kind"] == "edits" and not typed:
         # What an edit sets has to be somewhere to set it: a property of the
-        # type it edits, said at publish rather than by an action's click.
-        declared = {str(p["api_name"]) for p in types[output["object_type_id"]]["properties"]}
+        # type it edits, said at publish rather than by an action's click. A
+        # typed edit's properties are its rows', checked when it runs.
+        edited = types[edited_types(output)[0]]
+        declared = {str(p["api_name"]) for p in edited["properties"]}
         for column in dry["columns"]:
             if column["name"] not in declared:
                 raise FunctionError(
                     f"the query sets {column['name']!r}, which is not a property of "
-                    f"{types[output['object_type_id']]['api_name']}")
+                    f"{edited['api_name']}")
     return {"version": version, "parameters": parameters, "inputs": inputs,
             "output": output, "sql": sql}
 
@@ -524,4 +552,36 @@ async def execute(
         tables.append(engine.InputTable(name=table.name, columns=table.columns, rows=rows))
     result = await anyio.to_thread.run_sync(
         lambda: engine.run(tables, chosen["sql"], params, chosen["output"]))
+    if result["kind"] == "edits":
+        result["edits"] = await _edits_by_type(conn, workspace_id, chosen["output"],
+                                               result["edits"])
     return {**result, "version": chosen["version"]}
+
+
+async def _edits_by_type(
+    conn: AsyncConnection, workspace_id: UUID, output: dict[str, Any],
+    edits: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Each edit with the id of the type it edits. A typed edit (§783) names
+    its type by api name, which has to be one the output declares (p.83's
+    provenance), and each property it sets one of that type's."""
+    allowed = edited_types(output)
+    if not any("object_type" in e for e in edits):
+        return [{**e, "object_type_id": allowed[0]} for e in edits]
+    types = await _types(conn, workspace_id, set(allowed))
+    by_name = {str(t["api_name"]): (type_id, {str(p["api_name"]) for p in t["properties"]})
+               for type_id, t in types.items()}
+    out = []
+    for edit in edits:
+        found = by_name.get(str(edit["object_type"]))
+        if found is None:
+            raise FunctionError(
+                f"the function edits {edit['object_type']}, which is not an object type it "
+                "declares (action-types p.83)")
+        type_id, declared = found
+        for name in edit["properties"]:
+            if name not in declared:
+                raise FunctionError(f"the function sets {name!r}, which is not a property of "
+                                    f"{edit['object_type']}")
+        out.append({**edit, "object_type_id": type_id})
+    return out

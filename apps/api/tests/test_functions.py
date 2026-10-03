@@ -475,9 +475,11 @@ def test_an_edit_function_names_objects_and_the_properties_to_set(client, fx, si
     got = call(client, fx, fn.json()["id"], {"more": 5}).json()
     assert got["kind"] == "edits"
     assert [c["name"] for c in got["columns"]] == ["capacity", "region"]
+    # Each with the type it edits, as a typed edit's is (§783).
+    t = sites["type"]["id"]
     assert got["edits"] == [
-        {"primary_key": "S1", "properties": {"capacity": 15, "region": "x"}},
-        {"primary_key": "S2", "properties": {"capacity": 35, "region": "x"}}]
+        {"primary_key": "S1", "properties": {"capacity": 15, "region": "x"}, "object_type_id": t},
+        {"primary_key": "S2", "properties": {"capacity": 35, "region": "x"}, "object_type_id": t}]
 
 
 @pytest.mark.parametrize("sql,output,said", [
@@ -556,9 +558,10 @@ def test_a_batch_is_a_list_of_structs_the_sql_unnests(client, fx, sites) -> None
     got = call(client, fx, fn.json()["id"], {"batch": [
         {"site": ids["S1"], "extra": 1}, {"site": ids["S3"], "extra": 2}]})
     assert got.status_code == 200, got.text
+    t = sites["type"]["id"]
     assert got.json()["edits"] == [
-        {"primary_key": "S1", "properties": {"capacity": 11}},
-        {"primary_key": "S3", "properties": {"capacity": 27}}]
+        {"primary_key": "S1", "properties": {"capacity": 11}, "object_type_id": t},
+        {"primary_key": "S3", "properties": {"capacity": 27}, "object_type_id": t}]
 
 
 @pytest.mark.parametrize("values,said", [

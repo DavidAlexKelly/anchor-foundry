@@ -20,7 +20,11 @@ parameters comes from:
 **At submission the edits become the rules the executor already runs**
 (`edit_rules`): a `modify_object` per property of the object the action is
 run on, a named `modify_object` per property of any other object that
-exists, and a `create_object` for a key that does not. Their values sit in the
+exists, and a `create_object` for a key that does not. A typed edit (§783)
+says its verb, and a `delete` is a `delete_object`; a verb the object cannot
+take - creating one that exists, modifying or deleting one that does not - is
+refused rather than turned into the other, since the query said which it
+meant. Their values sit in the
 bound namespace under `function.`, a name no parameter can have and no caller
 can supply - the same reservation a writeback's outputs use (`webhook.`). So
 every check, write, log entry, notification and revert downstream reads a
@@ -168,27 +172,43 @@ def batch_parameter(version: dict[str, Any]) -> dict[str, Any] | None:
 def edit_rules(
     edits: list[dict[str, Any]],
     *,
-    object_type_id: str,
     subject_type_id: str,
     subject_key: str,
-    existing: dict[str, str],
+    existing: dict[tuple[str, str], str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """The function's edits as the rules and bound values the executor runs
-    (module note). `existing` is `{primary key: instance id}` for the keys
-    that name objects already there."""
+    (module note). Each edit names its `object_type_id`; `existing` is
+    `{(type id, primary key): instance id}` for the objects already there."""
     rules: list[dict[str, Any]] = []
     bound: dict[str, Any] = {}
     for i, edit in enumerate(edits):
         key = str(edit["primary_key"])
+        object_type_id = str(edit["object_type_id"])
+        verb = edit.get("edit")
+        subject = object_type_id == subject_type_id and key == subject_key
+        there = subject or (object_type_id, key) in existing
+        if verb == "create" and there:
+            raise FunctionError(f"the function creates {key}, which already exists")
+        if verb in ("modify", "delete") and not there:
+            said = "modifies" if verb == "modify" else "deletes"
+            raise FunctionError(f"the function {said} {key}, which does not exist")
+        if verb == "delete":
+            if subject:
+                rules.append({"kind": "delete_object", "config": {}})
+            else:
+                bound[f"{PREFIX}{i}"] = existing[(object_type_id, key)]
+                rules.append({"kind": "delete_object", "config": {
+                    "object_type": object_type_id, "object": f"{PREFIX}{i}"}})
+            continue
         values = {f"{PREFIX}{i}.{prop}": (prop, value)
                   for prop, value in edit["properties"].items()}
         bound.update({name: value for name, (_prop, value) in values.items()})
-        if object_type_id == subject_type_id and key == subject_key:
+        if subject:
             rules.extend({"kind": "modify_object",
                           "config": {"property": prop, "parameter": name}}
                          for name, (prop, _v) in values.items())
-        elif key in existing:
-            bound[f"{PREFIX}{i}"] = existing[key]
+        elif there:
+            bound[f"{PREFIX}{i}"] = existing[(object_type_id, key)]
             rules.extend({"kind": "modify_object", "config": {
                 "object": f"{PREFIX}{i}", "object_type": object_type_id,
                 "property": prop, "parameter": name}}
@@ -251,7 +271,13 @@ async def call_batch(
     if chosen is None:
         raise FunctionError(f"{fn['api_name']} has no version {config.get('version')}")
     pinned = next(v for v in fn["versions"] if v["version"] == config.get("version"))
-    if chosen["output"] != pinned["output"]:
+    if chosen["output"]["kind"] != "edits":
+        raise FunctionError(
+            f"{fn['api_name']} {chosen['version']} returns {chosen['output']['kind']} rather "
+            f"than edits, and this action was set up against {pinned['version']} "
+            "(action-types p.83)")
+    if not set(functions_service.edited_types(chosen["output"])) \
+            <= set(functions_service.edited_types(pinned["output"])):
         # p.83: "If a newer release of the function returns edits outside of
         # this provenance (for example, an additional object type), action
         # execution will fail."

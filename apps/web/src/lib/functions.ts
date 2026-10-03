@@ -28,6 +28,20 @@ export const OUTPUT_KINDS: { kind: FunctionOutput["kind"]; label: string }[] = [
   { kind: "edits", label: "Edits to objects, for an action" },
 ];
 
+/** The object types an edit output may edit (§783): one, or several. An
+ * unchosen one is "". */
+export function editedTypes(output: FunctionOutput): string[] {
+  return output.object_type_ids ?? [output.object_type_id ?? ""];
+}
+
+/** An edit output over these types: `object_type_id` for one, as §773
+ * saved it, and `object_type_ids` for several. */
+export function editsOver(types: string[]): FunctionOutput {
+  return types.length === 1
+    ? { kind: "edits", object_type_id: types[0] }
+    : { kind: "edits", object_type_ids: types };
+}
+
 /** Whether a parameter names an object type: one object, or a set (§770). */
 export function refersToObjects(dataType: string): boolean {
   return dataType === "object" || dataType === "object_set";
@@ -138,8 +152,10 @@ export function draftProblem(draft: DraftVersion, latest: string | null): string
   if (draft.output.kind === "map" && !draft.output.object_type_id) {
     return "Choose the object type it gives values for.";
   }
-  if (draft.output.kind === "edits" && !draft.output.object_type_id) {
-    return "Choose the object type it edits.";
+  if (draft.output.kind === "edits") {
+    const types = editedTypes(draft.output);
+    if (types.some((t) => !t)) return "Choose the object type it edits.";
+    if (new Set(types).size !== types.length) return "Name each object type it edits once.";
   }
   if (!draft.sql.trim()) return "Write the query.";
   const used = parametersUsed(draft.sql);
@@ -177,10 +193,10 @@ export function bodyOf(draft: DraftVersion): Record<string, unknown> {
   if (draft.output.kind === "value" || draft.output.kind === "array") {
     output.data_type = draft.output.data_type;
   }
-  if (draft.output.kind === "object_set" || draft.output.kind === "map"
-      || draft.output.kind === "edits") {
+  if (draft.output.kind === "object_set" || draft.output.kind === "map") {
     output.object_type_id = draft.output.object_type_id;
   }
+  if (draft.output.kind === "edits") Object.assign(output, editsOver(editedTypes(draft.output)));
   return {
     version: draft.version,
     parameters: draft.parameters.map((p) => ({
