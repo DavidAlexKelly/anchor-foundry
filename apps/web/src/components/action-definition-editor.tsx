@@ -68,6 +68,7 @@ import {
   valueOptions,
 } from "@/lib/webhook-rule";
 import { webhooks as webhookApi } from "@/lib/api";
+import { generatedName } from "@/lib/interface-link-rules";
 import { ApiError, actions as actionApi, objects as objApi, type ActionDefinitionInput } from "@/lib/api";
 import {
   CURRENT_USER, blankBlock, conditionDraft as overrideConditionDraft,
@@ -136,6 +137,14 @@ const RULE_KINDS = [
   // p.113: "select Add new rule, then select Webhook". The sixth and last
   // kind the executor runs (§260); §262 is what makes it selectable.
   ["webhook", "Call a webhook"],
+];
+
+/** p.63-64's interface link rules (§761, §762): offered on an action on an
+ * interface only, which is the one kind of action that has an interface's
+ * links to name. */
+const INTERFACE_LINK_KINDS = [
+  ["create_interface_link", "Link through the interface"],
+  ["delete_interface_link", "Unlink through the interface"],
 ];
 
 /** p.54–55's operators, named as Foundry names them. */
@@ -705,6 +714,13 @@ export function ActionDefinitionEditor({
     queryKey: ["interfaces", workspaceId],
     queryFn: () => objApi.listInterfaces(workspaceId),
   });
+  // The interface this action is on, for its links (§762).
+  const subjectInterface = useQuery({
+    queryKey: ["interface", workspaceId, action.interface_id],
+    queryFn: () => objApi.getInterface(workspaceId, action.interface_id!),
+    enabled: !!action.interface_id,
+  });
+  const interfaceLinks = subjectInterface.data?.effective_link_constraints ?? [];
   const [parameters, setParameters] = useState<Parameter[]>(
     action.parameters.map((p) => ({
       api_name: p.api_name,
@@ -1129,9 +1145,10 @@ export function ActionDefinitionEditor({
                           : rule))
                     }
                   >
-                    {RULE_KINDS.map(([value, label]) => (
-                      <option key={value} value={value}>{label}</option>
-                    ))}
+                    {(action.interface_id ? [...RULE_KINDS, ...INTERFACE_LINK_KINDS] : RULE_KINDS)
+                      .map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
                   </select>
                 </Field>
 
@@ -1340,6 +1357,66 @@ export function ActionDefinitionEditor({
                   </p>
                 )}
 
+                {(r.kind === "create_interface_link" || r.kind === "delete_interface_link") && (() => {
+                  // p.63: "Select the interface link constraint defined on the
+                  // interface" - then the other end is a reference to what
+                  // it links to, and p.63 has it generated.
+                  const constraint = interfaceLinks.find((c) => c.api_name === config.link);
+                  const fits = (p: Parameter) => !!constraint && p.data_type === "object" && (
+                    constraint.target_interface_id
+                      ? p.interface_id === constraint.target_interface_id
+                      : p.object_type_id === constraint.target_object_type_id);
+                  return (
+                    <>
+                      <Field label="Interface link">
+                        <select
+                          value={String(config.link ?? "")}
+                          aria-label={`Rule ${i + 1} interface link`}
+                          onChange={(e) => {
+                            const picked = interfaceLinks.find((c) => c.api_name === e.target.value);
+                            const existing = picked && parameters.find((p) => p.data_type === "object" && (
+                              picked.target_interface_id
+                                ? p.interface_id === picked.target_interface_id
+                                : p.object_type_id === picked.target_object_type_id));
+                            let other = existing?.api_name ?? "";
+                            if (picked && !existing) {
+                              // p.63's "automatically generated" parameter for
+                              // the other end, named after the link.
+                              other = generatedName(picked.api_name, parameters.map((p) => p.api_name));
+                              setParameters([...parameters, {
+                                api_name: other, display_name: picked.display_name,
+                                data_type: "object", required: true, hidden: false,
+                                object_type_id: picked.target_object_type_id ?? null,
+                                interface_id: picked.target_interface_id ?? null,
+                              }]);
+                            }
+                            patch({ link: e.target.value, object: other });
+                          }}
+                        >
+                          <option value="">Choose…</option>
+                          {interfaceLinks.map((c) => (
+                            <option key={c.api_name} value={c.api_name}>{c.display_name}</option>
+                          ))}
+                        </select>
+                      </Field>
+                      {constraint && (
+                        <Field label="Object at the other end">
+                          <select
+                            value={String(config.object ?? "")}
+                            aria-label={`Rule ${i + 1} other end`}
+                            onChange={(e) => patch({ ...config, object: e.target.value })}
+                          >
+                            <option value="">Choose…</option>
+                            {parameters.filter(fits).map((p) => (
+                              <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+                            ))}
+                          </select>
+                        </Field>
+                      )}
+                    </>
+                  );
+                })()}
+
                 {(r.kind === "create_link" || r.kind === "delete_link") && (
                   <>
                     <Field label="Link">
@@ -1464,6 +1541,13 @@ export function ActionDefinitionEditor({
                   }
                 />
               )}
+              {(r.kind === "create_interface_link" || r.kind === "delete_interface_link") &&
+                subjectInterface.isSuccess && interfaceLinks.length === 0 && (
+                  <p className="field-hint" data-testid={`rule-${i + 1}-no-interface-links`}>
+                    This interface declares no links. Add one to it in the Ontology Manager
+                    first.
+                  </p>
+                )}
               {(r.kind === "create_link" || r.kind === "delete_link") &&
                 settableLinks.length === 0 && (
                   <p className="field-hint">
