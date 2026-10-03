@@ -58,6 +58,22 @@ def test_a_header_shows_its_title_icon_and_description(page, api) -> None:
         "Alerts awaiting triage")
 
 
+def test_a_header_icon_from_the_set(page, api) -> None:
+    """p.15's section icon, chosen from the icon set (§706)."""
+    mod = section_module(api, "Section header named icon", {"showHeader": True, "headerIcon": "flag"})
+    open_module(page, mod)
+    expect(header(page).locator(".canvas-section-header-icon svg")).to_have_attribute(
+        "data-icon", "flag", timeout=30000)
+
+
+def test_a_typed_header_icon_is_one_or_two_characters(page, api) -> None:
+    """A document holding more than the field allows is drawn as the field
+    would have kept it, not as a word in the icon's place."""
+    mod = section_module(api, "Section header long icon", {"showHeader": True, "headerIcon": "ABC"})
+    open_module(page, mod)
+    expect(header(page).locator(".canvas-section-header-icon")).to_have_text("AB", timeout=30000)
+
+
 def test_without_the_setting_there_is_no_header(page, api) -> None:
     mod = section_module(api, "Section no header", {})
     open_module(page, mod)

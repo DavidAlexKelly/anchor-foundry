@@ -79,7 +79,7 @@ def build(api, sites, name: str, props: dict | None = None):
                     "property": "tag", "hideEmpty": False, "title": "By tag",
                     "terms": [
                         {"value": "north", "label": "Northern", "icon": "N"},
-                        {"value": "south", "label": "Southern", "icon": ""},
+                        {"value": "south", "label": "Southern", "icon": "map-marker"},
                         {"value": "rare", "label": "", "icon": ""},
                         {"value": "absent", "label": "Nowhere", "icon": ""},
                     ],
@@ -131,6 +131,16 @@ def counts(page) -> dict[str, str]:
 
 def table_rows(page) -> int:
     return page.locator(".data-grid tbody tr").count()
+
+
+def test_a_term_draws_a_typed_icon_or_one_from_the_set(page, api, sites) -> None:
+    """p.475's Icon: typed characters as they were, and a name from the icon
+    set drawn as the icon (§706)."""
+    mod = build(api, sites, "Terms icons")
+    open_module(page, mod)
+    expect(term(page, "north").locator(".canvas-term-icon")).to_have_text("N", timeout=30000)
+    expect(term(page, "south").locator(".canvas-term-icon svg")).to_have_attribute(
+        "data-icon", "map-marker")
 
 
 def test_each_term_shows_its_own_count(page, api, sites) -> None:

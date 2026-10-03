@@ -43,12 +43,15 @@ describe("reading one configured term", () => {
     expect(term?.icon).toBe("N");
   });
 
-  it("keeps an icon to two characters", () => {
-    // There is no icon library here, so an icon is one or two characters — the
-    // same ○ every icon setting in this build carries. A longer string would
-    // render as a word in the icon's place and break the row's alignment.
+  it("keeps a typed icon to two characters", () => {
+    // A longer string would render as a word in the icon's place and break
+    // the row's alignment.
     expect(termOf({ value: "n", icon: "🚚" })?.icon).toBe("🚚");
     expect(termOf({ value: "n", icon: "North" })?.icon).toBe("No");
+  });
+
+  it("keeps a name from the icon set whole (§706)", () => {
+    expect(termOf({ value: "n", icon: " truck " })?.icon).toBe("truck");
   });
 });
 

@@ -1,3 +1,4 @@
+import { iconNamed } from "../../lib/icons";
 /**
  * p.47–49's application logo *image*, and the collapsed-state image (§472).
  *
@@ -86,6 +87,9 @@ export function headerMark(opts: {
   const collapsedImage = imageRefOf(opts.collapsedImage);
   if (opts.collapsed && image && collapsedImage) return { kind: "image", image: collapsedImage };
   if (image) return { kind: "image", image };
-  const text = String(opts.icon ?? "").trim().slice(0, 2);
+  // A name from the icon set (§706) is kept whole for the renderer to draw;
+  // anything else is the one or two characters it always was.
+  const raw = String(opts.icon ?? "").trim();
+  const text = iconNamed(raw) ? raw : raw.slice(0, 2);
   return text ? { kind: "icon", text } : null;
 }

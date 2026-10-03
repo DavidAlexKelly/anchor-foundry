@@ -51,6 +51,11 @@ describe("headerMark (p.47-49)", () => {
     expect(headerMark({ icon: "", image: null, collapsedImage: null, collapsed: false })).toBeNull();
   });
 
+  it("keeps a name from the icon set whole, for the renderer to draw (§706)", () => {
+    expect(headerMark({ icon: " airplane ", image: null, collapsedImage: null, collapsed: false }))
+      .toEqual({ kind: "icon", text: "airplane" });
+  });
+
   it("collapsed, shows the collapsed image only beside a header image", () => {
     expect(headerMark({ icon: "◎", image: png, collapsedImage: mini, collapsed: true }))
       .toEqual({ kind: "image", image: mini });

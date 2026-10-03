@@ -25,7 +25,7 @@ from api import Module, layout
 from conftest import eventually, no_console_errors, open_builder, open_module
 
 
-def header_module(api, name: str, **header_props):
+def header_module(api, name: str, button_icon: str = "⟳", page_icon: str = "◎", **header_props):
     mod = Module(api, name)
     mod.define({
         "format": 2,
@@ -36,14 +36,14 @@ def header_module(api, name: str, **header_props):
                     "nodes": ["tabs", "btn", "txt"]},
             "tabs": {"resolvedName": "CanvasTabs", "props": {}, "parent": "hdr"},
             "btn": {"resolvedName": "CanvasButton",
-                    "props": {"label": "Refresh", "icon": "⟳"}, "parent": "hdr"},
+                    "props": {"label": "Refresh", "icon": button_icon}, "parent": "hdr"},
             # The widget that must disappear. Text rather than a Metric Card
             # only because it needs no data to render — the rule is about the
             # widget's *kind*, not about what it is showing.
             "txt": {"resolvedName": "CanvasText",
                     "props": {"tag": "p", "text": "HEADER EXTRA"}, "parent": "hdr"},
             "page": {"resolvedName": "CanvasPage",
-                     "props": {"title": "Overview", "icon": "◎"},
+                     "props": {"title": "Overview", "icon": page_icon},
                      "isCanvas": True,
                      "nodes": ["body"]},
             "body": {"resolvedName": "CanvasText",
@@ -140,6 +140,17 @@ def test_a_collapsed_header_drops_the_text_and_shows_the_icon(page, collapsed):
 
     # And the module title is text too, so it goes with the rest.
     expect(page.get_by_text("MODULE TITLE")).to_have_count(0)
+
+
+def test_a_collapsed_header_shows_icons_from_the_set(page, api):
+    """p.49's collapsed icons, chosen from the icon set (§706)."""
+    mod = header_module(api, "Header collapsed named", button_icon="refresh", page_icon="home",
+                        orientation="vertical", width=200, collapsible=True,
+                        collapsedByDefault=True)
+    open_module(page, mod)
+    expect(page.get_by_role("button", name="Refresh").locator("svg")).to_have_attribute(
+        "data-icon", "refresh", timeout=30000)
+    expect(page.locator(".canvas-tab").first.locator("svg")).to_have_attribute("data-icon", "home")
 
 
 def test_expanding_a_collapsed_header_brings_everything_back(page, collapsed):

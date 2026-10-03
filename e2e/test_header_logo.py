@@ -3,11 +3,11 @@
     "Enable an application logo by choosing an icon or uploading an image.
      Icon: Choose an icon and an icon color." (p.47)
 
-**The divergence, stated once:** this platform has no icon library, and
-`workshop.md` has recorded that since §80 — a Button and a Page take one or
-two characters instead, an emoji or an initial. p.47's logo takes the same,
-with the colour p.47 names. The *behaviour* is faithful; the picker is not
-built. p.47's **Image** half is `test_header_image.py` (§472).
+**An icon from the set, or typed characters.** §445 built the logo as one or
+two characters, an emoji or an initial, when this platform had no icon set;
+§706 lets p.47's "Choose an icon" choose from the one decision 0019 added,
+and the typed glyph still works. p.47's **Image** half is
+`test_header_image.py` (§472).
 
 What needs a browser is the pair no unit test reaches: that the logo is drawn
 from the document at all, and p.49's rule applied to it — **the title goes
@@ -20,7 +20,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import open_builder, open_module, select_node
+from conftest import open_builder, open_module, save, select_node
 
 
 def module_with(api, name: str, props: dict) -> Module:
@@ -119,10 +119,21 @@ def test_the_builder_writes_the_logo_the_reader_sees(page, api) -> None:
     assert field.get_attribute("maxlength") == "2"
 
 
-def test_the_hint_says_there_is_no_icon_library(page, api) -> None:
-    """§337: somebody expecting a picker finds out at the control, rather than
-    by typing a word and watching it cut in half."""
-    mod = module_with(api, "Header logo hint", {"title": "Hinted"})
+def test_the_logo_chooses_an_icon_from_the_set(page, api) -> None:
+    """p.47's "Choose an icon" (§706): the choice is kept as the icon's name
+    and drawn as the icon, where a typed glyph would have been."""
+    mod = module_with(api, "Header logo named", {"title": "Named"})
     open_builder(page, mod)
     select_node(page, "Header")
-    expect(page.locator(".canvas-settings")).to_contain_text("no icon library", timeout=30000)
+    page.get_by_test_id("header-icon-name").select_option("airplane")
+    expect(page.get_by_test_id("header-icon")).to_have_count(0)
+    # Back to typed characters, and the field is there again, empty.
+    page.get_by_test_id("header-icon-name").select_option("")
+    expect(page.get_by_test_id("header-icon")).to_have_value("")
+    page.get_by_test_id("header-icon-name").select_option("airplane")
+    save(page)
+    props = mod.definition()["layout"]["hdr"]["props"]
+    assert props["icon"] == "airplane", props
+    open_module(page, mod)
+    expect(page.get_by_test_id("header-logo").locator("svg")).to_have_attribute(
+        "data-icon", "airplane", timeout=30000)

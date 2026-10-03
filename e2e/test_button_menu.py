@@ -29,14 +29,16 @@ def setting(item: str | None, value: str, node: str = "btn") -> dict:
 @pytest.fixture(scope="module")
 def menus(api):
     mod = Module(api, "Button menus")
-    items = [{"id": "i_1", "label": "Mark north"}, {"id": "i_2", "label": "Mark south"}]
+    items = [{"id": "i_1", "label": "Mark north", "leftIcon": "flag"},
+             {"id": "i_2", "label": "Mark south"}]
     mod.define({
         "format": 2,
         "layout": layout({
             "btn": {"resolvedName": "CanvasButton",
-                    "props": {"label": "Actions", "buttonType": "menu", "items": items}},
+                    "props": {"label": "Actions", "buttonType": "menu", "items": items,
+                              "leftIcon": "list"}},
             "two": {"resolvedName": "CanvasButton",
-                    "props": {"label": "Save", "buttonType": "twoPart",
+                    "props": {"label": "Save", "buttonType": "twoPart", "leftIcon": "download",
                               "items": [{"id": "i_1", "label": "Save as draft"}]}},
             "note": {"resolvedName": "CanvasText",
                      "props": {"tag": "p", "text": "NOTE={{v_note}}"}},
@@ -64,6 +66,11 @@ def test_each_menu_item_fires_its_own_events(page, menus) -> None:
     page.get_by_role("button", name="Actions").click()
     menu = page.get_by_role("menu", name="Actions")
     expect(menu.get_by_role("menuitem")).to_have_text(["Mark north", "Mark south"])
+    # The menu button's left icon and an item's, from the icon set (§706).
+    expect(page.get_by_role("button", name="Actions").locator(".btn-icon--left svg")).to_have_attribute(
+        "data-icon", "list")
+    expect(menu.get_by_role("menuitem", name="Mark north").locator("svg")).to_have_attribute(
+        "data-icon", "flag")
     menu.get_by_role("menuitem", name="Mark south").click()
     expect(note(page, "south")).to_be_visible()
     # Chosen, so it closes.
@@ -103,6 +110,9 @@ def test_a_two_part_buttons_main_part_and_menu_are_separate(page, menus) -> None
     """p.483's "primary button alongside an additional menu of options": the
     main part fires the button's own events, and an item fires its own."""
     open_module(page, menus)
+    # The main part carries the left icon, from the icon set (§706).
+    expect(page.get_by_role("button", name="Save", exact=True).locator(".btn-icon--left svg")
+           ).to_have_attribute("data-icon", "download")
     page.get_by_role("button", name="Save", exact=True).click()
     expect(note(page, "saved")).to_be_visible()
     page.get_by_role("button", name="More options for Save").click()

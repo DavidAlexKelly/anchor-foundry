@@ -79,7 +79,7 @@ def dnd(api):
             "zone": {"resolvedName": "CanvasSection", "isCanvas": True, "parent": "outer",
                      "nodes": ["picked", "note"],
                      "props": {"direction": "rows", "dropHandling": True,
-                               "dropLabel": "Drop sites here", "dropIcon": "+",
+                               "dropLabel": "Drop sites here", "dropIcon": "plus",
                                "dropVariable": "v_dropped"}},
             "picked": {"resolvedName": "CanvasObjectTable", "parent": "zone",
                        "props": {"objectSetVariable": "v_picked", "columns": "name",
@@ -254,7 +254,8 @@ def test_the_zone_shows_its_label_and_icon_while_something_is_over_it(page, dnd)
     page.mouse.move(start["x"] + 30, start["y"] + start["height"] / 2)
     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, steps=5)
     expect(overlay).to_be_visible()
-    expect(overlay).to_contain_text("+")
+    # p.566's icon, from the icon set (§706).
+    expect(overlay.locator("svg")).to_have_attribute("data-icon", "plus")
     expect(overlay).to_contain_text("Drop sites here")
 
     # **Across the zone's own children, it stays lit.** Every child boundary
@@ -357,5 +358,5 @@ def test_the_builder_offers_drop_handling_and_does_not_drop(page, dnd) -> None:
     page.locator(".canvas-tree-row", has_text="Section").nth(1).click()
     expect(page.get_by_test_id("section-drop-handling")).to_be_checked()
     expect(page.get_by_test_id("section-drop-label")).to_have_value("Drop sites here")
-    expect(page.get_by_test_id("section-drop-icon")).to_have_value("+")
+    expect(page.get_by_test_id("section-drop-icon-name")).to_have_value("plus")
     expect(page.get_by_test_id("section-drop-variable")).to_have_value("v_dropped")
