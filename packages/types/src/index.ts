@@ -3390,6 +3390,9 @@ export interface CanvasApp {
   prompt_for_description: boolean;
   /** Where this app opens as an application (`/r/{id}`). */
   resource_id: string;
+  /** p.617's protection (§700): main changes only by merging a branch whose
+   * proposal was approved. */
+  protected?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -3429,6 +3432,17 @@ export interface CanvasAppBranch {
   created_by_name: string | null;
   created_at: string;
   updated_at: string;
+  /** p.618's proposal (§700): null is no proposal. A save after a review
+   * sends it back to `open`. */
+  proposal_status: "open" | "approved" | "rejected" | null;
+  proposed_by: string | null;
+  proposed_at: string | null;
+  reviewed_by: string | null;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  /** Whether the reader may approve or reject it: an editor other than whoever
+   * proposed or last saved it. */
+  can_review: boolean;
 }
 
 export interface CanvasAppBranchDetail extends CanvasAppBranch {

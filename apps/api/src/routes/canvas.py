@@ -83,6 +83,8 @@ class CanvasAppOut(BaseModel):
     resource_id: UUID
     created_at: datetime
     updated_at: datetime
+    # p.617's protection (§700): main changes only through an approved merge.
+    protected: bool = False
 
 
 class CanvasAppDetail(CanvasAppOut):
@@ -133,6 +135,16 @@ class BranchOut(BaseModel):
     created_by_name: str | None = None
     created_at: datetime
     updated_at: datetime
+    # p.618's proposal (§700): None is no proposal.
+    proposal_status: str | None = None
+    proposed_by: UUID | None = None
+    proposed_at: datetime | None = None
+    reviewed_by: UUID | None = None
+    reviewed_by_name: str | None = None
+    reviewed_at: datetime | None = None
+    # Whether *this reader* may approve or reject it - p.618's reviewers are
+    # the module's other editors, never the change's own author.
+    can_review: bool = False
 
 
 class BranchDetail(BranchOut):
@@ -749,8 +761,13 @@ async def revert_to_version(
 
 
 # ---- branches (§698; p.193, p.617-620) -------------------------------------------
-def _branch(row: dict[str, Any]) -> BranchDetail:
-    return BranchDetail(**{**row, "definition": _parse_json(row["definition"])})
+def _can_review(row: dict[str, Any], access: ProjectAccess) -> bool:
+    return access.role != "viewer" and canvas_service.may_review(row, access.auth.user_id)
+
+
+def _branch(row: dict[str, Any], access: ProjectAccess) -> BranchDetail:
+    return BranchDetail(**{**row, "definition": _parse_json(row["definition"]),
+                           "can_review": _can_review(row, access)})
 
 
 @router.get("/{app_id}/branches", response_model=list[BranchOut])
@@ -762,7 +779,7 @@ async def list_branches(
     draft of the module, and reading drafts is what project viewers may do."""
     async with user_connection(access.auth.user_id) as conn:
         rows = await canvas_service.list_branches(conn, access.project_id, app_id)
-    return [BranchOut(**r) for r in rows]
+    return [BranchOut(**{**r, "can_review": _can_review(r, access)}) for r in rows]
 
 
 @router.post("/{app_id}/branches", response_model=BranchDetail,
@@ -795,7 +812,7 @@ async def create_branch(
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
-    return _branch(row)
+    return _branch(row, access)
 
 
 @router.get("/{app_id}/branches/{name}", response_model=BranchDetail)
@@ -806,7 +823,7 @@ async def get_branch(
 ) -> BranchDetail:
     async with user_connection(access.auth.user_id) as conn:
         row = await canvas_service.get_branch(conn, access.project_id, app_id, name)
-    return _branch(row)
+    return _branch(row, access)
 
 
 @router.put("/{app_id}/branches/{name}/definition", response_model=BranchDetail)
@@ -823,9 +840,9 @@ async def save_branch(
         await _validate_definition(conn, access, app_id, body.definition)
         row = await canvas_service.save_branch(
             conn, access.project_id, app_id, name, definition=body.definition,
-            base_version=body.base_version,
+            saved_by=access.auth.user_id, base_version=body.base_version,
         )
-    return _branch(row)
+    return _branch(row, access)
 
 
 @router.delete("/{app_id}/branches/{name}", status_code=status.HTTP_204_NO_CONTENT,
@@ -868,6 +885,113 @@ async def merge_branch(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"branch": name, "version": row["current_version"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return _out(row)
+
+
+class ProtectionIn(BaseModel):
+    protected: bool
+
+
+@router.post("/{app_id}/branches/{name}/propose", response_model=BranchDetail)
+async def propose_branch(
+    app_id: UUID,
+    name: str,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> BranchDetail:
+    """p.618: "When you are ready to merge your changes to main, create a
+    proposal." """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.propose_branch(
+            conn, access.project_id, app_id, name, proposed_by=access.auth.user_id,
+        )
+        await _audit_branch(conn, access, request, app_id, "canvas_app.propose", name)
+    return _branch(row, access)
+
+
+async def _review(
+    app_id: UUID, name: str, request: Request, access: ProjectAccess, approve: bool,
+) -> BranchDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.review_branch(
+            conn, access.project_id, app_id, name,
+            reviewer=access.auth.user_id, approve=approve,
+        )
+        await _audit_branch(
+            conn, access, request, app_id,
+            "canvas_app.approve" if approve else "canvas_app.reject", name,
+        )
+    return _branch(row, access)
+
+
+@router.post("/{app_id}/branches/{name}/approve", response_model=BranchDetail)
+async def approve_branch(
+    app_id: UUID,
+    name: str,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> BranchDetail:
+    """p.618's Approve, in the Review proposed changes section."""
+    return await _review(app_id, name, request, access, approve=True)
+
+
+@router.post("/{app_id}/branches/{name}/reject", response_model=BranchDetail)
+async def reject_branch(
+    app_id: UUID,
+    name: str,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> BranchDetail:
+    """p.618's Reject."""
+    return await _review(app_id, name, request, access, approve=False)
+
+
+async def _audit_branch(conn, access: ProjectAccess, request: Request, app_id: UUID,
+                        action: str, name: str) -> None:
+    await audit.record(
+        conn,
+        organisation_id=access.auth.organisation_id,
+        user_id=access.auth.user_id,
+        action=action,
+        resource_type="canvas_app",
+        resource_id=app_id,
+        workspace_id=access.workspace_id,
+        project_id=access.project_id,
+        metadata={"branch": name},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+
+
+@router.put("/{app_id}/protection", response_model=CanvasAppDetail)
+async def set_protection(
+    app_id: UUID,
+    body: ProtectionIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> CanvasAppDetail:
+    """p.617's protected module. **Workspace admin**, as publishing beyond the
+    project is: protection is the check on the module's editors, and an editor
+    who could switch it off would not be checked by it."""
+    if access.workspace_role != "admin":
+        raise ForbiddenError("protecting a module requires the workspace admin role")
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.set_protection(
+            conn, access.project_id, app_id, on=body.protected,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="canvas_app.protect",
+            resource_type="canvas_app",
+            resource_id=app_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"protected": body.protected},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
