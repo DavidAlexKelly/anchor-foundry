@@ -2889,6 +2889,8 @@ export interface LinkType {
    * not at all. Optional for documents and fixtures older than it. */
   from_visibility?: LinkVisibility;
   to_visibility?: LinkVisibility;
+  /** `object-link-types` p.235's type classes (§730), `kind:name` each. */
+  type_classes?: string[];
   /** p.257's *cap*, not a request: a link is stored at the lowest status of
    * its own declaration, its two object types, and the properties it joins
    * on. Asking for `active` on a link between experimental types stores
@@ -3262,6 +3264,8 @@ export interface ActionType {
   api_name: string;
   display_name: string;
   description: string;
+  /** `object-link-types` p.235's type classes (§730), `kind:name` each. */
+  type_classes?: string[];
   parameters: ActionParameter[];
   rules: ActionRule[];
   criteria: ActionCriterion[];

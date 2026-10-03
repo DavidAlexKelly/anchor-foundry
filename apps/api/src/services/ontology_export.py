@@ -116,6 +116,8 @@ LINK_FIELDS = (
     "to_visibility",
     "status",
     "deprecation",
+    # p.235's type classes (§730; db 0141): labels, so they travel verbatim.
+    "type_classes",
 )
 
 ACTION_FIELDS = (
@@ -125,6 +127,8 @@ ACTION_FIELDS = (
     "status",
     "deprecation",
     "allow_revert",
+    # p.235's type classes (§730; db 0141).
+    "type_classes",
 )
 
 
@@ -273,7 +277,7 @@ async def export_ontology(
                lt.cardinality::text AS cardinality,
                lt.from_property, lt.to_property,
                lt.from_side_name, lt.to_side_name,
-               lt.from_visibility, lt.to_visibility,
+               lt.from_visibility, lt.to_visibility, lt.type_classes,
                lt.status::text AS status, lt.deprecation::text AS deprecation,
                a.api_name AS from_object_type, b.api_name AS to_object_type
           FROM link_types lt
@@ -290,7 +294,7 @@ async def export_ontology(
         """
         SELECT at.id, at.api_name, at.display_name, at.description,
                at.status::text AS status,
-               at.deprecation::text AS deprecation, at.allow_revert,
+               at.deprecation::text AS deprecation, at.allow_revert, at.type_classes,
                ot.api_name AS object_type
           FROM action_types at
           JOIN object_types ot ON ot.id = at.object_type_id

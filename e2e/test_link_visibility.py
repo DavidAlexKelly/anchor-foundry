@@ -98,3 +98,23 @@ def test_a_user_application_shows_the_prominent_side_first_and_not_the_hidden(
     settled(page)
     eventually(lambda: labels(page), lambda got: got == ["Direct reports"],
                what="the hidden side gone")
+
+
+def test_the_dialog_sets_a_link_type_s_type_classes(page, api, people) -> None:
+    """`object-link-types` p.235 (§730): a link type takes type classes, such
+    as p.237's `hierarchy:parent`, in the dialog that edits it."""
+    page.goto(f"{WEB_BASE}/{people.workspace_slug}/{people.project_slug}/objects")
+    row = page.locator("tr", has_text=people.link["display_name"])
+    row.get_by_role("button", name="Edit join").click()
+    box = page.get_by_test_id("link-type-classes")
+    expect(box).to_have_value("", timeout=30000)
+    box.fill("hierarchy:parent, parent")
+    expect(page.get_by_test_id("link-type-classes-bad")).to_have_text("Not kind:name: parent")
+    expect(page.get_by_role("button", name="Save join")).to_be_disabled()
+    box.fill("hierarchy:parent")
+    page.get_by_role("button", name="Save join").click()
+    expect(box).to_have_count(0)
+    stored = next(link for link in api.call(
+        "GET", f"/workspaces/{people.workspace_id}/link-types")
+        if link["id"] == people.link["id"])
+    assert stored["type_classes"] == ["hierarchy:parent"]

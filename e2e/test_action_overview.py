@@ -158,3 +158,26 @@ def test_a_name_the_server_would_refuse_is_refused_here_first(
     ):
         page.get_by_test_id("action-overview-save").click()
     assert len(posted) == 1, posted
+
+
+def test_the_overview_sets_type_classes(page, module, action, api) -> None:
+    """`object-link-types` p.235: "Type classes can be applied to properties,
+    link types, and action types" (§730). Set beside the name, refused when
+    not kind:name, and kept by a later rename."""
+    open_overview(page, module, action)
+    box = page.get_by_test_id("action-overview-classes")
+    box.fill("actions:generate_uuid, uuid")
+    expect(page.get_by_test_id("action-overview-refusal")).to_have_text("Not kind:name: uuid")
+    expect(page.get_by_test_id("action-overview-save")).to_be_disabled()
+    box.fill("actions:generate_uuid, actions:prefill_current_user")
+    with page.expect_response(
+        lambda r: "/action-types/" in r.url and r.request.method == "PATCH"
+    ) as saved:
+        page.get_by_test_id("action-overview-save").click()
+    assert saved.value.ok, saved.value.text()
+    after = api.call("GET", f"/workspaces/{module.workspace_id}/action-types/{action['id']}")
+    assert after["type_classes"] == ["actions:generate_uuid", "actions:prefill_current_user"]
+    # Opened again, the box holds them.
+    open_overview(page, module, action)
+    expect(page.get_by_test_id("action-overview-classes")).to_have_value(
+        "actions:generate_uuid, actions:prefill_current_user")

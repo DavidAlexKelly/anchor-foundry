@@ -2230,7 +2230,7 @@ _LINK_SELECT = """
                lt.backing_type_id, lt.backing_from_link_id, lt.backing_to_link_id,
                b.display_name AS backing_display_name,
                lt.from_side_name, lt.to_side_name, lt.status, lt.deprecation,
-               lt.from_visibility, lt.to_visibility,
+               lt.from_visibility, lt.to_visibility, lt.type_classes,
                lt.from_object_type_id, f.display_name AS from_display_name,
                lt.to_object_type_id, t.display_name AS to_display_name
           FROM link_types lt
@@ -2439,9 +2439,12 @@ async def create_link_type(
     backing_to_link_id: UUID | None = None,
     from_visibility: str | None = None,
     to_visibility: str | None = None,
+    type_classes_raw: Any = None,
 ) -> dict[str, Any]:
     if not _PROP_API_RE.match(api_name):
         raise ValueError(f"invalid link api_name {api_name!r}")
+    # p.235 (§730; db 0141), the property's rule and its wording.
+    classes = type_classes.parse(type_classes_raw, property_name=api_name)
     if cardinality not in CARDINALITIES:
         raise ValueError(f"invalid cardinality {cardinality!r}")
     # Both endpoints must be this workspace's types (404 shape otherwise).
@@ -2477,14 +2480,14 @@ async def create_link_type(
                                 from_side_name, to_side_name,
                                 join_dataset_id, join_from_column, join_to_column,
                                 backing_type_id, backing_from_link_id, backing_to_link_id,
-                                from_visibility, to_visibility)
+                                from_visibility, to_visibility, type_classes)
         VALUES (:wid, :api, :name, :from, :to, CAST(:card AS link_cardinality), :by,
                 :fprop, :tprop, :fside, :tside, :jds, :jfrom, :jto, :bt, :bfrom, :bto,
-                :fvis, :tvis)
+                :fvis, :tvis, CAST(:tclasses AS text[]))
         RETURNING id, api_name, display_name, from_object_type_id,
                   to_object_type_id, cardinality, created_at,
                   from_property, to_property, from_side_name, to_side_name,
-                  from_visibility, to_visibility,
+                  from_visibility, to_visibility, type_classes,
                   join_dataset_id, join_from_column, join_to_column,
                   backing_type_id, backing_from_link_id, backing_to_link_id,
                   status, deprecation
@@ -2509,6 +2512,7 @@ async def create_link_type(
             "bto": backing_to,
             "fvis": link_visibility(from_visibility) or "normal",
             "tvis": link_visibility(to_visibility) or "normal",
+            "tclasses": classes,
         },
     )
     assert row is not None
@@ -2540,6 +2544,7 @@ async def set_link_join(
     backing_to_link_id: UUID | None = None,
     from_visibility: str | None = None,
     to_visibility: str | None = None,
+    type_classes_raw: Any = None,
 ) -> dict[str, Any]:
     """Map (or unmap) the properties a link joins on - or p.197's join table
     (§552), which replaces them - name its two sides, and set its status.
@@ -2655,7 +2660,10 @@ async def set_link_join(
             # p.217's visibilities (§714), unchanged when not given, as the
             # names are.
             "       from_visibility = COALESCE(:fvis, from_visibility), "
-            "       to_visibility = COALESCE(:tvis, to_visibility) "
+            "       to_visibility = COALESCE(:tvis, to_visibility), "
+            # p.235's type classes (§730), unchanged when not given - an empty
+            # list given clears them, which COALESCE keeps apart from none.
+            "       type_classes = COALESCE(CAST(:tclasses AS text[]), type_classes) "
             "WHERE id = :lid AND workspace_id = :wid"
         ),
         {"fprop": from_property, "tprop": to_property, "status": capped,
@@ -2669,6 +2677,8 @@ async def set_link_join(
          "tside": (to_side_name or "").strip() or None,
          "fvis": link_visibility(from_visibility),
          "tvis": link_visibility(to_visibility),
+         "tclasses": None if type_classes_raw is None else type_classes.parse(
+             type_classes_raw, property_name=str(link["api_name"])),
          "lid": str(link_id), "wid": str(workspace_id)},
     )
     return await get_link_type(conn, workspace_id, link_id)

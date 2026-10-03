@@ -2265,6 +2265,8 @@ export const objects = {
       /** p.253's status and p.254's note (§631); left out, each is kept. */
       status?: import("./types").OntologyStatus;
       deprecation?: import("./types").Deprecation | null;
+      /** p.235's type classes (§730); left out, kept. */
+      type_classes?: string[];
       /** p.217's per-side visibility (§714); left out, each is kept. */
       from_visibility?: import("./types").LinkVisibility;
       to_visibility?: import("./types").LinkVisibility;
@@ -2557,7 +2559,7 @@ export const actions = {
   rename: (
     wid: string,
     actionTypeId: string,
-    input: { display_name?: string; description?: string },
+    input: { display_name?: string; description?: string; type_classes?: string[] },
   ) =>
     request<import("./types").ActionType>(
       `/workspaces/${wid}/action-types/${actionTypeId}`,

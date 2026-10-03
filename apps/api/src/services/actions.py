@@ -1590,7 +1590,7 @@ async def list_action_types(
                -- written as many times as there are readers (§292).
                COALESCE(ot.display_name, i.display_name) AS subject_name,
                at.api_name, at.display_name, at.description,
-               at.status, at.deprecation, at.allow_revert,
+               at.status, at.deprecation, at.allow_revert, at.type_classes,
                at.version, at.log_object_type_id, at.log_link_type_id,
                at.log_summary, at.log_reference_properties,
                at.created_at, at.updated_at
@@ -1624,7 +1624,7 @@ async def get_action_type(
                -- written as many times as there are readers (§292).
                COALESCE(ot.display_name, i.display_name) AS subject_name,
                at.api_name, at.display_name, at.description,
-               at.status, at.deprecation, at.allow_revert,
+               at.status, at.deprecation, at.allow_revert, at.type_classes,
                at.version, at.log_object_type_id, at.log_link_type_id,
                at.log_summary, at.log_reference_properties,
                at.created_at, at.updated_at
@@ -1922,8 +1922,11 @@ async def rename_action_type(
     *,
     display_name: str | None = None,
     description: str | None = None,
+    type_classes_raw: Any = None,
 ) -> None:
-    """p.7's Overview tab: what an action is *called* (§344, §345).
+    """p.7's Overview tab: what an action is *called* (§344, §345) - and,
+    since §730, the type classes `object-link-types` p.235 lets it carry,
+    which are likewise statements about the action rather than what it does.
 
         "Enter a **Display name** for your action type." (p.7)
 
@@ -1952,17 +1955,22 @@ async def rename_action_type(
     """
     if display_name is not None:
         display_name = check_display_name(display_name)
+    from . import type_classes
+
+    classes = (None if type_classes_raw is None
+               else type_classes.parse(type_classes_raw, property_name="the action type"))
     await conn.execute(
         text(
             """
             UPDATE action_types
                SET display_name = COALESCE(:name, display_name),
-                   description = COALESCE(:descr, description)
+                   description = COALESCE(:descr, description),
+                   type_classes = COALESCE(CAST(:tclasses AS text[]), type_classes)
              WHERE id = :aid AND workspace_id = :wid
             """
         ),
         {
-            "name": display_name, "descr": description,
+            "name": display_name, "descr": description, "tclasses": classes,
             "aid": str(action_type_id), "wid": str(workspace_id),
         },
     )

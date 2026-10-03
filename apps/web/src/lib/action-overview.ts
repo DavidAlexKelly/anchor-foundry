@@ -18,10 +18,22 @@
  * browser at it.
  */
 
+import { typeClassesOf } from "./type-classes";
+
 /** One action's Overview fields, as the screen holds them. */
 export interface Overview {
   display_name: string;
   description: string;
+  /** `object-link-types` p.235's type classes (§730), as the box holds them:
+   * `kind:name`, comma-separated. Absent is none. */
+  type_classes?: string;
+}
+
+/** What `overviewEdit` may send. */
+export interface OverviewEdit {
+  display_name?: string;
+  description?: string;
+  type_classes?: string[];
 }
 
 /**
@@ -36,11 +48,8 @@ export interface Overview {
  * empty body by forgetting to check — the type makes the check the only way
  * through.
  */
-export function overviewEdit(
-  saved: Overview,
-  draft: Overview,
-): { display_name?: string; description?: string } | null {
-  const edit: { display_name?: string; description?: string } = {};
+export function overviewEdit(saved: Overview, draft: Overview): OverviewEdit | null {
+  const edit: OverviewEdit = {};
   // Trimmed before comparing, because the server trims before storing: without
   // this, adding a trailing space and saving reports a change and stores none.
   if (draft.display_name.trim() !== saved.display_name.trim()) {
@@ -52,6 +61,11 @@ export function overviewEdit(
   if (draft.description.trim() !== saved.description.trim()) {
     edit.description = draft.description.trim();
   }
+  // The classes as they would be stored, compared as lists: retyping the same
+  // ones with other spacing is not a change.
+  const before = typeClassesOf(saved.type_classes ?? "").classes;
+  const after = typeClassesOf(draft.type_classes ?? "").classes;
+  if (before.join(",") !== after.join(",")) edit.type_classes = after;
   return Object.keys(edit).length ? edit : null;
 }
 
@@ -72,5 +86,7 @@ export function overviewRefusal(draft: Overview): string {
   if (draft.description.length > 2000) {
     return `A description is at most 2000 characters; this one is ${draft.description.length}.`;
   }
+  const bad = typeClassesOf(draft.type_classes ?? "").bad;
+  if (bad.length) return `Not kind:name: ${bad.join(", ")}`;
   return "";
 }
