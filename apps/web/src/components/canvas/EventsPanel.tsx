@@ -1006,16 +1006,18 @@ function ExportEditor({
         <select
           disabled={readOnly}
           data-testid="effect-export-format"
-          value={config.format === "clipboard" ? "clipboard" : "csv"}
+          value={config.format === "clipboard" || config.format === "excel"
+            ? config.format : "csv"}
           onChange={(e) =>
-            onChange({ format: e.target.value === "clipboard" ? "clipboard" : undefined })}
+            onChange({ format: e.target.value === "csv" ? undefined : e.target.value })}
         >
+          <option value="excel">An Excel file</option>
           <option value="csv">A CSV file</option>
           <option value="clipboard">The clipboard</option>
         </select>
         <span className="field-hint">
-          p.489&apos;s Excel is written as CSV, which Excel opens; the clipboard
-          pastes into a spreadsheet as rows and columns
+          p.489&apos;s Excel or the clipboard, which pastes into a spreadsheet as rows
+          and columns. A table&apos;s function-backed or linked columns make the file CSV
         </span>
       </label>
       {config.format !== "clipboard" && (

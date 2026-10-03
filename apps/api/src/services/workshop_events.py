@@ -105,12 +105,11 @@ EFFECTS = (
 #: p.489's "Supported file types are CSV, TXT, JSON, XML, PDF, DOCX, and XLSX".
 EXPORT_FILE_TYPES = ("csv", "txt", "json", "xml", "pdf", "docx", "xlsx")
 
-# The formats an `export` may write. p.489 names Excel and the clipboard;
-# Excel is written as CSV here, which is the format p.489 itself falls back
-# to whenever the columns are not plain properties. There is no spreadsheet
-# library in this platform, and a hand-rolled XLSX writer would be a second
-# file format to get subtly wrong for the sake of a file Excel opens anyway.
-EXPORT_FORMATS = ("csv", "clipboard")
+# The formats an `export` may write. p.489 names Excel and the clipboard; CSV
+# is the format p.489 falls back to "if function-backed columns or linked
+# object columns are included", and what an export saved before §787 wrote
+# (the browser's `lib/xlsx.ts` writes Excel). No format is CSV, for them.
+EXPORT_FORMATS = ("excel", "csv", "clipboard")
 
 # The most properties one export may name. A column list longer than this is
 # a report, and the object type has fewer properties than this in practice.

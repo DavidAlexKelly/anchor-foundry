@@ -51,7 +51,8 @@ export interface ExportRequest {
   variable: string;
   /** What the set held at the click, or null when it had not resolved yet. */
   definition: unknown;
-  format: "csv" | "clipboard";
+  /** p.489's Excel (§787), CSV, or the clipboard. */
+  format: "excel" | "csv" | "clipboard";
   fileName: string | null;
   properties: string[] | null;
   /** An Object Table's derived columns (Workshop p.223; §778): each row's
@@ -384,7 +385,8 @@ export function run(
         context.exportObjects({
           variable,
           definition: definition ?? null,
-          format: config.format === "clipboard" ? "clipboard" : "csv",
+          format: config.format === "clipboard" || config.format === "excel"
+            ? config.format : "csv",
           fileName: typeof config.file_name === "string" ? config.file_name : null,
           properties: Array.isArray(config.properties)
             ? config.properties.filter((p): p is string => typeof p === "string")
