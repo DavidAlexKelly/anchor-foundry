@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FIELD_TYPES,
+  automapped,
   blankField,
   parseStructDefault,
   problem,
@@ -298,5 +299,29 @@ describe("p.169's struct main fields (§674)", () => {
     expect(structTitle(address, value)).toBe("Street: 12 Main St\nCollected: 2024-01-01\npostal_code: ∅");
     expect(structTitle(address, { street: null })).toBe("Street: ∅\nCollected: ∅\npostal_code: ∅");
     expect(structTitle(address, 5)).toBeNull();
+  });
+});
+
+describe("p.160's Automap all (§735)", () => {
+  const f = (api_name: string, over: Partial<StructField> = {}): StructField => ({
+    api_name, display_name: api_name, description: "", data_type: "string", ...over,
+  });
+
+  it("adds the fields not yet declared, after the ones that are", () => {
+    const drafts = draftsOf([f("street", { description: "written by hand", main: true })]);
+    const got = automapped(drafts, [f("street", { data_type: "integer" }), f("number", { data_type: "integer" })]);
+    expect(got.map((x) => x.api_name)).toEqual(["street", "number"]);
+    // The declared one is kept as it was, origin included.
+    expect(got[0]).toEqual({ ...f("street", { description: "written by hand", main: true }), was: "street" });
+    expect(got[1]).toEqual(f("number", { data_type: "integer" }));
+  });
+
+  it("replaces the blank row a new struct opens on", () => {
+    expect(automapped([{ ...blankField() }], [f("a")])).toEqual([f("a")]);
+  });
+
+  it("is the same answer twice", () => {
+    const once = automapped([], [f("a"), f("b")]);
+    expect(automapped(once, [f("a"), f("b")])).toEqual(once);
   });
 });

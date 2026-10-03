@@ -191,6 +191,13 @@ export function PropertyRows({
     constraining === null ? null : properties[constraining];
   const [structuring, setStructuring] = useState<number | null>(null);
   const structuringRow = structuring === null ? null : properties[structuring];
+  // p.160's Automap all (§735), read when a struct dialog opens on a type
+  // that exists: the create dialog has no sources to read.
+  const automaps = useQuery({
+    queryKey: ["struct-automap", workspaceId, objectTypeId],
+    queryFn: () => objApi.structAutomap(workspaceId!, objectTypeId!),
+    enabled: !!workspaceId && !!objectTypeId && structuringRow !== null,
+  });
   const [reducing, setReducing] = useState<number | null>(null);
   const reducingRow = reducing === null ? null : properties[reducing];
   const [hinting, setHinting] = useState<number | null>(null);
@@ -369,6 +376,7 @@ export function PropertyRows({
           onClose={() => setStructuring(null)}
           propertyName={structuringRow.api_name || `property ${structuring! + 1}`}
           value={structuringRow.struct_fields}
+          automaps={(automaps.data ?? []).filter((a) => a.property === structuringRow.api_name)}
           onSave={(next) => {
             const rows = [...properties];
             rows[structuring!] = { ...structuringRow, struct_fields: next };

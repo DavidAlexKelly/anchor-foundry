@@ -2370,6 +2370,11 @@ export const objects = {
     if (!res.ok) throw new ApiError(res.status, res.statusText);
     return res.blob();
   },
+  /** p.160's Automap all (§735): each mapped struct column's members. */
+  structAutomap: (wid: string, typeId: string) =>
+    request<import("./types").StructAutomap[]>(
+      `/workspaces/${wid}/object-types/${typeId}/struct-automap`,
+    ),
   typeLinks: (wid: string, typeId: string) =>
     request<import("./types").TypeLink[]>(
       `/workspaces/${wid}/object-types/${typeId}/links`,

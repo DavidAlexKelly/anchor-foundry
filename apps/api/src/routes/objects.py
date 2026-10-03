@@ -450,12 +450,31 @@ class SuggestRequest(BaseModel):
     dataset_id: UUID
 
 
+class SkippedField(BaseModel):
+    field: str
+    reason: str
+
+
 class SuggestedProperty(BaseModel):
     api_name: str
     display_name: str
     data_type: str
     required: bool
     source_column: str
+    # §735: a struct column's members, automapped (p.149, p.160), and an
+    # array column's element type.
+    array_of: str | None = None
+    struct_fields: list[dict[str, Any]] | None = None
+    skipped_fields: list[SkippedField] = []
+
+
+class StructAutomap(BaseModel):
+    """p.160's Automap all, for one struct column a source maps (§735)."""
+    property: str
+    dataset_name: str
+    column: str
+    struct_fields: list[dict[str, Any]]
+    skipped_fields: list[SkippedField]
 
 
 class SuggestResponse(BaseModel):
@@ -868,6 +887,19 @@ async def object_type_impact(
             conn, access.workspace_id, type_id, [p.model_dump() for p in body.properties]
         )
     return [ImpactOut(**i) for i in impacts]
+
+
+@router.get("/object-types/{type_id}/struct-automap", response_model=list[StructAutomap])
+async def object_type_struct_automap(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[StructAutomap]:
+    """p.160's Automap all (§735): the fields each mapped struct column's
+    members make. Read-only - the dialog applies them, and the save that
+    follows is the ordinary PATCH with every check it already makes."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await ontology_service.struct_automaps(conn, access.workspace_id, type_id)
+    return [StructAutomap(**row) for row in rows]
 
 
 @router.patch("/object-types/{type_id}", response_model=ObjectTypeDetail)

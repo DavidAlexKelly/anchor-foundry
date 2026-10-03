@@ -29,7 +29,8 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # definitions live in their own module because the worker needs a verbatim
 # copy of them (see that module's docstring).
 from . import (
-    array_properties, conditional_format, derived_properties, link_backing, link_join_tables,
+    array_properties, column_types, conditional_format, derived_properties, link_backing,
+    link_join_tables,
     ontology_status, property_inline_actions,
     property_reducers, render_hints, shared_properties, struct_fields, type_classes,
     value_format,
@@ -156,24 +157,6 @@ CARDINALITIES = {"one_to_one", "one_to_many", "many_to_many"}
 
 _TYPE_API_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,99}$")
 _PROP_API_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
-
-# DuckDB inferred type → property type, for auto-suggestion.
-_DUCK_TO_PROPERTY = [
-    ("BOOLEAN", "boolean"),
-    ("TINYINT", "integer"), ("SMALLINT", "integer"), ("INTEGER", "integer"),
-    ("BIGINT", "integer"), ("HUGEINT", "integer"),
-    ("DOUBLE", "float"), ("FLOAT", "float"), ("DECIMAL", "float"),
-    ("TIMESTAMP", "timestamp"), ("DATE", "date"),
-    ("STRUCT", "json"), ("LIST", "json"), ("MAP", "json"), ("JSON", "json"),
-]
-
-
-def property_type_for(duck_type: str) -> str:
-    upper = duck_type.upper()
-    for needle, prop in _DUCK_TO_PROPERTY:
-        if needle in upper:
-            return prop
-    return "string"
 
 
 def to_api_name(display: str, *, type_case: bool) -> str:
@@ -1437,6 +1420,59 @@ def _diff_properties(
         elif after[api_name] != data_type:
             changes[api_name] = "retyped"
     return changes
+
+
+async def struct_automaps(
+    conn: AsyncConnection, workspace_id: UUID, type_id: UUID,
+) -> list[dict[str, Any]]:
+    """p.160's Automap all for a type's struct properties (§735): for each
+    struct column a source maps to a property, the fields its members make.
+
+    > "If the object has already been created, users can automap all columns
+    > by using the Automap all feature." (`object-link-types` p.160)
+
+    Read off each dataset's stored schema, so nothing is opened: the members
+    are in the column's type. A column that is not a struct (or an array of
+    them) has nothing to automap and is left out; whether its property is a
+    struct is the dialog's question, since the dialog may be declaring one.
+    Sources in projects the caller cannot read are not seen, as everywhere.
+    """
+    await get_type(conn, workspace_id, type_id)
+    import json
+
+    sources = await fetch_all(
+        conn,
+        """
+        SELECT s.column_mappings, d.name AS dataset_name, d.table_schema
+          FROM object_type_sources s
+          JOIN datasets d ON d.id = s.dataset_id
+         WHERE s.object_type_id = :tid
+         ORDER BY s.created_at, s.id
+        """,
+        {"tid": str(type_id)},
+    )
+    out: list[dict[str, Any]] = []
+    for source in sources:
+        mappings = source["column_mappings"]
+        if isinstance(mappings, str):
+            mappings = json.loads(mappings)
+        schema = source["table_schema"] or []
+        if isinstance(schema, str):
+            schema = json.loads(schema)
+        types = {str(c["name"]): str(c["data_type"]) for c in schema}
+        for column, prop in mappings.items():
+            struct = column_types.struct_column(types.get(str(column), ""))
+            if struct is None:
+                continue
+            fields, skipped = column_types.automap(struct)
+            out.append({
+                "property": str(prop),
+                "dataset_name": str(source["dataset_name"]),
+                "column": str(column),
+                "struct_fields": fields,
+                "skipped_fields": skipped,
+            })
+    return out
 
 
 async def type_impact(
@@ -3003,14 +3039,17 @@ async def suggest_from_dataset(
     for column in schema:
         col_name = str(column["name"])
         prop_api = to_api_name(col_name, type_case=False)
-        prop_type = property_type_for(str(column["data_type"]))
+        # §735: the column's type read as a shape, so a struct column is a
+        # struct with its members automapped (p.149, p.160) and a list column
+        # an array, rather than whichever scalar name the type mentions first.
+        shape = column_types.suggest(str(column["data_type"]))
         properties.append(
             {
                 "api_name": prop_api,
                 "display_name": col_name.replace("_", " ").title(),
-                "data_type": prop_type,
                 "required": False,
                 "source_column": col_name,
+                **shape,
             }
         )
         lowered = col_name.lower()

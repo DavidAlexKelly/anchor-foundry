@@ -15,15 +15,21 @@
  * refuses, because the dropdown is not the whole declaration. This dialog is
  * the rest of the declaration, and the type joins the list in the same commit.
  *
- * **Two of p.152–160's steps are deliberately absent, and they are the same
- * one twice.** p.153's *Backing column* and p.155's step 7 — "map a column
- * from a datasource to the new struct field" — with p.160's *Automap all* on
- * top, are a **mapping** feature: they say where a field's value comes from.
- * This platform maps a struct the way p.149's own first sentence describes,
- * from one "struct type dataset column", which `column_mappings` already
- * expresses. Per-field mapping is a second way for the same value to arrive,
- * and building it before anybody has asked would be inventing the harder half
- * of a feature to avoid stating that the simpler half is what exists.
+ * **p.153's *Backing column* and p.155's step 7 are not here**, and they are
+ * the same step twice: "map a column from a datasource to the new struct
+ * field" says where a field's value comes from. This platform maps a struct
+ * the way p.149's own first sentence describes, from one "struct type dataset
+ * column", which `column_mappings` already expresses, and reads each field
+ * from it by name. Per-field mapping is a second way for the same value to
+ * arrive, and building it before anybody has asked would be inventing the
+ * harder half of a feature to avoid stating that the simpler half is what
+ * exists.
+ *
+ * **p.160's *Automap all* is here (§735)**, because by-name reading is what
+ * makes it simple: pairing each field with the column's member of the same
+ * name is how every struct is already read, so automapping is declaring a
+ * field for each member. The server reads the members off the mapped
+ * column's type (`services/column_types.py`); the button adds them.
  *
  * Every refusal here is the server's, answered early — see `lib/struct-fields`
  * for why that split rather than a browser-side copy of the rules.
@@ -33,6 +39,7 @@ import { useState } from "react";
 import { Dialog } from "@/components/dialog";
 import {
   FIELD_TYPES,
+  automapped,
   blankField,
   draftsOf,
   fieldsOf,
@@ -42,7 +49,7 @@ import {
   toFieldApiName,
   type DraftField,
 } from "@/lib/struct-fields";
-import type { PropertyDataType, StructField } from "@/lib/types";
+import type { PropertyDataType, StructAutomap, StructField } from "@/lib/types";
 
 export function StructFieldsEditor({
   open,
@@ -50,12 +57,16 @@ export function StructFieldsEditor({
   propertyName,
   value,
   onSave,
+  automaps = [],
 }: {
   open: boolean;
   onClose: () => void;
   propertyName: string;
   value: StructField[] | null | undefined;
   onSave: (next: StructField[]) => void;
+  /** p.160's Automap all (§735): the struct columns mapped to this property,
+   * each with the fields its members make. Empty where nothing is mapped. */
+  automaps?: readonly StructAutomap[];
 }) {
   // **Seeded once, from what was open when the dialog mounted**, each row
   // carrying the name it came in with, which is what `renamed` compares
@@ -108,6 +119,29 @@ export function StructFieldsEditor({
       >
         Add field
       </button>
+
+      {/* p.160's Automap all (§735): one button per mapped struct column,
+          above the list for the Add button's reason. */}
+      {automaps.map((a) => (
+        <div key={`${a.dataset_name}:${a.column}`} style={{ marginBottom: 8 }}>
+          <button
+            type="button"
+            className="btn"
+            data-testid="struct-automap"
+            disabled={a.struct_fields.length === 0}
+            onClick={() => setFields((current) => automapped(current, a.struct_fields))}
+          >
+            Automap all from {a.dataset_name} · {a.column}
+          </button>
+          {a.skipped_fields.length > 0 && (
+            <ul className="field-hint" data-testid="struct-automap-skipped" style={{ margin: "4px 0 0" }}>
+              {a.skipped_fields.map((s) => (
+                <li key={s.field}>Not mapped: {s.field} — {s.reason}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
 
       <table className="table" data-testid="struct-field-rows">
         <thead>

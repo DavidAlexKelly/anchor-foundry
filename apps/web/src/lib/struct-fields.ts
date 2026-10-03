@@ -124,6 +124,22 @@ export function fieldsOf(drafts: readonly DraftField[]): StructField[] {
   return drafts.map(({ was: _, ...f }) => f);
 }
 
+/** p.160's Automap all (§735): the fields a mapped struct column's members
+ * make, added to what the dialog holds.
+ *
+ * **Added, never overwriting.** A field already declared keeps its label,
+ * description, type and main flag: somebody wrote those, and an automap that
+ * reset them would make the button a way to lose work. A row with no name yet
+ * is the blank one a new struct opens on, and goes - it is where a field was
+ * about to be typed, and the automap has just typed them. */
+export function automapped(
+  drafts: readonly DraftField[], fields: readonly StructField[],
+): DraftField[] {
+  const kept = drafts.filter((f) => f.api_name !== "");
+  const named = new Set(kept.map((f) => f.api_name));
+  return [...kept, ...fields.filter((f) => !named.has(f.api_name)).map((f) => ({ ...f }))];
+}
+
 /** p.169's reorder (§676): one row a place up (-1) or down (+1); unchanged at
  * either end. */
 export function moved<T>(rows: readonly T[], index: number, by: -1 | 1): T[] {

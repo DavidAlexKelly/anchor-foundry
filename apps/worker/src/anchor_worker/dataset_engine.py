@@ -34,6 +34,23 @@ def json_safe(value: Any) -> Any:
     return str(value)
 
 
+def json_value(value: Any) -> Any:
+    """`json_safe`, into lists and structs (§735).
+
+    A STRUCT column reads as a dict and a list column as a list, and
+    `json_safe` writes either as Python's repr - `{'a': 1}` - which no struct
+    or array property can read: `_coerce_struct` parses JSON, and a repr is
+    not JSON. So a struct property mapped from a struct column failed every
+    sync. The sync reads values with this; a preview, which shows a value
+    rather than reading it, keeps `json_safe`'s text.
+    """
+    if isinstance(value, dict):
+        return {str(k): json_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_value(v) for v in value]
+    return json_safe(value)
+
+
 class DatasetEngineError(RuntimeError):
     """User-safe failure (bad SQL, bad file, too large)."""
 
@@ -112,7 +129,7 @@ def extract_instance_rows(
         pk = row[0]
         if pk is None:
             continue
-        properties = {property_names[i]: json_safe(row[i + 1]) for i in range(len(property_names))}
+        properties = {property_names[i]: json_value(row[i + 1]) for i in range(len(property_names))}
         out.append((str(pk), properties))
     return out
 

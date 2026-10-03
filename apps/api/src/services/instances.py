@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import NotFoundError
 from . import object_sets
-from .dataset_engine import DatasetEngineError, json_safe
+from .dataset_engine import DatasetEngineError, json_value
 
 MAX_INSTANCE_SYNC_ROWS = 20_000  # flag: worker/OpenSearch bulk path beyond this
 INSTANCE_PAGE_SIZE = 50
@@ -94,7 +94,7 @@ def extract_rows(
         pk = row[0]
         if pk is None:
             continue
-        properties = {property_names[i]: json_safe(row[i + 1]) for i in range(len(property_names))}
+        properties = {property_names[i]: json_value(row[i + 1]) for i in range(len(property_names))}
         out.append((str(pk), properties))
     return out
 
