@@ -9,6 +9,7 @@ org admin; member management = workspace admin.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, status
@@ -81,6 +82,12 @@ class RecipientOut(BaseModel):
     id: UUID
     email: str | None
     display_name: str | None
+    #: p.95's "users and groups" (§755). A group's `display_name` is its name,
+    #: and it says how many members it has and how many of them can see this
+    #: workspace, since p.96 checks each of them.
+    kind: Literal["user", "group"] = "user"
+    members: int | None = None
+    reachable: int | None = None
 
 
 class MemberAdd(BaseModel):
@@ -223,7 +230,13 @@ async def list_notification_recipients(
     """
     async with user_connection(access.auth.user_id) as conn:
         rows = await notification_store.notifiable(conn, workspace_id=access.workspace_id)
-    return [RecipientOut(**row) for row in rows]
+        groups = await notification_store.notifiable_groups(
+            conn, workspace_id=access.workspace_id)
+    return [RecipientOut(**row) for row in rows] + [
+        RecipientOut(id=g["id"], email=None, display_name=g["name"], kind="group",
+                     members=g["members"], reachable=g["reachable"])
+        for g in groups
+    ]
 
 
 @router.post(

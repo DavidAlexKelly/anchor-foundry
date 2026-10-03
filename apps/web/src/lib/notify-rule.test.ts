@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  groupReach,
   PERMISSION_MODES, RECIPIENT_KINDS, USER_REFERENCES, blankNotifyConfig,
   insertReference, problem, referenceOptions, referencesIn,
 } from "./notify-rule";
@@ -56,7 +57,16 @@ describe("problem", () => {
   it("wants somebody on a static list", () => {
     expect(
       problem(config({ recipients: { kind: "static", user_ids: [] } }), PARAMETERS),
-    ).toContain("at least one person");
+    ).toBe("Choose at least one person or group to notify.");
+  });
+
+  it("takes a group alone as somebody (§755)", () => {
+    expect(
+      problem(
+        config({ recipients: { kind: "static", user_ids: [], group_ids: ["g1"] } }),
+        PARAMETERS,
+      ),
+    ).toBeNull();
   });
 
   it("wants the parameter a recipient is read from", () => {
@@ -185,5 +195,21 @@ describe("referenceOptions", () => {
     expect(referenceOptions(["a", "b"]).map((o) => o.value)).toEqual([
       "a", "b", "recipient", "current_user",
     ]);
+  });
+});
+
+describe("groupReach (§755; p.96 checks each member)", () => {
+  it("counts the members", () => {
+    expect(groupReach({ members: 3, reachable: 3 })).toBe("3 people");
+    expect(groupReach({ members: 1, reachable: 1 })).toBe("1 person");
+  });
+
+  it("says how many the strict mode would refuse", () => {
+    expect(groupReach({ members: 3, reachable: 2 })).toBe(
+      "3 people, 1 of whom cannot see this workspace");
+  });
+
+  it("says when there is nobody in it", () => {
+    expect(groupReach({ members: 0, reachable: 0 })).toBe("No members yet");
   });
 });

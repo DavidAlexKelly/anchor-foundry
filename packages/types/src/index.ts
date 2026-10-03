@@ -78,6 +78,12 @@ export interface NotificationRecipient {
   id: string;
   email: string | null;
   display_name: string | null;
+  /** p.95's "users and groups" (§755). A group's `display_name` is its name;
+   * `members` is how many it has and `reachable` how many of them can see the
+   * workspace, since p.96 checks each member. Both null for a person. */
+  kind: "user" | "group";
+  members: number | null;
+  reachable: number | null;
 }
 
 /** A webhook: a request shape held against a connection

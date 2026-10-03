@@ -186,17 +186,24 @@ def parse(
 
     out_recipients: dict[str, Any] = {"kind": kind}
     if kind == "static":
-        users = recipients.get("user_ids")
-        if not isinstance(users, list) or not users:
+        # p.90: "a set of users or groups who will always be notified" - the
+        # groups resolved to their members when the action runs (p.96, §755).
+        users = recipients.get("user_ids") or []
+        groups = recipients.get("group_ids") or []
+        if not isinstance(users, list) or not isinstance(groups, list):
+            raise NotificationError("`user_ids` and `group_ids` are lists of ids")
+        if not users and not groups:
             raise NotificationError(
-                "a static recipient list needs at least one `user_ids` entry"
+                "a static recipient list needs at least one person or group"
             )
-        if len(users) > MAX_RECIPIENTS:
+        if len(users) + len(groups) > MAX_RECIPIENTS:
             raise NotificationError(
                 f"a notification may name at most {MAX_RECIPIENTS} recipients "
-                f"(given {len(users)}) - p.94"
+                f"(given {len(users) + len(groups)}) - p.94"
             )
         out_recipients["user_ids"] = [str(u) for u in users]
+        if groups:
+            out_recipients["group_ids"] = [str(g) for g in groups]
     elif kind == "parameter":
         name = str(recipients.get("parameter", ""))
         if name not in parameters:
@@ -441,7 +448,7 @@ def recipient_ids(
     kind = str(spec.get("kind", ""))
     raw: list[Any]
     if kind == "static":
-        raw = list(spec.get("user_ids") or [])
+        raw = list(spec.get("user_ids") or []) + list(spec.get("group_ids") or [])
     elif kind == "parameter":
         raw = _as_list(values.get(str(spec.get("parameter", ""))))
     elif kind == "object_property":

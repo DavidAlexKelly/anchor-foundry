@@ -986,3 +986,52 @@ def test_switching_an_inputs_source_forgets_the_other_one(page, api, webhook_tar
     assert definition(api, mod)["rules"][1]["config"]["inputs"] == {
         "priority": {"value": ""}
     }
+
+
+def test_a_group_is_offered_saved_and_reaches_its_members(page, api):
+    """p.95's "users or groups" (§755): a group in the picker says whom it
+    reaches, saves as a group, and is resolved to its members when the action
+    runs (p.96).
+
+    **One group, found or made**, because groups have no delete here and a
+    suite that made one per run would grow every picker in the organisation.
+    Its one member is this browser's account, so the delivery is checked where
+    it lands.
+    """
+    mod = build(api, "Action editor notify group")
+    me = api.call("GET", "/auth/me")
+    name = "E2E notify team"
+    group = next((g for g in api.call("GET", "/org/groups") if g["name"] == name), None)
+    if group is None:
+        group = api.call("POST", "/org/groups", {"name": name})
+    if group.get("member_count", 0) == 0:
+        api.call("PUT", f"/org/groups/{group['id']}/members/{me['user_id']}")
+
+    open_editor(page, mod)
+    add_notify_rule(page)
+    expect(page.get_by_test_id(f"group-reach-{name}")).to_have_text("1 person", timeout=15000)
+    # Offered once, as a group - not a second time among the people.
+    expect(page.get_by_test_id("rule-2-people").get_by_text(name, exact=True)).to_have_count(1)
+    page.get_by_label(f"Notify group {name}").check()
+    page.get_by_test_id("rule-2-subject").fill(f"For the team {mod.tag}")
+    expect(page.get_by_test_id("rule-2-problem")).to_have_count(0)
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    stored = definition(api, mod)
+    assert stored["rules"][1]["config"]["recipients"] == {
+        "kind": "static", "user_ids": [], "group_ids": [group["id"]]}
+
+    instance = api.call(
+        "GET", f"/workspaces/{mod.workspace_id}/object-types/{mod.type_id}/instances",
+    )["items"][0]
+    result = api.call(
+        "POST", f"{mod.base}/actions/{mod.action['id']}/execute",
+        {"instance_id": instance["id"], "values": {"status": "closed"}},
+    )
+    assert result["ok"], result
+    page.goto(f"{WEB_BASE}/home")
+    page.get_by_test_id("notification-bell").click()
+    panel = page.get_by_test_id("notification-panel")
+    expect(panel.locator("div").filter(has_text=f"For the team {mod.tag}").first).to_be_visible(
+        timeout=15000)

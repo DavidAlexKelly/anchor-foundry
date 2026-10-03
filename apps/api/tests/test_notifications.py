@@ -189,6 +189,28 @@ def test_a_static_list_may_not_exceed_p94s_five_hundred() -> None:
     )
 
 
+def test_people_and_groups_count_together_towards_the_five_hundred() -> None:
+    """p.94's limit is on recipients named, and a group named is one (§755)."""
+    half = notifications.MAX_RECIPIENTS // 2
+    users = [f"u{i}" for i in range(half)]
+    groups = [f"g{i}" for i in range(notifications.MAX_RECIPIENTS - half + 1)]
+    with pytest.raises(notifications.NotificationError, match="500"):
+        notifications.parse(
+            rule(recipients={"kind": "static", "user_ids": users, "group_ids": groups}),
+            parameters=PARAMETERS,
+        )
+    parsed = notifications.parse(
+        rule(recipients={"kind": "static", "user_ids": users, "group_ids": groups[:-1]}),
+        parameters=PARAMETERS,
+    )
+    assert parsed["recipients"]["group_ids"] == groups[:-1]
+
+
+def test_a_static_list_of_people_alone_carries_no_groups() -> None:
+    parsed = notifications.parse(rule(), parameters=PARAMETERS)
+    assert parsed["recipients"] == {"kind": "static", "user_ids": ["u1"]}
+
+
 def test_a_parameter_recipient_must_be_a_parameter() -> None:
     with pytest.raises(notifications.NotificationError, match="not a parameter"):
         notifications.parse(

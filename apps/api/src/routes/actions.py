@@ -2424,9 +2424,12 @@ async def _pending_notifications(
     out: list[dict] = []
     for rule in rules:
         config = _parse_json(rule.get("config")) or {}
-        requested = notifications_service.recipient_ids(
-            config, values=values, objects=objects
-        )
+        # p.96: a group is its members by the time anybody is checked (§755).
+        requested = (await notification_store.resolve_groups(
+            conn, notifications_service.recipient_ids(
+                config, values=values, objects=objects
+            ),
+        ))[:notifications_service.MAX_RECIPIENTS]
         allowed = notifications_service.deliverable(
             str(config.get("permissions") or "all"),
             requested=requested,
