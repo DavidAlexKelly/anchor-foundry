@@ -1010,7 +1010,7 @@ export interface BootstrapFirstOwnerResult {
 // ---- connections (Layer 1) --------------------------------------------------
 export type ConnectionScope = "project" | "workspace";
 export type ConnectionStatus = "unconfigured" | "ok" | "error" | "testing";
-export type SyncMode = "federated" | "full" | "incremental";
+export type SyncMode = "federated" | "full" | "incremental" | "files";
 
 export interface Connection {
   id: string;
@@ -1472,6 +1472,22 @@ export interface SyncResult {
     row_count: number;
     current_version: number;
   } | null;
+  /** A file sync's run (§749): the paths it took, in the order read. */
+  files_taken?: string[];
+}
+
+/** p.164's filters on a file sync (§749; decision 0021), as the server keeps
+ *  them: a filter not set is absent. */
+export interface FileSyncFilters {
+  exclude_synced?: { by_modified: boolean; by_size: boolean };
+  path_matches?: string;
+  path_not_matches?: string;
+  any_path_matches?: string;
+  modified_after?: string;
+  size_min?: number;
+  size_max?: number;
+  at_least?: number;
+  limit?: number;
 }
 
 /** Schema drift between a synced dataset version and the one it replaced
@@ -1534,6 +1550,9 @@ export interface ScheduledSync {
   sync_cursor_column: string | null;
   sync_last_cursor_value: string | null;
   sync_next_run_at: string | null;
+  /** A file sync's transaction type and filters (§749); null for a table. */
+  sync_file_transaction?: "SNAPSHOT" | "APPEND" | "UPDATE" | null;
+  sync_file_filters?: FileSyncFilters | null;
 }
 
 // ---- models -----------------------------------------------------------------

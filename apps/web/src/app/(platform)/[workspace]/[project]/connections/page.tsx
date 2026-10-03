@@ -16,6 +16,10 @@ import { EgressDialog } from "@/components/egress-panel";
 import { ExportsPanel } from "@/components/exports-panel";
 import { ExploreDialog } from "@/components/source-explorer";
 import { isSyncable, tableKey, tableLabel } from "@/lib/source-explorer";
+import {
+  BLANK_FIELDS, INGESTIONS, describeFileSync, fieldsOf, payloadOf, tookText,
+  type FileSyncFields, type Ingestion,
+} from "@/lib/file-sync-form";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { WebhooksPanel } from "@/components/webhooks-panel";
 import { ListenersPanel } from "@/components/listeners-panel";
@@ -645,6 +649,93 @@ function SyncDialog({
   );
 }
 
+/** A file sync's own fields (§751): the folder, p.160's ingestion mode with
+ *  what it does said beside it, how an UPDATE sees a change, and p.164's
+ *  filters, folded until asked for. */
+function FileSyncFieldsView({
+  folder,
+  setFolder,
+  fields,
+  setField,
+}: {
+  folder: string;
+  setFolder: (value: string) => void;
+  fields: FileSyncFields;
+  setField: <K extends keyof FileSyncFields>(key: K, value: FileSyncFields[K]) => void;
+}) {
+  const chosen = INGESTIONS.find((i) => i.key === fields.ingestion)!;
+  const text = (key: keyof FileSyncFields, label: string, hint?: string, type = "text") => (
+    <Field label={label} hint={hint}>
+      <input
+        type={type}
+        data-testid={`file-${key}`}
+        value={fields[key] as string}
+        onChange={(e) => setField(key, e.target.value)}
+      />
+    </Field>
+  );
+  return (
+    <>
+      <Field label="Folder" hint="Under the source's prefix; empty is the prefix itself. Nested files are included.">
+        <input
+          type="text"
+          data-testid="file-folder"
+          value={folder}
+          onChange={(e) => setFolder(e.target.value)}
+          placeholder="exports/daily"
+        />
+      </Field>
+      <Field label="Ingestion">
+        <select
+          data-testid="file-ingestion"
+          value={fields.ingestion}
+          onChange={(e) => setField("ingestion", e.target.value as Ingestion)}
+        >
+          {INGESTIONS.map((i) => (
+            <option key={i.key} value={i.key}>{i.label}</option>
+          ))}
+        </select>
+      </Field>
+      <p className="soft" data-testid="file-ingestion-says" style={{ margin: "-6px 0 10px" }}>
+        {chosen.says}
+      </p>
+      {fields.ingestion === "update" && (
+        <Field label="A file has changed when its">
+          <label className="check">
+            <input
+              type="checkbox"
+              data-testid="file-by-modified"
+              checked={fields.byModified}
+              onChange={(e) => setField("byModified", e.target.checked)}
+            />{" "}
+            modified date differs
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              data-testid="file-by-size"
+              checked={fields.bySize}
+              onChange={(e) => setField("bySize", e.target.checked)}
+            />{" "}
+            size differs
+          </label>
+        </Field>
+      )}
+      <details data-testid="file-filters">
+        <summary>Filters</summary>
+        {text("pathMatches", "Path matches", "A regular expression; only files whose path matches")}
+        {text("pathNotMatches", "Path does not match", "Leaves out files whose path matches")}
+        {text("anyPathMatches", "Only when any file matches", "Takes nothing until some file's path matches, e.g. _SUCCESS")}
+        {text("modifiedAfter", "Modified after", undefined, "date")}
+        {text("sizeMin", "Smallest size (bytes)")}
+        {text("sizeMax", "Largest size (bytes)")}
+        {text("atLeast", "At least this many files", "Takes nothing until there are this many")}
+        {text("limit", "At most this many files a run", "The oldest first; the rest wait for the next run")}
+      </details>
+    </>
+  );
+}
+
 /** A connection carries at most one managed scheduled/incremental sync
  * target (migration 0014) - this dialog is both the "set it up" form and
  * the status view, since there's only ever one to show. */
@@ -671,8 +762,17 @@ function ScheduledSyncDialog({
     retry: false,
   });
 
-  const [mode, setMode] = useState<"full" | "incremental">("full");
+  const [mode, setMode] = useState<"full" | "incremental" | "files">("full");
   const [table, setTable] = useState<string | null>(null);
+  // A file sync (§751; decision 0021): a folder of an S3 source, p.160's
+  // ingestion mode and p.164's filters.
+  const files = mode === "files";
+  const holdsFiles = connection.source_type === "s3";
+  const [folder, setFolder] = useState("");
+  const [fileFields, setFileFields] = useState<FileSyncFields>(BLANK_FIELDS);
+  const setFile = <K extends keyof FileSyncFields>(key: K, value: FileSyncFields[K]) =>
+    setFileFields((current) => ({ ...current, [key]: value }));
+  const [fileProblem, setFileProblem] = useState("");
   const [datasetName, setDatasetName] = useState("");
   const [pkColumn, setPkColumn] = useState("");
   const [cursorColumn, setCursorColumn] = useState("");
@@ -685,7 +785,14 @@ function ScheduledSyncDialog({
 
   useEffect(() => {
     if (!schedule.data) return;
-    setMode(schedule.data.sync_mode === "incremental" ? "incremental" : "full");
+    if (schedule.data.sync_mode === "files") {
+      setMode("files");
+      setFolder(schedule.data.sync_source_schema ?? "");
+      setFileFields(fieldsOf(schedule.data.sync_file_transaction,
+                             schedule.data.sync_file_filters));
+    } else {
+      setMode(schedule.data.sync_mode === "incremental" ? "incremental" : "full");
+    }
     if (schedule.data.sync_source_table) {
       setTable(
         tableKey({
@@ -718,18 +825,8 @@ function ScheduledSyncDialog({
   };
 
   const save = useMutation({
-    mutationFn: (picked: { schema: string; name: string }) =>
-      scheduledSyncApi.set(workspaceId, projectId, connection.id, {
-        mode,
-        source_schema: picked.schema,
-        source_table: picked.name,
-        dataset_name: datasetName || undefined,
-        primary_key_column: mode === "incremental" ? pkColumn : undefined,
-        cursor_column: mode === "incremental" ? cursorColumn : undefined,
-        cursor_start_value:
-          mode === "incremental" && cursorStart ? cursorStart : undefined,
-        cron_schedule: cronSchedule || undefined,
-      }),
+    mutationFn: (body: Parameters<typeof scheduledSyncApi.set>[3]) =>
+      scheduledSyncApi.set(workspaceId, projectId, connection.id, body),
     onSuccess: async () => {
       await invalidate();
       // **Emptied once it has been applied**, because the box means "start
@@ -762,7 +859,7 @@ function ScheduledSyncDialog({
     },
   });
 
-  const configured = !!schedule.data?.sync_source_table;
+  const configured = !!schedule.data?.sync_source_table || schedule.data?.sync_mode === "files";
   const result = runNow.data;
 
   return (
@@ -772,12 +869,16 @@ function ScheduledSyncDialog({
         <>
           {configured && (
             <div className="card" style={{ marginBottom: 14 }}>
-              <p className="login-note" style={{ marginTop: 0 }}>
-                {schedule.data.sync_mode} sync of{" "}
-                {tableLabel({
-                  schema_name: schedule.data.sync_source_schema ?? "",
-                  name: schedule.data.sync_source_table ?? "",
-                })}
+              <p className="login-note" style={{ marginTop: 0 }} data-testid="sync-configured">
+                {schedule.data.sync_mode === "files"
+                  ? describeFileSync(schedule.data)
+                  : <>
+                      {schedule.data.sync_mode} sync of{" "}
+                      {tableLabel({
+                        schema_name: schedule.data.sync_source_schema ?? "",
+                        name: schedule.data.sync_source_table ?? "",
+                      })}
+                    </>}
                 {schedule.data.sync_schedule
                   ? ` on ${schedule.data.sync_schedule}`
                   : " - no cron, run manually with the button below"}
@@ -793,7 +894,8 @@ function ScheduledSyncDialog({
               {result && (
                 <div style={{ marginTop: 8 }}>
                   {result.ok ? (
-                    <p className="login-note" style={{ margin: 0 }}>
+                    <p className="login-note" style={{ margin: 0 }} data-testid="sync-result">
+                      {schedule.data.sync_mode === "files" && `${tookText(result.files_taken ?? [])} `}
                       Synced {result.rows_synced.toLocaleString()} rows
                       {result.dataset ? ` → ${result.dataset.name} v${result.dataset.current_version}` : ""}.
                     </p>
@@ -825,27 +927,71 @@ function ScheduledSyncDialog({
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              if (picked) save.mutate(picked);
+              if (files) {
+                // What `payloadOf` makes of the fields, or the first thing
+                // wrong with them, said beside them before a round trip.
+                const sent = payloadOf(fileFields);
+                setFileProblem(sent.ok ? "" : sent.problem);
+                if (sent.ok) {
+                  save.mutate({
+                    mode: "files", folder,
+                    file_transaction: sent.file_transaction, file_filters: sent.file_filters,
+                    dataset_name: datasetName || undefined,
+                    cron_schedule: cronSchedule || undefined,
+                  });
+                }
+                return;
+              }
+              if (picked) {
+                save.mutate({
+                  mode: mode === "incremental" ? "incremental" : "full",
+                  source_schema: picked.schema,
+                  source_table: picked.name,
+                  dataset_name: datasetName || undefined,
+                  primary_key_column: mode === "incremental" ? pkColumn : undefined,
+                  cursor_column: mode === "incremental" ? cursorColumn : undefined,
+                  cursor_start_value:
+                    mode === "incremental" && cursorStart ? cursorStart : undefined,
+                  cron_schedule: cronSchedule || undefined,
+                });
+              }
             }}
           >
             <Field label="Mode">
-              <select value={mode} onChange={(e) => setMode(e.target.value as "full" | "incremental")}>
+              <select
+                value={mode}
+                data-testid="sync-mode"
+                onChange={(e) => setMode(e.target.value as "full" | "incremental" | "files")}
+              >
                 <option value="full">Full - replace the dataset each run</option>
                 <option value="incremental">Incremental - merge only new/changed rows</option>
+                {/* p.160's unit is a subfolder, and only object storage has one. */}
+                {holdsFiles && <option value="files">Files - sync a folder</option>}
               </select>
             </Field>
-            {discover.isPending && <div className="state">Reading the source schema…</div>}
+            {files && (
+              <FileSyncFieldsView
+                folder={folder}
+                setFolder={setFolder}
+                fields={fileFields}
+                setField={setFile}
+              />
+            )}
+            {fileProblem && files && (
+              <div className="form-error" data-testid="file-sync-problem">{fileProblem}</div>
+            )}
+            {!files && discover.isPending && <div className="state">Reading the source schema…</div>}
             {/* Said here as well as in `SyncNowDialog`, because Save is now
                 disabled until the source schema arrives: a discovery that
                 failed would otherwise leave a dead button and no reason. */}
-            {discover.isError && (
+            {!files && discover.isError && (
               <div className="form-error">
                 {discover.error instanceof ApiError
                   ? discover.error.message
                   : "Couldn't read the source schema."}
               </div>
             )}
-            {discover.data && (
+            {!files && discover.data && (
               <Field label="Table">
                 <select value={table ?? ""} onChange={(e) => setTable(e.target.value || null)} required>
                   <option value="">Choose a table…</option>
@@ -859,7 +1005,7 @@ function ScheduledSyncDialog({
                 </select>
               </Field>
             )}
-            <Field label="Dataset name" hint="Defaults to the table name">
+            <Field label="Dataset name" hint={files ? "Defaults to the folder's name" : "Defaults to the table name"}>
               <input
                 type="text"
                 value={datasetName}
@@ -943,7 +1089,7 @@ function ScheduledSyncDialog({
               <button type="button" className="btn quiet" onClick={onClose}>
                 Close
               </button>
-              <button type="submit" className="btn" disabled={save.isPending || !picked}>
+              <button type="submit" className="btn" disabled={save.isPending || (!files && !picked)}>
                 {save.isPending ? "Saving…" : "Save schedule"}
               </button>
             </div>
