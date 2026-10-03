@@ -147,6 +147,55 @@ def test_toggling_the_theme_repaints_widgets_that_know_nothing_about_it(
                what="the original scheme, because a toggle goes both ways")
 
 
+def background(page, selector: str) -> str:
+    return page.locator(selector).first.evaluate(
+        "el => getComputedStyle(el).backgroundColor"
+    )
+
+
+def test_dark_mode_paints_the_canvas_and_reads_the_dark_ladder(page, api) -> None:
+    """§722. A dark module is dark under its text, not only in it: light ink on
+    a page that stayed white is a theme nobody can read. And p.58's "five
+    preset shades for both light mode and dark mode" means a section saved as
+    `shade-3` is the third *dark* step once the viewer toggles - the same name,
+    the other ladder."""
+    mod = Module(api, "Theme ladder")
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "btn": {"resolvedName": "CanvasButton", "props": {"label": "Do it"}},
+            "sec": {"resolvedName": "CanvasSection", "isCanvas": True,
+                    "props": {"direction": "rows", "gap": 12, "title": "Shaded",
+                              "background": "shade-3"},
+                    "nodes": ["inside"]},
+            "inside": {"resolvedName": "CanvasText", "parent": "sec",
+                       "props": {"tag": "p", "text": "IN THE SHADE"}},
+        }),
+        "variables": {},
+        "events": {
+            "e_1": {"id": "e_1", "trigger": {"node": "btn", "on": "click"},
+                    "effects": [{"type": "toggle_theme"}]},
+        },
+    })
+    open_module(page, mod)
+    settled(page)
+    shaded = ".canvas-section:has-text('IN THE SHADE')"
+    # `#f1f4f6` and `#22323f`: the third step of each ladder in `style.ts`.
+    assert background(page, shaded) == "rgb(241, 244, 246)"
+    assert background(page, ".canvas-frame-area") != "rgb(22, 35, 47)"
+
+    page.get_by_role("button", name="Do it").click()
+    eventually(lambda: background(page, ".canvas-frame-area"),
+               lambda c: c == "rgb(22, 35, 47)",
+               what="the module canvas painted dark")
+    eventually(lambda: background(page, shaded), lambda c: c == "rgb(34, 50, 63)",
+               what="shade-3 read from the dark ladder")
+
+    page.get_by_role("button", name="Do it").click()
+    eventually(lambda: background(page, shaded), lambda c: c == "rgb(241, 244, 246)",
+               what="shade-3 back on the light ladder")
+
+
 def test_a_module_always_opens_light(page, api) -> None:
     """Decision 0002 §3: values are never persisted, and a saved app is not a
     saved session. The theme is runtime state like the current page, so a
