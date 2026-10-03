@@ -514,6 +514,10 @@ REFERENCE_PROPS = (
     # obvious binding to remember, and this one was still nearly missed because
     # the widget already had `subjectVariable` and looked complete.
     "outputVariable",
+    # p.512's "Pre-fill with variable (table only)" (§703): the object set whose
+    # objects become an Action table's rows. A read, and one the lazy rule has
+    # to see - an unreferenced set is never computed, and the table stays empty.
+    "prefillVariable",
     # p.567-568's **Output object set** on a Section drop zone: "Select the
     # object set variable that the dropped data should be written to". A
     # write, in the same currency as p.224's outputs and p.513's - a clause

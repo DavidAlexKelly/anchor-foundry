@@ -128,3 +128,100 @@ export function nextCell(
 export function pendingRows(rows: TableRow[]): TableRow[] {
   return rows.filter((row) => row.status !== "done");
 }
+
+// ---- p.511's "CSV file upload capabilities" (§703) ---------------------------
+
+/** A CSV file's rows, as RFC 4180 writes them: commas, double-quoted fields
+ * that may hold commas, newlines and `""` for a quote, and either line ending.
+ * Blank lines are dropped - a trailing newline is not a row. */
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  const body = text.replace(/^\uFEFF/, "");
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]!;
+    if (quoted) {
+      if (ch === '"') {
+        if (body[i + 1] === '"') { field += '"'; i++; } else quoted = false;
+      } else field += ch;
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === ",") { row.push(field); field = ""; }
+    else if (ch === "\n" || ch === "\r") {
+      // A "\r\n" ends the row at the "\r"; the "\n" then ends an empty one,
+      // which is dropped below like any blank line.
+      row.push(field); field = "";
+      if (row.some((cell) => cell !== "")) rows.push(row);
+      row = [];
+    } else field += ch;
+  }
+  row.push(field);
+  if (row.some((cell) => cell !== "")) rows.push(row);
+  return rows;
+}
+
+/** What a header names, decided once for the whole file. The object's column
+ * is any of the names a person would write for it; a parameter's is its api
+ * name or its display name, ignoring case and surrounding space - the two
+ * names the table itself shows and the one the action is defined in. */
+export interface CsvPlan {
+  keyColumn: number;
+  cells: { column: number; parameter: TableParameter }[];
+  ignored: string[];
+}
+
+const KEY_HEADERS = new Set(["object", "primary key", "primary_key", "key"]);
+
+export function csvPlan(header: string[], columns: TableParameter[]): CsvPlan {
+  const norm = (text: string) => text.trim().toLowerCase();
+  let keyColumn = -1;
+  const cells: CsvPlan["cells"] = [];
+  const ignored: string[] = [];
+  header.forEach((name, index) => {
+    const wanted = norm(name);
+    if (keyColumn < 0 && KEY_HEADERS.has(wanted)) {
+      keyColumn = index;
+      return;
+    }
+    const parameter = columns.find(
+      (c) => norm(c.api_name) === wanted || (c.display_name && norm(c.display_name) === wanted),
+    );
+    if (parameter && !cells.some((c) => c.parameter.api_name === parameter.api_name)) {
+      cells.push({ column: index, parameter });
+    } else if (name.trim()) {
+      ignored.push(name.trim());
+    }
+  });
+  return { keyColumn, cells, ignored };
+}
+
+/** A CSV cell as the value a cell control holds. Text is text, and the server
+ * coerces it against the parameter's type as it does a typed one; a yes/no is
+ * turned into one here because its control is a choice, not a box, and would
+ * otherwise show a value it cannot hold. An empty cell is no value. */
+export function csvValue(text: string, dataType: string | undefined): unknown {
+  const trimmed = text.trim();
+  if (dataType === "boolean") {
+    const lower = trimmed.toLowerCase();
+    if (["true", "yes", "1"].includes(lower)) return true;
+    if (["false", "no", "0"].includes(lower)) return false;
+  }
+  return trimmed;
+}
+
+/** The file's rows as keys and the values the file gives for each. Cells the
+ * file has no column for are left out, so the object's own values seed them. */
+export function csvEntries(
+  rows: string[][],
+  plan: CsvPlan,
+): { key: string; values: Record<string, unknown> }[] {
+  return rows.map((row) => ({
+    key: plan.keyColumn >= 0 ? (row[plan.keyColumn] ?? "").trim() : "",
+    values: Object.fromEntries(plan.cells.map(({ column, parameter }) => [
+      parameter.api_name, csvValue(row[column] ?? "", parameter.data_type),
+    ])),
+  }));
+}

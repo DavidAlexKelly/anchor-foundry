@@ -20,19 +20,35 @@ import uuid
 
 from playwright.sync_api import expect
 
-from api import Module, layout
+from api import Module, layout, object_set
 from conftest import eventually, no_console_errors, open_module
 
 
 def build(api, name: str, *, layout_switch: bool = False, props: dict | None = None,
-          events: dict | None = None, variables: dict | None = None) -> Module:
+          events: dict | None = None, variables: dict | None = None,
+          prefill: str | None = None, tickets: int = 3,
+          prefill_keys: list[str] | None = None) -> Module:
+    """`prefill`: "same" fills the table from a set of this action's own type
+    (p.512), "other" from a set of a second type, which p.512 says must not."""
     mod = Module(api, name)
     type_id = mod.object_type(
         columns=["ticket_id", "status"],
-        rows=[{"ticket_id": k, "status": "open"} for k in ("T1", "T2", "T3")],
+        rows=[{"ticket_id": k, "status": "open"}
+              for k in (("T1", "T2", "T3") if tickets == 3
+                        else [f"T{n:02d}" for n in range(1, tickets + 1)])],
         key="ticket_id",
         title="ticket_id",
     )
+    if prefill:
+        set_type = type_id if prefill == "same" else mod.object_type(
+            columns=["code"], rows=[{"code": "X"}], key="code", title="code",
+            slug=f"other_{uuid.uuid4().hex[:6]}")
+        variables = {**(variables or {}), "v_rows": {
+            "id": "v_rows", "kind": "object_set", "label": "Rows",
+            "object_set": object_set(set_type, [
+                {"property": "$primary_key", "op": "in", "value": prefill_keys}]
+                if prefill_keys else None)}}
+        props = {**(props or {}), "prefillVariable": "v_rows"}
     action = api.call("POST", f"/workspaces/{mod.workspace_id}/action-types", {
         "object_type_id": type_id,
         "api_name": f"set_{uuid.uuid4().hex[:8]}",
@@ -233,3 +249,79 @@ def test_an_action_the_table_cannot_hold_is_a_form(page, api) -> None:
     expect(page.get_by_test_id("action-table-refused")).to_contain_text("geopoint")
     expect(page.get_by_test_id("action-table")).to_have_count(0)
     expect(page.locator("form")).to_be_visible()
+
+
+# ---- §703: pre-fill with variable, and CSV upload ------------------------------
+def row_keys(page) -> list[str]:
+    selects = rows(page).locator("td:first-child select")
+    return [s.evaluate("e => e.options[e.selectedIndex].text")
+            for s in selects.all()]
+
+
+def test_a_variable_fills_the_table_with_its_objects(page, api) -> None:
+    """p.512: "Pre-populate table rows by mapping an object set variable to an
+    object reference action parameter"."""
+    mod = build(api, "Action table prefill", prefill="same")
+    open_module(page, mod)
+    expect(rows(page)).to_have_count(3)
+    assert sorted(row_keys(page)) == ["T1", "T2", "T3"]
+    # Each row seeded from its own object.
+    expect(rows(page).first.locator("[data-cell$=':1'] input")).to_have_value("open")
+
+
+def test_a_set_of_another_type_fills_nothing(page, api) -> None:
+    """p.512: "The variable's object type must match the action parameter's
+    defined object type"."""
+    mod = build(api, "Action table prefill other", prefill="other")
+    open_module(page, mod)
+    expect(page.get_by_test_id("action-table-note")).to_contain_text("different object type")
+    expect(rows(page)).to_have_count(1)
+
+
+def test_a_csv_fills_rows_by_key_and_says_what_it_skipped(page, api) -> None:
+    """p.511's "CSV file upload capabilities"."""
+    mod = build(api, "Action table csv")
+    open_module(page, mod)
+    page.get_by_test_id("action-table-csv").set_input_files({
+        "name": "rows.csv", "mimeType": "text/csv",
+        "buffer": b"Object,Status,colour\nT1,closed,red\nT9,open,blue\nT2,,green\n",
+    })
+    expect(rows(page)).to_have_count(3)
+    note = page.get_by_test_id("action-table-note")
+    expect(note).to_contain_text("Read 3 rows.")
+    expect(note).to_contain_text("ignored: colour")
+    expect(rows(page).nth(0).locator("[data-cell$=':1'] input")).to_have_value("closed")
+    # An empty cell keeps what the object says.
+    expect(rows(page).nth(2).locator("[data-cell$=':1'] input")).to_have_value("open")
+    expect(rows(page).nth(1)).to_contain_text('No object has the key "T9".')
+
+    rows(page).nth(1).get_by_role("button", name="Remove row 2").click()
+    page.get_by_test_id("action-table-submit").click()
+    expect(page.get_by_test_id("action-table-done")).to_have_count(2)
+    eventually(lambda: statuses(api, mod),
+               lambda got: got == {"T1": "closed", "T2": "open", "T3": "open"},
+               what="the file's rows written")
+
+
+def test_a_csv_without_an_object_column_is_refused(page, api) -> None:
+    mod = build(api, "Action table csv refused")
+    open_module(page, mod)
+    page.get_by_test_id("action-table-csv").set_input_files({
+        "name": "rows.csv", "mimeType": "text/csv", "buffer": b"Status\nclosed\n"})
+    expect(page.get_by_test_id("action-table-note")).to_contain_text(
+        "needs a column naming each row's object")
+    expect(rows(page)).to_have_count(1)
+
+
+def test_objects_past_the_first_page_can_be_rows(page, api) -> None:
+    """The Object dropdown starts with 25 objects. A pre-fill or a file may
+    name others, and a row has to be able to show the object it is about."""
+    mod = build(api, "Action table far", tickets=30, prefill="same",
+                prefill_keys=["T29", "T30"])
+    open_module(page, mod)
+    expect(rows(page)).to_have_count(2)
+    assert sorted(row_keys(page)) == ["T29", "T30"]
+    page.get_by_test_id("action-table-csv").set_input_files({
+        "name": "rows.csv", "mimeType": "text/csv", "buffer": b"key,status\nT28,closed\n"})
+    expect(rows(page)).to_have_count(3)
+    assert row_keys(page)[2] == "T28"
