@@ -230,6 +230,8 @@ export function MapCanvas({
   bounds,
   onBounds,
   legend = null,
+  onPinMenu,
+  tools = null,
 }: {
   points: MapPoint[];
   /** p.11's geoshapes, drawn **under** the pins: a pin is a thing to click
@@ -293,6 +295,12 @@ export function MapCanvas({
     collapsed: boolean;
     compact: boolean;
   } | null;
+  /** p.303's context menu (§734): what a right-click on a pin offers. Only a
+   * pin with an object behind it has one; a cluster is zoomed into first. */
+  onPinMenu?: (point: MapPoint, at: { x: number; y: number }) => void;
+  /** Controls the widget adds to the toolbar after the map's own (§734's
+   * Search around). */
+  tools?: React.ReactNode;
 }) {
   const fill = color ?? "var(--accent, #2f6f4f)";
   const [view, setView] = useState<MapView | null>(null);
@@ -719,6 +727,10 @@ export function MapCanvas({
               data-layer={only.layer?.id}
               style={{ cursor: clickable ? "pointer" : "inherit" }}
               onClick={clickable ? () => onSelect!(only) : undefined}
+              onContextMenu={onPinMenu && only.instance ? (e) => {
+                e.preventDefault();
+                onPinMenu(only, { x: e.clientX, y: e.clientY });
+              } : undefined}
             >
               <title>{`${only.label} (${only.lat.toFixed(4)}, ${only.lon.toFixed(4)})`}</title>
             </circle>
@@ -850,6 +862,7 @@ export function MapCanvas({
             Clear line
           </button>
         )}
+        {tools}
         <span className="canvas-map-note">
           {layerLabel ? `${layerLabel}: ` : ""}
           {points.length.toLocaleString()} placed
