@@ -43,6 +43,7 @@ import { inlineActionChoices, type InlineAction } from "@/lib/property-inline-ac
 import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
 import { relatedResources, type RelatedDestination } from "@/lib/related-resources";
 import { typeClassesOf } from "@/lib/type-classes";
+import { ownClasses, withInherited } from "@/lib/shared-property";
 import { LastEdited } from "@/components/ontology-history-panel";
 import { bulkApply, classesIn, sharedDataType, toggled, type BulkChange } from "@/lib/property-bulk";
 import type {
@@ -196,6 +197,21 @@ export function PropertyRows({
       : null);
   };
   const bulkType = sharedDataType(properties, selected);
+  // §723: the shared properties' own type classes, so a row attached to one
+  // shows which of its classes are the shared property's (p.188) - from the
+  // list rather than from the saved type, so a row attached or detached in
+  // this form is right before it is saved. The picker's query, so one fetch -
+  // and the objects page's shared property panel's, which is why the sweep
+  // could not tell this fetch from none: the only route opening this editor
+  // has already filled the cache. Kept so the editor does not depend on it.
+  const sharedList = useQuery({
+    queryKey: ["shared-properties", workspaceId],
+    queryFn: () => objApi.listSharedProperties(workspaceId!),
+    enabled: !!workspaceId,
+  });
+  const inheritedOf = (prop: PropertyInput): string[] =>
+    (prop.shared_property_id
+      && sharedList.data?.find((sp) => sp.id === prop.shared_property_id)?.type_classes) || [];
 
   return (
     <div>
@@ -599,10 +615,16 @@ export function PropertyRows({
           )}
           {/* p.91's type classes (§671): "additional metadata that can be
               interpreted by applications", such as p.222's hubble:icon. */}
-          <TypeClassesField index={index} value={prop.type_classes ?? []}
+          {/* On a shared property the box is the property's own and the
+              shared property's are shown beside it, fixed (§723): p.188's
+              "You can still add, delete, or edit type classes" and its union
+              on load. What is sent is the union, as a read returns it. */}
+          <TypeClassesField index={index}
+            value={ownClasses(prop.type_classes ?? [], inheritedOf(prop))}
+            inherited={inheritedOf(prop)}
             onCommit={(classes) => {
               const rows = [...properties];
-              rows[index] = { ...prop, type_classes: classes };
+              rows[index] = { ...prop, type_classes: withInherited(classes, inheritedOf(prop)) };
               onChange(rows);
             }} />
           {/* Conditional formatting (`object-link-types` p.102-109). Unlike
@@ -1240,9 +1262,11 @@ export function EditObjectTypeDialog({
 /** A property's type classes as one box (§671), committed when it loses
  * focus: a list rewritten on every keystroke would eat the comma a second
  * class is typed after. What is not `kind:name` is said and not saved. */
-function TypeClassesField({ index, value, onCommit }: {
+function TypeClassesField({ index, value, inherited = [], onCommit }: {
   index: number;
   value: string[];
+  /** The shared property's (§723), shown and not edited here. */
+  inherited?: readonly string[];
   onCommit: (classes: string[]) => void;
 }) {
   const [text, setText] = useState(value.join(", "));
@@ -1266,6 +1290,13 @@ function TypeClassesField({ index, value, onCommit }: {
           onCommit(read.classes);
         }}
       />
+      {inherited.length > 0 && (
+        <span className="field-hint" style={{ fontSize: 12 }}
+          data-testid={`property-${index}-inherited-classes`}
+          title="From the shared property, and edited there">
+          {`+ ${inherited.join(", ")} (shared)`}
+        </span>
+      )}
       {bad.length > 0 && (
         <span className="form-error" role="alert" style={{ fontSize: 12 }}>
           {`Not kind:name: ${bad.join(", ")}`}

@@ -207,7 +207,11 @@ class PropertyOut(BaseModel):
     status: str = "experimental"
     deprecation: dict[str, Any] | None = None
     inline_action_type_id: UUID | None = None
+    # p.188's union: the property's own classes and its shared property's.
     type_classes: list[str] = []
+    # Which of those came from the shared property (§723), which a save need
+    # not send back and an editor shows as fixed.
+    inherited_type_classes: list[str] = []
 
 
 class ObjectTypeGroupRef(BaseModel):
@@ -2756,6 +2760,8 @@ class SharedPropertyOut(BaseModel):
     # because "is anyone using this" and "who exactly" are asked at different
     # moments - the first before deleting, the second after being surprised.
     usage_count: int = 0
+    # p.181 (§723): joined with an attached property's own on load (p.188).
+    type_classes: list[str] = []
     created_at: datetime
     updated_at: datetime
 
@@ -2779,6 +2785,7 @@ class SharedPropertyCreate(BaseModel):
     visibility: str = Field(default="normal", pattern="^(normal|prominent|hidden)$")
     value_format: dict[str, Any] | None = None
     value_type_id: UUID | None = None
+    type_classes: list[str] | None = None
 
 
 class SharedPropertyUpdate(BaseModel):
@@ -2793,6 +2800,8 @@ class SharedPropertyUpdate(BaseModel):
     visibility: str = Field(default="normal", pattern="^(normal|prominent|hidden)$")
     value_format: dict[str, Any] | None = None
     value_type_id: UUID | None = None
+    # Left out keeps them; an empty list clears them.
+    type_classes: list[str] | None = None
 
 
 # ---- interfaces (`object-link-types` p.4, p.53; `ontology` p.60-62) ---------
@@ -3318,6 +3327,7 @@ async def create_shared_property(
             value_format_raw=body.value_format,
             value_type_id=body.value_type_id,
             created_by=access.auth.user_id,
+            type_classes_raw=body.type_classes,
         )
         await audit.record(
             conn,
@@ -3367,6 +3377,7 @@ async def update_shared_property(
             visibility=body.visibility,
             value_format_raw=body.value_format,
             value_type_id=body.value_type_id,
+            type_classes_raw=body.type_classes,
         )
         await audit.record(
             conn,

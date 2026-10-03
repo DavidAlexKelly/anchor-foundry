@@ -225,22 +225,30 @@ async def export_ontology(
     properties = await fetch_all(
         conn,
         """
-        SELECT object_type_id, api_name, display_name,
-               data_type::text AS data_type, required, description, sort_order,
-               visibility::text AS visibility,
-               value_format::text AS value_format,
-               conditional_format::text AS conditional_format,
-               edit_only, derivation::text AS derivation,
-               struct_fields::text AS struct_fields,
-               array_of::text AS array_of, reducers::text AS reducers,
-               status::text AS status,
-               deprecation::text AS deprecation, id, type_classes,
+        SELECT p.object_type_id, p.api_name, p.display_name,
+               p.data_type::text AS data_type, p.required, p.description,
+               p.sort_order, p.visibility::text AS visibility,
+               p.value_format::text AS value_format,
+               p.conditional_format::text AS conditional_format,
+               p.edit_only, p.derivation::text AS derivation,
+               p.struct_fields::text AS struct_fields,
+               p.array_of::text AS array_of, p.reducers::text AS reducers,
+               p.status::text AS status,
+               p.deprecation::text AS deprecation, p.id,
+               -- p.188's union as loaded (§723), since the file carries no
+               -- shared property for an importer to join it with: the
+               -- inherited metadata travels as what it is, as the four
+               -- inherited columns already do.
+               p.type_classes || ARRAY(
+                   SELECT c FROM unnest(sp.type_classes) WITH ORDINALITY AS t(c, n)
+                    WHERE c <> ALL(p.type_classes) ORDER BY n) AS type_classes,
                (SELECT at.api_name FROM action_types at
-                 WHERE at.id = inline_action_type_id) AS inline_action
-          FROM object_type_properties
-         WHERE object_type_id = ANY(
+                 WHERE at.id = p.inline_action_type_id) AS inline_action
+          FROM object_type_properties p
+          LEFT JOIN shared_properties sp ON sp.id = p.shared_property_id
+         WHERE p.object_type_id = ANY(
                    SELECT id FROM object_types WHERE workspace_id = :wid)
-         ORDER BY object_type_id, sort_order, api_name
+         ORDER BY p.object_type_id, p.sort_order, p.api_name
         """,
         {"wid": str(workspace_id)},
     )
