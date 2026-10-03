@@ -5,7 +5,18 @@ import { mixedKinds,
 } from "./chart-series";
 
 const ON_CHART = { objectSetVariable: null, dimension: null, kind: null,
-  drilldownVariable: null, segmentBy: null };
+  drilldownVariable: null, segmentBy: null, fn: null };
+
+describe("a layer's function (§771)", () => {
+  it("is read with the layer, and null for one over a set", () => {
+    const [own, over] = seriesOf([
+      { aggregate: "count", fn: { function_id: "f", version: "1.0.0", inputs: {} } },
+      { aggregate: "count" },
+    ]);
+    expect(own?.fn).toEqual({ function_id: "f", version: "1.0.0", inputs: {} });
+    expect(over?.fn).toBeNull();
+  });
+});
 
 describe("seriesOf (p.281's multiple series)", () => {
   it("reads what a saved chart holds, and nothing else", () => {

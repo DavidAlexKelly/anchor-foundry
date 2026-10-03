@@ -408,3 +408,53 @@ def test_a_map_leaves_out_a_row_with_no_key() -> None:
     got = engine.run([], "SELECT * FROM (VALUES ('a', 1), (NULL, 2)) t(k, v)", {},
                      {"kind": "map", "object_type_id": "t"})
     assert got["entries"] == {"a": {"v": 1}}
+
+
+# ---- §771: Chart XY's shape ---------------------------------------------------------
+
+def test_two_and_three_dimensional_aggregations(client, fx, sites) -> None:
+    """Workshop p.284: "a function that returns either a
+    TwoDimensionalAggregation or ThreeDimensionalAggregation"."""
+    table = sites["table"]
+    two = create(client, fx, sites,
+                 sql=f"SELECT region, sum(capacity) FROM {table} GROUP BY 1 ORDER BY 1",
+                 output={"kind": "aggregation"}).json()
+    got = call(client, fx, two["id"]).json()
+    assert (got["kind"], got["dimensions"]) == ("aggregation", 2)
+    assert got["buckets"] == [{"key": "north", "value": 40.0}, {"key": "south", "value": 25.0}]
+    three = create(client, fx, sites,
+                   sql=f"SELECT region, capacity > 20 AS big, count(*) FROM {table} "
+                       "GROUP BY 1, 2 ORDER BY 1, 2",
+                   output={"kind": "aggregation"}).json()
+    got = call(client, fx, three["id"]).json()
+    assert got["dimensions"] == 3
+    assert got["buckets"] == [
+        {"key": "north", "segment": "false", "value": 1.0},
+        {"key": "north", "segment": "true", "value": 1.0},
+        {"key": "south", "segment": "true", "value": 1.0}]
+
+
+@pytest.mark.parametrize("sql,said", [
+    ("SELECT region FROM {t}", "this one gives 1 columns"),
+    ("SELECT region, code, capacity, opened FROM {t}", "this one gives 4 columns"),
+])
+def test_an_aggregation_is_two_or_three_columns(client, fx, sites, sql, said) -> None:
+    r = create(client, fx, sites, sql=sql.format(t=sites["table"]),
+               output={"kind": "aggregation"})
+    assert r.status_code == 422, r.text
+    assert said in r.text
+
+
+def test_an_aggregations_value_is_a_number(client, fx, sites) -> None:
+    fn = create(client, fx, sites, sql=f"SELECT code, region FROM {sites['table']}",
+                output={"kind": "aggregation"}).json()
+    r = call(client, fx, fn["id"])
+    assert r.status_code == 422, r.text
+    assert "'region' is not a number" in r.text
+
+
+def test_an_aggregation_is_capped(monkeypatch) -> None:
+    monkeypatch.setattr(engine, "MAX_ARRAY_ITEMS", 2)
+    with pytest.raises(engine.FunctionError) as caught:
+        engine.run([], "SELECT range, 1 FROM range(3)", {}, {"kind": "aggregation"})
+    assert "more than 2 buckets" in str(caught.value)

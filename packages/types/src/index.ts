@@ -2241,7 +2241,9 @@ export interface FunctionParameter {
 /** What a function returns (§768). */
 export interface FunctionOutput {
   /** `map` is p.221's object-to-fields map (§770). */
-  kind: "value" | "array" | "object_set" | "table" | "map";
+  kind: "value" | "array" | "object_set" | "table" | "map"
+    /** Workshop p.284's 2D or 3D aggregation, for a chart layer (§771). */
+    | "aggregation";
   data_type?: string;
   object_type_id?: string;
 }
@@ -2283,6 +2285,9 @@ export interface FunctionResult {
   truncated?: boolean;
   /** A map's answer (§770): primary key to its fields. */
   entries?: Record<string, Record<string, unknown>> | null;
+  /** An aggregation's answer (§771): two or three dimensions, and buckets. */
+  dimensions?: 2 | 3 | null;
+  buckets?: { key: string; segment?: string; value: number }[] | null;
 }
 
 /** p.255's proposal to promote an object type (§767): "Other users must

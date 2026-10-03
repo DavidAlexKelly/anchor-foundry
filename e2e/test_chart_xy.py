@@ -909,7 +909,8 @@ def test_the_panel_adds_and_names_a_series(page, api, sites) -> None:
     assert props["series"] == [{"title": "", "aggregate": "sum", "measure": "capacity", "name": "Capacity",
                                 "axis": "right", "objectSetVariable": None,
                                 "dimension": None, "kind": None,
-                                "drilldownVariable": None, "segmentBy": None}], props
+                                "drilldownVariable": None, "segmentBy": None,
+                                "fn": None}], props
     assert (props["seriesName"], props["legendPosition"]) == ("Sites", "top"), props
     page.get_by_test_id("chart-series-remove").click()
     page.get_by_role("button", name="Save", exact=True).click()
@@ -1011,7 +1012,7 @@ def test_the_panel_points_a_series_at_another_set(page, api, sites, tickets) -> 
     # The chart's own set is the default, and offers no property of its own.
     expect(page.get_by_test_id("chart-series-set")).to_have_value("")
     expect(page.get_by_test_id("chart-series-set").locator("option")).to_have_text(
-        ["The chart's set", "Tickets"])
+        ["The chart's set", "Tickets", "A function"])
     expect(page.get_by_test_id("chart-series-dimension")).to_have_count(0)
     page.get_by_test_id("chart-series-set").select_option("v_tickets")
     expect(page.get_by_test_id("chart-series-dimension").locator("option")).to_have_text(
@@ -1029,7 +1030,8 @@ def test_the_panel_points_a_series_at_another_set(page, api, sites, tickets) -> 
     assert props["series"] == [{"title": "", "aggregate": "sum", "measure": "hours", "name": "",
                                 "axis": "right", "objectSetVariable": "v_tickets",
                                 "dimension": "state", "kind": None,
-                                "drilldownVariable": None, "segmentBy": None}], props
+                                "drilldownVariable": None, "segmentBy": None,
+                                "fn": None}], props
     # Back to the chart's set lets go of what was the tickets'.
     page.get_by_test_id("chart-series-set").select_option("")
     page.get_by_role("button", name="Save", exact=True).click()
@@ -1037,7 +1039,8 @@ def test_the_panel_points_a_series_at_another_set(page, api, sites, tickets) -> 
                lambda got: got == [{"title": "", "aggregate": "sum", "measure": None, "name": "",
                                     "axis": "right", "objectSetVariable": None,
                                     "dimension": None, "kind": None,
-                                    "drilldownVariable": None, "segmentBy": None}],
+                                    "drilldownVariable": None, "segmentBy": None,
+                                    "fn": None}],
                what="the series back on the chart's set")
 
 

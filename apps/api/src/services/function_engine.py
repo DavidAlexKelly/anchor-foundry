@@ -168,6 +168,32 @@ def _map(con: duckdb.DuckDBPyConnection, names: list[str], described: list[Any])
             "entries": entries}
 
 
+def _aggregation(con: duckdb.DuckDBPyConnection, names: list[str]) -> dict[str, Any]:
+    """Workshop p.284's two- and three-dimensional aggregations (§771): each
+    row a bucket and its value, or a bucket, a segment and its value. The
+    buckets and segments are labels, and the value a number."""
+    if len(names) not in (2, 3):
+        raise FunctionError("an aggregation's query gives a bucket and a value, or a "
+                            f"bucket, a segment and a value; this one gives {len(names)} "
+                            "columns")
+    quoted = ['"' + n.replace('"', '""') + '"' for n in names]
+    labels = ", ".join(f"CAST({q} AS VARCHAR)" for q in quoted[:-1])
+    try:
+        rows = con.execute(
+            f"SELECT {labels}, CAST({quoted[-1]} AS DOUBLE) FROM __function_output "
+            f"LIMIT {MAX_ARRAY_ITEMS + 1}").fetchall()
+    except duckdb.Error as exc:
+        raise FunctionError(f"an aggregation's last column is its value, and "
+                            f"{names[-1]!r} is not a number: {_clean(exc)}") from exc
+    if len(rows) > MAX_ARRAY_ITEMS:
+        raise FunctionError(f"the function returned more than {MAX_ARRAY_ITEMS:,} buckets")
+    if len(names) == 2:
+        buckets = [{"key": r[0], "value": r[1]} for r in rows]
+    else:
+        buckets = [{"key": r[0], "segment": r[1], "value": r[2]} for r in rows]
+    return {"kind": "aggregation", "dimensions": len(names), "buckets": buckets}
+
+
 def _shape(con: duckdb.DuckDBPyConnection, output: dict[str, Any]) -> dict[str, Any]:
     described = con.execute("DESCRIBE __function_output").fetchall()
     names = [row[0] for row in described]
@@ -181,6 +207,8 @@ def _shape(con: duckdb.DuckDBPyConnection, output: dict[str, Any]) -> dict[str, 
     first = '"' + names[0].replace('"', '""') + '"'
     if kind == "map":
         return _map(con, names, described)
+    if kind == "aggregation":
+        return _aggregation(con, names)
     target = "VARCHAR" if kind == "object_set" else SCALAR_TYPES[str(output["data_type"])]
     try:
         values = [row[0] for row in con.execute(

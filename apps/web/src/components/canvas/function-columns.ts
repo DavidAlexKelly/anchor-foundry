@@ -13,6 +13,7 @@
  */
 
 import type { FunctionColumn } from "./derived-columns";
+import { inputValues, unsetRequired } from "./function-inputs";
 import type { FunctionDetail, FunctionResult, FunctionVersion } from "@/lib/types";
 
 /** The version a column calls: the one it names, or the newest. */
@@ -40,15 +41,7 @@ export function callValues(
   keys: readonly string[],
   resolved: Record<string, unknown>,
 ): Record<string, unknown> {
-  const out: Record<string, unknown> = { [column.objects_parameter]: [...keys] };
-  for (const [name, source] of Object.entries(column.inputs)) {
-    if ("variable" in source) {
-      out[name] = resolved[source.variable];
-    } else {
-      out[name] = source.value;
-    }
-  }
-  return out;
+  return { ...inputValues(column.inputs, resolved), [column.objects_parameter]: [...keys] };
 }
 
 /** One row's value: its entry's field, or the first field when none is
@@ -84,11 +77,7 @@ export function columnProblem(
   if (!objects || objects.data_type !== "object_set" || objects.object_type_id !== objectTypeId) {
     return "Choose the parameter that receives the table's objects.";
   }
-  const unset = version.parameters.find(
-    (p) => p.api_name !== column.objects_parameter && p.required && !column.inputs[p.api_name],
-  );
-  if (unset) return `${unset.api_name} needs a value or a variable.`;
-  return null;
+  return unsetRequired(version, column.inputs, column.objects_parameter);
 }
 
 /** The parameters a table's objects can go to: object sets of its type. */

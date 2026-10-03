@@ -17,7 +17,10 @@ import { useQuery } from "@tanstack/react-query";
 import { objects as objApi } from "@/lib/api";
 import { useCanvasEnv, useCanvasVariables } from "./context";
 import type { FunctionColumn } from "./derived-columns";
+import type { FunctionInputs } from "./function-inputs";
+import type { FunctionParameter } from "@/lib/types";
 import { columnProblem, objectParameters, versionOf } from "./function-columns";
+import { layerProblem, type FunctionLayer } from "./function-layers";
 
 export function FunctionColumnEditor({ index, objectTypeId, column, onChange }: {
   index: number;
@@ -26,7 +29,6 @@ export function FunctionColumnEditor({ index, objectTypeId, column, onChange }: 
   onChange: (next: FunctionColumn) => void;
 }) {
   const { workspaceId } = useCanvasEnv();
-  const { declared } = useCanvasVariables();
   const n = index + 1;
   const list = useQuery({
     queryKey: ["functions", workspaceId],
@@ -85,20 +87,44 @@ export function FunctionColumnEditor({ index, objectTypeId, column, onChange }: 
           onChange={(e) => onChange({ ...column, field: e.target.value.trim() })}
         />
       )}
-      {others.map((p) => {
-        const source = column.inputs[p.api_name];
+      <FunctionInputsFields
+        label={`Derived property ${n}`}
+        parameters={others}
+        inputs={column.inputs}
+        onChange={(inputs) => onChange({ ...column, inputs })}
+      />
+      {issue && (
+        <span className="field-hint" data-testid={`derived-problem-${n}`}>{issue}</span>
+      )}
+    </div>
+  );
+}
+
+/** Where each parameter's value comes from: a module variable, or a value
+ * typed here (§770, §771). `label` prefixes each control's accessible name. */
+export function FunctionInputsFields({ label, parameters, inputs, onChange }: {
+  label: string;
+  parameters: FunctionParameter[];
+  inputs: FunctionInputs;
+  onChange: (next: FunctionInputs) => void;
+}) {
+  const { declared } = useCanvasVariables();
+  return (
+    <>
+      {parameters.map((p) => {
+        const source = inputs[p.api_name];
         const variable = source && "variable" in source ? source.variable : "";
         const typed = source && "value" in source ? String(source.value ?? "") : "";
-        const setSource = (next: FunctionColumn["inputs"][string] | null) => {
-          const inputs = { ...column.inputs };
-          if (next) inputs[p.api_name] = next;
-          else delete inputs[p.api_name];
-          onChange({ ...column, inputs });
+        const setSource = (next: FunctionInputs[string] | null) => {
+          const all = { ...inputs };
+          if (next) all[p.api_name] = next;
+          else delete all[p.api_name];
+          onChange(all);
         };
         return (
           <span key={p.api_name} className="row-actions" style={{ gap: 4 }}>
             <select
-              aria-label={`Derived property ${n} ${p.api_name} from`}
+              aria-label={`${label} ${p.api_name} from`}
               value={variable}
               onChange={(e) => setSource(e.target.value ? { variable: e.target.value } : null)}
             >
@@ -109,7 +135,7 @@ export function FunctionColumnEditor({ index, objectTypeId, column, onChange }: 
             </select>
             {!variable && (
               <input
-                aria-label={`Derived property ${n} ${p.api_name} value`}
+                aria-label={`${label} ${p.api_name} value`}
                 placeholder={p.data_type}
                 value={typed}
                 onChange={(e) => setSource(e.target.value === "" ? null : {
@@ -121,9 +147,60 @@ export function FunctionColumnEditor({ index, objectTypeId, column, onChange }: 
           </span>
         );
       })}
-      {issue && (
-        <span className="field-hint" data-testid={`derived-problem-${n}`}>{issue}</span>
+    </>
+  );
+}
+
+/**
+ * A Chart XY layer's function (Workshop p.280, p.284; §771): which function,
+ * which version, and where its parameters come from. What would stop the
+ * layer drawing is said under it, from `layerProblem`.
+ */
+export function FunctionLayerEditor({ label, layer, onChange }: {
+  label: string;
+  layer: FunctionLayer;
+  onChange: (next: FunctionLayer) => void;
+}) {
+  const { workspaceId } = useCanvasEnv();
+  const list = useQuery({
+    queryKey: ["functions", workspaceId],
+    queryFn: () => objApi.listFunctions(workspaceId),
+  });
+  const detail = useQuery({
+    queryKey: ["function", layer.function_id],
+    queryFn: () => objApi.getFunction(workspaceId, layer.function_id),
+    enabled: !!layer.function_id,
+  });
+  const version = versionOf(detail.data, layer.version);
+  const issue = !layer.function_id || detail.data || detail.isError
+    ? layerProblem(layer, detail.data) : null;
+  return (
+    <>
+      <select
+        aria-label={`${label} function`}
+        value={layer.function_id}
+        onChange={(e) => onChange({ function_id: e.target.value, version: null, inputs: {} })}
+      >
+        <option value="">Choose a function…</option>
+        {(list.data ?? []).map((f) => <option key={f.id} value={f.id}>{f.api_name}</option>)}
+      </select>
+      {detail.data && (
+        <select
+          aria-label={`${label} version`}
+          value={layer.version ?? ""}
+          onChange={(e) => onChange({ ...layer, version: e.target.value || null })}
+        >
+          <option value="">Newest ({detail.data.versions[0]?.version})</option>
+          {detail.data.versions.map((v) => <option key={v.id} value={v.version}>{v.version}</option>)}
+        </select>
       )}
-    </div>
+      <FunctionInputsFields
+        label={label}
+        parameters={version?.parameters ?? []}
+        inputs={layer.inputs}
+        onChange={(inputs) => onChange({ ...layer, inputs })}
+      />
+      {issue && <span className="field-hint" data-testid="chart-series-problem">{issue}</span>}
+    </>
   );
 }

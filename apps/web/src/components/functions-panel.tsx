@@ -277,6 +277,12 @@ function VersionDialog({ workspaceId, existing, onClose }: {
       {draft.output.kind === "object_set" && (
         <p className="field-hint">The query's first column is the objects' primary keys.</p>
       )}
+      {draft.output.kind === "aggregation" && (
+        <p className="field-hint">
+          A bucket and a value, or a bucket, a segment and a value, as a Chart XY
+          layer draws them (Workshop p.284).
+        </p>
+      )}
       {draft.output.kind === "map" && (
         <p className="field-hint">
           The query's first column is each object&apos;s primary key, and every other
@@ -366,6 +372,19 @@ function RunDialog({ workspaceId, fn, onClose }: {
             <ul data-testid="fn-result-values">
               {(result.values ?? []).map((v, i) => <li key={i}>{String(v)}</li>)}
             </ul>
+          )}
+          {result.kind === "aggregation" && (
+            <table className="table" data-testid="fn-result-buckets">
+              <tbody>
+                {(result.buckets ?? []).map((b, i) => (
+                  <tr key={i}>
+                    <td>{b.key}</td>
+                    {result.dimensions === 3 && <td>{b.segment}</td>}
+                    <td>{b.value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
           {result.kind === "map" && (
             <table className="table" data-testid="fn-result-map">
