@@ -59,6 +59,7 @@ import {
   type Deprecation,
   type LinkCardinality,
   type LinkType,
+  type LinkVisibility,
   type ObjectTypeSource,
   type ObjectTypeSummary,
   type OntologyStatus,
@@ -675,6 +676,10 @@ function LinkJoinDialog({
   const [status, setStatus] = useState<OntologyStatus>(link.status);
   const [deprecation, setDeprecation] = useState<Deprecation | null>(link.deprecation);
   const [capped, setCapped] = useState<string | null>(null);
+  // p.217's per-side visibility (§714).
+  const [toVisibility, setToVisibility] = useState<LinkVisibility>(link.to_visibility ?? "normal");
+  const [fromVisibility, setFromVisibility] = useState<LinkVisibility>(
+    link.from_visibility ?? "normal");
   const queryClient = useQueryClient();
   const throughTable = link.cardinality === "many_to_many" && joinBy === "join_table";
   const throughBacking = joinBy === "backing";
@@ -689,6 +694,8 @@ function LinkJoinDialog({
         ...backingPayload(throughBacking ? backing : null),
         status,
         deprecation: status === "deprecated" ? deprecation : null,
+        from_visibility: fromVisibility,
+        to_visibility: toVisibility,
       }),
     onSuccess: async (saved) => {
       await queryClient.invalidateQueries({ queryKey: ["link-types", workspaceId] });
@@ -754,6 +761,26 @@ function LinkJoinDialog({
           <div className="form-error">Set the property on both ends, or on neither.</div>
         )}
         {tableProblem && <div className="form-error">{tableProblem}</div>}
+        {/* p.217: "Visibility: An indication to user applications for how
+            prominently to display the side of the link type" - each side, as
+            each has its own name (§714). */}
+        {([
+          [`${link.to_display_name} side`, toVisibility, setToVisibility, "link-to-visibility"],
+          [`${link.from_display_name} side`, fromVisibility, setFromVisibility, "link-from-visibility"],
+        ] as const).map(([label, value, set, testid]) => (
+          <Field key={testid} label={`Visibility of the ${label}`}
+            hint="Prominent shows this side first; hidden keeps it out of user applications">
+            <select
+              value={value}
+              data-testid={testid}
+              onChange={(e) => set(e.target.value as LinkVisibility)}
+            >
+              <option value="normal">Normal</option>
+              <option value="prominent">Prominent</option>
+              <option value="hidden">Hidden</option>
+            </select>
+          </Field>
+        ))}
         {/* p.253-256's status for a link type, and p.254's note when it is
             deprecated (§631). */}
         <StatusField

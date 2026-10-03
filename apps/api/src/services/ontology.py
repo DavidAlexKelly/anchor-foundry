@@ -128,6 +128,29 @@ def _check_title_property(title_property: Any, properties: list[dict[str, Any]])
 # indication to user applications", and treating it as access control would be
 # worse than not having it, because somebody would rely on it as one.
 PROPERTY_VISIBILITIES = ("normal", "prominent", "hidden")
+
+
+def link_visibility(value: str | None) -> str | None:
+    """A link side's visibility as asked for (§714; `object-link-types` p.217):
+    p.217's three, the same words a property's visibility uses. `None` is
+    "not given"; anything else is refused by name."""
+    if value is None:
+        return None
+    if value not in PROPERTY_VISIBILITIES:
+        raise ValueError(
+            f"invalid link visibility {value!r}; expected one of "
+            + ", ".join(PROPERTY_VISIBILITIES)
+        )
+    return value
+
+
+def user_facing_links(links: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The traversals a user application shows (§714), from `links_for_type`'s:
+    p.217's "A hidden side of a link type will not appear in user
+    applications", and "A prominent side … will lead applications to show this
+    side of the link type first". Otherwise in the order given."""
+    shown = [link for link in links if link.get("side_visibility") != "hidden"]
+    return sorted(shown, key=lambda link: link.get("side_visibility") != "prominent")
 CARDINALITIES = {"one_to_one", "one_to_many", "many_to_many"}
 
 _TYPE_API_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,99}$")
@@ -2102,6 +2125,7 @@ _LINK_SELECT = """
                lt.backing_type_id, lt.backing_from_link_id, lt.backing_to_link_id,
                b.display_name AS backing_display_name,
                lt.from_side_name, lt.to_side_name, lt.status, lt.deprecation,
+               lt.from_visibility, lt.to_visibility,
                lt.from_object_type_id, f.display_name AS from_display_name,
                lt.to_object_type_id, t.display_name AS to_display_name
           FROM link_types lt
@@ -2270,6 +2294,8 @@ async def links_for_type(
                 # Falls back to the link's single name, which is what every
                 # link type had before sides could be named separately.
                 "side_name": link["to_side_name"] or link["display_name"],
+                # p.217's visibility of that same side (§714; db 0138).
+                "side_visibility": link.get("to_visibility") or "normal",
             })
         if str(link["to_object_type_id"]) == str(type_id):
             out.append({
@@ -2281,6 +2307,7 @@ async def links_for_type(
                 "far_type_id": link["from_object_type_id"],
                 "far_type_display_name": link["from_display_name"],
                 "side_name": link["from_side_name"] or link["display_name"],
+                "side_visibility": link.get("from_visibility") or "normal",
             })
     return out
 
@@ -2305,6 +2332,8 @@ async def create_link_type(
     backing_type_id: UUID | None = None,
     backing_from_link_id: UUID | None = None,
     backing_to_link_id: UUID | None = None,
+    from_visibility: str | None = None,
+    to_visibility: str | None = None,
 ) -> dict[str, Any]:
     if not _PROP_API_RE.match(api_name):
         raise ValueError(f"invalid link api_name {api_name!r}")
@@ -2342,12 +2371,15 @@ async def create_link_type(
                                 cardinality, created_by, from_property, to_property,
                                 from_side_name, to_side_name,
                                 join_dataset_id, join_from_column, join_to_column,
-                                backing_type_id, backing_from_link_id, backing_to_link_id)
+                                backing_type_id, backing_from_link_id, backing_to_link_id,
+                                from_visibility, to_visibility)
         VALUES (:wid, :api, :name, :from, :to, CAST(:card AS link_cardinality), :by,
-                :fprop, :tprop, :fside, :tside, :jds, :jfrom, :jto, :bt, :bfrom, :bto)
+                :fprop, :tprop, :fside, :tside, :jds, :jfrom, :jto, :bt, :bfrom, :bto,
+                :fvis, :tvis)
         RETURNING id, api_name, display_name, from_object_type_id,
                   to_object_type_id, cardinality, created_at,
                   from_property, to_property, from_side_name, to_side_name,
+                  from_visibility, to_visibility,
                   join_dataset_id, join_from_column, join_to_column,
                   backing_type_id, backing_from_link_id, backing_to_link_id,
                   status, deprecation
@@ -2370,6 +2402,8 @@ async def create_link_type(
             "bt": backing,
             "bfrom": backing_from,
             "bto": backing_to,
+            "fvis": link_visibility(from_visibility) or "normal",
+            "tvis": link_visibility(to_visibility) or "normal",
         },
     )
     assert row is not None
@@ -2399,6 +2433,8 @@ async def set_link_join(
     backing_type_id: UUID | None = None,
     backing_from_link_id: UUID | None = None,
     backing_to_link_id: UUID | None = None,
+    from_visibility: str | None = None,
+    to_visibility: str | None = None,
 ) -> dict[str, Any]:
     """Map (or unmap) the properties a link joins on - or p.197's join table
     (§552), which replaces them - name its two sides, and set its status.
@@ -2510,7 +2546,11 @@ async def set_link_join(
             # expressible here, which is the right trade: an unnamed side falls
             # back to the link's own name, so nobody is stuck with a wrong one.
             "       from_side_name = COALESCE(:fside, from_side_name), "
-            "       to_side_name = COALESCE(:tside, to_side_name) "
+            "       to_side_name = COALESCE(:tside, to_side_name), "
+            # p.217's visibilities (§714), unchanged when not given, as the
+            # names are.
+            "       from_visibility = COALESCE(:fvis, from_visibility), "
+            "       to_visibility = COALESCE(:tvis, to_visibility) "
             "WHERE id = :lid AND workspace_id = :wid"
         ),
         {"fprop": from_property, "tprop": to_property, "status": capped,
@@ -2522,6 +2562,8 @@ async def set_link_join(
          "bto": None if backing_to is None else str(backing_to),
          "fside": (from_side_name or "").strip() or None,
          "tside": (to_side_name or "").strip() or None,
+         "fvis": link_visibility(from_visibility),
+         "tvis": link_visibility(to_visibility),
          "lid": str(link_id), "wid": str(workspace_id)},
     )
     return await get_link_type(conn, workspace_id, link_id)

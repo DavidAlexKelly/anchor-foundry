@@ -2252,6 +2252,9 @@ export const objects = {
       /** p.253's status and p.254's note (§631); left out, each is kept. */
       status?: import("./types").OntologyStatus;
       deprecation?: import("./types").Deprecation | null;
+      /** p.217's per-side visibility (§714); left out, each is kept. */
+      from_visibility?: import("./types").LinkVisibility;
+      to_visibility?: import("./types").LinkVisibility;
     },
   ) =>
     request<import("./types").LinkType>(`/workspaces/${wid}/link-types/${linkId}`, {

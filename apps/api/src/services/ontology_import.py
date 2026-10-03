@@ -265,6 +265,10 @@ def _parameter_references(parameter: dict[str, Any]):
 #: recreate for that." An import is not an exception to that. Applying the half
 #: that *is* mutable and leaving these would produce a link matching neither the
 #: file nor the workspace, which is worse than refusing (§340).
+#: A link's fields a file may leave out, kept as the workspace has them when
+#: it does (§714): applying a link sets them only when named.
+LINK_KEPT_IF_ABSENT = ("from_visibility", "to_visibility")
+
 IMMUTABLE_LINK_FIELDS = (
     ("from_object_type", "the type at its from end"),
     ("to_object_type", "the type at its to end"),
@@ -351,6 +355,16 @@ async def plan(
         key = named(section)
         mine = {key(row): row for row in current[section]}
         theirs = {key(row): row for row in document[section]}
+        if section == "link_types":
+            # p.217's visibilities (§714) are newer than files exported before
+            # db 0138. Applying one that does not name them keeps what the
+            # workspace has, so planning it compares against the same.
+            theirs = {
+                name: {**{field: mine[name][field] for field in LINK_KEPT_IF_ABSENT
+                          if name in mine and field in mine[name] and field not in row},
+                       **row}
+                for name, row in theirs.items()
+            }
         return {
             "added": sorted(n for n in theirs if n not in mine),
             # **Changed means "differs", not "mentioned".** A file that is a
@@ -601,6 +615,8 @@ async def _apply_links(
             to_property=link.get("to_property"),
             from_side_name=link.get("from_side_name"),
             to_side_name=link.get("to_side_name"),
+            from_visibility=link.get("from_visibility"),
+            to_visibility=link.get("to_visibility"),
             status=link.get("status"),
             deprecation=link.get("deprecation"),
             # The file names no join table (it would be a dataset id), so a

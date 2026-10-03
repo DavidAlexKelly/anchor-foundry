@@ -140,3 +140,18 @@ def test_the_panel_lists_the_links_to_offer(page, api, world) -> None:
     props = mod.definition()["layout"]["bar"]["props"]
     assert props["linkScope"] == "custom"
     assert props["customLinks"] == [world.link]
+
+
+def test_prominent_and_visible_read_the_link_s_side(page, api, world) -> None:
+    """p.473's Prominent and Visible (§714): the issues side here is p.217's
+    default, normal - so it is visible and not prominent."""
+    open_module(page, build(api, world, "Search bar prominent links", linkScope="prominent"))
+    rows_are(page, EVERYONE, "everyone")
+    field(page).fill("raised")
+    stays(lambda: page.locator("[data-testid='search-bar-option'][data-kind='link']").count(),
+          lambda n: n == 0, what="no prominent link offered", for_ms=2000)
+
+    open_module(page, build(api, world, "Search bar visible links", linkScope="visible"))
+    rows_are(page, EVERYONE, "everyone")
+    field(page).fill("raised")
+    expect(entry(page, "link", "Raised by")).to_be_visible()

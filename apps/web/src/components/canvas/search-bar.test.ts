@@ -207,3 +207,22 @@ describe("links in the bar (§578)", () => {
     expect(describeLinked({ property: "L2", op: "has_link", value: null }, links)).toBe("Has Owner");
   });
 });
+
+describe("p.473's Prominent and Visible link scopes (§714)", () => {
+  const link = (id: string, side_visibility?: string) => ({
+    link_type_id: id, side_name: id, far_type_id: "t", far_type_display_name: "T",
+    ...(side_visibility ? { side_visibility } : {}),
+  });
+  const links = [link("a", "prominent"), link("b", "normal"), link("c", "hidden"), link("d")];
+
+  it("reads them", () => {
+    expect(linkScopeOf("prominent")).toBe("prominent");
+    expect(linkScopeOf("visible")).toBe("visible");
+  });
+
+  it("offers only the prominent sides, or every side but the hidden", () => {
+    expect(availableLinks(links, "prominent").map((l) => l.link_type_id)).toEqual(["a"]);
+    expect(availableLinks(links, "visible").map((l) => l.link_type_id)).toEqual(["a", "b", "d"]);
+    expect(availableLinks(links, "all").map((l) => l.link_type_id)).toEqual(["a", "b", "c", "d"]);
+  });
+});
