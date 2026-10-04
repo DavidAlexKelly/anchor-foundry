@@ -224,6 +224,27 @@ limit rather than failing the check, on purpose.
 
 ---
 
+## Moving objects to OpenSearch (§813)
+
+A stack starts with its objects in Postgres. Moving them to the OpenSearch
+domain is **backfill, flip, backfill again**. Each step can be run again
+safely, because every document's id is derived from its source and key, so
+copying an object twice rewrites one document.
+
+1. **Backfill.** Run a one-off task from the API image with the owner role's
+   `DATABASE_URL`, plus `OPENSEARCH_ENDPOINT` and `OPENSEARCH_SECRET_ARN`.
+   Set those two on this task only:
+   `python -m src.services.instance_cutover [--workspace <uuid>]`. It copies
+   every workspace's objects, a page at a time, and moves each action run's
+   `instance_id` to the copied object's id. It commits one workspace at a
+   time and prints JSON counts. It refuses to start without both variables.
+2. **Flip.** Give the API and the worker both variables and redeploy. From
+   then on, both read and write the index.
+3. **Backfill again**, with the same command, to copy anything written
+   between step 1 and the flip.
+4. Run `python -m src.services.restore_check` with the same variables. A
+   non-empty `stale_index` names the sources to re-sync.
+
 ## Backup and restore (§803)
 
 The stack's three stores are backed up three ways, and a restore is finished
