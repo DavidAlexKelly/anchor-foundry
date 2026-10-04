@@ -31,7 +31,13 @@ function LoginInner() {
   const [hostedUiConfigured, setHostedUiConfigured] = useState(false);
 
   useEffect(() => {
-    setHostedUiConfigured(cognitoConfig() !== null);
+    let live = true;
+    void cognitoConfig().then((cfg) => {
+      if (live) setHostedUiConfigured(cfg !== null);
+    });
+    return () => {
+      live = false;
+    };
   }, []);
 
   async function onSignIn() {

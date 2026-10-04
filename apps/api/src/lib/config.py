@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     cognito_region: str = "eu-west-2"
     cognito_user_pool_id: str = ""
     cognito_client_id: str = ""
+    # The hosted UI's address, e.g. https://platform-acme.auth.eu-west-2.amazoncognito.com.
+    # The API never calls it; it tells the web app, which cannot be told at
+    # build time (§851): one web image serves every customer's stack.
+    cognito_domain: str = ""
     # Overridable for tests; production derives from region + pool id.
     cognito_jwks_url: str = ""
     cognito_issuer: str = ""

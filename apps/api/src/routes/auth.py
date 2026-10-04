@@ -47,6 +47,32 @@ async def me(auth: AuthContext = Depends(get_current_user)) -> Me:
     )
 
 
+class SignInConfig(BaseModel):
+    """Where the web app sends a person to sign in. Both null when this
+    deployment has no hosted UI, as in development."""
+    domain: str | None
+    client_id: str | None
+
+
+@router.get("/config", response_model=SignInConfig)
+async def sign_in_config() -> SignInConfig:
+    """The hosted UI's address and the app client, for the sign-in page (§851).
+
+    Public, since it is what a person who is not signed in needs, and nothing
+    in it is a secret: both appear in the address bar the moment sign-in
+    starts. The web app used to read them from `NEXT_PUBLIC_COGNITO_*`, which
+    Next writes into the bundle at build time. One web image serves every
+    customer's stack, each with its own pool, and the documented builds pass
+    neither - so a deployed sign-in page had no hosted UI to send anyone to.
+    """
+    settings = get_settings()
+    configured = bool(settings.cognito_domain and settings.cognito_client_id)
+    return SignInConfig(
+        domain=settings.cognito_domain.rstrip("/") if configured else None,
+        client_id=settings.cognito_client_id if configured else None,
+    )
+
+
 class SessionIn(BaseModel):
     access_token: str = Field(min_length=1, max_length=8192)
 

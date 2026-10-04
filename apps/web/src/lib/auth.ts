@@ -29,15 +29,61 @@ interface CognitoConfig {
   redirectUri: string;
 }
 
-export function cognitoConfig(): CognitoConfig | null {
-  const domain = process.env.NEXT_PUBLIC_COGNITO_DOMAIN;
-  const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID;
-  if (!domain || !clientId) return null;
-  return {
-    domain,
-    clientId,
-    redirectUri: `${window.location.origin}/callback`,
-  };
+/** What `GET /api/auth/config` answers. */
+export interface ToldConfig {
+  domain: string | null;
+  client_id: string | null;
+}
+
+/**
+ * Where to sign in, from what the API said and what the build said.
+ *
+ * **The API first (§851).** `NEXT_PUBLIC_*` values are written into the bundle
+ * when it is built, and one web image serves every customer's stack, each with
+ * its own pool - so a deployed build carries none (the documented builds pass
+ * no build arguments), and one that did would carry somebody else's. The stack
+ * tells the API; the API tells the page. The build's values remain for
+ * development against a real pool, where the API has none to give.
+ */
+export function resolveCognitoConfig(
+  told: ToldConfig | null,
+  built: { domain?: string; clientId?: string },
+  redirectUri: string,
+): CognitoConfig | null {
+  if (told?.domain && told.client_id) {
+    return { domain: told.domain, clientId: told.client_id, redirectUri };
+  }
+  if (built.domain && built.clientId) {
+    return { domain: built.domain, clientId: built.clientId, redirectUri };
+  }
+  return null;
+}
+
+let told: Promise<ToldConfig | null> | null = null;
+
+async function askTheApi(): Promise<ToldConfig | null> {
+  try {
+    const res = await fetch("/api/auth/config");
+    if (res.ok) return (await res.json()) as ToldConfig;
+  } catch {
+    /* unreachable: fall back to the build's values, and ask again next time */
+  }
+  told = null;
+  return null;
+}
+
+export async function cognitoConfig(): Promise<CognitoConfig | null> {
+  // An answer is kept for the page's life; a failure is not, so a blip while
+  // the page loads does not leave it unable to sign anyone in.
+  told ??= askTheApi();
+  return resolveCognitoConfig(
+    await told,
+    {
+      domain: process.env.NEXT_PUBLIC_COGNITO_DOMAIN,
+      clientId: process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID,
+    },
+    `${window.location.origin}/callback`,
+  );
 }
 
 function base64url(bytes: Uint8Array): string {
@@ -54,8 +100,8 @@ async function sha256(input: string): Promise<Uint8Array> {
 
 /** Step 1: send the user to the hosted UI with a PKCE challenge. */
 export async function beginLogin(): Promise<void> {
-  const cfg = cognitoConfig();
-  if (!cfg) throw new Error("Cognito is not configured (NEXT_PUBLIC_COGNITO_*)");
+  const cfg = await cognitoConfig();
+  if (!cfg) throw new Error("this deployment has no sign-in configured (COGNITO_DOMAIN on the API)");
   const verifier = base64url(crypto.getRandomValues(new Uint8Array(48)));
   sessionStorage.setItem(KEY_VERIFIER, verifier);
   const challenge = base64url(await sha256(verifier));
@@ -72,8 +118,8 @@ export async function beginLogin(): Promise<void> {
 
 /** Steps 4-5: exchange the code for tokens at the Cognito token endpoint. */
 export async function completeLogin(code: string): Promise<void> {
-  const cfg = cognitoConfig();
-  if (!cfg) throw new Error("Cognito is not configured");
+  const cfg = await cognitoConfig();
+  if (!cfg) throw new Error("this deployment has no sign-in configured");
   const verifier = sessionStorage.getItem(KEY_VERIFIER);
   if (!verifier) throw new Error("Missing PKCE verifier - restart sign-in");
   const body = new URLSearchParams({
