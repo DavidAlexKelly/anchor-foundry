@@ -36,7 +36,7 @@
 
 import { Editor, Frame, useEditor } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { canvas as canvasApi, objects as objApi } from "@/lib/api";
 import { CommentsButton } from "@/components/comments-panel";
 import { StandardPanelView } from "@/components/object-panels";
@@ -155,6 +155,69 @@ function ConfiguredObjectView({
               bound={[subjectVariable, ...Object.keys(bindings)]}
             >
               <ReadOnlyFrame definition={definition} />
+            </VariableBridge>
+          </CanvasParameterProvider>
+        </CanvasEnvProvider>
+      </Editor>
+    </div>
+  );
+}
+
+/** p.41's configured object set panel (§744): "object set panels display
+ * multiple objects as an object set". The type's `panel_set` module, with the
+ * set arriving in its `object_set` subject variable as a seed - the instance
+ * view's arrangement, with a set where that has an object. When the module
+ * cannot be loaded, p.41's default set panel stands in, for the instance
+ * view's reason: the objects are still worth showing. */
+export function ConfiguredSetPanel({
+  workspaceId,
+  appId,
+  subjectVariable,
+  definition,
+  fallback,
+}: {
+  workspaceId: string;
+  appId: string;
+  subjectVariable: string;
+  definition: unknown;
+  fallback: ReactNode;
+}) {
+  const app = useQuery({
+    queryKey: ["published-canvas-app", appId],
+    queryFn: () => canvasApi.getPublished(workspaceId, appId),
+  });
+  if (app.isPending) {
+    return <div className="state" data-testid="configured-set-panel">Loading this panel…</div>;
+  }
+  if (app.isError || !app.data) {
+    return (
+      <>
+        <p className="state error" data-testid="configured-set-panel-failed">
+          This object type&apos;s object set panel couldn&apos;t be loaded, so here is the
+          standard one.
+        </p>
+        {fallback}
+      </>
+    );
+  }
+  const declared = variablesOf(app.data.definition);
+  return (
+    <div data-testid="configured-set-panel" data-app={appId}>
+      <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
+        <CanvasEnvProvider value={{ workspaceId, projectId: app.data.project_id, mode: "run" }}>
+          <CanvasParameterProvider seed={{ [subjectVariable]: definition }}>
+            <VariableBridge
+              workspaceId={workspaceId}
+              projectId={app.data.project_id}
+              appId={app.data.id}
+              declared={declared}
+              events={eventsOf(app.data.definition)}
+              published
+              // The set is supplied from outside, so the module's own
+              // definition of the variable stands aside (p.122, p.127).
+              bound={[subjectVariable]}
+            >
+              <ReadOnlyFrame definition={readerLayout(app.data.definition)} />
             </VariableBridge>
           </CanvasParameterProvider>
         </CanvasEnvProvider>

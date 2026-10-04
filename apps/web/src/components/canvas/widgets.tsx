@@ -10096,6 +10096,13 @@ const EmbeddedObjectView = dynamic(
   { loading: () => <p className="canvas-widget-empty">Loading this object&apos;s view…</p> },
 );
 
+/** p.41's configured object set panel (§744), dynamically for
+ * `EmbeddedObjectView`'s reason: it is the same file. */
+const ConfiguredSetPanel = dynamic(
+  () => import("@/components/object-view").then((m) => m.ConfiguredSetPanel),
+  { loading: () => <p className="canvas-widget-empty">Loading this panel…</p> },
+);
+
 /** p.259-263's Object View widget: "detailed information about a single object
  * by displaying an embedded object view within a Workshop module".
  *
@@ -10185,6 +10192,13 @@ export function CanvasObjectViewWidget({
   const panel = formFactorOf(formFactor) === "panel";
   // p.263: which of the two panels, by the set's size.
   const shows = panel ? panelShows(panelBehaviorOf(panelBehavior), setPage.total ?? 0) : "instance";
+  // p.41's configured object set panel (§744), asked only when the set panel
+  // is what this widget is showing.
+  const setPanelView = useQuery({
+    queryKey: ["object-view", workspaceId, setPage.typeId, "panel_set"],
+    queryFn: () => objApi.getView(workspaceId, setPage.typeId!, "panel_set"),
+    enabled: shows === "set" && !!setPage.typeId,
+  });
   // The wrapper below carries no class of its own. The first version gave it
   // `min-width: 0; overflow-x: auto` for §208's reason, and the harness said
   // nothing could tell: `.canvas-frame-area` already carries `min-width: 0` and
@@ -10199,11 +10213,27 @@ export function CanvasObjectViewWidget({
         <p className="canvas-widget-empty">Resolving the object set…</p>
       ) : shows === "set" && setPage.typeId ? (
         <div data-testid="object-view-widget" data-panel="set">
-          <ObjectSetPanel
-            workspaceId={workspaceId}
-            definition={setDefinition}
-            typeId={setPage.typeId}
-          />
+          {/* p.41's configured object set panel when the type has one (§744),
+              p.41's default otherwise. */}
+          {setPanelView.data ? (
+            <ConfiguredSetPanel
+              key={`${setPanelView.data.canvas_app_id}:${JSON.stringify(setDefinition)}`}
+              workspaceId={workspaceId}
+              appId={setPanelView.data.canvas_app_id}
+              subjectVariable={setPanelView.data.subject_variable}
+              definition={setDefinition}
+              fallback={<ObjectSetPanel workspaceId={workspaceId} definition={setDefinition}
+                typeId={setPage.typeId} />}
+            />
+          ) : setPanelView.isPending ? (
+            <p className="canvas-widget-empty">Loading…</p>
+          ) : (
+            <ObjectSetPanel
+              workspaceId={workspaceId}
+              definition={setDefinition}
+              typeId={setPage.typeId}
+            />
+          )}
         </div>
       ) : !instance || !setPage.typeId ? (
         <p className="canvas-widget-empty" data-testid="object-view-empty">

@@ -359,3 +359,56 @@ def test_deleting_the_module_takes_the_view_with_it(
     assert client.get(
         f"{wbase(fx)}/object-types/{type_id}/view", headers=hdr(fx.viewer_sub)
     ).json() is None
+
+
+# ---- p.41's configured object set panel (§744) -------------------------------
+def test_an_object_set_panel_is_a_module_receiving_the_set(
+    client: TestClient, fx: Fixture, type_id: str, module_id: str
+) -> None:
+    """p.41: "object set panels display multiple objects as an object set".
+    A third form factor whose module receives an `object_set`, beside the
+    full view and the instance panel rather than replacing either."""
+    set_panel = make_module(
+        client, fx,
+        variables={"v_set": {"id": "v_set", "kind": "object_set", "label": "The objects",
+                             "object_set": {"object_type_id": type_id, "filters": []}},
+                   "v_one": {"id": "v_one", "kind": "single_object", "label": "One"}},
+    )
+    r = client.put(
+        f"{wbase(fx)}/object-types/{type_id}/view", headers=hdr(fx.editor_sub),
+        json={"canvas_app_id": set_panel, "subject_variable": "v_set",
+              "form_factor": "panel_set"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["form_factor"] == "panel_set"
+    got = client.get(f"{wbase(fx)}/object-types/{type_id}/view?form_factor=panel_set",
+                     headers=hdr(fx.viewer_sub)).json()
+    assert (got["canvas_app_id"], got["subject_variable"]) == (set_panel, "v_set")
+    assert client.delete(f"{wbase(fx)}/object-types/{type_id}/view?form_factor=panel_set",
+                         headers=hdr(fx.editor_sub)).status_code == 204
+
+
+def test_each_form_factor_takes_its_own_kind_of_variable(
+    client: TestClient, fx: Fixture, type_id: str
+) -> None:
+    """An object set panel receives a set and an instance view one object, so
+    each refuses the other's variable in a sentence naming what it needs."""
+    both = make_module(
+        client, fx,
+        variables={"v_set": {"id": "v_set", "kind": "object_set", "label": "The objects",
+                             "object_set": {"object_type_id": type_id, "filters": []}},
+                   "v_one": {"id": "v_one", "kind": "single_object", "label": "One"}},
+    )
+    r = client.put(
+        f"{wbase(fx)}/object-types/{type_id}/view", headers=hdr(fx.editor_sub),
+        json={"canvas_app_id": both, "subject_variable": "v_one", "form_factor": "panel_set"},
+    )
+    assert r.status_code == 422, r.text
+    assert "not an object set variable" in r.text and "p.41" in r.text
+    for factor in ("panel", "full"):
+        r = client.put(
+            f"{wbase(fx)}/object-types/{type_id}/view", headers=hdr(fx.editor_sub),
+            json={"canvas_app_id": both, "subject_variable": "v_set", "form_factor": factor},
+        )
+        assert r.status_code == 422, r.text
+        assert "not a single-object variable" in r.text

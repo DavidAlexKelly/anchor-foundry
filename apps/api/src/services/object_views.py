@@ -34,7 +34,12 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import NotFoundError
 
-FORM_FACTORS = ("full", "panel")
+FORM_FACTORS = ("full", "panel", "panel_set")
+
+#: What each form factor's module receives (§744; `object-views` p.41): one
+#: object for the full view and the instance panel, the set for the object
+#: set panel.
+SUBJECT_KINDS = {"full": "single_object", "panel": "single_object", "panel_set": "object_set"}
 
 _COLUMNS = (
     "v.id, v.workspace_id, v.object_type_id, v.canvas_app_id, "
@@ -51,14 +56,14 @@ def _json(value: Any) -> Any:
     return json.loads(value) if isinstance(value, str) else value
 
 
-def subject_candidates(definition: Any) -> dict[str, str]:
+def subject_candidates(definition: Any, kind: str = "single_object") -> dict[str, str]:
     """The module variables that could receive the object, id -> label.
 
-    `single_object` only: that is the kind that holds "the object somebody
-    picked" (§84), and it is what every widget reading an object already
-    expects. An object *set* variable would make the view about a collection,
-    which is a different screen, and a string one would hold a primary key -
-    which is not what the widgets look an instance up by.
+    `single_object` for a view of one object: that is the kind that holds "the
+    object somebody picked" (§84), and it is what every widget reading an
+    object already expects. A string one would hold a primary key - which is
+    not what the widgets look an instance up by. **An `object_set` for p.41's
+    object set panel** (§744), the one view that is about a collection.
     """
     document = _json(definition) or {}
     variables = document.get("variables") or {}
@@ -69,7 +74,7 @@ def subject_candidates(definition: Any) -> dict[str, str]:
         for variable in variables.values()
         if isinstance(variable, dict)
         and variable.get("id")
-        and str(variable.get("kind")) == "single_object"
+        and str(variable.get("kind")) == kind
     }
 
 
@@ -165,7 +170,8 @@ async def set_view(
     """
     if form_factor not in FORM_FACTORS:
         raise ValueError(f"unknown object view form factor {form_factor!r}")
-    app = await _checked_module(conn, workspace_id, canvas_app_id, subject_variable)
+    app = await _checked_module(conn, workspace_id, canvas_app_id, subject_variable,
+                                kind=SUBJECT_KINDS[form_factor])
 
     row = await fetch_one(
         conn,
@@ -192,6 +198,7 @@ async def set_view(
 
 async def _checked_module(
     conn: AsyncConnection, workspace_id: UUID, canvas_app_id: UUID, subject_variable: str,
+    *, kind: str = "single_object",
 ) -> dict[str, Any]:
     """A module a view or a tab may point at, or a refusal in a sentence."""
     app = await fetch_one(
@@ -211,8 +218,14 @@ async def _checked_module(
             "by whoever can read the object, and an unpublished module is readable only "
             "inside its own project"
         )
-    candidates = subject_candidates(app["definition"])
+    candidates = subject_candidates(app["definition"], kind)
     if subject_variable not in candidates:
+        if kind == "object_set":
+            raise ValueError(
+                f"{subject_variable!r} is not an object set variable of this module - "
+                "an object set panel needs one to receive the objects being viewed "
+                "(object-views p.41)"
+            )
         raise ValueError(
             f"{subject_variable!r} is not a single-object variable of this module - "
             "an object view needs one to receive the object being viewed"

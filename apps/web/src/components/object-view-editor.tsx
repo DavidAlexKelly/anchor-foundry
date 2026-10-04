@@ -31,6 +31,7 @@ import { Dialog, Field } from "@/components/dialog";
 import { canvas as canvasApi, objects as objApi } from "@/lib/api";
 import { variablesOf } from "@/lib/workshop-module";
 import { MAX_TABS, draftsOf, moveTab, tabsProblem, type TabDraft } from "@/lib/object-view-tabs";
+import { VIEW_FORMS, subjectKindOf, viewFormOf, type ViewForm } from "@/lib/object-panels";
 
 export function ObjectViewEditor({
   workspaceId,
@@ -45,10 +46,15 @@ export function ObjectViewEditor({
 }) {
   const queryClient = useQueryClient();
   const [failure, setFailure] = useState<string | null>(null);
+  // p.35's form factor dropdown and p.42's Object instance / Object set
+  // switch (§744): which of the type's three views this dialog edits.
+  const [form, setForm] = useState<ViewForm>("full");
+  const full = form === "full";
 
   const current = useQuery({
-    queryKey: ["object-view", workspaceId, typeId],
-    queryFn: () => objApi.getView(workspaceId, typeId),
+    // The full view keeps the key every reader of it uses.
+    queryKey: full ? ["object-view", workspaceId, typeId] : ["object-view", workspaceId, typeId, form],
+    queryFn: () => objApi.getView(workspaceId, typeId, form),
   });
   const published = useQuery({
     queryKey: ["published-canvas-apps", workspaceId],
@@ -58,7 +64,9 @@ export function ObjectViewEditor({
   // The saved tabs are the starting point, once they have arrived. Held in
   // state from the first edit on, so an edit is not thrown away by a refetch.
   const [edited, setEdited] = useState<TabDraft[] | null>(null);
-  const tabs = edited ?? (current.isPending ? [] : draftsOf(current.data ?? null));
+  const saved = current.isPending ? [] : draftsOf(current.data ?? null);
+  // A panel is one module (p.41), so its draft is the first tab's alone.
+  const tabs = edited ?? (full ? saved : saved.slice(0, 1));
   const problem = tabsProblem(tabs);
   const change = (next: TabDraft[]) => setEdited(next);
   const update = (n: number, patch: Partial<TabDraft>) =>
@@ -70,12 +78,18 @@ export function ObjectViewEditor({
     onClose();
   };
   const save = useMutation({
-    mutationFn: () => objApi.setViewTabs(workspaceId, typeId, tabs),
+    mutationFn: () => full
+      ? objApi.setViewTabs(workspaceId, typeId, tabs)
+      : objApi.setView(workspaceId, typeId, {
+        canvas_app_id: tabs[0]!.canvas_app_id,
+        subject_variable: tabs[0]!.subject_variable,
+        form_factor: form,
+      }),
     onSuccess: done,
     onError: (e: Error) => setFailure(e.message),
   });
   const clear = useMutation({
-    mutationFn: () => objApi.clearView(workspaceId, typeId),
+    mutationFn: () => objApi.clearView(workspaceId, typeId, form),
     onSuccess: done,
     onError: (e: Error) => setFailure(e.message),
   });
@@ -83,33 +97,60 @@ export function ObjectViewEditor({
   return (
     <Dialog open title={`Object view · ${typeName}`} onClose={onClose}>
       {failure && <p className="state error" data-testid="object-view-error">{failure}</p>}
+      <Field label="Form factor">
+        <select
+          value={form}
+          aria-label="Form factor"
+          data-testid="object-view-form"
+          onChange={(e) => {
+            setForm(viewFormOf(e.target.value));
+            setEdited(null);
+            setFailure(null);
+          }}
+        >
+          {(Object.keys(VIEW_FORMS) as ViewForm[]).map((key) => (
+            <option key={key} value={key}>{VIEW_FORMS[key]}</option>
+          ))}
+        </select>
+      </Field>
       <p className="field-hint">
-        A configured view is a published Workshop module standing in for the generated
-        one. Readers can always switch back to the standard view. Each tab is a module;
-        with one tab, its title is not shown.
+        {full
+          ? "A configured view is a published Workshop module standing in for the generated "
+            + "one. Readers can always switch back to the standard view. Each tab is a module; "
+            + "with one tab, its title is not shown."
+          : form === "panel"
+            ? "The compact view of one object, where an application selects it (p.37)."
+            : "The view of several objects of this type at once, where an application "
+              + "selects a set of them (p.38). The module receives the set."}
       </p>
 
-      {tabs.map((tab, n) => (
-        <TabFields
-          key={n}
-          workspaceId={workspaceId}
-          n={n}
-          count={tabs.length}
-          tab={tab}
-          modules={published.data ?? []}
-          onChange={(patch) => update(n, patch)}
-          onMove={(by) => change(moveTab(tabs, n, by))}
-          onDelete={() => change(tabs.filter((_, i) => i !== n))}
-        />
-      ))}
-      <button
-        type="button"
-        className="btn quiet"
-        disabled={tabs.length >= MAX_TABS || current.isPending}
-        onClick={() => change([...tabs, { title: "", canvas_app_id: "", subject_variable: "" }])}
-      >
-        Add tab
-      </button>
+      {(tabs.length > 0 ? tabs : full ? [] : [{ title: "", canvas_app_id: "", subject_variable: "" }])
+        .map((tab, n, shown) => (
+          <TabFields
+            key={`${form}:${n}`}
+            workspaceId={workspaceId}
+            n={n}
+            count={shown.length}
+            tab={tab}
+            modules={published.data ?? []}
+            kind={subjectKindOf(form)}
+            titled={full}
+            onChange={(patch) => full ? update(n, patch)
+              : change([{ ...tab, ...patch }])}
+            onMove={(by) => change(moveTab(tabs, n, by))}
+            onDelete={() => change(tabs.filter((_, i) => i !== n))}
+          />
+        ))}
+      {full && (
+        <button
+          type="button"
+          className="btn quiet"
+          disabled={tabs.length >= MAX_TABS || current.isPending}
+          onClick={() => change([...tabs, { title: "", canvas_app_id: "", subject_variable: "" }])}
+        >
+          Add tab
+        </button>
+      )}
 
       <div className="row-actions" style={{ marginTop: 16 }}>
         <button
@@ -137,12 +178,19 @@ export function ObjectViewEditor({
 
 /** One tab: its title, its module, and which of *that* module's variables
  * receives the object. */
-function TabFields({ workspaceId, n, count, tab, modules, onChange, onMove, onDelete }: {
+function TabFields({
+  workspaceId, n, count, tab, modules, kind = "single_object", titled = true,
+  onChange, onMove, onDelete,
+}: {
   workspaceId: string;
   n: number;
   count: number;
   tab: TabDraft;
   modules: { id: string; name: string }[];
+  /** What the module receives: one object, or p.41's set (§744). */
+  kind?: "single_object" | "object_set";
+  /** A panel is one module and has no tabs to title (p.41). */
+  titled?: boolean;
   onChange: (patch: Partial<TabDraft>) => void;
   onMove: (by: -1 | 1) => void;
   onDelete: () => void;
@@ -158,13 +206,13 @@ function TabFields({ workspaceId, n, count, tab, modules, onChange, onMove, onDe
     enabled: !!tab.canvas_app_id,
   });
   const subjects = Object.values(variablesOf(document.data?.definition)).filter(
-    (v) => v.kind === "single_object",
+    (v) => v.kind === kind,
   );
-  const label = `Tab ${n + 1}`;
+  const label = titled ? `Tab ${n + 1}` : "Panel";
   return (
     <fieldset className="object-view-tab" data-testid="object-view-tab">
       <legend>{label}</legend>
-      <Field label="Title">
+      {titled && <Field label="Title">
         <input
           type="text"
           value={tab.title}
@@ -173,7 +221,7 @@ function TabFields({ workspaceId, n, count, tab, modules, onChange, onMove, onDe
           placeholder={n === 0 ? "The module's name" : "Required"}
           onChange={(e) => onChange({ title: e.target.value })}
         />
-      </Field>
+      </Field>}
       <Field label="Module">
         <select
           value={tab.canvas_app_id}
@@ -190,7 +238,7 @@ function TabFields({ workspaceId, n, count, tab, modules, onChange, onMove, onDe
           ))}
         </select>
       </Field>
-      <Field label="Receives the object as">
+      <Field label={kind === "object_set" ? "Receives the objects as" : "Receives the object as"}>
         <select
           value={tab.subject_variable}
           aria-label={`${label} subject variable`}
@@ -205,8 +253,11 @@ function TabFields({ workspaceId, n, count, tab, modules, onChange, onMove, onDe
       </Field>
       {tab.canvas_app_id && document.data && subjects.length === 0 && (
         <p className="field-hint" data-testid="no-subject-variable">
-          This module has no single-object variable, so there is nowhere for the object to
-          arrive. Add one in the module&apos;s Variables panel.
+          {kind === "object_set"
+            ? "This module has no object set variable, so there is nowhere for the objects to "
+              + "arrive. Add one in the module's Variables panel."
+            : "This module has no single-object variable, so there is nowhere for the object to "
+              + "arrive. Add one in the module's Variables panel."}
         </p>
       )}
       {count > 1 && (
