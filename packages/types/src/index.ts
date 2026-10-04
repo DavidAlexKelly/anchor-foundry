@@ -2997,12 +2997,32 @@ export interface ObjectSourceSchedule {
   sync_next_run_at: string | null;
 }
 
+/** A struct column member that could not be a field, and why (§735). */
+export interface SkippedField {
+  field: string;
+  reason: string;
+}
+
 export interface SuggestedProperty {
   api_name: string;
   display_name: string;
   data_type: PropertyDataType;
   required: boolean;
   source_column: string;
+  /** §735: an array column's element type, and a struct column's members as
+   * fields (`object-link-types` p.149, p.160). */
+  array_of?: PropertyDataType | null;
+  struct_fields?: StructField[] | null;
+  skipped_fields?: SkippedField[];
+}
+
+/** p.160's Automap all for one struct column a source maps (§735). */
+export interface StructAutomap {
+  property: string;
+  dataset_name: string;
+  column: string;
+  struct_fields: StructField[];
+  skipped_fields: SkippedField[];
 }
 
 export interface ObjectTypeSuggestion {

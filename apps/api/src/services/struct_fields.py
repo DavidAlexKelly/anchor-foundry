@@ -43,7 +43,7 @@ _FIELD_API_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 #: (BOOLEAN, BYTE, DATE, DECIMAL, DOUBLE, FLOAT, GEOPOINT, INTEGER, LONG,
 #: SHORT, STRING, TIMESTAMP); this platform's property types collapse the four
 #: integer widths to `integer` and the three float widths to `float`, which is
-#: the same collapse `_DUCK_TO_PROPERTY` already makes when reading a dataset.
+#: the same collapse `column_types` makes when reading a dataset's schema.
 #:
 #: **What is absent is absent for a reason, one reason each**, because a reader
 #: comparing this list with ``PROPERTY_TYPES`` will otherwise read the gaps as

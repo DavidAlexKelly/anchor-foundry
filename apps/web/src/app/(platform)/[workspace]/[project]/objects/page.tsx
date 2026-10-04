@@ -14,6 +14,7 @@ import {
   type PropertyInput,
 } from "@/lib/api";
 import { typeClassesOf } from "@/lib/type-classes";
+import { suggestedFields, suggestedInput, suggestedTypeLabel } from "@/lib/suggested-property";
 import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ActionOverviewDialog } from "@/components/action-overview-dialog";
 import { ObjectViewEditor } from "@/components/object-view-editor";
@@ -212,9 +213,9 @@ function SuggestDialog({
       const type = await objApi.createType(workspaceId, {
         api_name: toApiName(displayName, true),
         display_name: displayName,
-        properties: chosen.map((p) => ({
-          api_name: p.api_name, data_type: p.data_type, required: p.required,
-        })),
+        // §735: a struct's automapped fields and an array's element travel
+        // with the type, which the create refuses without them.
+        properties: chosen.map(suggestedInput),
         title_property: suggestion.suggested_title_property,
       });
       const mappings = Object.fromEntries(chosen.map((p) => [p.source_column, p.api_name]));
@@ -271,6 +272,8 @@ function SuggestDialog({
               {suggestion.properties.map((p) => (
                 <label
                   key={p.api_name}
+                  data-testid="suggested-property"
+                  data-column={p.source_column}
                   style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, padding: "3px 0" }}
                 >
                   <input
@@ -278,10 +281,22 @@ function SuggestDialog({
                     checked={!!included[p.api_name]}
                     onChange={(e) => setIncluded({ ...included, [p.api_name]: e.target.checked })}
                   />
-                  <span className="chip">{p.data_type}</span>
+                  <span className="chip" data-testid="suggested-type">{suggestedTypeLabel(p)}</span>
                   <strong>{p.api_name}</strong>
                   <span style={{ color: "var(--ink-soft)" }}>from column {p.source_column}</span>
                   {p.api_name === suggestion.suggested_primary_key && <span className="chip brass">primary key</span>}
+                  {suggestedFields(p) && (
+                    <span className="slug" data-testid="suggested-fields">fields: {suggestedFields(p)}</span>
+                  )}
+                  {(p.skipped_fields ?? []).length > 0 && (
+                    <span
+                      className="slug"
+                      data-testid="suggested-skipped"
+                      title={(p.skipped_fields ?? []).map((f) => `${f.field}: ${f.reason}`).join("\n")}
+                    >
+                      not mapped: {(p.skipped_fields ?? []).map((f) => f.field).join(", ")}
+                    </span>
+                  )}
                 </label>
               ))}
             </div>
