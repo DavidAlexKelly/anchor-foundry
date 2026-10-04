@@ -119,6 +119,22 @@ def test_a_hidden_property_is_nowhere_in_the_view(page, module):
     expect(view.locator("[data-property='internal_note']")).to_have_count(0)
 
 
+def test_a_hidden_property_is_not_an_explorer_column(page, module):
+    """`ontology.md` §8's second half: "and from the Object Explorer's
+    columns". The value is still returned - hidden is a display hint, not a
+    permission - so the column is what has to be absent."""
+    page.goto(f"{WEB_BASE}/{module.workspace_slug}/explore?type={module.object_type_id}")
+    rows = page.locator("tbody tr")
+    eventually(lambda: rows.count(), lambda n: n == len(ROWS), what="this type's objects")
+    headers = page.locator("thead th")
+    # Lowered: the header is upper-cased by CSS, and the property's name is
+    # what is being looked for.
+    eventually(lambda: [h.lower() for h in headers.all_inner_texts()], lambda h: "region" in h,
+               what="the normal property's column")
+    assert "internal_note" not in [h.lower() for h in headers.all_inner_texts()]
+    expect(page.locator("tbody")).not_to_contain_text("DO NOT SHOW")
+
+
 def test_a_prominent_geopoint_renders_a_map(page, module):
     """p.11: "Objects with prominent geohash, geoshape, or geotemporal series
     reference properties will render on a Map."
@@ -131,6 +147,26 @@ def test_a_prominent_geopoint_renders_a_map(page, module):
     expect(holder).to_be_visible()
     eventually(lambda: holder.locator("svg").count(), lambda n: n >= 1,
                what="the map drawn for the prominent geopoint")
+
+
+@pytest.fixture(scope="module")
+def plain(api):
+    """The same objects with every property left normal - the prominent flag
+    removed - for the half of `ontology.md` §8's line that falls back."""
+    mod = Module(api, "Standard object view plain")
+    mod.object_type(columns=["id", "name", "region", "where", "internal_note"], rows=ROWS,
+                    key="id", title="name", types={"where": "geopoint"})
+    return mod
+
+
+def test_without_the_prominent_flag_a_geopoint_is_a_table_row(page, plain):
+    """"Remove the prominent flag and it falls back to the table." The map and
+    the time series chart are both drawn from the prominent cards
+    (`objectViewSections`), so one split decides both."""
+    open_first_object(page, plain)
+    view = page.get_by_test_id("standard-object-view")
+    expect(view.get_by_test_id("sov-normal").locator("[data-property='where']")).to_be_visible()
+    expect(view.get_by_test_id("sov-map-where")).to_have_count(0)
 
 
 def test_the_linked_objects_section_sits_under_the_view(page, module):
