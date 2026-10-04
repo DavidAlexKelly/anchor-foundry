@@ -143,10 +143,13 @@ export async function completeLogin(code: string): Promise<void> {
     }
     throw new Error(tokenFailure(res.status, body));
   }
-  const data: { access_token?: string } = await res.json();
+  const data: { access_token?: string; refresh_token?: string } = await res.json();
   if (!data.access_token) throw new Error("Token endpoint returned no access token");
   sessionStorage.removeItem(KEY_VERIFIER);
-  await establishSession(data.access_token);
+  // The refresh token goes to the API with it, and from there into a cookie
+  // no script can read (§859): it is what keeps the session past the access
+  // token's fifteen minutes.
+  await establishSession(data.access_token, data.refresh_token);
 }
 
 /** Hand a verified token to the API and keep only the cookie it sets.
@@ -156,12 +159,12 @@ export async function completeLogin(code: string): Promise<void> {
  * open - nothing short of removing the browser from the loop prevents that -
  * but it cannot walk away with a credential.
  */
-export async function establishSession(token: string): Promise<void> {
+export async function establishSession(token: string, refreshToken?: string): Promise<void> {
   const res = await fetch("/api/auth/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
-    body: JSON.stringify({ access_token: token }),
+    body: JSON.stringify({ access_token: token, ...(refreshToken ? { refresh_token: refreshToken } : {}) }),
   });
   if (!res.ok) {
     let detail = `Sign-in failed (${res.status})`;
@@ -174,6 +177,31 @@ export async function establishSession(token: string): Promise<void> {
     throw new Error(detail);
   }
   localStorage.setItem(KEY_SIGNED_IN, "1");
+}
+
+let renewing: Promise<boolean> | null = null;
+
+/**
+ * A new session from the refresh cookie, when the access token has run out
+ * (§859). Whether it worked.
+ *
+ * **One renewal for every request that needs it.** A page whose session has
+ * just expired fails all its queries at once, and each would otherwise ask
+ * Cognito for a token of its own; they share the first one's answer instead.
+ * Cleared once settled, so the next expiry, fifteen minutes on, asks afresh.
+ */
+export function renewSession(fetcher: typeof fetch = fetch): Promise<boolean> {
+  renewing ??= fetcher("/api/auth/refresh", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-Anchor-Session": "1" },
+  })
+    .then((res) => res.ok)
+    .catch(() => false)
+    .finally(() => {
+      renewing = null;
+    });
+  return renewing;
 }
 
 /** Whether to render or redirect. Deliberately synchronous and deliberately
