@@ -227,10 +227,10 @@ async def record(
         conn,
         """
         INSERT INTO export_runs (export_id, status, skipped, dataset_version,
-                                 rows_written, error, finished_at, run_by)
-        VALUES (:eid, :status, :skipped, :version, :rows, :error, now(), :by)
+                                 rows_written, error, finished_at, run_by, detail)
+        VALUES (:eid, :status, :skipped, :version, :rows, :error, now(), :by, :detail)
         RETURNING id, status, skipped, dataset_version, rows_written, error,
-                  started_at, finished_at
+                  started_at, finished_at, detail
         """,
         {
             "eid": str(export_id),
@@ -240,6 +240,7 @@ async def record(
             "rows": int(result.get("rows_written") or 0),
             "error": result.get("error"),
             "by": str(run_by) if run_by else None,
+            "detail": result.get("detail"),
         },
     )
     assert row is not None
@@ -290,7 +291,7 @@ async def runs(
         conn,
         """
         SELECT id, status, skipped, dataset_version, rows_written, error,
-               started_at, finished_at, run_by
+               started_at, finished_at, run_by, detail
           FROM export_runs
          WHERE export_id = :eid
          ORDER BY started_at DESC

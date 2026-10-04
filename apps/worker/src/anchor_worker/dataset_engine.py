@@ -317,6 +317,41 @@ def merge_transaction(
         con.close()
 
 
+def added_rows(pairs: list[tuple[int, str, str]], dest_path: str) -> int:
+    """The rows each APPEND version added, as one Parquet (§748; decision 0020
+    §4). `pairs` is `(version, its parquet, the previous version's parquet)`.
+
+    An APPEND is the previous view plus rows (data-integration p.22), so what
+    it added is `version EXCEPT ALL previous` - exact for a multiset, and it
+    needs no second file per version. A pair whose columns differ is refused
+    rather than compared: rows of two shapes cannot be told apart.
+    """
+    con = duckdb.connect()
+    try:
+        selects = []
+        for version, new, previous in pairs:
+            shape = [con.execute(f"DESCRIBE SELECT * FROM read_parquet({p!r})").fetchall()
+                     for p in (new, previous)]
+            if shape[0] != shape[1]:
+                raise DatasetEngineError(
+                    f"v{version} has different columns from v{version - 1}, so the rows it "
+                    "added cannot be told apart from the ones before"
+                )
+            selects.append(
+                f"(SELECT * FROM read_parquet({new!r}) "
+                f"EXCEPT ALL SELECT * FROM read_parquet({previous!r}))"
+            )
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        try:
+            con.execute(f"CREATE VIEW added AS {' UNION ALL '.join(selects)}")
+            con.execute(f"COPY added TO '{dest_path}' (FORMAT parquet)")
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+        return int(con.execute("SELECT count(*) FROM added").fetchone()[0])
+    finally:
+        con.close()
+
+
 def evaluate_expectations(
     parquet_path: str, rules: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:

@@ -429,6 +429,9 @@ function HistoryDialog({
                   <span className={entry.status === "failed" ? "chip" : "count"}>
                     {runLabel(entry)}
                   </span>
+                  {entry.detail && (
+                    <div className="soft" data-testid="export-run-detail">{entry.detail}</div>
+                  )}
                   {entry.error && <div className="form-error">{entry.error}</div>}
                 </td>
                 <td className="slug">

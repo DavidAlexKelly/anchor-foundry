@@ -137,6 +137,15 @@ def _run_one(context, platform_db, export_id, workspace_id) -> bool:
             dataset_schema = _schema_list(version_row[0]) if version_row else []
             manifest_key = str(version_row[1] or "") if version_row else ""
 
+            # Every version's type and key (§748): a transactional mode reads
+            # the ones since its last run, and the version before each APPEND.
+            cur.execute(
+                "SELECT version_number, transaction_type, s3_manifest_key FROM dataset_versions"
+                " WHERE dataset_id = %s ORDER BY version_number",
+                (str(dataset_id),),
+            )
+            history = cur.fetchall()
+
             # §263: the source's egress policies, read in the same scoped
             # transaction as the row they belong to. A scheduled export has no
             # caller to inherit an ambient scope from.
@@ -174,12 +183,24 @@ def _run_one(context, platform_db, export_id, workspace_id) -> bool:
         except (StorageKeyError, FileNotFoundError, OSError):
             parquet_path = None
 
+    versions = [{"version_number": int(n), "transaction_type": t} for n, t, _key in history]
+    keys = {int(n): key for n, _t, key in history}
+
+    def path_of(number):
+        """A version's bytes, fetched only when a run sends them (§748)."""
+        try:
+            return storage.local_path(keys[number]) if keys.get(number) else None
+        except (StorageKeyError, FileNotFoundError, OSError):
+            return None
+
     outcome = export_runs.perform(
         export, connection, secret,
         parquet_path=parquet_path,
         dataset_version=int(current_version or 0),
         dataset_schema=dataset_schema,
         policies=policies,
+        versions=versions,
+        path_of=path_of,
     )
 
     _record(platform_db, workspace_id, export_id, outcome)
@@ -212,16 +233,16 @@ def _record(platform_db, workspace_id, export_id, outcome) -> None:
     with platform_db.connect_scoped_to(workspace_id) as conn:
         with conn.cursor() as cur:
             # **`run_by` is NULL, and that is the only column that differs from
-            # a manual run.** Nobody pressed this. `duration_ms` and `detail`
-            # are on the result and not in the table — the API's `record` drops
-            # them too, and the two writers must produce the same row or the
-            # history stops being one list.
+            # a manual run.** Nobody pressed this. `duration_ms` is on the
+            # result and not in the table — the API's `record` drops it too, and
+            # the two writers must produce the same row or the history stops
+            # being one list. `detail` is kept by both (§748; db 0145).
             cur.execute(
                 """
                 INSERT INTO export_runs
                     (export_id, status, skipped, dataset_version, rows_written,
-                     error, finished_at, run_by)
-                VALUES (%s, %s, %s, %s, %s, %s, now(), NULL)
+                     error, finished_at, run_by, detail)
+                VALUES (%s, %s, %s, %s, %s, %s, now(), NULL, %s)
                 """,
                 (
                     str(export_id),
@@ -230,6 +251,7 @@ def _record(platform_db, workspace_id, export_id, outcome) -> None:
                     outcome["dataset_version"],
                     outcome["rows_written"],
                     outcome["error"],
+                    outcome.get("detail"),
                 ),
             )
             # The API's condition exactly, including why there is no

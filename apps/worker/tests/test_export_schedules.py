@@ -588,3 +588,89 @@ def test_an_openid_connect_source_is_told_who_it_is_not_given_a_key(
     run_due_exports(_ctx())
     assert handed == [{"oidc_subject": f"connection.{resource}"}]
     assert _runs(eid)
+
+
+# ---- §748: a transactional mode on a schedule --------------------------------
+def _append_a_version(dataset_id, row: tuple) -> None:
+    """v2 as an APPEND (db 0144): v1's rows and one more, written the way a
+    writer would - its own Parquet, a version row saying APPEND."""
+    import duckdb
+
+    from anchor_worker.storage import gateway_from_env
+
+    storage = gateway_from_env()
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        key, schema = conn.execute(
+            "SELECT s3_manifest_key, table_schema FROM dataset_versions "
+            "WHERE dataset_id = %s AND version_number = 1", (dataset_id,)).fetchone()
+        con = duckdb.connect()
+        dest = os.path.join(os.path.dirname(storage.local_path(key)), "v2.parquet")
+        con.execute("CREATE TABLE t AS SELECT * FROM read_parquet(?)", [storage.local_path(key)])
+        con.execute("INSERT INTO t VALUES (?, ?)", list(row))
+        con.execute(f"COPY t TO '{dest}' (FORMAT parquet)")
+        new_key = key.rsplit("/", 2)[0] + "/v2/data.parquet"
+        with open(dest, "rb") as handle:
+            storage.put(new_key, handle.read())
+        conn.execute(
+            "INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key, "
+            "table_schema, row_count, transaction_type) VALUES (%s, 2, %s, %s, 3, 'APPEND')",
+            (dataset_id, new_key, json.dumps(schema)))
+        conn.execute("UPDATE datasets SET current_version = 2, s3_location = %s, row_count = 3 "
+                     "WHERE id = %s", (new_key, dataset_id))
+
+
+def test_a_scheduled_efficient_mirror_sends_only_what_an_append_added(
+    workspace: dict, source_database: dict
+) -> None:
+    """p.195's recommended mode, run by the schedule: the first run clears and
+    sends the view, the next sends the APPEND's one row onto what is there."""
+    cid = _connection(workspace, source_database)
+    dataset = _synced_dataset(workspace, cid)
+    eid = _export(workspace, cid, dataset, mode="efficient_mirror")
+    run_due_exports(_ctx())
+    assert _exported_rows() == [(1, "a"), (2, "b")]
+
+    _append_a_version(dataset, (3, "c"))
+    with psycopg.connect(for_database(ADMIN_DSN, SOURCE_DB), autocommit=True) as conn:
+        conn.execute("INSERT INTO public.exported VALUES (99, 'left by somebody else')")
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE exports SET next_run_at = now() - interval '1 hour' WHERE id = %s",
+                     (eid,))
+    run_due_exports(_ctx())
+    # One row sent, and nothing cleared: the row somebody else left is there.
+    assert _exported_rows() == [(1, "a"), (2, "b"), (3, "c"), (99, "left by somebody else")]
+    runs = _runs(eid)
+    assert [r["rows"] for r in runs] == [2, 1]
+    with psycopg.connect(ADMIN_DSN) as conn:
+        details = [r[0] for r in conn.execute(
+            "SELECT detail FROM export_runs WHERE export_id = %s ORDER BY started_at",
+            (eid,)).fetchall()]
+    assert details == ["cleared the table, then sent the whole view at v1",
+                       "sent the rows v2 added"]
+    assert _export_row(eid)["last_version"] == 2
+
+
+def test_a_scheduled_append_only_export_fails_on_a_new_view(
+    workspace: dict, source_database: dict
+) -> None:
+    """p.196: "failing if there is a SNAPSHOT, UPDATE, or DELETE transaction
+    (after the first run)". A full sync's next version is a SNAPSHOT."""
+    cid = _connection(workspace, source_database)
+    dataset = _synced_dataset(workspace, cid)
+    eid = _export(workspace, cid, dataset, mode="append_only")
+    run_due_exports(_ctx())
+    assert _exported_rows() == [(1, "a"), (2, "b")]
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE connections SET sync_schedule = '* * * * *', sync_next_run_at = NULL "
+                     "WHERE id = %s", (cid,))
+    _synced_dataset(workspace, cid)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE exports SET next_run_at = now() - interval '1 hour' WHERE id = %s",
+                     (eid,))
+    run_due_exports(_ctx())
+    runs = _runs(eid)
+    assert runs[-1]["status"] == "failed"
+    assert runs[-1]["error"].startswith("v2 is a SNAPSHOT transaction")
+    assert _exported_rows() == [(1, "a"), (2, "b")]
+    assert _export_row(eid)["last_version"] == 1

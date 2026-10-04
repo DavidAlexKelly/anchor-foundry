@@ -1,6 +1,6 @@
 # 0020 — Transaction types on dataset versions
 
-**Status:** decided; §747 builds §1–§3, §748 builds §4.
+**Status:** decided and built: §747 built §1–§3, §748 §4.
 **Parity items:** `docs/parity/datasets-lineage.md` §1.3 (History), `data-connection.md` §2 (*Exports*: the four transaction modes decision 0014 §2 left out; *Source exploration*: p.160-161's file-import filter).
 **Source:** `docs/pal/foundry_data-integration.pdf` p.21-26, cited `(p.N)`; `foundry_data-connection.pdf` p.195-196 and p.160-161, cited `(dc p.N)`.
 **Follows:** decision 0014 §2, which named this as "a migration and a decision of its own, not something to smuggle in behind an export dropdown". Decision 0008 (one version per action) is unchanged by it.

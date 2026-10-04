@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 import tempfile
 import time
-from typing import Any
+from typing import Any, Callable
 
 import anyio
 
@@ -54,16 +54,36 @@ async def perform(
     dataset_version: int,
     dataset_schema: list[dict[str, Any]],
     policies: list[dict[str, Any]] | None = None,
+    versions: list[dict[str, Any]] | None = None,
+    path_of: Callable[[int], str | None] | None = None,
 ) -> dict[str, Any]:
     """Write the dataset's current version to the destination, or say why not.
 
     `parquet_path` is None when the version has no stored file — a real state
     (`routes/datasets.py` has the same branch) and a failure rather than a
     crash, because the metadata is true and the bytes are not addressable.
+
+    A transactional mode (§748) also needs every version's
+    `{version_number, transaction_type}` and where each one's bytes are
+    (`path_of(version)`, None for one whose are gone - resolved only for the
+    versions a run sends, since in S3 resolving one is a download): what it
+    sends is `exports.plan`'s, from those.
     """
     started = time.monotonic()
+    mode = export.get("mode")
+    sending = None
+    if export["kind"] == "table" and mode in exports_service.TRANSACTIONAL:
+        sending = exports_service.plan(str(mode), export.get("last_version"), versions or [])
+        if sending.refusal:
+            # p.196's "fail": nothing is written, and the mark stays where it
+            # was, so the table holds exactly what it held.
+            return result(
+                ok=False, dataset_version=dataset_version, error=sending.refusal,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
 
-    if exports_service.should_skip(export.get("mode"), export.get("last_version"), dataset_version):
+    if sending.skip if sending is not None else exports_service.should_skip(
+            mode, export.get("last_version"), dataset_version):
         # p.192's June 2025 behaviour, and the reason it is a *success*: a
         # scheduled export finding nothing new has done its job.
         return result(
@@ -98,9 +118,22 @@ async def perform(
                     duration_ms=int((time.monotonic() - started) * 1000),
                     detail=f"wrote {written}",
                 )
+            if sending is not None:
+                rows = await anyio.to_thread.run_sync(
+                    lambda: _put_plan(
+                        connector, config, secret, export, sending,
+                        path_of or (lambda _version: None), dataset_schema,
+                    )
+                )
+                return result(
+                    ok=True, dataset_version=dataset_version, rows_written=rows,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    detail=exports_service.sent(sending),
+                )
             rows = await anyio.to_thread.run_sync(
                 lambda: _put_rows(
-                    connector, config, secret, export, parquet_path, dataset_schema
+                    connector, config, secret, export, parquet_path, dataset_schema,
+                    truncate=exports_service.truncates(mode),
                 )
             )
             return result(
@@ -148,9 +181,40 @@ def _put_file(
     )
 
 
+def _put_plan(
+    connector, config, secret, export, sending, path_of: Callable[[int], str | None],
+    dataset_schema: list[dict[str, Any]],
+) -> int:
+    """A transactional mode's run (§748): one version's whole view, or the rows
+    the APPENDs since the last run added - computed (`added_rows`), so each
+    needs its own bytes and the version before it."""
+    if sending.whole is not None:
+        path = path_of(sending.whole)
+        if path is None:
+            raise SourceReadError(
+                f"v{sending.whole} has no stored file, so its rows cannot be exported")
+        return _put_rows(connector, config, secret, export, path, dataset_schema,
+                         truncate=sending.truncate)
+    pairs = []
+    for version in sending.added:
+        new, previous = path_of(version), path_of(version - 1)
+        if new is None or previous is None:
+            gone = version if new is None else version - 1
+            raise SourceReadError(
+                f"v{gone} is no longer stored, so the rows v{version} added cannot be told "
+                "apart from the ones before. A mirror export sends the dataset as it is"
+            )
+        pairs.append((version, new, previous))
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = os.path.join(tmp, "added.parquet")
+        dataset_engine.added_rows(pairs, dest)
+        return _put_rows(connector, config, secret, export, dest, dataset_schema,
+                         truncate=sending.truncate)
+
+
 def _put_rows(
     connector, config, secret, export, parquet_path: str,
-    dataset_schema: list[dict[str, Any]],
+    dataset_schema: list[dict[str, Any]], *, truncate: bool,
 ) -> int:
     """p.195's table export: the current view's rows, into an existing table.
 
@@ -192,12 +256,12 @@ def _put_rows(
             return connector.export_rows(
                 config, secret, schema=schema_name, table=table,
                 columns=[str(c["name"]) for c in dataset_schema], csv_path=csv_path,
-                truncate=exports_service.truncates(export.get("mode")),
+                truncate=truncate,
             )
         return connector.export_rows(
             config, secret,
             schema=schema_name, table=table, columns=columns, csv_path=csv_path,
-            truncate=exports_service.truncates(export.get("mode")),
+            truncate=truncate,
         )
 
 
