@@ -169,3 +169,14 @@ def test_only_http_and_https_are_followed() -> None:
 def test_an_ordinary_request_still_goes_out(server: _Server) -> None:
     with safe_http.open_url(f"http://127.0.0.1:{server.port}/", timeout=5) as response:
         assert response.read() == b"ok"
+
+
+@pytest.mark.parametrize("endpoint", ["http://169.254.170.2", "http://[fd00:ec2::254]:80"])
+def test_an_s3_source_cannot_name_a_metadata_address(endpoint: str) -> None:
+    """boto3 makes its own connections, so an S3 source's custom endpoint is
+    checked when its client is built."""
+    from src.services.connectors import ConnectorConfigError, S3Connector
+
+    with pytest.raises(ConnectorConfigError, match="link-local"):
+        S3Connector()._client(
+            {"bucket": "landing", "region": "eu-west-2", "endpoint_url": endpoint}, {})

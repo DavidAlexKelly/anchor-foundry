@@ -536,6 +536,17 @@ class S3Connector:
             ),
         }
         if config.get("endpoint_url"):
+            # A destination somebody typed, held to the source's egress
+            # policy and kept off the metadata addresses, as the API's
+            # client is (§880).
+            parsed = urllib.parse.urlparse(config["endpoint_url"])
+            egress.check_current(
+                parsed.hostname or "", egress.port_for(parsed.scheme, parsed.port)
+            )
+            try:
+                safe_http.check_host(parsed.hostname or "")
+            except safe_http.RefusedDestination as exc:
+                raise ConnectorError(f"endpoint_url: {exc}") from exc
             kwargs["endpoint_url"] = config["endpoint_url"]
         if config.get("oidc_role_arn"):
             # §599, as the API's `_web_identity_credentials`: the platform's
