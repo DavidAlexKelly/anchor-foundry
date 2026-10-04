@@ -262,6 +262,179 @@ def check_implementation(
             )
 
 
+# ---- link constraints (§759; decision 0024) -----------------------------------
+#: A shape's links are fewer than its properties; a ceiling all the same.
+MAX_LINK_CONSTRAINTS = 50
+
+
+def _uuid_text(value: Any, what: str) -> str:
+    try:
+        return str(UUID(str(value)))
+    except ValueError:
+        raise InterfaceError(f"{what} is not an id") from None
+
+
+def parse_link_constraints(raw: Any) -> list[dict[str, Any]]:
+    """An interface's own link constraints, as written (decision 0024 §1).
+
+    > "If the link constraint is between two interfaces … If the link
+    > constraint is between an interface and an object type …"
+    > (action-types p.63)
+
+    So each points at **exactly one** of the two. Named like a link type,
+    since an implementation keeps it with link types.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise InterfaceError("`link_constraints` must be a list")
+    if len(raw) > MAX_LINK_CONSTRAINTS:
+        raise InterfaceError(
+            f"an interface may declare at most {MAX_LINK_CONSTRAINTS} link constraints")
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise InterfaceError("a link constraint must be an object")
+        api = str(item.get("api_name") or "")
+        if not _PROPERTY_API_RE.match(api):
+            raise InterfaceError(f"invalid link constraint api_name {api!r}")
+        if api in seen:
+            raise InterfaceError(f"link constraint {api!r} is declared twice")
+        seen.add(api)
+        to_interface = item.get("target_interface_id") or None
+        to_type = item.get("target_object_type_id") or None
+        if (to_interface is None) == (to_type is None):
+            raise InterfaceError(
+                f"link constraint {api!r} must point at one interface or one object type")
+        out.append({
+            "api_name": api,
+            "display_name": (str(item.get("display_name") or "").strip() or api)[:200],
+            "description": str(item.get("description") or ""),
+            "target_interface_id":
+                _uuid_text(to_interface, f"{api!r}'s interface") if to_interface else None,
+            "target_object_type_id":
+                _uuid_text(to_type, f"{api!r}'s object type") if to_type else None,
+            "required": item.get("required", True) is not False,
+        })
+    return out
+
+
+def effective_link_constraints(
+    interface_id: str,
+    *,
+    own: dict[str, list[dict[str, Any]]],
+    extends: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    """Every link constraint an implementation must keep: its own, then each
+    ancestor's, in `effective_properties`' order and by its rule. A name
+    declared twice is agreement when both point at the same thing, and a
+    contradiction otherwise, refused here rather than when somebody tries to
+    implement both."""
+    seen: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+
+    def walk(current: str, path: list[str]) -> None:
+        if current in path:
+            raise InterfaceError(
+                "interfaces cannot extend each other in a circle: "
+                + " → ".join(path[path.index(current):] + [current]))
+        for link in own.get(current, []):
+            name = str(link["api_name"])
+            existing = seen.get(name)
+            if existing is None:
+                seen[name] = link
+                order.append(name)
+            elif _target(existing) != _target(link):
+                raise InterfaceError(
+                    f"two interfaces in this hierarchy declare the link {name!r} to "
+                    "different targets - no object type could keep both")
+        for parent in extends.get(current, []):
+            walk(parent, [*path, current])
+
+    walk(interface_id, [])
+    return [seen[name] for name in order]
+
+
+def _target(link: dict[str, Any]) -> tuple[str, str]:
+    if link.get("target_interface_id"):
+        return ("interface", str(link["target_interface_id"]))
+    return ("object_type", str(link["target_object_type_id"]))
+
+
+def ancestors(interface_id: str, extends: dict[str, list[str]]) -> set[str]:
+    """The interface and everything it extends, however far up."""
+    out: set[str] = set()
+    stack = [interface_id]
+    while stack:
+        current = stack.pop()
+        if current in out:
+            continue
+        out.add(current)
+        stack.extend(extends.get(current, []))
+    return out
+
+
+def check_link_implementation(
+    *,
+    interface_name: str,
+    required: list[dict[str, Any]],
+    type_id: str,
+    links: dict[str, dict[str, Any]],
+    implements: dict[str, set[str]],
+    names: dict[str, str],
+    mapping: dict[str, list[str]],
+) -> None:
+    """Whether this object type keeps the interface's link constraints
+    (decision 0024 §2).
+
+    `links` is the workspace's link types by id (`api_name`, `from`, `to`),
+    `implements` is `{object type id: every interface it implements, with
+    their ancestors}`, `names` names types and interfaces for the sentences,
+    and `mapping` is `{constraint: [link type id, …]}`.
+
+    A link type keeps a constraint when one of its ends is this type and the
+    other end is the target: that object type, or a type implementing that
+    interface. p.64 allows several per constraint ("multiple concrete link
+    implementations").
+    """
+    declared = {str(c["api_name"]): c for c in required}
+    unknown = sorted(set(mapping) - set(declared))
+    if unknown:
+        raise InterfaceError(f"{interface_name} declares no link " + ", ".join(unknown))
+    for name, constraint in declared.items():
+        chosen = mapping.get(name) or []
+        if not chosen:
+            if constraint.get("required", True):
+                raise InterfaceError(
+                    f"{interface_name} requires the link {name!r} and this object type "
+                    "keeps it with none of its link types")
+            continue
+        if len(set(chosen)) != len(chosen):
+            raise InterfaceError(f"the link {name!r} lists one link type twice")
+        kind, target = _target(constraint)
+        for link_id in chosen:
+            link = links.get(link_id)
+            if link is None:
+                raise InterfaceError(
+                    f"the link {name!r} names a link type this workspace does not have")
+            ends = (str(link["from"]), str(link["to"]))
+            if type_id not in ends:
+                raise InterfaceError(
+                    f"{link['api_name']} does not link this object type, so it cannot "
+                    f"keep {name!r}")
+            other = ends[1] if ends[0] == type_id else ends[0]
+            if kind == "object_type" and other != target:
+                raise InterfaceError(
+                    f"{link['api_name']} links to {names.get(other, other)}, and {name!r} "
+                    f"links to {names.get(target, target)}")
+            if kind == "interface" and target not in implements.get(other, set()):
+                raise InterfaceError(
+                    f"{link['api_name']} links to {names.get(other, other)}, which does not "
+                    f"implement {names.get(target, target)} - {name!r} links to that "
+                    "interface's objects")
+
+
 def parse_properties(raw: Any) -> list[dict[str, Any]]:
     """Normalise and check an interface's own property list.
 
@@ -391,6 +564,36 @@ async def _graph(
     return own, extends
 
 
+async def _link_graph(
+    conn: AsyncConnection, workspace_id: UUID
+) -> dict[str, list[dict[str, Any]]]:
+    """Every interface's own link constraints, in one read (§759)."""
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT c.interface_id, c.api_name, c.display_name, c.description,
+               c.target_interface_id, c.target_object_type_id, c.required
+          FROM interface_link_constraints c
+          JOIN interfaces i ON i.id = c.interface_id
+         WHERE i.workspace_id = :wid
+         ORDER BY c.sort_order, c.api_name
+        """,
+        {"wid": str(workspace_id)},
+    )
+    own: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        own.setdefault(str(row["interface_id"]), []).append({
+            "api_name": row["api_name"], "display_name": row["display_name"],
+            "description": row["description"],
+            "target_interface_id":
+                str(row["target_interface_id"]) if row["target_interface_id"] else None,
+            "target_object_type_id":
+                str(row["target_object_type_id"]) if row["target_object_type_id"] else None,
+            "required": row["required"],
+        })
+    return own
+
+
 async def get_interface(
     conn: AsyncConnection, workspace_id: UUID, interface_id: UUID
 ) -> dict[str, Any]:
@@ -421,6 +624,11 @@ async def get_interface(
     out["effective_properties"] = effective_properties(
         str(interface_id), own=own, extends=extends
     )
+    links = await _link_graph(conn, workspace_id)
+    out["link_constraints"] = links.get(str(interface_id), [])
+    out["effective_link_constraints"] = effective_link_constraints(
+        str(interface_id), own=links, extends=extends
+    )
     return out
 
 
@@ -444,7 +652,7 @@ async def implementations_of(
     rows = await fetch_all(
         conn,
         """
-        SELECT oti.object_type_id, oti.property_mapping,
+        SELECT oti.object_type_id, oti.property_mapping, oti.link_mapping,
                ot.api_name, ot.display_name
           FROM object_type_interfaces oti
           JOIN object_types ot ON ot.id = oti.object_type_id
@@ -465,6 +673,7 @@ async def implementations_of(
                 "property_mapping": (
                     json.loads(mapping) if isinstance(mapping, str) else mapping
                 ) or {},
+                "link_mapping": _jsonb(row["link_mapping"]),
             }
         )
     return out
@@ -490,7 +699,7 @@ async def implementations_by_type(
     rows = await fetch_all(
         conn,
         """
-        SELECT oti.object_type_id, oti.interface_id, oti.property_mapping,
+        SELECT oti.object_type_id, oti.interface_id, oti.property_mapping, oti.link_mapping,
                i.api_name, i.display_name
           FROM object_type_interfaces oti
           JOIN interfaces i ON i.id = oti.interface_id
@@ -512,9 +721,32 @@ async def implementations_by_type(
                 "property_mapping": (
                     json.loads(mapping) if isinstance(mapping, str) else mapping
                 ) or {},
+                "link_mapping": _jsonb(row["link_mapping"]),
             }
         )
     return out
+
+
+def _link_mapping_of(raw: Any) -> dict[str, list[str]]:
+    """`{constraint: [link type id, …]}` as an entry gives it, read
+    defensively; a constraint with an empty list is left out, as an unmapped
+    property is."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise InterfaceError("a link mapping must be an object")
+    out: dict[str, list[str]] = {}
+    for key, value in raw.items():
+        if not isinstance(value, list):
+            raise InterfaceError(f"the link {key!r} must list link types")
+        ids = [_uuid_text(v, f"a link type of {key!r}") for v in value if v]
+        if ids:
+            out[str(key)] = ids
+    return out
+
+
+def _jsonb(value: Any) -> dict[str, Any]:
+    return (json.loads(value) if isinstance(value, str) else value) or {}
 
 
 # ---- writing ----------------------------------------------------------------
@@ -527,6 +759,7 @@ async def create_interface(
     description: str = "",
     properties: Any = None,
     extends: list[UUID] | None = None,
+    link_constraints: Any = None,
     status: str = ontology_status.DEFAULT_STATUS,
     deprecation: Any = None,
     created_by: UUID,
@@ -547,6 +780,7 @@ async def create_interface(
     if not display_name.strip():
         raise InterfaceError("an interface needs a display name")
     parsed = parse_properties(properties or [])
+    links = parse_link_constraints(link_constraints)
     status = ontology_status.check_status(status, kind="interface")
     note = ontology_status.parse_deprecation(deprecation, status)
 
@@ -574,7 +808,7 @@ async def create_interface(
     )
     assert row is not None
     interface_id = UUID(str(row["id"]))
-    await _write_shape(conn, workspace_id, interface_id, parsed, extends or [])
+    await _write_shape(conn, workspace_id, interface_id, parsed, extends or [], links)
     return await get_interface(conn, workspace_id, interface_id)
 
 
@@ -587,6 +821,7 @@ async def update_interface(
     description: str = "",
     properties: Any = None,
     extends: list[UUID] | None = None,
+    link_constraints: Any = None,
     status: str | None = None,
     deprecation: Any = None,
 ) -> dict[str, Any]:
@@ -610,6 +845,9 @@ async def update_interface(
     if not display_name.strip():
         raise InterfaceError("an interface needs a display name")
     parsed = parse_properties(properties or [])
+    # Omitted is unchanged (§759): the stored ones, written back as they were.
+    links = parse_link_constraints(
+        current["link_constraints"] if link_constraints is None else link_constraints)
     next_status = ontology_status.check_status(
         str(status or current["status"]), kind="interface"
     )
@@ -628,7 +866,7 @@ async def update_interface(
          "status": next_status,
          "depr": json.dumps(note) if note is not None else None},
     )
-    await _write_shape(conn, workspace_id, interface_id, parsed, extends or [])
+    await _write_shape(conn, workspace_id, interface_id, parsed, extends or [], links)
     return await get_interface(conn, workspace_id, interface_id)
 
 
@@ -638,6 +876,7 @@ async def _write_shape(
     interface_id: UUID,
     properties: list[dict[str, Any]],
     extends: list[UUID],
+    links: list[dict[str, Any]],
 ) -> None:
     """The properties and the parents, written whole and then checked together.
 
@@ -656,7 +895,7 @@ async def _write_shape(
         raise InterfaceError(
             f"an interface may extend at most {MAX_EXTENDS} others"
         )
-    for table in ("interface_properties", "interface_extends"):
+    for table in ("interface_properties", "interface_extends", "interface_link_constraints"):
         await conn.execute(
             text(f"DELETE FROM {table} WHERE interface_id = :iid"),
             {"iid": str(interface_id)},
@@ -675,6 +914,34 @@ async def _write_shape(
             {"iid": str(interface_id), "api": prop["api_name"],
              "name": prop["display_name"], "descr": prop["description"],
              "dtype": prop["data_type"], "req": prop["required"], "ord": order},
+        )
+    for order, link in enumerate(links):
+        # The target is this workspace's, or nothing: an id from elsewhere
+        # reads as absent under row security, and is named as such.
+        if link["target_interface_id"]:
+            found = await fetch_one(
+                conn, "SELECT 1 AS x FROM interfaces WHERE id = :id AND workspace_id = :wid",
+                {"id": link["target_interface_id"], "wid": str(workspace_id)})
+        else:
+            found = await fetch_one(
+                conn, "SELECT 1 AS x FROM object_types WHERE id = :id AND workspace_id = :wid",
+                {"id": link["target_object_type_id"], "wid": str(workspace_id)})
+        if found is None:
+            raise InterfaceError(
+                f"link constraint {link['api_name']!r} points at something this "
+                "workspace does not have")
+        await conn.execute(
+            text(
+                """
+                INSERT INTO interface_link_constraints
+                    (interface_id, api_name, display_name, description,
+                     target_interface_id, target_object_type_id, required, sort_order)
+                VALUES (:iid, :api, :name, :descr, :ti, :tt, :req, :ord)
+                """
+            ),
+            {"iid": str(interface_id), "api": link["api_name"], "name": link["display_name"],
+             "descr": link["description"], "ti": link["target_interface_id"],
+             "tt": link["target_object_type_id"], "req": link["required"], "ord": order},
         )
     for parent in dict.fromkeys(extends):
         if str(parent) == str(interface_id):
@@ -722,12 +989,16 @@ async def delete_interface(
         SELECT i.display_name FROM interface_extends e
           JOIN interfaces i ON i.id = e.interface_id
          WHERE e.extends_id = :iid
+         UNION ALL
+        SELECT i.display_name FROM interface_link_constraints c
+          JOIN interfaces i ON i.id = c.interface_id
+         WHERE c.target_interface_id = :iid AND c.interface_id <> :iid
         """,
         {"iid": str(interface_id)},
     )
     if users:
         raise InterfaceError(
-            "this interface is implemented or extended by "
+            "this interface is implemented, extended or linked to by "
             + ", ".join(sorted(str(r["name"]) for r in users))
             + " - change those first"
         )
@@ -772,7 +1043,7 @@ async def set_implementations(
     }
     own, graph = await _graph(conn, workspace_id)
 
-    checked: list[tuple[UUID, dict[str, str]]] = []
+    checked: list[tuple[UUID, dict[str, str], dict[str, list[str]], str]] = []
     seen: set[str] = set()
     for entry in entries:
         interface_id = UUID(str(entry["interface_id"]))
@@ -797,23 +1068,77 @@ async def set_implementations(
             property_types=property_types,
             mapping=mapping,
         )
-        checked.append((interface_id, mapping))
+        link_raw = entry.get("link_mapping")
+        if link_raw is None:
+            # Omitted is as stored (§759), for a client that predates links.
+            stored = await fetch_one(
+                conn,
+                "SELECT link_mapping FROM object_type_interfaces "
+                "WHERE object_type_id = :tid AND interface_id = :iid",
+                {"tid": str(object_type_id), "iid": str(interface_id)},
+            )
+            link_raw = _jsonb(stored["link_mapping"]) if stored else {}
+        checked.append((interface_id, mapping, _link_mapping_of(link_raw),
+                        str(interface["display_name"])))
+
+    # The link constraints (§759; decision 0024 §2), checked once every entry
+    # is known: a link back to this type is kept by what it implements *now*.
+    link_own = await _link_graph(conn, workspace_id)
+    if any(link_map for _, _, link_map, _ in checked) or link_own:
+        link_rows = await fetch_all(
+            conn,
+            "SELECT id, api_name, from_object_type_id, to_object_type_id "
+            "FROM link_types WHERE workspace_id = :wid",
+            {"wid": str(workspace_id)},
+        )
+        links = {str(r["id"]): {"api_name": r["api_name"], "from": str(r["from_object_type_id"]),
+                                "to": str(r["to_object_type_id"])} for r in link_rows}
+        others = await fetch_all(
+            conn,
+            """
+            SELECT oti.object_type_id, oti.interface_id FROM object_type_interfaces oti
+              JOIN interfaces i ON i.id = oti.interface_id
+             WHERE i.workspace_id = :wid AND oti.object_type_id <> :tid
+            """,
+            {"wid": str(workspace_id), "tid": str(object_type_id)},
+        )
+        implements: dict[str, set[str]] = {}
+        for row in others:
+            implements.setdefault(str(row["object_type_id"]), set()).update(
+                ancestors(str(row["interface_id"]), graph))
+        implements[str(object_type_id)] = set().union(
+            *(ancestors(str(iid), graph) for iid, _, _, _ in checked))
+        named = await fetch_all(
+            conn,
+            "SELECT id, display_name FROM object_types WHERE workspace_id = :wid "
+            "UNION ALL SELECT id, display_name FROM interfaces WHERE workspace_id = :wid",
+            {"wid": str(workspace_id)},
+        )
+        names = {str(r["id"]): str(r["display_name"]) for r in named}
+        for interface_id, _, link_map, name in checked:
+            check_link_implementation(
+                interface_name=name,
+                required=effective_link_constraints(
+                    str(interface_id), own=link_own, extends=graph),
+                type_id=str(object_type_id), links=links, implements=implements,
+                names=names, mapping=link_map,
+            )
 
     await conn.execute(
         text("DELETE FROM object_type_interfaces WHERE object_type_id = :tid"),
         {"tid": str(object_type_id)},
     )
-    for interface_id, mapping in checked:
+    for interface_id, mapping, link_map, _ in checked:
         await conn.execute(
             text(
                 """
                 INSERT INTO object_type_interfaces
-                    (object_type_id, interface_id, property_mapping, created_by)
-                VALUES (:tid, :iid, CAST(:map AS jsonb), :by)
+                    (object_type_id, interface_id, property_mapping, link_mapping, created_by)
+                VALUES (:tid, :iid, CAST(:map AS jsonb), CAST(:links AS jsonb), :by)
                 """
             ),
             {"tid": str(object_type_id), "iid": str(interface_id),
-             "map": json.dumps(mapping), "by": str(created_by)},
+             "map": json.dumps(mapping), "links": json.dumps(link_map), "by": str(created_by)},
         )
     by_type = await implementations_by_type(conn, workspace_id)
     return by_type.get(str(object_type_id), [])

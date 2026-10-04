@@ -2587,6 +2587,18 @@ export interface InterfaceProperty {
   required: boolean;
 }
 
+/** A link an interface promises (§759; decision 0024; `action-types` p.63):
+ * to another interface's objects, or to one object type's. Exactly one of the
+ * two targets is set. */
+export interface InterfaceLinkConstraint {
+  api_name: string;
+  display_name: string;
+  description: string;
+  target_interface_id: string | null;
+  target_object_type_id: string | null;
+  required: boolean;
+}
+
 export interface InterfaceDetail extends InterfaceSummary {
   properties: InterfaceProperty[];
   /** p.53: "interfaces may extend any number of other interfaces". */
@@ -2594,6 +2606,9 @@ export interface InterfaceDetail extends InterfaceSummary {
   /** Own plus inherited, resolved by the server because it is the server that
    * refuses an implementation. */
   effective_properties: InterfaceProperty[];
+  /** Its link constraints, and with every ancestor's (§759). */
+  link_constraints: InterfaceLinkConstraint[];
+  effective_link_constraints: InterfaceLinkConstraint[];
   /** The object types that implement it (§453). On the detail rather than the
    * summary, where `implementation_count` lives: a listing wants how many, and
    * only somebody looking at one interface wants which. `action-types` p.60's
@@ -2628,6 +2643,9 @@ export interface Implementation {
   api_name: string;
   display_name: string;
   property_mapping: Record<string, string>;
+  /** `{link constraint: [link type id, …]}` (§759): p.64's "concrete link
+   * implementations". */
+  link_mapping: Record<string, string[]>;
 }
 
 /** One object of an interface set (Foundry `ontology` p.61 — "target the

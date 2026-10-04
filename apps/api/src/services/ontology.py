@@ -1265,6 +1265,26 @@ async def delete_type(conn: AsyncConnection, workspace_id: UUID, type_id: UUID) 
             + ". Change those parameters first, or delete the action."
         )
 
+    # **An interface's link constraint pointing at it** (§759): the database
+    # holds that reference (db 0148) and would refuse in a sentence nobody
+    # could use, so it is asked here in one they can.
+    targeted = await fetch_all(
+        conn,
+        """
+        SELECT i.display_name AS interface, c.api_name AS link
+          FROM interface_link_constraints c JOIN interfaces i ON i.id = c.interface_id
+         WHERE c.target_object_type_id = :tid
+         ORDER BY i.display_name, c.api_name
+        """,
+        {"tid": str(type_id)},
+    )
+    if targeted:
+        raise ConflictError(
+            f"{existing['api_name']!r} cannot be deleted while an interface links to it: "
+            + ", ".join(f"{r['interface']}.{r['link']}" for r in targeted)
+            + ". Change those link constraints first."
+        )
+
     await fetch_one(
         conn, "DELETE FROM object_types WHERE id = :tid RETURNING id", {"tid": str(type_id)}
     )
@@ -2752,6 +2772,30 @@ async def delete_link_type(conn: AsyncConnection, workspace_id: UUID, link_id: U
             "parameter follows it: "
             + actions_service.pointing_at_detail(pointing)
             + ". Change the walk first, or delete the action."
+        )
+
+    # **An implementation keeping an interface's link with it** (§759): held
+    # in jsonb, so nothing else would stop this delete, and the next save of
+    # that implementation would be refused for a link type that is gone.
+    keeping = await fetch_all(
+        conn,
+        """
+        SELECT ot.display_name AS type, i.display_name AS interface, m.key AS link
+          FROM object_type_interfaces oti
+          JOIN object_types ot ON ot.id = oti.object_type_id
+          JOIN interfaces i ON i.id = oti.interface_id
+          CROSS JOIN LATERAL jsonb_each(oti.link_mapping) m
+         WHERE i.workspace_id = :wid
+           AND m.value @> jsonb_build_array(CAST(:lid AS text))
+         ORDER BY ot.display_name, i.display_name, m.key
+        """,
+        {"wid": str(workspace_id), "lid": str(link_id)},
+    )
+    if keeping:
+        raise ConflictError(
+            f"{existing['api_name']!r} cannot be deleted while it keeps an interface's link: "
+            + ", ".join(f"{r['type']} for {r['interface']}.{r['link']}" for r in keeping)
+            + ". Change those implementations first."
         )
 
     row = await fetch_one(
