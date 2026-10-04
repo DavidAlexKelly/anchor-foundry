@@ -158,8 +158,10 @@ async def update(
 
 async def delete(conn: AsyncConnection, workspace_id: UUID) -> None:
     # FK cascades remove members/projects/resources. The ws_* pg schema and
-    # S3 prefix are cleaned up by an async worker job, not inline - dropping
-    # customer data synchronously in a request is deliberately avoided.
+    # S3 prefix are cleaned up by the nightly worker job (jobs/cleanup.py), not
+    # inline - dropping customer data synchronously in a request is
+    # deliberately avoided. The files only since §864: the row's deletion
+    # leaves a tombstone naming the prefix (db 0164), which the job reads.
     # Flagged for review: spec is silent on deletion semantics; conservative
     # choice is soft-latency cleanup with the row removal as the commit point.
     result = await fetch_one(
