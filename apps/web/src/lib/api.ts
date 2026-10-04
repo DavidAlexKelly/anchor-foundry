@@ -2170,6 +2170,29 @@ export const objects = {
       `/workspaces/${wid}/object-types/${typeId}/interfaces`,
       { method: "PUT", body: JSON.stringify(body) },
     ),
+  /** Functions (decision 0018, option B; §768). */
+  listFunctions: (wid: string) =>
+    request<import("./types").FunctionSummary[]>(`/workspaces/${wid}/functions`),
+  getFunction: (wid: string, id: string) =>
+    request<import("./types").FunctionDetail>(`/workspaces/${wid}/functions/${id}`),
+  createFunction: (wid: string, body: {
+    api_name: string; display_name: string; description: string;
+    version: Record<string, unknown>;
+  }) =>
+    request<import("./types").FunctionDetail>(`/workspaces/${wid}/functions`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  addFunctionVersion: (wid: string, id: string, version: Record<string, unknown>) =>
+    request<import("./types").FunctionDetail>(`/workspaces/${wid}/functions/${id}/versions`, {
+      method: "POST", body: JSON.stringify(version),
+    }),
+  deleteFunction: (wid: string, id: string) =>
+    request<void>(`/workspaces/${wid}/functions/${id}`, { method: "DELETE" }),
+  executeFunction: (wid: string, id: string, values: Record<string, unknown>,
+                    version?: string | null) =>
+    request<import("./types").FunctionResult>(`/workspaces/${wid}/functions/${id}/execute`, {
+      method: "POST", body: JSON.stringify({ values, version: version ?? null }),
+    }),
   /** p.255's proposals to promote an object type (§767). */
   promotionRequests: (wid: string, pendingOnly = true) =>
     request<import("./types").PromotionRequest[]>(
