@@ -6,6 +6,8 @@ Flow:
   2. Run `cdk deploy` for the customer stack with the temporary credentials.
   3. Poll CloudFormation until CREATE_COMPLETE / UPDATE_COMPLETE.
   4. Record stack outputs in the registry and mark the customer READY.
+  5. Create the platform's first owner, from the organisation and address the
+     customer gave at onboarding (§886).
 
 Updates (spec §6): push new image tags to ECR happens in CI; this module's
 `update_stack` re-deploys with the new imageTag context, which produces a
@@ -17,10 +19,14 @@ logic is unit-testable without AWS.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -443,6 +449,53 @@ class SubprocessCdkRunner:
             raise RuntimeError(f"cdk deploy exited with {result.returncode}")
 
 
+class FirstOwnerGateway(Protocol):
+    def create(self, platform_url: str, token: str, body: dict[str, str]) -> bool:
+        """True when the owner was created, False when the platform already
+        had one. Raises when neither could be established."""
+
+
+class HttpFirstOwner:
+    """`POST /api/bootstrap/first-owner` on the stack, with its token (§886).
+
+    Asked again for a few minutes on anything that waiting could fix: a
+    stack that CloudFormation calls complete may still be bringing up its
+    distribution or its tasks. A refusal that waiting cannot fix (a wrong
+    token, a body the API will not take) is raised at once."""
+
+    def __init__(self, attempts: int = 10, wait_s: float = 30.0, timeout_s: float = 20.0) -> None:
+        self._attempts = attempts
+        self._wait = wait_s
+        self._timeout = timeout_s
+
+    def create(self, platform_url: str, token: str, body: dict[str, str]) -> bool:
+        url = f"{platform_url.rstrip('/')}/api/bootstrap/first-owner"
+        last: Exception | None = None
+        for attempt in range(self._attempts):
+            if attempt:
+                time.sleep(self._wait)
+            request = urllib.request.Request(
+                url, data=json.dumps(body).encode(), method="POST",
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self._timeout):
+                    return True
+            except urllib.error.HTTPError as exc:
+                if exc.code == 409:
+                    return False
+                if exc.code in (400, 401, 403, 422):
+                    raise RuntimeError(f"{url} refused the first owner (HTTP {exc.code})") from exc
+                last = exc
+            except (urllib.error.URLError, OSError) as exc:
+                last = exc
+        raise RuntimeError(f"could not reach {url}: {last}")
+
+
+def token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 class Provisioner:
     def __init__(
         self,
@@ -452,6 +505,7 @@ class Provisioner:
         vendor_ecr_registry: str,
         poll_interval_s: float = 15.0,
         poll_timeout_s: float = 1800.0,
+        first_owner: FirstOwnerGateway | None = None,
     ) -> None:
         self._registry = registry
         self._aws = aws
@@ -459,6 +513,7 @@ class Provisioner:
         self._vendor_ecr = vendor_ecr_registry
         self._poll_interval = poll_interval_s
         self._poll_timeout = poll_timeout_s
+        self._first_owner = first_owner or HttpFirstOwner()
 
     # -------------------------------------------------------------------------
     def provision(self, org_slug: str, image_tag: str) -> dict[str, str]:
@@ -504,6 +559,9 @@ class Provisioner:
                     "vendorEcrRegistry": self._vendor_ecr,
                     "imageTag": image_tag,
                     "region": record.aws_region,
+                    # Every deploy, the same hash: a deploy without it would
+                    # open the setup page to whoever finds it first (§886).
+                    "bootstrapTokenHash": token_hash(self._registry.bootstrap_token_for(org_slug)),
                 },
             )
             self._poll_until_stable(creds, record.aws_region)
@@ -516,11 +574,46 @@ class Provisioner:
                 outputs=outputs,
             )
             logger.info("stack %s for %s is READY at version %s", STACK_NAME, org_slug, image_tag)
+            self.invite_owner(org_slug)
             return outputs
         except Exception:
             self._registry.set_status(org_slug, StackStatus.FAILED)
             logger.exception("deployment failed for %s", org_slug)
             raise
+
+    def invite_owner(self, org_slug: str) -> bool:
+        """Create the platform's first owner, from what the customer gave at
+        onboarding, if it has none yet (§886; roadmap E.28).
+
+        The stack takes its first owner only from the holder of the token
+        whose hash it was deployed with, which is this. Until §886 it took one
+        from whoever reached its setup page first, and the stack is public
+        from the moment it is deployed. Cognito emails the owner an
+        invitation; the onboarding page says so.
+
+        Never raises: the stack is ready either way, and the next deploy, or
+        `cli.py invite-owner`, asks again. Returns whether an owner exists."""
+        record = self._registry.get(org_slug)
+        if record.owner_invited_at is not None:
+            return True
+        if not (record.platform_url and record.contact_email and record.org_name):
+            logger.warning("no first owner for %s: the registry lacks its address or details", org_slug)
+            return False
+        body = {
+            "organisation_name": record.org_name,
+            "organisation_slug": org_slug,
+            "owner_email": record.contact_email,
+            "owner_display_name": record.contact_email.split("@", 1)[0][:120] or record.org_name,
+        }
+        try:
+            created = self._first_owner.create(
+                record.platform_url, self._registry.bootstrap_token_for(org_slug), body)
+        except Exception:
+            logger.exception("could not create the first owner for %s", org_slug)
+            return False
+        self._registry.mark_owner_invited(org_slug)
+        logger.info("first owner for %s %s", org_slug, "invited" if created else "already existed")
+        return True
 
     def _poll_until_stable(self, creds: TempCredentials, region: str) -> None:
         """Poll CloudFormation until a terminal state (spec §6: 'polls for

@@ -296,3 +296,140 @@ def test_updater_respects_version_pinning(registry: StackRegistry) -> None:
     # No-op when already at target.
     res = upd.update_customer(s, "v1.1.0")
     assert not res.updated and res.reason == "already at target version"
+
+
+# ---- the first owner, made by the provisioner (§886) ---------------------------
+class FakeFirstOwner:
+    def __init__(self, answers: list[object] | None = None) -> None:
+        self.calls: list[tuple[str, str, dict[str, str]]] = []
+        self.answers = answers or [True]
+
+    def create(self, platform_url: str, token: str, body: dict[str, str]) -> bool:
+        self.calls.append((platform_url, token, body))
+        answer = self.answers.pop(0) if self.answers else True
+        if isinstance(answer, Exception):
+            raise answer
+        return bool(answer)
+
+
+def _onboarded(registry: StackRegistry) -> str:
+    s = slug()
+    registry.register_customer(s)
+    registry.set_onboarding(s, org_name="Acme Ltd", contact_email="jane.doe@acme.example",
+                            token_hash=uuid.uuid4().hex)
+    registry.connect_aws(s, "123456789012", "eu-west-2", "arn:aws:iam::123456789012:role/platform-bootstrap")
+    return s
+
+
+def test_every_deploy_hands_the_stack_the_same_token_hash(registry: StackRegistry) -> None:
+    import hashlib
+
+    s = _onboarded(registry)
+    cdk = FakeCdk()
+    prov = Provisioner(registry, FakeAws(), cdk, "r", poll_interval_s=0.0, first_owner=FakeFirstOwner())
+    prov.provision(s, "v1")
+    prov.update_stack(s, "v2")
+    token = registry.bootstrap_token_for(s)
+    hashes = [d["bootstrapTokenHash"] for d in cdk.deploys]
+    assert hashes == [hashlib.sha256(token.encode()).hexdigest()] * 2
+    # Never the token itself: the template is readable in the customer's account.
+    assert all(token not in str(d) for d in cdk.deploys)
+
+
+def test_a_ready_stack_gets_its_first_owner_from_onboarding(registry: StackRegistry) -> None:
+    s = _onboarded(registry)
+    owner = FakeFirstOwner()
+    prov = Provisioner(registry, FakeAws(), FakeCdk(), "r", poll_interval_s=0.0, first_owner=owner)
+    prov.provision(s, "v1")
+    ((url, token, body),) = owner.calls
+    assert url == "https://dxxx.cloudfront.net"
+    assert token == registry.bootstrap_token_for(s)
+    assert body == {"organisation_name": "Acme Ltd", "organisation_slug": s,
+                    "owner_email": "jane.doe@acme.example", "owner_display_name": "jane.doe"}
+    assert registry.get(s).owner_invited_at is not None
+    # Once is enough: a later deploy does not ask again.
+    prov.update_stack(s, "v2")
+    assert len(owner.calls) == 1
+
+
+def test_a_failed_invitation_leaves_the_stack_ready_and_is_asked_again(registry: StackRegistry) -> None:
+    s = _onboarded(registry)
+    owner = FakeFirstOwner([RuntimeError("could not reach it"), True])
+    prov = Provisioner(registry, FakeAws(), FakeCdk(), "r", poll_interval_s=0.0, first_owner=owner)
+    prov.provision(s, "v1")
+    record = registry.get(s)
+    assert record.stack_status is StackStatus.READY and record.owner_invited_at is None
+    assert prov.invite_owner(s) is True
+    assert registry.get(s).owner_invited_at is not None
+
+
+class _Stack:
+    """A loopback stand-in for a stack's API, answering each request with the
+    next status in `answers`."""
+
+    def __init__(self, answers: list[int]) -> None:
+        import http.server
+        import threading
+
+        self.answers = answers
+        self.seen: list[tuple[str, dict]] = []
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                import json as _json
+
+                length = int(self.headers.get("Content-Length", "0"))
+                outer.seen.append((self.headers.get("Authorization", ""),
+                                   _json.loads(self.rfile.read(length))))
+                self.send_response(outer.answers.pop(0))
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *args) -> None:
+                pass
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.httpd.shutdown()
+
+
+@pytest.fixture()
+def no_proxy(monkeypatch) -> None:
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "getproxies", lambda: {})
+
+
+@pytest.mark.parametrize("answers, created, asked", [
+    ([201], True, 1),
+    ([409], False, 1),             # an owner already: done, not an error
+    ([503, 502, 201], True, 3),    # a stack still coming up: asked again
+])
+def test_the_stacks_answer_decides_the_outcome(no_proxy, answers, created, asked) -> None:
+    from src.provisioner.provisioner import HttpFirstOwner
+
+    stack = _Stack(list(answers))
+    try:
+        got = HttpFirstOwner(attempts=5, wait_s=0.0, timeout_s=5).create(
+            stack.url, "the-token", {"organisation_slug": "acme"})
+    finally:
+        stack.close()
+    assert got is created and len(stack.seen) == asked
+    assert stack.seen[0] == ("Bearer the-token", {"organisation_slug": "acme"})
+
+
+def test_a_refusal_waiting_cannot_fix_is_raised_at_once(no_proxy) -> None:
+    from src.provisioner.provisioner import HttpFirstOwner
+
+    stack = _Stack([401, 201])
+    try:
+        with pytest.raises(RuntimeError, match="HTTP 401"):
+            HttpFirstOwner(attempts=5, wait_s=0.0, timeout_s=5).create(stack.url, "t", {})
+    finally:
+        stack.close()
+    assert len(stack.seen) == 1

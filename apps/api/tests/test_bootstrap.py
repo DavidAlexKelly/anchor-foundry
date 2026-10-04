@@ -41,7 +41,7 @@ MIGRATE_PY = REPO_ROOT / "packages" / "db" / "migrate.py"
 def test_status_is_false_once_any_organisation_exists(client: TestClient, fx: Fixture) -> None:
     r = client.get("/api/bootstrap/status")
     assert r.status_code == 200
-    assert r.json() == {"needs_setup": False}
+    assert r.json()["needs_setup"] is False
 
 
 def test_first_owner_conflicts_once_platform_is_set_up(
@@ -181,7 +181,7 @@ def scratch_client(monkeypatch: pytest.MonkeyPatch, scratch_dsns: dict[str, str]
 def test_full_bootstrap_flow_on_empty_platform(scratch_client: TestClient) -> None:
     r = scratch_client.get("/api/bootstrap/status")
     assert r.status_code == 200
-    assert r.json() == {"needs_setup": True}
+    assert r.json()["needs_setup"] is True
 
     r = scratch_client.post(
         "/api/bootstrap/first-owner",
@@ -197,7 +197,7 @@ def test_full_bootstrap_flow_on_empty_platform(scratch_client: TestClient) -> No
     assert uuid.UUID(org_id)
 
     r = scratch_client.get("/api/bootstrap/status")
-    assert r.json() == {"needs_setup": False}
+    assert r.json()["needs_setup"] is False
 
     r = scratch_client.post(
         "/api/bootstrap/first-owner",
@@ -208,4 +208,53 @@ def test_full_bootstrap_flow_on_empty_platform(scratch_client: TestClient) -> No
             "owner_display_name": "Owner Two",
         },
     )
+    assert r.status_code == 409
+
+
+# ---- a stack set up by its provisioner (§886) ---------------------------------
+FIRST_OWNER = {
+    "organisation_name": "Squatter",
+    "organisation_slug": "squatter",
+    "owner_email": "squatter@example.com",
+    "owner_display_name": "Squatter",
+}
+
+
+def test_with_a_provisioner_token_only_its_holder_may_name_the_owner(
+    client: TestClient, fx: Fixture, monkeypatch
+) -> None:
+    """Whoever found a new stack's address before its customer could make
+    themselves its owner (roadmap E.28). Where the provisioner has set a
+    token's hash, a request without that token is refused before anything
+    else is asked - and with it, the request is the ordinary one (here, a
+    platform already set up)."""
+    import hashlib
+
+    asked: list[str] = []
+
+    class Recording(NullCognitoGateway):
+        def admin_create_user(self, email: str, display_name: str) -> str:
+            asked.append(email)
+            return super().admin_create_user(email, display_name)
+
+    monkeypatch.setattr(bootstrap_routes, "_cognito", Recording())
+    monkeypatch.setenv("BOOTSTRAP_TOKEN_SHA256", hashlib.sha256(b"the-provisioners").hexdigest())
+
+    assert client.get("/api/bootstrap/status").json()["by_provisioner"] is True
+    for headers in ({}, {"Authorization": "Bearer guessed"}, {"Authorization": "Bearer "}):
+        r = client.post("/api/bootstrap/first-owner", json=FIRST_OWNER, headers=headers)
+        assert r.status_code == 401, headers
+        assert "set up by its provider" in r.json()["detail"]
+    r = client.post("/api/bootstrap/first-owner", json=FIRST_OWNER,
+                    headers={"Authorization": "Bearer the-provisioners"})
+    assert r.status_code == 409  # past the token, to the platform's own answer
+    assert asked == []
+
+
+def test_without_one_the_setup_page_works_as_before(client: TestClient, fx: Fixture,
+                                                     monkeypatch) -> None:
+    monkeypatch.delenv("BOOTSTRAP_TOKEN_SHA256", raising=False)
+    assert client.get("/api/bootstrap/status").json() == {
+        "needs_setup": False, "by_provisioner": False}
+    r = client.post("/api/bootstrap/first-owner", json=FIRST_OWNER)
     assert r.status_code == 409

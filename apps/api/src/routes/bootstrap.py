@@ -10,9 +10,12 @@ yet to hold one.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
 from ..lib.db import get_engine
@@ -32,6 +35,39 @@ def configure_cognito_gateway(gateway: CognitoAdminGateway) -> None:
 
 class BootstrapStatus(BaseModel):
     needs_setup: bool
+    #: Set up by whoever provisioned the stack, not on this page (§886).
+    by_provisioner: bool = False
+
+
+#: SHA-256 of the token the provisioner holds, in hex (§886).
+TOKEN_HASH_ENV = "BOOTSTRAP_TOKEN_SHA256"
+
+
+def _required_token_hash() -> str:
+    return os.environ.get(TOKEN_HASH_ENV, "").strip().lower()
+
+
+def _check_token(authorization: str) -> None:
+    """**Only the provisioner may name a stack's first owner, where it says
+    so (§886; roadmap E.28).** A stack is reachable at its address the moment
+    it is deployed, and this route needs no sign-in, so whoever found the
+    address before the customer's first visit could make themselves owner.
+
+    The control plane derives a token for each stack, passes its SHA-256 to
+    the deploy, and creates the first owner itself as soon as the stack is up,
+    from the organisation and address the customer gave at onboarding. The
+    template carries only the hash. Without it set, as in development, the
+    setup page works as it always has."""
+    wanted = _required_token_hash()
+    if not wanted:
+        return
+    given = authorization.removeprefix("Bearer ").strip()
+    digest = hashlib.sha256(given.encode()).hexdigest()
+    if not given or not hmac.compare_digest(digest, wanted):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="this platform is set up by its provider; sign in with the "
+                   "invitation it sent instead")
 
 
 class FirstOwnerIn(BaseModel):
@@ -50,11 +86,14 @@ class FirstOwnerOut(BaseModel):
 async def bootstrap_status() -> BootstrapStatus:
     async with get_engine().connect() as conn:
         needs_setup = await org_service.platform_needs_setup(conn)
-    return BootstrapStatus(needs_setup=needs_setup)
+    return BootstrapStatus(needs_setup=needs_setup, by_provisioner=bool(_required_token_hash()))
 
 
 @router.post("/first-owner", response_model=FirstOwnerOut, status_code=status.HTTP_201_CREATED)
-async def bootstrap_first_owner(body: FirstOwnerIn) -> FirstOwnerOut:
+async def bootstrap_first_owner(
+    body: FirstOwnerIn, authorization: str = Header(default="")
+) -> FirstOwnerOut:
+    _check_token(authorization)
     async with get_engine().begin() as conn:
         org_id = await org_service.bootstrap_first_owner(
             conn,

@@ -327,6 +327,10 @@ class OnboardingService:
             })
         return out
 
+    @property
+    def provisioner(self) -> Provisioner:
+        return self._provisioner
+
     # ---- status, throughout -------------------------------------------------
     def status(self, org_slug: str, *, with_events: bool = True) -> dict[str, Any]:
         record = self._registry.get(org_slug)
@@ -352,6 +356,12 @@ class OnboardingService:
             "connected": bool(record.bootstrap_role_arn),
             "stack_status": record.stack_status.value,
             "platform_url": record.platform_url,
+            # The first owner is created by the provisioner, not on the
+            # stack's setup page (§886): the page says who was invited, or
+            # that it is still being done, or that it could not be.
+            "contact_email": record.contact_email,
+            "owner_invited": record.owner_invited_at is not None,
+            "provisioning": bool(job and not job.done),
             "outputs": record.outputs,
             "error": job.error if job else None,
             "events": events,

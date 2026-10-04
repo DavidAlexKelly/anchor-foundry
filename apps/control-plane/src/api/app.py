@@ -400,8 +400,30 @@ async function poll() {
     }
     if (s.stack_status === "ready" && s.platform_url) {
       state("s5", "done");
-      $("done").innerHTML = `<p><strong>Your deployment is live.</strong></p>
-        <a class="launch" href="${s.platform_url}/setup">Create your first account ↗</a>`;
+      // The first account is made for them (§886), so the page says where
+      // its invitation went rather than sending them to a setup form.
+      const done = $("done");
+      done.textContent = "";
+      const live = document.createElement("p");
+      live.innerHTML = "<strong>Your deployment is live.</strong>";
+      const next = document.createElement("p");
+      if (s.owner_invited) {
+        next.textContent = `We have sent an invitation to ${s.contact_email}. Sign in with ` +
+          "the temporary password it contains, and you will be asked to choose your own.";
+      } else if (s.provisioning) {
+        next.textContent = "Creating your first account…";
+      } else {
+        next.textContent = "Your first account could not be created automatically. " +
+          "Reply to your onboarding email and we will finish it for you.";
+      }
+      done.append(live, next);
+      if (s.owner_invited) {
+        const open = document.createElement("a");
+        open.className = "launch";
+        open.href = s.platform_url;
+        open.textContent = "Open the platform ↗";
+        done.append(open);
+      }
     }
   } catch (e) { /* transient; the next poll says the same thing or better */ }
 }
