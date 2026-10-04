@@ -10,6 +10,9 @@ import {
   sync as syncApi,
 } from "@/lib/api";
 import { trustLines, usesOidc } from "@/lib/connection-oidc";
+import {
+  grantText, isOutbound, returnNotice, showsField, withoutReturn, type Notice,
+} from "@/lib/outbound-app";
 import { stepLabel, summary as diagnoseSummary } from "@/lib/diagnose";
 import { Dialog, Field } from "@/components/dialog";
 import { EgressDialog } from "@/components/egress-panel";
@@ -306,8 +309,13 @@ function AddConnectionWizard({
         // one sent anyway.
         secret: usesOidc(config) ? {} : secret,
       });
+      // An outbound application's source is called as a person, and nobody
+      // has authorized it yet, so a test now could only say that (§754).
+      if (isOutbound(created.config)) {
+        return { ok: false, error: null, connection: created, outbound: true };
+      }
       // Test immediately so the list shows a truthful status.
-      return connApi.test(workspaceId, projectId, created.id);
+      return { ...(await connApi.test(workspaceId, projectId, created.id)), outbound: false };
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["connections", projectId] });
@@ -342,7 +350,20 @@ function AddConnectionWizard({
       <Dialog open={open} title="Add connection" onClose={close}>
         {result ? (
           <div>
-            {result.ok ? (
+            {result.outbound ? (
+              <>
+                <p>
+                  <strong>{result.connection.name}</strong> was saved. It is called as whoever
+                  uses it, so each person authorizes it once with the provider before using it.
+                </p>
+                <AuthorizeButton
+                  workspaceId={workspaceId}
+                  projectId={projectId}
+                  connection={result.connection}
+                  label="Authorize now"
+                />
+              </>
+            ) : result.ok ? (
               <p>
                 <span className="status-ok">
                   <span className="status-dot" />
@@ -410,7 +431,9 @@ function AddConnectionWizard({
                 autoFocus
               />
             </Field>
-            {Object.entries(selected.config_schema.properties).map(([key, prop]) => (
+            {Object.entries(selected.config_schema.properties)
+              .filter(([key]) => showsField(key, config))
+              .map(([key, prop]) => (
               <Field key={key} label={prop.title ?? key}>
                 {prop.enum ? (
                   // A constrained choice is a picker: typing one of a fixed set
@@ -1152,6 +1175,98 @@ function DiagnoseDialog({
   );
 }
 
+/** p.39's "interactive authorization flow", begun from here: the API keeps a
+ * state and sets the cookie binding it to this browser, and the browser goes
+ * to the provider, which sends it back to this page (decision 0022 §3). */
+function AuthorizeButton({
+  workspaceId,
+  projectId,
+  connection,
+  label,
+}: {
+  workspaceId: string;
+  projectId: string;
+  connection: Connection;
+  label: string;
+}) {
+  const start = useMutation({
+    mutationFn: () =>
+      connApi.authorize(workspaceId, projectId, connection.id, window.location.pathname),
+    onSuccess: ({ authorize_url }) => window.location.assign(authorize_url),
+  });
+  return (
+    <>
+      <button
+        className="btn"
+        style={{ padding: "3px 9px", fontSize: 12 }}
+        data-testid={`authorize-${connection.name}`}
+        disabled={start.isPending || start.isSuccess}
+        onClick={() => start.mutate()}
+      >
+        {start.isPending || start.isSuccess ? "Going to the provider…" : label}
+      </button>
+      {start.isError && (
+        <div className="form-error">
+          {start.error instanceof ApiError
+            ? start.error.message
+            : "Couldn't start the authorization. Try again."}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Whether *you* have authorized an outbound application's source (decision
+ * 0022 §2): a grant is one person's, so this is the caller's and nobody
+ * else's. Outside `canEdit`, because a viewer who may use the source must be
+ * able to authorize it, and authorizing changes nothing but their own grant. */
+function AuthorizationCell({
+  workspaceId,
+  projectId,
+  connection,
+}: {
+  workspaceId: string;
+  projectId: string;
+  connection: Connection;
+}) {
+  const queryClient = useQueryClient();
+  const key = ["connection-authorization", connection.id];
+  const grant = useQuery({
+    queryKey: key,
+    queryFn: () => connApi.authorization(workspaceId, projectId, connection.id),
+  });
+  const revoke = useMutation({
+    mutationFn: () => connApi.revokeAuthorization(workspaceId, projectId, connection.id),
+    onSuccess: (fresh) => queryClient.setQueryData(key, fresh),
+  });
+  if (!grant.data) return null;
+  return (
+    <div className="connection-authorization" data-testid={`authorization-${connection.name}`}>
+      <p className="login-note" style={{ margin: "4px 0" }} data-testid="authorization-says">
+        {grantText(grant.data)}
+      </p>
+      <div className="row-actions">
+        <AuthorizeButton
+          workspaceId={workspaceId}
+          projectId={projectId}
+          connection={connection}
+          label={grant.data.authorized ? "Authorize again" : "Authorize"}
+        />
+        {grant.data.authorized && (
+          <button
+            className="btn quiet"
+            style={{ padding: "3px 9px", fontSize: 12 }}
+            disabled={revoke.isPending}
+            onClick={() => revoke.mutate()}
+          >
+            Revoke
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ConnectionRow({
   workspaceId,
   projectId,
@@ -1221,6 +1336,13 @@ function ConnectionRow({
               </div>
             ))}
           </dl>
+        )}
+        {isOutbound(connection.config) && (
+          <AuthorizationCell
+            workspaceId={workspaceId}
+            projectId={projectId}
+            connection={connection}
+          />
         )}
       </td>
       <td>
@@ -1410,6 +1532,18 @@ export default function ConnectionsPage() {
   const canEdit = project ? project.effective_role !== "viewer" : false;
   const canWorkspaceScope = workspace?.effective_role === "admin";
 
+  // The provider sends the person back here with how it went (§754;
+  // `/api/oauth/callback`). Said once, then taken off the address so a reload
+  // does not say it again.
+  const [returned, setReturned] = useState<Notice | null>(null);
+  useEffect(() => {
+    const notice = returnNotice(window.location.search);
+    if (!notice) return;
+    setReturned(notice);
+    window.history.replaceState(
+      null, "", withoutReturn(window.location.pathname, window.location.search));
+  }, []);
+
   return (
     <main>
       <div className="page-head">
@@ -1426,6 +1560,15 @@ export default function ConnectionsPage() {
         )}
       </div>
 
+      {returned && (
+        <div
+          className={returned.ok ? "state" : "form-error"}
+          role="status"
+          data-testid="authorization-returned"
+        >
+          {returned.text}
+        </div>
+      )}
       {list.isPending && <div className="state">Loading connections…</div>}
       {list.isError && (
         <div className="state error">Couldn&apos;t load connections. Refresh to try again.</div>

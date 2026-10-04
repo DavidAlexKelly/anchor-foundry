@@ -229,7 +229,10 @@ export function destinationsFor(
       // system and spends it on another, and §263 found this destination
       // unguarded for exactly the reason it is easy to leave off a screen: it
       // is auth, so it does not read as a place data comes from.
-      if (text("auth_type") === "oauth2_client_credentials") {
+      // An outbound application's token endpoint is dialled too (decision
+      // 0022 §3): the code exchange and every refresh. Its authorize URL is
+      // the person's browser's to visit, not this platform's.
+      if (["oauth2_client_credentials", "oauth2_authorization_code"].includes(text("auth_type"))) {
         const token = urlDestination(text("token_url"));
         if (token) known.push({ label: "Token endpoint", ...token });
       }
