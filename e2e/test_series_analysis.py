@@ -1029,3 +1029,33 @@ def test_a_dsp_filter_smooths_towards_the_middle(page, api, module) -> None:
     # And by how much the cut-off says: at 0.2 of Nyquist the ends move to
     # 21.088 and 28.912 (at the default 0.1 they would be 23.746 and 26.254).
     assert (low, high) == (21.088, 28.912), (low, high)
+
+
+def test_a_save_location_is_found_by_searching(page, api, module) -> None:
+    """§828: the save location offered every project in the workspace as an
+    option - ten thousand on the development one. It is searched now, and a
+    project found is where the analysis goes."""
+    mod = build(api, module, "Analysis searched location", saving=True)
+    elsewhere = Module(api, "Analysis destination")
+    open_module(page, mod)
+    expect(page.locator("[data-testid='series-plots'] tbody tr")).to_have_count(3)
+    page.get_by_role("button", name="Save as new analysis").click()
+    destination = f"Analysis destination {elsewhere.tag}"
+    page.get_by_label("Find a project to save in").fill(destination)
+    location = page.get_by_label("Save location")
+    expect(location.locator("option", has_text=destination)).to_have_count(1)
+    location.select_option(label=destination)
+    name = f"Elsewhere {mod.tag}"
+    page.get_by_label("Analysis name").fill(name)
+    # The search moving on keeps the chosen project, by name.
+    # Once a search that finds nothing has answered, the chosen project is
+    # the only option - and it is still called by its name.
+    with page.expect_response(lambda r: "/projects/search" in r.url and "no+such+project" in r.url):
+        page.get_by_label("Find a project to save in").fill(f"no such project {mod.tag}")
+    expect(location.locator("option")).to_have_count(1)
+    expect(location).to_have_value(elsewhere.project_id)
+    expect(location.locator("option:checked")).to_have_text(destination)
+    page.get_by_test_id("series-save-analysis").get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_test_id("series-analysis-open")).to_contain_text(name)
+    saved = api.call("GET", f"{elsewhere.base}/series-analyses")
+    assert name in [a["name"] for a in saved], saved
