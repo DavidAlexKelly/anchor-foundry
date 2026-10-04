@@ -112,6 +112,13 @@ class _Refused(Exception):
         self.response = response
 
 
+def config_of(connection: dict[str, Any]) -> dict[str, Any]:
+    """A connection's config as a dict: a jsonb column comes back as a dict
+    from some drivers and as text from others."""
+    raw_config = connection.get("config") or {}
+    return raw_config if isinstance(raw_config, dict) else json.loads(raw_config)
+
+
 def _send(
     webhook: dict[str, Any],
     connection: dict[str, Any],
@@ -130,8 +137,7 @@ def _send(
     # it, because a caller that forgot would get `{}.get("base_url")` — an
     # empty base URL, a request to a relative path, and a failure that names
     # the URL rather than the mistake.
-    raw_config = connection.get("config") or {}
-    config = raw_config if isinstance(raw_config, dict) else json.loads(raw_config)
+    config = config_of(connection)
     started = time.monotonic()
     deadline = started + int(webhook.get("timeout_seconds") or 20)
     fetched: list[dict[str, str]] = []
