@@ -101,7 +101,7 @@ def _seed(source_database: dict) -> None:
 def storage_root(tmp_path, monkeypatch) -> str:
     root = str(tmp_path / "storage")
     monkeypatch.setenv("LOCAL_STORAGE_ROOT", root)
-    monkeypatch.delenv("DATA_BUCKET", raising=False)
+    monkeypatch.delenv("S3_DATA_BUCKET", raising=False)
     return root
 
 

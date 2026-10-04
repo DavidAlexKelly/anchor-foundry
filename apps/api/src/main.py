@@ -58,6 +58,11 @@ from .routes import workspaces as workspace_routes
 QUERY_CANCELED_SQLSTATE = "57014"
 
 
+#: Set by the ECS agent in every task (it names the task metadata endpoint), and
+#: by nothing in development or tests.
+ECS_MARKER = "ECS_CONTAINER_METADATA_URI_V4"
+
+
 def _wire_production_gateways() -> None:
     """Swap in real AWS-backed gateways when running in a deployed stack.
     S3_DATA_BUCKET is only ever set there (services.ts's commonEnv); local
@@ -70,6 +75,17 @@ def _wire_production_gateways() -> None:
     never created real Cognito users on any deployed stack until now."""
     bucket = os.environ.get("S3_DATA_BUCKET")
     if not bucket:
+        # **Not on ECS, though** (§844). There, a missing bucket means the task
+        # definition lost its variables, and carrying on would serve requests
+        # with connection secrets held in this process's memory - which a
+        # second API task (§841) does not share - and files written to the
+        # task's own disk. Refusing to start is the failure an operator sees;
+        # the other is the one a customer finds.
+        if os.environ.get(ECS_MARKER):
+            raise RuntimeError(
+                "running on ECS without S3_DATA_BUCKET: refusing to start on the "
+                "in-memory secrets and local-disk storage meant for development"
+            )
         return
     region = os.environ.get("AWS_REGION", "")
     settings = get_settings()
