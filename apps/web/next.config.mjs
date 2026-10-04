@@ -4,6 +4,9 @@ import path from "node:path";
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /** @type {import('next').NextConfig} */
+const CONTENT_SECURITY_POLICY =
+  "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'";
+
 const nextConfig = {
   reactStrictMode: true,
   output: "standalone",
@@ -34,6 +37,12 @@ const nextConfig = {
         { key: "X-Content-Type-Options", value: "nosniff" },
         { key: "X-Frame-Options", value: "SAMEORIGIN" },
         { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        // The parts of a Content-Security-Policy nothing here relies on the
+        // absence of (§860): no plugins, no <base> pointing scripts elsewhere,
+        // no form posting off-site, and framing as X-Frame-Options says, for
+        // browsers that read only this. Scripts and styles are not restricted
+        // yet: Next's hydration and Monaco need a policy written for them.
+        { key: "Content-Security-Policy", value: CONTENT_SECURITY_POLICY },
       ],
     }];
   },
