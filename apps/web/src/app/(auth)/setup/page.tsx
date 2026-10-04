@@ -71,7 +71,19 @@ export default function SetupPage() {
             </>
           )}
 
-          {status.isSuccess && status.data.needs_setup && !create.isSuccess && (
+          {status.isSuccess && status.data.needs_setup && status.data.by_provisioner && (
+            // §886: a provisioned stack takes its first owner only from its
+            // provider, so the form would be refused; say what happens instead.
+            <>
+              <h2>Being set up</h2>
+              <p className="sub" data-testid="setup-by-provider">
+                This deployment is being set up by its provider. Its first owner will
+                receive an email invitation with a temporary password shortly.
+              </p>
+            </>
+          )}
+
+          {status.isSuccess && status.data.needs_setup && !status.data.by_provisioner && !create.isSuccess && (
             <>
               <h2>Set up this deployment</h2>
               <p className="sub">
