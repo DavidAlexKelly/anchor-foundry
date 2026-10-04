@@ -24,3 +24,12 @@ retention:
       skipped: 1
       success: 1
       failure: 7
+# At most four runs at once (§888), whatever is due: each is a process with
+# its own DuckDB, up to 512 MiB (§875), on a 2 GB task. The rest wait in
+# Dagster's queue, and `definitions.one_at_a_time` keeps a job from queueing
+# behind itself.
+run_coordinator:
+  module: dagster._core.run_coordinator.queued_run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 4

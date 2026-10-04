@@ -5,7 +5,14 @@ from __future__ import annotations
 import os
 from urllib.parse import quote
 
-from dagster import DefaultScheduleStatus, Definitions, ScheduleDefinition
+from dagster import (
+    DagsterRunStatus,
+    DefaultScheduleStatus,
+    Definitions,
+    RunsFilter,
+    ScheduleDefinition,
+    ScheduleEvaluationContext,
+)
 
 from .jobs.cleanup import workspace_cleanup
 from .jobs.code_preview_runs import scheduled_preview_runs
@@ -44,6 +51,27 @@ def _resolve_database_url() -> str:
 #: The browser suite drives the ops directly, so nothing saw it.
 RUNNING = DefaultScheduleStatus.RUNNING
 
+#: A run that has not finished: queued, launched, or going.
+UNFINISHED = [DagsterRunStatus.QUEUED, DagsterRunStatus.NOT_STARTED,
+              DagsterRunStatus.STARTING, DagsterRunStatus.STARTED]
+
+
+def one_at_a_time(job_name: str):
+    """**A tick is skipped while the job's last run has not finished
+    (§888).** A poll runs every minute and works through everything due, so
+    one that outlasts its minute - a model run, a large sync - had a second
+    pass start beside it, then a third. The claims (§853, §854) keep them
+    from doing the same work twice. Memory was the problem: each pass is a
+    process with its own DuckDB, up to 512 MiB (§875), and a 2 GB worker
+    holds about three. The next tick after the run finishes picks up
+    whatever is still due."""
+
+    def should_execute(context: ScheduleEvaluationContext) -> bool:
+        return not context.instance.get_run_records(
+            filters=RunsFilter(job_name=job_name, statuses=UNFINISHED), limit=1)
+
+    return should_execute
+
 defs = Definitions(
     jobs=[
         dagster_run_pruning,
@@ -60,18 +88,21 @@ defs = Definitions(
         ScheduleDefinition(
             default_status=RUNNING,
             job=dagster_run_pruning,
+            should_execute=one_at_a_time(dagster_run_pruning.name),
             cron_schedule="40 * * * *",  # hourly: see jobs/dagster_runs.py
             name="prune_dagster_runs",
         ),
         ScheduleDefinition(
             default_status=RUNNING,
             job=workspace_cleanup,
+            should_execute=one_at_a_time(workspace_cleanup.name),
             cron_schedule="15 3 * * *",  # nightly, off-peak
             name="nightly_workspace_cleanup",
         ),
         ScheduleDefinition(
             default_status=RUNNING,
             job=scheduled_model_runs,
+            should_execute=one_at_a_time(scheduled_model_runs.name),
             cron_schedule="* * * * *",  # every minute: queued python runs and
             # cron-scheduled models should start promptly, not sit for long
             name="poll_model_runs",
@@ -79,18 +110,21 @@ defs = Definitions(
         ScheduleDefinition(
             default_status=RUNNING,
             job=scheduled_connection_syncs,
+            should_execute=one_at_a_time(scheduled_connection_syncs.name),
             cron_schedule="*/5 * * * *",  # every 5 minutes - syncs are heavier
             name="poll_scheduled_syncs",
         ),
         ScheduleDefinition(
             default_status=RUNNING,
             job=scheduled_instance_syncs,
+            should_execute=one_at_a_time(scheduled_instance_syncs.name),
             cron_schedule="*/5 * * * *",  # every 5 minutes, same cadence as connection syncs
             name="poll_instance_syncs",
         ),
         ScheduleDefinition(
             default_status=RUNNING,
             job=scheduled_exports,
+            should_execute=one_at_a_time(scheduled_exports.name),
             # Every 5 minutes, the same cadence as syncs and for the same
             # reason: this is the *poll*, not the schedule. An export's own
             # cron decides when it is due; this decides how long after
@@ -102,6 +136,7 @@ defs = Definitions(
         ScheduleDefinition(
             default_status=RUNNING,
             job=scheduled_test_runs,
+            should_execute=one_at_a_time(scheduled_test_runs.name),
             # Every minute, the same cadence as queued model runs and for the
             # same reason: somebody is watching this one. A test run is asked
             # for by a person who has just pressed a button and is looking at
@@ -113,6 +148,7 @@ defs = Definitions(
         ScheduleDefinition(
             default_status=RUNNING,
             job=scheduled_listener_archives,
+            should_execute=one_at_a_time(scheduled_listener_archives.name),
             # p.264: "Every few minutes, the listener event stream will
             # archive into a backing dataset" (§519).
             cron_schedule="*/5 * * * *",
@@ -121,6 +157,7 @@ defs = Definitions(
         ScheduleDefinition(
             default_status=RUNNING,
             job=scheduled_preview_runs,
+            should_execute=one_at_a_time(scheduled_preview_runs.name),
             # Every minute, for `poll_test_runs`' reason exactly: a preview is
             # asked for by somebody who has just pressed a button and is
             # watching a panel, so the poll interval is the latency they feel.
