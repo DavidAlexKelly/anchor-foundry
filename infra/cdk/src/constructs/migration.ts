@@ -86,12 +86,14 @@ export class MigrationTriggerConstruct extends Construct {
           // container's architecture regardless of the host machine
           // running `cdk deploy`. Must match `architecture` above.
           image: DockerImage.fromBuild(BUNDLING_DOCKERFILE_DIR, { platform: "linux/amd64" }),
+          // The files themselves come from packages/db/bundle.sh, which the
+          // API's test_migration_bundle.py runs too and migrates a fresh
+          // database from (§848). Listing them here instead left out what
+          // migration 0034 imports, and every fresh stack's migration failed.
           command: [
             "bash",
             "-c",
-            "pip install -r requirements.txt -t /asset-output && " +
-              "cp migrate.py lambda_handler.py /asset-output && " +
-              "cp -r migrations /asset-output",
+            "pip install -r requirements.txt -t /asset-output && bash bundle.sh /asset-output",
           ],
         },
       }),
