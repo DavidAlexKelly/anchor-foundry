@@ -116,6 +116,9 @@ What each route requires, below `/api/workspaces/{workspace_id}`:
 | `PUT /projects/{project_id}/connections/{connection_id}/scheduled-sync` | project editor |
 | `DELETE /projects/{project_id}/connections/{connection_id}/scheduled-sync` | project editor |
 | `DELETE /projects/{project_id}/connections/{connection_id}/scheduled-sync/cursor` | project editor |
+| `POST /projects/{project_id}/connections/{connection_id}/authorization` | project viewer |
+| `GET /projects/{project_id}/connections/{connection_id}/authorization` | project viewer |
+| `DELETE /projects/{project_id}/connections/{connection_id}/authorization` | project viewer |
 | `POST /projects/{project_id}/connections/{connection_id}/scheduled-sync/run` | project editor |
 | `GET /projects/{project_id}/connections/{connection_id}/egress-policies` | project viewer |
 | `POST /projects/{project_id}/connections/{connection_id}/egress-policies` | project editor |
