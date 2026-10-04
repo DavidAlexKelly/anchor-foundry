@@ -945,6 +945,26 @@ def merge_incremental(
         con.close()
 
 
+def merge_transaction(
+    existing_parquet: str | None, new_rows_parquet: str, primary_key_column: str,
+) -> str:
+    """What `merge_incremental` does to the view, as p.22's type (§747): the
+    first run is a SNAPSHOT, a run whose keys are all new only adds - an
+    APPEND - and a run that replaces any existing row is an UPDATE."""
+    if existing_parquet is None:
+        return "SNAPSHOT"
+    con = duckdb.connect()
+    try:
+        pk = f'"{primary_key_column}"'
+        (replaced,) = con.execute(
+            f"SELECT count(*) FROM read_parquet({new_rows_parquet!r}) "
+            f"WHERE {pk} IN (SELECT {pk} FROM read_parquet({existing_parquet!r}))"
+        ).fetchone()
+        return "UPDATE" if replaced else "APPEND"
+    finally:
+        con.close()
+
+
 def _clean(exc: duckdb.Error) -> str:
     """First line of DuckDB's message: precise about the SQL/file problem,
     never contains paths beyond the one we passed in."""

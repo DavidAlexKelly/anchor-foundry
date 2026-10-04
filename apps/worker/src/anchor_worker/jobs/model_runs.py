@@ -132,8 +132,8 @@ def _record_output(
             """
             INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                           table_schema, row_count, produced_by_kind,
-                                          produced_by_id)
-            VALUES (%s, %s, %s, %s, %s, 'model', %s)
+                                          produced_by_id, transaction_type)
+            VALUES (%s, %s, %s, %s, %s, 'model', %s, 'SNAPSHOT')
             RETURNING id
             """,
             (str(dataset_id), version, parquet_key, schema_json, row_count, str(model_id)),

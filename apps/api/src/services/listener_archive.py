@@ -169,7 +169,9 @@ async def archive(conn: AsyncConnection, storage: StorageGateway, listener_id: U
     committed = await ds_service.add_version(
         conn, storage, dataset_id=dataset_id, workspace_id=listener["workspace_id"],
         parquet_bytes=parquet, schema=[ColumnSchema(name=n, data_type=t) for n, t in schema],
-        row_count=count, produced_by_kind="listener", produced_by_id=listener_id, created_by=by)
+        row_count=count, produced_by_kind="listener", produced_by_id=listener_id, created_by=by,
+        # An archive only ever adds the events since the last (§747).
+        transaction_type="APPEND")
     await conn.execute(text("""
         UPDATE listeners SET archive_dataset_id = :did, archived_through = :through, archived_at = now()
          WHERE id = :id

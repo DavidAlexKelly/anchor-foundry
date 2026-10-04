@@ -1568,6 +1568,8 @@ async def _write_pairs(
         produced_by_kind="action",
         produced_by_id=run_id,
         created_by=access.auth.user_id,
+        # A join table only gains pairs unless one was removed (§747).
+        transaction_type="UPDATE" if removed else "APPEND",
     )
     return staged, changes
 
@@ -1931,6 +1933,8 @@ async def undo_action(
                     produced_by_kind="action",
                     produced_by_id=undo_run_id,
                     created_by=access.auth.user_id,
+                    transaction_type=dataset_service.written_transaction(
+                        work["updates"], work["deletes"]),
                 ))
             for dataset_key, table in join_tables.items():
                 staged, _changes = await _write_pairs(
@@ -3377,6 +3381,10 @@ async def execute_action(
                             produced_by_kind="action",
                             produced_by_id=run_id,
                             created_by=access.auth.user_id,
+                            # An action that only creates objects (and the
+                            # log's one row) adds to the view (§747).
+                            transaction_type=dataset_service.written_transaction(
+                                work["updates"], work["deletes"]),
                         )
                     )
                 for dataset_key, table in join_tables.items():
@@ -3987,6 +3995,8 @@ async def execute_batch(
                         produced_by_kind="action_batch",
                         produced_by_id=batch_id,
                         created_by=access.auth.user_id,
+                        transaction_type=dataset_service.written_transaction(
+                            work["updates"], []),
                     )
                 )
             # p.167's "automatically linked to all edited objects" (§587): a

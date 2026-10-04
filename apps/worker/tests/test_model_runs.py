@@ -142,6 +142,11 @@ def test_sql_model_run_succeeds_and_versions_output(workspace: dict) -> None:
             "SELECT current_version FROM datasets WHERE id=%s", (output_dataset_id,)
         ).fetchone()[0]
         assert version == 2
+        # §747: a model run writes a whole view every time.
+        typed = conn.execute(
+            "SELECT transaction_type FROM dataset_versions WHERE dataset_id=%s "
+            "ORDER BY version_number", (output_dataset_id,)).fetchall()
+        assert typed == [("SNAPSHOT",), ("SNAPSHOT",)]
 
 
 def test_python_model_run_succeeds(workspace: dict) -> None:
@@ -203,8 +208,9 @@ def _add_version(
         with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
             conn.execute(
                 """INSERT INTO dataset_versions (dataset_id, version_number,
-                                                 produced_by_kind, produced_by_id)
-                   VALUES (%s,%s,%s,%s)""",
+                                                 produced_by_kind, produced_by_id,
+                                                 transaction_type)
+                   VALUES (%s,%s,%s,%s,'SNAPSHOT')""",
                 (dataset_id, version_number, kind, produced_by),
             )
         return
@@ -212,8 +218,8 @@ def _add_version(
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute(
             """INSERT INTO dataset_versions (dataset_id, version_number, produced_by_kind,
-                                             produced_by_id)
-               VALUES (%s,%s,%s,%s)""",
+                                             produced_by_id, transaction_type)
+               VALUES (%s,%s,%s,%s,'SNAPSHOT')""",
             (dataset_id, version_number, kind, pid),
         )
 

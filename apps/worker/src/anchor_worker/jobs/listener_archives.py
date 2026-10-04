@@ -156,8 +156,8 @@ def archive_one(platform_db: PlatformDatabase, storage, listener_id, workspace_i
             cur.execute("""
                 INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                               table_schema, row_count, produced_by_kind,
-                                              produced_by_id)
-                VALUES (%s, %s, %s, %s, %s, 'listener', %s)
+                                              produced_by_id, transaction_type)
+                VALUES (%s, %s, %s, %s, %s, 'listener', %s, 'APPEND')
             """, (str(dataset_id), version, key, schema_json, count, str(listener_id)))
             cur.execute("""
                 UPDATE listeners SET archive_dataset_id = %s, archived_through = %s,

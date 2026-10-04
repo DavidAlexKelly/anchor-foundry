@@ -143,6 +143,9 @@ class VersionOut(BaseModel):
     # Set on a version a rollback produced, naming the version it took its data
     # from (§361; `data-lineage` p.73). None on every other kind.
     rolled_back_to: int | None = None
+    # p.22's type (§747; db 0144): SNAPSHOT begins a new view, APPEND and
+    # UPDATE extend the one before.
+    transaction_type: str
 
 
 class RetentionOut(BaseModel):
@@ -468,6 +471,9 @@ async def upload_file_into(
             parquet_bytes=parquet, schema=schema, row_count=rows,
             produced_by_kind="upload", produced_by_id=None,
             created_by=access.auth.user_id,
+            # p.10's two words are p.22's two types (§747): a new file adds
+            # to the view, a replaced one overwrites part of it.
+            transaction_type="APPEND" if mode == "append" else "UPDATE",
         )
         await ds_service.record_file(
             conn, dataset_id, name, access.auth.user_id,
@@ -1258,6 +1264,8 @@ async def parse_again(
             parquet_bytes=parquet, schema=schema, row_count=rows,
             produced_by_kind="reparse", produced_by_id=None,
             created_by=access.auth.user_id,
+            # Every row is read again, so this is a new view of the files.
+            transaction_type="SNAPSHOT",
         )
         # Kept, so a file added later is read the same way (§746; p.24's
         # "stored in the schema"). The default read is stored as nothing.

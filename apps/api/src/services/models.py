@@ -966,9 +966,9 @@ async def record_output(
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
                                       table_schema, row_count, produced_by_kind,
-                                      produced_by_id, created_by)
+                                      produced_by_id, created_by, transaction_type)
         VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, 'model',
-                :mid, :by)
+                :mid, :by, 'SNAPSHOT')
         RETURNING id
         """,
         {

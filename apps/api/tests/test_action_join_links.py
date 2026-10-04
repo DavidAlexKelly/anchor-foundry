@@ -99,6 +99,18 @@ def linked(client, fx, world, key: str) -> list[str]:
     return sorted(i["primary_key"] for i in group["items"])
 
 
+def last_type(world) -> str:
+    """The join table's newest version's transaction type (§747)."""
+    import psycopg
+
+    from test_api import ADMIN_DSN
+
+    with psycopg.connect(ADMIN_DSN) as conn:
+        return conn.execute(
+            "SELECT transaction_type FROM dataset_versions WHERE dataset_id = %s "
+            "ORDER BY version_number DESC LIMIT 1", (world["pairs"],)).fetchone()[0]
+
+
 def version_of(client, fx, world) -> int:
     r = client.get(f"{pbase(fx)}/datasets/{world['pairs']}", headers=hdr(fx.editor_sub))
     assert r.status_code == 200, r.text
@@ -137,6 +149,8 @@ def test_a_create_link_rule_writes_the_pair(client, fx, world) -> None:
     r = run(client, fx, world, link_it, "flights", "F4", "aircraft", "3")
     assert r.status_code == 200 and r.json()["ok"], r.text
     assert linked(client, fx, world, "F4") == ["3"]
+    # A pair added and none removed: the table only grew (§747).
+    assert last_type(world) == "APPEND"
     # Written as the column's own integer, and read back as a key: the
     # aircraft sees the flight too.
     group = links_of(client, fx, world["aircraft"], "3")[world["link"]]
@@ -170,11 +184,14 @@ def test_a_delete_link_rule_removes_the_pair_and_its_undo_puts_it_back(
     r = run(client, fx, world, unlink, "flights", "F2", "aircraft", "2")
     assert r.status_code == 200 and r.json()["ok"], r.text
     assert linked(client, fx, world, "F2") == ["1"]
+    assert last_type(world) == "UPDATE"
     assert r.json()["can_undo"] is True, r.json()
     undone = client.post(f"{pbase(fx)}/actions/{unlink}/runs/{r.json()['run_id']}/undo",
                          headers=hdr(fx.editor_sub))
     assert undone.status_code == 200, undone.text
     assert linked(client, fx, world, "F2") == ["1", "2"]
+    # The undo only puts a pair back.
+    assert last_type(world) == "APPEND"
 
 
 def test_undoing_a_link_made_removes_it(client, fx, world) -> None:

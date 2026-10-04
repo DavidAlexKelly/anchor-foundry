@@ -122,6 +122,13 @@ def test_the_job_archives_new_events_and_appends_later_ones(workspace) -> None:
     # Nothing new: no version.
     run()
     assert archived(lid)[2] == 2
+    # §747: an archive only ever adds events.
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        typed = conn.execute(
+            "SELECT transaction_type FROM dataset_versions v JOIN listeners l"
+            " ON l.archive_dataset_id = v.dataset_id WHERE l.id = %s ORDER BY version_number",
+            (lid,)).fetchall()
+    assert typed == [("APPEND",), ("APPEND",)]
 
 
 def test_one_listener_failing_does_not_stop_the_others(workspace, monkeypatch) -> None:
