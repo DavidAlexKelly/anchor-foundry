@@ -2505,6 +2505,53 @@ async def _counted_as(
         raise
 
 
+async def _with_interface_links(
+    conn: Any,
+    action_type: dict[str, Any],
+    bound: dict[str, Any],
+    *,
+    implementation: dict[str, Any],
+    link_types: dict[str, dict[str, Any]],
+    subject_type_id: str,
+    subject: dict[str, Any],
+    parameter_types: dict[str, str],
+    prefix: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The action with its interface link rules renamed (§761), and the
+    values the renamed rules read. Each link rule's destination is looked up
+    here, under its own type: an interface reference's resolved one, or the
+    object type its parameter names."""
+    store = instance_store.store_for(conn)
+    destinations: dict[str, dict[str, Any]] = {}
+    for rule in action_type["rules"]:
+        if str(rule.get("kind")) not in ("create_interface_link", "delete_interface_link"):
+            continue
+        param = str(_parse_json(rule.get("config")).get("object", ""))
+        if not bound.get(param):
+            continue
+        declared = next((p for p in action_type["parameters"]
+                         if str(p["api_name"]) == param), None)
+        type_id = parameter_types.get(param) or (
+            str(declared["object_type_id"]) if declared and declared.get("object_type_id")
+            else None)
+        if type_id is None:
+            continue
+        # `check_object_values` has already refused an object that is not
+        # there, so this read finds it.
+        found = await store.get_instance(
+            search_prefix=prefix, object_type_id=UUID(type_id), instance_id=str(bound[param]))
+        destinations[param] = {"primary_key": found["primary_key"],
+                               "properties": _parse_json(found["properties"])}
+    rules, values = actions_service.interface_link_rules(
+        action_type["rules"], link_mapping=implementation.get("link_mapping") or {},
+        link_types=link_types, subject_type_id=subject_type_id,
+        subject={"primary_key": subject["primary_key"],
+                 "properties": _parse_json(subject["properties"])},
+        destinations=destinations,
+    )
+    return {**action_type, "rules": rules}, {**bound, **values}
+
+
 async def _interface_subject(
     conn: Any,
     *,
@@ -2563,6 +2610,9 @@ async def execute_action(
         async with user_connection(access.auth.user_id) as conn:
             action_type = await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
             prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+            # The subject's implementation of the interface, for an interface
+            # action; its link mapping renames p.63-64's link rules (§761).
+            implementation: dict[str, Any] | None = None
             if action_type["object_type_id"] is not None:
                 object_type_id = UUID(str(action_type["object_type_id"]))
                 # The *concrete* type's name, which for an object action is the
@@ -2871,6 +2921,17 @@ async def execute_action(
             # lookup that resolves the named instance needs this as much as the
             # one that coerces the value.
             link_types = await actions_service.link_types_for(conn, access.workspace_id)
+            # p.63-64's interface link rules (§761), renamed into this object's
+            # type's own link rules before anything below reads the rules.
+            if implementation is not None and any(
+                str(r.get("kind")) in ("create_interface_link", "delete_interface_link")
+                for r in action_type["rules"]
+            ):
+                action_type, bound = await _with_interface_links(
+                    conn, action_type, bound, implementation=implementation,
+                    link_types=link_types, subject_type_id=str(object_type_id),
+                    subject=instance, parameter_types=parameter_types, prefix=prefix,
+                )
 
             # **A named object is looked up before it is written**, and its own
             # source decides which columns exist - two instances of one type can
