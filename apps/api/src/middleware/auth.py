@@ -87,17 +87,19 @@ class CognitoTokenVerifier:
         except jwt.PyJWTError as exc:
             raise UnauthorizedError(f"invalid token: {type(exc).__name__}") from exc
 
-        # §9 step 3 (audience): Cognito puts the app client in `aud` on ID
-        # tokens and `client_id` on access tokens; verify whichever is present.
+        # §9 step 3 (audience): Cognito puts the app client in `client_id` on
+        # an access token, and an access token is the only kind this API
+        # takes (§839). There was an ID-token branch here, checking `aud`, and
+        # it could never run: an ID token carries `aud`, and `jwt.decode`
+        # refuses any token that does when it is given no audience to compare
+        # - so ID tokens were already refused, by an exception that said
+        # "invalid token" rather than what was wrong. The web app sends the
+        # access token (lib/auth.ts); this says so.
         token_use = claims.get("token_use")
-        if token_use == "access":
-            if claims.get("client_id") != self._settings.cognito_client_id:
-                raise UnauthorizedError("token client mismatch")
-        elif token_use == "id":
-            if claims.get("aud") != self._settings.cognito_client_id:
-                raise UnauthorizedError("token audience mismatch")
-        else:
+        if token_use != "access":
             raise UnauthorizedError("unrecognised token_use")
+        if claims.get("client_id") != self._settings.cognito_client_id:
+            raise UnauthorizedError("token client mismatch")
         return claims
 
 
