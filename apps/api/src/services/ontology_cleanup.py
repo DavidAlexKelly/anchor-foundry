@@ -267,10 +267,24 @@ async def candidates(
     rows = await fetch_all(
         conn,
         """
-        WITH usage AS (
+        -- **Each aggregated once, for this workspace's types (§825).** The
+        -- planner guessed one object type, so it ran the usage sum - over
+        -- every workspace's usage - and four source probes once per type:
+        -- 4.8 seconds for 814 types on a copy of the development database.
+        WITH mine AS MATERIALIZED (
+            SELECT id FROM object_types WHERE workspace_id = :wid
+        ), usage AS MATERIALIZED (
             SELECT object_type_id, sum(reads) + sum(writes) AS interactions
               FROM object_type_usage
              WHERE day >= CURRENT_DATE - CAST(:unused_days AS integer)
+               AND object_type_id IN (SELECT id FROM mine)
+             GROUP BY 1
+        ), sources AS MATERIALIZED (
+            SELECT object_type_id,
+                   bool_or(sync_status = 'error') AS failing,
+                   bool_or(last_synced_at >= :stale_before) AS fresh
+              FROM object_type_sources
+             WHERE object_type_id IN (SELECT id FROM mine)
              GROUP BY 1
         )
         SELECT ot.id,
@@ -291,24 +305,16 @@ async def candidates(
                ) AS past_deprecation,
                -- p.74's "Trashed datasource", as near as this platform gets:
                -- there is no trash here, so a source is mapped or it is not.
-               NOT EXISTS (SELECT 1 FROM object_type_sources src
-                            WHERE src.object_type_id = ot.id) AS no_source,
+               (src.object_type_id IS NULL) AS no_source,
                -- §315's other issue. p.74's "Phonograph deindexed" is the
                -- equivalent question for Object Storage v1 and is explicitly
                -- not offered for v2; this is ours under its own name.
-               EXISTS (SELECT 1 FROM object_type_sources src
-                        WHERE src.object_type_id = ot.id
-                          AND src.sync_status = 'error') AS failing_source,
+               COALESCE(src.failing, false) AS failing_source,
                -- p.74's "Datasource not updated in [x] days". Every source, so
-               -- a type with one fresh mapping is not stale because another is.
-               (EXISTS (SELECT 1 FROM object_type_sources src
-                         WHERE src.object_type_id = ot.id)
-                AND NOT EXISTS (
-                    SELECT 1 FROM object_type_sources src
-                     WHERE src.object_type_id = ot.id
-                       AND src.last_synced_at IS NOT NULL
-                       AND src.last_synced_at >= :stale_before)
-               ) AS stale_source,
+               -- a type with one fresh mapping is not stale because another is;
+               -- a source never synced is not fresh (bool_or skips its NULL).
+               (src.object_type_id IS NOT NULL
+                AND NOT COALESCE(src.fresh, false)) AS stale_source,
                -- p.74: "The object type has a blank description. Does not
                -- check for descriptions on all properties of the object type."
                (btrim(ot.description) = '') AS no_description,
@@ -321,6 +327,7 @@ async def candidates(
                 END) AS name_looks_temporary
           FROM object_types ot
           LEFT JOIN usage u ON u.object_type_id = ot.id
+          LEFT JOIN sources src ON src.object_type_id = ot.id
           -- **`s.user_id = :uid` is belt to db 0080's braces, and the sweep
           -- could not make it matter.** The row policy already restricts this
           -- table to `rls_current_user_id()`, so a join without the condition

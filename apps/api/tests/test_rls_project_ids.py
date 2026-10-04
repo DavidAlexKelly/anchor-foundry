@@ -342,3 +342,35 @@ def test_a_caller_with_no_context_reaches_nothing(admin) -> None:
         if row is not None:
             cur.execute("SELECT %s::uuid = ANY (rls_project_ids())", (str(row[0]),))
             assert cur.fetchone()[0] is False
+
+
+# ---- the projects policy itself (db 0160) ------------------------------------
+APP_DSN = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
+
+
+@pytest.mark.parametrize("source", sorted(SOURCES))
+def test_the_projects_policy_admits_exactly_who_has_a_role(admin, source: str) -> None:
+    """§825 put a shortcut in front of `proj_isolation`'s per-row role check:
+    an inherited project in a reachable workspace. A shortcut may only admit
+    what the full rule admits, so this reads `projects` *through the policy*,
+    as the application role, and compares with `effective_project_role` for
+    every sampled pair - per access route, including revocations."""
+    with admin.cursor() as cur:
+        cur.execute(SOURCES[source], {"n": SAMPLE})
+        pairs = [(str(u), str(p)) for u, p in cur.fetchall() if p is not None]
+    if not pairs:
+        pytest.skip(f"no rows for {source!r} in this database")
+    granted = 0
+    with psycopg.connect(APP_DSN) as app:
+        for user_id, project_id in pairs:
+            with app.transaction():
+                app.execute("SELECT set_config('app.user_id', %s, true)", (user_id,))
+                seen = app.execute("SELECT EXISTS (SELECT 1 FROM projects WHERE id = %s)",
+                                   (project_id,)).fetchone()[0]
+            role = admin.execute("SELECT effective_project_role(%s, %s)",
+                                 (user_id, project_id)).fetchone()[0]
+            assert seen == (role is not None), (source, user_id, project_id, role)
+            granted += seen
+    if source not in ("a different organisation", "a direct project member"):
+        assert granted > 0, f"{source} granted nothing - the sample proves nothing"
+
