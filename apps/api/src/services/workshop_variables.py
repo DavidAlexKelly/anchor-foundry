@@ -2958,6 +2958,7 @@ def displayed(
     *,
     bound: "frozenset[str]" = frozenset(),
     events: Any = None,
+    derived: Any = None,
 ) -> set[str]:
     """Which variables a set of on-screen nodes needs computed (§392; p.75).
 
@@ -3030,6 +3031,15 @@ def displayed(
                 if isinstance(effect, dict):
                     wanted |= _named_in(effect.get("config"), variables)
 
+    # **What a table's function-backed columns read** (§856). p.221's derived
+    # columns are declared once for the module, per object type, under
+    # `derived_properties`, and a table names the ones it shows in `columns`.
+    # A function column's inputs - `{"variable": id}` per parameter, a set
+    # variable among them since §780 - are named in no widget prop. So on a
+    # lazy page a variable read only by such a column was never computed, and
+    # the column's call went without it: "shown needs a value", in every row.
+    wanted |= _column_inputs(layout, visible, derived, variables)
+
     # The closure. Breadth rather than recursion because `parse` has already
     # refused cycles, so the only reason to track what has been walked is to
     # avoid re-walking a diamond - and a diamond is the ordinary case, not an
@@ -3045,6 +3055,40 @@ def displayed(
                 wanted.add(ref)
                 frontier.append(ref)
     return wanted
+
+
+def _column_inputs(
+    layout: Any, visible: "set[str] | frozenset[str]", derived: Any,
+    variables: dict[str, "Variable"],
+) -> set[str]:
+    """The variables the function columns on visible tables are called with.
+
+    By column name, across every type's declarations, rather than through the
+    table's set to its type: the set may itself be derived, and a name two
+    types share costs at most one variable computed that need not be.
+    """
+    if not isinstance(layout, dict) or not isinstance(derived, dict):
+        return set()
+    by_name: dict[str, list[dict]] = {}
+    for columns in derived.values():
+        for column in columns if isinstance(columns, list) else []:
+            if isinstance(column, dict) and column.get("kind") == "function":
+                by_name.setdefault(str(column.get("api_name")), []).append(column)
+    found: set[str] = set()
+    for node_id, node in layout.items():
+        if str(node_id) not in visible or not isinstance(node, dict):
+            continue
+        props = node.get("props")
+        shown = props.get("columns") if isinstance(props, dict) else None
+        names = shown.split(",") if isinstance(shown, str) else shown
+        for name in names if isinstance(names, list) else []:
+            for column in by_name.get(str(name).strip(), []):
+                inputs = column.get("inputs")
+                for source in inputs.values() if isinstance(inputs, dict) else []:
+                    ref = source.get("variable") if isinstance(source, dict) else None
+                    if isinstance(ref, str) and ref in variables:
+                        found.add(ref)
+    return found
 
 
 def _named_in(value: Any, variables: dict[str, "Variable"]) -> set[str]:

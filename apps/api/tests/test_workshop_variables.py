@@ -4100,6 +4100,29 @@ def test_a_visible_widget_pulls_in_what_its_variable_is_made_of() -> None:
     assert wv.displayed(lazy_layout(), variables, {"shown"}) == {"v_filtered", "v_region"}
 
 
+def test_a_visible_tables_function_columns_pull_in_their_inputs() -> None:
+    """§856: a function column's inputs are declared with the column, under the
+    module's `derived_properties`, not in the table's props - so a variable
+    only such a column reads was never computed on a lazy page, and the call
+    went without it."""
+    variables = wv.parse({**LAZY, "v_north": var("v_north", label="North")})
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["tbl", "other"]},
+        "tbl": node({"variable": "v_region", "columns": "code, level"}),
+        "other": node({"variable": "v_elsewhere", "columns": ["code"]}),
+    }
+    derived = {"type-1": [
+        {"api_name": "level", "kind": "function",
+         "inputs": {"shown": {"variable": "v_north"}, "cutoff": {"value": 3},
+                    "gone": {"variable": "v_deleted"}}},
+        {"api_name": "spare", "kind": "column_math", "expression": "capacity - 5"},
+    ]}
+    assert wv.displayed(layout, variables, {"tbl"}, derived=derived) == {"v_region", "v_north"}
+    # A table that does not show the column, or is not on screen, needs none.
+    assert wv.displayed(layout, variables, {"other"}, derived=derived) == {"v_elsewhere"}
+    assert "v_north" not in wv.displayed(layout, variables, set(), derived=derived)
+
+
 def test_the_closure_follows_a_chain_as_far_as_it_goes() -> None:
     """**The depth, and a survivor is why this test exists.**
 
