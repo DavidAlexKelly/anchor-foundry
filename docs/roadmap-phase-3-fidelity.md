@@ -301,11 +301,25 @@ The tell was visible in the job list the whole time: `types and unit tests` is t
 
 Two things worth keeping from this. **The docstring on `sync_app_password` was the bug** — it said local dev and CI don't set the variable, "so this is a no-op there", which reads as fine on paper and is wrong in exactly the way only a run exposes. And nineteen red runs sat there while the same suites passed on every developer machine, which is the entire argument for stage 0 going first.
 
-**E.2 — Decision 0006 is unproven against a real cluster. M.** Typed instance properties are tested against a fixture that now enforces mappings and has 17 tests of its own fidelity (§112). As that work said: this narrows the unproven claim from "does any of this work" to "does OpenSearch behave like the mapping it was given". One deployment closes it.
+**E.2 — Decision 0006 is unproven against a real cluster. M.** *Found in §805: deployed stacks set `OPENSEARCH_ENDPOINT` but never `OPENSEARCH_SECRET_ARN`, and the API needs both, so every deployment reads its objects from Postgres today. Turning OpenSearch on needs more than the secret: the worker's scheduled sync writes only Postgres, so tables past the 20,000-row interactive limit would never reach the index.* Typed instance properties are tested against a fixture that now enforces mappings and has 17 tests of its own fidelity (§112). As that work said: this narrows the unproven claim from "does any of this work" to "does OpenSearch behave like the mapping it was given". One deployment closes it.
 
 **E.3 — Observability: ~~there is none~~. In-process half done (§802), M.** ~~No error tracking, no structured logging worth querying, no metrics, no alerting. The first incident will be diagnosed by SSH and guesswork.~~ The API now gives every response an `X-Request-ID`, writes one JSON line per request (by route template, so nothing an id or a token lives in), records an unhandled error's traceback under the id its 500 quotes, and serves Prometheus metrics at `/api/metrics` (`apps/api/src/lib/observability.py`; `docs/deploying.md` has the variables). **Still open, and the deployment's rather than the process's:** shipping those lines to a store, scraping the metrics, and alerting on them.
 
-**E.4 — Scale is entirely unmeasured. M.** Every test runs against tens of rows. Not "it will be slow" — **unknown**, which is worse, because it cannot be planned around.
+**E.4 — Scale ~~is entirely unmeasured~~. Measured at a million rows (§804, §805), M.** ~~Every test runs against tens of rows. Not "it will be slow" — **unknown**, which is worse, because it cannot be planned around.~~ `apps/api/bench/scale.py` drives the real routes in-process against Postgres and local storage: upload a million-row file, preview, profile and query it, sync it into objects, then list, count and sum them. On a 4-CPU machine, after the fixes below:
+
+| At 1,000,000 rows | p50 | p95 |
+|---|---|---|
+| **Dataset preview** (the number this item asked for) | **23 ms** | **26 ms** |
+| Dataset profile, cached (first: 0.18 s) | 11 ms | 15 ms |
+| Grouped query over the dataset | 98 ms | 109 ms |
+| Objects: first page with its total | 301 ms | 336 ms |
+| Objects: count | 292 ms | 332 ms |
+| Objects: sum a property | 864 ms | 970 ms |
+| Objects: sync (the worker's scheduled sync) | 42 s, once | |
+
+**What measuring found, and fixed.** At 10,000 objects a first page took 0.9 s and a count 0.5 s. Freshly synced rows made the planner check row-level security row by row, calling the SECURITY DEFINER `rls_workspace_ids()` twice per row; migration 0155 makes all 25 policies that call it compute it once per statement. At a million, the first page took 2.9 s at p95 because one sync gives every object the same `updated_at`, and the `primary_key` tie-break sorted every row; migration 0156 puts the key in the index (0.09 ms to read the page). Migration 0157 asks "is this a kiosk?" once per statement in the six policies that ask it per row. The API's interactive sync wrote one statement per object (16 s for 10,000); it now writes a thousand per statement (0.55 s). The worker's sync, the only one for a table past 20,000 rows, did the same per-row writes and also **overwrote edit-only property values on every run** (§805): it merges and batches now.
+
+**What is still slow, and why.** A count or a sum reads every row. The count pays about 0.3 µs a row for the policy checks (39 ms without RLS), and the sum also parses each row's `jsonb`. That is the Postgres store's floor without a structural change, such as putting `workspace_id` on `object_instances` so the policy needs no join; OpenSearch would aggregate natively. **Not measured:** OpenSearch at this size (E.2), and anything past one machine.
 
 **E.5 — Dependency advisories. S.** Two in the Next 14.2.5 tree. Pre-existing and known; still an answer somebody will want.
 
