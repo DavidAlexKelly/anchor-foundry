@@ -7,6 +7,11 @@ const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "
 const nextConfig = {
   reactStrictMode: true,
   output: "standalone",
+  // No image optimizer (§806). Nothing here uses `next/image`, and the
+  // optimizer's endpoint is where Next 14's unpatched advisories live -
+  // GHSA-2xp9-vwfh-vxw4 (remote code execution via AVIF) among them - so the
+  // endpoint is switched off rather than left serving nothing on purpose.
+  images: { unoptimized: true },
   // Pin tracing to the monorepo root so the standalone layout is stable
   // (apps/web/server.js) regardless of where the build runs - the web
   // Dockerfile's COPY paths depend on it.

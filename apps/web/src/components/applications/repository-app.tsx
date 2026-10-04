@@ -863,7 +863,7 @@ function FilesTab({
                   readOnly={readOnly}
                   reveal={reveal}
                   onReady={() => setEditorReady(true)}
-                  onChange={(next) => setEdits((c) => ({ ...c, [selected]: next }))}
+                  onChange={(next: string) => setEdits((c) => ({ ...c, [selected]: next }))}
                   preferences={editorPreferences}
                   vocabulary={vocabulary}
                   // p.115's dataset aliases, read from the working tree the
