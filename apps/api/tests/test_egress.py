@@ -263,9 +263,11 @@ def test_every_outbound_path_in_the_worker_is_guarded() -> None:
         os.path.join(root, "worker", "src", "anchor_worker", "connectors.py"),
         encoding="utf-8",
     ).read()
-    # One per outbound path: Postgres, MySQL, the REST page fetch, and the
-    # OAuth token fetch that is a second destination (p.12).
-    assert source.count("egress.check_current(") == 4, (
+    # One per outbound path: Postgres, MySQL, the REST page fetch, the OAuth
+    # token fetch that is a second destination (p.12), and an S3 source's
+    # custom endpoint (§881). The redirects of the two HTTP paths are asked
+    # again by safe_http, which is handed `egress.check_current` itself.
+    assert source.count("egress.check_current(") == 5, (
         "the worker's connectors have a number of egress guards this test does "
         "not expect - a new outbound path needs one, and a removed one needs "
         "this number changed on purpose"
