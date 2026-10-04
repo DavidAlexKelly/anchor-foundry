@@ -207,8 +207,8 @@ def test_versions_listed(client: TestClient, fx: Fixture) -> None:
     did = _dataset_id(client, fx, f"Orders {fx.tag}")
     r = client.get(f"{base(fx)}/{did}/versions", headers=hdr(fx.viewer_sub))
     assert r.status_code == 200
-    assert [v["version_number"] for v in r.json()] == [1]
-    assert r.json()[0]["produced_by_kind"] == "upload"
+    assert [v["version_number"] for v in r.json()["items"]] == [1]
+    assert r.json()["items"][0]["produced_by_kind"] == "upload"
 
 
 # ---- isolation & lifecycle ---------------------------------------------------

@@ -148,6 +148,26 @@ class VersionOut(BaseModel):
     # p.22's type (§747; db 0144): SNAPSHOT begins a new view, APPEND and
     # UPDATE extend the one before.
     transaction_type: str
+    #: The version before's row count, for the change (§879). None on the first.
+    previous_row_count: int | None = None
+    #: Whether this version begins a view: a SNAPSHOT, or the first (p.26).
+    starts_view: bool = False
+
+
+#: Versions on a page of the history (§879).
+VERSION_PAGE = 50
+
+
+class VersionPage(BaseModel):
+    """A page of the history, newest first, and what is true of all of it."""
+
+    items: list[VersionOut]
+    #: Every version the dataset has, not this page's.
+    total: int
+    views: int
+    #: Where the current view begins, and the newest version.
+    view_start: int | None
+    newest: int | None
 
 
 class RetentionOut(BaseModel):
@@ -1130,13 +1150,22 @@ async def dataset_retention(
     )
 
 
-@router.get("/{dataset_id}/versions", response_model=list[VersionOut])
+@router.get("/{dataset_id}/versions", response_model=VersionPage)
 async def list_versions(
     dataset_id: UUID,
+    limit: int = Query(default=VERSION_PAGE, ge=1, le=200),
+    before: int | None = Query(default=None, ge=1),
     access: ProjectAccess = Depends(require_project_role("viewer")),
-) -> list[VersionOut]:
+) -> VersionPage:
+    """**A page, not the history (§879).** A dataset synced every five
+    minutes has a hundred thousand versions a year, and this answered every
+    one of them, each with its schema and each with its own S3 HEAD, on every
+    visit to its History tab. `before` is the version number the page starts
+    under; the summary is of the whole history."""
     async with user_connection(access.auth.user_id) as conn:
-        rows = await ds_service.list_versions(conn, access.project_id, dataset_id)
+        rows = await ds_service.list_versions(
+            conn, access.project_id, dataset_id, limit=limit, before=before)
+        summary = await ds_service.version_summary(conn, dataset_id)
     # One HEAD per version, rather than storing the size at write time: that
     # would be a second copy of a fact the object store already holds, and
     # would silently go wrong the first time anything touched the bucket
@@ -1152,7 +1181,7 @@ async def list_versions(
         data.pop("s3_manifest_key", None)
         data["size_bytes"] = size
         out.append(VersionOut(**data))
-    return out
+    return VersionPage(items=out, **summary)
 
 
 class ParseOptionsIn(BaseModel):

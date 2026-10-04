@@ -818,10 +818,18 @@ export const datasets = {
     request<import("./dataset-origin").DatasetOrigin>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/origin`,
     ),
-  versions: (wid: string, pid: string, did: string) =>
-    request<import("./types").DatasetVersion[]>(
-      `/workspaces/${wid}/projects/${pid}/datasets/${did}/versions`,
-    ),
+  /** A page of the history, newest first: `before` is the version number it
+   *  starts under (§879). */
+  versions: (wid: string, pid: string, did: string,
+             page: { limit?: number; before?: number | null } = {}) => {
+    const query = new URLSearchParams();
+    if (page.limit) query.set("limit", String(page.limit));
+    if (page.before) query.set("before", String(page.before));
+    const qs = query.toString();
+    return request<import("./types").DatasetVersionPage>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/versions${qs ? `?${qs}` : ""}`,
+    );
+  },
   /** p.24's rehearsal: what these parsing options would produce, with nothing
    *  written (§362). */
   previewParse: (

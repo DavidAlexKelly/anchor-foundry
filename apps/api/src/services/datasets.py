@@ -459,28 +459,70 @@ async def store_profile(
 
 
 async def list_versions(
-    conn: AsyncConnection, project_id: UUID, dataset_id: UUID
+    conn: AsyncConnection, project_id: UUID, dataset_id: UUID,
+    *, limit: int | None = None, before: int | None = None,
 ) -> list[dict[str, Any]]:
+    """The history, newest first: every version, or `limit` of them older than
+    `before` (§879).
+
+    **Each row carries what reading it needed the rest of the history for**,
+    so a page reads the same as the whole: the version before's row count, for
+    the change, and whether it begins a view (p.26: a SNAPSHOT, or the first
+    version). Both are worked out over every version before the page is cut.
+    """
     await get(conn, project_id, dataset_id)
     return await fetch_all(
         conn,
         """
-        SELECT v.id, v.version_number, v.row_count, v.table_schema,
-               v.produced_by_kind, v.s3_manifest_key, v.created_at, v.transaction_type,
-               -- Where a rollback took its data from, resolved to the number
-               -- the history shows rather than the row id it stores, so the
-               -- reader sees "rolled back to v3" instead of a uuid. Foundry
-               -- crosses the skipped transactions out (p.70); saying which
-               -- version came back is the same fact without editing the past.
-               src.version_number AS rolled_back_to
-          FROM dataset_versions v
-          LEFT JOIN dataset_versions src
-                 ON v.produced_by_kind = 'rollback' AND src.id = v.produced_by_id
-         WHERE v.dataset_id = :did
-         ORDER BY v.version_number DESC
+        SELECT * FROM (
+            SELECT v.id, v.version_number, v.row_count, v.table_schema,
+                   v.produced_by_kind, v.s3_manifest_key, v.created_at, v.transaction_type,
+                   -- Where a rollback took its data from, resolved to the
+                   -- number the history shows rather than the row id it
+                   -- stores, so the reader sees "rolled back to v3" instead of
+                   -- a uuid. Foundry crosses the skipped transactions out
+                   -- (p.70); saying which version came back is the same fact
+                   -- without editing the past.
+                   src.version_number AS rolled_back_to,
+                   LAG(v.row_count) OVER (ORDER BY v.version_number) AS previous_row_count,
+                   (v.transaction_type = 'SNAPSHOT'
+                    OR v.version_number = MIN(v.version_number) OVER ()) AS starts_view
+              FROM dataset_versions v
+              LEFT JOIN dataset_versions src
+                     ON v.produced_by_kind = 'rollback' AND src.id = v.produced_by_id
+             WHERE v.dataset_id = :did
+        ) history
+         WHERE CAST(:before AS integer) IS NULL OR version_number < CAST(:before AS integer)
+         ORDER BY version_number DESC
+         LIMIT CAST(:limit AS integer)
+        """,
+        {"did": str(dataset_id), "before": before, "limit": limit},
+    )
+
+
+async def version_summary(conn: AsyncConnection, dataset_id: UUID) -> dict[str, Any]:
+    """What the history tab says about the whole history, whichever page it is
+    showing (§879): how many versions, how many views, and where the current
+    one begins."""
+    row = await fetch_one(
+        conn,
+        """
+        SELECT count(*) AS total,
+               max(version_number) AS newest,
+               count(*) FILTER (WHERE transaction_type = 'SNAPSHOT')
+                 + CASE WHEN bool_or(version_number = first AND transaction_type <> 'SNAPSHOT')
+                        THEN 1 ELSE 0 END AS views,
+               COALESCE(max(version_number) FILTER (WHERE transaction_type = 'SNAPSHOT'),
+                        min(version_number)) AS view_start
+          FROM (SELECT version_number, transaction_type,
+                       min(version_number) OVER () AS first
+                  FROM dataset_versions WHERE dataset_id = :did) v
         """,
         {"did": str(dataset_id)},
     )
+    assert row is not None
+    return {"total": int(row["total"]), "views": int(row["views"] or 0),
+            "newest": row["newest"], "view_start": row["view_start"]}
 
 
 async def version_history(

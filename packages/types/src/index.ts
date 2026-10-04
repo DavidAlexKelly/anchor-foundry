@@ -1468,6 +1468,22 @@ export interface DatasetVersion {
    *  an UPDATE may also change or remove them. */
   transaction_type: TransactionType;
   created_at: string;
+  /** The version before's row count, for the change (§879). Null on the
+   *  first. Worked out over the whole history, so a page's last row reads as
+   *  it would in the whole. */
+  previous_row_count?: number | null;
+  /** Whether it begins a view: a SNAPSHOT, or the first (p.26). */
+  starts_view?: boolean;
+}
+
+/** A page of a dataset's history, newest first, and what is true of all of it
+ *  (§879). */
+export interface DatasetVersionPage {
+  items: DatasetVersion[];
+  total: number;
+  views: number;
+  view_start: number | null;
+  newest: number | null;
 }
 
 export type TransactionType = "SNAPSHOT" | "APPEND" | "UPDATE";

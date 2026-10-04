@@ -446,7 +446,7 @@ def test_re_parsing_keeps_the_version_that_was_parsed_wrongly(
     assert apply(client, fx, created["id"], delimiter="^").status_code == 200
     versions = client.get(
         f"{base(fx)}/datasets/{created['id']}/versions", headers=hdr(fx.viewer_sub)
-    ).json()
+    ).json()["items"]
     assert [v["version_number"] for v in versions] == [2, 1]
     assert versions[0]["produced_by_kind"] == "reparse"
     assert [c["name"] for c in versions[1]["table_schema"]] == ["id^val"], \

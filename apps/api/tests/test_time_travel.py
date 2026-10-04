@@ -105,7 +105,7 @@ def test_the_fixture_really_produced_two_versions(
 ) -> None:
     """Every assertion below is meaningless if it did not."""
     rows = client.get(f"{base(fx)}/datasets/{versioned}/versions",
-                      headers=hdr(fx.viewer_sub)).json()
+                      headers=hdr(fx.viewer_sub)).json()["items"]
     assert [r["version_number"] for r in rows] == [3, 2, 1]
 
 
@@ -136,7 +136,7 @@ def test_a_version_is_described_by_its_own_schema_not_the_current_one(
     wrongly in exactly the case somebody looks at an old version: to find out
     what changed."""
     rows = client.get(f"{base(fx)}/datasets/{versioned}/versions",
-                      headers=hdr(fx.viewer_sub)).json()
+                      headers=hdr(fx.viewer_sub)).json()["items"]
     by_number = {r["version_number"]: r for r in rows}
     assert [c["name"] for c in by_number[1]["table_schema"]] == ["id", "total"]
     assert [c["name"] for c in by_number[2]["table_schema"]] == ["id", "total", "region"]
@@ -216,7 +216,7 @@ def test_every_version_reports_what_it_costs_to_keep(
     """Time travel is only possible because nothing deletes an old version.
     That bill has always been paid and never shown."""
     rows = client.get(f"{base(fx)}/datasets/{versioned}/versions",
-                      headers=hdr(fx.viewer_sub)).json()
+                      headers=hdr(fx.viewer_sub)).json()["items"]
     assert all(r["size_bytes"] and r["size_bytes"] > 0 for r in rows), rows
 
 
@@ -224,7 +224,7 @@ def test_the_retention_report_adds_them_up(
     client: TestClient, fx: Fixture, versioned: str
 ) -> None:
     rows = client.get(f"{base(fx)}/datasets/{versioned}/versions",
-                      headers=hdr(fx.viewer_sub)).json()
+                      headers=hdr(fx.viewer_sub)).json()["items"]
     r = client.get(f"{base(fx)}/datasets/{versioned}/retention", headers=hdr(fx.viewer_sub))
     assert r.status_code == 200, r.text
     report = r.json()
@@ -244,7 +244,7 @@ def test_a_version_whose_object_is_gone_is_counted_as_unmeasured_not_as_zero(
     import pathlib
 
     rows = client.get(f"{base(fx)}/datasets/{versioned}/versions",
-                      headers=hdr(fx.viewer_sub)).json()
+                      headers=hdr(fx.viewer_sub)).json()["items"]
     before = client.get(f"{base(fx)}/datasets/{versioned}/retention",
                         headers=hdr(fx.viewer_sub)).json()
 

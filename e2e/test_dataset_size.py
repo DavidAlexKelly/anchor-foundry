@@ -37,7 +37,7 @@ def test_the_details_tab_says_columns_and_bytes(page, api) -> None:
                               b"id,total,note\n1,10,a\n2,20,b\n")
     resources = mod.api.call("GET", f"{mod.base}/resources")["resources"]
     rid = next(r for r in resources if r["name"] == made["name"] and r["kind"] == "dataset")["id"]
-    [version] = mod.api.call("GET", f"{mod.base}/datasets/{made['id']}/versions")
+    [version] = mod.api.call("GET", f"{mod.base}/datasets/{made['id']}/versions")["items"]
 
     page.goto(f"{WEB_BASE}/r/{rid}?tab=details")
     size = page.get_by_test_id("ds-size")

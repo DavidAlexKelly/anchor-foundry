@@ -132,7 +132,7 @@ def test_an_uploaded_dataset_through_its_life(client, fx) -> None:
     assert r.status_code == 200, r.text
     assert types(did) == ["SNAPSHOT", "APPEND", "UPDATE", "SNAPSHOT", "SNAPSHOT"]
     versions = client.get(f"{pbase(fx)}/datasets/{did}/versions", headers=hdr(fx.viewer_sub))
-    assert [v["transaction_type"] for v in versions.json()] == [
+    assert [v["transaction_type"] for v in versions.json()["items"]] == [
         "SNAPSHOT", "SNAPSHOT", "UPDATE", "APPEND", "SNAPSHOT"]
 
     r = client.post(f"{pbase(fx)}/datasets/{did}/fork", headers=hdr(fx.editor_sub),
