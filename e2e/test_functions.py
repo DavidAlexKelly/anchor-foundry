@@ -73,7 +73,7 @@ def test_a_function_is_written_published_run_and_versioned(page, world) -> None:
     page.get_by_role("textbox", name="Value of region").fill("north")
     page.get_by_test_id("fn-run").click()
     expect(page.get_by_test_id("fn-result-line")).to_have_text("40", timeout=15000)
-    page.get_by_role("button", name="Close").click()
+    page.get_by_role("button", name="Close", exact=True).click()
 
     # A new version starts from the last, with the next patch number.
     page.get_by_role("button", name=f"New version of {api_name}").click()
