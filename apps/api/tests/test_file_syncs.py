@@ -333,9 +333,10 @@ def test_settings_a_file_sync_cannot_have_are_refused(client, fx, folder: Folder
     r = folder.configure("APPEND")
     assert r.status_code == 422, r.text
     assert "needs Exclude files already synced" in r.text
+    # A schedule is a schedule (§750): the worker runs it.
     r = client.put(f"{cbase(fx)}/{folder.id}/scheduled-sync", headers=hdr(fx.editor_sub),
                    json={"mode": "files", "folder": folder.name, "cron_schedule": "0 * * * *"})
-    assert r.status_code == 422 and "not built yet" in r.text, r.text
+    assert r.status_code == 200 and r.json()["sync_next_run_at"], r.text
     r = client.put(f"{cbase(fx)}/{folder.id}/scheduled-sync", headers=hdr(fx.editor_sub),
                    json={"mode": "full", "source_schema": "x"})
     assert r.status_code == 422 and "needs a source table" in r.text, r.text
@@ -406,3 +407,14 @@ def test_a_table_sync_carries_no_file_settings(client, fx, folder: Folder) -> No
         "mode": "full", "source_schema": folder.name, "source_table": "a.csv"})
     assert r.status_code == 200, r.text
     assert (r.json()["sync_file_transaction"], r.json()["sync_file_filters"]) == (None, None)
+
+
+def test_the_worker_runs_the_same_rules_byte_for_byte() -> None:
+    """`file_sync_rules.py` is the same file in both (§750), for `exports.py`'s
+    reason: a scheduled run that chose different files from a manual one would
+    be a difference nothing else would notice."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    api = open(os.path.join(root, "apps", "api", "src", "services", "file_sync_rules.py"), "rb").read()
+    worker = open(os.path.join(root, "apps", "worker", "src", "anchor_worker",
+                               "file_sync_rules.py"), "rb").read()
+    assert api == worker, "copy apps/api/src/services/file_sync_rules.py to the worker"

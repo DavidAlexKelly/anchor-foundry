@@ -515,6 +515,11 @@ class MySQLConnector:
 # rather than a column, since the unit of change is the object. See the
 # API-side connector for the full reasoning.
 _S3_KEY_MAX = 1024
+#: A file sync's folder is listed whole each run - the API copy's bound.
+_MAX_FOLDER_FILES = 10_000
+#: The files a sync can read: `jobs/sync_configs._READERS`' keys, which a test
+#: holds this to (the job imports this module, so it cannot import the job).
+FILE_EXTENSIONS = (".csv", ".tsv", ".parquet", ".json", ".jsonl")
 
 
 class S3Connector:
@@ -605,6 +610,57 @@ class S3Connector:
         if len(key) > _S3_KEY_MAX or not key.startswith(prefix):
             raise ConnectorError(f"invalid object name {source_table!r}")
         return key
+
+    # ---- file-based syncs (decision 0021; `data-connection` p.160-164) -------
+    def _folder_prefix(self, config: dict, folder: str) -> str:
+        """A subfolder's key prefix under the connection's own, refusing one
+        that climbs out of it - the API copy's rule."""
+        folder = (folder or "").strip("/")
+        if ".." in folder.split("/"):
+            raise ConnectorError(f"invalid folder {folder!r}")
+        return f"{config.get('prefix') or ''}{folder + '/' if folder else ''}"
+
+    def list_folder(self, config: dict, secret: dict, *, folder: str) -> list:
+        """Every readable file nested in `folder`, as `{path, size, modified}`
+        - the API copy's `list_folder`."""
+        bucket = config["bucket"]
+        client = self._client(config, secret)
+        base = self._folder_prefix(config, folder)
+        out = []
+        try:
+            paginator = client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=bucket, Prefix=base):
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if key.endswith("/"):
+                        continue
+                    if os.path.splitext(key)[1].lower() not in FILE_EXTENSIONS:
+                        continue
+                    out.append({"path": key[len(base):], "size": int(obj.get("Size", 0)),
+                                "modified": _s3_timestamp(obj.get("LastModified"))})
+                    if len(out) > _MAX_FOLDER_FILES:
+                        raise ConnectorError(
+                            f"{folder or 'this folder'} holds more than {_MAX_FOLDER_FILES} "
+                            "files - sync a narrower subfolder, or filter by path"
+                        )
+        except ConnectorError:
+            raise
+        except Exception as exc:
+            raise self._translate(exc, f"bucket {bucket}") from exc
+        return out
+
+    def fetch_file(self, config: dict, secret: dict, *, folder: str, path: str, dest: str) -> None:
+        """One of `list_folder`'s files, downloaded to `dest`."""
+        if ".." in path.split("/") or path.startswith("/"):
+            raise ConnectorError(f"invalid file path {path!r}")
+        key = f"{self._folder_prefix(config, folder)}{path}"
+        if len(key) > _S3_KEY_MAX:
+            raise ConnectorError(f"invalid file path {path!r}")
+        bucket = config["bucket"]
+        try:
+            self._client(config, secret).download_file(bucket, key, dest)
+        except Exception as exc:
+            raise self._translate(exc, f"{bucket}/{key}") from exc
 
     # ---- export (decision 0016; `data-connection` p.193, p.203) --------------
     def export_file(

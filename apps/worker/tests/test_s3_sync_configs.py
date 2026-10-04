@@ -305,3 +305,171 @@ def test_an_openid_connect_source_the_deployment_cannot_sign_for_fails_alone(
     assert run_due_scheduled_syncs(_ctx()) >= 1
     row = _connection_row(cid)
     assert row["status"] == "error" and "OIDC_ISSUER" in row["last_error"], row
+
+
+# ---- §750: a file sync on the schedule (decision 0021) -------------------------
+def _file_sync(workspace: dict, s3_config: dict, folder: str, transaction: str,
+               filters: dict) -> uuid.UUID:
+    import json
+    import psycopg
+
+    cid = _create_connection(
+        workspace, s3_config, mode="files", dataset_name=f"files_{folder}",
+        source_type="s3", source_schema=folder, source_table=None,
+    )
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        conn.execute("UPDATE connections SET sync_file_transaction = %s, "
+                     "sync_file_filters = %s::jsonb WHERE id = %s",
+                     (transaction, json.dumps(filters), cid))
+    return cid
+
+
+def _due_again(cid) -> None:
+    import psycopg
+
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        conn.execute("UPDATE connections SET sync_next_run_at = NULL WHERE id = %s", (cid,))
+
+
+def _versions(dataset_id) -> list[tuple]:
+    import psycopg
+
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        return conn.execute(
+            "SELECT version_number, transaction_type, row_count FROM dataset_versions "
+            "WHERE dataset_id = %s ORDER BY version_number", (dataset_id,)).fetchall()
+
+
+def _runs(cid) -> list[tuple]:
+    import psycopg
+
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        return conn.execute(
+            "SELECT mode::text, status, rows_synced, error FROM sync_runs "
+            "WHERE connection_id = %s ORDER BY started_at", (cid,)).fetchall()
+
+
+def test_a_scheduled_append_file_sync_takes_only_new_files(
+    workspace: dict, s3_config: dict, s3
+) -> None:
+    folder = f"drop-{uuid.uuid4().hex[:6]}"
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/a.csv", Body=b"id,val\n1,a\n")
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/deep/b.csv", Body=b"id,val\n2,b\n")
+    # Not a file a dataset can be read from, so not one the sync lists.
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/notes.txt", Body=b"hello")
+    cid = _file_sync(workspace, s3_config, folder, "APPEND",
+                     {"exclude_synced": {"by_modified": False, "by_size": False}})
+    assert run_due_scheduled_syncs(_ctx()) >= 1
+    row = _connection_row(cid)
+    assert row["status"] == "ok", row["last_error"]
+    dataset = row["sync_dataset_id"]
+    assert _versions(dataset) == [(1, "APPEND", 2)]
+
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/c.csv", Body=b"id,val\n3,c\n")
+    _due_again(cid)
+    run_due_scheduled_syncs(_ctx())
+    assert _versions(dataset) == [(1, "APPEND", 2), (2, "APPEND", 3)]
+    # Nothing new: a run, and no version.
+    _due_again(cid)
+    run_due_scheduled_syncs(_ctx())
+    assert len(_versions(dataset)) == 2
+    assert [(m, s, r) for m, s, r, _e in _runs(cid)] == [
+        ("files", "succeeded", 2), ("files", "succeeded", 1), ("files", "succeeded", 0)]
+
+
+def test_a_scheduled_update_file_sync_replaces_a_changed_file(
+    workspace: dict, s3_config: dict, s3
+) -> None:
+    folder = f"drop-{uuid.uuid4().hex[:6]}"
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/a.csv", Body=b"id,val\n1,a\n")
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/b.csv", Body=b"id,val\n2,b\n")
+    cid = _file_sync(workspace, s3_config, folder, "UPDATE",
+                     {"exclude_synced": {"by_modified": False, "by_size": True}})
+    run_due_scheduled_syncs(_ctx())
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/a.csv", Body=b"id,val\n1,a2\n7,g\n")
+    _due_again(cid)
+    run_due_scheduled_syncs(_ctx())
+    dataset = _connection_row(cid)["sync_dataset_id"]
+    # a.csv's one row became two, and b.csv's row stayed: three, not four.
+    assert _versions(dataset) == [(1, "UPDATE", 2), (2, "UPDATE", 3)]
+    # Remembered at its new size: an unchanged folder takes nothing.
+    _due_again(cid)
+    run_due_scheduled_syncs(_ctx())
+    assert len(_versions(dataset)) == 2
+
+
+def test_a_scheduled_file_sync_that_cannot_read_a_file_commits_nothing(
+    workspace: dict, s3_config: dict, s3
+) -> None:
+    folder = f"drop-{uuid.uuid4().hex[:6]}"
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/a.csv", Body=b"id,val\n1,a\n")
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/bad.json", Body=b"{not json")
+    cid = _file_sync(workspace, s3_config, folder, "SNAPSHOT", {})
+    run_due_scheduled_syncs(_ctx())
+    row = _connection_row(cid)
+    assert row["status"] == "error" and row["sync_dataset_id"] is None
+    assert row["last_error"].startswith("bad.json could not be read")
+    [(mode, status, _rows, error)] = _runs(cid)
+    assert (mode, status) == ("files", "failed") and "bad.json" in error
+
+
+def test_the_worker_lists_only_what_the_job_can_read() -> None:
+    """`FILE_EXTENSIONS` is the job's `_READERS`, which the connector cannot
+    import (the job imports it)."""
+    from anchor_worker.connectors import FILE_EXTENSIONS
+
+    assert set(FILE_EXTENSIONS) == set(sync_configs._READERS)
+
+
+def _files_of(dataset_id) -> list[str]:
+    import psycopg
+
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        return sorted(r[0] for r in conn.execute(
+            "SELECT filename FROM dataset_files WHERE dataset_id = %s", (dataset_id,)).fetchall())
+
+
+def test_a_scheduled_trailing_window_holds_only_the_new_files(
+    workspace: dict, s3_config: dict, s3
+) -> None:
+    folder = f"drop-{uuid.uuid4().hex[:6]}"
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/a.csv", Body=b"id,val\n1,a\n")
+    cid = _file_sync(workspace, s3_config, folder, "SNAPSHOT",
+                     {"exclude_synced": {"by_modified": False, "by_size": False}})
+    run_due_scheduled_syncs(_ctx())
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/b.csv", Body=b"id,val\n2,b\n")
+    _due_again(cid)
+    run_due_scheduled_syncs(_ctx())
+    dataset = _connection_row(cid)["sync_dataset_id"]
+    assert _versions(dataset) == [(1, "SNAPSHOT", 1), (2, "SNAPSHOT", 1)]
+    assert _files_of(dataset) == ["b.csv"]
+
+
+def test_a_dataset_a_table_sync_made_is_a_new_view_when_files_take_it_over(
+    workspace: dict, s3_config: dict, s3
+) -> None:
+    import psycopg
+
+    folder = f"drop-{uuid.uuid4().hex[:6]}"
+    s3.put_object(Bucket=BUCKET, Key=f"{PREFIX}{folder}/a.csv", Body=b"id,val\n1,a\n")
+    cid = _create_connection(
+        workspace, s3_config, mode="full", dataset_name=f"files_{folder}",
+        source_type="s3", source_schema=folder, source_table="a.csv")
+    run_due_scheduled_syncs(_ctx())
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        conn.execute("UPDATE connections SET sync_mode = 'files', sync_source_table = NULL, "
+                     "sync_file_transaction = 'APPEND', sync_file_filters = %s::jsonb, "
+                     "sync_next_run_at = NULL WHERE id = %s",
+                     ('{"exclude_synced": {"by_modified": false, "by_size": false}}', cid))
+    run_due_scheduled_syncs(_ctx())
+    dataset = _connection_row(cid)["sync_dataset_id"]
+    assert [t for _v, t, _r in _versions(dataset)] == ["SNAPSHOT", "SNAPSHOT"]
+
+
+def test_a_scheduled_file_sync_stays_inside_the_prefix(
+    workspace: dict, s3_config: dict, s3
+) -> None:
+    cid = _file_sync(workspace, s3_config, "../private", "SNAPSHOT", {})
+    run_due_scheduled_syncs(_ctx())
+    row = _connection_row(cid)
+    assert row["status"] == "error" and "invalid folder" in row["last_error"]
