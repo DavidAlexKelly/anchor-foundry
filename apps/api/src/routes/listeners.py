@@ -352,10 +352,19 @@ async def receive(token: str, request: Request) -> JSONResponse:
                     request.headers.get("x-forwarded-for"), _proxy_hops()))
         # A second transaction, so the count above stands whatever is
         # decided here (db 0110).
+        # **The address the card shows, not the one this process heard
+        # (§892).** A sender that signs its address - Twilio - signs the one
+        # it was given, and since §849 that is `public_base`: on a stack the
+        # distribution's https address, where this process hears the load
+        # balancer's plain http one. Checked against `request.url`, every
+        # signed push to a stack was refused.
+        query_string = request.url.query
+        signed_address = public_base(request) + request.url.path + (
+            f"?{query_string}" if query_string else "")
         async with get_engine().begin() as conn:
             taken = await listener_service.accept(
                 conn, secrets_gateway(), found, headers, body, query=dict(request.query_params),
-                url=str(request.url))
+                url=signed_address)
     except listener_service.Refusal as refusal:
         return JSONResponse({"detail": refusal.detail}, status_code=refusal.status,
                             headers=refusal.headers)

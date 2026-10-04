@@ -825,6 +825,29 @@ def test_a_twilio_listener_checks_the_signed_address_and_form(client, fx) -> Non
         **form, "X-Twilio-Signature": twilio_signature("auth-token", url)}).status_code == 401
 
 
+def test_twilio_signs_the_address_the_card_shows_not_the_one_the_api_hears(
+    client, fx, monkeypatch
+) -> None:
+    """§892: behind CloudFront and the load balancer, the card shows the
+    platform's public address (§849) and this process hears another. Twilio
+    signs the first."""
+    from urllib.parse import urlencode
+    monkeypatch.setenv("PLATFORM_PUBLIC_URL", "https://platform.example.com")
+    listener = started(client, fx, listener_type="twilio", secret="auth-token")
+    [endpoint] = listener["endpoints"]
+    assert endpoint["url"].startswith("https://platform.example.com/api/listen/")
+    params = [("From", "+15550100"), ("Body", "hello")]
+    form = {"Content-Type": "application/x-www-form-urlencoded"}
+    good = twilio_signature("auth-token", endpoint["url"], params)
+    assert client.post(path_of(listener), content=urlencode(params),
+                       headers={**form, "X-Twilio-Signature": good}).status_code == 200
+    # Signed for the address the process hears instead, it is someone else's.
+    heard = "http://testserver" + path_of(listener)
+    assert client.post(path_of(listener), content=urlencode(params), headers={
+        **form, "X-Twilio-Signature": twilio_signature("auth-token", heard, params)
+    }).status_code == 401
+
+
 def sendgrid_key():
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
