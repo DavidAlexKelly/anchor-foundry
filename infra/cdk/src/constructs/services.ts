@@ -508,9 +508,10 @@ export class ServicesConstruct extends Construct {
       internetFacing: true,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
-    // HTTP listener only in the synth template; the control plane attaches the
-    // ACM certificate + HTTPS listener once the customer subdomain is issued
-    // (Route 53 + ACM, spec §7). HTTP-to-HTTPS redirect is added at that point.
+    // HTTP only, and open to the internet. This said the control plane would
+    // attach a certificate and an HTTPS listener once a customer subdomain was
+    // issued; nothing does, so CloudFront reaches this in plain HTTP and so
+    // can anyone else. Decision 0025 (roadmap E.11) proposes the fix.
     const listener = this.alb.addListener("Http", { port: 80, open: true });
     listener.addTargets("Web", {
       port: 3000,
