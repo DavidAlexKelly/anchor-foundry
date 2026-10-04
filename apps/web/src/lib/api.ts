@@ -178,6 +178,13 @@ export const api = {
     ),
   projects: (workspaceId: string) =>
     request<ProjectSummary[]>(`/workspaces/${workspaceId}/projects`),
+  /** A page of the workspace grid, searched by name or slug (§823). */
+  projectPage: (workspaceId: string, q: string, offset: number) =>
+    request<{ items: ProjectSummary[]; total: number }>(
+      `/workspaces/${workspaceId}/projects/search?${new URLSearchParams({
+        q, offset: String(offset),
+      }).toString()}`,
+    ),
   /** The one project a page is about, by slug or id, rather than every
    * project in the workspace (§822). Empty when absent or not the caller's. */
   projectLookup: (workspaceId: string, by: { slug: string } | { id: string }) =>
