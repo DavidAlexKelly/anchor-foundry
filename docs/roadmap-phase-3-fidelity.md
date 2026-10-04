@@ -370,6 +370,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.23 — The fifty-first invitation of a day was a server fault. Done (§866), S.** A stack's user pool sent invitations through Cognito's own email, which AWS limits to 50 messages a day per account, and nothing said so. The 51st invitation of a day reached the 500 handler with no hint that waiting, or SES, would fix it. Cognito's other refusals reached it too: an address it would not send to, and an email already in the pool. `-c inviteFromEmail=` now sends through SES from a verified address. Cognito's refusals are translated: the daily limit is a 503 that names its cause and its fix, an existing address a 409, and an address Cognito will not send to a 422 in Cognito's words. Any other code is still a fault.
 
+**E.24 — Every read from S3 left a copy on the task's disk. Done (§869), S.** DuckDB reads a file, so on S3 `local_path` downloaded the object to a new temporary file on every call. That covers every query, preview, object-set read, sync and export. Nothing ever removed one. A task that ran long enough would fill its 20 GB of ephemeral disk, after which every read failed until ECS replaced it; the more a stack was used, the sooner. Both apps now keep one copy per object and ETag, so a repeat read costs a HEAD rather than a download, and an object that changed is fetched again. A download lands whole or not at all. Past `STORAGE_CACHE_MAX_BYTES` (4 GiB), copies idle for fifteen minutes are deleted, least recently used first. The two apps share no code, so the cache is written in each and `test_storage_cache_parity.py` holds them identical.
+
 ## Suggested order
 
 **First, out of band:** E.1.
