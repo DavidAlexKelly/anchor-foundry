@@ -485,3 +485,9 @@ def test_a_retry_after_a_failure_is_allowed(
     again = client.post("/api/onboarding/provision", headers=session["headers"])  # type: ignore[arg-type]
     assert again.status_code == 200 and again.json()["started"] is True
     assert client.get("/api/onboarding", headers=session["headers"]).json()["stack_status"] == "ready"  # type: ignore[arg-type]
+
+
+def test_the_service_publishes_no_schema_of_itself(client) -> None:
+    """§887: the operator's routes mint credentials, and the schema named
+    every one of them for anyone who asked."""
+    assert client.get("/openapi.json").status_code == 404
