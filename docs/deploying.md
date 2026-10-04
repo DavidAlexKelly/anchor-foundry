@@ -336,7 +336,7 @@ missing files.
 | `LOG_LEVEL` | platform API | Level for the API's structured `anchor.*` log lines; defaults to `INFO` (§802) |
 | `OPENSEARCH_ENDPOINT`, `OPENSEARCH_SECRET_ARN` | platform API and worker | Both set: objects are read and written in OpenSearch, the secret holding `{"username", "password"}`. Either unset: Postgres. The two services read the pair the same way, so they cannot disagree about where objects live (§811). A stack sets the endpoint always, and the secret only when deployed with `-c objectStore=opensearch` (§814) |
 | `STATEMENT_TIMEOUT_MS` | platform API | The longest one SQL statement may run before Postgres cancels it and the request gets a 503; defaults to `30000`, CloudFront's origin timeout, and `0` turns it off. The operator commands (`instance_cutover`, `restore_check`) default it to `0` themselves (§833) |
-| `METRICS_TOKEN` | platform API | When set, `/api/metrics` requires `Authorization: Bearer <token>`; unset, it is open like `/api/health` (§802) |
+| `METRICS_TOKEN` | platform API | When set, `/api/metrics` requires `Authorization: Bearer <token>`. Unset, it is open in development like `/api/health` (§802), and on a stack it is a 404 (§884): through CloudFront it was anyone's to read, and nothing on a stack scrapes it, since its alarms count log lines (§815) |
 
 **What the API emits (§802).** Every response carries `X-Request-ID` (the
 caller's own when it is a safe id, otherwise a new one). Each request writes one

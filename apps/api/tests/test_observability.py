@@ -186,6 +186,16 @@ def test_metrics_can_require_a_token(client, monkeypatch) -> None:
                       headers={"Authorization": "Bearer s3cret"}).status_code == 200
 
 
+def test_on_a_stack_metrics_are_closed_without_a_token(client, monkeypatch) -> None:
+    """§884: through CloudFront they were anyone's to read."""
+    monkeypatch.setenv("ECS_CONTAINER_METADATA_URI_V4", "http://169.254.170.2/v4/task")
+    monkeypatch.delenv("METRICS_TOKEN", raising=False)
+    assert client.get("/api/metrics").status_code == 404
+    monkeypatch.setenv("METRICS_TOKEN", "s3cret")
+    assert client.get("/api/metrics",
+                      headers={"Authorization": "Bearer s3cret"}).status_code == 200
+
+
 def test_a_histogram_puts_each_duration_in_its_own_bucket() -> None:
     m = observability.Metrics()
     m.observe("GET", "/r", 200, 0.004)
