@@ -174,7 +174,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
       - run: npm ci
       - run: scripts/check.sh types
@@ -230,7 +230,7 @@ jobs:
           cache: pip
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
       # **The worker's requirements too, since §295.** `e2e/test_tests_panel.py`
       # drives the worker's own op - the dev stack runs no Dagster daemon, so a
