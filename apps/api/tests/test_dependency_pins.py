@@ -43,11 +43,10 @@ SHARED = (
 #: A suite with tests that `check.sh` does not run, and the reason — written
 #: down rather than left as an absence, because an absence is what took this
 #: long to notice. Wiring one up means deleting its entry here.
-NOT_RUN = {
-    "control-plane": (
-        "needs a second database (CONTROL_PLANE_DATABASE_URL) that neither "
-        "setup.sh nor dev-up.sh provisions"
-    ),
+NOT_RUN: dict[str, str] = {
+    # Empty since §873: the control plane's suite was here, "needs a second
+    # database (CONTROL_PLANE_DATABASE_URL) that neither setup.sh nor
+    # dev-up.sh provisions", and `check.sh control-plane` now makes one.
 }
 
 #: `name[extra]==version`, with comments and whitespace already stripped. The

@@ -160,6 +160,12 @@ jobs:
           cache: pip
       - run: pip install -r apps/worker/requirements.txt -r apps/worker/requirements-dev.txt
       - run: scripts/check.sh worker
+      # The control plane's suite (§873), here because this is the short job
+      # with a Postgres: it makes its own database, as the worker's does. Its
+      # pins match the shared ones (test_dependency_pins), so installing them
+      # beside the worker's changes nothing the worker ran on.
+      - run: pip install -r apps/control-plane/requirements.txt -r apps/control-plane/requirements-dev.txt
+      - run: scripts/check.sh control-plane
 
   types:
     name: types and unit tests

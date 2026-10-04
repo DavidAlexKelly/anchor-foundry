@@ -20,12 +20,11 @@
 # start empty. `scripts/fresh-e2e.sh` is the same suite against a database
 # created a minute ago, and it is the one to run before merging.
 #
-# `apps/control-plane/tests` is deliberately not here: it needs a second
-# database nothing in this repo provisions (its pins match apps/api's since §837).
-# `apps/api/tests/test_dependency_pins.py` holds that reason and goes red if a
-# new suite is added without one - because until §263 the worker's 78 tests
-# were absent from this file with no reason at all, and an absence explains
-# nothing to the next person reading it.
+# Every `apps/*/tests` is run by a target here - `apps/control-plane/tests`
+# since §873, on a database of its own. `apps/api/tests/test_dependency_pins.py`
+# goes red if a new suite is added without one, or without a written reason -
+# because until §263 the worker's 78 tests were absent from this file with no
+# reason at all, and an absence explains nothing to the next person reading it.
 #
 # Exits non-zero on the first failure. Set ANCHOR_E2E_REQUIRED=1 to make a
 # missing dev stack a failure rather than a skip - which is what CI wants,
@@ -98,6 +97,30 @@ with psycopg.connect(for_database(admin, "postgres"), autocommit=True) as conn:
     LOCAL_STORAGE_ROOT="${LOCAL_STORAGE_ROOT:-$STORAGE_ROOT/worker}" \
     "$PYTHON" -m pytest -q
 ); }
+# **The control plane's suite, on a database of its own** (§873). It was left
+# out of this file because it needs one - CONTROL_PLANE_DATABASE_URL, the
+# registry's - and nothing provisioned it, so the provisioner, the onboarding
+# flow and the registry were changed (§849 among them) with their tests run
+# by hand or not at all. Made here the way the worker's is: on demand, beside
+# the platform's, named so it cannot be mistaken for it. The registry creates
+# its own tables (`ensure_schema`), so there is nothing to migrate.
+CONTROL_PLANE_DB="${ANCHOR_CONTROL_PLANE_DB:-platform_control_plane_test}"
+run_control_plane() { (
+  set -e
+  dsn="$(PYTHONPATH="$ROOT/packages/db" "$PYTHON" -c \
+    'import sys; from dsn import for_database; print(for_database(sys.argv[1], sys.argv[2]))' \
+    "$TEST_ADMIN_DSN" "$CONTROL_PLANE_DB")"
+  PYTHONPATH="$ROOT/packages/db" "$PYTHON" -c '
+import sys, psycopg
+from dsn import for_database
+admin, name = sys.argv[1], sys.argv[2]
+with psycopg.connect(for_database(admin, "postgres"), autocommit=True) as conn:
+    if not conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone():
+        conn.execute(f"CREATE DATABASE {name}")
+' "$TEST_ADMIN_DSN" "$CONTROL_PLANE_DB"
+  cd "$ROOT/apps/control-plane"
+  CONTROL_PLANE_DATABASE_URL="$dsn" "$PYTHON" -m pytest -q
+); }
 run_types() { ( cd "$ROOT/apps/web" && npx tsc --noEmit -p tsconfig.json ); }
 # Pure functions only, and fast enough to be run on every save - see
 # `apps/web/src/components/canvas/pure.ts` for why the boundary is drawn there.
@@ -166,6 +189,7 @@ run_e2e() {
 case "$WHICH" in
   api)    step "API tests" run_api ;;
   worker) step "Worker tests" run_worker ;;
+  control-plane) step "Control plane tests" run_control_plane ;;
   types)  step "TypeScript" run_types ;;
   unit)   step "TypeScript unit tests" run_unit ;;
   e2e)    step "Browser suite" run_e2e ;;
@@ -176,10 +200,11 @@ case "$WHICH" in
     step "TypeScript" run_types
     step "TypeScript unit tests" run_unit
     step "Worker tests" run_worker
+    step "Control plane tests" run_control_plane
     step "API tests" run_api
     step "Browser suite" run_e2e
     ;;
-  *) echo "unknown target '$WHICH' (api, worker, types, unit, e2e, all)" >&2; exit 2 ;;
+  *) echo "unknown target '$WHICH' (api, worker, control-plane, types, unit, e2e, all)" >&2; exit 2 ;;
 esac
 
 echo
