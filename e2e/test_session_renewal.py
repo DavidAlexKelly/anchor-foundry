@@ -10,6 +10,8 @@ given here: the API's refusals of an expired token, and the renewal's.
 """
 from __future__ import annotations
 
+from playwright.sync_api import Error as PlaywrightError
+
 from conftest import WEB_BASE
 
 EXPIRED = {"status": 401, "json": {"detail": "token expired"}}
@@ -38,7 +40,9 @@ def test_a_refused_request_is_renewed_and_asked_again(page) -> None:
         renewals.append(route.request.headers.get("x-anchor-session", "")),
         route.fulfill(json={})))
     page.goto(f"{WEB_BASE}/home")
-    page.get_by_role("heading", name="Choose a workspace").wait_for()
+    # The workspaces themselves, not the heading: the heading is drawn before
+    # anything is fetched, and the renewal happens after the refusal.
+    page.locator("main .grid .card").first.wait_for(timeout=30000)
     assert "/login" not in page.url
     assert len(refused) == 1
     assert renewals == ["1"], "renewed once, with the CSRF header"
@@ -49,7 +53,12 @@ def test_a_session_that_cannot_be_renewed_goes_to_sign_in(page) -> None:
     page.route("**/api/workspaces", lambda route: route.fulfill(**EXPIRED))
     page.route("**/api/auth/refresh", lambda route: route.fulfill(
         status=401, json={"detail": "the session could not be renewed"}))
-    # Only to the commit: the redirect to sign-in aborts the load being waited on.
-    page.goto(f"{WEB_BASE}/home", wait_until="commit")
+    # The redirect to sign-in can abort the very load that asked for it,
+    # before even its commit: that abort is the outcome, not a failure.
+    try:
+        page.goto(f"{WEB_BASE}/home", wait_until="commit")
+    except PlaywrightError as exc:
+        if "ERR_ABORTED" not in str(exc):
+            raise
     page.wait_for_url("**/login**")
     _expected_refusals(page)
