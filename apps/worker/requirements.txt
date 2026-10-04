@@ -27,3 +27,8 @@ pytest==8.3.3
 # authenticates with OpenID Connect signs its token here (`oidc.py`), RS256 by
 # hand; the API has it through PyJWT[crypto], and this image had nothing.
 cryptography==50.0.1
+# **Runtime since §811.** A scheduled object sync writes the OpenSearch index
+# when the deployment has one (`instance_index.py`), because that is where the
+# API reads objects from; writing Postgres instead was a sync reporting "ok"
+# into a table nobody read. The synchronous client, so no [async] extra.
+opensearch-py==2.7.1
