@@ -159,3 +159,27 @@ def test_the_worker_runs_at_most_four_at_once() -> None:
     settings = yaml.safe_load(open(DAGSTER_YAML))
     assert settings["run_coordinator"]["class"] == "QueuedRunCoordinator"
     assert settings["run_coordinator"]["config"]["max_concurrent_runs"] == 4
+
+
+MONITORING = os.path.join(os.path.dirname(os.path.dirname(WORKER)), "infra", "cdk", "src",
+                          "constructs", "monitoring.ts")
+
+
+def test_the_failure_alarm_counts_what_a_failed_run_writes(instance: DagsterInstance, capfd) -> None:
+    """§889: the deployment alarms on Dagster's RUN_FAILURE line, read out of
+    the CDK source and matched here against what a failed run really prints.
+    A quoted CloudWatch term matches that exact text anywhere in a line."""
+    import re
+
+    source = open(MONITORING).read()
+    (pattern,) = re.findall(r'counted\(\s*"WorkerRunFailures",\s*\'([^\']+)\'\s*\)', source)
+    assert pattern.startswith('"') and pattern.endswith('"'), pattern
+    term = pattern[1:-1]
+
+    capfd.readouterr()
+    execute_job(reconstructable(_failing_job), instance=instance, raise_on_error=False)
+    failed = capfd.readouterr()
+    execute_job(reconstructable(_succeeding_job), instance=instance)
+    succeeded = capfd.readouterr()
+    assert term in failed.out + failed.err
+    assert term not in succeeded.out + succeeded.err

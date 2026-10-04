@@ -38,6 +38,7 @@ export const METRIC_NAMESPACE = "Anchor/Platform";
  *   - any unhandled error, each of which already carries its request id;
  *   - p95 latency over two seconds;
  *   - the API or the worker with no task running;
+ *   - the worker's scheduled runs failing (§889);
  *   - the API's targets failing the load balancer's health check;
  *   - the database short of storage, or of CPU.
  *
@@ -81,6 +82,10 @@ export class MonitoringConstruct extends Construct {
     const latency = counted("ApiLatency", '{ $.logger = "anchor.access" }', "$.duration_ms").with({
       statistic: "p95",
     });
+    // Dagster's own event line for a run that failed, which the worker's
+    // run processes write to the container's output (§889). Quoted, so the
+    // whole term is matched rather than its parts.
+    const workerRunFailures = counted("WorkerRunFailures", '"RUN_FAILURE"');
 
     const alarm = (
       name: string,
@@ -148,6 +153,13 @@ export class MonitoringConstruct extends Construct {
         `The ${name.toLowerCase()} service has had no running task for three minutes.`
       );
     }
+    alarm(
+      "WorkerRunsFailing",
+      workerRunFailures, 3, atLeast, 1,
+      "Three or more of the worker's scheduled runs failed in five minutes: a poll itself is " +
+        "failing, every minute. A sync's or a model's own failure is recorded on it, not here. " +
+        "The worker's log has Dagster's RUN_FAILURE lines with the error."
+    );
     alarm(
       "ApiUnhealthyTargets",
       props.apiTargetGroup.metrics.unhealthyHostCount({ period: Duration.minutes(1) }),

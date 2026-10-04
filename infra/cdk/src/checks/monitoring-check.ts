@@ -97,6 +97,7 @@ check("the API's lines are counted by the patterns its formatter matches", () =>
     ApiServerErrors: ['{ $.logger = "anchor.access" && $.status >= 500 }', "1"],
     ApiUnhandledErrors: ['{ $.logger = "anchor.error" }', "1"],
     ApiLatency: ['{ $.logger = "anchor.access" }', "$.duration_ms"],
+    WorkerRunFailures: ['"RUN_FAILURE"', "1"],
   };
   if (filters.length !== Object.keys(expected).length) {
     throw new Error(`expected ${Object.keys(expected).length} filters, found ${filters.length}`);
@@ -113,7 +114,7 @@ check("the API's lines are counted by the patterns its formatter matches", () =>
 });
 
 check("every alarm reaches the topic when it fires and when it clears", () => {
-  if (alarms.length !== 8) throw new Error(`expected 8 alarms, found ${alarms.length}`);
+  if (alarms.length !== 9) throw new Error(`expected 9 alarms, found ${alarms.length}`);
   for (const [id, made] of alarms) {
     for (const key of ["AlarmActions", "OKActions"]) {
       if (!JSON.stringify(made.Properties?.[key] ?? []).includes(topicId)) {
