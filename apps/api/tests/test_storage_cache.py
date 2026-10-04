@@ -103,3 +103,15 @@ def test_a_failed_download_leaves_nothing(s3, monkeypatch) -> None:
     with pytest.raises(ConnectionError):
         gateway.local_path(KEY)
     assert list(cache.iterdir()) == []
+
+
+def test_the_s3_gateway_lists_sizes_past_one_page(s3) -> None:
+    """§898's listing, across more objects than one ListObjectsV2 page."""
+    client, gateway, _ = s3
+    prefix = "workspaces/w-cache/datasets/00000000-0000-0000-0000-000000000002/"
+    for n in range(1, 1206):
+        client.put_object(Bucket=BUCKET, Key=f"{prefix}v{n}/data.parquet", Body=b"x" * (n % 7))
+    client.put_object(Bucket=BUCKET, Key=KEY, Body=b"other dataset")
+    sizes = gateway.sizes_under(prefix)
+    assert len(sizes) == 1205 and KEY not in sizes
+    assert sizes[f"{prefix}v13/data.parquet"] == 13 % 7

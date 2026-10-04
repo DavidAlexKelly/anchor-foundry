@@ -72,6 +72,11 @@ class StorageGateway(Protocol):
         """Remove every object under prefix (dataset deletion)."""
         ...
 
+    def sizes_under(self, prefix: str) -> dict[str, int]:
+        """Every object under prefix, by key, with its size: one listing,
+        where asking `size` of each would be a request per object (§898)."""
+        ...
+
 
 class LocalStorageGateway:
     """Development gateway: keys map to files under a root directory."""
@@ -115,6 +120,15 @@ class LocalStorageGateway:
         target = (self._root / prefix).resolve()
         if target.is_relative_to(self._root) and target.is_dir():
             shutil.rmtree(target)
+
+    def sizes_under(self, prefix: str) -> dict[str, int]:
+        if ".." in prefix or not prefix.startswith("workspaces/"):
+            raise StorageKeyError("invalid storage prefix")
+        target = (self._root / prefix).resolve()
+        if not target.is_relative_to(self._root) or not target.is_dir():
+            return {}
+        return {str(path.relative_to(self._root)): path.stat().st_size
+                for path in target.rglob("*") if path.is_file()}
 
 
 # ---- S3 objects on local disk (§869) -----------------------------------------
@@ -221,6 +235,16 @@ class S3StorageGateway:
             keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
             if keys:
                 self._client.delete_objects(Bucket=self._bucket, Delete={"Objects": keys})
+
+    def sizes_under(self, prefix: str) -> dict[str, int]:
+        if ".." in prefix or not prefix.startswith("workspaces/"):
+            raise StorageKeyError("invalid storage prefix")
+        sizes: dict[str, int] = {}
+        paginator = self._client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                sizes[obj["Key"]] = int(obj["Size"])
+        return sizes
 
 
 # The gateway this process was configured with, for a service that reads a
