@@ -808,19 +808,21 @@ async def list_shares(conn: AsyncConnection, project_id: UUID, app_id: UUID) -> 
 async def list_published(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str, Any]]:
     """Apps visible to any workspace member regardless of project
     membership - the counterpart to list_for_project for a "gallery of apps
-    shared with me" view. Scoped via rls_project_workspace_id (db 0015)
-    rather than a subquery against `projects` directly: `projects` is
-    itself RLS-protected, and a permission_mode='custom' project can
-    legitimately hide its own row from a user this endpoint exists to
-    serve - the SECURITY DEFINER helper resolves the workspace_id without
-    depending on that visibility. RLS still independently enforces
-    group-share membership for publish_scope='groups' rows."""
+    shared with me" view. Scoped by the app's own `workspace_id` (db 0161)
+    rather than a join to `projects`: `projects` is itself RLS-protected,
+    and a permission_mode='custom' project can legitimately hide its own row
+    from a user this endpoint exists to serve. The column is copied from the
+    project by a trigger, and filtering on it lets the index find this
+    workspace's apps before the row policy runs - the per-row
+    `rls_project_workspace_id` it replaced ran the policy on every tenant's
+    apps first (§826). RLS still independently enforces group-share
+    membership for publish_scope='groups' rows."""
     rows = await fetch_all(
         conn,
         f"""
         SELECT {_COLUMNS} FROM canvas_apps
          WHERE publish_scope <> 'private'
-           AND rls_project_workspace_id(project_id) = :wid
+           AND workspace_id = :wid
          ORDER BY name
         """,
         {"wid": str(workspace_id)},
@@ -854,7 +856,7 @@ async def get_saved(conn: AsyncConnection, workspace_id: UUID, app_id: UUID) -> 
         SELECT {_columns("a")}, a.definition AS definition
           FROM canvas_apps a
          WHERE a.id = :aid
-           AND rls_project_workspace_id(a.project_id) = :wid
+           AND a.workspace_id = :wid
         """,
         {"aid": str(app_id), "wid": str(workspace_id)},
     )
@@ -885,7 +887,7 @@ async def get_published(conn: AsyncConnection, workspace_id: UUID, app_id: UUID)
                  ON v.canvas_app_id = a.id
                 AND v.version_number = a.published_version
          WHERE a.id = :aid AND a.publish_scope <> 'private'
-           AND rls_project_workspace_id(a.project_id) = :wid
+           AND a.workspace_id = :wid
         """,
         {"aid": str(app_id), "wid": str(workspace_id)},
     )
