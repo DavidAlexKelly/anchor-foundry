@@ -464,12 +464,9 @@ def modification_targets(
                 f"{parameter!r} names the object to change and no value was supplied"
             )
         if kind == "modify_object":
-            # **No interface-reference case here** (§454, §223). A modify rule
-            # naming one is refused at save time — its property would be in the
-            # interface's vocabulary and only the subject's rules translate that
-            # — so a lookup for the resolved type could never run. It was
-            # written, and a mutant that removed it broke nothing, which is
-            # what unreachable looks like from outside.
+            # A rule changing an object named by an interface reference names
+            # its type by now: `rules_for_references` wrote it in at submission
+            # (§742), once the reference's object had been found.
             type_id = str(config.get("object_type") or default_object_type_id)
         else:
             link = (link_types or {}).get(str(config.get("link_type", "")))
@@ -2857,6 +2854,68 @@ def rules_for_implementation(
     return out
 
 
+def rules_for_references(
+    rules: list[dict[str, Any]],
+    *,
+    references: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Modify rules that change an object named by an interface reference, in
+    that object's own type's vocabulary (§742; `action-types` p.62).
+
+    > "'Modify' rules on an interface can modify any object of the configured
+    > interface. An 'interface reference' parameter will be generated,
+    > constrained to the selected interface." (p.62)
+
+    `references` is `{parameter: {object_type_id, property_mapping, type_name,
+    interface_name, presented}}` for each interface reference this submission
+    filled in, its type found by asking the implementations. The rename is
+    `rules_for_implementation`'s - the same refusals for an unmapped optional
+    property and for one presented through a reducer or main field - and the
+    rule then names the type, so the executor treats it as the ordinary
+    cross-type modify it now is.
+    """
+    out: list[dict[str, Any]] = []
+    for rule in rules:
+        config = _json(rule.get("config")) or {}
+        named = str(config.get("object") or "")
+        if str(rule.get("kind")) != "modify_object" or named not in references:
+            out.append(rule)
+            continue
+        ref = references[named]
+        [renamed] = rules_for_implementation(
+            [{**rule, "config": {k: v for k, v in config.items() if k != "object_type"}}],
+            mapping=ref["property_mapping"], interface_name=ref["interface_name"],
+            type_name=ref["type_name"], presented=ref.get("presented"),
+        )
+        out.append({**renamed, "config": {**(_json(renamed["config"]) or {}),
+                                          "object_type": ref["object_type_id"]}})
+    return out
+
+
+async def _reference_properties(
+    conn: AsyncConnection, workspace_id: UUID, parameters: list[dict[str, Any]],
+) -> dict[str, set[str]]:
+    """`{interface reference parameter: its interface's effective property
+    names}`, for `_validate_definition`'s modify check (§742). An interface the
+    caller cannot see contributes nothing, so a rule writing through it is
+    refused as writing nothing it may name."""
+    from . import interfaces as interfaces_service
+
+    out: dict[str, set[str]] = {}
+    for parameter in parameters:
+        interface_id = parameter.get("interface_id")
+        if not interface_id:
+            continue
+        try:
+            interface = await interfaces_service.get_interface(
+                conn, workspace_id, UUID(str(interface_id)))
+        except (NotFoundError, ValueError):
+            continue
+        out[str(parameter.get("api_name", ""))] = {
+            str(p["api_name"]) for p in interface["effective_properties"]}
+    return out
+
+
 def creation_rules_for_interface(
     rules: list[dict[str, Any]],
     *,
@@ -3167,8 +3226,13 @@ def _validate_definition(
     link_types: dict[str, dict[str, Any]],
     workspace_properties: dict[str, dict[str, str]],
     webhooks: dict[str, dict[str, Any]] | None = None,
+    reference_properties: dict[str, set[str]] | None = None,
 ) -> None:
     """Refuse a definition that could not be executed, at save time.
+
+    `reference_properties` is `{interface reference parameter: its interface's
+    effective property names}`, which a modify rule changing an object named
+    by one is written in (§742; p.62).
 
     Every check here has the same justification: the executor would refuse it
     later, at click time, in front of somebody who did not write it. §1.2a made
@@ -3552,20 +3616,26 @@ def _validate_definition(
             raise ValueError(f"a rule reads {parameter!r}, which is not a parameter")
         named = config.get("object")
         if named and str(named) in interface_parameters:
-            # p.62 names the interface reference for a *delete*, and for the
-            # subject of a modify on an interface — which this platform resolves
-            # from the instance rather than from a parameter (§451). A modify
-            # rule naming one as *another* object is the case that is not built:
-            # the property it writes would be in the interface's vocabulary and
-            # would need renaming per implementation, exactly as the subject's
-            # rules do. Refused with a sentence rather than half-working (§214),
-            # and named as a ○ on the row.
-            raise ValueError(
-                f"{named!r} is an interface reference, and a modify rule cannot "
-                "change an object named by one yet — its properties would be "
-                "the interface's, which only the subject's rules translate "
-                "(action-types p.62)"
-            )
+            # p.62: "'Modify' rules on an interface can modify any object of the
+            # configured interface. An 'interface reference' parameter will be
+            # generated, constrained to the selected interface." (§742) The
+            # property is the interface's, renamed per implementation at
+            # submission exactly as the subject's rules are
+            # (`rules_for_references`), so it is checked against the
+            # interface's vocabulary here - and the rule names no type, since
+            # the reference says what type its object is.
+            if config.get("object_type"):
+                raise ValueError(
+                    f"{named!r} is an interface reference, so it says which object "
+                    "to change and what type it is; the rule cannot also name an "
+                    "object type (action-types p.62)"
+                )
+            if prop not in (reference_properties or {}).get(str(named), set()):
+                raise ValueError(
+                    f"a rule writes {prop!r} on {named!r}, which is not a property "
+                    "of the interface that parameter holds (action-types p.62)"
+                )
+            continue
         if named and str(named) not in seen:
             raise ValueError(
                 f"a modify_object rule changes {named!r}, which is not a parameter"
@@ -3946,6 +4016,7 @@ async def set_definition(
         # because an action type is a workspace resource and RLS already
         # narrows this to what the caller can see.
         webhooks=await webhooks_by_id(conn, workspace_id),
+        reference_properties=await _reference_properties(conn, workspace_id, parameters),
     )
 
     # **The refusal decision 0007 names.** Checked against what is *going*, not

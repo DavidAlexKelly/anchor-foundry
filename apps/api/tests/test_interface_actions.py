@@ -1123,23 +1123,26 @@ def test_a_delete_rule_naming_one_cannot_also_name_a_type(
     assert "interface reference" in made["response"].text
 
 
-def test_a_modify_rule_naming_one_is_refused_and_says_why(
+def test_a_modify_rule_naming_one_writes_the_interfaces_vocabulary(
     client: TestClient, fx: Fixture, world: dict
 ) -> None:
-    """p.62 names the interface reference for a *delete*, and for the subject
-    of a modify on an interface — which this platform resolves from the
-    instance rather than from a parameter (§451).
-
-    A modify rule naming one as *another* object is the case that is not built:
-    its property would be in the interface's vocabulary and would need
-    translating per implementation. Refused with a sentence rather than
-    half-working (§214), and a ○ on the row.
-    """
+    """p.62: "'Modify' rules on an interface can modify any object of the
+    configured interface" (§742). The rule's property is the interface's, so
+    one implementation's own column name is refused at save time - and naming
+    a type beside the reference is refused too, since the reference says it."""
     made = _reference_action(
         client, fx, world,
         rules=[{"kind": "modify_object",
                 "config": {"object": "subject", "property": "state",
                            "parameter": "subject"}}],
+    )
+    assert made["response"].status_code == 422, made["response"].text
+    assert "not a property of the interface" in made["response"].text
+    made = _reference_action(
+        client, fx, world,
+        rules=[{"kind": "modify_object",
+                "config": {"object": "subject", "property": "inspection_status",
+                           "parameter": "subject", "object_type": world["vehicle"]}}],
     )
     assert made["response"].status_code == 422, made["response"].text
     assert "interface reference" in made["response"].text
@@ -1402,6 +1405,36 @@ def _offered(client: TestClient, fx: Fixture, action_id: str, values: dict | Non
     return next(c for c in r.json() if c["parameter"] == "subject")
 
 
+def _modify_through(client: TestClient, fx: Fixture, narrow: dict, prop: str) -> dict:
+    action = client.post(
+        f"{wbase(fx)}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": narrow["facility"],
+              "api_name": f"mref_{uuid.uuid4().hex[:8]}",
+              "display_name": "Modify by reference", "editable_properties": ["state"]},
+    ).json()
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition", headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "subject", "display_name": "Which object", "data_type": "object",
+                 "interface_id": narrow["interface_id"]},
+                {"api_name": "said", "display_name": "Said", "data_type": "string"},
+            ],
+            "rules": [{"kind": "modify_object",
+                       "config": {"object": "subject", "property": prop, "parameter": "said"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+    return action
+
+
+def _property(client: TestClient, fx: Fixture, type_id: str, key: str, name: str):
+    rows = client.get(f"{wbase(fx)}/object-types/{type_id}/instances",
+                      headers=hdr(fx.viewer_sub)).json()["items"]
+    return next(r for r in rows if r["primary_key"] == key)["properties"].get(name)
+
+
 def test_a_filter_on_an_interface_reference_is_written_in_the_interfaces_names(
     client: TestClient, fx: Fixture, narrow: dict
 ) -> None:
@@ -1534,3 +1567,40 @@ def test_the_check_reads_the_parameter_the_filter_reads(
     status_code, refusal = _execute(client, fx, made["action"]["id"], narrow["ids"]["F1"],
                                     {"subject": narrow["ids"]["F2"], "when": "2021-06-01"})
     assert status_code == 200 and refusal in ("", "None"), refusal
+
+
+# ---- p.62's Modify through an interface reference (§742) -------------------
+def test_a_modify_through_a_reference_writes_each_types_own_column(
+    client: TestClient, fx: Fixture, narrow: dict
+) -> None:
+    """p.62's Modify on an interface (§742): one rule, written in the
+    interface's `inspection_status`, lands in Facility's `state` and in
+    Vehicle's `state`, and `last_inspection_date` in Vehicle's `checked_on`."""
+    by_status = _modify_through(client, fx, narrow, "inspection_status")
+    for type_key, key in (("facility", "F1"), ("vehicle", "V1")):
+        status_code, refusal = _execute(client, fx, by_status["id"], narrow["ids"]["F1"],
+                                        {"subject": narrow["ids"][key], "said": f"done-{key}"})
+        assert status_code == 200 and refusal in ("", "None"), refusal
+        assert _property(client, fx, narrow[type_key], key, "state") == f"done-{key}"
+    by_date = _modify_through(client, fx, narrow, "last_inspection_date")
+    status_code, refusal = _execute(client, fx, by_date["id"], narrow["ids"]["F1"],
+                                    {"subject": narrow["ids"]["V1"], "said": "2022-02-02"})
+    assert status_code == 200 and refusal in ("", "None"), refusal
+    assert _property(client, fx, narrow["vehicle"], "V1", "checked_on") == "2022-02-02"
+
+
+def test_a_type_with_nothing_to_write_refuses_the_modify(
+    client: TestClient, fx: Fixture, narrow: dict
+) -> None:
+    """The drone maps nothing to the optional `inspection_status`: the same
+    refusal the subject's rename makes (p.59), rather than a silent no-op."""
+    # A drone of its own: the filter tests above deleted D1.
+    _sync(client, fx, narrow["drone"], b"tail,flown_on\nD9,2023-03-03\n",
+          "tail", {"flown_on": "flown_on"}, "NDrones again")
+    rows = client.get(f"{wbase(fx)}/object-types/{narrow['drone']}/instances",
+                      headers=hdr(fx.viewer_sub)).json()["items"]
+    d9 = next(r["id"] for r in rows if r["primary_key"] == "D9")
+    action = _modify_through(client, fx, narrow, "inspection_status")
+    status_code, refusal = _execute(client, fx, action["id"], narrow["ids"]["F1"],
+                                    {"subject": d9, "said": "done"})
+    assert "without mapping 'inspection_status'" in refusal, (status_code, refusal)

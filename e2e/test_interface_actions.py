@@ -673,3 +673,63 @@ def test_a_filter_on_an_interface_reference_is_set_in_the_dialog_and_narrows_the
     eventually(lambda: " ".join(picker.locator("option").all_text_contents()),
                lambda t: "F2" in t and "F1" not in t and "V1" not in t,
                what="only the Facility inspected on 2026-02-02")
+
+
+def test_a_rule_written_through_a_reference_is_set_in_the_dialog_and_writes_either_type(
+    page, api, world
+) -> None:
+    """§742: p.62's "'Modify' rules on an interface can modify any object of
+    the configured interface". The rule is pointed at the reference in the
+    dialog, its property picker offers the interface's properties, and one
+    submission writes F2's `surveyed_on` (F2 because the submit test above
+    rewrites F1 and V1)."""
+    action = api.call(
+        "POST", f"/workspaces/{world.workspace_id}/action-types",
+        {"object_type_id": world.facility,
+         "api_name": f"through_{uuid.uuid4().hex[:8]}",
+         "display_name": "Write through reference",
+         "editable_properties": ["surveyed_on"]},
+    )
+    api.call(
+        "PUT", f"/workspaces/{world.workspace_id}/action-types/{action['id']}/definition",
+        {
+            "parameters": [
+                {"api_name": "subject", "display_name": "Which object",
+                 "data_type": "object", "required": True,
+                 "interface_id": world.interface["id"]},
+                {"api_name": "when", "display_name": "When", "data_type": "string"},
+            ],
+            "rules": [{"kind": "modify_object",
+                       "config": {"property": "surveyed_on", "parameter": "when"}}],
+            "criteria": [],
+        },
+    )
+    page.goto(f"{WEB_BASE}/{world.workspace_slug}/{world.project_slug}/objects")
+    expect(page.get_by_role("heading", name="Actions", exact=True)).to_be_visible(timeout=30000)
+    page.locator("tbody tr").filter(has_text="Write through reference").first \
+        .get_by_role("button", name="Parameters").click()
+    page.get_by_label("Rule 1 interface reference").select_option("subject")
+    prop = page.get_by_role("combobox", name="Rule 1 property")
+    expect(prop.locator("option[value='last_inspection_date']")).to_have_count(1)
+    expect(prop.locator("option[value='surveyed_on']")).to_have_count(0)
+    prop.select_option("last_inspection_date")
+    page.get_by_role("combobox", name="Rule 1 parameter").select_option("when")
+    page.get_by_role("button", name="Save", exact=True).click()
+    eventually(
+        lambda: api.call("GET", f"/workspaces/{world.workspace_id}/action-types/{action['id']}")
+        ["rules"][0]["config"],
+        lambda c: c.get("object") == "subject" and c.get("property") == "last_inspection_date",
+        what="the rule pointed through the reference",
+    )
+
+    facility_rows = api.call(
+        "POST", f"/workspaces/{world.workspace_id}/object-sets/evaluate",
+        {"definition": {"object_type_id": world.facility, "filters": []}, "limit": 10},
+    )["instances"]
+    f2 = next(r for r in facility_rows if r["primary_key"] == "F2")
+    f1 = next(r for r in facility_rows if r["primary_key"] == "F1")
+    api.call("POST", f"{world.base}/actions/{action['id']}/execute",
+             {"instance_id": f1["id"], "values": {"subject": f2["id"], "when": "2030-01-01"}})
+    got = eventually(lambda: stored(api, world, world.facility, "F2", "surveyed_on"),
+                     lambda v: v == "2030-01-01", what="F2's surveyed_on, written through")
+    assert got == "2030-01-01"
