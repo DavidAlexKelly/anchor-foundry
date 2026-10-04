@@ -54,6 +54,9 @@ from .routes import oidc as oidc_routes
 from .routes import oauth as oauth_routes
 from .routes import workspaces as workspace_routes
 
+#: Postgres's `query_canceled`, which `statement_timeout` raises (§833).
+QUERY_CANCELED_SQLSTATE = "57014"
+
 
 def _wire_production_gateways() -> None:
     """Swap in real AWS-backed gateways when running in a deployed stack.
@@ -158,6 +161,16 @@ def create_app() -> FastAPI:
         apart from every other constraint on the table; anything else is a
         genuine server fault and is re-raised to the 500 handler unchanged."""
         original = getattr(exc, "orig", None)
+        if getattr(original, "sqlstate", None) == QUERY_CANCELED_SQLSTATE:
+            # `statement_timeout` (§833): the request asked for more than one
+            # statement may take. Not a fault in the code, and not the
+            # caller's input either, so neither a 500 nor a 4xx.
+            seconds = get_settings().statement_timeout_ms / 1000
+            return JSONResponse(
+                status_code=503,
+                content={"detail": f"the database stopped this request after {seconds:g} "
+                                   "seconds - narrow what it asks for and try again"},
+            )
         if getattr(original, "sqlstate", None) != SCHEMA_POLICY_SQLSTATE:
             raise exc
         diag = getattr(original, "diag", None)

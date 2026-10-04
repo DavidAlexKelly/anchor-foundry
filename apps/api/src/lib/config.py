@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     # http://localhost is a dev annoyance you notice in seconds, and a
     # non-Secure cookie in production is a session token on the wire.
     session_cookie_secure: bool = True
+    # The longest one SQL statement may run, in milliseconds; 0 for no limit
+    # (§833). CloudFront gives up on an origin after 30 seconds, so a request
+    # whose query runs longer has already lost its client - and without this
+    # the query ran on regardless, holding one of the task's thirty pooled
+    # connections. The operator CLIs that share this engine turn it off.
+    statement_timeout_ms: int = 30_000
 
     @model_validator(mode="after")
     def _assemble_database_url(self) -> "Settings":

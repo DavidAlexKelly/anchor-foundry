@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from typing import Any
 from uuid import UUID
@@ -195,6 +196,10 @@ def _storage_from_env() -> Any:
 
 async def _main(argv: list[str]) -> int:
     import argparse
+
+    # An operator's run over a whole deployment, not a request: no
+    # statement limit unless one is asked for (§833).
+    os.environ.setdefault("STATEMENT_TIMEOUT_MS", "0")
 
     from ..lib.db import get_engine
 
