@@ -31,6 +31,7 @@ from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import NotFoundError
 from . import object_sets
 from .dataset_engine import DatasetEngineError, json_value
+from ..lib import duck
 
 MAX_INSTANCE_SYNC_ROWS = 20_000  # flag: worker/OpenSearch bulk path beyond this
 INSTANCE_PAGE_SIZE = 50
@@ -73,7 +74,7 @@ def extract_rows(
     property_names = list(column_mappings.values())
     select_list = ", ".join(_quote_source_column(c) for c in source_columns)
 
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             cursor = con.execute(

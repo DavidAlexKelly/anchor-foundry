@@ -23,6 +23,8 @@ from typing import Any
 
 import duckdb
 
+from ..lib import duck
+
 MAX_INTERACTIVE_BYTES = 200 * 1024 * 1024  # flag: Athena beyond this in prod
 MAX_RESULT_ROWS = 500
 PREVIEW_ROWS = 100
@@ -467,7 +469,7 @@ def parse_to_parquet(
         # the reading order, which is the only order a row number can mean for
         # a file — anything else would number a sort somebody did not ask for.
         selected.append("row_number() OVER () AS row_number")
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         try:
@@ -532,7 +534,7 @@ def _with_dates(
 def ingest_to_parquet(src_path: str, extension: str, dest_path: str) -> tuple[list[ColumnSchema], int]:
     """Convert an uploaded file to canonical Parquet; returns (schema, rows)."""
     reader = _reader_expr(src_path, extension)
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         try:
@@ -565,7 +567,7 @@ def combine_parquets(
     """
     if not parts:
         raise DatasetEngineError("there is no file to read")
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         schemas = [
             (name, [(str(r[0]), str(r[1])) for r in con.execute(
@@ -641,7 +643,7 @@ def describe_file(src_path: str, extension: str) -> list[ColumnSchema]:
     discovery time is what the file will actually land with - but DESCRIBE
     only, since discovery inspects files it has no intention of ingesting."""
     reader = _reader_expr(src_path, extension)
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             con.execute(f"CREATE VIEW src AS SELECT * FROM {reader}")
@@ -674,7 +676,7 @@ def sample_file(
     avoid.
     """
     reader = _reader_expr(src_path, extension)
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             cursor = con.execute(f"SELECT * FROM {reader} LIMIT {max(1, int(limit))}")
@@ -699,7 +701,7 @@ def profile_columns(parquet_path: str) -> list[dict[str, Any]]:
     ordinary in a JSON source) get NULL min/max rather than failing the whole
     profile; the null rate and distinct count are still meaningful for them.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             con.execute(
@@ -714,27 +716,39 @@ def profile_columns(parquet_path: str) -> list[dict[str, Any]]:
             return []
 
         selects: list[str] = []
+        quoted_names: list[str] = []
         for name, data_type, *_ in described:
             quoted = '"' + str(name).replace('"', '""') + '"'
+            quoted_names.append(quoted)
             selects.append(f"count({quoted})")
-            selects.append(f"count(DISTINCT {quoted})")
             if _is_orderable(str(data_type)):
                 selects.append(f"CAST(min({quoted}) AS VARCHAR)")
                 selects.append(f"CAST(max({quoted}) AS VARCHAR)")
             else:
-                # Kept in the projection so the row stays a fixed 4-per-column
+                # Kept in the projection so the row stays a fixed 3-per-column
                 # stride and the unpacking below doesn't need to branch.
                 selects.append("NULL")
                 selects.append("NULL")
 
         try:
             row = con.execute(f"SELECT {', '.join(selects)} FROM src").fetchone()
+            # **One distinct count per query (§875).** An exact distinct count
+            # holds every value of its column at once, so one aggregate over
+            # all the columns held all of them: at three million rows it took
+            # 1.3 GB, and under a connection's memory limit it refused to run.
+            # One column at a time is the same wall-clock time - the file is
+            # columnar, so each query reads only its own column - and 400 MB.
+            distincts = [
+                con.execute(f"SELECT count(DISTINCT {quoted}) FROM src").fetchone()[0]
+                for quoted in quoted_names
+            ]
         except duckdb.Error as exc:
             raise DatasetEngineError(_clean(exc)) from exc
 
         profile: list[dict[str, Any]] = []
         for index, (name, data_type, *_) in enumerate(described):
-            non_null, distinct, minimum, maximum = row[index * 4 : index * 4 + 4]
+            non_null, minimum, maximum = row[index * 3 : index * 3 + 3]
+            distinct = distincts[index]
             non_null = int(non_null or 0)
             null_count = total - non_null
             profile.append(
@@ -866,7 +880,7 @@ def evaluate_expectations(
     One rule failing never stops the others - a dataset's health is the whole
     picture, and the first broken rule is the least useful place to stop.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             con.execute(
@@ -1032,7 +1046,7 @@ def _is_orderable(data_type: str) -> bool:
 
 def preview(parquet_path: str, limit: int = PREVIEW_ROWS) -> TabularResult:
     limit = max(1, min(limit, MAX_RESULT_ROWS))
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             cursor = con.execute(
@@ -1066,7 +1080,7 @@ def query(
                 "use export, or a model transform"
             )
     max_rows = max(1, min(max_rows, MAX_RESULT_ROWS))
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         con.execute(f"SET memory_limit='{QUERY_MEMORY_LIMIT}'")
         con.execute(f"CREATE TABLE dataset AS SELECT * FROM read_parquet('{parquet_path}')")
@@ -1098,7 +1112,7 @@ def empty_parquet(columns: list[tuple[str, str]]) -> bytes:
     (quoting them survived the sweep as equivalent)."""
     with tempfile.TemporaryDirectory() as tmp:
         dest = os.path.join(tmp, "data.parquet")
-        con = duckdb.connect()
+        con = duck.connect()
         try:
             definition = ", ".join(f"{name} {kind}" for name, kind in columns)
             con.execute(f"CREATE TABLE t ({definition})")
@@ -1110,7 +1124,7 @@ def empty_parquet(columns: list[tuple[str, str]]) -> bytes:
 
 
 def export_csv(parquet_path: str, dest_path: str) -> None:
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             con.execute(
@@ -1133,7 +1147,7 @@ def merge_incremental(
     dataset by primary key, writing the merged result as a new version. No
     existing_parquet means this is the connection's first incremental run -
     the new rows are the whole dataset."""
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             con.execute(
@@ -1176,7 +1190,7 @@ def merge_transaction(
     APPEND - and a run that replaces any existing row is an UPDATE."""
     if existing_parquet is None:
         return "SNAPSHOT"
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         pk = f'"{primary_key_column}"'
         (replaced,) = con.execute(
@@ -1197,7 +1211,7 @@ def added_rows(pairs: list[tuple[int, str, str]], dest_path: str) -> int:
     needs no second file per version. A pair whose columns differ is refused
     rather than compared: rows of two shapes cannot be told apart.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         selects = []
         for version, new, previous in pairs:
@@ -1247,7 +1261,7 @@ def join_keys(
     whose key column the upload inferred as an integer still pairs with the
     key "7". A pair with a null on either side links nothing.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             names = {
@@ -1291,7 +1305,7 @@ def join_pairs(
     cannot say. Same comparison as `join_keys` - text on both sides, nulls
     link nothing - and the same limit, counted in pairs.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             names = {
@@ -1345,7 +1359,7 @@ def write_rows(
     that no query could tell apart - the same failure the STATUS note about two
     sources feeding one object type describes, arrived at from the other side.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             con.execute(f"CREATE TABLE t AS SELECT * FROM read_parquet({parquet_path!r})")
@@ -1440,7 +1454,7 @@ def add_columns(
     """The same rows with these text columns added, empty - what an action
     log needs when its action gains a parameter after the log was made
     (§792). A column the file already has is left as it is."""
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             con.execute(f"CREATE TABLE t AS SELECT * FROM read_parquet({parquet_path!r})")
@@ -1463,7 +1477,7 @@ def add_columns(
 def has_pair(parquet_path: str, from_column: str, to_column: str, pair: tuple[str, str]) -> bool:
     """Whether a join table holds this link now (§553), compared as text as
     `join_keys` reads one - what an undo asks before it reverses a link."""
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             a, b = _quote_column(from_column), _quote_column(to_column)
@@ -1499,7 +1513,7 @@ def write_pairs(
     Keys compare as text, as `join_keys` reads them; a pair is written into the
     columns' own types, and a key that will not convert is refused.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             con.execute(f"CREATE TABLE t AS SELECT * FROM read_parquet({parquet_path!r})")
@@ -1593,8 +1607,8 @@ def run_transform(
             "scheduled worker runs handle larger models"
         )
 
-    sandbox = duckdb.connect()
-    writer = duckdb.connect()
+    sandbox = duck.connect()
+    writer = duck.connect()
     try:
         sandbox.execute(f"SET memory_limit='{QUERY_MEMORY_LIMIT}'")
         for alias, path in inputs.items():
@@ -1697,7 +1711,7 @@ def preview_transform(
     sample_rows = max(1, sample_rows)
     limit = max(1, min(limit, MAX_RESULT_ROWS))
 
-    sandbox = duckdb.connect()
+    sandbox = duck.connect()
     try:
         sandbox.execute(f"SET memory_limit='{QUERY_MEMORY_LIMIT}'")
         previewed: list[PreviewedInput] = []
@@ -1733,7 +1747,7 @@ def preview_transform(
         if spill_to is not None:
             # The writer never sees user SQL — only this DDL and these inserts,
             # which is `run_transform`'s bargain made for the same reason.
-            writer = duckdb.connect()
+            writer = duck.connect()
             try:
                 columns_ddl = ", ".join(f'"{c.name}" {c.data_type}' for c in columns)
                 writer.execute(f"CREATE TABLE __spill ({columns_ddl})")

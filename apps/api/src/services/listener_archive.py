@@ -33,6 +33,7 @@ from ..lib.db import fetch_all, fetch_one
 from . import datasets as ds_service
 from .dataset_engine import ColumnSchema
 from .storage import StorageGateway
+from ..lib import duck
 
 # ---- SHARED with apps/worker/src/anchor_worker/jobs/listener_archives.py ----
 #: The dataset's columns. The body is text: a stream row is a string, and a
@@ -75,7 +76,7 @@ def archive_file(previous: str | None, events: list[tuple], dest: str) -> tuple[
     the schema as (name, type) pairs and the row count."""
     import duckdb
 
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         con.execute("CREATE TABLE archive (" + ", ".join(f"{n} {t}" for n, t in COLUMNS) + ")")
         if previous is not None:

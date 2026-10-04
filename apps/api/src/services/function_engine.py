@@ -28,6 +28,7 @@ from typing import Any, Callable
 import duckdb
 
 from .dataset_engine import QUERY_MEMORY_LIMIT, json_value
+from ..lib import duck
 
 #: How long one call may run. A function-backed column is called as a table
 #: page loads (`functions` p.80), so this is seconds, not a build's minutes.
@@ -137,7 +138,7 @@ def run(
     for the query's `read_attachment(...)`. Without one (a publish's dry run)
     every attachment reads as NULL.
     """
-    sandbox = duckdb.connect()
+    sandbox = duck.connect()
     timer = threading.Timer(timeout, sandbox.interrupt)
     refused: list[FunctionError] = []
 
