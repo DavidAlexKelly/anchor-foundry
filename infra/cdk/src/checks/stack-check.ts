@@ -19,7 +19,8 @@
  *   4. the control plane can read it, with its scheme, as an output;
  *   5. a listener trusts only the X-Forwarded-For entries nobody else can
  *      write, which depends on whether the load balancer is public (§850);
- *   6. a deleted file outlives the database backups that may name it (§852).
+ *   6. a deleted file outlives the database backups that may name it (§852);
+ *   7. the edge caches the web app's build output and nothing else (§865).
  *
  * Run: `npx ts-node src/checks/stack-check.ts`
  */
@@ -29,7 +30,7 @@ import * as path from "path";
 import { App, DockerImage } from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
 
-import { CustomerStack } from "../stacks/customer-stack";
+import { CustomerStack, STATIC_ASSETS } from "../stacks/customer-stack";
 
 (DockerImage as unknown as { fromBuild: () => DockerImage }).fromBuild =
   () => DockerImage.fromRegistry("bundling-skipped");
@@ -168,6 +169,34 @@ check("the data bucket keeps a previous version past the database's oldest backu
   }
   if (rules.some((r) => r.ExpirationInDays || r.ExpirationDate)) {
     throw new Error("a rule expires current objects: that is deleting customer data");
+  }
+});
+
+console.log("what the edge caches (§865):");
+
+check("the web app's build output is cached, and nothing else is", () => {
+  const config = only(plain, "AWS::CloudFront::Distribution").Properties.DistributionConfig;
+  // CloudFront's managed policies, by their fixed ids.
+  const CACHING_OPTIMIZED = "658327ea-f89d-4fab-a63d-7e88639e58f6";
+  const CACHING_DISABLED = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad";
+  if (config.DefaultCacheBehavior.CachePolicyId !== CACHING_DISABLED) {
+    throw new Error("pages and the API are cached at the edge");
+  }
+  const behaviors: Record<string, any>[] = config.CacheBehaviors ?? [];
+  if (behaviors.length !== 1 || behaviors[0].PathPattern !== STATIC_ASSETS) {
+    throw new Error(`cached paths: ${JSON.stringify(behaviors.map((b) => b.PathPattern))}`);
+  }
+  const [assets] = behaviors;
+  if (assets.CachePolicyId !== CACHING_OPTIMIZED) throw new Error("the build output is not cached");
+  if (assets.OriginRequestPolicyId) throw new Error("the cached path forwards viewer headers or cookies");
+  if (JSON.stringify(assets.AllowedMethods) !== JSON.stringify(["GET", "HEAD"])) {
+    throw new Error(`the cached path accepts ${JSON.stringify(assets.AllowedMethods)}`);
+  }
+  // And it is where Next actually serves its build output.
+  const nextServe = fs.readFileSync(
+    path.join(__dirname, "..", "..", "..", "..", "apps", "web", "Dockerfile"), "utf8");
+  if (!nextServe.includes(".next/static ./apps/web/.next/static")) {
+    throw new Error("the web image no longer serves .next/static: re-derive this path");
   }
 });
 
