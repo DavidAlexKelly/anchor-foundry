@@ -39,17 +39,25 @@ export const SCALE_AT_CPU_PERCENT = 60;
  * times it; so a task is sized for two such operations at once beside the
  * process itself, which scaling-check.ts holds. That took the API from 1 GB
  * to 2 GB, which on Fargate is about $3 a month a task: memory is the cheap
- * line of the bill. The worker was already 2 GB.
+ * line of the bill.
+ *
+ * **The worker is sized by its runs, not by two operations (§894).** Its
+ * schedules run (§883), up to four runs at once, two of them the jobs that
+ * work datasets in its own process (`apps/worker/dagster.yaml`). §894
+ * measured the daemon at about 290 MB and a run's process at about 160 MB,
+ * so it went from 2 GB to 4 GB, about $6 a month.
  *
  * Why 512 MiB rather than less: §875's three-million-row join refused to run
  * under 384 MiB at two threads, and a user's query is held to 512 MB already
  * (`QUERY_MEMORY_LIMIT`).
  */
-export const TASK_MEMORY_MIB = { api: 2048, worker: 2048 };
+export const TASK_MEMORY_MIB = { api: 2048, worker: 4096 };
 export const DUCKDB_MEMORY_MIB = 512;
 export const DUCKDB_THREADS = 2;
 /** What a task's process holds besides DuckDB, allowed for when sizing. */
 export const PROCESS_ALLOWANCE_MIB = 512;
+/** One worker run's own process, besides its DuckDB (§894: measured 160 MB). */
+export const WORKER_RUN_PROCESS_MIB = 256;
 
 export interface ServicesProps {
   readonly vpc: ec2.IVpc;

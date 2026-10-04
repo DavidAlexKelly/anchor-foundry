@@ -56,6 +56,14 @@ UNFINISHED = [DagsterRunStatus.QUEUED, DagsterRunStatus.NOT_STARTED,
               DagsterRunStatus.STARTING, DagsterRunStatus.STARTED]
 
 
+#: The tag the worker's instance limits (§894; `apps/worker/dagster.yaml`).
+WEIGHT_TAG = "anchor/weight"
+#: Jobs that read and write datasets with DuckDB in the worker's own process.
+#: Test and preview runs send their code to the transform runner, and the
+#: archive and the cleanups move little; those are not limited by this.
+HEAVY = {WEIGHT_TAG: "heavy"}
+
+
 def one_at_a_time(job_name: str):
     """**A tick is skipped while the job's last run has not finished
     (§888).** A poll runs every minute and works through everything due, so
@@ -102,6 +110,7 @@ defs = Definitions(
         ScheduleDefinition(
             default_status=RUNNING,
             job=scheduled_model_runs,
+            tags=HEAVY,
             should_execute=one_at_a_time(scheduled_model_runs.name),
             cron_schedule="* * * * *",  # every minute: queued python runs and
             # cron-scheduled models should start promptly, not sit for long
@@ -110,6 +119,7 @@ defs = Definitions(
         ScheduleDefinition(
             default_status=RUNNING,
             job=scheduled_connection_syncs,
+            tags=HEAVY,
             should_execute=one_at_a_time(scheduled_connection_syncs.name),
             cron_schedule="*/5 * * * *",  # every 5 minutes - syncs are heavier
             name="poll_scheduled_syncs",
@@ -117,6 +127,7 @@ defs = Definitions(
         ScheduleDefinition(
             default_status=RUNNING,
             job=scheduled_instance_syncs,
+            tags=HEAVY,
             should_execute=one_at_a_time(scheduled_instance_syncs.name),
             cron_schedule="*/5 * * * *",  # every 5 minutes, same cadence as connection syncs
             name="poll_instance_syncs",
@@ -124,6 +135,7 @@ defs = Definitions(
         ScheduleDefinition(
             default_status=RUNNING,
             job=scheduled_exports,
+            tags=HEAVY,
             should_execute=one_at_a_time(scheduled_exports.name),
             # Every 5 minutes, the same cadence as syncs and for the same
             # reason: this is the *poll*, not the schedule. An export's own

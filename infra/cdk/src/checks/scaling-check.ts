@@ -27,6 +27,7 @@ import {
   ServicesConstruct,
   TASK_MEMORY_MIB,
   WEB_TASKS,
+  WORKER_RUN_PROCESS_MIB,
 } from "../constructs/services";
 
 const context = JSON.parse(
@@ -155,6 +156,17 @@ for (const name of ["api", "worker"] as const) {
     // its limit, beside the process itself.
     const needed = 2 * 1.5 * DUCKDB_MEMORY_MIB + PROCESS_ALLOWANCE_MIB;
     if (needed > memory) throw new Error(`needs ${needed} MiB of ${memory}`);
+    if (name === "worker") {
+      // §894: the daemon, every run's process, and the heavy runs' DuckDB,
+      // with the numbers the worker's own Dagster settings declare.
+      const settings = fs.readFileSync(
+        path.join(__dirname, "..", "..", "..", "..", "apps", "worker", "dagster.yaml"), "utf8");
+      const runs = Number(/max_concurrent_runs:\s*(\d+)/.exec(settings)?.[1]);
+      const heavy = Number(/value:\s*heavy\s*\n\s*limit:\s*(\d+)/.exec(settings)?.[1]);
+      if (!runs || !heavy) throw new Error("apps/worker/dagster.yaml no longer declares its limits");
+      const worst = PROCESS_ALLOWANCE_MIB + runs * WORKER_RUN_PROCESS_MIB + heavy * 1.5 * DUCKDB_MEMORY_MIB;
+      if (worst > memory) throw new Error(`${runs} runs, ${heavy} heavy, need ${worst} MiB of ${memory}`);
+    }
   });
 }
 
