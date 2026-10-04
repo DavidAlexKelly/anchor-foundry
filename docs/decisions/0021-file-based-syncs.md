@@ -1,6 +1,6 @@
 # 0021 — File-based syncs: a folder, a transaction type, and filters
 
-**Status:** decided; §749 builds the API's run, §750 the worker's schedule, §751 the form.
+**Status:** decided and built: §749 the API's run, §750 the worker's schedule, §751 the form.
 **Parity items:** `docs/parity/data-connection.md` §2 (*File-based syncs*, whose ✅ said more than was built, and *Source exploration*'s file-import filter).
 **Source:** `docs/pal/foundry_data-connection.pdf` p.160-164, cited `(p.N)`.
 **Follows:** decision 0020 (transaction types), whose APPEND and UPDATE this commits, and §746 (`dataset_files`), whose "a dataset is a set of named files" this reuses.

@@ -1032,9 +1032,13 @@ export const scheduledSync = {
     pid: string,
     cid: string,
     input: {
-      mode: "full" | "incremental";
+      mode: "full" | "incremental" | "files";
       source_schema?: string;
-      source_table: string;
+      /** A table sync's; a file sync names `folder` instead (§749). */
+      source_table?: string;
+      folder?: string;
+      file_transaction?: "SNAPSHOT" | "APPEND" | "UPDATE";
+      file_filters?: import("./types").FileSyncFilters;
       dataset_name?: string;
       primary_key_column?: string;
       cursor_column?: string;
