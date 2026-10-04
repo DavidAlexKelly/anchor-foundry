@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from dagster import OpExecutionContext, job, op
 
 from ..dataset_engine import DatasetEngineError
-from ..python_sandbox import run_python_tests
+from ..transform_dispatch import run_python_tests
 from ..resources import PlatformDatabase
 
 

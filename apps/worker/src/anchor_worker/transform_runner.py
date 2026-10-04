@@ -86,6 +86,11 @@ class Job:
     output_path: str
     inputs: dict[str, str]
     language: str = "python"
+    #: "transform", or "tests": a repository's unit tests (§890).
+    kind: str = "transform"
+    #: For tests: what pytest collects, relative to the directory.
+    collect: str = "."
+    timeout_s: int = 300
 
 
 def read_job(work_dir: str) -> Job:
@@ -108,6 +113,12 @@ def read_job(work_dir: str) -> Job:
         # directory would defeat the point of there being one.
         if os.path.isabs(name) or ".." in name.split("/"):
             raise RuntimeError(f"input {alias!r} points outside the working directory")
+    if raw.get("kind") == "tests":
+        collect = str(raw.get("collect") or ".")
+        if os.path.isabs(collect) or ".." in collect.split("/"):
+            raise RuntimeError("the tests to collect are outside the working directory")
+        return Job(code_path="", output_path="", inputs={}, kind="tests",
+                   collect=collect, timeout_s=int(raw.get("timeout_s") or 300))
     return Job(
         code_path=str(raw["code_path"]),
         output_path=str(raw.get("output_path", "output.parquet")),
@@ -241,6 +252,32 @@ def execute(work_dir: str, job: Job) -> dict[str, Any]:
     }
 
 
+def run_tests(work_dir: str, job: Job) -> dict[str, Any]:
+    """A repository's unit tests, run here rather than in the worker (§890):
+    this container has no network, a role that grants nothing, and no
+    credentials in any process's environment to read. The report is left in
+    the directory for the worker to parse; the result says only that one is
+    there."""
+    import subprocess
+
+    from . import test_command
+
+    try:
+        result = subprocess.run(
+            test_command.command(sys.executable, job.collect),
+            cwd=work_dir,
+            env=test_command.environment(work_dir),
+            capture_output=True,
+            text=True,
+            timeout=job.timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TransformError(f"the tests exceeded the {job.timeout_s}s time limit") from exc
+    if not os.path.exists(os.path.join(work_dir, test_command.REPORT_FILE)):
+        raise TransformError(test_command.no_report(result.stdout, result.stderr))
+    return {"status": "ok"}
+
+
 def write_result(work_dir: str, payload: dict[str, Any]) -> None:
     with open(os.path.join(work_dir, RESULT_FILE), "w") as handle:
         json.dump(payload, handle)
@@ -250,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     work_dir = os.environ.get(WORK_DIR_ENV, DEFAULT_WORK_DIR)
     job = read_job(work_dir)  # deliberately outside the try: see the docstring
     try:
-        payload = execute(work_dir, job)
+        payload = run_tests(work_dir, job) if job.kind == "tests" else execute(work_dir, job)
     except TransformError as exc:
         failure: dict[str, Any] = {"status": "failed", "error": str(exc)}
         if exc.log:

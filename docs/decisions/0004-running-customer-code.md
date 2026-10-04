@@ -110,3 +110,7 @@ So the runtime contract is written down here, beside the syntax it belongs to:
 ## Proof
 
 `apps/api/tests/test_transform_declarations.py`: declarations are read from source without executing it (a module whose import would raise still parses), non-literal declarations are refused with a reason, both languages produce the same structure, and a file declaring no transform is not an error — it is a helper.
+
+## Unit tests, too (§890)
+
+A repository's unit tests are customer Python as much as a transform is, and until §890 they ran in a subprocess of the worker on a deployed stack. The subprocess got a stripped environment, but it ran as the worker's own Unix user. So it could read `/proc/1/environ`, which holds the database password and the path to the worker role's credentials, and that role reaches every workspace's connection secrets and the whole data bucket. Test runs now go to the transform runner like every other piece of customer Python. The runner's job file says `"kind": "tests"`, and it runs pytest in its own container, which has no network and a role that grants nothing. `apps/worker/src/anchor_worker/test_command.py` stages the files and builds the pytest command for both paths, so development runs tests the way a stack does.

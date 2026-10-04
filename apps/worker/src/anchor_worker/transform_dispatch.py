@@ -422,6 +422,78 @@ def run_python_transform(
     return schema, int(payload.get("row_count", 0))
 
 
+#: How long past a test run's own limit the worker waits on its task: the
+#: runner stops pytest at the limit, and a task takes a while to start.
+TEST_GRACE_S = 120
+
+
+def stage_tests(
+    files: dict[str, str], target: str | None, *, timeout_s: int,
+    root: str | None = None, run_id: str | None = None,
+) -> RunHandle:
+    """A test run's directory: the working set, `anchor.py`, and a job that
+    says "tests" (§890)."""
+    from . import test_command
+
+    base = root or scratch_root()
+    run_id = run_id or uuid.uuid4().hex
+    work_dir = os.path.join(base, run_id)
+    os.makedirs(work_dir, exist_ok=False)
+    try:
+        user_api.write_into(work_dir)
+        collect = test_command.stage(work_dir, files, target)
+        with open(os.path.join(work_dir, JOB_FILE), "w") as handle:
+            json.dump({"kind": "tests", "collect": collect, "timeout_s": timeout_s}, handle)
+    except BaseException:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise
+    return RunHandle(
+        run_id=run_id,
+        work_dir=work_dir,
+        runner_work_dir=f"{RUNNER_MOUNT}/{run_id}",
+        output_filename=test_command.REPORT_FILE,
+    )
+
+
+def run_python_tests(files: dict[str, str], timeout_s: int | None = None,
+                     target: str | None = None):
+    """**Where a repository's unit tests run (§890).** In development, a
+    subprocess (`python_sandbox.run_python_tests`). On a stack, the transform
+    runner, as every other piece of customer Python is: a subprocess of the
+    worker shares its Unix user, and so could read the worker's own
+    environment out of `/proc` - the database password, and the path to the
+    worker role's credentials.
+
+    The same answer either way: a parsed report, or a `DatasetEngineError`
+    whose sentence says whose problem it is.
+    """
+    from . import test_command, unit_test_report
+    from .dataset_engine import DatasetEngineError
+    from .python_sandbox import TEST_TIMEOUT_S
+    from .python_sandbox import run_python_tests as in_process
+
+    timeout_s = timeout_s or TEST_TIMEOUT_S
+    if isolation_mode() == "subprocess":
+        return in_process(files, timeout_s=timeout_s, target=target)
+
+    try:
+        handle = stage_tests(files, target, timeout_s=timeout_s)
+    except test_command.BadTarget as exc:
+        raise DatasetEngineError(str(exc)) from exc
+    try:
+        handle = start(handle)
+        reason = wait(handle, timeout_s=timeout_s + TEST_GRACE_S)
+        collect(handle, stopped_reason=reason)
+        with open(os.path.join(handle.work_dir, test_command.REPORT_FILE)) as report:
+            return unit_test_report.parse_junit(report.read())
+    except TransformFailed as exc:
+        raise DatasetEngineError(exc.error[:500]) from exc
+    except DispatchError as exc:
+        raise DatasetEngineError(f"the platform could not run these tests: {exc}") from exc
+    finally:
+        cleanup(handle)
+
+
 def _keep_log(log_path: str | None, text: str) -> None:
     """Write the runner's log where the caller asked, if there is one.
 
