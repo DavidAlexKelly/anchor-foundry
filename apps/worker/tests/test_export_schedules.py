@@ -674,3 +674,26 @@ def test_a_scheduled_append_only_export_fails_on_a_new_view(
     assert runs[-1]["error"].startswith("v2 is a SNAPSHOT transaction")
     assert _exported_rows() == [(1, "a"), (2, "b")]
     assert _export_row(eid)["last_version"] == 1
+
+
+def test_a_pass_that_starts_while_an_export_runs_leaves_it_alone(
+    workspace: dict, source_database: dict, monkeypatch
+) -> None:
+    """§854: the next tick, arriving mid-export, used to find the export still
+    due and write a second copy alongside."""
+    cid = _connection(workspace, source_database)
+    dataset = _synced_dataset(workspace, cid)
+    eid = _export(workspace, cid, dataset)
+    real = export_schedules.export_runs.perform
+    second: list[None] = []
+
+    def perform_with_a_second_pass(*args, **kwargs):
+        if not second:
+            second.append(None)
+            run_due_exports(_ctx())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(export_schedules.export_runs, "perform", perform_with_a_second_pass)
+    run_due_exports(_ctx())
+    assert second == [None]
+    assert len(_runs(eid)) == 1, "the second pass ran the export again"

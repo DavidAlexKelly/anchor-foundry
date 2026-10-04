@@ -37,6 +37,7 @@ from .. import oidc
 from ..connectors import ConnectorError, get_connector
 from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env, slugify, storage_prefix
+from .claims import claim_due
 
 MAX_SYNC_BYTES = 200 * 1024 * 1024  # matches the API's day-one interactive cap
 
@@ -278,6 +279,10 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
     for connection_id, workspace_id in candidates:
         with platform_db.connect_scoped_to(workspace_id) as conn:
             with conn.cursor() as cur:
+                # This pass's, or another's (§854): see claims.py.
+                if not claim_due(cur, "connections", connection_id, schedule="sync_schedule",
+                                 next_run="sync_next_run_at", warn=context.log.warning):
+                    continue
                 cur.execute(
                     """
                     SELECT project_id, config, secret_arn, sync_mode, sync_schedule,

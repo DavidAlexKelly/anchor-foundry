@@ -42,6 +42,7 @@ from dagster import OpExecutionContext, job, op
 from .. import export_runs, oidc
 from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env
+from .claims import claim_due
 
 
 def _json(value):
@@ -93,6 +94,10 @@ def _run_one(context, platform_db, export_id, workspace_id) -> bool:
 
     with platform_db.connect_scoped_to(workspace_id) as conn:
         with conn.cursor() as cur:
+            # This pass's, or another's (§854): see claims.py.
+            if not claim_due(cur, "exports", export_id, schedule="schedule",
+                             next_run="next_run_at", warn=context.log.warning):
+                return False
             cur.execute(
                 """
                 SELECT e.name, e.kind, e.mode, e.destination, e.last_version,

@@ -310,3 +310,29 @@ def test_a_large_sync_brings_the_statistics_up_to_date(
     run_due_object_source_syncs(_ctx())
     assert _source_row(workspace["source_id"])[0] == "ok"
     assert _counted_after(before) == before + analyzed
+
+
+def test_a_pass_that_starts_while_a_source_syncs_leaves_it_alone(
+    workspace: dict, monkeypatch
+) -> None:
+    """§854: the next tick, arriving mid-sync, used to find the source still
+    due and sync it again alongside."""
+    from anchor_worker.jobs import instance_syncs
+
+    _set_due(workspace["source_id"])
+    real = instance_syncs.engine.extract_instance_rows
+    calls: list[str] = []
+
+    ours = str(workspace["dataset_id"])
+
+    def extract_with_a_second_pass(path, *args, **kwargs):
+        if ours in str(path):
+            calls.append(path)
+            if len(calls) == 1:
+                run_due_object_source_syncs(_ctx())
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(instance_syncs.engine, "extract_instance_rows", extract_with_a_second_pass)
+    run_due_object_source_syncs(_ctx())
+    assert len(calls) == 1, "the second pass synced the source again"
+    assert [r[0] for r in _instances(workspace["object_type_id"])] == ["1", "2"]
