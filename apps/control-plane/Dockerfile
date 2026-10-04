@@ -15,7 +15,9 @@
 # build is correct whatever machine it was built on - but note the pin only
 # fixes the *base* image; pass `--platform=linux/amd64` on the build command
 # too (STATUS.md §20, tenth bug).
-FROM --platform=linux/amd64 python:3.12-slim AS base
+# The tag says what it is; the digest says which one (§818). Bump both together
+# with scripts/pin-images.sh.
+FROM --platform=linux/amd64 python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016 AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
