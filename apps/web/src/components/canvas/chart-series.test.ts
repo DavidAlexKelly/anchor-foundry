@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
+import { mixedKinds,
   MAX_SERIES, axisSides, drillClauses, drilledLabel, layerKinds, mergeSeries, seriesName, seriesOf, seriesRequests, seriesSource, splitLayers, type SeriesSpec, canSegment, layeredGrid, segmentsLayer,
 } from "./chart-series";
 
@@ -12,10 +12,13 @@ describe("seriesOf (p.281's multiple series)", () => {
     expect(seriesOf(undefined)).toEqual([]);
     expect(seriesOf({ aggregate: "sum" })).toEqual([]);
     expect(seriesOf([null, 3, { aggregate: "sum", measure: "capacity", name: "Total" }]))
-      .toEqual([{ aggregate: "sum", measure: "capacity", name: "Total", axis: "right",
+      .toEqual([{ title: "", aggregate: "sum", measure: "capacity", name: "Total", axis: "right",
                   ...ON_CHART }]);
-    expect(seriesOf([{ aggregate: "median", measure: "", name: 4 }]))
-      .toEqual([{ aggregate: "count", measure: null, name: "", axis: "right", ...ON_CHART }]);
+    expect(seriesOf([{ aggregate: "median", measure: "", name: 4, title: 7 }]))
+      .toEqual([{ title: "", aggregate: "count", measure: null, name: "", axis: "right", ...ON_CHART }]);
+    // p.280's layer Title (§757), for the builder, at most 100 characters.
+    expect(seriesOf([{ title: "Delays" }, { title: "x".repeat(150) }]).map((s) => s.title))
+      .toEqual(["Delays", "x".repeat(100)]);
     // p.280's layer input and X axis property (§625), when they are names.
     expect(seriesOf([{ objectSetVariable: "v_flights", dimension: "origin" }])[0])
       .toMatchObject({ objectSetVariable: "v_flights", dimension: "origin" });
@@ -90,11 +93,20 @@ describe("seriesSource (p.280's layers, §625)", () => {
 
 describe("layerKinds (p.280's Layer type, §626)", () => {
   it("reads a series' own type, and is the chart's where it names none", () => {
-    expect(seriesOf([{ kind: "line" }, { kind: "bar" }, { kind: "pie" }, {}])
-      .map((s) => s.kind)).toEqual(["line", "bar", null, null]);
+    expect(seriesOf([{ kind: "line" }, { kind: "bar" }, { kind: "pie" }, {}, { kind: "scatter" }])
+      .map((s) => s.kind)).toEqual(["line", "bar", null, null, "scatter"]);
     expect(layerKinds("bar", [spec({ kind: "line" }), spec({})])).toEqual(["bar", "line", "bar"]);
     expect(layerKinds("line", [spec({ kind: "bar" }), spec({})])).toEqual(["line", "bar", "line"]);
     expect(layerKinds("line", [])).toEqual(["line"]);
+  });
+
+  it("draws layers together when more than one kind meets (§757)", () => {
+    expect(mixedKinds(["bar", "bar"])).toBe(false);
+    expect(mixedKinds(["line", "line"])).toBe(false);
+    expect(mixedKinds(["bar", "line"])).toBe(true);
+    expect(mixedKinds(["bar", "scatter"])).toBe(true);
+    expect(mixedKinds(["line", "scatter"])).toBe(true);
+    expect(mixedKinds(["scatter"])).toBe(true);
   });
 });
 
@@ -112,6 +124,12 @@ describe("splitLayers", () => {
     });
     expect(split.barAt).toEqual([0, 2]);
     expect(split.lineAt).toEqual([1]);
+  });
+
+  it("draws a scatter layer across the bars, as a line is (§757)", () => {
+    const split = splitLayers(grid, ["bar", "scatter", "line"]);
+    expect(split.barAt).toEqual([0]);
+    expect(split.lineAt).toEqual([1, 2]);
   });
 
   it("draws a series with no type named as a bar, and a short row as missing", () => {
@@ -190,7 +208,7 @@ describe("axisSides (p.283's Use multiple value axes)", () => {
 });
 
 function spec(over: Partial<SeriesSpec>): SeriesSpec {
-  return { aggregate: "count", measure: null, name: "", axis: "right", ...ON_CHART, ...over };
+  return { title: "", aggregate: "count", measure: null, name: "", axis: "right", ...ON_CHART, ...over };
 }
 
 describe("p.282's Segment by on a layer (§678)", () => {
