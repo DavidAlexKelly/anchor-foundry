@@ -503,6 +503,32 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
     return executed
 
 
+#: How long after starting a run is certainly not alive (§870; db 0165). A
+#: model run waits at most DEFAULT_TIMEOUT_S (900 s) on a dispatched
+#: transform; a test or preview at most the sandbox's 300 s. Well past both.
+ABANDONED_MODEL_RUN = "1 hour"
+ABANDONED_CODE_RUN = "30 minutes"
+#: An action run lives inside one request, which CloudFront gives up on after
+#: thirty seconds.
+ABANDONED_ACTION_RUN = "30 minutes"
+
+
+def _fail_abandoned(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
+    """Runs left 'running' by a worker that stopped, failed with the reason.
+    Every minute, with the rest of this pass: a replaced worker's runs are
+    reported within the hour, and an upstream model reacts again."""
+    with platform_db.connect() as conn:
+        failed = conn.execute(
+            "SELECT fail_abandoned_runs(CAST(%s AS interval), CAST(%s AS interval),"
+            " CAST(%s AS interval))",
+            (ABANDONED_MODEL_RUN, ABANDONED_CODE_RUN, ABANDONED_ACTION_RUN),
+        ).fetchone()[0]
+        conn.commit()
+    if failed:
+        context.log.warning("failed %d run(s) a stopped worker left running", failed)
+    return failed
+
+
 @op
 def run_model_runs(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
     """Enqueues due cron and upstream models, then executes every queued run
@@ -518,6 +544,7 @@ def run_model_runs(context: OpExecutionContext, platform_db: PlatformDatabase) -
     three-step chain therefore takes three passes to settle. Flagged for
     review - resolving a whole chain in one pass needs the dependency graph
     (topological order), which lives with the DAG work, not here."""
+    _fail_abandoned(context, platform_db)
     _enqueue_due_cron_models(context, platform_db)
     _enqueue_due_upstream_models(context, platform_db)
     return _execute_queued_model_runs(context, platform_db)
