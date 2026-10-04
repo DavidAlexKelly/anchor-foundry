@@ -108,7 +108,8 @@ async def permitted(
         conn,
         """
         SELECT u.id FROM users u
-         WHERE u.id::text = ANY(CAST(:ids AS text[]))
+         WHERE u.organisation_id = (SELECT rls_user_org_id())
+           AND u.id::text = ANY(CAST(:ids AS text[]))
            AND effective_workspace_role(u.id, CAST(:wid AS uuid)) IS NOT NULL
         """,
         {"wid": str(workspace_id), "ids": user_ids},
@@ -178,6 +179,7 @@ async def notifiable_groups(
                )::int AS reachable
           FROM groups g
           LEFT JOIN group_members gm ON gm.group_id = g.id
+         WHERE g.organisation_id = (SELECT rls_user_org_id())
          GROUP BY g.id, g.name
          ORDER BY g.name
         """,
@@ -215,7 +217,9 @@ async def notifiable(
         """
         SELECT u.id, u.email, u.display_name
           FROM users u
-         WHERE effective_workspace_role(u.id, CAST(:wid AS uuid)) IS NOT NULL
+         -- The caller's organisation, as `graph_access.viewers` says (§829).
+         WHERE u.organisation_id = (SELECT rls_user_org_id())
+           AND effective_workspace_role(u.id, CAST(:wid AS uuid)) IS NOT NULL
          ORDER BY u.display_name, u.email
         """,
         {"wid": str(workspace_id)},
