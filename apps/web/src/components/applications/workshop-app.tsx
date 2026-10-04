@@ -32,6 +32,7 @@ import { Dialog, Field } from "@/components/dialog";
 import { heldBy, strandedSummary, type OrphanedKey } from "@/lib/state-impact";
 import { ChangelogPanel } from "@/components/canvas/ChangelogPanel";
 import { diffModules } from "@/components/canvas/changelog";
+import { savedDefinition } from "@/components/canvas/frame-protocol";
 import {
   describeConflict, rebase, type MergeChoice, type MergeConflict,
 } from "@/components/canvas/module-merge";
@@ -1927,9 +1928,12 @@ function CanvasBody({
         // clicks the way a Menu button's are, and only when it is customised.
         // p.322's actions on highlighted text (§638), the same shape, and its
         // On hover interactions (§669) after them.
+        // p.553's events a Bidirectional iframe's application asks for (§756).
         const menu = name === "CanvasObjectTable" && props.customMenu
           ? itemsOf(props.menuItems)
-          : name === "CanvasMarkdown" ? markdownClickItems(props.highlightActions, props.hoverActions) : [];
+          : name === "CanvasMarkdown" ? markdownClickItems(props.highlightActions, props.hoverActions)
+            : name === "CanvasIframe" && props.frameMode === "bidirectional"
+              ? savedDefinition(props.frameDefinition)?.events ?? [] : [];
         // p.349's Override selection event (§616): a timeline's overriding
         // layers are row selections of their own, beside the widget's.
         const layers = name === "CanvasTimeline"

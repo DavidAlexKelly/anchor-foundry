@@ -2023,6 +2023,56 @@ def test_a_markdown_widgets_hover_interactions_are_clicks_too() -> None:
             we.parse(markdown_event("hover_1"), layout=markdown_layout(actions=[], hover=junk), variables=variables)
 
 
+def iframe_layout(mode: str = "bidirectional", events=None, definition=True) -> dict:
+    """p.553's Bidirectional iframe (§756; decision 0023)."""
+    props: dict = {"frameMode": mode, "url": "https://tool.example.org"}
+    if definition:
+        props["frameDefinition"] = {"fields": [], "events": events if events is not None else [
+            {"id": "open", "label": "Open"}, {"label": "no id"}, "junk"]}
+    return {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["frm"]},
+        "frm": {"type": {"resolvedName": "CanvasIframe"}, "props": props},
+    }
+
+
+def iframe_event(item=None, on: str = "click") -> dict:
+    trigger = {"node": "frm", "on": on, **({"item": item} if item is not None else {})}
+    return {"e_1": {"id": "e_1", "trigger": trigger, "effects": [set_var("v_a", "x")]}}
+
+
+def test_a_bidirectional_iframes_events_are_its_clicks() -> None:
+    """p.553: "The set events will determine what events can be executed from
+    within the custom application." Each is an item of the widget, from the
+    definition saved on it."""
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    events = we.parse(iframe_event("open"), layout=iframe_layout(), variables=variables)
+    assert events["e_1"].item == "open"
+    with pytest.raises(we.EventError, match="the events its application asks for"):
+        we.parse(iframe_event(), layout=iframe_layout(), variables=variables)
+    with pytest.raises(we.EventError, match="does not have"):
+        we.parse(iframe_event("close"), layout=iframe_layout(), variables=variables)
+    with pytest.raises(we.EventError, match="only a click"):
+        we.parse(iframe_event("open", on="change"), layout=iframe_layout(), variables=variables)
+
+
+def test_an_iframe_not_in_bidirectional_mode_has_no_events() -> None:
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    for layout in (iframe_layout("url"), iframe_layout(definition=False),
+                   iframe_layout(events="junk")):
+        with pytest.raises(we.EventError, match="does not have"):
+            we.parse(iframe_event("open"), layout=layout, variables=variables)
+
+
+def test_a_bidirectional_iframes_bindings_are_references() -> None:
+    """Decision 0023 §4: `frameBindings` maps field ids to variables, so a
+    bound variable is used and a binding to nothing is refused."""
+    props = {"frameMode": "bidirectional", "frameBindings": {"query": "v_q", "blank": ""}}
+    assert wv.references(props) == [("frameBindings.query", "v_q")]
+    layout = {"frm": {"type": {"resolvedName": "CanvasIframe"}, "props": props}}
+    assert wv.dangling_references(layout, {}) == [
+        {"node": "frm", "prop": "frameBindings.query", "variable": "v_q"}]
+
+
 def test_a_tables_right_click_menu_items_are_clicks() -> None:
     """p.243: "add custom items to the menu… choose whether your menu item
     triggers an action or an event"."""

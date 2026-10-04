@@ -636,7 +636,11 @@ NESTED_REFERENCE_PROPS: dict[str, tuple[str, ...]] = {
 #: catalogue. p.263's Object View Interface configuration (§710) is the third:
 #: `{"<tab id>:<external id>": variable}`, an embed's mapping per view tab.
 #: Mirrored in `workshop-module.ts`.
-MAPPING_REFERENCE_PROPS: tuple[str, ...] = ("interface", "inlineEditVariables", "viewInterface")
+#: `frameBindings` is a Bidirectional iframe's field id -> variable (§756;
+#: decision 0023 §4): a bound variable is used, and computed on screen.
+MAPPING_REFERENCE_PROPS: tuple[str, ...] = (
+    "interface", "inlineEditVariables", "viewInterface", "frameBindings",
+)
 
 
 def references(props: Any) -> list[tuple[str, str]]:

@@ -253,6 +253,10 @@ import {
   sourceOf as mediaSourceOf,
 } from "./media";
 import { frameRefusal, frameTitle, safeFrameUrl, youtubeEmbedUrl } from "./frame";
+import {
+  MESSAGE as FRAME_MESSAGE, VERSION as FRAME_VERSION, acceptWrite, bindable, frameOrigin,
+  knownEvent, readMessage, sameDefinition, savedDefinition, valuesOf as frameValuesOf,
+} from "./frame-protocol";
 import { buttonLook, customColourOf, intentOf } from "./button-look";
 import {
   addItem, buttonTypeOf, duplicateItem, itemsOf, removeItem, renameItem, setItemIcon,
@@ -12120,6 +12124,9 @@ export function CanvasIframe({
   textVariable = null,
   title = "",
   height = 480,
+  frameMode = "url",
+  frameDefinition = null,
+  frameBindings = {},
 }: {
   /** p.546's URL, as a static string. */
   url?: string;
@@ -12128,16 +12135,118 @@ export function CanvasIframe({
   /** The frame's accessible name. */
   title?: string;
   height?: number;
+  /** p.552's Bidirectional option (§756; decision 0023): the framed
+   * application reads and writes variables and fires events. */
+  frameMode?: "url" | "bidirectional";
+  /** The fields and events the application last asked for, saved so the
+   * bindings mean something before it answers again (decision 0023 §4). */
+  frameDefinition?: unknown;
+  /** Field id -> the variable it is bound to. */
+  frameBindings?: Record<string, string>;
 }) {
   const {
+    id: nodeId,
     connectors: { connect, drag },
+    actions: { setProp },
   } = useNode();
   const { mode } = useCanvasEnv();
-  const { resolved } = useCanvasVariables();
+  const { resolved, declared, pending, events: moduleEvents } = useCanvasVariables();
+  const { set } = useCanvasParameters();
   const raw = textVariable ? resolved[textVariable] : url;
   const target = safeFrameUrl(raw);
   const refusal = frameRefusal(raw);
   const px = Math.max(120, Math.min(Number(height) || 480, 2000));
+
+  // p.552-553's Bidirectional mode: one listener and one sender, each
+  // checking that the other end is this frame's window at its URL's origin
+  // (decision 0023 §2).
+  const bidirectional = frameMode === "bidirectional";
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const origin = bidirectional && typeof window !== "undefined"
+    ? frameOrigin(target, window.location.href) : null;
+  const definition = savedDefinition(frameDefinition);
+  const bindings = frameBindings && typeof frameBindings === "object" ? frameBindings : {};
+  const overlayIds = useOverlayIds();
+  const eventContext = useEventContext(undefined, overlayIds);
+  const sent = frameValuesOf(definition, bindings, resolved, pending);
+  const sentKey = JSON.stringify(sent);
+  // The listener reads the latest of these through a ref, so it is attached
+  // once per frame rather than once per render.
+  const live = useRef({ definition, bindings, declared, moduleEvents, eventContext, mode, sent });
+  live.current = { definition, bindings, declared, moduleEvents, eventContext, mode, sent };
+
+  function post(body: Record<string, unknown>) {
+    const win = frameRef.current?.contentWindow;
+    if (!win || !origin) return;
+    // Until its URL loads, a frame is `about:blank` on this page's origin. A
+    // window whose origin can be read and is not the frame's is that one, and
+    // a message to it would be refused; one that cannot be read is the
+    // framed page on another origin, which is who it is for.
+    let current: string | null = null;
+    try {
+      current = win.location.origin;
+    } catch {
+      current = null;
+    }
+    if (current !== null && current !== origin) return;
+    win.postMessage({ version: FRAME_VERSION, ...body }, origin);
+  }
+
+  useEffect(() => {
+    if (!bidirectional || !origin) return;
+    function onMessage(e: MessageEvent) {
+      if (e.source !== frameRef.current?.contentWindow || e.origin !== origin) return;
+      const message = readMessage(e.data);
+      if (!message) return;
+      const now = live.current;
+      if (message.type === "definition") {
+        // p.553: the panel learns what to offer from this. Saved in the
+        // builder only - a viewer's frame cannot rewrite the module.
+        if (now.mode === "edit" && !sameDefinition(message.definition, now.definition)) {
+          setProp((p: { frameDefinition: unknown }) => (p.frameDefinition = message.definition));
+        }
+        // And what it is bound to, at once, so it does not wait for a change.
+        post({ type: FRAME_MESSAGE.values, values: now.sent });
+        return;
+      }
+      if (now.mode !== "run") return;
+      if (message.type === "set-value") {
+        const verdict = acceptWrite(
+          now.definition, now.bindings, now.declared, message.fieldId, message.value);
+        if (!verdict.ok) {
+          console.warn(`Iframe: ignored a write - ${verdict.reason}`);
+          return;
+        }
+        set(verdict.variable, verdict.value);
+        return;
+      }
+      if (!knownEvent(now.definition, message.eventId)) {
+        console.warn(`Iframe: ignored an event the module did not ask for - "${message.eventId}"`);
+        return;
+      }
+      const wired = eventsFor(now.moduleEvents, nodeId, "click", message.eventId);
+      if (wired.length > 0) {
+        runEvents(wired, { ...now.eventContext, payload: { event: message.eventId } });
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [bidirectional, origin, nodeId, set, setProp]);
+
+  // Asked again when the builder opens for editing: a frame that loaded
+  // before then sent its definition to a viewer, which saves nothing.
+  useEffect(() => {
+    if (bidirectional && mode === "edit") post({ type: FRAME_MESSAGE.requestDefinition });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bidirectional, origin, mode]);
+
+  // p.553: "sent to the custom application each time the value or loading
+  // state of the variable changes".
+  useEffect(() => {
+    if (!bidirectional) return;
+    post({ type: FRAME_MESSAGE.values, values: live.current.sent });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bidirectional, origin, sentKey]);
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
@@ -12149,9 +12258,15 @@ export function CanvasIframe({
         </p>
       ) : (
         <iframe
+          ref={frameRef}
           src={target}
           title={frameTitle(title, target)}
           data-testid="iframe"
+          onLoad={() => {
+            // Asked once the frame is up, so a definition sent before this
+            // listened is sent again (decision 0023 §1).
+            if (bidirectional) post({ type: FRAME_MESSAGE.requestDefinition });
+          }}
           className="canvas-iframe"
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
           referrerPolicy="no-referrer"
@@ -12168,16 +12283,22 @@ export function CanvasIframe({
 
 function IframeSettings() {
   const {
-    url, textVariable, title, height,
+    url, textVariable, title, height, frameMode, frameDefinition, frameBindings,
     actions: { setProp },
   } = useNode((node) => ({
     url: node.data.props.url,
     textVariable: node.data.props.textVariable,
     title: node.data.props.title,
     height: node.data.props.height,
+    frameMode: node.data.props.frameMode,
+    frameDefinition: node.data.props.frameDefinition,
+    frameBindings: node.data.props.frameBindings,
   }));
   const { declared } = useCanvasVariables();
   const strings = Object.values(declared).filter((v) => v.kind === "string");
+  const definition = savedDefinition(frameDefinition);
+  const bindings: Record<string, string> =
+    frameBindings && typeof frameBindings === "object" ? frameBindings : {};
   // p.547's one-click conversion, offered only while it would change something.
   const embed = textVariable ? null : youtubeEmbedUrl(url);
 
@@ -12224,6 +12345,72 @@ function IframeSettings() {
           ))}
         </select>
       </label>
+      {/* p.552-553's Bidirectional option (§756; decision 0023). */}
+      <label className="field">
+        <span className="field-label">Mode</span>
+        <select
+          value={frameMode === "bidirectional" ? "bidirectional" : "url"}
+          data-testid="iframe-mode"
+          onChange={(e) =>
+            setProp((p: { frameMode: string }) => (p.frameMode = e.target.value))}
+        >
+          <option value="url">URL - show the page</option>
+          <option value="bidirectional">Bidirectional - the page reads and writes variables</option>
+        </select>
+      </label>
+      {frameMode === "bidirectional" && !definition && (
+        // p.553: "a loading state while waiting to receive the definition of
+        // variables and events required by the embedded application".
+        <p className="field-hint" data-testid="iframe-waiting">
+          Waiting for the application to say which variables and events it needs. It sends
+          an <code>anchor-widget//definition</code> message once it loads.
+        </p>
+      )}
+      {frameMode === "bidirectional" && definition && (
+        <div data-testid="iframe-fields">
+          {definition.fields.length === 0 && (
+            <p className="field-hint">The application asks for no variables.</p>
+          )}
+          {definition.fields.map((field) => {
+            const options = bindable(field, Object.values(declared));
+            return (
+              <label className="field" key={field.id}>
+                <span className="field-label">
+                  {field.label} ({field.type}
+                  {field.access === "read" ? ", read only" : field.access === "write" ? ", written only" : ""})
+                </span>
+                <select
+                  value={bindings[field.id] ?? ""}
+                  data-testid={`iframe-bind-${field.id}`}
+                  onChange={(e) =>
+                    setProp((p: { frameBindings: Record<string, string> }) => {
+                      const next = { ...(p.frameBindings ?? {}) };
+                      if (e.target.value) next[field.id] = e.target.value;
+                      else delete next[field.id];
+                      p.frameBindings = next;
+                    })}
+                >
+                  <option value="">Not bound</option>
+                  {options.map((v) => (
+                    <option key={v.id} value={v.id}>{v.label}</option>
+                  ))}
+                </select>
+                {options.length === 0 && (
+                  <span className="field-hint">
+                    Declare a {field.type} variable in the Variables panel first
+                  </span>
+                )}
+              </label>
+            );
+          })}
+          {definition.events.length > 0 && (
+            <p className="field-hint" data-testid="iframe-events">
+              It can fire {definition.events.map((e) => e.label).join(", ")}. Wire each in the
+              Events panel, as this widget&apos;s items.
+            </p>
+          )}
+        </div>
+      )}
       </>}
       configuration={<>
       <label className="field">
@@ -12262,7 +12449,10 @@ function IframeSettings() {
 
 CanvasIframe.craft = {
   displayName: "Iframe",
-  props: { url: "", textVariable: null, title: "", height: 480 },
+  props: {
+    url: "", textVariable: null, title: "", height: 480,
+    frameMode: "url", frameDefinition: null, frameBindings: {},
+  },
   related: { settings: IframeSettings },
 };
 

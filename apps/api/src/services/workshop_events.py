@@ -269,6 +269,9 @@ TIMELINE_WIDGET = "CanvasTimeline"
 #: widget (§638): interactions offered on highlighted text, each a click, as
 #: are p.322's On hover interactions on an annotation (§669).
 MARKDOWN_WIDGET = "CanvasMarkdown"
+#: p.553's Bidirectional iframe (§756; decision 0023): the events its framed
+#: application asks for are its items, each a click.
+IFRAME_WIDGET = "CanvasIframe"
 #: The trigger each kind of item belongs to. Everything else's items are
 #: clicks; a timeline's layers are row selections.
 ITEM_TRIGGERS = {"layers": "row_select"}
@@ -336,6 +339,16 @@ def button_items(layout: Any) -> dict[str, tuple[str, list[str], dict[str, str]]
             out[node_id] = ("highlight", [
                 str(a["id"]) for a in actions if isinstance(a, dict) and a.get("id")
             ] + overriding, {item: "row_select" for item in overriding})
+        if name == IFRAME_WIDGET and isinstance(props, dict):
+            # Only in Bidirectional mode, and only the saved definition's
+            # events: one the application no longer asks for is refused, as an
+            # event on a deleted menu item is.
+            definition = props.get("frameDefinition")
+            events = definition.get("events") if isinstance(definition, dict) else None
+            out[node_id] = ("frame", [
+                str(e["id"]) for e in (events if isinstance(events, list) else [])
+                if isinstance(e, dict) and e.get("id")
+            ] if props.get("frameMode") == "bidirectional" else [], {})
         # A table falls through here and out: it is not a Button (§613's sweep
         # found a `continue` above could not change an answer).
         if name != BUTTON_WIDGET or not isinstance(props, dict):
@@ -513,6 +526,12 @@ def _parse_item(
             "actions offered on highlighted text or an annotation's hover card - choose which "
             "one fires the event"
         )
+    if item is None and menus is not None and on == "click" \
+            and menus.get(node, ("",))[0] == "frame":
+        raise EventError(
+            f"event {key!r} fires when iframe {node!r} is clicked, but an iframe's clicks are "
+            "the events its application asks for (p.553) - choose which one fires the event"
+        )
     if item is None:
         # A Menu button's own click opens its menu; an event on it would be a
         # wiring that never fires. A Two-part button's is its main button.
@@ -535,8 +554,8 @@ def _parse_item(
             raise EventError(
                 f"event {key!r} fires from item {item!r} of {node!r}, which has no items - "
                 "only a Menu or Two-part button does, or a table's right-click menu, "
-                "a timeline's overriding layers, or a Markdown widget's highlight actions "
-                "and overriding object types"
+                "a timeline's overriding layers, a Markdown widget's highlight actions "
+                "and overriding object types, or a Bidirectional iframe's events"
             )
         if item not in entry[1]:
             # Named against the items that are there: the usual cause is an
