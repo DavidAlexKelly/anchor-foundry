@@ -68,6 +68,10 @@ def module(api):
         "variables": {
             "v_all": {"id": "v_all", "kind": "object_set", "label": "All",
                       "object_set": object_set(type_id)},
+            # A second set, for Widget setup to rebind the table to (§739).
+            "v_few": {"id": "v_few", "kind": "object_set", "label": "Few",
+                      "object_set": object_set(type_id, [
+                          {"property": "id", "op": "in", "value": ["R1", "R2", "R3"]}])},
         },
         "events": {},
     })
@@ -311,3 +315,15 @@ def test_the_default_adds_no_wrapper_at_all(page, plain_module):
     # Presence before absence — the widget is drawn, *then* there is no wrapper.
     expect(page.locator(".canvas-block").first).to_be_visible()
     expect(page.locator(".canvas-sized")).to_have_count(0)
+
+
+def test_widget_setup_rebinds_the_input_and_the_render_follows_unsaved(page, module):
+    """§12's first clause: "a widget's input variable is settable from Widget
+    setup and the render changes without a save". The stored module is read
+    back afterwards, so "without a save" is asserted rather than assumed."""
+    open_builder(page, module)
+    settled(page)
+    select_widget(page)
+    page.get_by_label("Object set variable").select_option("v_few")
+    expect(page.locator(".canvas-block table tbody tr")).to_have_count(3)
+    assert module.definition()["layout"]["tbl"]["props"]["objectSetVariable"] == "v_all"
