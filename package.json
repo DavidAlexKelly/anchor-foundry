@@ -10,5 +10,10 @@
     "web:build": "npm run build -w @platform/web",
     "web:typecheck": "npm run typecheck -w @platform/web",
     "web:test": "npm run test -w @platform/web"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.28"
+    }
   }
 }

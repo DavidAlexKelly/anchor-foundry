@@ -15,7 +15,7 @@ const nextConfig = {
   // Pin tracing to the monorepo root so the standalone layout is stable
   // (apps/web/server.js) regardless of where the build runs - the web
   // Dockerfile's COPY paths depend on it.
-  experimental: { outputFileTracingRoot: repoRoot },
+  outputFileTracingRoot: repoRoot,
   async rewrites() {
     // Dev convenience: proxy /api to the local FastAPI process so the browser
     // sees one origin, mirroring the CloudFront layout in production.
