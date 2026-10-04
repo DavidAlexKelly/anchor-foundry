@@ -239,6 +239,16 @@ def test_the_resolve_tells_the_server_what_is_on_screen(page, api) -> None:
     try:
         open_module(page, mod)
         expect(page.get_by_text("ALPHA=AY")).to_be_visible()
+        # **The value proves nothing about which resolve made it** (§840).
+        # `open_module` lands in the builder, where every page is on screen and
+        # the resolve asks for everything, and only then clicks Preview - so
+        # ALPHA can be showing before Preview's lazy resolve has been sent,
+        # and unrouting on it raced that request (CI, #593). Wait for the
+        # request itself; if the rule never engages this still fails, below.
+        for _ in range(100):
+            if any(b.get("visible") is not None for b in sent):
+                break
+            page.wait_for_timeout(100)
     finally:
         page.unroute(EVALUATE)
 
