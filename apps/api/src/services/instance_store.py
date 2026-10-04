@@ -589,11 +589,9 @@ class OpenSearchInstanceStore:
         index = _index_name(search_prefix, object_type_id)
         await self._ensure_index(index, declared)
 
-        bulk_body: list[dict[str, Any]] = []
-        for primary_key, properties in rows:
-            doc_id = _doc_id(source_id, primary_key)
-            bulk_body.append({"update": {"_index": index, "_id": doc_id}})
-            bulk_body.append(
+        batches = instance_mapping.bulk_batches(
+            (
+                {"update": {"_index": index, "_id": _doc_id(source_id, primary_key)}},
                 {
                     "doc": {
                         "object_type_id": str(object_type_id),
@@ -603,12 +601,20 @@ class OpenSearchInstanceStore:
                         "updated_at": synced_at.isoformat(),
                     },
                     "doc_as_upsert": True,
-                }
+                },
             )
-        resp = await self._client.bulk(body=bulk_body, refresh="wait_for")
-        if resp.get("errors"):
-            failed = [item["update"]["error"] for item in resp["items"] if "error" in item.get("update", {})]
-            raise RuntimeError(f"OpenSearch bulk upsert had {len(failed)} failure(s): {failed[:3]}")
+            for primary_key, properties in rows
+        )
+        for number, bulk_body in enumerate(batches, start=1):
+            # Only the last waits for a refresh, which makes every batch
+            # before it searchable too: the sweep that follows a sync must
+            # see what it rewrote, and a refresh per batch is a refresh per
+            # thousand rows.
+            last = number == len(batches)
+            resp = await self._client.bulk(body=bulk_body, refresh="wait_for" if last else "false")
+            if resp.get("errors"):
+                failed = [item["update"]["error"] for item in resp["items"] if "error" in item.get("update", {})]
+                raise RuntimeError(f"OpenSearch bulk upsert had {len(failed)} failure(s): {failed[:3]}")
         return len(rows)
 
     async def delete_stale_instances(

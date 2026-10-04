@@ -191,7 +191,7 @@ def test_a_property_declared_since_the_last_sync_widens_the_index(
 def test_a_sync_longer_than_a_batch_loses_nothing_at_the_seams(
     index, workspace, storage_root, monkeypatch
 ) -> None:
-    monkeypatch.setattr(instance_index, "BULK_BATCH", 3)
+    monkeypatch.setattr(instance_index.instance_mapping, "BULK_MAX_DOCUMENTS", 3)
     replace_dataset(workspace, storage_root, 2,
                     [(1, "a", "a@x"), (2, "b", "b@x"), (3, "c", "c@x"), (3, "c2", "c2@x"),
                      (4, "d", "d@x"), (4, "d2", "d2@x"), (5, "e", "e@x")])
@@ -203,7 +203,7 @@ def test_a_sync_longer_than_a_batch_loses_nothing_at_the_seams(
 def test_only_the_last_batch_waits_for_a_refresh(index, workspace, storage_root, monkeypatch) -> None:
     """Every batch waiting would be a refresh per thousand rows; none waiting
     would sweep on the pre-sync view and delete what was just rewritten."""
-    monkeypatch.setattr(instance_index, "BULK_BATCH", 2)
+    monkeypatch.setattr(instance_index.instance_mapping, "BULK_MAX_DOCUMENTS", 2)
     # Six rows, so the last batch is a full one: "last" is the batch that
     # reaches the end, not one past it.
     replace_dataset(workspace, storage_root, 2,
