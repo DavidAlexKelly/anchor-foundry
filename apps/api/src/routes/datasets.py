@@ -1074,6 +1074,33 @@ async def export_dataset(
                         content_disposition_type="attachment")
 
 
+#: How many HEADs a listing of versions makes at once (§878).
+SIZE_CONCURRENCY = 16
+
+
+async def _sizes(keys: list[Any]) -> list[int | None]:
+    """Each version's stored size, in the order given; None where there is no
+    key or no object.
+
+    **Several at a time, not one after another (§878).** A version listing
+    asked S3 for one size, waited, then asked for the next. That was a few
+    seconds for a dataset with a hundred versions, and minutes for one synced
+    every five minutes for a month. The threads come from a limiter of the
+    listing's own, so one listing cannot take every thread the API has.
+    """
+    sizes: list[int | None] = [None] * len(keys)
+    limiter = anyio.CapacityLimiter(SIZE_CONCURRENCY)
+
+    async def one(index: int, key: str) -> None:
+        sizes[index] = await anyio.to_thread.run_sync(_storage.size, key, limiter=limiter)
+
+    async with anyio.create_task_group() as group:
+        for index, key in enumerate(keys):
+            if key:
+                group.start_soon(one, index, str(key))
+    return sizes
+
+
 @router.get("/{dataset_id}/retention", response_model=RetentionOut)
 async def dataset_retention(
     dataset_id: UUID,
@@ -1090,11 +1117,7 @@ async def dataset_retention(
         rows = await ds_service.list_versions(conn, access.project_id, dataset_id)
     total = 0
     unmeasured = 0
-    for row in rows:
-        key = row.get("s3_manifest_key")
-        size = (
-            await anyio.to_thread.run_sync(_storage.size, str(key)) if key else None
-        )
+    for size in await _sizes([row.get("s3_manifest_key") for row in rows]):
         if size is None:
             unmeasured += 1
         else:
@@ -1114,21 +1137,20 @@ async def list_versions(
 ) -> list[VersionOut]:
     async with user_connection(access.auth.user_id) as conn:
         rows = await ds_service.list_versions(conn, access.project_id, dataset_id)
+    # One HEAD per version, rather than storing the size at write time: that
+    # would be a second copy of a fact the object store already holds, and
+    # would silently go wrong the first time anything touched the bucket
+    # directly. Made several at a time (§878).
+    sizes = await _sizes([row.get("s3_manifest_key") for row in rows])
     out: list[VersionOut] = []
-    for row in rows:
+    for row, size in zip(rows, sizes):
         data = dict(row)
         if isinstance(data.get("table_schema"), str):
             import json
 
             data["table_schema"] = json.loads(data["table_schema"])
-        # One HEAD per version. A dataset has tens of these, not thousands, and
-        # the alternative - storing the size at write time - is a second copy of
-        # a fact the object store already holds and would silently go wrong the
-        # first time anything touched the bucket directly.
-        key = data.pop("s3_manifest_key", None)
-        data["size_bytes"] = (
-            await anyio.to_thread.run_sync(_storage.size, str(key)) if key else None
-        )
+        data.pop("s3_manifest_key", None)
+        data["size_bytes"] = size
         out.append(VersionOut(**data))
     return out
 

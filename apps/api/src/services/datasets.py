@@ -483,6 +483,24 @@ async def list_versions(
     )
 
 
+async def version_history(
+    conn: AsyncConnection, project_id: UUID, dataset_id: UUID
+) -> list[dict[str, Any]]:
+    """Every version's number, type and key, oldest first: what an export
+    reads to plan a run (§748), without each version's schema (§878)."""
+    await get(conn, project_id, dataset_id)
+    return await fetch_all(
+        conn,
+        """
+        SELECT version_number, transaction_type, s3_manifest_key
+          FROM dataset_versions
+         WHERE dataset_id = :did
+         ORDER BY version_number
+        """,
+        {"did": str(dataset_id)},
+    )
+
+
 async def record_file(
     conn: AsyncConnection, dataset_id: UUID, filename: str, uploaded_by: UUID | None,
     *, version_number: int,
