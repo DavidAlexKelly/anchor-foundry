@@ -144,19 +144,40 @@ async def allowlist(conn: AsyncConnection, organisation_id: UUID) -> list[dict[s
     )
 
 
-async def candidates(conn: AsyncConnection) -> list[dict[str, Any]]:
-    return await fetch_all(
-        conn,
-        """
-        SELECT a.id AS app_id, a.name, w.name AS workspace_name
+#: Modules offered at once in the allowlist's Add (§819).
+CANDIDATE_PAGE = 50
+
+
+async def candidates(conn: AsyncConnection, search: str = "") -> tuple[list[dict[str, Any]], int]:
+    """A page of the modules matching `search`, and how many match in all.
+
+    This was the first 500 by name, with nothing to say there were more: an
+    organisation past 500 modules could not add the rest, and the picker gave
+    no sign they existed. A dropdown that silently truncates is worse than a
+    slow one, so it is searched and says what it is not showing.
+    """
+    term = search.strip()
+    params: dict[str, Any] = {"q": f"%{_escape_like(term)}%" if term else None,
+                              "page": CANDIDATE_PAGE}
+    where = """
           FROM canvas_apps a
           JOIN projects p ON p.id = a.project_id
           JOIN workspaces w ON w.id = p.workspace_id
-         ORDER BY w.name, a.name
-         LIMIT 500
-        """,
-        {},
+         WHERE CAST(:q AS text) IS NULL OR a.name ILIKE :q OR w.name ILIKE :q
+    """
+    rows = await fetch_all(
+        conn,
+        f"SELECT a.id AS app_id, a.name, w.name AS workspace_name {where} "
+        "ORDER BY w.name, a.name, a.id LIMIT :page",
+        params,
     )
+    total = await fetch_one(conn, f"SELECT count(*) AS n {where}", params)
+    return rows, int(total["n"]) if total else 0
+
+
+def _escape_like(term: str) -> str:
+    """A search for "a_b" means "a_b", not "a<anything>b"."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 async def allow(conn: AsyncConnection, organisation_id: UUID, app_id: UUID, *, by: UUID) -> None:

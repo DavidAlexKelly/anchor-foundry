@@ -314,8 +314,43 @@ def test_an_administrator_adds_from_the_modules_they_can_see(
 ) -> None:
     r = client.get("/api/org/kiosk/candidates", headers=hdr(fx.admin_sub))
     assert r.status_code == 200, r.text
-    assert world["app"] in {c["app_id"] for c in r.json()}
+    assert world["app"] in {c["app_id"] for c in r.json()["items"]}
     assert client.get("/api/org/kiosk/candidates", headers=hdr(fx.editor_sub)).status_code == 403
+
+
+def test_the_candidates_are_searched_and_say_how_many_match(
+    client: TestClient, fx: Fixture, world: dict, monkeypatch,
+) -> None:
+    """The first 500 by name stood for all of them, with nothing to say there
+    were more (§819). A page, a search, and the total it was taken from."""
+    from src.services import kiosk as kiosk_service
+
+    def candidates(q: str = "") -> dict:
+        r = client.get("/api/org/kiosk/candidates", headers=hdr(fx.admin_sub), params={"q": q})
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    everything = candidates()
+    assert everything["total"] >= len(everything["items"]) >= 1
+    name = next(c["name"] for c in everything["items"] if c["app_id"] == world["app"])
+    found = candidates(name.upper())
+    assert world["app"] in {c["app_id"] for c in found["items"]}
+    assert found["total"] == len(found["items"])
+    # By workspace name too, as the option shows it.
+    workspace = next(c["workspace_name"] for c in everything["items"] if c["app_id"] == world["app"])
+    assert world["app"] in {c["app_id"] for c in candidates(workspace)["items"]}
+    assert candidates(f"{name} nothing like this")["total"] == 0
+    # A wildcard in the search is a character, not a pattern: "%" finds the
+    # modules with a "%" in them, not every module.
+    assert everything["total"] == len(everything["items"]), "this organisation fits a page"
+    for wildcard in ("%", "_"):
+        literal = {c["app_id"] for c in everything["items"]
+                   if wildcard in c["name"] or wildcard in c["workspace_name"]}
+        assert {c["app_id"] for c in candidates(wildcard)["items"]} == literal, wildcard
+
+    monkeypatch.setattr(kiosk_service, "CANDIDATE_PAGE", 1)
+    paged = candidates()
+    assert len(paged["items"]) == 1 and paged["total"] == everything["total"]
 
 
 def test_a_session_lasts_a_week(client: TestClient, fx: Fixture, world: dict) -> None:

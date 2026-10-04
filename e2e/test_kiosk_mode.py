@@ -56,6 +56,9 @@ def allowlist(page, mod) -> None:
     page.goto(f"{WEB_BASE}/org")
     settings = page.get_by_test_id("kiosk-settings")
     expect(settings).to_be_visible(timeout=30000)
+    # Searched for, as an administrator with more modules than a list holds
+    # would (§819): the development workspace alone is past the old 500.
+    page.get_by_test_id("kiosk-search").fill(f"App {mod.tag}")
     choice = page.get_by_test_id("kiosk-add-module")
     expect(choice.locator(f"option[value='{mod.app_id}']")).to_have_count(1)
     choice.select_option(mod.app_id)

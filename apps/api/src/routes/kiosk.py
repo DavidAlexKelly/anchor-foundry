@@ -73,13 +73,22 @@ class CandidateOut(BaseModel):
     workspace_name: str
 
 
-@org_router.get("/candidates", response_model=list[CandidateOut])
-async def list_candidates(auth: AuthContext = Depends(require_org_admin)) -> list[CandidateOut]:
+class CandidatesOut(BaseModel):
+    items: list[CandidateOut]
+    #: How many match the search in all, so a page can say what it leaves out.
+    total: int
+
+
+@org_router.get("/candidates", response_model=CandidatesOut)
+async def list_candidates(
+    q: str = "", auth: AuthContext = Depends(require_org_admin),
+) -> CandidatesOut:
     """Modules the administrator can see, for the allowlist's Add - by their
-    own access, so the list cannot show a module they could not open."""
+    own access, so the list cannot show a module they could not open. A page
+    of them, searched by module or workspace name (§819)."""
     async with user_connection(auth.user_id) as conn:
-        rows = await kiosk_service.candidates(conn)
-    return [CandidateOut(**r) for r in rows]
+        rows, total = await kiosk_service.candidates(conn, q)
+    return CandidatesOut(items=[CandidateOut(**r) for r in rows], total=total)
 
 
 @org_router.put("/modules/{app_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
