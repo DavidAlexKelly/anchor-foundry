@@ -25,6 +25,7 @@ avoid.
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -545,3 +546,81 @@ def test_a_quiet_model_run_through_the_runner_writes_no_log_file(
         log_path=log,
     )
     assert not os.path.exists(log)
+
+
+# ---- a repository's unit tests, through the runner (§890) ---------------------
+TESTED = {
+    "src/calc.py": "def add(a, b):\n    return a + b\n",
+    "tests/test_calc.py": (
+        "import os\n"
+        "from src.calc import add\n\n"
+        "def test_adds():\n    assert add(1, 2) == 3\n\n"
+        "def test_wrong():\n    assert add(1, 1) == 3\n\n"
+        "def test_sees_none_of_the_worker():\n"
+        "    assert set(os.environ) <= {'PATH', 'HOME', 'PYTHONDONTWRITEBYTECODE', 'PWD',\n"
+        "                               'LC_CTYPE', 'PYTEST_CURRENT_TEST', 'PYTEST_VERSION'}\n"
+    ),
+}
+
+
+def _run_the_container_when_tests_are_staged(monkeypatch) -> list[dispatch.RunHandle]:
+    staged: list[dispatch.RunHandle] = []
+    real_stage = dispatch.stage_tests
+
+    def capture(*args, **kwargs):
+        handle = real_stage(*args, **kwargs)
+        staged.append(handle)
+        run_the_container(handle)
+        return handle
+
+    monkeypatch.setattr(dispatch, "stage_tests", capture)
+    return staged
+
+
+def test_the_test_run_path_reaches_the_dispatch() -> None:
+    """`jobs/code_test_runs.py` ran tests in a subprocess of the worker on a
+    stack too, where the subprocess could read the worker's credentials out
+    of /proc (§890)."""
+    from anchor_worker.jobs import code_test_runs
+
+    assert code_test_runs.run_python_tests is dispatch.run_python_tests
+
+
+def test_a_test_run_goes_through_the_runner_and_its_report_comes_back(
+    model_run_env, ecs, monkeypatch
+) -> None:
+    staged = _run_the_container_when_tests_are_staged(monkeypatch)
+    report = dispatch.run_python_tests(dict(TESTED))
+
+    outcomes = {o.id.rsplit("::", 1)[-1]: o.outcome for o in report.outcomes}
+    assert outcomes == {"test_adds": "passed", "test_wrong": "failed",
+                        "test_sees_none_of_the_worker": "passed"}
+    (handle,) = staged
+    # And the run's directory is gone from the share afterwards.
+    assert not os.path.exists(handle.work_dir)
+
+
+def test_one_file_of_tests_is_collected_alone(model_run_env, ecs, monkeypatch) -> None:
+    _run_the_container_when_tests_are_staged(monkeypatch)
+    files = dict(TESTED)
+    files["tests/test_other.py"] = "def test_other():\n    assert True\n"
+    report = dispatch.run_python_tests(files, target="tests/test_other.py")
+    assert [o.id.rsplit("::", 1)[-1] for o in report.outcomes] == ["test_other"]
+
+
+def test_a_target_outside_the_working_set_starts_no_task(model_run_env, ecs, monkeypatch) -> None:
+    from anchor_worker.dataset_engine import DatasetEngineError
+
+    started: list[object] = []
+    monkeypatch.setattr(dispatch, "start", lambda handle, **_: started.append(handle) or handle)
+    with pytest.raises(DatasetEngineError, match="not a file in this working set"):
+        dispatch.run_python_tests(dict(TESTED), target="../etc/passwd")
+    assert started == [] and os.listdir(model_run_env) == []
+
+
+def test_the_job_says_tests_and_what_to_collect(scratch) -> None:
+    handle = dispatch.stage_tests(dict(TESTED), "tests/test_calc.py", timeout_s=60, root=scratch)
+    with open(os.path.join(handle.work_dir, "job.json")) as job:
+        assert json.load(job) == {"kind": "tests", "collect": "tests/test_calc.py", "timeout_s": 60}
+    assert os.path.exists(os.path.join(handle.work_dir, "anchor.py"))
+    assert os.path.exists(os.path.join(handle.work_dir, "pytest.ini"))

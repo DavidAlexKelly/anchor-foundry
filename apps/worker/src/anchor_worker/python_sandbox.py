@@ -299,85 +299,29 @@ def run_python_tests(
     looking. That is `transform_runner.py`'s result-file distinction, in the
     shape this function has.
 
+    **Development only, since §890.** On a stack the worker sends a test run
+    to the transform runner (`transform_dispatch.run_python_tests`), because a
+    subprocess of the worker could read the worker's own credentials; see
+    `test_command.py`.
+
     `target` is p.13's "all unit tests defined in the current file" (§530):
     one path of the working set, handed to pytest instead of the directory.
     The rest of the files are still written, since the file under test
     imports them. None runs every test.
     """
-    from . import unit_test_report
+    from . import test_command, unit_test_report
 
     with tempfile.TemporaryDirectory() as tmp:
         user_api.write_into(tmp)
-        for path, content in files.items():
-            # Not `target`: that is the parameter, and a loop that reused the
-            # name handed pytest the last file written instead (§530).
-            destination = os.path.join(tmp, path)
-            os.makedirs(os.path.dirname(destination) or tmp, exist_ok=True)
-            with open(destination, "w") as handle:
-                handle.write(content)
-
-        # **The configuration this run obeys, and the reason it is a file
-        # rather than a flag.**
-        #
-        # pytest looks for an ini in the directory it was given and then
-        # *upwards*, so without one here it finds whatever sits above the
-        # working directory and applies it. `TMPDIR` is the user's to set, so
-        # "above" can perfectly well be a checkout of this repository - at
-        # which point our own settings reach a customer's tests. A file in this
-        # directory is found first and ends the search.
-        #
-        # Two flags were tried before this and neither was the mechanism, which
-        # two surviving mutants are what proved (§293). `--rootdir` moves
-        # pytest's *rootdir* and not its *inifile*, so it walked up anyway;
-        # `-c` pointed at this same file and so said nothing the file's
-        # existence did not already say. One mechanism, and it is this one.
-        #
-        # Written only when the repository did not bring its own: a repository
-        # with a `pytest.ini` means it, a checkout would honour it, and
-        # overwriting theirs would be this platform quietly disagreeing with a
-        # file they wrote.
-        config_path = os.path.join(tmp, "pytest.ini")
-        if not os.path.exists(config_path):
-            with open(config_path, "w") as handle:
-                handle.write("[pytest]\n")
-
-        collect = tmp
-        if target is not None:
-            # The API normalised the path; this is the second guard, because
-            # the path is written into a command line.
-            collect = os.path.realpath(os.path.join(tmp, target))
-            if not collect.startswith(os.path.realpath(tmp) + os.sep) or not os.path.isfile(collect):
-                raise DatasetEngineError(f"{target} is not a file in this working set")
-
-        report_path = os.path.join(tmp, "_report.xml")
-        # **No `PYTHONPATH`, and a mutant is why.** It used to be set to `tmp`
-        # so that a test could import the transform under test by its
-        # repository path, and deleting it changed nothing: `python -m pytest`
-        # already puts the invocation directory first on `sys.path`, and the
-        # invocation directory is `cwd` below. Two mechanisms for one promise
-        # is how they come to disagree (§213), so the one that is load-bearing
-        # is named where it lives - see `cwd`.
-        env = {"PATH": "/usr/bin:/bin", "HOME": tmp,
-               "PYTHONDONTWRITEBYTECODE": "1"}
+        try:
+            collect = test_command.stage(tmp, files, target)
+        except test_command.BadTarget as exc:
+            raise DatasetEngineError(str(exc)) from exc
         try:
             result = subprocess.run(
-                [sys.executable, "-m", "pytest", "-q", "--no-header",
-                 "-p", "no:cacheprovider",
-                 # **`xunit1`, for `file` and `line`.** pytest 8's default
-                 # family writes a dotted `classname` and nothing else, so the
-                 # only way back to a path is to guess that dots are slashes -
-                 # which is wrong the moment a test lives in a class. A panel
-                 # whose job is to open the failing test needs the file it is
-                 # in, so ask for the format that says.
-                 "-o", "junit_family=xunit1",
-                 f"--junitxml={report_path}", collect],
-                # **Load-bearing, not tidiness.** `python -m pytest` prepends
-                # the invocation directory to `sys.path`, so this is what makes
-                # `from src.daily import build` resolve to the repository's own
-                # file. A change here breaks every test that imports the
-                # transform it is testing.
+                test_command.command(sys.executable, collect),
                 cwd=tmp,
-                env=env,
+                env=test_command.environment(tmp),
                 capture_output=True,
                 text=True,
                 timeout=timeout_s,
@@ -388,13 +332,9 @@ def run_python_tests(
                 f"the tests exceeded the {timeout_s}s time limit"
             ) from exc
 
+        report_path = os.path.join(tmp, test_command.REPORT_FILE)
         if not os.path.exists(report_path):
-            # pytest itself could not run, or died before writing. Its own
-            # stderr is the useful sentence - "No module named pytest" names
-            # the problem and "your tests failed" does not.
-            tail = (result.stderr or result.stdout or "").strip().splitlines()
-            raise DatasetEngineError(
-                "the test run produced no report: " + (tail[-1] if tail else "no output")
-            )
+            # pytest itself could not run, or died before writing.
+            raise DatasetEngineError(test_command.no_report(result.stdout, result.stderr))
         with open(report_path) as handle:
             return unit_test_report.parse_junit(handle.read())
