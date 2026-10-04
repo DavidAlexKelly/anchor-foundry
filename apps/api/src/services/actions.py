@@ -1570,10 +1570,16 @@ async def list_action_types(
         # concatenated would be a second answer to "which actions apply to
         # this type", and the two would drift the first time either query
         # gained a condition (§292).
+        # p.65's Interface action control (§763; db 0150): what a type has
+        # switched off for its own objects is not among its actions.
         where += """ AND (at.object_type_id = :tid
-                          OR at.interface_id IN (
-                              SELECT interface_id FROM object_type_interfaces
-                               WHERE object_type_id = :tid))"""
+                          OR (at.interface_id IN (
+                                  SELECT interface_id FROM object_type_interfaces
+                                   WHERE object_type_id = :tid)
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM interface_action_controls c
+                                   WHERE c.object_type_id = :tid
+                                     AND c.action_type_id = at.id)))"""
         params["tid"] = str(object_type_id)
     rows = await fetch_all(
         conn,

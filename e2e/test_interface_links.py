@@ -15,7 +15,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module
-from conftest import WEB_BASE
+from conftest import WEB_BASE, eventually
 from ontology_page import pick_type
 
 
@@ -166,3 +166,43 @@ def test_an_action_on_the_interface_links_through_it(page, api, world) -> None:
     assert result["ok"], result
     after = api.call("GET", f"/workspaces/{wid}/object-types/{world['offices']}/instances/{office['id']}")
     assert after["properties"]["desk_ref"] == desk["primary_key"]
+
+
+def test_a_type_switches_an_inherited_action_off_for_its_own_objects(page, api, world) -> None:
+    """p.65's Interface action control (§763): from the object type's own
+    editor, an action its interface carries is switched off for its objects,
+    which takes it out of the type's actions."""
+    from ontology_page import open_type_editor
+
+    mod = world["mod"]
+    wid = mod.workspace_id
+    tag = uuid.uuid4().hex[:6]
+    iface = api.call("POST", f"/workspaces/{wid}/interfaces", {
+        "api_name": f"Controlled{tag}", "display_name": f"Controlled {tag}",
+        "properties": [{"api_name": "code", "data_type": "string"}]})
+    api.call("PUT", f"/workspaces/{wid}/object-types/{world['offices']}/interfaces", [
+        {"interface_id": i["interface_id"], "property_mapping": i["property_mapping"]}
+        for i in api.call("GET", f"/workspaces/{wid}/object-types/{world['offices']}/interfaces")
+    ] + [{"interface_id": iface["id"], "property_mapping": {"code": "name"}}])
+    action = api.call("POST", f"/workspaces/{wid}/action-types", {
+        "interface_id": iface["id"], "api_name": f"rename_{tag}", "display_name": f"Rename {tag}",
+        "editable_properties": ["code"]})
+
+    def offered() -> bool:
+        return action["id"] in {a["id"] for a in api.call(
+            "GET", f"/workspaces/{wid}/action-types?object_type_id={world['offices']}")}
+
+    assert offered()
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/objects")
+    open_type_editor(page, f"office_{mod.tag}")
+    box = page.get_by_role("checkbox", name=f"Offer rename_{tag} for this type")
+    expect(box).to_be_checked(timeout=15000)
+    expect(page.get_by_test_id("interface-action-control")).to_contain_text(f"Controlled {tag}")
+    # A click rather than `uncheck`: the box follows the saved state, which
+    # arrives a moment after the click.
+    box.click()
+    expect(box).not_to_be_checked(timeout=15000)
+    eventually(lambda: offered(), lambda on: on is False, what="the action switched off")
+    box.click()
+    expect(box).to_be_checked(timeout=15000)
+    eventually(lambda: offered(), lambda on: on is True, what="the action switched back on")
