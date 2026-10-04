@@ -263,6 +263,28 @@ def test_changing_the_verification_takes_effect_and_forgets_an_old_secret(client
     assert r.status_code == 422
 
 
+def test_pushes_reuse_the_secret_and_a_new_one_takes_effect_at_once(
+    client, fx, gateway, monkeypatch
+) -> None:
+    """§867: each push fetched the secret from Secrets Manager, on the event
+    loop. A task now asks at most every thirty seconds - and forgets what it
+    kept the moment the listener's secret is changed through it."""
+    listener = started(client, fx, verification="header_secret",
+                       verification_header="X-T", secret="first")
+    asked: list[str] = []
+    real = gateway.get_secret
+    monkeypatch.setattr(gateway, "get_secret", lambda arn: (asked.append(arn), real(arn))[1])
+    for _ in range(5):
+        assert client.post(path_of(listener), content=b"x", headers={"X-T": "first"}).status_code == 200
+    assert len(asked) == 1
+    r = client.put(f"{base(fx)}/{listener['id']}/verification", headers=hdr(fx.editor_sub),
+                   json={"verification": "header_secret", "verification_header": "X-T",
+                         "secret": "second"})
+    assert r.status_code == 200
+    assert client.post(path_of(listener), content=b"x", headers={"X-T": "first"}).status_code == 401
+    assert client.post(path_of(listener), content=b"x", headers={"X-T": "second"}).status_code == 200
+
+
 def test_deleting_a_listener_deletes_its_secret(client, fx, gateway) -> None:
     listener = make(client, fx, verification="header_secret", verification_header="X-T", secret="t")
     assert any(listener["id"] in arn for arn in gateway._store)
