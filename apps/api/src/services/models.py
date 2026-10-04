@@ -896,7 +896,7 @@ async def record_output(
                 f"a dataset named '{slug}' already exists - rename the model or that dataset"
             )
         parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v1/data.parquet"
-        storage.put(parquet_key, parquet_bytes)
+        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
         row = await fetch_one(
             conn,
             """
@@ -942,7 +942,7 @@ async def record_output(
         parquet_key = (
             f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
         )
-        storage.put(parquet_key, parquet_bytes)
+        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
         row = await fetch_one(
             conn,
             """

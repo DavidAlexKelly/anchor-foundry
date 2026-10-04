@@ -112,7 +112,7 @@ async def record(
 
     schema, view_rows, rows_taken, parquet, written = await to_thread.run_sync(work)
     for key, data in written.items():
-        storage.put(key, data)
+        await to_thread.run_sync(storage.put, key, data)
 
     created = existing is None
     if created:

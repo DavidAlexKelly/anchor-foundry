@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
+from anyio import to_thread
 from sqlalchemy import text as _text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -264,7 +265,8 @@ async def fork(
     # and for the same reason: an orphaned file is recoverable garbage, a row
     # without its file is a broken dataset.
     try:
-        storage.put(parquet_key, storage.read(str(version["s3_manifest_key"])))
+        data = await to_thread.run_sync(storage.read, str(version["s3_manifest_key"]))
+        await to_thread.run_sync(storage.put, parquet_key, data)
     except FileNotFoundError as exc:
         # The row exists and its bytes do not - storage cleared under a dev
         # machine, a bucket lifecycle rule, a database restored against the
@@ -401,7 +403,7 @@ async def delete(
     # Storage after the row within the same request; a crash between the two
     # leaves recoverable files, and the worker's cleanup patterns extend to
     # dataset prefixes in a later milestone.
-    storage.delete_prefix(prefix)
+    await to_thread.run_sync(storage.delete_prefix, prefix)
 
 
 async def get_cached_profile(
@@ -848,7 +850,7 @@ async def stage_version(
         raise NotFoundError("dataset")
     version = int(current["current_version"]) + 1
     parquet_key = f"{storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
-    storage.put(parquet_key, parquet_bytes)
+    await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
     return StagedVersion(
         dataset_id=dataset_id,
         version=version,
