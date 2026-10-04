@@ -178,16 +178,17 @@ jobs:
   # step on one of the above: a failure here means something a viewer would
   # see, and reading that off a job whose name is "api" helps nobody.
   #
-  # **Eight shards, each with its own stack** (§696, §863). One runner took
-  # about eighty minutes for the suite, and every pull request waited on it.
-  # The files are dealt round-robin by `check.sh e2e` from E2E_SHARD, so each
-  # shard is an eighth of the suite on a database and a dev server of its own,
-  # and nothing one shard writes can be read by another. Four shards had grown
-  # to 26-34 minutes each as the suite did, and the slowest shard is how long
-  # every pull request waits; eight cost each run its setup four more times
-  # (about five minutes apiece) to wait roughly half as long. `browser` below
-  # is the one check that says whether all of them passed, under the name this
-  # job has always had, so a rule requiring that check still finds it.
+  # **Sixteen shards, each with its own stack** (§696, §863, §901). One runner
+  # took about eighty minutes for the suite, and every pull request waited on
+  # it. The files are dealt by weight by `check.sh e2e` from E2E_SHARD, so each
+  # shard is a sixteenth of the suite on a database and a dev server of its
+  # own, and nothing one shard writes can be read by another. At eight, a
+  # shard spent about 100 s setting up and 14 minutes testing, and was the
+  # slowest job by five minutes; the API job takes about nine. Sixteen costs
+  # the setup eight more times to bring the browser half level with it, and
+  # every pull request waits for the slowest job. `browser` below is the one
+  # check that says whether all of them passed, under the name this job has
+  # always had, so a rule requiring that check still finds it.
   browser-shard:
     name: browser shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
@@ -196,7 +197,7 @@ jobs:
       # others, and stopping them would hide the rest of what is red.
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     services:
       postgres:
         image: postgres:16
@@ -262,7 +263,7 @@ jobs:
         run: scripts/dev-up.sh
       - run: scripts/check.sh e2e
         env:
-          E2E_SHARD: ${{ matrix.shard }}/8
+          E2E_SHARD: ${{ matrix.shard }}/16
       - name: Server logs on failure
         if: failure()
         # **`-n 40`, not `-n 100`, and not `-100`.** Two bugs in one line,

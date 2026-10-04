@@ -135,7 +135,7 @@ run_unit()  { ( cd "$ROOT/apps/web" && npm test --silent ); }
 #
 # **E2E_SHARD=i/n runs one shard of the suite** (§696): the files dealt out
 # so each shard holds as many tests as the others (§863; below). CI runs
-# eight on eight runners, each with a stack of its own. Unset, it
+# sixteen on sixteen runners (§901), each with a stack of its own. Unset, it
 # is the whole suite, as it always was. A shard that is not `i/n` with
 # 0 <= i < n is refused rather than read as "no files", which pytest would take
 # as every file and report as the whole suite passing once per shard.
