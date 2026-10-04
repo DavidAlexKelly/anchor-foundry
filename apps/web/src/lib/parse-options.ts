@@ -50,6 +50,28 @@ export const DEFAULT_OPTIONS: ParseOptions = {
   add_row_number: false,
 };
 
+/** The options a dataset is read with now (§746; db 0143), over the
+ *  defaults: what the server stored, which is the defaults when nothing is.
+ *  Only the keys the panel knows are taken, each only when it has the
+ *  default's type, so a stored set from an older shape cannot put a value in
+ *  a field that would send it back wrong. */
+export function storedOptions(stored: Record<string, unknown> | null | undefined): ParseOptions {
+  const out: ParseOptions = { ...DEFAULT_OPTIONS, null_values: [] };
+  if (!stored) return out;
+  for (const key of Object.keys(DEFAULT_OPTIONS) as (keyof ParseOptions)[]) {
+    const value = stored[key];
+    const fallback = DEFAULT_OPTIONS[key];
+    if (key === "delimiter" || key === "quote") {
+      if (typeof value === "string") out[key] = value;
+    } else if (key === "null_values") {
+      if (Array.isArray(value)) out.null_values = value.filter((v): v is string => typeof v === "string");
+    } else if (typeof value === typeof fallback) {
+      (out as unknown as Record<string, unknown>)[key] = value;
+    }
+  }
+  return out;
+}
+
 /**
  * Why this dataset cannot be parsed again, or `""` when it can.
  *

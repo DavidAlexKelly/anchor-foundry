@@ -164,6 +164,8 @@ def test_an_upload_from_before_the_name_was_recorded_is_refused_by_name(
         conn.execute(
             "UPDATE datasets SET original_filename = NULL WHERE id = %s", (created["id"],)
         )
+        # What db 0143's backfill leaves for such a dataset: no file row.
+        conn.execute("DELETE FROM dataset_files WHERE dataset_id = %s", (created["id"],))
     r = preview(client, fx, created["id"])
     assert r.status_code == 409, r.text
     assert "before the original file was recorded" in r.text
@@ -320,9 +322,10 @@ def test_re_encoding_a_file_that_was_uploaded_as_bytes(
 
     async def key() -> str:
         async with user_connection(uuid.UUID(str(fx.editor))) as conn:
-            return await ds_service.original_upload_key(
+            [(_name, kept)] = await ds_service.upload_files(
                 conn, uuid.UUID(str(fx.project)), uuid.UUID(created["id"])
             )
+            return kept
 
     storage.put(asyncio.run(key()), LATIN1)
 
@@ -346,9 +349,10 @@ def test_an_encoding_the_file_is_not_says_where_it_gave_up(
 
     async def key() -> str:
         async with user_connection(uuid.UUID(str(fx.editor))) as conn:
-            return await ds_service.original_upload_key(
+            [(_name, kept)] = await ds_service.upload_files(
                 conn, uuid.UUID(str(fx.project)), uuid.UUID(created["id"])
             )
+            return kept
 
     storage.put(asyncio.run(key()), LATIN1)
     r = preview(client, fx, created["id"], encoding="utf-16")
@@ -545,9 +549,10 @@ def test_a_json_file_can_be_re_encoded(
 
     async def key() -> str:
         async with user_connection(uuid.UUID(str(fx.editor))) as conn:
-            return await ds_service.original_upload_key(
+            [(_name, kept)] = await ds_service.upload_files(
                 conn, uuid.UUID(str(fx.project)), uuid.UUID(created["id"])
             )
+            return kept
 
     storage.put(asyncio.run(key()), '{"id": 1, "name": "café"}\n'.encode("latin-1"))
     assert preview(client, fx, created["id"]).status_code == 422

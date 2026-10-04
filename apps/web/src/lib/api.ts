@@ -809,6 +809,20 @@ export const datasets = {
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/rollback`,
       { method: "POST", body: JSON.stringify({ version_number: versionNumber }) },
     ),
+  /** The files an uploaded dataset holds (§746; db 0143). */
+  files: (wid: string, pid: string, did: string) =>
+    request<import("./types").DatasetFile[]>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/files`,
+    ),
+  /** A file into an existing dataset (§746; `dataset-preview` p.10): one of a
+   *  name already there replaces it, a new name joins the others. */
+  uploadFile: (wid: string, pid: string, did: string, file: File) => {
+    const form = new FormData();
+    form.set("file", file);
+    return requestForm<import("./types").DatasetFileUpload>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/files`, form,
+    );
+  },
   upload: (wid: string, pid: string, input: { name: string; file: File }) => {
     const form = new FormData();
     form.set("name", input.name);

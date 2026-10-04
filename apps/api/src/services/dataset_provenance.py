@@ -99,10 +99,21 @@ async def current_origin(conn: AsyncConnection, dataset_id: UUID) -> dict[str, A
         source = await fetch_one(conn, "SELECT version_number FROM dataset_versions WHERE id = :id",
                                  {"id": pid})
         note = f"rolled back to version {source['version_number']}" if source else "rolled back"
-    elif kind in ("upload", "reparse"):
-        filename = version["original_filename"]
-        verb = "re-parsed from" if kind == "reparse" else "uploaded as"
-        note = f"{verb} {filename}" if filename else None
+    elif kind == "upload":
+        # The file this version added or replaced (§746; db 0143), which is
+        # the dataset's first only for version 1.
+        found = await fetch_one(conn, """
+            SELECT filename FROM dataset_files WHERE dataset_id = :id AND version_number = :v
+        """, {"id": str(dataset_id), "v": version["version_number"]})
+        filename = found["filename"] if found else version["original_filename"]
+        note = f"uploaded as {filename}" if filename else None
+    elif kind == "reparse":
+        names = [str(r["filename"]) for r in await fetch_all(conn, """
+            SELECT filename FROM dataset_files WHERE dataset_id = :id
+             ORDER BY uploaded_at, filename
+        """, {"id": str(dataset_id)})] or (
+            [version["original_filename"]] if version["original_filename"] else [])
+        note = f"re-parsed from {', '.join(names)}" if names else None
 
     return {
         "version_number": version["version_number"],

@@ -1198,8 +1198,28 @@ export interface Dataset {
    *  when there is none to read again — anything not uploaded, or uploaded
    *  before the name was recorded. */
   original_filename?: string | null;
+  /** The parsing options it is read with now (§746; db 0143; p.24's "stored
+   *  in the schema"), or null for the default read. */
+  parse_options?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
+}
+
+/** One of the files an uploaded dataset holds (§746; db 0143). */
+export interface DatasetFile {
+  filename: string;
+  uploaded_at: string;
+  /** The version this file last wrote. */
+  version_number: number;
+  uploaded_by_name: string | null;
+}
+
+/** A file uploaded into an existing dataset: p.10's "update" when it
+ *  replaced one of its name, "append" when it joined the others. */
+export interface DatasetFileUpload {
+  mode: "update" | "append";
+  filename: string;
+  dataset: Dataset;
 }
 
 /** Per-column statistics for a dataset version (migration 0019). Computed on
