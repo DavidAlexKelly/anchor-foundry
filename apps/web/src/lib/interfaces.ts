@@ -24,6 +24,7 @@
  */
 
 import type {
+  InterfaceLinkConstraint,
   InterfaceProperty,
   InterfaceSummary,
   PropertyDataType,
@@ -225,4 +226,75 @@ export function unmappedRequired(
 export function implementationLabel(count: number): string {
   if (count === 0) return "Nothing yet";
   return count === 1 ? "1 object type" : `${count} object types`;
+}
+
+// ---- link constraints (§760; decision 0024) ----------------------------------
+
+/** A link constraint as the dialog edits it. `target` is `interface:<id>` or
+ * `object_type:<id>`, one select for p.63's two kinds, or "" while unchosen. */
+export interface DraftLink {
+  api_name: string;
+  display_name: string;
+  description: string;
+  target: string;
+  required: boolean;
+}
+
+export function blankLink(): DraftLink {
+  return { api_name: "", display_name: "", description: "", target: "", required: true };
+}
+
+/** A saved constraint as the dialog edits it. */
+export function draftLinkOf(c: InterfaceLinkConstraint): DraftLink {
+  return {
+    api_name: c.api_name,
+    display_name: c.display_name,
+    description: c.description,
+    target: c.target_interface_id
+      ? `interface:${c.target_interface_id}`
+      : c.target_object_type_id ? `object_type:${c.target_object_type_id}` : "",
+    required: c.required,
+  };
+}
+
+/** A draft as the server takes it. */
+export function linkBody(d: DraftLink): {
+  api_name: string; display_name: string | null; description: string;
+  target_interface_id: string | null; target_object_type_id: string | null; required: boolean;
+} {
+  const [kind, id] = d.target.split(":");
+  return {
+    api_name: d.api_name,
+    display_name: d.display_name || null,
+    description: d.description,
+    target_interface_id: kind === "interface" && id ? id : null,
+    target_object_type_id: kind === "object_type" && id ? id : null,
+    required: d.required,
+  };
+}
+
+/** What is wrong with the drafted links, as one sentence, or null; each case
+ * the server refuses too. */
+export function linksProblem(links: DraftLink[]): string | null {
+  const seen = new Set<string>();
+  for (const l of links) {
+    if (!l.api_name) return "Every link needs a name.";
+    if (!/^[a-z][a-z0-9_]{0,99}$/.test(l.api_name)) {
+      return `${l.api_name} must start with a lowercase letter and hold lowercase letters, digits and underscores.`;
+    }
+    if (seen.has(l.api_name)) return `Two links are both called ${l.api_name}.`;
+    seen.add(l.api_name);
+    if (!/^(interface|object_type):./.test(l.target)) return `Choose what ${l.api_name} links to.`;
+  }
+  return null;
+}
+
+/** The required link constraints no link type keeps yet. */
+export function unkeptRequired(
+  constraints: InterfaceLinkConstraint[],
+  mapping: Record<string, string[]>,
+): string[] {
+  return constraints
+    .filter((c) => c.required && !(mapping[c.api_name]?.length))
+    .map((c) => c.api_name);
 }

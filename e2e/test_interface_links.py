@@ -1,0 +1,102 @@
+"""Link constraints on interfaces, from the Ontology Manager (§760; decision
+0024; `ontology` p.60, `action-types` p.63-64).
+
+The model and its refusals are `apps/api/tests/test_interface_links.py`', and
+the dialog's sentences `apps/web/src/lib/interfaces.test.ts`'. What needs a
+browser is the round trip: a link declared in the interface's dialog is the
+promise the implementation dialog then asks to be kept, offering only the
+link types that would keep it.
+"""
+from __future__ import annotations
+
+import uuid
+
+import pytest
+from playwright.sync_api import expect
+
+from api import Module
+from conftest import WEB_BASE
+from ontology_page import pick_type
+
+
+@pytest.fixture(scope="module")
+def world(api):
+    mod = Module(api, "Interface links")
+    tag = mod.tag
+    desks = mod.object_type(columns=["id", "name"], rows=[{"id": "D1", "name": "Window"}],
+                            key="id", title="name", slug=f"desk_{tag}")
+    offices = mod.object_type(
+        columns=["id", "name", "desk_ref", "next_ref"],
+        rows=[{"id": "O1", "name": "North", "desk_ref": "D1", "next_ref": "O1"}],
+        key="id", title="name", slug=f"office_{tag}")
+    sits = api.call("POST", f"/workspaces/{mod.workspace_id}/link-types", {
+        "api_name": f"sits_at_{tag}", "display_name": "Sits at",
+        "from_type_id": offices, "to_type_id": desks, "cardinality": "one_to_many",
+        "from_property": "desk_ref", "to_property": "$primary_key"})
+    # A link that goes somewhere else, which must not be offered.
+    nxt = api.call("POST", f"/workspaces/{mod.workspace_id}/link-types", {
+        "api_name": f"next_{tag}", "display_name": "Next office",
+        "from_type_id": offices, "to_type_id": offices, "cardinality": "one_to_many",
+        "from_property": "next_ref", "to_property": "$primary_key"})
+    return {"mod": mod, "desks": desks, "offices": offices, "sits": sits, "next": nxt}
+
+
+def open_objects(page, mod) -> None:
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/objects")
+    expect(page.get_by_test_id("new-interface")).to_be_visible(timeout=30000)
+
+
+def test_a_link_declared_on_an_interface_is_kept_by_an_implementation(page, api, world) -> None:
+    mod = world["mod"]
+    name = f"Seated {uuid.uuid4().hex[:4]}"
+    open_objects(page, mod)
+    page.get_by_test_id("new-interface").click()
+    page.get_by_test_id("iface-name").fill(name)
+    expect(page.get_by_test_id("iface-no-links")).to_be_visible()
+    page.get_by_test_id("iface-add-link").click()
+    page.get_by_role("textbox", name="Link 1 name").fill("Desk")
+    # Not saveable until it says what it links to.
+    expect(page.get_by_test_id("iface-problem")).to_have_text("Choose what desk links to.")
+    expect(page.get_by_test_id("iface-save")).to_be_disabled()
+    page.get_by_role("combobox", name="Link 1 links to").select_option("object_type")
+    pick_type(page, "iface-link-1-type", {"id": world["desks"], "api_name": f"desk_{mod.tag}"})
+    api_name = page.get_by_test_id("iface-api-name").input_value()
+    page.get_by_test_id("iface-save").click()
+    expect(page.get_by_test_id("iface-table")).to_contain_text(api_name, timeout=15000)
+
+    found = next(i for i in api.call("GET", f"/workspaces/{mod.workspace_id}/interfaces")
+                 if i["api_name"] == api_name)
+    detail = api.call("GET", f"/workspaces/{mod.workspace_id}/interfaces/{found['id']}")
+    assert [(c["api_name"], c["target_object_type_id"], c["required"])
+            for c in detail["link_constraints"]] == [("desk", world["desks"], True)]
+
+    # Reopened, the dialog shows it as saved.
+    page.get_by_role("button", name=f"Edit {api_name}").click()
+    expect(page.get_by_role("textbox", name="Link 1 API name")).to_have_value("desk", timeout=15000)
+    expect(page.get_by_role("combobox", name="Link 1 links to")).to_have_value("object_type")
+    page.get_by_role("button", name="Cancel").click()
+
+    page.get_by_role("button", name=f"Implement {api_name}").click()
+    pick_type(page, "impl-type", {"id": world["offices"], "api_name": f"office_{mod.tag}"})
+    kept = page.get_by_test_id("impl-link-desk")
+    expect(kept.get_by_role("checkbox")).to_have_count(1, timeout=15000)
+    expect(kept).to_contain_text("Sits at")
+    expect(kept).not_to_contain_text("Next office")
+    # A required link nothing keeps yet holds the save.
+    expect(page.get_by_test_id("impl-unkept")).to_contain_text("desk")
+    expect(page.get_by_test_id("impl-save")).to_be_disabled()
+    kept.get_by_role("checkbox", name=f"Keep desk with sits_at_{mod.tag}").check()
+    expect(page.get_by_test_id("impl-unkept")).to_have_count(0)
+    page.get_by_test_id("impl-save").click()
+    expect(page.get_by_test_id(f"iface-impls-{api_name}")).to_have_text(
+        "1 object type", timeout=15000)
+
+    impls = api.call("GET", f"/workspaces/{mod.workspace_id}/object-types/{world['offices']}/interfaces")
+    mine = next(i for i in impls if i["interface_id"] == found["id"])
+    assert mine["link_mapping"] == {"desk": [world["sits"]["id"]]}
+
+    # Opened again, the dialog holds what was kept.
+    page.get_by_role("button", name=f"Implement {api_name}").click()
+    pick_type(page, "impl-type", {"id": world["offices"], "api_name": f"office_{mod.tag}"})
+    expect(page.get_by_test_id("impl-link-desk").get_by_role("checkbox")).to_be_checked(
+        timeout=15000)
