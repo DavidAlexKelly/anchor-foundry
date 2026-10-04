@@ -353,3 +353,51 @@ def test_connection_actions_audited_without_password(client: TestClient, fx: Fix
     assert {"connection.create", "connection.test", "connection.discover",
             "connection.delete"} <= actions
     assert SOURCE_PASSWORD not in r.text
+
+
+def test_no_read_endpoint_returns_the_credential_at_any_role(
+    client: TestClient, fx: Fixture, source_database: dict[str, object],
+) -> None:
+    """`data-connection.md` §6: "a credential is never returned by any read
+    endpoint, at any role. This wants an explicit test rather than an
+    assumption."
+
+    **Every GET route the app has**, walked rather than listed: each one whose
+    path parameters are a workspace, a project or this connection, called at
+    every role, the password searched for in whatever comes back. A list
+    written out here would miss the endpoint added next year; the app's own
+    routing table cannot. A route needing any other id is skipped, since it
+    cannot be about this connection without naming something else first.
+    """
+    import re as _re
+    from fastapi.routing import APIRoute
+
+    r = client.post(
+        base(fx), headers=hdr(fx.editor_sub),
+        json={"name": "Credential sweep", "source_type": "postgres",
+              "config": source_database, "secret": {"password": SOURCE_PASSWORD}},
+    )
+    assert r.status_code == 201, r.text
+    known = {"workspace_id": fx.workspace, "project_id": fx.project,
+             "connection_id": r.json()["id"]}
+    # Tested once, so a connection that reads as `ok` has been through the
+    # code that holds the password.
+    client.post(f"{base(fx)}/{known['connection_id']}/test", headers=hdr(fx.editor_sub))
+
+    checked: list[str] = []
+    for route in client.app.routes:
+        if not isinstance(route, APIRoute) or "GET" not in route.methods:
+            continue
+        params = _re.findall(r"{(\w+)}", route.path)
+        if any(p not in known for p in params):
+            continue
+        path = route.path.format(**{p: known[p] for p in params})
+        for sub in (fx.viewer_sub, fx.editor_sub, fx.admin_sub, fx.owner_sub):
+            response = client.get(path, headers=hdr(sub))
+            assert SOURCE_PASSWORD not in response.text, (route.path, sub, response.status_code)
+        checked.append(route.path)
+    # The connection's own reads are among the routes walked, and the walk is
+    # the app's breadth rather than a handful.
+    assert any(p.endswith("/connections") for p in checked), checked
+    assert any("{connection_id}" in p for p in checked), checked
+    assert len(checked) > 50, len(checked)

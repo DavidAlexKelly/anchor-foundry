@@ -20,6 +20,7 @@ which cards the count is talking about: a match nothing draws is a number.
 """
 from __future__ import annotations
 
+import re
 import uuid
 
 import pytest
@@ -287,3 +288,30 @@ def test_searching_columns_looks_at_the_whole_graph(page, columned) -> None:
     page.get_by_test_id("search-query").fill("site_id")
     expect(matches(page)).to_have_count(1)
     expect(matches(page).first).to_contain_text(f"Alpha {columned['tag']}")
+
+
+@pytest.fixture(scope="module")
+def three_of_four(api):
+    """`datasets-lineage.md` §4's acceptance line, as written: "a column
+    present in three datasets returns exactly those three". The column sits
+    first, last and in the middle, and a fourth dataset does not have it."""
+    tag = uuid.uuid4().hex[:6]
+    workspace = api.call("GET", "/workspaces")[0]
+    project = api.call(
+        "POST", f"/workspaces/{workspace['id']}/projects",
+        {"name": f"Three {tag}", "slug": f"three-{tag}"},
+    )
+    base = f"/workspaces/{workspace['id']}/projects/{project['id']}"
+    for name, body in (("Red", b"id,depot\n1,D1\n"), ("Green", b"depot,qty\nD1,3\n"),
+                       ("Blue", b"n,depot,flag\n1,D2,1\n"), ("Grey", b"id,val\n1,10\n")):
+        api.upload_csv(f"{base}/datasets/upload", f"{name} {tag}", body)
+    return {"workspace_slug": workspace["slug"], "project_slug": project["slug"], "tag": tag}
+
+
+def test_a_column_in_three_datasets_finds_exactly_those_three(page, three_of_four) -> None:
+    open_columned(page, three_of_four)
+    page.get_by_test_id("search-query").fill("depot")
+    expect(matches(page)).to_have_count(3)
+    tag = three_of_four["tag"]
+    found = sorted(re.search(rf"(\w+) {tag}", t).group(1) for t in matches(page).all_inner_texts())
+    assert found == ["Blue", "Green", "Red"], found
