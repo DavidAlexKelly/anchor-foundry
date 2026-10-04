@@ -557,3 +557,55 @@ def test_an_exists_clause_selects_the_documents_with_a_value(server):
     put(name, "1", {"primary_key": "has", "capacity": 40})
     put(name, "2", {"primary_key": "hasnt"})
     assert keys(search(name, {"exists": {"field": "capacity"}})[1]) == ["has"]
+
+
+# ---- arrays and absent indices (§810) ----------------------------------------
+def test_a_list_is_each_of_its_elements_parsed_as_the_fields_type(server):
+    """OpenSearch has no array type: a `long` field takes `[5, 6]` as it takes
+    `5`, every element parsed, and one it cannot hold refuses the document.
+    This refused every list, so an array property could not be indexed."""
+    name = index("arrays")
+    status, body = put(name, "1", {"primary_key": "a", "capacity": ["40", 7]})
+    assert status == 200 and not body["errors"], body
+    assert call("GET", f"/{name}/_doc/1")[1]["_source"]["capacity"] == [40, 7]
+    _, body = put(name, "2", {"primary_key": "b", "capacity": [1, "n/a"]})
+    item = body["items"][0]["update"]
+    assert item["status"] == 400 and "capacity" in item["error"]["reason"], item
+
+
+def test_a_list_of_points_is_several_points(server):
+    """How an array of geopoints (db 0087) arrives: each element a point."""
+    name = index("arrays")
+    status, body = put(name, "1", {"primary_key": "a", "location": [
+        {"lat": 51.5, "lon": -0.12}, {"lat": 48.85, "lon": 2.35}]})
+    assert status == 200 and not body["errors"], body
+    _, body = put(name, "2", {"primary_key": "b", "location": [{"lat": 51.5, "lon": -0.12}, "nowhere"]})
+    assert body["items"][0]["update"]["status"] == 400
+
+
+def test_a_query_over_a_list_matches_when_any_element_does(server):
+    name = index("arrays")
+    put(name, "1", {"primary_key": "a", "capacity": [5, 250]})
+    put(name, "2", {"primary_key": "b", "capacity": [5, 6]})
+    put(name, "3", {"primary_key": "c", "capacity": 250})
+    assert keys(search(name, {"term": {"capacity": 250}})[1]) == ["a", "c"]
+    assert keys(search(name, {"terms": {"capacity": [6, 7]}})[1]) == ["b"]
+    # Numerically, element by element: 250 >= 40, and neither 5 nor 6 is.
+    assert keys(search(name, {"range": {"capacity": {"gte": 40}}})[1]) == ["a", "c"]
+    assert keys(search(name, {"range": {"capacity": {"lt": 6}}})[1]) == ["a", "b"]
+
+
+def test_a_delete_by_query_on_an_index_that_does_not_exist_is_an_error(server):
+    """As for a search. This answered "deleted 0", which hid that a sync's
+    sweep after an empty first sync - no rows, so no index - fails against a
+    real cluster."""
+    call("POST", "/__reset")
+    query = {"query": {"term": {"source_id": "s1"}}}
+    status, body = call("POST", "/nowhere/_delete_by_query", query)
+    assert status == 404
+    assert body["error"]["type"] == "index_not_found_exception"
+    status, body = call("POST", "/nowhere/_delete_by_query?ignore_unavailable=true", query)
+    assert status == 200 and body["deleted"] == 0
+    # A pattern matching nothing is still not an error.
+    status, body = call("POST", "/nothing-*/_delete_by_query", query)
+    assert status == 200 and body["deleted"] == 0

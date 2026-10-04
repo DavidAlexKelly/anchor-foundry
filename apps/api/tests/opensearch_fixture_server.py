@@ -195,6 +195,16 @@ def _coerce(value, declared: str | None, where: str):
     """
     if value is None or declared is None:
         return value
+    if isinstance(value, list):
+        # **OpenSearch has no array type** (§810): a field mapped `long` takes
+        # `5` and `[5, 6]` alike, each element parsed as the field's type, and
+        # one element it cannot hold refuses the document. Refusing every list
+        # here made an array property unwritable to the index - for the API's
+        # store as much as anything - and nothing had tried. A `geo_point`
+        # too: a list of `{lat, lon}` is several points. (`[lon, lat]` is one
+        # point on a cluster, but not a form the platform writes, so it is
+        # refused here with every other form `_parse_geo` does not know.)
+        return [_coerce(element, declared, where) for element in value]
     try:
         if declared in ("integer", "long"):
             if isinstance(value, bool) or float(value) != int(float(value)):
@@ -323,6 +333,14 @@ def _resolve(source: dict, field: str):
     return current
 
 
+def _any(found, test) -> bool:
+    """A query over an array field matches when *any* element does, which is
+    the only meaning a cluster with no array type can give it (§810)."""
+    if isinstance(found, list):
+        return any(test(element) for element in found)
+    return test(found)
+
+
 def _match(source: dict, clause: dict, index: str = "") -> bool:
     if "term" in clause:
         field, value = next(iter(clause["term"].items()))
@@ -331,7 +349,8 @@ def _match(source: dict, clause: dict, index: str = "") -> bool:
             return False
         declared = _declared_type(index, field)
         try:
-            return _comparable(found, declared) == _comparable(value, declared)
+            wanted = _comparable(value, declared)
+            return _any(found, lambda v: _comparable(v, declared) == wanted)
         except (TypeError, ValueError) as exc:
             # A query value the field's type cannot hold. A real cluster
             # answers 400 rather than "no matches", and the difference matters:
@@ -390,7 +409,8 @@ def _match(source: dict, clause: dict, index: str = "") -> bool:
         if found is MISSING:
             return False
         declared = _declared_type(index, field)
-        return _comparable(found, declared) in {_comparable(v, declared) for v in values}
+        wanted = {_comparable(v, declared) for v in values}
+        return _any(found, lambda v: _comparable(v, declared) in wanted)
     if "geo_bounding_box" in clause:
         # Decision 0006 §3: the map's area selection is a bounding box, not
         # four ordered comparisons - four get the antimeridian wrong, silently,
@@ -494,22 +514,26 @@ def _match(source: dict, clause: dict, index: str = "") -> bool:
         # would have passed here.
         declared = _declared_type(index, field)
         try:
-            current = _comparable(found, declared)
             edges = {op: _comparable(bounds[op], declared) for op in bounds if op in
                      ("lt", "lte", "gt", "gte")}
         except (TypeError, ValueError) as exc:
             raise MappingError(
                 f"failed to parse range bound for [{field}] of type [{declared}]"
             ) from exc
-        if "lt" in edges and not current < edges["lt"]:
-            return False
-        if "lte" in edges and not current <= edges["lte"]:
-            return False
-        if "gt" in edges and not current > edges["gt"]:
-            return False
-        if "gte" in edges and not current >= edges["gte"]:
-            return False
-        return True
+
+        def within(value) -> bool:
+            current = _comparable(value, declared)
+            if "lt" in edges and not current < edges["lt"]:
+                return False
+            if "lte" in edges and not current <= edges["lte"]:
+                return False
+            if "gt" in edges and not current > edges["gt"]:
+                return False
+            if "gte" in edges and not current >= edges["gte"]:
+                return False
+            return True
+
+        return _any(found, within)
     raise ValueError(f"fixture does not implement clause {clause!r}")
 
 
@@ -1089,6 +1113,14 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     def _delete_by_query(self, index: str, body: dict) -> None:
+        # A concrete index that does not exist is a 404, as for a search
+        # (§810). This answered "deleted 0", which hid that a sync's sweep
+        # after an empty first sync - no rows, so no index made - fails
+        # against a real cluster.
+        if "*" not in index and not _matching_indices(index) and not self._flag(
+            "ignore_unavailable"
+        ):
+            return self._send(404, {"error": {"type": "index_not_found_exception"}})
         try:
             matched = _filtered(index, body.get("query", {}))
         except MappingError as exc:
