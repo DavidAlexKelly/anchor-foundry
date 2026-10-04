@@ -250,6 +250,12 @@ def test_an_abandoned_edit_changes_nothing(page, api, sites) -> None:
     settled(page)
 
     eventually(lambda: pills(page).count(), lambda n: n == 2, what="two pills")
+    # Named before anything else. A pill reads its property's API name until
+    # the object type arrives, and `has_text` matches either case - so without
+    # this the edit below could start, and `stays` take its first look, while
+    # the pills still said "region is north" (#595's shard 1).
+    eventually(lambda: texts(page), lambda t: t == ["Band is new", "Region is north"],
+               what="the pills, named from the type")
     pill_for(page, "Region is north").get_by_test_id("filter-pill-edit").click()
     page.get_by_test_id("filter-pill-input").fill("south")
     page.get_by_test_id("filter-pill-input").press("Escape")
