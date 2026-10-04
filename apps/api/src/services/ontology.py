@@ -564,7 +564,7 @@ async def reducers_for(
 
 
 async def list_properties_for_workspace(
-    conn: AsyncConnection, workspace_id: UUID
+    conn: AsyncConnection, workspace_id: UUID, *, type_ids: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Every object type's properties, in **one** query, keyed by type id.
 
@@ -599,9 +599,11 @@ async def list_properties_for_workspace(
           JOIN object_types ot ON ot.id = p.object_type_id
           LEFT JOIN shared_properties sp ON sp.id = p.shared_property_id
          WHERE ot.workspace_id = :wid
+           -- `type_ids` narrows it to the types a caller will ask about (§830).
+           AND (CAST(:tids AS uuid[]) IS NULL OR ot.id = ANY(CAST(:tids AS uuid[])))
          ORDER BY p.object_type_id, p.sort_order, p.api_name
         """,
-        {"wid": str(workspace_id)},
+        {"wid": str(workspace_id), "tids": type_ids},
     )
     out: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
