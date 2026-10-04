@@ -116,6 +116,75 @@ async def permitted(
     return {str(r["id"]) for r in rows}
 
 
+async def resolve_groups(conn: AsyncConnection, ids: list[str]) -> list[str]:
+    """Each group among these ids replaced by its members, in order (§755).
+
+    > "Groups will be resolved to individual users in order to check
+    > permissions on the data before sending the notifications." (p.96)
+
+    So p.96's check is asked of the people, never of the group: a group one of
+    whose members cannot see the data is refused in `all` mode as that member
+    would be, named by their own id.
+
+    An id that is not a group this caller's organisation has (row security on
+    `groups`) is left as it was, to be a user or nobody. A group with no
+    members is nobody, which is absence rather than a denial. A person reached
+    twice, by name and through a group or through two groups, is one
+    recipient (p.90's "each recipient individually").
+    """
+    if not ids:
+        return []
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT g.id::text AS group_id, gm.user_id::text AS user_id
+          FROM groups g
+          LEFT JOIN group_members gm ON gm.group_id = g.id
+          LEFT JOIN users u ON u.id = gm.user_id
+         WHERE g.id::text = ANY(CAST(:ids AS text[]))
+         ORDER BY u.display_name, u.email, gm.user_id
+        """,
+        {"ids": ids},
+    )
+    members: dict[str, list[str]] = {}
+    for row in rows:
+        found = members.setdefault(str(row["group_id"]), [])
+        if row["user_id"] is not None:
+            found.append(str(row["user_id"]))
+    out: list[str] = []
+    seen: set[str] = set()
+    for one in ids:
+        for user_id in members.get(one, [one]):
+            if user_id not in seen:
+                seen.add(user_id)
+                out.append(user_id)
+    return out
+
+
+async def notifiable_groups(
+    conn: AsyncConnection, *, workspace_id: UUID
+) -> list[dict[str, Any]]:
+    """The groups a static recipient list may name (p.95: "selectors for users
+    and groups"), with how many members each has and how many of them can see
+    this workspace - since p.96 checks the members, a group with somebody who
+    cannot is one the strict mode will refuse, and the picker says so."""
+    return await fetch_all(
+        conn,
+        """
+        SELECT g.id, g.name,
+               count(gm.user_id)::int AS members,
+               count(gm.user_id) FILTER (
+                   WHERE effective_workspace_role(gm.user_id, CAST(:wid AS uuid)) IS NOT NULL
+               )::int AS reachable
+          FROM groups g
+          LEFT JOIN group_members gm ON gm.group_id = g.id
+         GROUP BY g.id, g.name
+         ORDER BY g.name
+        """,
+        {"wid": str(workspace_id)},
+    )
+
+
 async def notifiable(
     conn: AsyncConnection, *, workspace_id: UUID
 ) -> list[dict[str, Any]]:
@@ -139,9 +208,7 @@ async def notifiable(
     NOT NULL` and nothing else — the same expression `permitted` filters by,
     with an API test asserting the two agree on the same person.
 
-    Groups are not in the answer, though p.95 names them: a group id delivered
-    as a recipient reaches `deliver`, which looks it up in `users` and finds
-    nobody. Absent until group recipients exist, rather than offered broken.
+    The groups are `notifiable_groups`' (§755).
     """
     return await fetch_all(
         conn,

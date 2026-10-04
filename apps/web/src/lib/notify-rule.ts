@@ -55,6 +55,8 @@ export interface NotifyConfig {
   recipients: {
     kind: string;
     user_ids?: string[];
+    /** p.90's "users or groups", resolved to members when it runs (§755). */
+    group_ids?: string[];
     parameter?: string;
     object_type?: string;
     property?: string;
@@ -63,6 +65,18 @@ export interface NotifyConfig {
   body: string;
   link?: { url: string; text: string } | null;
   permissions: string;
+}
+
+/** A group as the picker describes it: how many it reaches, and - since p.96
+ * checks each member, not the group - how many of them cannot see this
+ * workspace, which the strict mode will refuse the action for. */
+export function groupReach(group: { members: number | null; reachable: number | null }): string {
+  const members = group.members ?? 0;
+  const people = members === 1 ? "1 person" : `${members} people`;
+  const blocked = members - (group.reachable ?? 0);
+  if (members === 0) return "No members yet";
+  if (blocked === 0) return people;
+  return `${people}, ${blocked} of whom cannot see this workspace`;
 }
 
 /** A new rule's config.
@@ -100,8 +114,12 @@ export function problem(
   parameterNames: readonly string[],
 ): string | null {
   const recipients = config.recipients ?? { kind: "" };
-  if (recipients.kind === "static" && !(recipients.user_ids ?? []).length) {
-    return "Choose at least one person to notify.";
+  if (
+    recipients.kind === "static" &&
+    !(recipients.user_ids ?? []).length &&
+    !(recipients.group_ids ?? []).length
+  ) {
+    return "Choose at least one person or group to notify.";
   }
   if (
     (recipients.kind === "parameter" || recipients.kind === "object_property") &&

@@ -25,7 +25,7 @@ import { Field } from "@/components/dialog";
 import { TypePicker } from "@/components/type-picker";
 import { api, objects as objApi } from "@/lib/api";
 import {
-  NotifyConfig, PERMISSION_MODES, RECIPIENT_KINDS, insertReference,
+  NotifyConfig, PERMISSION_MODES, RECIPIENT_KINDS, groupReach, insertReference,
   referenceOptions,
 } from "@/lib/notify-rule";
 
@@ -178,16 +178,11 @@ export function NotifyRuleFields({
 
       {recipients.kind === "static" && (
         <Field
-          label="People"
-          hint="Only people who can see this workspace — p.96 refuses the action for anybody who cannot."
+          label="People and groups"
+          hint="Only people who can see this workspace — p.96 refuses the action for anybody who cannot, a group's members included."
         >
           <div data-testid={`rule-${index}-people`}>
-            {/* Individual people only. p.90's static option names users *or
-                groups*, and groups are absent rather than offered: a group id
-                sent as a recipient reaches a lookup in `users` that finds
-                nobody, so the rule would save and then silently notify
-                no-one. */}
-            {(people.data ?? []).map((p) => (
+            {(people.data ?? []).filter((p) => p.kind !== "group").map((p) => (
               <label key={p.id} className="row-actions" style={{ gap: 6 }}>
                 <input
                   type="checkbox"
@@ -203,6 +198,29 @@ export function NotifyRuleFields({
                 />
                 <span>{p.display_name}</span>
                 <span className="slug">{p.email}</span>
+              </label>
+            ))}
+            {/* p.90's "users or groups" (§755): a group is resolved to its
+                members when the action runs (p.96), so what it is said to
+                reach is its members, and how many of them would be refused. */}
+            {(people.data ?? []).filter((p) => p.kind === "group").map((g) => (
+              <label key={g.id} className="row-actions" style={{ gap: 6 }}>
+                <input
+                  type="checkbox"
+                  aria-label={`Notify group ${g.display_name}`}
+                  checked={(recipients.group_ids ?? []).includes(g.id)}
+                  onChange={(e) =>
+                    patchRecipients({
+                      group_ids: e.target.checked
+                        ? [...(recipients.group_ids ?? []), g.id]
+                        : (recipients.group_ids ?? []).filter((id) => id !== g.id),
+                    })
+                  }
+                />
+                <span>{g.display_name}</span>
+                <span className="slug" data-testid={`group-reach-${g.display_name}`}>
+                  {groupReach(g)}
+                </span>
               </label>
             ))}
             {/* **Present rather than absent** when there is nobody: an empty
@@ -221,8 +239,8 @@ export function NotifyRuleFields({
           label="From parameter"
           hint={
             recipients.kind === "parameter"
-              ? "A parameter holding a user id (p.90)."
-              : "An object parameter whose property holds a user id (p.100)."
+              ? "A parameter holding a user or group id (p.90)."
+              : "An object parameter whose property holds a user or group id (p.100)."
           }
         >
           <select

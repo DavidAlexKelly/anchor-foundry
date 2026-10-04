@@ -226,6 +226,6 @@ def outside_ontology(rule: dict[str, Any]) -> list[str]:
         recipients = config.get("recipients")
         if isinstance(recipients, dict) and str(
             recipients.get("kind", "")
-        ) == "static" and recipients.get("user_ids"):
+        ) == "static" and (recipients.get("user_ids") or recipients.get("group_ids")):
             return ["a list of named recipients"]
     return []
