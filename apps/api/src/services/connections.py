@@ -13,6 +13,7 @@ decorative. Federated (the spec default) is fully served by test + discover.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 from uuid import UUID
 
@@ -224,7 +225,7 @@ async def set_exports_enabled(
 _SCHEDULE_COLUMNS = """
     sync_mode, sync_schedule, sync_source_schema, sync_source_table, sync_dataset_name,
     sync_dataset_id, sync_primary_key_column, sync_cursor_column, sync_last_cursor_value,
-    sync_next_run_at
+    sync_next_run_at, sync_file_transaction, sync_file_filters
 """
 
 
@@ -243,6 +244,8 @@ async def set_schedule(
     cron_schedule: str | None,
     next_run_at,
     cursor_start_value: str | None = None,
+    file_transaction: str | None = None,
+    file_filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Define (or redefine) the one managed sync target a connection can
     carry - spec-shaped, flagged in migration 0014: a connection supports at
@@ -289,7 +292,11 @@ async def set_schedule(
                    ELSE sync_last_cursor_value
                END,
                sync_schedule = :cron,
-               sync_next_run_at = :next_run
+               sync_next_run_at = :next_run,
+               -- A folder's settings (§749; decision 0021), cleared for any
+               -- other mode so a table sync never carries a file sync's.
+               sync_file_transaction = :file_transaction,
+               sync_file_filters = CAST(:file_filters AS jsonb)
          WHERE id = :cid
         RETURNING id, {_SCHEDULE_COLUMNS}
         """,
@@ -298,6 +305,8 @@ async def set_schedule(
             "dsname": dataset_name, "pk": primary_key_column, "cursor": cursor_column,
             "start": cursor_start_value, "column_changed": column_changed,
             "cron": cron_schedule, "next_run": next_run_at, "cid": str(connection_id),
+            "file_transaction": file_transaction if mode == "files" else None,
+            "file_filters": json.dumps(file_filters or {}) if mode == "files" else None,
         },
     )
     assert row is not None
