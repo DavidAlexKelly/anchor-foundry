@@ -131,7 +131,6 @@ export class CustomerStack extends Stack {
       appDbSecret: data.appDbSecret,
       databaseHost: data.database.instanceEndpoint.hostname,
       databasePort: data.database.instanceEndpoint.port.toString(),
-      redisEndpoint: data.redis.attrPrimaryEndPointAddress,
       searchEndpoint: data.search.domainEndpoint,
       userPool: auth.userPool,
       userPoolClientId: auth.userPoolClient.userPoolClientId,
@@ -153,16 +152,6 @@ export class CustomerStack extends Stack {
     // a-zA-Z0-9. _-:/()#,@[]+=&;{}!$* (no < or >).
     data.database.connections.allowFrom(services.apiService, ec2.Port.tcp(5432), "api to postgres");
     data.database.connections.allowFrom(services.workerService, ec2.Port.tcp(5432), "worker to postgres");
-    data.redisSecurityGroup.addIngressRule(
-      services.apiService.connections.securityGroups[0],
-      ec2.Port.tcp(6379),
-      "api to redis"
-    );
-    data.redisSecurityGroup.addIngressRule(
-      services.workerService.connections.securityGroups[0],
-      ec2.Port.tcp(6379),
-      "worker to redis"
-    );
     data.search.connections.allowFrom(services.apiService, ec2.Port.tcp(443), "api to opensearch");
     data.search.connections.allowFrom(services.workerService, ec2.Port.tcp(443), "worker to opensearch");
 

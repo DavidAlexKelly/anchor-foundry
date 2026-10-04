@@ -40,7 +40,6 @@ function build(alarmEmail?: string): Template {
     appDbSecret: data.appDbSecret,
     databaseHost: "db.example",
     databasePort: "5432",
-    redisEndpoint: "redis.example",
     searchEndpoint: "search.example",
     userPool: cognito.UserPool.fromUserPoolId(stack, "Pool", "eu-west-2_check"),
     userPoolClientId: "check-client",
