@@ -23,6 +23,15 @@ const region = app.node.tryGetContext("region") as string | undefined;
 const deletionProtectionCtx = app.node.tryGetContext("deletionProtection") as string | undefined;
 const deletionProtection = deletionProtectionCtx !== "false";
 
+// Where objects live (§814). Postgres unless a stack says otherwise, and a
+// stack says otherwise only after its objects have been copied across
+// (docs/deploying.md, "Moving objects to OpenSearch"): switching first would
+// point the API at an empty index.
+const objectStore = (app.node.tryGetContext("objectStore") as string | undefined) ?? "postgres";
+if (objectStore !== "postgres" && objectStore !== "opensearch") {
+  throw new Error(`Invalid objectStore: ${objectStore} (postgres or opensearch)`);
+}
+
 if (!orgSlug || !platformUrl || !vendorEcrRegistry) {
   throw new Error(
     "Missing required context: orgSlug, platformUrl, vendorEcrRegistry (passed by the control plane)"
@@ -38,6 +47,7 @@ new CustomerStack(app, "PlatformStack", {
   vendorEcrRegistry,
   imageTag,
   deletionProtection,
+  objectStore,
   env: region ? { region } : undefined,
   description: `Platform stack for ${orgSlug} - provisioned by the platform control plane`,
 });

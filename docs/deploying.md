@@ -238,8 +238,12 @@ copying an object twice rewrites one document.
    every workspace's objects, a page at a time, and moves each action run's
    `instance_id` to the copied object's id. It commits one workspace at a
    time and prints JSON counts. It refuses to start without both variables.
-2. **Flip.** Give the API and the worker both variables and redeploy. From
-   then on, both read and write the index.
+2. **Flip.** Redeploy the stack with `-c objectStore=opensearch` (§814).
+   The API and the worker get the domain's master secret, and the domain's
+   policy lets their basic auth through to fine-grained access control.
+   From then on, both read and write the index. Without the flag a stack
+   stays on Postgres, so no deploy can switch a stack before its objects
+   are copied.
 3. **Backfill again**, with the same command, to copy anything written
    between step 1 and the flip.
 4. Run `python -m src.services.restore_check` with the same variables. A
@@ -298,7 +302,7 @@ missing files.
 | `PLATFORM_IMAGE_TAG` | provisioning | Image tag to deploy; defaults to `latest` |
 | `CDK_DIR` | provisioning | Path to `infra/cdk`; defaults to `infra/cdk` |
 | `LOG_LEVEL` | platform API | Level for the API's structured `anchor.*` log lines; defaults to `INFO` (§802) |
-| `OPENSEARCH_ENDPOINT`, `OPENSEARCH_SECRET_ARN` | platform API and worker | Both set: objects are read and written in OpenSearch, the secret holding `{"username", "password"}`. Either unset: Postgres. The two services read the pair the same way, so they cannot disagree about where objects live (§811). Stacks set the endpoint and not yet the secret, so they run on Postgres |
+| `OPENSEARCH_ENDPOINT`, `OPENSEARCH_SECRET_ARN` | platform API and worker | Both set: objects are read and written in OpenSearch, the secret holding `{"username", "password"}`. Either unset: Postgres. The two services read the pair the same way, so they cannot disagree about where objects live (§811). A stack sets the endpoint always, and the secret only when deployed with `-c objectStore=opensearch` (§814) |
 | `METRICS_TOKEN` | platform API | When set, `/api/metrics` requires `Authorization: Bearer <token>`; unset, it is open like `/api/health` (§802) |
 
 **What the API emits (§802).** Every response carries `X-Request-ID` (the
