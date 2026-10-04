@@ -35,3 +35,23 @@ def test_nothing_opens_duckdb_around_it() -> None:
                 for line in open(os.path.join(folder, name)).read().splitlines():
                     if "duckdb.connect(" in line and ".extract_statements(" not in line:
                         raise AssertionError(f"{name}: {line.strip()}")
+
+
+def test_a_scheduled_transform_cannot_raise_its_own_memory_limit(tmp_path) -> None:
+    """§891, the worker's copy: the SQL sits inside `CREATE TABLE ... AS (...)`,
+    and closing the bracket started a statement of the author's own."""
+    import sys
+
+    import duckdb
+    import pytest
+
+    sys.path.insert(0, os.path.join(ROOT, "worker", "src"))
+    from anchor_worker.dataset_engine import DatasetEngineError, run_sql_transform
+
+    source = str(tmp_path / "in.parquet")
+    duckdb.connect().execute(f"COPY (SELECT 1 AS id) TO '{source}' (FORMAT parquet)")
+    escape = "SELECT 1 AS x); SET memory_limit='100GB'; CREATE TABLE junk AS (SELECT 1"
+    with pytest.raises(DatasetEngineError, match="locked"):
+        run_sql_transform({"t": source}, escape, str(tmp_path / "out.parquet"))
+    schema, rows = run_sql_transform({"t": source}, "SELECT * FROM t", str(tmp_path / "ok.parquet"))
+    assert rows == 1
