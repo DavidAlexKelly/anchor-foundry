@@ -353,6 +353,33 @@ def test_the_candidates_are_searched_and_say_how_many_match(
     assert len(paged["items"]) == 1 and paged["total"] == everything["total"]
 
 
+def test_a_running_session_stays_on_the_history_however_many_came_after(
+    client: TestClient, fx: Fixture, world: dict, monkeypatch,
+) -> None:
+    """The history is where an administrator ends a session (p.610), and it
+    was the newest page: a week-long session launched before a page of later
+    ones fell off it while still running (§820)."""
+    running = launch(client, fx, world["app"]).json()
+    for _ in range(2):
+        later = launch(client, fx, world["app"]).json()
+        assert client.post(f"/api/org/kiosk/sessions/{later['session_id']}/end",
+                           headers=hdr(fx.admin_sub)).status_code == 204
+    monkeypatch.setattr(kiosk_service, "SESSION_PAGE", 2)
+    listed = client.get("/api/org/kiosk/sessions", headers=hdr(fx.admin_sub)).json()
+    assert len(listed) == 2
+    assert running["session_id"] in {s["id"] for s in listed}
+    # Active ones first, newest first among them; then the ended, newest first.
+    flags = [s["active"] for s in listed]
+    assert flags == sorted(flags, reverse=True), listed
+    assert all(s["active"] for s in listed), "two sessions were still running"
+    assert listed[0]["created_at"] >= listed[1]["created_at"]
+    monkeypatch.setattr(kiosk_service, "SESSION_PAGE", 200)
+    everything = client.get("/api/org/kiosk/sessions", headers=hdr(fx.admin_sub)).json()
+    ended = [s for s in everything if not s["active"]]
+    assert ended and everything[-len(ended):] == ended
+    assert [s["created_at"] for s in ended] == sorted((s["created_at"] for s in ended), reverse=True)
+
+
 def test_a_session_lasts_a_week(client: TestClient, fx: Fixture, world: dict) -> None:
     from datetime import datetime, timezone
     left = datetime.fromisoformat(world["expires_at"]) - datetime.now(timezone.utc)
