@@ -19,6 +19,7 @@ import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ActionOverviewDialog } from "@/components/action-overview-dialog";
 import { ObjectViewEditor } from "@/components/object-view-editor";
 import { InterfacesPanel } from "@/components/interfaces-panel";
+import { PromotionRequestsPanel } from "@/components/promotion-requests";
 import { OntologyHistoryPanel } from "@/components/ontology-history-panel";
 import { OntologySearch } from "@/components/ontology-search";
 import {
@@ -1807,6 +1808,13 @@ export default function ObjectsPage() {
             <Link href={`/${params.workspace}/explore`}>Explore</Link> — it is
             workspace-wide, so it is not filed under a project.
           </p>
+
+          {/* p.255's proposals (§767), first: they are the one thing on this
+              page waiting for somebody. Absent when nothing is. */}
+          <PromotionRequestsPanel
+            workspaceId={workspace!.id}
+            isAdmin={workspace!.effective_role === "admin"}
+          />
 
           {/* Shared properties (`object-link-types` p.180). Above link types
               because it is the smaller idea and the one a property editor

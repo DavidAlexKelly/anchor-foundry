@@ -2170,6 +2170,22 @@ export const objects = {
       `/workspaces/${wid}/object-types/${typeId}/interfaces`,
       { method: "PUT", body: JSON.stringify(body) },
     ),
+  /** p.255's proposals to promote an object type (§767). */
+  promotionRequests: (wid: string, pendingOnly = true) =>
+    request<import("./types").PromotionRequest[]>(
+      `/workspaces/${wid}/promotion-requests?pending=${pendingOnly}`,
+    ),
+  requestPromotion: (wid: string, typeId: string, reason: string) =>
+    request<import("./types").PromotionRequest>(
+      `/workspaces/${wid}/object-types/${typeId}/promotion-requests`,
+      { method: "POST", body: JSON.stringify({ reason }) },
+    ),
+  decidePromotion: (wid: string, id: string, verdict: "approve" | "reject" | "withdraw",
+                    note = "") =>
+    request<import("./types").PromotionRequest>(
+      `/workspaces/${wid}/promotion-requests/${id}/${verdict}`,
+      { method: "POST", body: JSON.stringify({ note }) },
+    ),
   /** p.65's Interface action control (§763): the actions a type inherits
    * from its interfaces, each on or off for its own objects. */
   interfaceActionControl: (wid: string, typeId: string) =>

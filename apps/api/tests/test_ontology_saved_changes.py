@@ -46,7 +46,8 @@ NOT_CHANGES = {
     "post_object_comment": "a comment on an object, not on its type",
 }
 PREFIXES = ("/object-types", "/link-types", "/action-types", "/interfaces",
-            "/shared-properties", "/value-types", "/object-type-groups", "/ontology")
+            "/shared-properties", "/value-types", "/object-type-groups", "/ontology",
+            "/promotion-requests")
 
 
 def test_every_ontology_write_is_recorded(client: TestClient) -> None:
