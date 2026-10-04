@@ -15,7 +15,12 @@ import { webAclRules } from "../constructs/waf";
 
 export interface CustomerStackProps extends StackProps {
   readonly orgSlug: string;
-  readonly platformUrl: string;
+  /** A further address the customer serves the platform at, as
+   * `https://host`. Optional: the distribution's own address is always
+   * allowed (§849). Nothing in this stack routes a custom domain to the
+   * distribution yet (decision 0025, option C), so this is for a domain set
+   * up outside it. */
+  readonly platformUrl?: string;
   readonly vendorEcrRegistry: string; // e.g. 123456789012.dkr.ecr.eu-west-2.amazonaws.com
   readonly imageTag: string;
   /** See DataStoresConstruct - defaults to true, only ever overridden for
@@ -109,10 +114,8 @@ export class CustomerStack extends Stack {
     Tags.of(data.search).add("platform:component", "object-search");
 
     // ---- Auth ---------------------------------------------------------------
-    const auth = new AuthConstruct(this, "Auth", {
-      orgSlug: props.orgSlug,
-      platformUrl: props.platformUrl,
-    });
+    // Its sign-in addresses are set below, once the distribution exists.
+    const auth = new AuthConstruct(this, "Auth", { orgSlug: props.orgSlug });
 
     // ---- Schema migrations: run once per deploy, after the database exists
     // and before any service that depends on its schema starts (§17) --------
@@ -199,7 +202,18 @@ export class CustomerStack extends Stack {
       },
     });
 
+    // ---- Where the platform is served (§849) ---------------------------------
+    // The distribution's own address is the one a viewer reaches, so it is the
+    // one the hosted UI must send them back to, and the one the API names when
+    // it hands out an address of itself (a listener's endpoint, an outbound
+    // application's OAuth callback). The API cannot work it out per request:
+    // it hears plain HTTP from the load balancer (decision 0025).
+    const servedAt = `https://${distribution.distributionDomainName}`;
+    auth.allowAddresses(props.platformUrl ? [servedAt, props.platformUrl] : [servedAt]);
+    services.apiService.taskDefinition.defaultContainer!.addEnvironment("PLATFORM_PUBLIC_URL", servedAt);
+
     // ---- Outputs consumed by the control plane registry ---------------------
+    new CfnOutput(this, "PlatformUrl", { value: servedAt });
     new CfnOutput(this, "PlatformDomain", { value: distribution.distributionDomainName });
     new CfnOutput(this, "UserPoolId", { value: auth.userPool.userPoolId });
     new CfnOutput(this, "UserPoolClientId", { value: auth.userPoolClient.userPoolClientId });

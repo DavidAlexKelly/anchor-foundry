@@ -101,8 +101,22 @@ class EventOut(BaseModel):
     headers: dict[str, str]
 
 
+def public_base(request: Request) -> str:
+    """Where a sender reaches this platform: `PLATFORM_PUBLIC_URL` when the
+    deployment says, which a stack does with its distribution's address
+    (§849), and the request's own address otherwise, as in development.
+
+    Not the request's address in a stack. Behind CloudFront and the load
+    balancer this process hears plain HTTP, so that was an `http://` endpoint:
+    the token in its path crossed the network in clear before CloudFront
+    redirected it, and a sender that does not follow a redirected POST - most
+    of them - never arrived at all."""
+    configured = os.environ.get("PLATFORM_PUBLIC_URL", "").strip().rstrip("/")
+    return configured or str(request.base_url).rstrip("/")
+
+
 def _out(request: Request, row: dict[str, Any]) -> ListenerOut:
-    base = str(request.base_url).rstrip("/")
+    base = public_base(request)
     endpoints = [EndpointOut(url=f"{base}/api/listen/{e['token']}", **{
         k: v for k, v in e.items() if k != "token"}) for e in row["endpoints"]]
     return ListenerOut(**{**{k: v for k, v in row.items() if k in ListenerOut.model_fields

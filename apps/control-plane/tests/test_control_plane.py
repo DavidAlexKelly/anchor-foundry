@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.deprovisioner.deprovisioner import Deprovisioner  # noqa: E402
-from src.provisioner.provisioner import Provisioner, TempCredentials  # noqa: E402
+from src.provisioner.provisioner import Provisioner, TempCredentials, served_at  # noqa: E402
 from src.registry.registry import StackRegistry, StackStatus, generate_external_id  # noqa: E402
 from src.updater.updater import Updater  # noqa: E402
 
@@ -161,6 +161,17 @@ def test_provision_happy_path(registry: StackRegistry) -> None:
     rec = registry.get(s)
     assert rec.stack_status is StackStatus.READY and rec.stack_version == "v1.0.0"
     assert rec.outputs["PlatformDomain"] == "dxxx.cloudfront.net"
+    # An address a browser can open, not the bare domain (§849); and no
+    # placeholder sign-in address handed to the stack.
+    assert rec.platform_url == "https://dxxx.cloudfront.net"
+    assert "platformUrl" not in cdk.deploys[0]
+
+
+def test_the_stacks_own_address_is_preferred() -> None:
+    assert served_at({"PlatformUrl": "https://d1.cloudfront.net", "PlatformDomain": "x"}) \
+        == "https://d1.cloudfront.net"
+    assert served_at({"PlatformDomain": "d2.cloudfront.net"}) == "https://d2.cloudfront.net"
+    assert served_at({}) is None
 
 
 def test_provision_without_aws_connection_fails_closed(registry: StackRegistry) -> None:

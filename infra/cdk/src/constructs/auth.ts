@@ -5,8 +5,6 @@ import { Construct } from "constructs";
 export interface AuthConstructProps {
   /** Customer org slug, used for the hosted UI domain prefix. */
   readonly orgSlug: string;
-  /** Platform URL, e.g. https://acme.platform.example - OAuth callback target. */
-  readonly platformUrl: string;
 }
 
 /**
@@ -60,13 +58,46 @@ export class AuthConstruct extends Construct {
       oAuth: {
         flows: { authorizationCodeGrant: true, implicitCodeGrant: false },
         scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
-        callbackUrls: [`${props.platformUrl}/callback`],
-        logoutUrls: [`${props.platformUrl}/login`],
+        // Replaced by `allowAddresses`, which the stack calls once it knows
+        // where the platform is served. Required here only because the
+        // construct refuses a code grant with no callback at all.
+        callbackUrls: [UNSET_ADDRESS],
+        logoutUrls: [UNSET_ADDRESS],
       },
+    });
+    this.node.addValidation({
+      validate: () => (this.addressesAllowed ? [] : [
+        "AuthConstruct.allowAddresses was never called: the hosted UI would send nobody back",
+      ]),
     });
 
     this.userPoolDomain = this.userPool.addDomain("HostedUi", {
       cognitoDomain: { domainPrefix: `platform-${props.orgSlug}` },
     });
   }
+
+  private addressesAllowed = false;
+
+  /**
+   * The addresses the platform is served at, each as `https://host`: the
+   * hosted UI sends a viewer back to `<address>/callback` after sign-in and
+   * to `<address>/login` after sign-out, and only to an address on this list.
+   *
+   * **The web app asks for its own origin** (`apps/web/src/lib/auth.ts`:
+   * `window.location.origin + "/callback"`), so the list has to hold the
+   * address viewers actually reach. It held only the `platformUrl` context
+   * until §849 - which the control plane filled with a placeholder,
+   * `https://<slug>.platform.example.com`, on a first deploy, and with the
+   * distribution's bare domain, no scheme, on every deploy after. Neither is
+   * an address the distribution answers on, so the hosted UI refused every
+   * sign-in on a deployed stack.
+   */
+  public allowAddresses(addresses: string[]): void {
+    const client = this.userPoolClient.node.defaultChild as cognito.CfnUserPoolClient;
+    client.callbackUrLs = addresses.map((a) => `${a}/callback`);
+    client.logoutUrLs = addresses.map((a) => `${a}/login`);
+    this.addressesAllowed = true;
+  }
 }
+
+const UNSET_ADDRESS = "https://unset.invalid/";

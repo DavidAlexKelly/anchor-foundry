@@ -41,6 +41,20 @@ _TERMINAL_FAIL = {
 }
 
 
+def served_at(outputs: dict[str, str]) -> str | None:
+    """Where a stack's platform is served, as an address a browser can open.
+
+    `PlatformUrl` since §849. A stack deployed before it reports only
+    `PlatformDomain`, a bare host name, which was stored as it was: the
+    onboarding page's "Create your first account" link was then relative to
+    the control plane's own page, and the next deploy passed it back as the
+    sign-in address."""
+    if outputs.get("PlatformUrl"):
+        return outputs["PlatformUrl"]
+    domain = outputs.get("PlatformDomain")
+    return f"https://{domain}" if domain else None
+
+
 @dataclass(frozen=True)
 class TempCredentials:
     access_key_id: str
@@ -475,13 +489,18 @@ class Provisioner:
                 # per customer account, ever, not on every version update.
                 self._aws.ensure_opensearch_service_linked_role(creds)
 
-            platform_url = record.platform_url or f"https://{org_slug}.platform.example.com"
+            # No `platformUrl`: the stack allows its distribution's own address
+            # for sign-in and reports it as `PlatformUrl` (§849). This passed
+            # a placeholder, `https://<slug>.platform.example.com`, on a first
+            # deploy and the stored bare domain on every deploy after, and the
+            # hosted UI accepted neither as the address it sends a viewer back
+            # to. The context key is for a customer's own domain, which the
+            # registry has no field for yet.
             self._cdk.deploy(
                 creds,
                 record.aws_region,
                 context={
                     "orgSlug": org_slug,
-                    "platformUrl": platform_url,
                     "vendorEcrRegistry": self._vendor_ecr,
                     "imageTag": image_tag,
                     "region": record.aws_region,
@@ -493,7 +512,7 @@ class Provisioner:
                 org_slug,
                 StackStatus.READY,
                 version=image_tag,
-                platform_url=outputs.get("PlatformDomain", platform_url),
+                platform_url=served_at(outputs),
                 outputs=outputs,
             )
             logger.info("stack %s for %s is READY at version %s", STACK_NAME, org_slug, image_tag)

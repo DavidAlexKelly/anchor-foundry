@@ -109,7 +109,6 @@ npx cdk bootstrap aws://<account-id>/<region>
 cd infra/cdk && npm ci
 npx cdk deploy \
   -c orgSlug=<slug> \
-  -c platformUrl=https://<slug>.example.com \
   -c vendorEcrRegistry=$ECR \
   -c imageTag=$TAG \
   -c region=<region> \
@@ -126,13 +125,23 @@ With the default (`true`), a failed CREATE cannot roll back past the RDS
 instance and you are into the manual teardown runbook — CloudFormation checks
 the template's declared property, not the live value.
 
+`-c platformUrl=https://<host>` is optional: a further address, beside the
+distribution's own, that sign-in may send a viewer back to. Pass it only for a
+domain you have pointed at the distribution yourself; the stack does not set
+one up (decision 0025, option C).
+
 **4. First account.** A fresh stack has no organisation and no users. Open the
-`PlatformDomain` output and go to `/setup`, which creates the first
+`PlatformUrl` output and go to `/setup`, which creates the first
 organisation and its owner. Everyone else arrives by invitation.
 
-**Known blocker:** the owner's password is currently rejected at the Cognito
-hosted UI (`ROADMAP.md`, carried forward). Onboarding will hand you a working
-`/setup` link and you may still not get past sign-in.
+**Known blocker, possibly resolved:** the owner's password was rejected at the
+Cognito hosted UI (`ROADMAP.md`, carried forward), and the cause was never
+confirmed. §849 found one that would do it. The hosted UI sends a viewer back
+only to an address on the app client's list. The web app asks for its own
+origin, the distribution's address, but the list held only `platformUrl`: on
+a control-plane deploy a placeholder, `https://<slug>.platform.example.com`.
+The list now holds the distribution's address. If sign-in still fails, the
+callback page shows Cognito's own reason (§816).
 
 **5. Tear it down** — `python -m src.cli deprovision --org-slug <slug>` for
 stacks the registry knows about. Anything deployed by hand is not in the
@@ -307,7 +316,7 @@ missing files.
 | `PLATFORM_IMAGE_TAG` | provisioning | Image tag to deploy; defaults to `latest` |
 | `CDK_DIR` | provisioning | Path to `infra/cdk`; defaults to `infra/cdk` |
 | `S3_DATA_BUCKET` | platform API and worker | The data bucket. A stack sets it in every service's environment. Unset, both fall back to development storage (local disk, and on the API in-memory connection secrets); on ECS, where that fallback would be a disk nothing else reads, both now refuse to start (§844). The worker read `DATA_BUCKET` until §844, which nothing set |
-| `PLATFORM_PUBLIC_URL` | platform API | The platform's public address, for an outbound application's OAuth callback (§752). Optional: unset, a source using the authorization-code grant is refused with a sentence naming it. Not set by the stack |
+| `PLATFORM_PUBLIC_URL` | platform API | The platform's public address, for an outbound application's OAuth callback (§752) and a listener's endpoint (§849). A stack sets it to its distribution's address, `https://<id>.cloudfront.net` (§849). Unset, as in development, a source using the authorization-code grant is refused with a sentence naming it, and a listener's endpoint uses the request's own address: behind the load balancer that is plain HTTP |
 | `OIDC_ISSUER`, `OIDC_SIGNING_KEY` | platform API and worker | The platform as an OIDC identity provider for source systems (§599): the issuer URL (`https://<host>/api/oidc`) and an RSA private key in PEM, the same for every task. Optional: unset, a source configured for OIDC is refused with a sentence naming them. Not set by the stack |
 | `LOG_LEVEL` | platform API | Level for the API's structured `anchor.*` log lines; defaults to `INFO` (§802) |
 | `OPENSEARCH_ENDPOINT`, `OPENSEARCH_SECRET_ARN` | platform API and worker | Both set: objects are read and written in OpenSearch, the secret holding `{"username", "password"}`. Either unset: Postgres. The two services read the pair the same way, so they cannot disagree about where objects live (§811). A stack sets the endpoint always, and the secret only when deployed with `-c objectStore=opensearch` (§814) |

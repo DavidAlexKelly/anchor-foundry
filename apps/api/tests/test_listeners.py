@@ -97,6 +97,17 @@ def test_a_new_listener_is_stopped_with_one_endpoint(client, fx) -> None:
     assert events(client, fx, made) == []
 
 
+def test_an_endpoint_is_named_at_the_platforms_public_address(client, fx, monkeypatch) -> None:
+    """A stack sets PLATFORM_PUBLIC_URL to the address viewers reach (§849):
+    behind the load balancer the request's own address is plain HTTP."""
+    monkeypatch.setenv("PLATFORM_PUBLIC_URL", "https://d123.cloudfront.net/")
+    [endpoint] = make(client, fx)["endpoints"]
+    assert endpoint["url"].startswith("https://d123.cloudfront.net/api/listen/")
+    # And the address it names is one this API answers on.
+    r = client.post(endpoint["url"].replace("https://d123.cloudfront.net", ""), json={"a": 1})
+    assert r.status_code == 503, r.text
+
+
 def test_a_running_listener_keeps_what_it_is_sent(client, fx) -> None:
     listener = started(client, fx)
     r = client.post(path_of(listener), content=b'{"ticket": 7}',

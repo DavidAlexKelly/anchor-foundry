@@ -39,10 +39,16 @@ if (alarmEmail !== undefined && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(alarmEmail)) 
   throw new Error(`Invalid alarmEmail: ${alarmEmail}`);
 }
 
-if (!orgSlug || !platformUrl || !vendorEcrRegistry) {
+if (!orgSlug || !vendorEcrRegistry) {
   throw new Error(
-    "Missing required context: orgSlug, platformUrl, vendorEcrRegistry (passed by the control plane)"
+    "Missing required context: orgSlug, vendorEcrRegistry (passed by the control plane)"
   );
+}
+// Optional since §849: a custom address, beside the distribution's own, which
+// the stack always allows. Sign-in sends a viewer back to `<address>/callback`,
+// so anything but a bare https origin would be an address nobody is sent to.
+if (platformUrl !== undefined && !/^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(platformUrl)) {
+  throw new Error(`Invalid platformUrl: ${platformUrl} (an https origin, e.g. https://data.example.com)`);
 }
 if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(orgSlug)) {
   throw new Error(`Invalid orgSlug: ${orgSlug}`);
