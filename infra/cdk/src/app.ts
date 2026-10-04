@@ -32,6 +32,13 @@ if (objectStore !== "postgres" && objectStore !== "opensearch") {
   throw new Error(`Invalid objectStore: ${objectStore} (postgres or opensearch)`);
 }
 
+// Where the stack's alarms are sent (§815). Optional: the topic exists either
+// way, and its ARN is a stack output for anything else to subscribe.
+const alarmEmail = app.node.tryGetContext("alarmEmail") as string | undefined;
+if (alarmEmail !== undefined && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(alarmEmail)) {
+  throw new Error(`Invalid alarmEmail: ${alarmEmail}`);
+}
+
 if (!orgSlug || !platformUrl || !vendorEcrRegistry) {
   throw new Error(
     "Missing required context: orgSlug, platformUrl, vendorEcrRegistry (passed by the control plane)"
@@ -48,6 +55,7 @@ new CustomerStack(app, "PlatformStack", {
   imageTag,
   deletionProtection,
   objectStore,
+  alarmEmail,
   env: region ? { region } : undefined,
   description: `Platform stack for ${orgSlug} - provisioned by the platform control plane`,
 });

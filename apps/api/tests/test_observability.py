@@ -247,3 +247,83 @@ def test_a_line_outside_a_request_has_no_id() -> None:
     line = json.loads(observability.JsonFormatter().format(record))
     assert line["message"] == "hi there" and line["level"] == "warning"
     assert "request_id" not in line
+
+
+# ---- the deployment's alarms read these lines (§815) ---------------------------
+MONITORING = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))), "infra", "cdk", "src", "constructs", "monitoring.ts")
+
+
+def deployed_filters() -> dict[str, tuple[str, str]]:
+    """`{metric: (filter pattern, metric value)}`, read out of the CDK source:
+    the two sides share no code, so the check is of the text each declares."""
+    import re
+
+    with open(MONITORING) as handle:
+        source = handle.read()
+    found = {
+        name: (pattern, value or "1")
+        for name, pattern, value in re.findall(
+            r'counted\(\s*"(\w+)",\s*\'([^\']+)\'(?:,\s*"([^"]+)")?\s*\)', source)
+    }
+    assert set(found) == {"ApiRequests", "ApiServerErrors", "ApiUnhandledErrors", "ApiLatency"}, found
+    return found
+
+
+def matches(pattern: str, line: dict) -> bool:
+    """CloudWatch's JSON filter syntax, the part these patterns use: `$.field`
+    compared with `=` to a quoted string or with `>=` to a number, joined by
+    `&&`. Anything else is refused, so a pattern this cannot read fails here
+    rather than being taken as matching."""
+    import re
+
+    body = pattern.strip()
+    assert body.startswith("{") and body.endswith("}"), pattern
+    for condition in body[1:-1].split("&&"):
+        parsed = re.fullmatch(r'\s*\$\.(\w+)\s*(=|>=)\s*("[^"]*"|-?\d+(?:\.\d+)?)\s*', condition)
+        assert parsed, f"cannot read {condition!r}"
+        field, op, raw = parsed.groups()
+        if field not in line:
+            return False
+        if op == "=":
+            assert raw.startswith('"'), condition
+            if line[field] != raw[1:-1]:
+                return False
+        elif not (isinstance(line[field], (int, float)) and line[field] >= float(raw)):
+            return False
+    return True
+
+
+def test_the_deployed_alarms_count_the_lines_the_api_writes(client, logged) -> None:
+    """A renamed field or logger would leave an alarm that can never fire and
+    looks exactly like one with nothing to report. Each filter is run against
+    lines this process really wrote."""
+    filters = deployed_filters()
+    client.get("/api/health")
+    client.get("/api/_boom/pump")
+    access = [line for line in logged if line.get("logger") == "anchor.access"]
+    ok = next(line for line in access if line["status"] == 200)
+    failed = next(line for line in access if line["status"] == 500)
+    error = next(line for line in logged if line.get("logger") == "anchor.error")
+
+    assert matches(filters["ApiRequests"][0], ok) and matches(filters["ApiRequests"][0], failed)
+    assert not matches(filters["ApiRequests"][0], error)
+    assert matches(filters["ApiServerErrors"][0], failed)
+    assert not matches(filters["ApiServerErrors"][0], ok)
+    assert matches(filters["ApiUnhandledErrors"][0], error)
+    assert not matches(filters["ApiUnhandledErrors"][0], failed)
+    # Latency is the access line's own number, in the unit the alarm's
+    # two-second threshold is written in.
+    pattern, value = filters["ApiLatency"]
+    assert matches(pattern, ok)
+    assert value.startswith("$.") and isinstance(ok[value[2:]], (int, float))
+    assert value == "$.duration_ms"
+
+
+def test_the_filter_reader_refuses_what_it_cannot_read() -> None:
+    with pytest.raises(AssertionError):
+        matches('{ $.status != 500 }', {"status": 200})
+    with pytest.raises(AssertionError):
+        matches('$.logger = "x"', {"logger": "x"})
+    assert not matches('{ $.status >= 500 }', {"status": "500"})
+    assert not matches('{ $.absent = "x" }', {})
