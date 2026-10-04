@@ -35,6 +35,12 @@ if (objectStore !== "postgres" && objectStore !== "opensearch") {
 // Where the stack's alarms are sent (§815). Optional: the topic exists either
 // way, and its ARN is a stack output for anything else to subscribe.
 const alarmEmail = app.node.tryGetContext("alarmEmail") as string | undefined;
+// Where invitations come from (§866): an address verified in SES in the stack's
+// region. Unset, Cognito's own email sends them, limited to 50 a day.
+const inviteFromEmail = app.node.tryGetContext("inviteFromEmail") as string | undefined;
+if (inviteFromEmail !== undefined && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(inviteFromEmail)) {
+  throw new Error(`Invalid inviteFromEmail: ${inviteFromEmail}`);
+}
 if (alarmEmail !== undefined && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(alarmEmail)) {
   throw new Error(`Invalid alarmEmail: ${alarmEmail}`);
 }
@@ -62,6 +68,7 @@ new CustomerStack(app, "PlatformStack", {
   deletionProtection,
   objectStore,
   alarmEmail,
+  inviteFromEmail,
   env: region ? { region } : undefined,
   description: `Platform stack for ${orgSlug} - provisioned by the platform control plane`,
 });
