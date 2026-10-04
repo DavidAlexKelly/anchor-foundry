@@ -35,9 +35,29 @@ export interface LinkedColumn {
   derivation: Derivation | null;
 }
 
-/** p.168's two kinds. The field was written as a discriminator with one value
- * (§411) so that this second one needed no migration. */
-export type DerivedColumn = ColumnMathColumn | LinkedColumn;
+/** Workshop p.221's function-backed column (§770): "a function that takes in
+ * the expected input (for example, an object set of Flight Alert objects) and
+ * returns the expected map output". The table passes the objects it is showing
+ * as `objects_parameter` (p.221's "Use a runtime input"), and the cell is the
+ * row's `field` from the map. */
+export interface FunctionColumn {
+  api_name: string;
+  display_name?: string;
+  kind: "function";
+  function_id: string;
+  /** The version called (p.49: a consumer names one). Null calls the newest. */
+  version: string | null;
+  /** The `object_set` parameter the shown objects go to. */
+  objects_parameter: string;
+  /** Which of the map's fields this column shows; empty is the first. */
+  field: string;
+  /** Every other parameter, from a module variable or a fixed value. */
+  inputs: Record<string, { variable: string } | { value: unknown }>;
+}
+
+/** p.168's two kinds, and p.221's function column. The field was written as a
+ * discriminator with one value (§411) so that later kinds need no migration. */
+export type DerivedColumn = ColumnMathColumn | LinkedColumn | FunctionColumn;
 
 /** Only what the rules read, so a caller can pass an ontology property row. */
 export interface KnownProperty {
@@ -81,6 +101,18 @@ export function columnsFor(raw: unknown, objectTypeId: string): DerivedColumn[] 
       const links = d?.links;
       if (!Array.isArray(links) || links.length === 0) continue;
       column = { api_name: name, ...label, kind: "linked", derivation: d as Derivation };
+    } else if (it.kind === "function") {
+      if (typeof it.function_id !== "string" || !it.function_id) continue;
+      column = {
+        api_name: name,
+        ...label,
+        kind: "function",
+        function_id: it.function_id,
+        version: typeof it.version === "string" && it.version ? it.version : null,
+        objects_parameter: typeof it.objects_parameter === "string" ? it.objects_parameter : "",
+        field: typeof it.field === "string" ? it.field : "",
+        inputs: inputsOf(it.inputs),
+      };
     } else {
       continue;
     }
@@ -90,6 +122,19 @@ export function columnsFor(raw: unknown, objectTypeId: string): DerivedColumn[] 
     if (seen.has(name)) continue;
     seen.add(name);
     out.push(column);
+  }
+  return out;
+}
+
+/** A function column's other inputs, keeping only the two shapes it can use. */
+function inputsOf(raw: unknown): FunctionColumn["inputs"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: FunctionColumn["inputs"] = {};
+  for (const [name, source] of Object.entries(raw as Record<string, unknown>)) {
+    if (!source || typeof source !== "object") continue;
+    const it = source as Record<string, unknown>;
+    if (typeof it.variable === "string" && it.variable) out[name] = { variable: it.variable };
+    else if ("value" in it) out[name] = { value: it.value };
   }
   return out;
 }

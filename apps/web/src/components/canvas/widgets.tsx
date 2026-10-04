@@ -156,8 +156,9 @@ import {
   strokeFor, subjectProperties,
 } from "./conditional-formats";
 import {
-  columnsFor, derivedInputs, problem as columnMathProblem, valueFor,
+  columnsFor, derivedInputs, problem as columnMathProblem, valueFor, type FunctionColumn,
 } from "./derived-columns";
+import { callKey, callValues, cellOf } from "./function-columns";
 import { derivedCell } from "@/lib/derived-values";
 import { unknownColumns, visibleColumns } from "./column-visibility";
 import { moved as movedColumn, storageKey as columnsKey, storedChoice, toggled as toggledColumn,
@@ -6796,6 +6797,28 @@ export function CanvasObjectTable({
     (derivedPage.data?.rows ?? []).map((r) => [r.primary_key, r.values]),
   );
 
+  // p.221's function-backed columns (§770), with the page's keys as the
+  // runtime input - "pass only the objects currently displayed in the Object
+  // Table". Columns that differ only in their field share a query key, so
+  // React Query makes them one call.
+  const functionColumns = derived.filter(
+    (c): c is FunctionColumn => !!c && c.kind === "function",
+  );
+  const functionResults = useQueries({
+    queries: functionColumns.map((c) => {
+      const values = callValues(c, pageKeys, variableValues);
+      return {
+        queryKey: ["canvas-function-column", c.function_id, c.version, values],
+        queryFn: () => objApi.executeFunction(workspaceId, c.function_id, values, c.version),
+        enabled: pageKeys.length > 0,
+        retry: false,
+      };
+    }),
+  });
+  const functionByCall = new Map(
+    functionColumns.map((c, i) => [callKey(c), functionResults[i]]),
+  );
+
   // Row selection (roadmap 1.3). The widget does not decide what a click
   // *means* - it announces that a row was chosen and hands over the row, and
   // the module's events say what happens. That is the difference between a
@@ -7401,6 +7424,30 @@ export function CanvasObjectTable({
                       );
                     })}
                     {derived.map((c) => {
+                      if (c.kind === "function") {
+                        const call = functionByCall.get(callKey(c));
+                        const value = cellOf(call?.data, instance.primary_key, c.field);
+                        return (
+                          <td key={`derived-${c.api_name}`} data-derived={c.api_name}>
+                            <div
+                              className="canvas-cell"
+                              data-testid={`function-${instance.primary_key}-${c.api_name}`}
+                              // The call's own sentence: a column that cannot
+                              // be computed is blank with the reason on it,
+                              // not an error in every row.
+                              title={call?.error instanceof ApiError ? call.error.message : undefined}
+                            >
+                              {call?.isPending ? (
+                                <span className="soft">…</span>
+                              ) : value === undefined || value === null ? (
+                                <span className="soft">{emptyText}</span>
+                              ) : (
+                                String(value)
+                              )}
+                            </div>
+                          </td>
+                        );
+                      }
                       if (c.kind === "linked") {
                         return (
                           <td key={`derived-${c.api_name}`} data-derived={c.api_name}>

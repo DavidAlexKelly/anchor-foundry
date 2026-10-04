@@ -47,6 +47,35 @@ group("reading a module's declarations", () => {
   });
 });
 
+group("p.221's function column (§770)", () => {
+  test("is kept with a function to call, its other fields read defensively", () => {
+    const got = columnsFor({
+      t: [
+        { api_name: "urgency", kind: "function", function_id: "f1", version: "1.0.0",
+          objects_parameter: "shown", field: "level", display_name: "Urgency",
+          inputs: { cutoff: { variable: "v1" }, label: { value: "x" }, junk: 3,
+                    empty: {}, blank: { variable: "" } } },
+        { api_name: "loose", kind: "function", function_id: "f2", version: "", inputs: [] },
+        { api_name: "nothing", kind: "function", function_id: "" },
+        { api_name: "numbered", kind: "function", function_id: 7 },
+      ],
+    }, "t");
+    expect(got).toEqual([
+      { api_name: "urgency", display_name: "Urgency", kind: "function", function_id: "f1",
+        version: "1.0.0", objects_parameter: "shown", field: "level",
+        inputs: { cutoff: { variable: "v1" }, label: { value: "x" } } },
+      { api_name: "loose", kind: "function", function_id: "f2", version: null,
+        objects_parameter: "", field: "", inputs: {} },
+    ]);
+  });
+
+  test("asks the server for nothing a derived read could answer", () => {
+    const fn: DerivedColumn = { api_name: "u", kind: "function", function_id: "f",
+      version: null, objects_parameter: "s", field: "", inputs: {} };
+    expect(derivedInputs(["u"], [], [fn])).toEqual({ properties: [], derivations: {} });
+  });
+});
+
 group("p.170: what column math may reference", () => {
   const known = [{ api_name: "revenue" }];
   const others: DerivedColumn[] = [

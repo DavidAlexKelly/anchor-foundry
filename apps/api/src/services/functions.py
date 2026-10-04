@@ -44,8 +44,13 @@ _API_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 #: prerelease identifier … by appending a hyphen".
 _VERSION_RE = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?$")
-PARAMETER_TYPES = (*engine.SCALAR_TYPES, "object")
-OUTPUT_KINDS = ("value", "array", "object_set", "table")
+#: `object_set` is p.221's "ObjectSet<ObjectType> parameter", by which an
+#: Object Table passes the objects it is showing (§770): their primary keys,
+#: as a list the SQL reads with `list_contains($name, __primary_key)`.
+PARAMETER_TYPES = (*engine.SCALAR_TYPES, "object", "object_set")
+#: `map` is p.221's "map from the object type to a value or custom type"
+#: (§770): a key column, then one column per field.
+OUTPUT_KINDS = ("value", "array", "object_set", "table", "map")
 MAX_PARAMETERS = 20
 MAX_INPUTS = 10
 #: The objects of one type a call reads. Above it a call is refused, by name:
@@ -89,7 +94,7 @@ def parse_parameters(raw: Any) -> list[dict[str, Any]]:
             "data_type": data_type,
             "required": item.get("required", True) is not False,
         }
-        if data_type == "object":
+        if data_type in ("object", "object_set"):
             if not item.get("object_type_id"):
                 raise FunctionError(f"{name}: an object parameter names its object type")
             parsed["object_type_id"] = str(item["object_type_id"])
@@ -109,9 +114,10 @@ def parse_output(raw: Any) -> dict[str, Any]:
         if data_type not in engine.SCALAR_TYPES:
             raise FunctionError(f"a {kind} output is one of {', '.join(engine.SCALAR_TYPES)}")
         return {"kind": kind, "data_type": data_type}
-    if kind == "object_set":
+    if kind in ("object_set", "map"):
         if not raw.get("object_type_id"):
-            raise FunctionError("an object set output names its object type")
+            raise FunctionError(f"an {'object set' if kind == 'object_set' else 'object map'} "
+                                "output names its object type")
         return {"kind": kind, "object_type_id": str(raw["object_type_id"])}
     return {"kind": kind}
 
@@ -158,8 +164,8 @@ async def check_version(
     if not sql:
         raise FunctionError("a function needs its SQL")
     referenced = {*inputs, *(p["object_type_id"] for p in parameters
-                             if p["data_type"] == "object")}
-    if output["kind"] == "object_set":
+                             if p["data_type"] in ("object", "object_set"))}
+    if output["kind"] in ("object_set", "map"):
         referenced.add(output["object_type_id"])
     types = await _types(conn, workspace_id, referenced)
     engine.check_sql(sql, [p["api_name"] for p in parameters])
@@ -308,6 +314,11 @@ def _bind(parameter: dict[str, Any], value: Any) -> Any:
     """A submitted value as the parameter's type, or a refusal naming it."""
     name, data_type = parameter["api_name"], parameter["data_type"]
     try:
+        if data_type == "object_set":
+            # Primary keys, as the table holds them (`__primary_key`).
+            if not isinstance(value, list) or len(value) > engine.MAX_ARRAY_ITEMS:
+                raise TypeError
+            return [str(v) for v in value]
         if data_type in ("string", "object"):
             return str(value)
         if data_type == "boolean":

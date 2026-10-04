@@ -92,6 +92,8 @@ class FunctionResult(BaseModel):
     columns: list[dict[str, str]] | None = None
     rows: list[list[Any]] | None = None
     truncated: bool = False
+    #: A map's answer (§770): primary key to its fields.
+    entries: dict[str, dict[str, Any]] | None = None
 
 
 @router.get("", response_model=list[FunctionSummary])
