@@ -8,6 +8,7 @@ import {
   dateFormatsText,
   whyNotParseable,
   DELIMITED_ONLY,
+  optionsProblem,
   isJsonFile,
   storedOptions,
 } from "./parse-options";
@@ -105,11 +106,13 @@ describe("what the options say they will do", () => {
       add_file_path: true,
       add_imported_at: true,
       add_row_number: true,
+      add_byte_offset: true,
     });
-    expect(said).toHaveLength(3);
+    expect(said).toHaveLength(4);
     expect(said.join(" ")).toContain("file path");
     expect(said.join(" ")).toContain("import time");
     expect(said.join(" ")).toContain("row number");
+    expect(said.join(" ")).toContain("a byte offset column added");
   });
 
   it("says dropping rows out loud, because it loses data", () => {
@@ -156,7 +159,7 @@ describe("JSON and Parquet files (§510)", () => {
   });
 
   it("names the switches only a delimited file has", () => {
-    expect(DELIMITED_ONLY).toEqual(["header", "drop_bad_rows"]);
+    expect(DELIMITED_ONLY).toEqual(["header", "drop_bad_rows", "add_byte_offset"]);
   });
 });
 
@@ -170,11 +173,13 @@ describe("the options a dataset is read with now (§746)", () => {
     expect(storedOptions({
       delimiter: "^", quote: null, header: false, skip_lines: 2, null_values: ["NA"],
       drop_bad_rows: true, encoding: "latin-1", add_file_path: true,
-      add_imported_at: false, add_row_number: true, date_formats: { when: "dd/MM/yyyy" },
+      add_imported_at: false, add_row_number: true, add_byte_offset: true,
+      date_formats: { when: "dd/MM/yyyy" },
     })).toEqual({
       delimiter: "^", quote: null, header: false, skip_lines: 2, null_values: ["NA"],
       drop_bad_rows: true, encoding: "latin-1", add_file_path: true,
-      add_imported_at: false, add_row_number: true, date_formats: { when: "dd/MM/yyyy" },
+      add_imported_at: false, add_row_number: true, add_byte_offset: true,
+      date_formats: { when: "dd/MM/yyyy" },
     });
   });
 
@@ -221,5 +226,22 @@ describe("date formats, one column: pattern per line (§765, p.26)", () => {
     expect(parseDateFormats(dateFormatsText(formats)).formats).toEqual(formats);
     expect(describeOptions({ ...DEFAULT_OPTIONS, date_formats: formats })).toEqual([
       "when read as dates like dd/MM/yyyy", "at read as dates like HH:mm"]);
+  });
+});
+
+describe("options that cannot be read together (§766)", () => {
+  const offset = { ...DEFAULT_OPTIONS, add_byte_offset: true };
+
+  it("has nothing to say without a byte offset", () => {
+    expect(optionsProblem({ ...DEFAULT_OPTIONS, drop_bad_rows: true, encoding: "utf-16" })).toBe("");
+    expect(optionsProblem(offset)).toBe("");
+    expect(optionsProblem({ ...offset, encoding: "latin-1" })).toBe("");
+  });
+
+  it("names the two that would misplace the offsets, in the server's words", () => {
+    expect(optionsProblem({ ...offset, drop_bad_rows: true })).toContain(
+      "cannot be given when rows that do not fit are dropped");
+    expect(optionsProblem({ ...offset, encoding: "utf-16" })).toContain(
+      "cannot be found in a UTF-16 file");
   });
 });

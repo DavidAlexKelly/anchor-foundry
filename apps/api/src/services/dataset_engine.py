@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime as dt
 import decimal
 import os
+import re
 import tempfile
 from dataclasses import dataclass, replace
 from typing import Any
@@ -159,6 +160,10 @@ class ParseOptions:
     #: p.14's "row number". Not in p.25-27's table, which is the *reader's*
     #: options; p.14 offers it beside the other two added columns.
     add_row_number: bool = False
+    #: p.14's "byte offset for row" (§766): where in the uploaded file each
+    #: row's record begins. Computed here rather than asked of DuckDB, which
+    #: has no such column; see `record_offsets`.
+    add_byte_offset: bool = False
     #: p.26 `dateFormat`: "a map that maps column names to JodaTime
     #: DateTimeFormat patterns" (§765). Pairs rather than a dict so the options
     #: stay hashable; see `date_columns`.
@@ -308,6 +313,15 @@ def refuse_for_file(extension: str, options: ParseOptions) -> None:
     if extension == ".parquet":
         raise DatasetEngineError(
             "a Parquet file carries its own schema, so there is nothing to parse again")
+    # §766's two combinations that would misplace the offsets (`_with_offsets`).
+    # Here so that they are said before a re-encoding runs, not after it fails.
+    if options.add_byte_offset and options.drop_bad_rows:
+        raise DatasetEngineError(
+            "a byte offset cannot be given when rows that do not fit are dropped: "
+            "the offsets would no longer line up with the rows")
+    if options.add_byte_offset and options.encoding == "utf-16":
+        raise DatasetEngineError(
+            "a byte offset cannot be found in a UTF-16 file, whose newlines are two bytes")
     if extension not in JSON_EXTENSIONS:
         return
     chosen = [label for label, on in (
@@ -318,6 +332,7 @@ def refuse_for_file(extension: str, options: ParseOptions) -> None:
         ("null markers", bool(options.null_values)),
         ("dropping rows that do not fit", options.drop_bad_rows),
         ("date formats", bool(options.date_formats)),
+        ("a byte offset column", options.add_byte_offset),
     ) if on]
     if chosen:
         raise DatasetEngineError(
@@ -352,8 +367,84 @@ def decode_to_utf8(src_path: str, dest_path: str, encoding: str) -> None:
         handle.write(text)
 
 
+def record_offsets(raw: bytes, quote: bytes, escape: bytes | None = None) -> list[int]:
+    """Where each record of a delimited file begins, in bytes (§766).
+
+    A record ends at a newline outside quotes, so a quoted field holding a
+    line break stays one record, as DuckDB reads it. Empty lines are not
+    records, since DuckDB skips them. Only the quote, escape and newline
+    bytes are visited, so a large file costs one pass of a regular expression.
+
+    Byte-level, which is why `refuse_for_file` refuses UTF-16: there a
+    newline is two bytes and a quote's second byte can be anything.
+
+    `escape` is the sniffed one (`\\` in `"a\\"b"`): inside quotes it takes
+    the byte after it out of play, as DuckDB reads it. A doubled quote needs
+    no escape, since it toggles twice.
+    """
+    starts: list[int] = []
+    in_quote = False
+    start = 0
+    escaped = -1
+    special = re.escape(quote) + rb"|\n"
+    if escape and escape != quote:
+        special += rb"|" + re.escape(escape)
+    for found in re.finditer(special, raw):
+        if found.start() == escaped:
+            continue
+        if found.group() == escape and found.group() != quote:
+            if in_quote:
+                escaped = found.end()
+            continue
+        if found.group() == quote:
+            # A doubled quote toggles twice, which is the same as not at all.
+            in_quote = not in_quote
+            continue
+        if not in_quote:
+            if raw[start:found.start()].strip(b"\r"):
+                starts.append(start)
+            start = found.end()
+    if raw[start:].strip(b"\r"):
+        starts.append(start)
+    return starts
+
+
+def _with_offsets(
+    con: "duckdb.DuckDBPyConnection", src_path: str, original_path: str, reader: str,
+    options: ParseOptions, workdir: str,
+) -> str:
+    """The read with p.14's byte offset beside each row (§766).
+
+    **The rows are the file's last records**: whatever a parse leaves out
+    comes first (skipped lines, the header), and dropping rows that do not
+    fit is refused with this option because it would leave holes nothing can
+    line up (`refuse_for_file`). So the offsets are the last N record starts, paired with the rows
+    by position. A file whose records cannot be lined up that way is refused
+    rather than given offsets that point at the wrong rows.
+    """
+    sniffed = con.execute(f"SELECT Quote, Escape FROM sniff_csv({src_path!r})").fetchone()
+    quote = options.quote or (str(sniffed[0]) if sniffed and sniffed[0] else '"')
+    escape = str(sniffed[1]) if sniffed and sniffed[1] else None
+    with open(original_path, "rb") as handle:
+        starts = record_offsets(
+            handle.read(), quote.encode(), escape.encode() if escape else None)
+    rows = int(con.execute(f"SELECT count(*) FROM {reader}").fetchone()[0])
+    preamble = len(starts) - rows
+    if not 0 <= preamble <= options.skip_lines + 1:
+        raise DatasetEngineError(
+            f"the file's {len(starts)} records could not be lined up with its "
+            f"{rows} rows, so no byte offsets were given")
+    offsets = os.path.join(workdir, "byte_offsets.csv")
+    with open(offsets, "w") as handle:
+        handle.write("byte_offset\n")
+        handle.writelines(f"{start}\n" for start in starts[preamble:])
+    return (f"(SELECT * FROM {reader} r POSITIONAL JOIN "
+            f"read_csv({offsets!r}, header=true, columns={{'byte_offset': 'BIGINT'}}) o)")
+
+
 def parse_to_parquet(
-    src_path: str, dest_path: str, options: ParseOptions, extension: str
+    src_path: str, dest_path: str, options: ParseOptions, extension: str,
+    original_path: str | None = None,
 ) -> tuple[list[ColumnSchema], int]:
     """Read a delimited file the way `options` says, and write the Parquet.
 
@@ -361,6 +452,9 @@ def parse_to_parquet(
     options, because only one of the three is a reader option at all —
     `filename=true` gives the path, and the import time and the row number are
     things this platform knows and DuckDB does not.
+
+    `original_path` is the file as uploaded, when `src_path` is a re-encoded
+    copy of it: a byte offset is a position in what was uploaded.
     """
     refuse_for_file(extension, options)
     reader = (json_reader_expr(src_path, extension, options) if extension in JSON_EXTENSIONS
@@ -379,6 +473,9 @@ def parse_to_parquet(
         try:
             if options.date_formats:
                 reader = _with_dates(con, src_path, reader, options)
+            if options.add_byte_offset:
+                reader = _with_offsets(con, src_path, original_path or src_path, reader,
+                                       options, os.path.dirname(dest_path))
             con.execute(f"CREATE VIEW src AS SELECT {', '.join(selected)} FROM {reader} src")
             con.execute(f"COPY src TO '{dest_path}' (FORMAT parquet)")
         except duckdb.Error as exc:

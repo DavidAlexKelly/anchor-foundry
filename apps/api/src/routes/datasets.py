@@ -1142,6 +1142,8 @@ class ParseOptionsIn(BaseModel):
     add_file_path: bool = False
     add_imported_at: bool = False
     add_row_number: bool = False
+    #: p.14's "byte offset for row" (§766).
+    add_byte_offset: bool = False
     #: p.26 `dateFormat` (§765): column name to JodaTime pattern.
     date_formats: dict[str, str] = Field(default_factory=dict, max_length=50)
 
@@ -1153,6 +1155,7 @@ class ParseOptionsIn(BaseModel):
             encoding=self.encoding, add_file_path=self.add_file_path,
             add_imported_at=self.add_imported_at, add_row_number=self.add_row_number,
             date_formats=tuple(self.date_formats.items()),
+            add_byte_offset=self.add_byte_offset,
         )
 
 
@@ -1210,17 +1213,20 @@ def _parse_file(
     dataset's files a row came from.
     """
     extension = os.path.splitext(name)[1].lower()
+    engine.refuse_for_file(extension, options.to_engine())
     os.makedirs(directory)
     src = os.path.join(directory, name)
     with open(src, "wb") as handle:
         handle.write(raw)
+    original = src
     if options.encoding != "utf-8":
         os.makedirs(os.path.join(directory, "utf8"))
         decoded = os.path.join(directory, "utf8", name)
         engine.decode_to_utf8(src, decoded, options.encoding)
         src = decoded
     dest = os.path.join(directory, "data.parquet")
-    schema, _rows = engine.parse_to_parquet(src, dest, options.to_engine(), extension)
+    schema, _rows = engine.parse_to_parquet(
+        src, dest, options.to_engine(), extension, original_path=original)
     return dest, schema
 
 

@@ -26,6 +26,8 @@ export type ParseOptions = {
   add_file_path: boolean;
   add_imported_at: boolean;
   add_row_number: boolean;
+  /** p.14's "byte offset for row" (§766). */
+  add_byte_offset: boolean;
   /** p.26 `dateFormat` (§765): column name to JodaTime pattern. */
   date_formats: Record<string, string>;
 };
@@ -50,6 +52,7 @@ export const DEFAULT_OPTIONS: ParseOptions = {
   add_file_path: false,
   add_imported_at: false,
   add_row_number: false,
+  add_byte_offset: false,
   date_formats: {},
 };
 
@@ -154,6 +157,7 @@ export function describeOptions(options: ParseOptions): string[] {
   if (options.add_file_path) said.push("a file path column added");
   if (options.add_imported_at) said.push("an import time column added");
   if (options.add_row_number) said.push("a row number column added");
+  if (options.add_byte_offset) said.push("a byte offset column added");
   for (const [column, pattern] of Object.entries(options.date_formats)) {
     said.push(`${column} read as dates like ${pattern}`);
   }
@@ -219,4 +223,20 @@ export function parseNullMarkers(text: string): string[] {
 /** The switches only a delimited file has (§510): a JSON file has no header
  * row, and DuckDB keeps a malformed JSON record as a row of NULLs rather than
  * dropping it, so "drop rows that do not fit" would not mean what it says. */
-export const DELIMITED_ONLY: readonly (keyof ParseOptions)[] = ["header", "drop_bad_rows"];
+export const DELIMITED_ONLY: readonly (keyof ParseOptions)[] = [
+  "header", "drop_bad_rows", "add_byte_offset",
+];
+
+/** Why these options cannot be read together, or `""` (§766). The server
+ * refuses both, in the same words, because each would put a row beside
+ * another row's byte offset. */
+export function optionsProblem(options: ParseOptions): string {
+  if (!options.add_byte_offset) return "";
+  if (options.drop_bad_rows) {
+    return "A byte offset cannot be given when rows that do not fit are dropped: the offsets would no longer line up with the rows.";
+  }
+  if (options.encoding === "utf-16") {
+    return "A byte offset cannot be found in a UTF-16 file, whose newlines are two bytes.";
+  }
+  return "";
+}
