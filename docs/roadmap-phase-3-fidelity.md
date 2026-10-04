@@ -348,6 +348,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 ---
 
+**E.13 — The web ACL refused the platform's own requests. Done (§847), S.** Found by reading the stack's WAF against what the API accepts. AWS's Common Rule Set blocks every request body over 8 KB (`SizeRestrictions_BODY`). So a deployed stack answered every upload, attachment, listener push and large save with the WAF's 403, long before §832's limits applied. Five more of its rules refuse what this platform's requests legitimately carry. Query strings over 2 KB are a picker reading back about fifty chosen types. URLs with IP addresses, `../` paths and markup in a body are a connection to an internal host, a code file, a Markdown widget. A request without a `User-Agent` is a system pushing to a listener. Those six rules now count instead of blocking (`infra/cdk/src/constructs/waf.ts` says why each), so matches still show in the WAF's metrics and nothing is refused for them. Every other rule in both managed sets still blocks, including the metadata-address SSRF rule. `src/checks/waf-check.ts` holds the six to names the set has, the rest to blocking, and the API to bounding bodies itself. **Not verified:** a request through a deployed WAF.
+
 ## Suggested order
 
 **First, out of band:** E.1.
