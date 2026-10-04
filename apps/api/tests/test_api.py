@@ -296,6 +296,45 @@ def test_editor_creates_project(client: TestClient, fx: Fixture) -> None:
     assert r.json()["effective_role"] == "editor"
 
 
+def test_a_page_looks_up_its_one_project_by_slug_or_id(client: TestClient, fx: Fixture) -> None:
+    """Every page inside a project found it by fetching the workspace's whole
+    list - 2.7 MB at 10,000 projects (§822). `slug` or `id` asks for one, as
+    the caller can see it, and the same shape the list has."""
+    base = f"/api/workspaces/{fx.workspace}/projects"
+    made = client.post(base, headers=hdr(fx.editor_sub), json={"name": f"Look {fx.tag}"}).json()
+    client.post(base, headers=hdr(fx.editor_sub), json={"name": f"Other {fx.tag}"})
+    listed = {p["id"]: p for p in client.get(base, headers=hdr(fx.editor_sub)).json()}
+
+    by_slug = client.get(base, headers=hdr(fx.editor_sub), params={"slug": made["slug"]})
+    assert by_slug.status_code == 200 and by_slug.json() == [listed[made["id"]]]
+    by_id = client.get(base, headers=hdr(fx.editor_sub), params={"id": made["id"]})
+    assert by_id.json() == [listed[made["id"]]]
+    # Absent, or in a workspace the id does not belong to: nothing.
+    assert client.get(base, headers=hdr(fx.editor_sub), params={"slug": "no-such-project"}).json() == []
+    assert client.get(base, headers=hdr(fx.editor_sub), params={"id": str(uuid.uuid4())}).json() == []
+    # Not a pattern: a slug's prefix finds nothing.
+    assert client.get(base, headers=hdr(fx.editor_sub), params={"slug": made["slug"][:-1]}).json() == []
+
+
+def test_a_project_lookup_is_the_callers_own_view(client: TestClient, fx: Fixture) -> None:
+    """A project the caller has been shut out of is not found by name either,
+    and the role on it is theirs."""
+    base = f"/api/workspaces/{fx.workspace}/projects"
+    made = client.post(base, headers=hdr(fx.editor_sub), json={"name": f"Shut {fx.tag}"}).json()
+    pbase = f"{base}/{made['id']}"
+    assert client.patch(pbase, headers=hdr(fx.owner_sub),
+                        json={"permission_mode": "custom"}).status_code == 200
+    for user, role in ((fx.editor, "editor"), (fx.viewer, "none")):
+        r = client.put(f"{pbase}/permissions", headers=hdr(fx.owner_sub),
+                       json={"user_id": str(user), "role": role})
+        assert r.status_code == 201, r.text
+    assert client.get(base, headers=hdr(fx.viewer_sub), params={"slug": made["slug"]}).json() == []
+    seen = client.get(base, headers=hdr(fx.editor_sub), params={"id": made["id"]}).json()
+    assert [p["effective_role"] for p in seen] == [
+        next(p["effective_role"] for p in client.get(base, headers=hdr(fx.editor_sub)).json()
+             if p["id"] == made["id"])]
+
+
 def test_project_under_wrong_workspace_is_404(client: TestClient, fx: Fixture) -> None:
     # Correct project id, wrong workspace id in the path → hierarchy check 404s.
     r = client.get(

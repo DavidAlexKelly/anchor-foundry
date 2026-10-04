@@ -29,11 +29,16 @@ def slugify(name: str) -> str:
 
 
 async def list_for_user(
-    conn: AsyncConnection, user_id: UUID, workspace_id: UUID
+    conn: AsyncConnection, user_id: UUID, workspace_id: UUID,
+    *, slug: str | None = None, project_id: UUID | None = None,
 ) -> list[dict[str, Any]]:
     """Workspace view project grid (§5): visible projects with effective role
     from v_user_projects (db 0005) - a project with no effective role simply
-    isn't in the list."""
+    isn't in the list.
+
+    `slug` or `project_id` narrows it to the one project a page is about
+    (§822): every page inside a project looked its project up by fetching
+    this whole list, which is 2.7 MB on a workspace of 10,000 projects."""
     return await fetch_all(
         conn,
         """
@@ -42,9 +47,12 @@ async def list_for_user(
           FROM v_user_projects v
           JOIN projects p ON p.id = v.project_id
          WHERE v.user_id = :uid AND p.workspace_id = :wid
+           AND (CAST(:slug AS text) IS NULL OR p.slug = :slug)
+           AND (CAST(:pid AS uuid) IS NULL OR p.id = CAST(:pid AS uuid))
          ORDER BY p.name
         """,
-        {"uid": str(user_id), "wid": str(workspace_id)},
+        {"uid": str(user_id), "wid": str(workspace_id), "slug": slug,
+         "pid": str(project_id) if project_id else None},
     )
 
 
