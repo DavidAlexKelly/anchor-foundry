@@ -61,6 +61,9 @@ export interface FunctionExportRequest {
   /** Null calls the newest (`functions` p.49). */
   version: string | null;
   values: Record<string, unknown>;
+  /** Inputs read from a variable that had no value yet when the button was
+   * pressed, parameter -> variable (§857). The capability waits for each. */
+  unresolved?: Record<string, string>;
   fileType: ExportFileType;
   fileName: string | null;
 }
@@ -386,11 +389,21 @@ export function run(
         // `export`'s set is, this click's writes first.
         const functionId = typeof config.function_id === "string" ? config.function_id : "";
         if (!functionId || !context.exportFunction) continue;
+        const inputs = inputsOf(config.inputs);
+        const values = inputValues(inputs, { ...(context.variables ?? {}), ...written });
+        // **A variable with no value yet is named, not sent empty** (§857),
+        // as `export` hands over an unresolved set. A button pressed the
+        // moment the module draws reaches here before the first resolve, and
+        // the function was called without the input: "region needs a value".
+        const unresolved: Record<string, string> = {};
+        for (const [name, source] of Object.entries(inputs)) {
+          if ("variable" in source && values[name] === undefined) unresolved[name] = source.variable;
+        }
         context.exportFunction({
           functionId,
           version: typeof config.version === "string" && config.version ? config.version : null,
-          values: inputValues(inputsOf(config.inputs),
-                              { ...(context.variables ?? {}), ...written }),
+          values,
+          ...(Object.keys(unresolved).length > 0 ? { unresolved } : {}),
           fileType: isExportFileType(config.file_type) ? config.file_type : "csv",
           fileName: typeof config.file_name === "string" ? config.file_name : null,
         });

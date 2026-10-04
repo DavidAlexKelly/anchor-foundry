@@ -250,6 +250,19 @@ describe("a function-backed export (p.489-490, §775)", () => {
       values: { minimum: 9 } });
   });
 
+  it("names an input whose variable has no value yet, for the capability to wait on (§857)", () => {
+    const exportFunction = vi.fn();
+    const { context } = contextWith({ exportFunction, variables: { v_zero: 0 } });
+    run([event(exporting({
+      function_id: "f",
+      inputs: { region: { variable: "v_region" }, floor: { variable: "v_zero" },
+                fixed: { value: "x" } } }))], context);
+    expect(exportFunction).toHaveBeenCalledWith(expect.objectContaining({
+      values: { region: undefined, floor: 0, fixed: "x" },
+      unresolved: { region: "v_region" },
+    }));
+  });
+
   it("does nothing when no function is named", () => {
     const exportFunction = vi.fn();
     const { context } = contextWith({ exportFunction, variables: {} });
