@@ -47,6 +47,7 @@ from ..services import datasets as dataset_service
 from ..lib.errors import ConflictError, ForbiddenError, NotFoundError
 from ..services import instance_store
 from ..services import interfaces as interfaces_service
+from ..services import interface_evaluate, interface_sets
 from ..services import notification_store
 from ..services import object_type_usage as usage_service
 from ..services import notifications as notifications_service
@@ -1035,16 +1036,16 @@ async def action_parameter_choices(
         # **Its own pass rather than a branch in the loop above**, because the
         # loop is built around one type: p.36's filters are compiled against
         # that type's properties and p.37's walk starts from it. An interface
-        # set has its own filter vocabulary (§254 rewrites them onto each
-        # implementation), and narrowing one is a separate question from
-        # offering one — a named ○ rather than a branch pretending to be
-        # finished.
+        # set has its own filter vocabulary, which §254 rewrites onto each
+        # implementation - and §741 reads it through that same evaluator
+        # (`interface_evaluate`), p.36's filters written in the interface's
+        # names.
         for parameter in choices_service.object_parameters(action_type["parameters"]):
             constrained = choices_service.interface_of(parameter)
             if constrained is None:
                 continue
             try:
-                interface = await interfaces_service.get_interface(
+                interface, declared = await interface_evaluate.declared(
                     conn, access.workspace_id, UUID(constrained)
                 )
             except NotFoundError:
@@ -1052,12 +1053,41 @@ async def action_parameter_choices(
                 # loop above omits an invisible type: "nothing to choose from"
                 # and "not yours to look at" are different things.
                 continue
-            rows, total = await interfaces_service.members_page(
-                conn, access.workspace_id, UUID(constrained),
-                limit=choices_service.MAX_CHOICES,
-            )
+            name = str(parameter["api_name"])
+            try:
+                narrowing = filters_service.resolve(
+                    parameter, bound=body.values, property_types=declared,
+                    objects=await choices_service.object_values_of(
+                        conn, parameter, workspace_id=access.workspace_id,
+                        bound=body.values, parameters=action_type["parameters"],
+                    ),
+                )
+            except filters_service.Unresolved as missing:
+                # The loop above's sentence: which box to fill in first.
+                out.append(ParameterChoices(
+                    parameter=name, object_type_id=None,
+                    object_type_name=str(interface["display_name"]),
+                    items=[], truncated=False,
+                    waiting_for=missing.parameter,
+                    waiting_for_property=missing.property,
+                ))
+                continue
+            try:
+                found = await interface_evaluate.evaluate(
+                    conn, access.workspace_id, UUID(constrained),
+                    filters=[{"property": f.property, "op": f.op, "value": f.value}
+                             for f in narrowing],
+                    limit=choices_service.MAX_CHOICES,
+                )
+            except interface_sets.InterfaceSetError as exc:
+                # More implementations than one read may fan out over: refused
+                # in the evaluator's words rather than offered as a short list.
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                ) from exc
+            rows, total = found.instances, found.total
             out.append(ParameterChoices(
-                parameter=str(parameter["api_name"]),
+                parameter=name,
                 # **No object type, because there is no one type**, which is
                 # the whole of p.62's difference. The name is the interface's,
                 # so the control still reads "Choose a Ticket…".

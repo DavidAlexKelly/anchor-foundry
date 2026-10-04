@@ -366,6 +366,36 @@ async def check_object_values(
         walked = search_arounds.source_of(parameter)
         if not declared and walked is None:
             continue
+        if interface_id is not None:
+            # §741: p.36's filters on an interface reference are written in
+            # the interface's names, so they are resolved against its
+            # vocabulary and asked of this one object through the evaluator
+            # the dropdown reads - one rule for the offer and the check.
+            from . import interface_evaluate
+
+            _interface, vocabulary = await interface_evaluate.declared(
+                conn, workspace_id, UUID(interface_id))
+            try:
+                narrowing = action_filters.resolve(
+                    parameter, bound=bound, property_types=vocabulary,
+                    objects=await object_values_of(
+                        conn, parameter, workspace_id=workspace_id,
+                        bound=bound, parameters=parameters,
+                    ),
+                )
+            except action_filters.Unresolved as missing:
+                raise ValueError(
+                    f"{name!r} is narrowed by {missing.parameter!r}, which this "
+                    "submission does not supply"
+                ) from missing
+            if not await interface_evaluate.contains(
+                conn, workspace_id, UUID(interface_id),
+                filters=[{"property": f.property, "op": f.op, "value": f.value}
+                         for f in narrowing],
+                object_type_id=UUID(str(type_id)), primary_key=row["primary_key"],
+            ):
+                raise ValueError(f"{value!r} is not among the objects {name!r} offers")
+            continue
         types = await property_types_of(conn, type_id)
         try:
             narrowing = action_filters.resolve(

@@ -609,3 +609,67 @@ def test_picking_an_interface_clears_the_object_type_beside_it(
         what="the swapped constraint",
     )
     assert saved["object_type_id"] is None, saved
+
+
+def test_a_filter_on_an_interface_reference_is_set_in_the_dialog_and_narrows_the_form(
+    page, api, world
+) -> None:
+    """§741: `action-types` p.36's filters, on p.62's interface reference. The
+    dialog offers the interface's own properties (not one type's columns), and
+    the form's list narrows across both implementations: `2026-02-02` is F2's
+    `surveyed_on` and no Vehicle's `checked_on`. (F2 because the submit test
+    above rewrites F1's and V1's dates.)"""
+    action = api.call(
+        "POST", f"/workspaces/{world.workspace_id}/action-types",
+        {"object_type_id": world.facility,
+         "api_name": f"narrow_{uuid.uuid4().hex[:8]}",
+         "display_name": "Narrowed reference",
+         "editable_properties": ["surveyed_on"]},
+    )
+    api.call(
+        "PUT", f"/workspaces/{world.workspace_id}/action-types/{action['id']}/definition",
+        {
+            "parameters": [
+                {"api_name": "subject", "display_name": "Which object",
+                 "data_type": "object", "required": True,
+                 "interface_id": world.interface["id"]},
+            ],
+            "rules": [{"kind": "delete_object", "config": {"object": "subject"}}],
+            "criteria": [],
+        },
+    )
+    page.goto(f"{WEB_BASE}/{world.workspace_slug}/{world.project_slug}/objects")
+    expect(page.get_by_role("heading", name="Actions", exact=True)).to_be_visible(timeout=30000)
+    page.locator("tbody tr").filter(has_text="Narrowed reference").first \
+        .get_by_role("button", name="Parameters").click()
+    page.get_by_label("Add a filter to subject").click()
+    prop = page.get_by_label("Filter 1 on subject property")
+    expect(prop.locator("option[value='last_inspection_date']")).to_have_count(1)
+    expect(prop.locator("option[value='surveyed_on']")).to_have_count(0)
+    prop.select_option("last_inspection_date")
+    page.get_by_label("Filter 1 on subject value").fill("2026-02-02")
+    page.get_by_role("button", name="Save", exact=True).click()
+    eventually(
+        lambda: api.call(
+            "GET", f"/workspaces/{world.workspace_id}/action-types/{action['id']}",
+        )["parameters"][0].get("dropdown_filters"),
+        lambda f: bool(f) and f[0]["property"] == "last_inspection_date",
+        what="the filter saved",
+    )
+
+    mod = Module(api, "Interface reference narrowed", beside=world)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "form": {"resolvedName": "CanvasActionForm",
+                     "props": {"actionTypeId": action["id"], "objectVariable": None}},
+        }),
+        "variables": {}, "events": {},
+    })
+    open_module(page, mod)
+    settled(page)
+    picker = page.get_by_role("combobox", name="Which object")
+    expect(picker).to_be_visible(timeout=30000)
+    eventually(lambda: " ".join(picker.locator("option").all_text_contents()),
+               lambda t: "F2" in t and "F1" not in t and "V1" not in t,
+               what="only the Facility inspected on 2026-02-02")

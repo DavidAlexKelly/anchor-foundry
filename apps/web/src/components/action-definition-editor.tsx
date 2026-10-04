@@ -508,12 +508,15 @@ function SearchAroundPanel({
  * `@/lib/action-filters`; this only draws.
  */
 function FilterPanel({
-  workspaceId, parameters, parameter, typeId, onChange,
+  workspaceId, parameters, parameter, typeId, interfaceId, onChange,
 }: {
   workspaceId: string;
   parameters: Parameter[];
   parameter: Parameter;
   typeId: string;
+  /** p.62's interface reference (§741): the filters are written in the
+   *  interface's own vocabulary, which each implementation translates. */
+  interfaceId?: string | null;
   onChange: (next: DropdownFilter[]) => void;
 }) {
   const labels = labelsOf(parameters);
@@ -551,6 +554,7 @@ function FilterPanel({
                             <PropertySelect
                               workspaceId={workspaceId}
                               typeId={typeId}
+                              interfaceId={interfaceId}
                               value={f.property}
                               label={`Filter ${fi + 1} on ${parameter.api_name} property`}
                               onChange={(next) => patch({ property: next })}
@@ -1829,12 +1833,13 @@ export function ActionDefinitionEditor({
                       patchParameter(i, { dropdown_search_around: next })}
                   />
                 )}
-                {p.object_type_id && !isObjectList(p) && (
+                {(p.object_type_id || p.interface_id) && !isObjectList(p) && (
                   <FilterPanel
                     workspaceId={workspaceId}
                     parameters={parameters}
                     parameter={p}
-                    typeId={String(p.object_type_id)}
+                    typeId={p.object_type_id ? String(p.object_type_id) : ""}
+                    interfaceId={p.object_type_id ? null : p.interface_id}
                     onChange={(next) =>
                       patchParameter(i, { dropdown_filters: next })}
                   />

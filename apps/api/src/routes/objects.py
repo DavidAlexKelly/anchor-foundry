@@ -39,6 +39,7 @@ from ..lib.cron import next_run_after
 from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
+from ..services import interface_evaluate
 from ..services import ontology_history as history_service
 from ..services import object_edits as object_edits_service
 from ..services import favourites as favourites_service
@@ -3267,115 +3268,24 @@ async def evaluate_interface_set(
     what an interface set means - there is only one thing evaluating it.
     """
     async with user_connection(access.auth.user_id) as conn:
-        interface = await interfaces_service.get_interface(
-            conn, access.workspace_id, interface_id
-        )
-        members_raw = await interfaces_service.implementations_of(
-            conn, access.workspace_id, interface_id
-        )
-        declared = {
-            str(p["api_name"]): str(p["data_type"])
-            for p in interface["effective_properties"]
-        }
-        members = [
-            interface_sets.Member(
-                object_type_id=UUID(r["object_type_id"]),
-                property_mapping=r["property_mapping"],
-            )
-            for r in members_raw
-        ]
+        # §741: the body moved to `interface_evaluate`, so the interface
+        # reference dropdown reads the same evaluator rather than a copy.
         try:
-            # **The request before the resource.** Depth and sort are wrong
-            # about what was asked for whatever this interface looks like, and
-            # answering "nothing implements it" to somebody who asked for page
-            # nine sends them to fix the wrong thing.
-            interface_sets.check_depth(limit=body.limit, offset=body.offset)
-            sort = interface_sets.parse_sort(body.sort)
-            interface_sets.check_fan_out(
-                members, interface_name=str(interface["api_name"])
+            result = await interface_evaluate.evaluate(
+                conn, access.workspace_id, interface_id,
+                filters=body.filters, sort=body.sort, limit=body.limit, offset=body.offset,
             )
-        except interface_sets.InterfaceSetError as exc:
+        except (interface_sets.InterfaceSetError, ValueError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
             ) from exc
-
-        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
-        store = instance_store.store_for(conn)
-        pages: list[list[dict[str, Any]]] = []
-        read: list[str] = []
-        total = 0
-        for member, raw in zip(members, members_raw):
-            try:
-                translated = interface_sets.filters_for(
-                    body.filters, member=member, declared=declared,
-                    interface_name=str(interface["api_name"]),
-                )
-            except interface_sets.InterfaceSetError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-                ) from exc
-            if translated is None:
-                # This type answers nothing to a filtered property, so no
-                # object of it can match. Skipped rather than read unfiltered,
-                # which would be decision 0002's silent widening.
-                continue
-            property_types = await _declared_types(conn, member.object_type_id)
-            # §675: each implementing property's row, for what it presents
-            # (p.131's reduced element, p.170's main field).
-            presenters = {str(p["api_name"]): p
-                          for p in await ontology_service.list_properties(conn, member.object_type_id)}
-            try:
-                definition = object_sets.parse(
-                    {"object_type_id": str(member.object_type_id),
-                     "filters": translated},
-                    property_types=property_types,
-                )
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-                ) from exc
-            # **The whole prefix of the merged order, from every type.** Any of
-            # them could supply the entire page, so each is asked for
-            # `offset + limit` from the top rather than for its own slice —
-            # which is what `check_depth` bounds.
-            rows, count = await store.evaluate_object_set(
-                search_prefix=prefix,
-                object_type_id=definition.object_type_id,
-                filters=definition.filters,
-                limit=body.offset + body.limit,
-                offset=0,
-                sort=object_sets.parse_sorts(sort, property_types=property_types),
-            )
-            total += count
-            read.append(str(raw["display_name"]))
-            pages.append([
-                {
-                    "id": r["id"],
-                    "primary_key": r["primary_key"],
-                    "object_type_id": member.object_type_id,
-                    "object_type_name": raw["display_name"],
-                    "updated_at": r["updated_at"],
-                    "properties": interface_sets.project(
-                        _jsonb(r["properties"]) or {},
-                        member=member, declared=declared, presenters=presenters,
-                    ),
-                }
-                for r in rows
-            ])
-
-    merged = interface_sets.merge(
-        pages, sort=sort, limit=body.limit, offset=body.offset
-    )
     return InterfaceSetOut(
-        instances=[InterfaceInstanceOut(**r) for r in merged],
-        total=total,
+        instances=[InterfaceInstanceOut(**r) for r in result.instances],
+        total=result.total,
         limit=body.limit,
         offset=body.offset,
-        object_types=read,
-        skipped=[
-            str(r["display_name"]) for r in members_raw
-            if str(r["display_name"]) not in read
-        ],
+        object_types=result.read,
+        skipped=result.skipped,
     )
 
 
