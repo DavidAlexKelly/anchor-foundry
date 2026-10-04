@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { completeLogin, consumeReturnPath } from "@/lib/auth";
+import { callbackError } from "@/lib/auth-errors";
 
 function CallbackInner() {
   const router = useRouter();
@@ -13,6 +14,13 @@ function CallbackInner() {
   useEffect(() => {
     if (ran.current) return;
     ran.current = true;
+    // Cognito's own reason first: a refused sign-in comes back with an error
+    // instead of a code, and "missing code" would hide why (§816).
+    const refused = callbackError(new URLSearchParams(params.toString()));
+    if (refused) {
+      setError(refused);
+      return;
+    }
     const code = params.get("code");
     if (!code) {
       setError("Missing authorization code. Restart sign-in.");
@@ -25,7 +33,7 @@ function CallbackInner() {
 
   if (error) {
     return (
-      <div className="state error">
+      <div className="state error" data-testid="sign-in-error">
         {error} - <a href="/login" style={{ textDecoration: "underline" }}>back to sign in</a>
       </div>
     );

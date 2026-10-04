@@ -17,6 +17,8 @@
  * API's 401 is what actually decides.
  */
 
+import { tokenFailure } from "./auth-errors";
+
 const KEY_SIGNED_IN = "anchor.signed_in";
 const KEY_VERIFIER = "anchor.pkce_verifier";
 const KEY_RETURN = "anchor.return_to";
@@ -86,7 +88,15 @@ export async function completeLogin(code: string): Promise<void> {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  if (!res.ok) throw new Error(`Token exchange failed (${res.status})`);
+  if (!res.ok) {
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      /* not JSON: the status is all there is */
+    }
+    throw new Error(tokenFailure(res.status, body));
+  }
   const data: { access_token?: string } = await res.json();
   if (!data.access_token) throw new Error("Token endpoint returned no access token");
   sessionStorage.removeItem(KEY_VERIFIER);
