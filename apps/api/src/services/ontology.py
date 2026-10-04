@@ -563,8 +563,46 @@ async def reducers_for(
     return out
 
 
-async def list_properties_for_workspace(
+async def property_types_for_workspace(
     conn: AsyncConnection, workspace_id: UUID, *, type_ids: list[str] | None = None,
+) -> dict[str, dict[str, str]]:
+    """`{object_type_id: {api_name: data_type}}` for a workspace (§831).
+
+    What a module's sets are checked and cast against, and nothing else.
+    `list_properties_for_workspace` answers it too, but builds every column of
+    every property and its shared metadata to keep two of them - and
+    evaluation, which runs on every keystroke a viewer makes in a filter,
+    paid that each time: half of a 105 ms evaluate on 815 object types.
+
+    **The type a property declares is its shared property's** when it has
+    one, exactly as `shared_properties.resolve` overlays it - including when
+    the shared property is not visible to the caller, which resolves to no
+    type, and a property with no type is not in the map.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT p.object_type_id, p.api_name,
+               CASE WHEN p.shared_property_id IS NOT NULL THEN sp.data_type::text
+                    ELSE p.data_type::text END AS data_type
+          FROM object_type_properties p
+          JOIN object_types ot ON ot.id = p.object_type_id
+          LEFT JOIN shared_properties sp ON sp.id = p.shared_property_id
+         WHERE ot.workspace_id = :wid
+           AND (CAST(:tids AS uuid[]) IS NULL OR ot.id = ANY(CAST(:tids AS uuid[])))
+        """,
+        {"wid": str(workspace_id), "tids": type_ids},
+    )
+    out: dict[str, dict[str, str]] = {}
+    for row in rows:
+        entry = out.setdefault(str(row["object_type_id"]), {})
+        if row["api_name"] and row["data_type"]:
+            entry[str(row["api_name"])] = str(row["data_type"])
+    return out
+
+
+async def list_properties_for_workspace(
+    conn: AsyncConnection, workspace_id: UUID
 ) -> dict[str, list[dict[str, Any]]]:
     """Every object type's properties, in **one** query, keyed by type id.
 
@@ -599,11 +637,9 @@ async def list_properties_for_workspace(
           JOIN object_types ot ON ot.id = p.object_type_id
           LEFT JOIN shared_properties sp ON sp.id = p.shared_property_id
          WHERE ot.workspace_id = :wid
-           -- `type_ids` narrows it to the types a caller will ask about (§830).
-           AND (CAST(:tids AS uuid[]) IS NULL OR ot.id = ANY(CAST(:tids AS uuid[])))
          ORDER BY p.object_type_id, p.sort_order, p.api_name
         """,
-        {"wid": str(workspace_id), "tids": type_ids},
+        {"wid": str(workspace_id)},
     )
     out: dict[str, list[dict[str, Any]]] = {}
     for row in rows:

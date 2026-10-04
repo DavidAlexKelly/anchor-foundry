@@ -293,10 +293,10 @@ async def _workspace_property_types(
 ) -> dict[str, dict[str, str]]:
     """`{object_type_id: {api_name: data_type}}` for a whole workspace (§221).
 
-    **One query, not one per object type**, which is why
-    `list_properties_for_workspace` exists at all: a document can hold sets
-    over any number of types, and the per-type version made a workspace with
-    226 of them do 226 round trips.
+    **One query, not one per object type**: a document can hold sets over any
+    number of types, and the per-type version made a workspace with 226 of
+    them do 226 round trips. Its own query since §831, which reads the two
+    columns this needs rather than every property's whole description.
 
     Passed on **both** the write and the read path, unlike `actions`. An action
     deleted after an app was saved must not stop the app opening, because the
@@ -306,17 +306,8 @@ async def _workspace_property_types(
     be showing a set narrowed by a filter that silently did nothing, which is
     decision 0002's failure exactly.
     """
-    return {
-        str(type_id): {
-            str(row["api_name"]): str(row["data_type"])
-            for row in rows
-            if row.get("api_name") and row.get("data_type")
-        }
-        for type_id, rows in (
-            await ontology_service.list_properties_for_workspace(
-                conn, workspace_id, type_ids=type_ids)
-        ).items()
-    }
+    return await ontology_service.property_types_for_workspace(
+        conn, workspace_id, type_ids=type_ids)
 
 
 @router.get("", response_model=list[CanvasAppOut])
