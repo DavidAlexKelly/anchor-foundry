@@ -14813,11 +14813,6 @@ export function CanvasSeriesAnalysis({
   const dataSetDefinition = dataDraft && dataSets.length ? resolvedVariables[dataDraft.source] : undefined;
   const dataTypeId = !dataDraft?.source ? null : dataSets.length
     ? (dataSetDefinition as { object_type_id?: string } | undefined)?.object_type_id ?? null : dataDraft.source;
-  const dataTypes = useQuery({
-    queryKey: ["canvas-series-analysis-add-types"],
-    queryFn: () => objApi.listTypes(workspaceId, null, { limit: 200 }),
-    enabled: !!dataDraft && dataSets.length === 0,
-  });
   const dataType = useQuery({
     queryKey: ["object-type", dataTypeId],
     queryFn: () => objApi.getType(workspaceId, dataTypeId!),
@@ -15410,13 +15405,19 @@ export function CanvasSeriesAnalysis({
           )}
           {dataDraft && (
             <div className="row-actions" data-testid="series-add-data" style={{ marginTop: 6, flexWrap: "wrap", gap: 4 }}>
-              <select aria-label="Data source" value={dataDraft.source}
-                      onChange={(e) => setDataDraft({ ...dataDraft, source: e.target.value, object: "", property: "" })}>
-                {dataSets.length === 0 && <option value="">Object type…</option>}
-                {dataSets.length
-                  ? dataSets.map((id) => <option key={id} value={id}>{declaredVariables[id]?.label ?? id}</option>)
-                  : (dataTypes.data?.items ?? []).map((t) => <option key={t.id} value={t.id}>{t.display_name}</option>)}
-              </select>
+              {dataSets.length ? (
+                <select aria-label="Data source" value={dataDraft.source}
+                        onChange={(e) => setDataDraft({ ...dataDraft, source: e.target.value, object: "", property: "" })}>
+                  {dataSets.map((id) => <option key={id} value={id}>{declaredVariables[id]?.label ?? id}</option>)}
+                </select>
+              ) : (
+                // **The ontology, searched, not its first 200 types (§893).**
+                // A plain list of one page offered a reader of a larger
+                // workspace none of the rest, and said nothing.
+                <TypePicker workspaceId={workspaceId} label="Data source" placeholder="Object type…"
+                            testId="series-data-source" value={dataDraft.source}
+                            onChange={(id) => setDataDraft({ ...dataDraft, source: id, object: "", property: "" })} />
+              )}
               <input aria-label="Find an object" placeholder="Find an object" value={dataDraft.search}
                      onChange={(e) => setDataDraft({ ...dataDraft, search: e.target.value })} />
               <select aria-label="Data object" value={dataDraft.object} disabled={!dataTypeId}
