@@ -122,3 +122,40 @@ def test_finished_runs_are_forgotten_once_old_and_failures_kept_longer(
     # Past a week, the failure goes too.
     assert _prune(instance, now + timedelta(days=8)) == 1
     assert instance.get_run_by_id(bad) is None
+
+
+def _run_of(instance: DagsterInstance, job_name: str, status) -> None:
+    import uuid as _uuid
+
+    from dagster._core.storage.dagster_run import DagsterRun
+
+    instance.add_run(DagsterRun(job_name=job_name, run_id=str(_uuid.uuid4()), status=status))
+
+
+def test_a_poll_waits_for_its_own_last_run(instance: DagsterInstance, monkeypatch) -> None:
+    """§888: a poll that outlasted its minute had a second pass start beside
+    it, and a third - each a process with its own DuckDB, on a 2 GB task."""
+    from dagster import DagsterRunStatus, build_schedule_context
+
+    monkeypatch.setenv("WORKER_DATABASE_URL", "postgresql://unused@localhost/unused")
+    from anchor_worker.definitions import defs, one_at_a_time
+
+    assert all(s._should_execute is not None for s in defs.schedules)
+    may = one_at_a_time("scheduled_model_runs")
+    context = build_schedule_context(instance=instance)
+
+    assert may(context)
+    _run_of(instance, "scheduled_model_runs", DagsterRunStatus.SUCCESS)
+    _run_of(instance, "scheduled_test_runs", DagsterRunStatus.STARTED)  # another job's
+    assert may(context)
+    # (QUEUED counts too; a queued run cannot be recorded without a code
+    # location, so NOT_STARTED and STARTED stand for it here.)
+    for status in (DagsterRunStatus.NOT_STARTED, DagsterRunStatus.STARTED):
+        _run_of(instance, "scheduled_model_runs", status)
+        assert not may(context), status
+
+
+def test_the_worker_runs_at_most_four_at_once() -> None:
+    settings = yaml.safe_load(open(DAGSTER_YAML))
+    assert settings["run_coordinator"]["class"] == "QueuedRunCoordinator"
+    assert settings["run_coordinator"]["config"]["max_concurrent_runs"] == 4
