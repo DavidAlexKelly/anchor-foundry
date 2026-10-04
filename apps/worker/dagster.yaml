@@ -1,0 +1,26 @@
+# The worker's Dagster instance (§883), copied to $DAGSTER_HOME by the
+# Dockerfile. Its storage is SQLite on the task's own disk, which a deploy
+# replaces; everything the platform needs to keep is in Postgres.
+telemetry:
+  enabled: false
+# One event log for every run, rather than Dagster's default of a file per
+# run: 35 KB a run instead of 150, and a deleted run's pages are reused, so
+# `jobs/dagster_runs.py`'s pruning keeps it at about a day's size.
+event_log_storage:
+  module: dagster._core.storage.event_log
+  class: ConsolidatedSqliteEventLogStorage
+  config:
+    base_dir: /opt/dagster/home/history/
+# An op's output goes to the container's stdout, and so to CloudWatch with
+# the rest of the worker's lines, rather than to files under $DAGSTER_HOME
+# that nothing reads and nothing removes.
+compute_logs:
+  module: dagster._core.storage.noop_compute_log_manager
+  class: NoOpComputeLogManager
+# Schedule ticks: thousands a day.
+retention:
+  schedule:
+    purge_after_days:
+      skipped: 1
+      success: 1
+      failure: 7

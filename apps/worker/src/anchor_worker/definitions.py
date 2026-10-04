@@ -5,11 +5,12 @@ from __future__ import annotations
 import os
 from urllib.parse import quote
 
-from dagster import Definitions, ScheduleDefinition
+from dagster import DefaultScheduleStatus, Definitions, ScheduleDefinition
 
 from .jobs.cleanup import workspace_cleanup
 from .jobs.code_preview_runs import scheduled_preview_runs
 from .jobs.code_test_runs import scheduled_test_runs
+from .jobs.dagster_runs import dagster_run_pruning
 from .jobs.export_schedules import scheduled_exports
 from .jobs.instance_syncs import scheduled_instance_syncs
 from .jobs.listener_archives import scheduled_listener_archives
@@ -35,8 +36,17 @@ def _resolve_database_url() -> str:
     name = os.environ.get("DATABASE_NAME", "platform")
     return f"postgresql://{username}:{quote(password, safe='')}@{host}:{port}/{name}?sslmode=require"
 
+#: **Every schedule starts running (§883).** Dagster's default is stopped,
+#: until somebody turns a schedule on in its web UI. That UI was never
+#: reachable on a deployed stack, and whatever it had turned on lived on the
+#: task's disk, which a deploy replaces. So no deployed worker ran a scheduled
+#: sync, model run, export, test or preview run, listener archive or cleanup.
+#: The browser suite drives the ops directly, so nothing saw it.
+RUNNING = DefaultScheduleStatus.RUNNING
+
 defs = Definitions(
     jobs=[
+        dagster_run_pruning,
         workspace_cleanup,
         scheduled_model_runs,
         scheduled_connection_syncs,
@@ -48,27 +58,38 @@ defs = Definitions(
     ],
     schedules=[
         ScheduleDefinition(
+            default_status=RUNNING,
+            job=dagster_run_pruning,
+            cron_schedule="40 * * * *",  # hourly: see jobs/dagster_runs.py
+            name="prune_dagster_runs",
+        ),
+        ScheduleDefinition(
+            default_status=RUNNING,
             job=workspace_cleanup,
             cron_schedule="15 3 * * *",  # nightly, off-peak
             name="nightly_workspace_cleanup",
         ),
         ScheduleDefinition(
+            default_status=RUNNING,
             job=scheduled_model_runs,
             cron_schedule="* * * * *",  # every minute: queued python runs and
             # cron-scheduled models should start promptly, not sit for long
             name="poll_model_runs",
         ),
         ScheduleDefinition(
+            default_status=RUNNING,
             job=scheduled_connection_syncs,
             cron_schedule="*/5 * * * *",  # every 5 minutes - syncs are heavier
             name="poll_scheduled_syncs",
         ),
         ScheduleDefinition(
+            default_status=RUNNING,
             job=scheduled_instance_syncs,
             cron_schedule="*/5 * * * *",  # every 5 minutes, same cadence as connection syncs
             name="poll_instance_syncs",
         ),
         ScheduleDefinition(
+            default_status=RUNNING,
             job=scheduled_exports,
             # Every 5 minutes, the same cadence as syncs and for the same
             # reason: this is the *poll*, not the schedule. An export's own
@@ -79,6 +100,7 @@ defs = Definitions(
             name="poll_scheduled_exports",
         ),
         ScheduleDefinition(
+            default_status=RUNNING,
             job=scheduled_test_runs,
             # Every minute, the same cadence as queued model runs and for the
             # same reason: somebody is watching this one. A test run is asked
@@ -89,6 +111,7 @@ defs = Definitions(
             name="poll_test_runs",
         ),
         ScheduleDefinition(
+            default_status=RUNNING,
             job=scheduled_listener_archives,
             # p.264: "Every few minutes, the listener event stream will
             # archive into a backing dataset" (§519).
@@ -96,6 +119,7 @@ defs = Definitions(
             name="archive_listener_events",
         ),
         ScheduleDefinition(
+            default_status=RUNNING,
             job=scheduled_preview_runs,
             # Every minute, for `poll_test_runs`' reason exactly: a preview is
             # asked for by somebody who has just pressed a button and is
