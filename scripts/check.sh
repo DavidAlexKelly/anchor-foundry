@@ -133,12 +133,12 @@ run_unit()  { ( cd "$ROOT/apps/web" && npm test --silent ); }
 # run. It prints on success too, which is the point: the report that tells you
 # a test is drifting towards a timeout is the green one, not the red one.
 #
-# **E2E_SHARD=i/n runs one shard of the suite** (§696): the files dealt
-# round-robin in name order, so shard i of n takes every n-th file from the
-# i-th. CI runs four on four runners, each with a stack of its own. Unset, it
+# **E2E_SHARD=i/n runs one shard of the suite** (§696): the files dealt out
+# so each shard holds as many tests as the others (§863; below). CI runs
+# eight on eight runners, each with a stack of its own. Unset, it
 # is the whole suite, as it always was. A shard that is not `i/n` with
 # 0 <= i < n is refused rather than read as "no files", which pytest would take
-# as every file and report as the whole suite passing four times.
+# as every file and report as the whole suite passing once per shard.
 e2e_files() {
   [ -z "${E2E_SHARD:-}" ] && return 0
   local i="${E2E_SHARD%/*}" n="${E2E_SHARD#*/}"
@@ -146,7 +146,17 @@ e2e_files() {
     echo "E2E_SHARD must be i/n with 0 <= i < n, not '$E2E_SHARD'" >&2
     return 1
   fi
-  ls test_*.py | LC_ALL=C sort | awk -v i="$i" -v n="$n" '(NR - 1) % n == i'
+  # **Dealt by weight, not by name** (§863). Round-robin in name order gave
+  # one shard of eight 426 tests while the rest had 240-330, and the slowest
+  # shard is how long every pull request waits. Heaviest file first, each to
+  # the lightest shard so far, by its count of tests: the same answer on every
+  # runner, because the sort and the ties are fixed, and within a test of even.
+  local f
+  for f in test_*.py; do
+    printf '%s %s\n' "$(grep -c 'def test_' "$f")" "$f"
+  done | LC_ALL=C sort -k1,1nr -k2,2 | awk -v i="$i" -v n="$n" '
+    { s = 0; for (k = 1; k < n; k++) if (load[k] < load[s]) s = k
+      load[s] += $1; if (s == i) print $2 }'
 }
 run_e2e() {
   ( cd "$ROOT/e2e" && files="$(e2e_files)" \
