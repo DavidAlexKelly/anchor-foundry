@@ -2644,6 +2644,12 @@ export const actions = {
     request<import("./types").ActionType[]>(
       `/workspaces/${wid}/action-types${objectTypeId ? `?object_type_id=${objectTypeId}` : ""}`,
     ),
+  /** Every action as a picker offers it, without its definition (§835).
+   * Cached under `["action-types", wid, "summaries"]`: beneath the full
+   * listing's key, so every invalidation of that reaches this too, and not
+   * equal to it, so neither screen is handed the other's shape. */
+  summaries: (wid: string) =>
+    request<import("./types").ActionTypeSummary[]>(`/workspaces/${wid}/action-type-summaries`),
   createType: (wid: string, input: ActionTypeCreateInput) =>
     request<import("./types").ActionType>(`/workspaces/${wid}/action-types`, {
       method: "POST",

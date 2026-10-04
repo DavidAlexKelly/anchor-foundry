@@ -1025,8 +1025,9 @@ export function EditObjectTypeDialog({
     enabled: !!onOpenRelated,
   });
   const workspaceActions = useQuery({
-    queryKey: ["action-types", workspaceId],
-    queryFn: () => actionApi.listTypes(workspaceId),
+    // Summaries (§835): a related link needs an action's name and subject.
+    queryKey: ["action-types", workspaceId, "summaries"],
+    queryFn: () => actionApi.summaries(workspaceId),
     enabled: !!onOpenRelated,
   });
   const implementations = useQuery({

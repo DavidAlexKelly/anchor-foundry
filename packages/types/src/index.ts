@@ -3472,6 +3472,17 @@ export interface ActionCriterion {
   sort_order: number;
 }
 
+/** An action as a picker offers it (§835; `/action-type-summaries`):
+ * `ActionType`'s identity and subject, and the properties it writes, without
+ * its definition. */
+export type ActionTypeSummary = Pick<
+  ActionType,
+  "id" | "object_type_id" | "subject_name" | "api_name" | "display_name" | "editable_properties"
+> & {
+  interface_id: string | null;
+  status: string;
+};
+
 export interface ActionType {
   id: string;
   /** **Null on an interface action** (`action-types` p.59; db 0101, §451).

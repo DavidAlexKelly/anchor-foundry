@@ -1507,9 +1507,12 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // the panel because the panel is given what the layout and the workspace
   // contain and does not reach out for either - the same reason `triggerNodes`
   // and `pages` arrive as props.
+  // The summaries (§835): a label and the properties each action writes is
+  // everything the panel offers, and the full listing carried every
+  // definition in the workspace to draw them.
   const actionTypes = useQuery({
-    queryKey: ["action-types", workspaceId],
-    queryFn: () => actionApi.listTypes(workspaceId),
+    queryKey: ["action-types", workspaceId, "summaries"],
+    queryFn: () => actionApi.summaries(workspaceId),
   });
   const actionCandidates: ActionCandidate[] = (actionTypes.data ?? []).map((a) => ({
     id: a.id,
