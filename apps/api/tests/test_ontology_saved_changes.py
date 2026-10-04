@@ -35,6 +35,7 @@ NOT_CHANGES = {
     "object_type_impact": "reads what a change would do",
     "plan_ontology_import": "reads what a file would do",
     "evaluate_interface_set": "reads objects",
+    "execute_function": "a call reads, as a query does (§768)",
     "derived_values_for_page": "reads values",
     "object_type_freshness": "reads freshness",
     "action_parameter_choices": "reads choices",
@@ -47,7 +48,7 @@ NOT_CHANGES = {
 }
 PREFIXES = ("/object-types", "/link-types", "/action-types", "/interfaces",
             "/shared-properties", "/value-types", "/object-type-groups", "/ontology",
-            "/promotion-requests")
+            "/promotion-requests", "/functions")
 
 
 def test_every_ontology_write_is_recorded(client: TestClient) -> None:
