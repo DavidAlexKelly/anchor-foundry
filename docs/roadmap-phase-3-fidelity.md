@@ -358,6 +358,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.17 — Nothing deleted from the data bucket was ever gone. Done (§852), S.** The data bucket is versioned (§10) and had no lifecycle rule. So every previous version of every file was kept for the life of the stack: a deleted dataset, every replaced file, and every upload abandoned part-way. All of it was billed, and "delete" never removed customer data. A previous version now lasts 30 days and an abandoned upload a week. Thirty is the database's 14 days of backups plus two weeks, because the restore runbook repairs a file deleted since the restore point from its previous version. `stack-check.ts` holds the bucket's window past the backups', and refuses any rule that expires current files.
 
+**E.18 — Overlapping worker passes did the same work twice. Done for model runs (§853), S.** The worker's schedules fire every minute or five, and Dagster launches each tick as its own run. A pass still working when the next tick comes overlaps it, and during a deploy the old and new worker both pass. Each step read its row, decided, and wrote later with nothing held between. So a model run that outlasted a minute could be executed again by the next pass, writing a second output version, and a due cron model could be enqueued twice. A model run, a due cron model and an upstream model are each now claimed under a row lock: `FOR UPDATE SKIP LOCKED`, re-checking the condition that made them due. The pass holding the lock acts; the others skip the row, and find it handled once that pass commits. `test_model_run_claims.py` runs a second pass inside the first one's claim, and runs passes against rows another pass holds.
+
 ## Suggested order
 
 **First, out of band:** E.1.
