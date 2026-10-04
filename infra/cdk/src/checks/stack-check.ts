@@ -18,7 +18,8 @@
  *   3. the API is told the same address, for the addresses it hands out;
  *   4. the control plane can read it, with its scheme, as an output;
  *   5. a listener trusts only the X-Forwarded-For entries nobody else can
- *      write, which depends on whether the load balancer is public (§850).
+ *      write, which depends on whether the load balancer is public (§850);
+ *   6. a deleted file outlives the database backups that may name it (§852).
  *
  * Run: `npx ts-node src/checks/stack-check.ts`
  */
@@ -146,6 +147,27 @@ check("the control plane can read the address, scheme and all", () => {
   const outputs = plain.toJSON().Outputs ?? {};
   if (JSON.stringify(outputs.PlatformUrl?.Value) !== servedAt(plain, "")) {
     throw new Error(`PlatformUrl is ${JSON.stringify(outputs.PlatformUrl?.Value)}`);
+  }
+});
+
+console.log("how long a deleted file can be recovered (§852):");
+
+check("the data bucket keeps a previous version past the database's oldest backup", () => {
+  const db = only(plain, "AWS::RDS::DBInstance").Properties;
+  const buckets = Object.values(plain.findResources("AWS::S3::Bucket"))
+    .filter((b) => b.Properties.VersioningConfiguration?.Status === "Enabled");
+  if (buckets.length !== 1) throw new Error(`expected one versioned bucket, found ${buckets.length}`);
+  const rules: Record<string, any>[] = buckets[0].Properties.LifecycleConfiguration?.Rules ?? [];
+  const kept = rules.map((r) => r.NoncurrentVersionExpiration?.NoncurrentDays).filter((d) => d !== undefined);
+  if (kept.length !== 1) throw new Error(`previous versions expire under ${kept.length} rules`);
+  if (kept[0] < db.BackupRetentionPeriod + 7) {
+    throw new Error(`previous versions last ${kept[0]} days; backups ${db.BackupRetentionPeriod}`);
+  }
+  if (!rules.some((r) => r.AbortIncompleteMultipartUpload?.DaysAfterInitiation)) {
+    throw new Error("abandoned uploads are never cleared");
+  }
+  if (rules.some((r) => r.ExpirationInDays || r.ExpirationDate)) {
+    throw new Error("a rule expires current objects: that is deleting customer data");
   }
 });
 

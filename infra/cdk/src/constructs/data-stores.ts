@@ -8,6 +8,12 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Construct } from "constructs";
 
+/** The database's automated backups (§10). */
+export const BACKUP_DAYS = 14;
+/** How long the data bucket keeps a deleted or replaced file (§852): the
+ * backup window, plus two weeks to notice and carry out a restore. */
+export const NONCURRENT_VERSION_DAYS = 30;
+
 export interface DataStoresProps {
   readonly vpc: ec2.IVpc;
   readonly orgSlug: string;
@@ -76,6 +82,20 @@ export class DataStoresConstruct extends Construct {
       versioned: true, // §10: versioning on
       serverAccessLogsBucket: this.accessLogBucket, // §10: access logging
       serverAccessLogsPrefix: "s3-data/",
+      // **How long a deleted or replaced file can still be recovered (§852).**
+      // Versioning with no rule kept every previous version forever: a
+      // deleted dataset was billed, and held, for the life of the stack, and
+      // "delete" never meant gone. A previous version now lasts
+      // NONCURRENT_VERSION_DAYS, longer than the database's backups, because
+      // the restore runbook (docs/deploying.md) repairs a file deleted since
+      // the restore point from its previous version - a database restored to
+      // its oldest backup must still find those. stack-check.ts holds the two
+      // together. An upload abandoned part-way is cleared after a week.
+      lifecycleRules: [{
+        noncurrentVersionExpiration: Duration.days(NONCURRENT_VERSION_DAYS),
+        abortIncompleteMultipartUploadAfter: Duration.days(7),
+        expiredObjectDeleteMarker: true,
+      }],
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
@@ -94,7 +114,7 @@ export class DataStoresConstruct extends Construct {
       storageEncryptionKey: this.dataKey,
       publiclyAccessible: false, // §10
       deletionProtection: props.deletionProtection ?? true, // §10
-      backupRetention: Duration.days(14), // §10: automated backups
+      backupRetention: Duration.days(BACKUP_DAYS), // §10: automated backups
       credentials: rds.Credentials.fromGeneratedSecret("platform"),
       databaseName: "platform",
       securityGroups: [dbSg],

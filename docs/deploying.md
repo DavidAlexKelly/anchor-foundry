@@ -271,14 +271,16 @@ only when they agree again.
 | Store | Backed up by | Restored by |
 |---|---|---|
 | Postgres (RDS) | Automated backups, 14 days (`data-stores.ts`) | Point-in-time restore to a new instance |
-| Data bucket (S3) | Versioning on every object | Nothing, usually - see below |
+| Data bucket (S3) | Versioning on every object; a deleted or replaced file's previous version is kept 30 days (§852) | Nothing, usually - see below |
 | OpenSearch | Not backed up: a projection of the datasets (decision 0008) | Re-syncing the object type sources |
 
 **Why the bucket usually needs nothing.** A dataset version is written to its
 own key (`.../v{n}/data.parquet`) and never over another, so a database
 restored to an earlier point names files the bucket still holds. The exception
 is a file deleted since; the bucket's previous version of that key is the
-repair.
+repair. Previous versions last 30 days, so a restore to the oldest backup (14
+days) leaves two weeks to repair from them. Past that, a deleted file is gone:
+that is what deleting it means.
 
 1. Restore the RDS instance to the chosen point in time, as a new instance.
 2. Point the stack's `DATABASE_HOST` at it and redeploy the API and worker.
