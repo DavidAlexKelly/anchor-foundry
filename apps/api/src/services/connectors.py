@@ -1355,6 +1355,13 @@ class S3Connector:
             egress.check_current(
                 parsed.hostname or "", egress.port_for(parsed.scheme, parsed.port)
             )
+            # And never the metadata addresses (§880). boto3 makes its own
+            # connections, so this is the check `safe_http` makes at connect
+            # time, made here instead, when the client is built.
+            try:
+                safe_http.check_host(parsed.hostname or "")
+            except safe_http.RefusedDestination as exc:
+                raise ConnectorConfigError(f"endpoint_url: {exc}") from exc
             kwargs["endpoint_url"] = cfg.endpoint_url
         if cfg.oidc_role_arn:
             kwargs.update(_web_identity_credentials(cfg, secret, kwargs))
