@@ -57,6 +57,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
+from ..lib import safe_http
 from . import egress
 
 
@@ -1910,7 +1911,11 @@ class RestConnector:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=_REST_TIMEOUT_S) as response:
+            with safe_http.open_url(
+                request, timeout=_REST_TIMEOUT_S,
+                allow_insecure_http=bool(config.get("allow_insecure_http", False)),
+                check_destination=egress.check_current,
+            ) as response:
                 payload = json.loads(response.read().decode("utf-8", "replace"))
         except urllib.error.HTTPError as exc:
             # Deliberately not echoing the body: a token endpoint's error can
@@ -1944,7 +1949,11 @@ class RestConnector:
         headers = {"Accept": "application/json", **self._auth_headers(config, secret)}
         request = urllib.request.Request(url, headers=headers, method="GET")
         try:
-            with urllib.request.urlopen(request, timeout=_REST_TIMEOUT_S) as response:
+            with safe_http.open_url(
+                request, timeout=_REST_TIMEOUT_S,
+                allow_insecure_http=bool(config.get("allow_insecure_http", False)),
+                check_destination=egress.check_current,
+            ) as response:
                 body = response.read()
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):

@@ -34,6 +34,7 @@ from typing import Any, Callable
 
 import anyio
 
+from ..lib import safe_http
 from . import egress
 from . import webhooks as webhooks_service
 from .connectors import RestConnector, _check_url, _join_url
@@ -273,8 +274,10 @@ def _call(
 
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(
-            request, timeout=max(0.001, deadline - time.monotonic())
+        with safe_http.open_url(
+            request, timeout=max(0.001, deadline - time.monotonic()),
+            allow_insecure_http=bool(config.get("allow_insecure_http", False)),
+            check_destination=egress.check_current,
         ) as response:
             status = int(response.status)
             raw = response.read(MAX_RESPONSE_BYTES + 1)

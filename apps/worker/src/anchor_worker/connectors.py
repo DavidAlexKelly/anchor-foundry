@@ -19,7 +19,7 @@ import os
 import re
 import urllib.parse
 
-from . import egress
+from . import egress, safe_http
 from dataclasses import dataclass
 
 
@@ -824,7 +824,11 @@ class RestConnector:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=_REST_TIMEOUT_S) as response:
+            with safe_http.open_url(
+                request, timeout=_REST_TIMEOUT_S,
+                allow_insecure_http=bool(config.get("allow_insecure_http", False)),
+                check_destination=egress.check_current,
+            ) as response:
                 payload = json.loads(response.read().decode("utf-8", "replace"))
         except urllib.error.HTTPError as exc:
             # Never echo the body - a token endpoint can quote back the secret.
@@ -858,7 +862,11 @@ class RestConnector:
         headers = {"Accept": "application/json", **self._auth_headers(config, secret)}
         request = urllib.request.Request(url, headers=headers, method="GET")
         try:
-            with urllib.request.urlopen(request, timeout=_REST_TIMEOUT_S) as response:
+            with safe_http.open_url(
+                request, timeout=_REST_TIMEOUT_S,
+                allow_insecure_http=bool(config.get("allow_insecure_http", False)),
+                check_destination=egress.check_current,
+            ) as response:
                 body = response.read()
         except urllib.error.HTTPError as exc:
             raise ConnectorError(f"the API returned HTTP {exc.code}") from exc
