@@ -69,6 +69,18 @@ class InstanceIndex:
             use_ssl=secure, verify_certs=secure,
         )
 
+    def workspace_indices(self) -> list[str]:
+        """Every index on the domain named under a workspace's search prefix
+        (§876). `_cat` rather than `_mapping`, which would bring back every
+        mapping on the domain to read their names."""
+        rows = self._client.cat.indices(index="ws-*", params={"format": "json", "h": "index"})
+        return sorted(str(row["index"]) for row in rows or [])
+
+    def drop_index(self, index: str) -> None:
+        # One name at a time, never a pattern: a domain that requires
+        # destructive actions to name their indices refuses a wildcard.
+        self._client.indices.delete(index=index, ignore_unavailable=True)
+
     def close(self) -> None:
         self._client.close()
 

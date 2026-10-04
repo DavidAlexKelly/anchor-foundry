@@ -666,6 +666,12 @@ class Handler(BaseHTTPRequestHandler):
                 "tagline": "The OpenSearch Project",
             })
         parts = path.strip("/").split("/")
+        if parts[:2] == ["_cat", "indices"]:
+            # `cat.indices` as JSON, names only: what the worker's cleanup
+            # lists a domain's workspace indices by (§876). A pattern matching
+            # nothing is an empty list, as on a cluster.
+            names = _matching_indices(parts[2]) if len(parts) > 2 else sorted(INDICES)
+            return self._send(200, [{"index": name} for name in names])
         if len(parts) == 3 and parts[1] == "_doc":
             index, doc_id = parts[0], parts[2]
             source = INDICES.get(index, {}).get(doc_id)
