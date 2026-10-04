@@ -17,7 +17,7 @@ import datetime as dt
 import decimal
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import duckdb
@@ -159,6 +159,83 @@ class ParseOptions:
     #: p.14's "row number". Not in p.25-27's table, which is the *reader's*
     #: options; p.14 offers it beside the other two added columns.
     add_row_number: bool = False
+    #: p.26 `dateFormat`: "a map that maps column names to JodaTime
+    #: DateTimeFormat patterns" (§765). Pairs rather than a dict so the options
+    #: stay hashable; see `date_columns`.
+    date_formats: tuple[tuple[str, str], ...] = ()
+
+
+#: JodaTime's pattern letters (p.26 `dateFormat`) that DuckDB's `strptime` can
+#: read, and how it spells each, by how many times the letter repeats. A count
+#: not listed is refused rather than guessed.
+_JODA: dict[str, dict[int, str]] = {
+    "y": {1: "%Y", 2: "%y", 3: "%Y", 4: "%Y"},
+    "Y": {1: "%Y", 2: "%y", 3: "%Y", 4: "%Y"},
+    "M": {1: "%m", 2: "%m", 3: "%b", 4: "%B"},
+    "d": {1: "%d", 2: "%d"},
+    "D": {1: "%j", 2: "%j", 3: "%j"},
+    "E": {1: "%a", 2: "%a", 3: "%a", 4: "%A"},
+    "H": {1: "%H", 2: "%H"},
+    "h": {1: "%I", 2: "%I"},
+    "m": {1: "%M", 2: "%M"},
+    "s": {1: "%S", 2: "%S"},
+    "S": {3: "%g", 6: "%f"},
+    "a": {1: "%p"},
+    "Z": {1: "%z", 2: "%z"},
+}
+#: The letters that make a value a moment rather than a day.
+_JODA_TIME = frozenset("HhmsSaZ")
+#: Joda reads more of these letters than the longest form as the longest form
+#: (`yyyyy` is a year, `MMMMM` a month's name); the rest must be exact.
+_JODA_CLAMPED = frozenset("yYMDE")
+
+
+def joda_to_strptime(pattern: str) -> tuple[str, bool]:
+    """A JodaTime pattern as a `strptime` format, and whether it has a time.
+
+    > "dateFormat: Format strings for date parsing in certain columns. A map
+    > that maps column names to JodaTime DateTimeFormat patterns" (p.26)
+
+    Joda's syntax is the one p.26 names, so it is the one taken, and
+    translated here: a letter repeated is one field, quoted text is literal
+    (`''` is a quote), and anything else is literal. **A letter this cannot
+    translate is refused by name**, never passed through: an unknown letter
+    read as literal text would match nothing and drop every row, or fail on
+    every row, for a reason nobody could see.
+    """
+    if not pattern.strip():
+        raise DatasetEngineError("a date format needs a pattern, such as dd/MM/yyyy")
+    out: list[str] = []
+    has_time = False
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+        if char == "'":
+            end = pattern.find("'", i + 1)
+            if end == -1:
+                raise DatasetEngineError(f"{pattern!r} opens a quote it does not close")
+            literal = pattern[i + 1:end] or "'"
+            out.append(literal.replace("%", "%%"))
+            i = end + 1
+            continue
+        if not char.isalpha():
+            out.append("%%" if char == "%" else char)
+            i += 1
+            continue
+        run = 1
+        while i + run < len(pattern) and pattern[i + run] == char:
+            run += 1
+        spellings = _JODA.get(char)
+        if spellings is None:
+            raise DatasetEngineError(
+                f"{char!r} in {pattern!r} is not a pattern letter this platform reads")
+        spelled = spellings.get(min(run, max(spellings)) if char in _JODA_CLAMPED else run)
+        if spelled is None:
+            raise DatasetEngineError(f"{char * run!r} in {pattern!r} is not a field it can read")
+        out.append(spelled)
+        has_time = has_time or char in _JODA_TIME
+        i += run
+    return "".join(out), has_time
 
 
 def _sql_string(value: str) -> str:
@@ -190,6 +267,13 @@ def csv_reader_expr(src_path: str, options: ParseOptions) -> str:
         args.append("ignore_errors=true")
     if options.add_file_path:
         args.append("filename=true")
+    if options.date_formats:
+        # Read as text, so `strptime` is what decides what the value is:
+        # DuckDB's sniffer reads 03/04/2026 as a date its own way, or not at
+        # all, and p.26's pattern is the answer to which.
+        typed = ", ".join(f"{_sql_string(column)}: 'VARCHAR'"
+                          for column, _pattern in options.date_formats)
+        args.append(f"types={{{typed}}}")
     return f"read_csv({', '.join(args)})"
 
 
@@ -233,6 +317,7 @@ def refuse_for_file(extension: str, options: ParseOptions) -> None:
         ("skipped lines", options.skip_lines > 0),
         ("null markers", bool(options.null_values)),
         ("dropping rows that do not fit", options.drop_bad_rows),
+        ("date formats", bool(options.date_formats)),
     ) if on]
     if chosen:
         raise DatasetEngineError(
@@ -292,6 +377,8 @@ def parse_to_parquet(
     try:
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         try:
+            if options.date_formats:
+                reader = _with_dates(con, src_path, reader, options)
             con.execute(f"CREATE VIEW src AS SELECT {', '.join(selected)} FROM {reader} src")
             con.execute(f"COPY src TO '{dest_path}' (FORMAT parquet)")
         except duckdb.Error as exc:
@@ -304,6 +391,45 @@ def parse_to_parquet(
         return schema, row_count
     finally:
         con.close()
+
+
+def _with_dates(
+    con: "duckdb.DuckDBPyConnection", src_path: str, reader: str, options: ParseOptions
+) -> str:
+    """The read with p.26's `dateFormat` applied: each named column parsed by
+    its pattern, into a date, or a timestamp when the pattern has a time.
+
+    A column the file does not have is refused by name, as is a value that
+    does not match - unless rows that do not fit are being dropped, which is
+    what `drop_bad_rows` already means for a value of the wrong type (p.26's
+    `parseErrorBehavior`).
+    """
+    plain = csv_reader_expr(src_path, replace(options, date_formats=()))
+    present = [row[0] for row in con.execute(f"DESCRIBE SELECT * FROM {plain}").fetchall()]
+    replaced: list[str] = []
+    fits: list[str] = []
+    for column, pattern in options.date_formats:
+        if column not in present:
+            raise DatasetEngineError(
+                f"date format for {column!r}: the file has no such column "
+                f"(it has {', '.join(present)})")
+        spelled, has_time = joda_to_strptime(pattern)
+        quoted = _quote_column(column)
+        parsed = f"try_strptime({quoted}, {_sql_string(spelled)})"
+        # A CASE rather than `IS NULL OR …`: DuckDB 1.1.1 plans that OR as
+        # two scans, and the rows come back out of the file's order, which
+        # is the order p.14's row number counts in.
+        fit = f"(CASE WHEN {quoted} IS NULL THEN true ELSE {parsed} IS NOT NULL END)"
+        if not options.drop_bad_rows:
+            bad = con.execute(
+                f"SELECT {quoted} FROM {reader} WHERE NOT {fit} LIMIT 1").fetchone()
+            if bad is not None:
+                raise DatasetEngineError(
+                    f"{column}: {bad[0]!r} does not match {pattern!r}")
+        replaced.append(f"{parsed}{'' if has_time else '::DATE'} AS {quoted}")
+        fits.append(fit)
+    return (f"(SELECT * REPLACE ({', '.join(replaced)}) FROM {reader} "
+            f"WHERE {' AND '.join(fits)})")
 
 
 def ingest_to_parquet(src_path: str, extension: str, dest_path: str) -> tuple[list[ColumnSchema], int]:

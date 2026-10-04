@@ -4,6 +4,8 @@ import {
   DEFAULT_OPTIONS,
   describeOptions,
   parseNullMarkers,
+  parseDateFormats,
+  dateFormatsText,
   whyNotParseable,
   DELIMITED_ONLY,
   isJsonFile,
@@ -168,23 +170,56 @@ describe("the options a dataset is read with now (§746)", () => {
     expect(storedOptions({
       delimiter: "^", quote: null, header: false, skip_lines: 2, null_values: ["NA"],
       drop_bad_rows: true, encoding: "latin-1", add_file_path: true,
-      add_imported_at: false, add_row_number: true,
+      add_imported_at: false, add_row_number: true, date_formats: { when: "dd/MM/yyyy" },
     })).toEqual({
       delimiter: "^", quote: null, header: false, skip_lines: 2, null_values: ["NA"],
       drop_bad_rows: true, encoding: "latin-1", add_file_path: true,
-      add_imported_at: false, add_row_number: true,
+      add_imported_at: false, add_row_number: true, date_formats: { when: "dd/MM/yyyy" },
     });
   });
 
   it("ignores a key it does not know and a value of the wrong type", () => {
     const read = storedOptions({ escape: "\\", header: "no", skip_lines: "2", delimiter: 5,
-      null_values: ["NA", 3] });
-    expect(read).toEqual({ ...DEFAULT_OPTIONS, null_values: ["NA"] });
+      null_values: ["NA", 3], date_formats: { when: "dd/MM/yyyy", at: 3 } });
+    expect(read).toEqual({ ...DEFAULT_OPTIONS, null_values: ["NA"],
+      date_formats: { when: "dd/MM/yyyy" } });
+    expect(storedOptions({ date_formats: ["when"] }).date_formats).toEqual({});
+    expect(storedOptions({ date_formats: null }).date_formats).toEqual({});
     expect(read).not.toHaveProperty("escape");
   });
 
   it("does not share the defaults' list", () => {
     storedOptions(null).null_values.push("x");
     expect(DEFAULT_OPTIONS.null_values).toEqual([]);
+    storedOptions(null).date_formats.x = "y";
+    expect(DEFAULT_OPTIONS.date_formats).toEqual({});
+  });
+});
+
+describe("date formats, one column: pattern per line (§765, p.26)", () => {
+  it("splits each line on its first colon, since a pattern has its own", () => {
+    expect(parseDateFormats("when: dd/MM/yyyy\n\n  at :dd/MM/yyyy HH:mm  \n")).toEqual({
+      formats: { when: "dd/MM/yyyy", at: "dd/MM/yyyy HH:mm" }, problem: "",
+    });
+  });
+
+  it("names a line that is not one", () => {
+    expect(parseDateFormats("when dd/MM/yyyy").problem).toBe(
+      '"when dd/MM/yyyy" is not column: pattern, e.g. when: dd/MM/yyyy.');
+    expect(parseDateFormats(": dd/MM").problem).toContain("is not column: pattern");
+    expect(parseDateFormats("when:").problem).toContain("is not column: pattern");
+  });
+
+  it("names a column given twice", () => {
+    expect(parseDateFormats("when: dd/MM/yyyy\nwhen: MM/dd/yyyy").problem).toBe(
+      "when has two date formats.");
+  });
+
+  it("is shown as it is typed, and says what it will do", () => {
+    const formats = { when: "dd/MM/yyyy", at: "HH:mm" };
+    expect(dateFormatsText(formats)).toBe("when: dd/MM/yyyy\nat: HH:mm");
+    expect(parseDateFormats(dateFormatsText(formats)).formats).toEqual(formats);
+    expect(describeOptions({ ...DEFAULT_OPTIONS, date_formats: formats })).toEqual([
+      "when read as dates like dd/MM/yyyy", "at read as dates like HH:mm"]);
   });
 });

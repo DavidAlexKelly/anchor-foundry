@@ -26,6 +26,8 @@ export type ParseOptions = {
   add_file_path: boolean;
   add_imported_at: boolean;
   add_row_number: boolean;
+  /** p.26 `dateFormat` (§765): column name to JodaTime pattern. */
+  date_formats: Record<string, string>;
 };
 
 /** The character sets the server will decode from, in its order. */
@@ -48,6 +50,7 @@ export const DEFAULT_OPTIONS: ParseOptions = {
   add_file_path: false,
   add_imported_at: false,
   add_row_number: false,
+  date_formats: {},
 };
 
 /** The options a dataset is read with now (§746; db 0143), over the
@@ -56,7 +59,7 @@ export const DEFAULT_OPTIONS: ParseOptions = {
  *  default's type, so a stored set from an older shape cannot put a value in
  *  a field that would send it back wrong. */
 export function storedOptions(stored: Record<string, unknown> | null | undefined): ParseOptions {
-  const out: ParseOptions = { ...DEFAULT_OPTIONS, null_values: [] };
+  const out: ParseOptions = { ...DEFAULT_OPTIONS, null_values: [], date_formats: {} };
   if (!stored) return out;
   for (const key of Object.keys(DEFAULT_OPTIONS) as (keyof ParseOptions)[]) {
     const value = stored[key];
@@ -65,6 +68,12 @@ export function storedOptions(stored: Record<string, unknown> | null | undefined
       if (typeof value === "string") out[key] = value;
     } else if (key === "null_values") {
       if (Array.isArray(value)) out.null_values = value.filter((v): v is string => typeof v === "string");
+    } else if (key === "date_formats") {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        for (const [column, pattern] of Object.entries(value)) {
+          if (typeof pattern === "string") out.date_formats[column] = pattern;
+        }
+      }
     } else if (typeof value === typeof fallback) {
       (out as unknown as Record<string, unknown>)[key] = value;
     }
@@ -145,7 +154,46 @@ export function describeOptions(options: ParseOptions): string[] {
   if (options.add_file_path) said.push("a file path column added");
   if (options.add_imported_at) said.push("an import time column added");
   if (options.add_row_number) said.push("a row number column added");
+  for (const [column, pattern] of Object.entries(options.date_formats)) {
+    said.push(`${column} read as dates like ${pattern}`);
+  }
   return said;
+}
+
+/**
+ * p.26's `dateFormat` as typed, one `column: pattern` per line (§765), and
+ * the first reason it cannot be sent, or `""`.
+ *
+ * Split on the **first** colon, because a pattern has colons of its own
+ * (`HH:mm`) and a column name rarely does. What a pattern's letters mean is
+ * the server's to say: it translates them, and refuses the ones it cannot
+ * read by name, in the preview.
+ */
+export function parseDateFormats(text: string): {
+  formats: Record<string, string>;
+  problem: string;
+} {
+  const formats: Record<string, string> = {};
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (line === "") continue;
+    const colon = line.indexOf(":");
+    const column = colon === -1 ? "" : line.slice(0, colon).trim();
+    const pattern = colon === -1 ? "" : line.slice(colon + 1).trim();
+    if (!column || !pattern) {
+      return { formats, problem: `"${line}" is not column: pattern, e.g. when: dd/MM/yyyy.` };
+    }
+    if (column in formats) {
+      return { formats, problem: `${column} has two date formats.` };
+    }
+    formats[column] = pattern;
+  }
+  return { formats, problem: "" };
+}
+
+/** The stored formats as the textarea shows them. */
+export function dateFormatsText(formats: Record<string, string>): string {
+  return Object.entries(formats).map(([column, pattern]) => `${column}: ${pattern}`).join("\n");
 }
 
 /**

@@ -29,6 +29,9 @@ from api import Module
 from conftest import WEB_BASE
 from ontology_page import find_type_row, pick_type
 
+#: The listing's page (`ontology.DEFAULT_TYPE_PAGE`).
+TYPE_PAGE = 50
+
 
 @pytest.fixture(scope="module")
 def module(api):
@@ -38,6 +41,16 @@ def module(api):
         rows=[{"id": "A1", "name": "Alpha"}],
         key="id", title="name",
     )
+    # **More than a page of its own** (§874). The workspace this runs in held
+    # hundreds of types when this file was written, because every suite before
+    # it had left some; dealt into a shard that runs it early on a fresh
+    # database, it held a few dozen, the table fitted on one page, and Next was
+    # disabled. The claim is about paging, so the fixture makes the page full.
+    for n in range(TYPE_PAGE + 5):
+        api.call("POST", f"/workspaces/{types.workspace_id}/object-types", {
+            "api_name": f"pad_{types.tag}_{n}",
+            "display_name": f"Pad {types.tag} {n}",
+        })
     return types
 
 

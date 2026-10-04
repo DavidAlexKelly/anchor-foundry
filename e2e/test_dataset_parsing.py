@@ -209,6 +209,35 @@ def test_the_null_markers_box_reaches_the_parse(page, wrongly_parsed) -> None:
     expect(result.locator("tbody tr").nth(1).locator("td").nth(1)).to_have_text("20")
 
 
+def test_date_formats_reach_the_parse_and_are_kept(page, api) -> None:
+    """p.26's `dateFormat` (§765), typed as `column: pattern`. The sniffer
+    reads 03/04/2026 as 3 April; the pattern says it is 4 March. A line that
+    is not a pattern holds the preview back, and a pattern the server cannot
+    read is named by it. Applied, the formats are what the panel reopens on."""
+    fixture = uploaded(api, b"id,when\n1,03/04/2026\n2,04/05/2026\n", "dates.csv")
+    open_preview(page, fixture)
+    page.get_by_test_id("parse-again").click()
+    dates = page.get_by_test_id("parse-dates")
+    dates.fill("when MM/dd/yyyy")
+    expect(page.get_by_test_id("parse-dates-problem")).to_contain_text("is not column: pattern")
+    expect(page.get_by_test_id("parse-preview")).to_be_disabled()
+    dates.fill("when: MM/dd/yyyy ww")
+    page.get_by_test_id("parse-preview").click()
+    expect(page.get_by_test_id("parse-error")).to_contain_text("'w' in")
+    dates.fill("when: MM/dd/yyyy")
+    expect(page.get_by_test_id("parse-summary")).to_contain_text(
+        "when read as dates like MM/dd/yyyy")
+    page.get_by_test_id("parse-preview").click()
+    result = page.get_by_test_id("parse-result")
+    expect(result.locator("tbody tr").first).to_contain_text("2026-03-04")
+    page.get_by_test_id("parse-apply").click()
+    expect(page.get_by_test_id("parse-panel")).to_have_count(0)
+    after = dataset(fixture)
+    assert after["parse_options"]["date_formats"] == {"when": "MM/dd/yyyy"}
+    page.get_by_test_id("parse-again").click()
+    expect(page.get_by_test_id("parse-dates")).to_have_value("when: MM/dd/yyyy")
+
+
 def test_a_dataset_nothing_uploaded_is_not_offered_the_panel(page, api) -> None:
     """`whyNotParseable`'s first case, on screen: a model output has no
     uploaded file, so the control is absent rather than present-and-failing."""
@@ -256,7 +285,7 @@ def test_a_json_file_is_offered_only_what_applies_and_reads_as_json(page, api) -
     open_preview(page, fixture)
     page.get_by_test_id("parse-again").click()
     for absent in ("parse-delimiter", "parse-quote", "parse-skip", "parse-nulls",
-                   "parse-header", "parse-drop_bad_rows"):
+                   "parse-header", "parse-drop_bad_rows", "parse-dates"):
         expect(page.get_by_test_id(absent)).to_have_count(0)
     expect(page.get_by_test_id("parse-encoding")).to_be_visible()
 
