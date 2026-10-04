@@ -135,6 +135,27 @@ def _label(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
+#: Where `main` mounts every router.
+API_PREFIX = "/api"
+
+
+def route_template(scope: Scope) -> str:
+    """The matched route's template, `UNMATCHED` when nothing matched.
+
+    **Prefixed here when the route does not carry the prefix itself** (§837).
+    FastAPI 0.111 copied an included router's routes with the include's prefix
+    in their paths; from 0.12x it includes routers lazily, and the route a
+    request matched knows only its own router's path - `/workspaces/...` where
+    a dashboard has always grouped `/api/workspaces/...`. Every router is
+    included under `API_PREFIX` and the app's own routes spell it out, so the
+    full template is one of the two, on either version.
+    """
+    path = getattr(scope.get("route"), "path", None)
+    if not path:
+        return UNMATCHED
+    return path if path.startswith(API_PREFIX) else API_PREFIX + path
+
+
 class RequestContext:
     """Pure ASGI, so a streamed response streams: Starlette's
     `BaseHTTPMiddleware` buffers, and a dataset download is the one place that
@@ -176,7 +197,7 @@ class RequestContext:
             await self.app(scope, receive, stamped)
         finally:
             elapsed = time.perf_counter() - started
-            route = getattr(scope.get("route"), "path", None) or UNMATCHED
+            route = route_template(scope)
             if scope.get("path") != METRICS_PATH:
                 self.metrics.observe(scope["method"], route, status, elapsed)
             access_log.info("request", extra={"fields": {
@@ -253,7 +274,7 @@ def install(app: Any) -> Metrics:
         error_log.error("unhandled error", exc_info=exc, extra={"fields": {
             "request_id": request_id,
             "method": request.method,
-            "route": getattr(request.scope.get("route"), "path", None) or UNMATCHED,
+            "route": route_template(request.scope),
             "error": type(exc).__name__,
         }})
         return JSONResponse(

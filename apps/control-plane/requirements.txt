@@ -3,10 +3,15 @@
 # orchestration logic don't need this installed - see requirements-dev.txt
 # for the test-only extras.
 boto3==1.34.144
-cryptography==43.0.0
+cryptography==50.0.1
 psycopg[binary]==3.2.4
 # The onboarding HTTP surface (ROADMAP section 7 item 2). Pinned to the same
 # versions apps/api uses - two FastAPI versions in one repo is a debugging
 # session nobody needs.
-fastapi==0.111.1
+fastapi==0.142.2
+starlette==1.7.0
+# `src/api/app.py` takes an `EmailStr`. FastAPI 0.111 brought this in on its
+# own, so it was never listed; 0.142 does not, and the app stopped importing
+# (§837). The version apps/api pins.
+email-validator==2.2.0
 uvicorn[standard]==0.30.3

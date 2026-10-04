@@ -46,8 +46,7 @@ SHARED = (
 NOT_RUN = {
     "control-plane": (
         "needs a second database (CONTROL_PLANE_DATABASE_URL) that neither "
-        "setup.sh nor dev-up.sh provisions, and pins httpx==0.27.0 against "
-        "apps/api's 0.27.2, so it cannot share the one virtualenv either"
+        "setup.sh nor dev-up.sh provisions"
     ),
 }
 
@@ -171,22 +170,22 @@ def test_the_shared_venv_is_possible() -> None:
     )
 
 
-def test_the_shared_venv_is_only_claimed_where_it_holds() -> None:
-    """The absence half of the test above, and the one that keeps it honest.
-
-    `NOT_RUN` says `control-plane` cannot share the virtualenv, and a reason
-    nobody re-checks is a reason that quietly stops being true. If its pins
-    ever come into line, this goes red and somebody gets to delete an
-    exclusion — which is the direction this repo wants the list moving.
+def test_the_control_plane_keeps_the_shared_pins() -> None:
+    """The control plane once could not share the virtualenv: it pinned httpx
+    0.27.0 against apps/api's 0.27.2, and that was half of `NOT_RUN`'s reason.
+    §837 brought its pins into line, so the reason left is the database alone
+    - and this keeps it that way, so the day somebody provisions that database
+    the suite can join `check.sh` with nothing else to untangle.
     """
     shared = {name: v for path in SHARED for name, v in pins(path).items()}
     theirs = pins("apps/control-plane/requirements-dev.txt")
     theirs.update(pins("apps/control-plane/requirements.txt"))
     clashes = {n: (shared[n], v) for n, v in theirs.items() if n in shared and shared[n] != v}
-    assert clashes, (
-        "control-plane no longer clashes with the shared pins, so half of "
-        f"NOT_RUN['control-plane'] is out of date: {NOT_RUN['control-plane']}"
+    assert not clashes, (
+        "apps/control-plane pins these differently from the shared virtualenv: "
+        f"{clashes}"
     )
+    assert "httpx" in theirs and "fastapi" in theirs, "the comparison found nothing to compare"
 
 
 def test_the_check_script_runs_every_suite_or_says_why_not() -> None:

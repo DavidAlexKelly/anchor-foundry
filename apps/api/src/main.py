@@ -206,7 +206,9 @@ def create_app() -> FastAPI:
         # client errors; the message is written to be user-safe.
         return JSONResponse(status_code=422, content={"detail": str(exc)})
 
-    prefix = "/api"
+    # The one prefix every router is included under, which the access log and
+    # the metrics name routes by (`observability.route_template`, §837).
+    prefix = observability.API_PREFIX
     app.include_router(auth_routes.router, prefix=prefix)
     app.include_router(org_routes.router, prefix=prefix)
     app.include_router(workspace_routes.router, prefix=prefix)

@@ -52,18 +52,25 @@ PREFIXES = ("/object-types", "/link-types", "/action-types", "/interfaces",
 
 
 def test_every_ontology_write_is_recorded(client: TestClient) -> None:
-    missing = []
-    for route in client.app.routes:
-        methods = getattr(route, "methods", None) or set()
+    from route_table import api_routes
+
+    missing, seen = [], 0
+    for template, methods, route in api_routes(client.app):
         if not methods & {"POST", "PUT", "PATCH", "DELETE"}:
             continue
         tail = re.sub(r"^/api/workspaces/\{workspace_id\}(/projects/\{project_id\})?", "",
-                      getattr(route, "path", ""))
+                      template)
         if not tail.startswith(PREFIXES) or route.endpoint.__name__ in NOT_CHANGES:
             continue
+        seen += 1
         if "audit.record" not in inspect.getsource(route.endpoint):
             missing.append(f"{sorted(methods)[0]} {tail}")
     assert missing == [], missing
+    # **Not vacuous** (§837): FastAPI 0.142's route table left this walking
+    # nothing and passing. The ontology has 45 writes as of §837; a floor a
+    # little under that fails a walk that finds none without failing a route
+    # retired on purpose.
+    assert seen >= 40, seen
 
 
 def history(client: TestClient, fx: Fixture, **params) -> list[dict]:

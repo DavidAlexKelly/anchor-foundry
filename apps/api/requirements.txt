@@ -11,12 +11,16 @@
 # `macosx_11_0` across cp39-cp313. The failure mode either way is a version
 # list that silently omits the pinned version, which reads as "that release
 # does not exist" rather than "not for this machine".
-fastapi==0.111.1
+fastapi==0.142.2
+# Pinned beside fastapi rather than left to it (§837): the advisories that
+# moved this file were Starlette's, and a range would let a rebuild pick up a
+# version nobody ran the suite against.
+starlette==1.7.0
 uvicorn[standard]==0.30.3
 sqlalchemy==2.0.31
-pydantic==2.8.2
-pydantic-settings==2.3.4
-PyJWT[crypto]==2.9.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+PyJWT[crypto]==2.15.1
 psycopg[binary]==3.2.4
 PyMySQL==1.1.1
 email-validator==2.2.0
@@ -27,7 +31,7 @@ email-validator==2.2.0
 greenlet==3.1.1
 duckdb==1.1.1
 pytz==2024.1
-python-multipart==0.0.9
+python-multipart==0.0.32
 boto3==1.34.144
 croniter==2.0.5
 # The [async] extra pulls aiohttp, which AsyncOpenSearch needs - without it

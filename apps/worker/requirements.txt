@@ -5,8 +5,8 @@
 # Dagster surface is Definitions, ScheduleDefinition, @job, @op,
 # OpExecutionContext and ConfigurableResource, all current in 1.11 - but the
 # next person bumping it should expect that not to hold forever.
-dagster==1.11.16
-dagster-webserver==1.11.16
+dagster==1.13.25
+dagster-webserver==1.13.25
 psycopg[binary]==3.2.4
 PyMySQL==1.1.1
 duckdb==1.1.1
@@ -22,7 +22,7 @@ croniter==2.0.5
 # development run and failed in every deployment with "No module named
 # pytest", which is the exact shape §292 had just finished fixing one floor
 # down. requirements-dev.txt still gets it, through `-r requirements.txt`.
-pytest==8.3.3
+pytest==9.1.1
 # **Runtime since §599.** A scheduled sync or export from a source that
 # authenticates with OpenID Connect signs its token here (`oidc.py`), RS256 by
 # hand; the API has it through PyJWT[crypto], and this image had nothing.
