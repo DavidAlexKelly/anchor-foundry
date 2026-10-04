@@ -171,6 +171,10 @@ def constraint_violation_counts(
     return out
 
 
+#: A write this large refreshes the table's statistics itself (§817).
+ANALYZE_AFTER_ROWS = 10_000
+
+
 async def upsert_instances(
     conn: AsyncConnection,
     *,
@@ -230,6 +234,10 @@ async def upsert_instances(
                 "ts": synced_at,
             },
         )
+    if len(rows) >= ANALYZE_AFTER_ROWS:
+        # The planner's picture of the table, brought up to date now rather
+        # than at autovacuum's next pass (§817, db 0158).
+        await conn.execute(text("SELECT analyze_object_instances()"))
     return len(rows)
 
 
