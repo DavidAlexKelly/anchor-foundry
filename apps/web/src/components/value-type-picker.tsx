@@ -53,7 +53,9 @@ export function ValueTypePicker({
     queryFn: () => objApi.listValueTypes(workspaceId),
   });
   const all = types.data ?? [];
-  const fits = offerableTo(all, dataType);
+  // A deprecated value type stays on offer only as this property's own
+  // current choice (§764).
+  const fits = offerableTo(all, dataType, value.value_type_id ?? null);
   const [chosen, setChosen] = useState(value.value_type_id ?? "");
 
   const inherited =

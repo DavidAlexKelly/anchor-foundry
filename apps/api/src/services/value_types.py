@@ -48,7 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError, NotFoundError
-from . import value_constraints
+from . import ontology_status, value_constraints
 
 _API_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 
@@ -71,7 +71,8 @@ def _out(row: Any, names: dict[str, str] | None = None) -> dict[str, Any]:
 
 _SELECT = """
     SELECT vt.id, vt.api_name, vt.display_name, vt.description,
-           vt.example_value, vt.created_at, vt.updated_at,
+           vt.example_value, vt.status, vt.deprecation,
+           vt.created_at, vt.updated_at,
            v.version_number, v.base_type, v.constraint_json,
            (SELECT count(*) FROM object_type_properties p
              WHERE p.value_type_id = vt.id)
@@ -220,7 +221,7 @@ async def create(
     if base_type not in ontology.PROPERTY_TYPES:
         raise ValueTypeError(f"invalid base type {base_type!r}")
     parsed = value_constraints.parse(constraint_raw, base_type=base_type)
-    await _check_references(conn, workspace_id, parsed)
+    await _check_references(conn, workspace_id, parsed, already=set())
 
     existing = await fetch_one(
         conn,
@@ -251,6 +252,11 @@ async def create(
     return await get_type(conn, workspace_id, UUID(str(row["id"])))
 
 
+#: An argument left out, told apart from one sent as null: a deprecation note
+#: left out is kept, and one sent as null is cleared.
+KEEP: Any = object()
+
+
 async def update_metadata(
     conn: AsyncConnection,
     *,
@@ -259,29 +265,94 @@ async def update_metadata(
     display_name: str,
     description: str,
     example_value: str,
+    status: str | None = None,
+    deprecation: Any = KEEP,
 ) -> dict[str, Any]:
     """p.229's mutable half: "name, description, and apiName can be changed
-    whenever necessary".
+    whenever necessary". And the status (§764), which is not part of a version
+    either: p.229 recommends *deprecating* a value type, which is a statement
+    about the value type rather than a new rule.
 
     `api_name` is not a parameter here, unlike Foundry, for
     `object_types.api_name`'s reason (db 0003): it is the stable machine name a
     consumer holds, and renaming it would break them with no warning that could
     reach them. Recorded as a divergence in `docs/parity/ontology.md`.
+
+    **Omitted means unchanged**, for both: a client written before §764 does
+    not reset a status, or drop a note, by saving a description. A note left
+    out while the value type stays deprecated is kept; moving away from
+    deprecated drops it, as `parse_deprecation` does everywhere (p.254).
     """
-    await get_type(conn, workspace_id, value_type_id)
+    current = await get_type(conn, workspace_id, value_type_id)
+    next_status = ontology_status.check_status(
+        str(status or current["status"]), kind="value_type"
+    )
+    if deprecation is KEEP:
+        deprecation = current["deprecation"] if next_status == "deprecated" else None
+    note = ontology_status.parse_deprecation(deprecation, next_status)
+    await _check_replacement(conn, workspace_id, value_type_id, note)
     await conn.execute(
         text(
             """
             UPDATE value_types
                SET display_name = :name, description = :descr,
-                   example_value = :example
+                   example_value = :example,
+                   status = CAST(:status AS ontology_status),
+                   deprecation = CAST(:depr AS jsonb)
              WHERE id = :vid
             """
         ),
         {"name": display_name, "descr": description,
-         "example": example_value, "vid": str(value_type_id)},
+         "example": example_value, "vid": str(value_type_id),
+         "status": next_status,
+         "depr": json.dumps(note) if note is not None else None},
     )
     return await get_type(conn, workspace_id, value_type_id)
+
+
+async def _check_replacement(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    value_type_id: UUID,
+    note: dict[str, Any] | None,
+) -> None:
+    """p.254's "the resource that is meant to replace the one that is
+    deprecated", which for a value type is p.229's "creating a new one": it
+    has to be another value type of this workspace, or the note points
+    somebody at nothing."""
+    replacement = (note or {}).get("replacement_id")
+    if replacement is None:
+        return
+    if replacement == str(value_type_id):
+        raise ValueTypeError("a value type cannot be its own replacement")
+    try:
+        wanted = UUID(replacement)
+    except ValueError as exc:
+        raise ValueTypeError(f"no value type {replacement} in this workspace") from exc
+    if not await by_id(conn, workspace_id, {wanted}):
+        raise ValueTypeError(f"no value type {replacement} in this workspace")
+
+
+def check_not_deprecated(
+    owner: str, value_type: dict[str, Any], *, already: bool
+) -> None:
+    """A deprecated value type takes no new attachments (§764).
+
+    p.229 deprecates a value type so that its consumers move to a new one, and
+    p.254 calls deprecated "should not be relied on". **What already uses it
+    keeps it**: unbinding would be deleting the rule out from under data that
+    was valid a moment ago, and p.256 leaves a deprecated resource in place
+    until it is deleted. So only the *new* use is refused, and the sentence
+    names the replacement when the note has one.
+    """
+    if already or str(value_type.get("status")) != "deprecated":
+        return
+    replacement = (value_type.get("deprecation") or {}).get("replacement_id")
+    raise ValueTypeError(
+        f"{owner}: value type {value_type['api_name']!r} is deprecated and takes "
+        "no new properties (p.229)"
+        + (f" - use its replacement {replacement}" if replacement else "")
+    )
 
 
 async def add_version(
@@ -304,7 +375,10 @@ async def add_version(
     parsed = value_constraints.parse(
         constraint_raw, base_type=str(current["base_type"])
     )
-    await _check_references(conn, workspace_id, parsed)
+    await _check_references(
+        conn, workspace_id, parsed,
+        already=set(value_constraints.references(current["constraint"])),
+    )
     if parsed == current["constraint"]:
         # An append that changes nothing would be a version somebody has to
         # read to discover it says the same thing.
@@ -326,11 +400,17 @@ async def delete(
     `ON DELETE SET NULL`), exactly as deleting a shared property does (p.185).
 
     Foundry recommends *deprecating* rather than deleting a value type with
-    consumers (p.229). There is no status here yet - that is `ontology.md`
-    §1.3's own ○ row - so this deletes and unbinds, and the audit record says
-    how many properties stopped being constrained.
+    consumers (p.229), and §764 gave it the status to do that with: like any
+    ontology resource, it must be experimental or deprecated to be deleted
+    (p.256). What is deleted still unbinds, and the audit record says how many
+    properties stopped being constrained.
     """
-    await get_type(conn, workspace_id, value_type_id)
+    current = await get_type(conn, workspace_id, value_type_id)
+    # p.256, as for every ontology resource (§764): an active value type is
+    # one applications rely on.
+    ontology_status.check_deletable(
+        str(current["status"]), kind="value_type", name=str(current["api_name"])
+    )
     # A value type another one names (§681) is refused rather than unbound:
     # unbinding a property is visible on its row, and a reference inside
     # somebody else's constraint that silently stopped checking is not.
@@ -413,14 +493,47 @@ def check_attachment(prop: dict[str, Any], value_type: dict[str, Any]) -> None:
                 )
 
 
+async def check_for_shared(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    *,
+    api_name: str,
+    data_type: str,
+    value_type_id: UUID | None,
+    already: str | None,
+) -> None:
+    """p.227's other attachment point, a shared property (§764).
+
+    This workspace's, of the shared property's base type, and not deprecated
+    unless the shared property already had it - the three refusals a
+    property's own choice gets in `ontology._apply_value_types`."""
+    if value_type_id is None:
+        return
+    found = (await by_id(conn, workspace_id, {value_type_id})).get(str(value_type_id))
+    if found is None:
+        raise ValueTypeError(f"{api_name}: no value type {value_type_id} in this workspace")
+    if str(found["base_type"]) != data_type:
+        raise ValueTypeError(
+            f"{api_name}: value type {found['api_name']!r} is a "
+            f"{found['base_type']}, and this shared property is {data_type}"
+        )
+    check_not_deprecated(api_name, found, already=already == str(value_type_id))
+
+
 async def _check_references(
     conn: AsyncConnection,
     workspace_id: UUID,
     constraint: dict[str, Any] | None,
+    *,
+    already: set[str],
 ) -> None:
     """Each value type a nested or elements constraint names (§681) must be
     one of this workspace's, and a scalar - which also rules out naming
-    itself, since only an array or struct value type names anything."""
+    itself, since only an array or struct value type names anything.
+
+    A deprecated one is not named anew (§764), and `already` is what the
+    current version names: a new version keeps those, as a property keeps
+    its own."""
     refs = value_constraints.references(constraint)
     if not refs:
         return
@@ -434,6 +547,7 @@ async def _check_references(
                 f"{held['api_name']} is a {held['base_type']} value type; items and "
                 f"fields take a {', '.join(value_constraints.REFERENCE_TYPES)} one"
             )
+        check_not_deprecated("items and fields", held, already=ref in already)
 
 
 async def _append_version(

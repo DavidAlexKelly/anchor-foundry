@@ -15,7 +15,8 @@ import { describe, expect, it } from "vitest";
 
 import type { ValueType } from "@/lib/types";
 import {
-  constraintProblem, kindsFor, offerableTo, optionLabel, rangeLabel, referable,
+  constraintProblem, kindsFor, offerableTo, optionLabel, rangeLabel, referable, replacements,
+  takesNewUses,
 } from "./value-type";
 
 function valueType(over: Partial<ValueType> = {}): ValueType {
@@ -30,6 +31,8 @@ function valueType(over: Partial<ValueType> = {}): ValueType {
     constraint: { kind: "regex", pattern: "[a-z]+@example\\.com" },
     constraint_summary: "matches [a-z]+@example\\.com",
     usage_count: 0,
+    status: "experimental",
+    deprecation: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     ...over,
@@ -217,5 +220,38 @@ describe("arrays and structs (§681, p.234)", () => {
       "Choose the value type for email.");
     expect(constraintProblem({ kind: "elements", fields: { email: "vt1", code: "vt2" } },
       "struct")).toBeNull();
+  });
+});
+
+describe("a deprecated value type (§764, p.229)", () => {
+  const old = valueType({ id: "old", status: "deprecated" });
+  const live = valueType({ id: "live", status: "active" });
+
+  it("takes no new uses, and keeps the ones it has", () => {
+    expect(takesNewUses(live, [])).toBe(true);
+    expect(takesNewUses(old, [])).toBe(false);
+    expect(takesNewUses(old, [null, "old"])).toBe(true);
+    expect(takesNewUses(old, ["live"])).toBe(false);
+  });
+
+  it("is offered to a property only where it is already the choice", () => {
+    expect(offerableTo([old, live], "string").map((t) => t.id)).toEqual(["live"]);
+    expect(offerableTo([old, live], "string", "old").map((t) => t.id)).toEqual(["old", "live"]);
+    expect(offerableTo([old, live], "integer", "old")).toEqual([]);
+  });
+
+  it("is offered to items and fields only where the rule already names it", () => {
+    expect(referable([old, live]).map((t) => t.id)).toEqual(["live"]);
+    expect(referable([old, live], ["old"]).map((t) => t.id)).toEqual(["old", "live"]);
+  });
+
+  it("says so in a picker", () => {
+    expect(optionLabel(old)).toBe("Email address — matches [a-z]+@example\\.com (deprecated)");
+  });
+
+  it("is replaced by another value type that is not on its way out", () => {
+    const other = valueType({ id: "other" });
+    expect(replacements([old, live, other], "live").map((t) => t.id)).toEqual(["other"]);
+    expect(replacements([old, live, other], "old").map((t) => t.id)).toEqual(["live", "other"]);
   });
 });

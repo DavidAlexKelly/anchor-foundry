@@ -969,8 +969,13 @@ async def _apply_value_types(
     conn: AsyncConnection,
     workspace_id: UUID,
     properties: list[dict[str, Any]],
+    *,
+    already_attached: dict[str, str],
 ) -> None:
     """Check every value type attachment (`object-link-types` p.222-234).
+
+    `already_attached` is the stored type's own choices by property, which a
+    deprecated value type keeps while refusing new ones (§764).
 
     Only a base type check, and deliberately only that. A value type carries no
     metadata a property inherits - unlike a shared property, whose display name
@@ -996,6 +1001,26 @@ async def _apply_value_types(
                 f"{prop['api_name']}: no value type {raw} in this workspace"
             )
         value_types.check_attachment(prop, found)
+        value_types.check_not_deprecated(
+            str(prop["api_name"]), found,
+            already=already_attached.get(str(prop["api_name"])) == str(raw),
+        )
+
+
+async def _attached_value_type_ids(
+    conn: AsyncConnection, type_id: UUID
+) -> dict[str, str]:
+    """The value type each stored property chose itself, by api_name, as
+    `_attached_shared_ids` has it for shared properties."""
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT api_name, value_type_id FROM object_type_properties
+         WHERE object_type_id = :tid AND value_type_id IS NOT NULL
+        """,
+        {"tid": str(type_id)},
+    )
+    return {str(r["api_name"]): str(r["value_type_id"]) for r in rows}
 
 
 async def _attached_shared_ids(
@@ -1033,7 +1058,7 @@ async def create_type(
     _validate_properties(properties)
     # Nothing is stored yet, so every attachment here is a fresh one.
     await _apply_shared(conn, workspace_id, properties, already_attached={})
-    await _apply_value_types(conn, workspace_id, properties)
+    await _apply_value_types(conn, workspace_id, properties, already_attached={})
     # §594: no action acts on a type that does not exist yet, so any inline
     # action named here is refused, by name.
     await property_inline_actions.apply(conn, workspace_id, None, properties)
@@ -1692,7 +1717,10 @@ async def update_type(
         properties,
         already_attached=await _attached_shared_ids(conn, type_id),
     )
-    await _apply_value_types(conn, workspace_id, properties)
+    await _apply_value_types(
+        conn, workspace_id, properties,
+        already_attached=await _attached_value_type_ids(conn, type_id),
+    )
     # The chain is checked against the ontology rather than against itself:
     # whether the links join up, and whether any hop can reach more than one
     # object, are facts only the workspace's link types can answer.

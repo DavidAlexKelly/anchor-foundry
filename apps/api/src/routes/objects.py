@@ -2606,6 +2606,9 @@ class ValueTypeOut(BaseModel):
     # shorter than the shape and more use than the kind.
     constraint_summary: str = ""
     usage_count: int = 0
+    # p.253-256's status and p.254's note (§764), as on every ontology resource.
+    status: str = "experimental"
+    deprecation: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -2649,6 +2652,9 @@ class ValueTypeMetadataUpdate(BaseModel):
     display_name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=1000)
     example_value: str = Field(default="", max_length=200)
+    # §764. Left out, each is unchanged; `deprecation: null` clears the note.
+    status: str | None = None
+    deprecation: dict[str, Any] | None = None
 
 
 class ValueTypeVersionCreate(BaseModel):
@@ -2742,6 +2748,9 @@ async def update_value_type(
             display_name=body.display_name,
             description=body.description,
             example_value=body.example_value,
+            status=body.status,
+            deprecation=(body.deprecation if "deprecation" in body.model_fields_set
+                         else value_types_service.KEEP),
         )
         await audit.record(
             conn,
@@ -2751,7 +2760,7 @@ async def update_value_type(
             resource_type="value_type",
             resource_id=value_type_id,
             workspace_id=access.workspace_id,
-            metadata={"api_name": row["api_name"]},
+            metadata={"api_name": row["api_name"], "status": row["status"]},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )

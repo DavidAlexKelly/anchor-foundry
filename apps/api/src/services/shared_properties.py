@@ -67,7 +67,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError, NotFoundError
-from . import value_format
+from . import value_format, value_types
 
 _API_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 
@@ -187,6 +187,10 @@ async def create_shared(
     )
     if existing is not None:
         raise ConflictError(f"a shared property named {api_name!r} already exists")
+    await value_types.check_for_shared(
+        conn, workspace_id, api_name=api_name, data_type=data_type,
+        value_type_id=value_type_id, already=None,
+    )
     row = await fetch_one(
         conn,
         """
@@ -278,6 +282,11 @@ async def update_shared(
         list(current["render_hints"])
         if render_hints_raw is None
         else _parse_hints(render_hints_raw, str(current["api_name"]))
+    )
+    await value_types.check_for_shared(
+        conn, workspace_id, api_name=str(current["api_name"]), data_type=data_type,
+        value_type_id=value_type_id,
+        already=str(current["value_type_id"]) if current.get("value_type_id") else None,
     )
     await conn.execute(
         text(

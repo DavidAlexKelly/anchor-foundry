@@ -213,3 +213,81 @@ def test_only_matching_base_types_are_offered_on_a_property(page, module) -> Non
     options = page.get_by_test_id("vt-choice").locator("option")
     expect(options.first).to_have_text("Not constrained")
     assert options.count() >= 2, "the string value type should be offered"
+
+
+def test_a_value_type_is_deprecated_in_favour_of_a_new_one(page, api, module) -> None:
+    """p.229's advice for a breaking change, "deprecating the current value
+    type and creating a new one" (§764): the status and its replacement are
+    set beside the rule, an active one cannot be deleted (p.256), and a
+    deprecated one is no longer offered to a property that does not have it."""
+    tag = uuid.uuid4().hex[:4]
+    wid = module.workspace_id
+
+    def make(name: str) -> dict:
+        return api.call("POST", f"/workspaces/{wid}/value-types", {
+            "api_name": f"{name}_{tag}", "display_name": f"{name.title()} {tag}",
+            "base_type": "string", "constraint": {"kind": "uuid"}})
+
+    old, new = make("handle"), make("username")
+    # Uses it has before it is deprecated, which it keeps: an array's items,
+    # and the `id` property.
+    handles = api.call("POST", f"/workspaces/{wid}/value-types", {
+        "api_name": f"handles_{tag}", "display_name": f"Handles {tag}",
+        "base_type": "array", "constraint": {"kind": "nested", "value_type": old["id"]}})
+    open_objects(page, module)
+    open_type_editor(page, module)
+    index = property_index(page, "id")
+    page.get_by_role("button", name=f"Property {index} value type").click()
+    choose_option(page, "vt-choice", old["display_name"])
+    page.get_by_test_id("vt-apply").click()
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0, timeout=15000)
+    open_objects(page, module)
+    page.get_by_role("button", name=f"Status of {old['api_name']}").click()
+    page.get_by_test_id("status-select").select_option("active")
+    page.get_by_test_id("vt-status-save").click()
+    delete = page.get_by_role("button", name=f"Delete {old['api_name']}")
+    expect(delete).to_be_disabled(timeout=15000)
+    expect(delete).to_have_attribute("title", re.compile("cannot be deleted"))
+
+    page.get_by_role("button", name=f"Status of {old['api_name']}").click()
+    page.get_by_test_id("status-select").select_option("deprecated")
+    # Offered: the others, not itself.
+    replacement = page.get_by_test_id("vt-replacement")
+    expect(replacement.locator("option", has_text=new["display_name"])).to_have_count(1)
+    expect(replacement.locator("option", has_text=old["display_name"])).to_have_count(0)
+    page.get_by_test_id("deprecation-reason").fill("Handles became usernames")
+    replacement.select_option(label=new["display_name"])
+    page.get_by_test_id("vt-status-save").click()
+    expect(page.get_by_role("dialog")).to_have_count(0, timeout=15000)
+    expect(page.get_by_test_id("vt-table").locator("tr", has_text=old["api_name"])
+           .get_by_test_id("status-badge-deprecated")).to_be_visible()
+    expect(delete).to_be_enabled()
+
+    saved = next(t for t in api.call("GET", f"/workspaces/{wid}/value-types")
+                 if t["id"] == old["id"])
+    assert (saved["status"], saved["deprecation"]) == (
+        "deprecated", {"reason": "Handles became usernames", "replacement_id": new["id"]})
+
+    # The array that names it still does, in the rule editor.
+    page.get_by_role("button", name=f"New version of {handles['api_name']}").click()
+    expect(page.get_by_test_id("constraint-nested")).to_have_value(old["id"])
+    page.get_by_role("button", name="Cancel").click()
+
+    # Not offered to a property that does not already have it.
+    open_type_editor(page, module)
+    index = property_index(page, "name")
+    page.get_by_role("button", name=f"Property {index} value type").click()
+    options = page.get_by_test_id("vt-choice").locator("option")
+    expect(options.filter(has_text=new["display_name"])).to_have_count(1)
+    expect(options.filter(has_text=old["display_name"])).to_have_count(0)
+    # The picker's own Cancel, beside its Apply: it sits inside the type's
+    # dialog, which has one too.
+    page.get_by_test_id("vt-apply").locator("xpath=..").get_by_role(
+        "button", name="Cancel").click()
+    # And still the choice of the one that has it, said to be deprecated.
+    index = property_index(page, "id")
+    page.get_by_role("button", name=f"Property {index} value type").click()
+    expect(page.get_by_test_id("vt-choice")).to_have_value(old["id"])
+    expect(page.get_by_test_id("vt-choice").locator("option", has_text=old["display_name"])
+           ).to_contain_text("(deprecated)")

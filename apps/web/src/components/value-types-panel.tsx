@@ -21,10 +21,14 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, Field } from "@/components/dialog";
 import { PROPERTY_TYPES } from "@/components/object-type-editor";
+import { StatusBadge, StatusField } from "@/components/status-field";
 import { ValueConstraintEditor } from "@/components/value-constraint-editor";
 import { ApiError, objects as objApi } from "@/lib/api";
-import { constraintProblem } from "@/lib/value-type";
-import type { PropertyDataType, ValueConstraint, ValueType } from "@/lib/types";
+import { canDelete, deleteBlockedReason } from "@/lib/ontology-status";
+import { constraintProblem, replacements } from "@/lib/value-type";
+import type {
+  Deprecation, OntologyStatus, PropertyDataType, ValueConstraint, ValueType,
+} from "@/lib/types";
 
 function toApiName(display: string): string {
   const words = display.match(/[A-Za-z0-9]+/g) ?? [];
@@ -245,6 +249,93 @@ function NewVersionDialog({
   );
 }
 
+/** p.253-256's status on a value type (§764), and p.229's reason for it: a
+ * breaking change is made by deprecating this one and creating a new one, so
+ * the note's replacement is the value type to use instead. Its own dialog,
+ * beside "Change rule", because it changes no rule. */
+function StatusDialog({
+  workspaceId,
+  valueType,
+  onClose,
+}: {
+  workspaceId: string;
+  valueType: ValueType;
+  onClose: () => void;
+}) {
+  const [status, setStatus] = useState<OntologyStatus>(valueType.status);
+  const [note, setNote] = useState<Deprecation | null>(valueType.deprecation);
+  const queryClient = useQueryClient();
+  const all = useQuery({
+    queryKey: ["value-types", workspaceId],
+    queryFn: () => objApi.listValueTypes(workspaceId),
+  });
+  const save = useMutation({
+    mutationFn: () =>
+      objApi.updateValueType(workspaceId, valueType.id, {
+        display_name: valueType.display_name,
+        description: valueType.description,
+        example_value: valueType.example_value,
+        status,
+        // StatusField clears the note when the status moves off deprecated.
+        deprecation: note,
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["value-types", workspaceId] });
+      onClose();
+    },
+  });
+
+  return (
+    <Dialog open title={`Status of ${valueType.api_name}`} onClose={onClose}>
+      <StatusField
+        kind="value_type"
+        value={status}
+        deprecation={note}
+        onChange={setStatus}
+        onDeprecationChange={setNote}
+      />
+      {status === "deprecated" && (
+        <>
+          <Field
+            label="Replaced by"
+            hint="p.229 — what properties should use instead. Nothing new can take a deprecated value type; what uses it keeps it."
+          >
+            <select
+              data-testid="vt-replacement"
+              value={note?.replacement_id ?? ""}
+              onChange={(e) =>
+                setNote({ ...note, replacement_id: e.target.value || undefined })
+              }
+            >
+              <option value="">Nothing named</option>
+              {replacements(all.data ?? [], valueType.id).map((t) => (
+                <option key={t.id} value={t.id}>{t.display_name}</option>
+              ))}
+            </select>
+          </Field>
+        </>
+      )}
+      {save.isError && (
+        <p className="field-hint" data-testid="vt-status-error">
+          {save.error instanceof ApiError ? save.error.message : "Could not save."}
+        </p>
+      )}
+      <div className="row-actions" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+        <button type="button" className="btn" onClick={onClose}>Cancel</button>
+        <button
+          type="button"
+          className="btn primary"
+          data-testid="vt-status-save"
+          disabled={save.isPending}
+          onClick={() => save.mutate()}
+        >
+          Save
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 function UsageDialog({
   workspaceId,
   valueType,
@@ -296,6 +387,7 @@ export function ValueTypesPanel({
   const [creating, setCreating] = useState(false);
   const [versioning, setVersioning] = useState<ValueType | null>(null);
   const [showingUsage, setShowingUsage] = useState<ValueType | null>(null);
+  const [statusOf, setStatusOf] = useState<ValueType | null>(null);
   const queryClient = useQueryClient();
 
   const types = useQuery({
@@ -324,6 +416,13 @@ export function ValueTypesPanel({
           workspaceId={workspaceId}
           valueType={versioning}
           onClose={() => setVersioning(null)}
+        />
+      )}
+      {statusOf && (
+        <StatusDialog
+          workspaceId={workspaceId}
+          valueType={statusOf}
+          onClose={() => setStatusOf(null)}
         />
       )}
       {showingUsage && (
@@ -370,6 +469,7 @@ export function ValueTypesPanel({
               <tr key={t.id}>
                 <td>
                   <strong>{t.display_name}</strong>
+                  <StatusBadge status={t.status} note={t.deprecation} />
                   <div className="slug">{t.api_name}</div>
                 </td>
                 <td className="count">{t.base_type}</td>
@@ -401,16 +501,26 @@ export function ValueTypesPanel({
                     )}
                     {canEdit && (
                       <button
+                        className="btn quiet"
+                        style={{ padding: "3px 9px", fontSize: 12 }}
+                        aria-label={`Status of ${t.api_name}`}
+                        onClick={() => setStatusOf(t)}
+                      >
+                        Status
+                      </button>
+                    )}
+                    {canEdit && (
+                      <button
                         className="btn danger"
                         style={{ padding: "3px 9px", fontSize: 12 }}
                         aria-label={`Delete ${t.api_name}`}
-                        disabled={remove.isPending}
+                        disabled={remove.isPending || !canDelete(t.status)}
                         title={
-                          t.usage_count
+                          deleteBlockedReason(t.status) ?? (t.usage_count
                             ? `${t.usage_count} propert${
                                 t.usage_count === 1 ? "y" : "ies"
                               } will stop being constrained`
-                            : "Nothing uses it"
+                            : "Nothing uses it")
                         }
                         onClick={() => remove.mutate(t.id)}
                       >
