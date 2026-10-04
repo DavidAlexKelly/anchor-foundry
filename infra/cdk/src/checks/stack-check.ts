@@ -16,7 +16,9 @@
  *      which is the origin the web app asks for (`apps/web/src/lib/auth.ts`);
  *   2. a custom address, when given, is allowed beside it, not instead;
  *   3. the API is told the same address, for the addresses it hands out;
- *   4. the control plane can read it, with its scheme, as an output.
+ *   4. the control plane can read it, with its scheme, as an output;
+ *   5. a listener trusts only the X-Forwarded-For entries nobody else can
+ *      write, which depends on whether the load balancer is public (§850).
  *
  * Run: `npx ts-node src/checks/stack-check.ts`
  */
@@ -131,6 +133,23 @@ check("the control plane can read the address, scheme and all", () => {
   if (JSON.stringify(outputs.PlatformUrl?.Value) !== servedAt(plain, "")) {
     throw new Error(`PlatformUrl is ${JSON.stringify(outputs.PlatformUrl?.Value)}`);
   }
+});
+
+console.log("who a listener's allowlist sees (§850):");
+
+check("the proxy hops match how the load balancer is reached", () => {
+  // Public, a request can reach the load balancer directly and write every
+  // X-Forwarded-For entry left of the load balancer's own: only one hop can
+  // be trusted. Internal behind a CloudFront VPC origin (decision 0025), the
+  // entry CloudFront writes is the sender's, two from the right.
+  const scheme = only(plain, "AWS::ElasticLoadBalancingV2::LoadBalancer").Properties.Scheme;
+  const api = Object.values(plain.findResources("AWS::ECS::TaskDefinition"))
+    .map((r) => r.Properties.ContainerDefinitions[0])
+    .find((c) => c.Name === "api");
+  const hops = (api.Environment as { Name: string; Value: string }[])
+    .find((e) => e.Name === "LISTENER_PROXY_HOPS")?.Value;
+  const want = scheme === "internal" ? "2" : "1";
+  if (hops !== want) throw new Error(`a ${scheme} load balancer with LISTENER_PROXY_HOPS=${hops}; expected ${want}`);
 });
 
 if (failures.length) {
