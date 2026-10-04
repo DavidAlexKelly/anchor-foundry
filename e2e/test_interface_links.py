@@ -23,7 +23,8 @@ from ontology_page import pick_type
 def world(api):
     mod = Module(api, "Interface links")
     tag = mod.tag
-    desks = mod.object_type(columns=["id", "name"], rows=[{"id": "D1", "name": "Window"}],
+    desks = mod.object_type(columns=["id", "name"],
+                            rows=[{"id": "D1", "name": "Window"}, {"id": "D2", "name": "Door"}],
                             key="id", title="name", slug=f"desk_{tag}")
     offices = mod.object_type(
         columns=["id", "name", "desk_ref", "next_ref"],
@@ -100,3 +101,68 @@ def test_a_link_declared_on_an_interface_is_kept_by_an_implementation(page, api,
     pick_type(page, "impl-type", {"id": world["offices"], "api_name": f"office_{mod.tag}"})
     expect(page.get_by_test_id("impl-link-desk").get_by_role("checkbox")).to_be_checked(
         timeout=15000)
+
+
+def test_an_action_on_the_interface_links_through_it(page, api, world) -> None:
+    """p.63's Create interface link, set up in the action editor (§762) and
+    run (§761): choosing the link generates the parameter for its other end,
+    named after it, as p.63 says, and the run writes the office's own key."""
+    mod = world["mod"]
+    wid = mod.workspace_id
+    tag = uuid.uuid4().hex[:6]
+    iface = api.call("POST", f"/workspaces/{wid}/interfaces", {
+        "api_name": f"Desked{tag}", "display_name": f"Desked {tag}",
+        "properties": [{"api_name": "code", "data_type": "string"}],
+        "link_constraints": [{"api_name": "desk", "display_name": "Desk",
+                              "target_object_type_id": world["desks"]}]})
+    api.call("PUT", f"/workspaces/{wid}/object-types/{world['offices']}/interfaces", [
+        {"interface_id": iface["id"], "property_mapping": {"code": "name"},
+         "link_mapping": {"desk": [world["sits"]["id"]]}}])
+    action = api.call("POST", f"/workspaces/{wid}/action-types", {
+        "interface_id": iface["id"], "api_name": f"seat_{tag}", "display_name": "Seat",
+        "editable_properties": ["code"]})
+    # An object parameter of another type, which is no desk and must not be
+    # offered for the link's other end.
+    api.call("PUT", f"/workspaces/{wid}/action-types/{action['id']}/definition", {
+        "parameters": [{"api_name": "code", "display_name": "Code", "data_type": "string"},
+                       {"api_name": "neighbour", "display_name": "Neighbour",
+                        "data_type": "object", "object_type_id": world["offices"]}],
+        "rules": [{"kind": "modify_object", "config": {"property": "code", "parameter": "code"}}],
+        "criteria": []})
+
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/objects")
+    row = page.locator("tr", has_text=f"seat_{tag}")
+    expect(row).to_be_visible(timeout=30000)
+    row.get_by_role("button", name="Parameters").click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_be_visible()
+    # p.63-64's two, on an action on an interface (an object type's has seven).
+    options = dialog.get_by_label("Rule 1 kind").locator("option").all_inner_texts()
+    assert options[-2:] == ["Link through the interface", "Unlink through the interface"], options
+    # The action's own rule becomes the link rule.
+    dialog.get_by_label("Rule 1 kind").select_option("create_interface_link")
+    dialog.get_by_label("Rule 1 interface link").select_option("desk")
+    expect(dialog.get_by_label("Rule 1 other end")).to_have_value("desk")
+    # Only a reference to the link's target is offered for its other end.
+    expect(dialog.get_by_label("Rule 1 other end").locator("option")).to_have_text(
+        ["Choose…", "desk"])
+    dialog.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0, timeout=15000)
+
+    saved = api.call("GET", f"/workspaces/{wid}/action-types/{action['id']}")
+    generated = next(p for p in saved["parameters"] if p["api_name"] == "desk")
+    assert (generated["data_type"], generated["object_type_id"]) == ("object", world["desks"])
+    assert [(r["kind"], r["config"]) for r in saved["rules"]] == [
+        ("create_interface_link", {"link": "desk", "object": "desk"})]
+
+    office = api.call("GET", f"/workspaces/{wid}/object-types/{world['offices']}/instances")["items"][0]
+    desk = next(d for d in api.call(
+        "GET", f"/workspaces/{wid}/object-types/{world['desks']}/instances")["items"]
+        if d["primary_key"] == "D2")
+    # The fixture's office points at D1; the run is what moves it.
+    assert office["properties"]["desk_ref"] == "D1"
+    result = api.call("POST", f"{mod.base}/actions/{action['id']}/execute",
+                      {"instance_id": office["id"], "values": {"desk": desk["id"]}})
+    assert result["ok"], result
+    after = api.call("GET", f"/workspaces/{wid}/object-types/{world['offices']}/instances/{office['id']}")
+    assert after["properties"]["desk_ref"] == desk["primary_key"]
