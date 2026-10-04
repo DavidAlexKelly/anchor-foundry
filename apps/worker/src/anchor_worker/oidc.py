@@ -40,7 +40,7 @@ def _private_key():
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
-    pem = os.environ.get("OIDC_SIGNING_KEY", "").strip()
+    pem = os.environ.get("OIDC_SIGNING_KEY", "").strip() or _stored_pem()
     if not pem:
         return None
     try:
@@ -48,6 +48,28 @@ def _private_key():
     except (ValueError, TypeError):
         return None
     return key if isinstance(key, rsa.RSAPrivateKey) else None
+
+
+#: The key an API task made and stored (§871). Read only: the worker signs
+#: with the deployment's key and never makes one, so until an API task has,
+#: nothing here can be issued - as before.
+_stored: str | None = None
+
+
+def _stored_pem() -> str:
+    global _stored
+    name = os.environ.get("OIDC_SIGNING_KEY_SECRET", "").strip()
+    if not name:
+        return ""
+    if _stored is None:
+        try:
+            import boto3
+
+            client = boto3.client("secretsmanager")
+            _stored = json.loads(client.get_secret_value(SecretId=name)["SecretString"])["pem"]
+        except Exception:  # noqa: BLE001 - absent or unreachable: not available yet
+            return ""
+    return _stored
 
 
 def _require():

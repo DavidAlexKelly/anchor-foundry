@@ -21,7 +21,8 @@
  *      write, which depends on whether the load balancer is public (§850);
  *   6. a deleted file outlives the database backups that may name it (§852);
  *   7. the edge caches the web app's build output and nothing else (§865);
- *   8. invitations go through SES when the stack is given an address (§866).
+ *   8. invitations go through SES when the stack is given an address (§866);
+ *   9. the platform can issue OpenID Connect tokens (§871).
  *
  * Run: `npx ts-node src/checks/stack-check.ts`
  */
@@ -31,7 +32,7 @@ import * as path from "path";
 import { App, DockerImage } from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
 
-import { CustomerStack, STATIC_ASSETS } from "../stacks/customer-stack";
+import { CustomerStack, OIDC_SIGNING_KEY_SECRET, STATIC_ASSETS } from "../stacks/customer-stack";
 
 (DockerImage as unknown as { fromBuild: () => DockerImage }).fromBuild =
   () => DockerImage.fromRegistry("bundling-skipped");
@@ -199,6 +200,26 @@ check("the web app's build output is cached, and nothing else is", () => {
     path.join(__dirname, "..", "..", "..", "..", "apps", "web", "Dockerfile"), "utf8");
   if (!nextServe.includes(".next/static ./apps/web/.next/static")) {
     throw new Error("the web image no longer serves .next/static: re-derive this path");
+  }
+});
+
+console.log("the platform as an OpenID Connect provider (§871):");
+
+check("the API and the worker are told the issuer and where the key is kept", () => {
+  for (const name of ["api", "worker"]) {
+    const container = Object.values(plain.findResources("AWS::ECS::TaskDefinition"))
+      .map((r) => r.Properties.ContainerDefinitions[0])
+      .find((c) => c.Name === name);
+    const env = Object.fromEntries((container.Environment as { Name: string; Value: unknown }[])
+      .map((e) => [e.Name, JSON.stringify(e.Value)]));
+    if (env.OIDC_ISSUER !== servedAt(plain, "/api/oidc")) throw new Error(`${name}: OIDC_ISSUER is ${env.OIDC_ISSUER}`);
+    if (env.OIDC_SIGNING_KEY_SECRET !== JSON.stringify(OIDC_SIGNING_KEY_SECRET)) {
+      throw new Error(`${name}: OIDC_SIGNING_KEY_SECRET is ${env.OIDC_SIGNING_KEY_SECRET}`);
+    }
+  }
+  // Inside what both roles may read, and the API create (§846).
+  if (!OIDC_SIGNING_KEY_SECRET.startsWith("anchor/connections/")) {
+    throw new Error("the key's secret is outside the prefix the task roles may touch");
   }
 });
 
