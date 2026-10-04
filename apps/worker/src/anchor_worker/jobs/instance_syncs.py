@@ -121,20 +121,29 @@ def run_due_object_source_syncs(context: OpExecutionContext, platform_db: Platfo
             with platform_db.connect_scoped_to(workspace_id) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT api_name, data_type, struct_fields "
+                        "SELECT api_name, data_type, struct_fields, array_of "
                         "FROM object_type_properties WHERE object_type_id = %s",
                         (str(object_type_id),),
                     )
                     declared = cur.fetchall()
-                    property_types = {name: str(dtype) for name, dtype, _ in declared}
+                    property_types = {name: str(dtype) for name, dtype, _, _ in declared}
                     # A struct is the one type whose name does not carry its
                     # meaning (db 0064): the fields it declares are what a
                     # value is checked against, so they travel with the label.
                     struct_by_property = {
-                        name: fields for name, _, fields in declared if fields is not None
+                        name: fields for name, _, fields, _ in declared if fields is not None
+                    }
+                    # An array is the other (db 0087): "array" says a list and
+                    # its element type says of what. Never passed here until
+                    # §809, so every scheduled sync of a type with an array
+                    # property failed while the API's sync of it worked.
+                    array_by_property = {
+                        name: str(element) for name, _, _, element in declared
+                        if element is not None
                     }
                 conn.commit()
-            rows = property_values.coerce_rows(rows, property_types, struct_by_property)
+            rows = property_values.coerce_rows(
+                rows, property_types, struct_by_property, array_by_property)
 
             with platform_db.connect_scoped_to(workspace_id) as conn:
                 with conn.cursor() as cur:

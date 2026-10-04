@@ -245,3 +245,35 @@ def test_a_sync_longer_than_a_batch_loses_nothing_at_the_seams(
     by_pk = {r[0]: r[1]["name"] for r in _instances(workspace["object_type_id"])}
     assert by_pk == {"1": "a", "2": "b", "3": "c2", "4": "d2", "5": "e"}
     assert _source_row(workspace["source_id"])[0] == "ok"
+
+
+def test_a_scheduled_sync_reads_an_array_property_by_its_element_type(
+    workspace: dict, storage_root: str
+) -> None:
+    """An array is read element by element as its declared element type
+    (db 0087), and the job never passed that type along - so every scheduled
+    sync of a type with an array property failed with "an array value cannot
+    be read without its property's element type", while the API's sync of the
+    same source worked (§809)."""
+    key = f"{workspace['ws_prefix']}datasets/{workspace['dataset_id']}/v2/data.parquet"
+    full = os.path.join(storage_root, key)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    duckdb.connect().execute(
+        "COPY (SELECT * FROM (VALUES (1, 'Ada', 'a@x', '[\"7\", 8]'), (2, 'Grace', 'g@x', '[]')) "
+        f"t(customer_id, name, email, scores)) TO '{full}' (FORMAT parquet)")
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE datasets SET s3_location=%s, current_version=2 WHERE id=%s",
+                     (key, workspace["dataset_id"]))
+        conn.execute(
+            "INSERT INTO object_type_properties (object_type_id, api_name, display_name, "
+            "data_type, array_of) VALUES (%s, 'scores', 'Scores', 'array', 'integer')",
+            (workspace["object_type_id"],))
+        conn.execute("UPDATE object_type_sources SET column_mappings = %s WHERE id = %s",
+                     (json.dumps({"name": "name", "email": "email", "scores": "scores"}),
+                      workspace["source_id"]))
+    _set_due(workspace["source_id"])
+    run_due_object_source_syncs(_ctx())
+    assert _source_row(workspace["source_id"])[:2] == ("ok", None)
+    by_pk = {r[0]: r[1]["scores"] for r in _instances(workspace["object_type_id"])}
+    # Each element coerced as an integer, not passed through as text.
+    assert by_pk == {"1": [7, 8], "2": []}
