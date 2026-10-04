@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from datetime import datetime
 from typing import Any
@@ -20,8 +21,9 @@ from uuid import UUID, uuid4
 
 import anyio
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from ..lib.db import user_connection
 from ..lib.errors import ConflictError
@@ -1021,25 +1023,36 @@ async def export_dataset(
     format: str = "parquet",
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> Response:
-    """Spec §11 export: open formats, any time. parquet streams the stored
-    file verbatim; csv converts on the fly."""
+    """Spec §11 export: open formats, any time. parquet sends the stored file
+    verbatim; csv converts on the fly.
+
+    **Sent from disk, not from memory** (§868). Both formats used to be read
+    whole into the response body: a million-row dataset's CSV is hundreds of
+    megabytes, held by an API task with a gigabyte for everything, and two
+    exports at once could have it killed. The stored file is already on disk
+    (`_parquet_path` reads it there, materialised from S3 when that is where it
+    lives), and the CSV is written to a temporary file that is removed once the
+    response has been sent.
+    """
     if format not in ("parquet", "csv"):
         raise _client_error("format must be 'parquet' or 'csv'")
     path, row = await _parquet_path(access, dataset_id)
 
+    cleanup = None
     if format == "parquet":
-        payload = await anyio.to_thread.run_sync(_storage.read, str(row["s3_location"]))
+        # Never deleted afterwards: on local storage this *is* the dataset.
+        sent = path
         media = "application/vnd.apache.parquet"
         filename = f"{row['slug']}.parquet"
     else:
-        def convert() -> bytes:
-            with tempfile.TemporaryDirectory() as tmp:
-                dest = os.path.join(tmp, "out.csv")
-                engine.export_csv(path, dest)
-                with open(dest, "rb") as handle:
-                    return handle.read()
-
-        payload = await anyio.to_thread.run_sync(convert)
+        scratch = tempfile.mkdtemp(prefix="export-")
+        sent = os.path.join(scratch, "out.csv")
+        try:
+            await anyio.to_thread.run_sync(engine.export_csv, path, sent)
+        except BaseException:
+            shutil.rmtree(scratch, ignore_errors=True)
+            raise
+        cleanup = BackgroundTask(shutil.rmtree, scratch, ignore_errors=True)
         media = "text/csv"
         filename = f"{row['slug']}.csv"
 
@@ -1053,15 +1066,12 @@ async def export_dataset(
             resource_id=dataset_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            metadata={"format": format, "bytes": len(payload)},
+            metadata={"format": format, "bytes": os.path.getsize(sent)},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
-    return Response(
-        content=payload,
-        media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return FileResponse(sent, media_type=media, filename=filename, background=cleanup,
+                        content_disposition_type="attachment")
 
 
 @router.get("/{dataset_id}/retention", response_model=RetentionOut)
