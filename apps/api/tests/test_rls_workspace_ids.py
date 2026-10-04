@@ -54,17 +54,23 @@ SOURCES = {
          WHERE u.org_role IN ('owner', 'admin') AND u.status = 'active'
          ORDER BY random() LIMIT %(n)s
     """,
+    # Users first, then a stranger's workspace for each. This sorted the whole
+    # users x workspaces product at random to keep fifty pairs - 795 million
+    # rows on the shared development database, half a minute and growing with
+    # every run (§821); it is the same sample for 116 ms.
     "a different organisation": """
-        SELECT u.id, w.id FROM users u, workspaces w
-         WHERE w.organisation_id <> u.organisation_id
-         ORDER BY random() LIMIT %(n)s
+        SELECT u.id, (SELECT w.id FROM workspaces w
+                       WHERE w.organisation_id <> u.organisation_id
+                       ORDER BY random() LIMIT 1)
+          FROM (SELECT id, organisation_id FROM users ORDER BY random() LIMIT %(n)s) u
     """,
 }
 
 
 def _pairs(cur, sql: str) -> list[tuple[str, str]]:
     cur.execute(sql, {"n": SAMPLE})
-    return [(str(u), str(w)) for u, w in cur.fetchall()]
+    # A user whose organisation holds every workspace has no stranger's to draw.
+    return [(str(u), str(w)) for u, w in cur.fetchall() if w is not None]
 
 
 @pytest.fixture(scope="module")

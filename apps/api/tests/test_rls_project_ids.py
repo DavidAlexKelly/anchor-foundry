@@ -73,11 +73,16 @@ SOURCES = {
          WHERE u.org_role IN ('owner', 'admin') AND u.status = 'active'
          ORDER BY random() LIMIT %(n)s
     """,
+    # Users first, then a stranger's project for each - as
+    # `test_rls_workspace_ids` does since §821. Sorting the whole users x
+    # projects product at random took 200 seconds on the shared development
+    # database (§821).
     "a different organisation": """
-        SELECT u.id, p.id FROM users u, projects p
-          JOIN workspaces w ON w.id = p.workspace_id
-         WHERE w.organisation_id <> u.organisation_id
-         ORDER BY random() LIMIT %(n)s
+        SELECT u.id, (SELECT p.id FROM projects p
+                        JOIN workspaces w ON w.id = p.workspace_id
+                       WHERE w.organisation_id <> u.organisation_id
+                       ORDER BY random() LIMIT 1)
+          FROM (SELECT id, organisation_id FROM users ORDER BY random() LIMIT %(n)s) u
     """,
 }
 
@@ -105,7 +110,8 @@ def _agree(cur, user_id: str, project_id: str) -> tuple[bool, bool]:
 def test_the_two_predicates_agree(admin, source: str) -> None:
     with admin.cursor() as cur:
         cur.execute(SOURCES[source], {"n": SAMPLE})
-        pairs = [(str(u), str(p)) for u, p in cur.fetchall()]
+        # A user whose organisation holds every project has no stranger's to draw.
+        pairs = [(str(u), str(p)) for u, p in cur.fetchall() if p is not None]
         if not pairs:
             pytest.skip(f"no rows for {source!r} in this database")
         granted = 0
