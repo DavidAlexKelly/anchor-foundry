@@ -22,10 +22,13 @@ RUN pip install -r requirements.txt
 COPY src ./src
 ENV PYTHONPATH=/app/src
 
-RUN mkdir -p /opt/dagster/home && \
-    printf 'telemetry:\n  enabled: false\n' > /opt/dagster/home/dagster.yaml && \
-    useradd --create-home --uid 10001 apprunner && \
+# The instance's storage settings (§883): see the file.
+COPY dagster.yaml /opt/dagster/home/dagster.yaml
+RUN useradd --create-home --uid 10001 apprunner && \
     chown -R apprunner /opt/dagster
 USER apprunner
 
-CMD ["dagster", "dev", "-m", "anchor_worker.definitions", "--host", "0.0.0.0", "--port", "3030"]
+# The daemon alone (§883): it is what fires schedules and launches runs.
+# `dagster dev` also started a web UI on 3030 that no load balancer or port
+# mapping reached, and Dagster documents it as for local development.
+CMD ["dagster-daemon", "run", "-m", "anchor_worker.definitions"]
