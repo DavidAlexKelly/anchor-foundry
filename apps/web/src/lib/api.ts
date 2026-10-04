@@ -2815,6 +2815,16 @@ export const canvas = {
         body: JSON.stringify({ definition, version_description: versionDescription }),
       },
     ),
+  /** p.203's warning before a save (§740): the saved states this document
+   * would stop reading, and by which external ID. */
+  stateImpact: (
+    wid: string, pid: string, appId: string,
+    definition: import("./types").WorkshopModule | Record<string, unknown>,
+  ) =>
+    request<import("./state-impact").OrphanedKey[]>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/state-impact`,
+      { method: "POST", body: JSON.stringify({ definition }) },
+    ),
   /** Resolve every variable, computing derived ones server-side so the
    * transformation semantics have one implementation. */
   evaluateVariables: (

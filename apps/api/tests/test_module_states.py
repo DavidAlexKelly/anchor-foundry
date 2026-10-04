@@ -341,3 +341,75 @@ def test_a_published_module_saves_and_opens_states_for_a_workspace_member(client
         f"{wbase(fx)}/published-canvas-apps/{module_id}/states", headers=hdr(fx.editor_sub)
     )
     assert [s["name"] for s in r.json()] == ["shared view"]
+
+
+# ---- p.203's warning, before the save (§740) ---------------------------------
+def impact(client, fx, module_id, document, sub=None):
+    return client.post(
+        f"{pbase(fx)}/canvas-apps/{module_id}/state-impact",
+        headers=hdr(sub or fx.editor_sub), json={"definition": document},
+    )
+
+
+def test_a_save_that_renames_an_external_id_names_the_states_it_strands(client, fx):
+    """p.203: "modifying a variable's external ID after state saving has been
+    configured may cause previously configured states to reload
+    unsuccessfully". Asked before the save, with the states named."""
+    module_id = make_module(client, fx, DOCUMENT)
+    save(client, fx, module_id, "Monday", {"v_region": "north", "v_status": "open"})
+    save(client, fx, module_id, "Tuesday", {"v_region": "south"})
+    save(client, fx, module_id, "Only status", {"v_status": "closed"})
+
+    renamed = {**DOCUMENT, "variables": {
+        **DOCUMENT["variables"], "v_region": saved("area", id="v_region")}}
+    r = impact(client, fx, module_id, renamed)
+    assert r.status_code == 200, r.text
+    # Newest first, as the states list is.
+    assert r.json() == [{"external_id": "region", "states": ["Tuesday", "Monday"]}]
+
+
+def test_turning_state_saving_off_for_a_variable_strands_its_key_too(client, fx):
+    module_id = make_module(client, fx, DOCUMENT)
+    save(client, fx, module_id, "kept", {"v_status": "open"})
+    off = {**DOCUMENT, "variables": {
+        **DOCUMENT["variables"], "v_status": saved("status", save_state=False)}}
+    assert impact(client, fx, module_id, off).json() == [
+        {"external_id": "status", "states": ["kept"]}]
+
+
+def test_a_rebuild_that_keeps_the_external_id_strands_nothing(client, fx):
+    """p.203's other sentence: the id, the label and the kind may all change
+    "as long as the output … uses the same external ID"."""
+    module_id = make_module(client, fx, DOCUMENT)
+    save(client, fx, module_id, "kept", {"v_region": "north"})
+    rebuilt = {**DOCUMENT, "variables": {
+        "v_rebuilt": {"id": "v_rebuilt", "kind": "string", "label": "Where",
+                      "external_id": "region", "save_state": True},
+        "v_status": saved("status")}}
+    assert impact(client, fx, module_id, rebuilt).json() == []
+
+
+def test_a_key_already_stranded_is_not_news(client, fx):
+    """Only what *this* save loses: repeating an earlier rename on every save
+    would teach a builder to click through the warning that matters."""
+    module_id = make_module(client, fx, DOCUMENT)
+    save(client, fx, module_id, "old", {"v_status": "open"})
+    narrowed = {**DOCUMENT, "variables": {"v_region": saved("region")}}
+    client.put(f"{pbase(fx)}/canvas-apps/{module_id}/definition",
+               headers=hdr(fx.editor_sub), json={"definition": narrowed})
+    assert impact(client, fx, module_id, narrowed).json() == []
+
+
+def test_a_module_with_no_states_strands_nothing_and_a_viewer_cannot_ask(client, fx):
+    module_id = make_module(client, fx, DOCUMENT)
+    assert impact(client, fx, module_id, {**DOCUMENT, "variables": {}}).json() == []
+    r = impact(client, fx, module_id, DOCUMENT, sub=fx.viewer_sub)
+    assert r.status_code == 403, r.text
+
+
+def test_a_document_that_does_not_parse_is_the_saves_to_refuse(client, fx):
+    module_id = make_module(client, fx, DOCUMENT)
+    save(client, fx, module_id, "kept", {"v_region": "north"})
+    broken = {**DOCUMENT, "variables": {"v_x": {"id": "v_x", "kind": "nonsense"}}}
+    r = impact(client, fx, module_id, broken)
+    assert r.status_code == 200 and r.json() == [], r.text

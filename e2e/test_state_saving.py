@@ -196,3 +196,47 @@ def test_the_builder_is_not_offered_a_state_to_save(page, saving):
         timeout=30000
     )
     expect(page.get_by_test_id("state-bar")).to_have_count(0)
+
+
+# ---- p.203's warning before a save (§740) -----------------------------------
+def test_a_save_that_strands_a_saved_state_asks_first(page, api):
+    """p.203: "modifying a variable's external ID after state saving has been
+    configured may cause previously configured states to reload
+    unsuccessfully". The builder is told which states, and may go ahead."""
+    from conftest import open_builder, settled
+
+    mod = build(api, "Saving renamed")
+    api.call("POST", f"{mod.base}/canvas-apps/{mod.app_id}/states",
+             {"name": "Monday view", "values": {"v_region": "north"}})
+    open_builder(page, mod)
+    settled(page)
+    page.get_by_role("button", name="Variables", exact=False).first.click()
+    page.locator(".vars-row", has_text="Region").first.click()
+    page.get_by_test_id("variable-external-id").fill("area")
+
+    page.get_by_role("button", name="Save", exact=True).click()
+    warning = page.get_by_test_id("state-impact")
+    expect(warning).to_contain_text("1 saved state will reopen without a value")
+    expect(warning.get_by_test_id("state-impact-key")).to_have_text("region — held by Monday view")
+    # Cancel is not a save.
+    page.get_by_test_id("state-impact-cancel").click()
+    expect(warning).to_have_count(0)
+    assert mod.definition()["variables"]["v_region"]["external_id"] == "region"
+
+    page.get_by_role("button", name="Save", exact=True).click()
+    page.get_by_test_id("state-impact-save").click()
+    eventually(lambda: mod.definition()["variables"]["v_region"]["external_id"],
+               lambda got: got == "area", what="the rename, saved anyway")
+
+
+def test_a_save_that_keeps_every_external_id_asks_nothing(page, api):
+    from conftest import open_builder, settled
+
+    mod = build(api, "Saving unchanged")
+    api.call("POST", f"{mod.base}/canvas-apps/{mod.app_id}/states",
+             {"name": "Kept", "values": {"v_region": "north"}})
+    open_builder(page, mod)
+    settled(page)
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.locator(".ws-actions .sub")).to_contain_text("saved")
+    expect(page.get_by_test_id("state-impact")).to_have_count(0)

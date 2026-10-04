@@ -1728,6 +1728,42 @@ async def _open(conn, row, state_id: UUID) -> StateDetail:
     return StateDetail(**_state_summary(state).model_dump(), values=values, missing=missing)
 
 
+class StateImpactIn(BaseModel):
+    definition: dict[str, Any]
+
+
+class OrphanedKey(BaseModel):
+    external_id: str
+    states: list[str]
+
+
+@router.post("/{app_id}/state-impact", response_model=list[OrphanedKey])
+async def state_impact(
+    app_id: UUID,
+    body: StateImpactIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> list[OrphanedKey]:
+    """p.203's warning before a save (§740): which saved states this document
+    would stop reading, and by which external ID. Read-only, and asked by the
+    builder's Save rather than enforced by it - see `module_states.orphaned`.
+
+    A document whose variables do not parse is not this endpoint's to refuse:
+    the save that follows refuses it in its own words, so this answers that
+    nothing is lost rather than answering a question the save will not reach.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.get(conn, access.project_id, app_id)
+        states = await states_service.list_states(conn, app_id)
+    if not states:
+        return []
+    try:
+        before = variables_service.parse((_parse_json(row["definition"]) or {}).get("variables"))
+        after = variables_service.parse((body.definition or {}).get("variables"))
+    except variables_service.VariableError:
+        return []
+    return [OrphanedKey(**k) for k in states_service.orphaned(states, before, after)]
+
+
 @router.get("/{app_id}/states", response_model=list[StateOut])
 async def list_states(
     app_id: UUID,
