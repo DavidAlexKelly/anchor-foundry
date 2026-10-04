@@ -125,8 +125,10 @@ def archive_one(platform_db: PlatformDatabase, storage, listener_id, workspace_i
             previous = None
             version = 1
             if dataset_id:
-                cur.execute("SELECT s3_location, current_version FROM datasets WHERE id = %s",
-                            (str(dataset_id),))
+                # Locked (§861): the listener's lock above keeps two archive
+                # runs apart, not an archive and anything else writing here.
+                cur.execute("SELECT s3_location, current_version FROM datasets WHERE id = %s"
+                            " FOR UPDATE", (str(dataset_id),))
                 location, current = cur.fetchone()
                 previous = storage.local_path(location)
                 version = int(current) + 1

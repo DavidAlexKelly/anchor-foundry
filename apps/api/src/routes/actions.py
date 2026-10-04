@@ -1935,6 +1935,7 @@ async def undo_action(
                      _columns(contexts[str(effect["source_id"])], effect["before"]))
                 )
         async with user_connection(access.auth.user_id) as conn:
+            await dataset_service.lock_for_writing(conn, [*plan, *join_tables])
             staged_all = []
             for dataset_key, work in plan.items():
                 work_source = work["context"]["source"]
@@ -3644,6 +3645,7 @@ async def _commit_rows(
     staged_all = []
     link_changes: list[list[dict[str, Any]]] = [[] for _ in rows]
     async with user_connection(access.auth.user_id) as conn:
+        await dataset_service.lock_for_writing(conn, [*plan, *join_tables])
         for dataset_key, work in plan.items():
             work_source = work["source"]
             work_path = await anyio.to_thread.run_sync(
@@ -4411,6 +4413,10 @@ async def execute_batch(
 
         staged_all = []
         async with user_connection(access.auth.user_id) as conn:
+            await dataset_service.lock_for_writing(conn, [
+                *(k for k, w in plan.items() if w["updates"] or w["appends"]),
+                *([log_edits["dataset_id"]] if log_edits is not None else []),
+            ])
             for dataset_key, work in plan.items():
                 if not work["updates"] and not work["appends"]:
                     # Every row this dataset carries wrote edit-only properties

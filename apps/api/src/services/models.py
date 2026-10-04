@@ -930,9 +930,10 @@ async def record_output(
         )
     else:
         dataset_id = UUID(str(output_dataset_id))
+        # Locked, for `stage_version`'s reason (§861).
         existing = await fetch_one(
             conn,
-            "SELECT current_version FROM datasets WHERE id = :did",
+            "SELECT current_version FROM datasets WHERE id = :did FOR UPDATE",
             {"did": str(dataset_id)},
         )
         if existing is None:

@@ -248,8 +248,16 @@ async def run_full_sync(
                 f"a different dataset already uses the name '{slug}' in this project"
             )
         schema_changes = engine.diff_schemas(_stored_schema(existing["table_schema"]), schema)
-        version = int(existing["current_version"]) + 1
         dataset_id = UUID(str(existing["id"]))
+        # The number under the dataset's lock, as `stage_version` takes it
+        # (§861): its file is written below, before the transaction commits.
+        locked = await fetch_one(
+            conn, "SELECT current_version FROM datasets WHERE id = :did FOR UPDATE",
+            {"did": str(dataset_id)},
+        )
+        if locked is None:
+            raise SyncError("the synced dataset no longer exists")
+        version = int(locked["current_version"]) + 1
         parquet_key = (
             f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
         )
@@ -441,8 +449,10 @@ async def run_incremental_sync(
         )
     else:
         dataset_id = UUID(str(existing_dataset_id))
+        # Locked, for `stage_version`'s reason (§861).
         existing = await fetch_one(
-            conn, "SELECT current_version FROM datasets WHERE id = :did", {"did": str(dataset_id)}
+            conn, "SELECT current_version FROM datasets WHERE id = :did FOR UPDATE",
+            {"did": str(dataset_id)},
         )
         if existing is None:
             raise SyncError("the synced dataset no longer exists")

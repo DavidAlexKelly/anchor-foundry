@@ -158,3 +158,40 @@ def test_an_upstream_model_another_pass_holds_is_left_to_it(workspace: dict) -> 
 def model_runs_db():
     return _ctx().resources.platform_db
 
+
+
+def test_a_runs_output_waits_for_another_writer_of_its_dataset(
+    workspace: dict, storage_root: str
+) -> None:
+    """§861: the output's file is named by the version number. Read without a
+    lock, another writer of the same dataset - a rollback, an action - could
+    take the same number, and whichever wrote second replaced the other's
+    committed file. Held, the run's write waits for the other to finish."""
+    import threading
+    import time
+
+    mid = _create_model(workspace, language="sql", code="SELECT * FROM t")
+    _queue_run(mid)
+    model_runs._execute_queued_model_runs(_ctx(), model_runs_db())
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        out, prefix = conn.execute(
+            "SELECT m.output_dataset_id, w.s3_prefix FROM models m JOIN projects p ON p.id=m.project_id"
+            " JOIN workspaces w ON w.id=p.workspace_id WHERE m.id=%s", (mid,)).fetchone()
+    second_file = os.path.join(storage_root, f"{prefix}datasets/{out}/v2/data.parquet")
+    _queue_run(mid)
+
+    held = psycopg.connect(ADMIN_DSN)
+    held.execute("SELECT 1 FROM datasets WHERE id=%s FOR UPDATE", (out,))
+    run = threading.Thread(
+        target=lambda: model_runs._execute_queued_model_runs(_ctx(), model_runs_db()), daemon=True)
+    run.start()
+    time.sleep(1.5)
+    try:
+        assert not os.path.exists(second_file), "the run wrote v2's file under another writer's lock"
+    finally:
+        held.rollback()
+        held.close()
+    run.join(30)
+    assert not run.is_alive()
+    assert os.path.exists(second_file)
+    assert _outputs(mid) == 2

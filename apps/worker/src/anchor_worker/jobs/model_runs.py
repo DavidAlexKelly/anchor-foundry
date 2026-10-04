@@ -108,7 +108,11 @@ def _record_output(
         cur.execute("UPDATE models SET output_dataset_id = %s WHERE id = %s", (str(dataset_id), str(model_id)))
     else:
         dataset_id = output_dataset_id
-        cur.execute("SELECT current_version FROM datasets WHERE id = %s", (str(dataset_id),))
+        # Locked until this run's output commits (§861): the file below is
+        # named by the number, and an unlocked read let another writer of the
+        # dataset take the same one and overwrite it.
+        cur.execute("SELECT current_version FROM datasets WHERE id = %s FOR UPDATE",
+                    (str(dataset_id),))
         row = cur.fetchone()
         if row is None:
             raise engine.DatasetEngineError("output dataset no longer exists")

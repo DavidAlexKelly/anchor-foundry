@@ -125,8 +125,11 @@ def _record_synced_dataset(
         dataset_id = new_id
         schema_changes = None  # first version: no baseline to drift from
     else:
+        # Locked until the version commits (§861): its file is named by the
+        # number, and an unlocked read let another writer take it too.
         cur.execute(
-            "SELECT current_version, table_schema FROM datasets WHERE id = %s", (str(dataset_id),)
+            "SELECT current_version, table_schema FROM datasets WHERE id = %s FOR UPDATE",
+            (str(dataset_id),),
         )
         row = cur.fetchone()
         if row is None:

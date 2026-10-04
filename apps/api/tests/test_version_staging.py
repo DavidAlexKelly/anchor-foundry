@@ -233,3 +233,73 @@ async def test_add_version_still_stages_and_commits_in_one_call(
 
     assert int(updated["current_version"]) == before["current_version"] + 1
     assert state(dataset_id)["versions"] == before["versions"] + 1
+
+
+@pytest.mark.anyio
+async def test_two_writers_take_turns_rather_than_share_a_file(
+    client: TestClient, fx: Fixture, storage
+) -> None:
+    """§861: the bytes are written under a key named by the number, before
+    anything commits. Two writers that both read v1 both wrote v2's file, and
+    whichever wrote second replaced what the other had committed - a v2 row
+    describing one write over the other's bytes. The first writer's lock now
+    makes the second wait, read v2, and write v3."""
+    import anyio
+    from src.lib.db import user_connection
+
+    dataset_id = upload(client, fx, f"Turns {uuid.uuid4().hex[:6]}")
+    second: dict = {}
+
+    async def second_writer() -> None:
+        async with user_connection(_uid(fx.editor)) as conn:
+            staged = await stage(conn, storage, fx, dataset_id, b"second")
+            second["staged"] = staged
+            await dataset_service.commit_versions(conn, [staged])
+
+    async with anyio.create_task_group() as tasks:
+        async with user_connection(_uid(fx.editor)) as conn:
+            first = await stage(conn, storage, fx, dataset_id, b"first")
+            tasks.start_soon(second_writer)
+            await anyio.sleep(0.5)
+            assert "staged" not in second, "the second writer staged while the first held v2"
+            await dataset_service.commit_versions(conn, [first])
+        # The first commits as its connection closes; the second goes next.
+
+    assert (first.version, second["staged"].version) == (2, 3)
+    assert storage.read(first.parquet_key) == b"first"
+    assert storage.read(second["staged"].parquet_key) == b"second"
+    assert state(dataset_id)["current_version"] == 3
+
+
+@pytest.mark.anyio
+async def test_two_writes_of_two_datasets_meet_in_one_order(
+    client: TestClient, fx: Fixture, storage
+) -> None:
+    """§861: each staged version locks its dataset, so two writes versioning
+    A then B and B then A would each hold what the other wants. Taking both
+    first, in one order, makes the second wait rather than deadlock."""
+    import anyio
+    from src.lib.db import user_connection
+
+    a = upload(client, fx, f"Order A {uuid.uuid4().hex[:6]}")
+    b = upload(client, fx, f"Order B {uuid.uuid4().hex[:6]}")
+    second: dict = {}
+
+    async def b_then_a() -> None:
+        async with user_connection(_uid(fx.editor)) as conn:
+            await dataset_service.lock_for_writing(conn, [b, a])
+            staged = [await stage(conn, storage, fx, b, b"2b"), await stage(conn, storage, fx, a, b"2a")]
+            second["committed"] = await dataset_service.commit_versions(conn, staged)
+
+    async with anyio.create_task_group() as tasks:
+        async with user_connection(_uid(fx.editor)) as conn:
+            await dataset_service.lock_for_writing(conn, [a, b])
+            first_a = await stage(conn, storage, fx, a, b"1a")
+            tasks.start_soon(b_then_a)
+            await anyio.sleep(0.5)
+            first_b = await stage(conn, storage, fx, b, b"1b")
+            await dataset_service.commit_versions(conn, [first_a, first_b])
+
+    assert (first_a.version, first_b.version) == (2, 2)
+    assert {k: v["current_version"] for k, v in second["committed"].items()} == {a: 3, b: 3}
+    assert state(a)["current_version"] == state(b)["current_version"] == 3
