@@ -413,11 +413,12 @@ def test_a_prerelease_floor_upgrades_to_the_release_above_it() -> None:
 
 def test_edit_rules_split_the_subject_the_existing_and_the_new() -> None:
     rules, bound = action_functions.edit_rules(
-        [{"primary_key": "T1", "properties": {"title": "a"}},
-         {"primary_key": "T2", "properties": {"title": "b", "status": None}},
-         {"primary_key": "T9", "properties": {"title": "c"}}],
-        object_type_id="t", subject_type_id="t", subject_key="T1",
-        existing={"T1": "id1", "T2": "id2"})
+        [{"object_type_id": "t", "primary_key": "T1", "properties": {"title": "a"}},
+         {"object_type_id": "t", "primary_key": "T2",
+          "properties": {"title": "b", "status": None}},
+         {"object_type_id": "t", "primary_key": "T9", "properties": {"title": "c"}}],
+        subject_type_id="t", subject_key="T1",
+        existing={("t", "T1"): "id1", ("t", "T2"): "id2"})
     assert rules == [
         {"kind": "modify_object", "config": {"property": "title", "parameter": "function.0.title"}},
         {"kind": "modify_object", "config": {"object": "function.1", "object_type": "t",
@@ -436,9 +437,9 @@ def test_edit_rules_split_the_subject_the_existing_and_the_new() -> None:
 
 def test_edit_rules_of_another_type_never_touch_the_subject() -> None:
     rules, _bound = action_functions.edit_rules(
-        [{"primary_key": "T1", "properties": {"status": "x"}}],
-        object_type_id="alerts", subject_type_id="t", subject_key="T1",
-        existing={"T1": "a1"})
+        [{"object_type_id": "alerts", "primary_key": "T1", "properties": {"status": "x"}}],
+        subject_type_id="t", subject_key="T1",
+        existing={("alerts", "T1"): "a1"})
     assert rules[0]["config"]["object"] == "function.0"
 
 

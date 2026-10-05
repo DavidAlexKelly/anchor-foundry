@@ -24,7 +24,8 @@ import { ApiError, objects as objApi } from "@/lib/api";
 import {
   BATCH_FIELD_TYPES, OUTPUT_KINDS, PARAMETER_TYPES, SCALAR_TYPES, blankDraft, blankField,
   blankParameter, bodyOf, draftOf,
-  draftProblem, refersToObjects, resultLine, valuesFor, type DraftVersion,
+  draftProblem, editedTypes, editsOver, refersToObjects, resultLine, valuesFor,
+  type DraftVersion,
 } from "@/lib/functions";
 import type {
   FunctionBatchField, FunctionDetail, FunctionParameter, FunctionSummary,
@@ -302,8 +303,7 @@ function VersionDialog({ workspaceId, existing, onClose }: {
               {SCALAR_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           )}
-          {(draft.output.kind === "object_set" || draft.output.kind === "map"
-            || draft.output.kind === "edits") && (
+          {(draft.output.kind === "object_set" || draft.output.kind === "map") && (
             <TypePicker
               workspaceId={workspaceId}
               testId="fn-output-object"
@@ -324,11 +324,11 @@ function VersionDialog({ workspaceId, existing, onClose }: {
         </p>
       )}
       {draft.output.kind === "edits" && (
-        <p className="field-hint">
-          The query&apos;s first column is the primary key of each object to change, and
-          every other column a property to set on it. An object that does not exist is
-          created — what an action&apos;s Function rule applies (action-types p.75).
-        </p>
+        <EditedTypes
+          workspaceId={workspaceId}
+          types={editedTypes(draft.output)}
+          onChange={(types) => set({ output: editsOver(types) })}
+        />
       )}
       {draft.output.kind === "map" && (
         <p className="field-hint">
@@ -453,7 +453,24 @@ function RunDialog({ workspaceId, fn, onClose }: {
               </tbody>
             </table>
           )}
-          {result.kind === "edits" && (
+          {result.kind === "edits" && (result.edits ?? []).some((e) => e.edit) && (
+            <table className="table" data-testid="fn-result-edits">
+              <thead>
+                <tr><th>Type</th><th>Object</th><th>Edit</th><th>Properties</th></tr>
+              </thead>
+              <tbody>
+                {(result.edits ?? []).map((e) => (
+                  <tr key={`${e.object_type}-${e.primary_key}`}>
+                    <td>{e.object_type}</td>
+                    <td>{e.primary_key}</td>
+                    <td>{e.edit}</td>
+                    <td>{Object.keys(e.properties).length ? JSON.stringify(e.properties) : ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {result.kind === "edits" && !(result.edits ?? []).some((e) => e.edit) && (
             <table className="table" data-testid="fn-result-edits">
               <thead>
                 <tr>
@@ -594,5 +611,51 @@ export function FunctionsPanel({ workspaceId, canEdit, openId: asked = null, onO
         </table>
       )}
     </>
+  );
+}
+
+/** The object types an edit function edits (§773, §783). p.75: "Create several
+ * different types of objects and set up links between them" - so a function
+ * may edit several, and then each row of its query says whose it is. */
+function EditedTypes({ workspaceId, types, onChange }: {
+  workspaceId: string;
+  types: string[];
+  onChange: (types: string[]) => void;
+}) {
+  return (
+    <div data-testid="fn-output-objects">
+      {types.map((t, i) => (
+        <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
+          <TypePicker
+            workspaceId={workspaceId}
+            testId={i === 0 ? "fn-output-object" : `fn-output-object-${i + 1}`}
+            placeholder="Choose an object type…"
+            value={t || null}
+            onChange={(id) => onChange(types.map((u, j) => (j === i ? id ?? "" : u)))}
+          />
+          {types.length > 1 && (
+            <button type="button" className="link-button" aria-label={`Remove edited type ${i + 1}`}
+                    onClick={() => onChange(types.filter((_u, j) => j !== i))}>
+              Remove
+            </button>
+          )}
+        </div>
+      ))}
+      <button type="button" className="link-button" onClick={() => onChange([...types, ""])}>
+        Add an object type
+      </button>
+      <p className="field-hint">
+        {types.length === 1
+          ? <>The query&apos;s first column is the primary key of each object to change, and
+              every other column a property to set on it. An object that does not exist is
+              created — what an action&apos;s Function rule applies (action-types p.75).
+              To edit several object types, or to delete, give the four columns below.</>
+          : <>Each row says what becomes of one object (action-types p.75).</>}
+        {" "}<code>__object_type</code> (its type&apos;s API name), <code>__primary_key</code>,
+        {" "}<code>__edit</code> (create, modify or delete) and <code>__properties</code>, a JSON
+        object of the properties to set, such as <code>json_object(&apos;status&apos;,
+        &apos;closed&apos;)</code>.
+      </p>
+    </div>
   );
 }

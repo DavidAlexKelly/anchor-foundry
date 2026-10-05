@@ -195,3 +195,49 @@ def test_a_batch_parameter_is_written_with_its_fields(page, api, world) -> None:
     page.get_by_role("textbox", name="batch").fill('[{"site": null}, {"site": null}]')
     page.get_by_test_id("fn-run").click()
     expect(page.get_by_test_id("fn-result-line")).to_have_text("2", timeout=15000)
+
+
+def test_an_edit_function_over_two_types_is_written_and_run(page, api, world) -> None:
+    """§783: p.75's "Create several different types of objects and set up
+    links between them", with a deletion beside it - each row of the query
+    naming its type, its object, its verb and the properties to set."""
+    mod, slug = world["mod"], world["slug"]
+    checks = f"check_{uuid.uuid4().hex[:6]}"
+    check_type = mod.object_type(columns=["id", "site", "note"],
+                                 rows=[{"id": "C1", "site": "S1", "note": "old"}],
+                                 key="id", title="id", slug=checks)
+    name = f"Inspect {uuid.uuid4().hex[:4]}"
+    api_name = name.lower().replace(" ", "_")
+    open_objects(page, mod)
+    page.get_by_test_id("new-function").click()
+    page.get_by_test_id("fn-name").fill(name)
+    pick_type(page, "fn-input-picker", {"id": world["sites"], "api_name": slug})
+    page.get_by_test_id("fn-add-input").click()
+    page.get_by_test_id("fn-output-kind").select_option("edits")
+    page.get_by_test_id("fn-sql").fill(
+        f"SELECT '{slug}' AS __object_type, 'S3' AS __primary_key, 'modify' AS __edit, "
+        "json_object('capacity', 26) AS __properties "
+        f"UNION ALL SELECT '{checks}', 'C2', 'create', json_object('site', 'S3', 'note', 'new') "
+        f"UNION ALL SELECT '{checks}', 'C1', 'delete', NULL")
+    pick_type(page, "fn-output-object", {"id": world["sites"], "api_name": slug})
+    page.get_by_role("button", name="Add an object type").click()
+    expect(page.get_by_test_id("fn-problem")).to_have_text("Choose the object type it edits.")
+    pick_type(page, "fn-output-object-2", {"id": check_type, "api_name": checks})
+    expect(page.get_by_test_id("fn-problem")).to_have_count(0)
+    page.get_by_test_id("fn-save").click()
+    expect(page.get_by_test_id(f"fn-version-{api_name}")).to_have_text("1.0.0", timeout=15000)
+    stored = next(f for f in api.call("GET", f"/workspaces/{mod.workspace_id}/functions")
+                  if f["api_name"] == api_name)
+    detail = api.call("GET", f"/workspaces/{mod.workspace_id}/functions/{stored['id']}")
+    assert detail["versions"][0]["output"] == {
+        "kind": "edits", "object_type_ids": [world["sites"], check_type]}
+
+    page.get_by_role("button", name=f"Run {api_name}").click()
+    page.get_by_test_id("fn-run").click()
+    expect(page.get_by_test_id("fn-result-line")).to_have_text("3 edits", timeout=15000)
+    edits = page.get_by_test_id("fn-result-edits")
+    expect(edits.locator("thead th")).to_have_text(["Type", "Object", "Edit", "Properties"])
+    expect(edits.locator("tbody tr").nth(1).locator("td")).to_have_text(
+        [checks, "C2", "create", '{"site":"S3","note":"new"}'])
+    expect(edits.locator("tbody tr").nth(2).locator("td")).to_have_text(
+        [checks, "C1", "delete", ""])

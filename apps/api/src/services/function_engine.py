@@ -19,6 +19,7 @@ Parameters are bound as `$name` and never put into the SQL text.
 """
 from __future__ import annotations
 
+import json
 import re
 import threading
 from dataclasses import dataclass, field
@@ -213,11 +214,29 @@ def _aggregation(con: duckdb.DuckDBPyConnection, names: list[str]) -> dict[str, 
     return {"kind": "aggregation", "dimensions": len(names), "buckets": buckets}
 
 
+#: The columns of an edit function's typed shape (§783), in order: whose row
+#: it is, which object, what becomes of it, and the properties to set.
+TYPED_EDIT_COLUMNS = ("__object_type", "__primary_key", "__edit", "__properties")
+#: p.75's verbs, "create, modify, and delete objects".
+EDIT_VERBS = ("create", "modify", "delete")
+
+
+def typed_edits(names: list[str]) -> bool:
+    """Whether a query's columns are §783's typed shape."""
+    return bool(names) and names[0] == TYPED_EDIT_COLUMNS[0]
+
+
 def _edits(con: duckdb.DuckDBPyConnection, names: list[str], described: list[Any]) -> dict[str, Any]:
     """`action-types` p.75's Ontology edit function (§773): each row an object
     of the output's type by its primary key, and the properties to set on it.
     What the action does with each - modify one that exists, create one that
-    does not - is the executor's (`actions.function_edit_rules`)."""
+    does not - is the executor's (`action_functions.edit_rules`).
+
+    A query whose first column is `__object_type` is §783's typed shape, for
+    p.75's edits across types: each row names its type, its object, its verb
+    and a JSON object of the properties to set (`_typed_edits`)."""
+    if typed_edits(names):
+        return _typed_edits(con, names)
     if len(names) < 2:
         raise FunctionError("an edit function's query gives each object's primary key and "
                             "then at least one property to set")
@@ -239,6 +258,49 @@ def _edits(con: duckdb.DuckDBPyConnection, names: list[str], described: list[Any
             name: json_value(value) for name, value in zip(names[1:], row[1:])}})
     return {"kind": "edits", "columns": [{"name": r[0], "data_type": r[1]} for r in described[1:]],
             "edits": edits}
+
+
+def _typed_edits(con: duckdb.DuckDBPyConnection, names: list[str]) -> dict[str, Any]:
+    """§783's shape. Its properties are JSON rather than a column each, because
+    two types may share a property name and a column cannot say "leave this
+    one alone" for one type and "set it to nothing" for the other. A JSON
+    value is coerced to the property's type as a parameter's is."""
+    if tuple(names) != TYPED_EDIT_COLUMNS:
+        raise FunctionError(TYPED_SHAPE)
+    rows = con.execute(f"SELECT * FROM __function_output LIMIT {MAX_EDITS + 1}").fetchall()
+    if len(rows) > MAX_EDITS:
+        raise FunctionError(f"the function returned more than {MAX_EDITS:,} edits, the most "
+                            "one action may make")
+    edits: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for type_name, key, verb, raw in rows:
+        if key is None:
+            continue  # names no object, as §773's shape skips it
+        key, type_name = str(key), str(type_name)
+        if verb not in EDIT_VERBS:
+            raise FunctionError(f"{verb!r} is not an edit; __edit is create, modify or delete")
+        properties = json.loads(raw) if isinstance(raw, str) else raw
+        if properties is None:
+            properties = {}
+        if not isinstance(properties, dict):
+            raise FunctionError(f"__properties is a JSON object of the properties to set, "
+                                f"and {key}'s is not")
+        if verb == "delete" and properties:
+            raise FunctionError(f"the function deletes {key} and sets properties on it")
+        if verb == "modify" and not properties:
+            raise FunctionError(f"the function says nothing to set on {key}, which it modifies")
+        if (type_name, key) in seen:
+            raise FunctionError(f"the function edits {type_name} {key} twice; one row says "
+                                "what becomes of one object")
+        seen.add((type_name, key))
+        edits.append({"object_type": type_name, "primary_key": key, "edit": verb,
+                      "properties": properties})
+    return {"kind": "edits", "columns": [{"name": n, "data_type": "VARCHAR"} for n in names],
+            "edits": edits}
+
+
+TYPED_SHAPE = ("an edit function over several object types says each row's type: its query "
+               "gives " + ", ".join(TYPED_EDIT_COLUMNS) + ", in that order (action-types p.75)")
 
 
 def _shape(con: duckdb.DuckDBPyConnection, output: dict[str, Any]) -> dict[str, Any]:

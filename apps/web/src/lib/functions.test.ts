@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import type { FunctionVersion } from "@/lib/types";
 import {
-  blankDraft, blankParameter, bodyOf, compareVersions, draftOf, draftProblem, nextVersion,
+  blankDraft, blankParameter, bodyOf, compareVersions, draftOf, draftProblem, editedTypes,
+  editsOver, nextVersion,
   OUTPUT_KINDS,
   parametersUsed, resultLine, valuesFor, versionKey,
 } from "./functions";
@@ -240,5 +241,30 @@ describe("a batch parameter (§779)", () => {
     expect(valuesFor([batch], { batch: '[{"ticket": "id"}]' }))
       .toEqual({ batch: [{ ticket: "id" }] });
     expect(valuesFor([batch], { batch: "not json" })).toEqual({ batch: "not json" });
+  });
+});
+
+describe("an edit function over several types (§783)", () => {
+  const edits = (output: Record<string, unknown>) =>
+    ({ ...blankDraft(), sql: "SELECT 1", output: { kind: "edits", ...output } });
+
+  it("names one type as §773 saved it, and several as a list", () => {
+    expect(editedTypes({ kind: "edits", object_type_id: "a" })).toEqual(["a"]);
+    expect(editedTypes({ kind: "edits" })).toEqual([""]);
+    expect(editedTypes({ kind: "edits", object_type_ids: ["a", "b"] })).toEqual(["a", "b"]);
+    expect(editsOver(["a"])).toEqual({ kind: "edits", object_type_id: "a" });
+    expect(editsOver(["a", "b"])).toEqual({ kind: "edits", object_type_ids: ["a", "b"] });
+    expect(bodyOf(edits({ object_type_ids: ["a", "b"] }) as never).output)
+      .toEqual({ kind: "edits", object_type_ids: ["a", "b"] });
+    expect(bodyOf(edits({ object_type_id: "a" }) as never).output)
+      .toEqual({ kind: "edits", object_type_id: "a" });
+  });
+
+  it("chooses every type once", () => {
+    expect(draftProblem(edits({ object_type_ids: ["a", ""] }) as never, null))
+      .toBe("Choose the object type it edits.");
+    expect(draftProblem(edits({ object_type_ids: ["a", "a"] }) as never, null))
+      .toBe("Name each object type it edits once.");
+    expect(draftProblem(edits({ object_type_ids: ["a", "b"] }) as never, null)).toBeNull();
   });
 });

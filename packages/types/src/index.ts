@@ -2264,6 +2264,9 @@ export interface FunctionOutput {
     | "edits";
   data_type?: string;
   object_type_id?: string;
+  /** An edit function over several types (§783; p.75): the types it may
+   * edit, in place of `object_type_id`. */
+  object_type_ids?: string[];
 }
 
 /** One immutable version (`functions` p.49): what it takes, reads and does. */
@@ -2308,7 +2311,14 @@ export interface FunctionResult {
   buckets?: { key: string; segment?: string; value: number }[] | null;
   /** An edit function's answer (§773): each object by its primary key, and
    * the properties to set on it. */
-  edits?: { primary_key: string; properties: Record<string, unknown> }[] | null;
+  edits?: {
+    primary_key: string;
+    properties: Record<string, unknown>;
+    /** A typed edit's (§783): its type's api name and id, and its verb. */
+    object_type?: string;
+    object_type_id?: string;
+    edit?: "create" | "modify" | "delete" | null;
+  }[] | null;
 }
 
 /** p.255's proposal to promote an object type (§767): "Other users must
