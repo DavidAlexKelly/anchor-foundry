@@ -36,7 +36,7 @@ from typing import Any
 from uuid import UUID
 
 from . import functions as functions_service
-from .function_engine import FunctionError, UserFacingError
+from .function_engine import LINK_VERBS, FunctionError, UserFacingError
 
 #: Where the edits' values live in the bound namespace. A dot, so it cannot be
 #: a parameter's api_name; refused by `bind_parameters` from a caller.
@@ -105,7 +105,9 @@ def check_rule(
 ) -> None:
     """A Function rule that could not run, refused at save (p.78-82)."""
     if object_type_id is None:
-        raise ValueError("a Function rule is not built for an action on an interface")
+        # p.65: "Actions on interfaces cannot be used with functions."
+        raise ValueError("an action on an interface cannot call a function "
+                         "(action-types p.65)")
     fn = functions.get(str(config.get("function_id") or ""))
     if fn is None:
         raise ValueError("a Function rule names a function this workspace does not have")
@@ -185,6 +187,8 @@ def edit_rules(
         key = str(edit["primary_key"])
         object_type_id = str(edit["object_type_id"])
         verb = edit.get("edit")
+        if verb in LINK_VERBS:
+            continue  # a join table's pairs, not a rule (`link_pairs`)
         subject = object_type_id == subject_type_id and key == subject_key
         there = subject or (object_type_id, key) in existing
         if verb == "create" and there:
@@ -219,6 +223,34 @@ def edit_rules(
                 "object_type": object_type_id, "primary_key": f"{PREFIX}{i}",
                 "properties": {prop: name for name, (prop, _v) in values.items()}}})
     return rules, bound
+
+
+def link_pairs(
+    edits: list[dict[str, Any]], *, there: set[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    """The join tables' pairs a function's link edits add or remove (§784),
+    by the two objects' keys. `there` is every `(type id, primary key)` that
+    exists or that the function creates; a link to anything else is refused.
+    """
+    pairs: list[dict[str, Any]] = []
+    for edit in edits:
+        if edit.get("edit") not in LINK_VERBS:
+            continue
+        key = str(edit["primary_key"])
+        if (str(edit["object_type_id"]), key) not in there:
+            raise FunctionError(f"the function {edit['edit']}s {key}, which does not exist")
+        for link in edit["links"]:
+            for other in link["keys"]:
+                if (link["other_type_id"], other) not in there:
+                    raise FunctionError(f"the function {edit['edit']}s {key} to {other}, "
+                                        "which does not exist")
+                pairs.append({
+                    "kind": "create_link" if edit["edit"] == "link" else "delete_link",
+                    "link_type_id": link["link_type_id"], "dataset_id": link["dataset_id"],
+                    "from_column": link["from_column"], "to_column": link["to_column"],
+                    "keys": (key, other) if link["end"] == "from" else (other, key),
+                })
+    return pairs
 
 
 async def call(

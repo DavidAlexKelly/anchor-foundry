@@ -191,6 +191,8 @@ def apply_rules(
     mapped_properties: set[str],
     edit_only: set[str] = frozenset(),
     link_types: dict[str, dict[str, Any]] | None = None,
+    #: A function's link edits write join tables and no rule says so (§784).
+    writes_links: bool = False,
 ) -> dict[str, Any]:
     """What the rules write, given the bound parameters.
 
@@ -316,7 +318,7 @@ def apply_rules(
         writes[prop] = _write_value(
             property_types, struct_fields, prop, bound[parameter], array_of
         )
-    if not writes and not writes_elsewhere and not any(
+    if not writes and not writes_elsewhere and not writes_links and not any(
         str(r["kind"]) in ("create_object", "delete_object") for r in rules
     ):
         raise ValueError("submit at least one value to write")

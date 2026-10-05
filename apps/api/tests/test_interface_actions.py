@@ -1625,4 +1625,4 @@ def test_a_function_rule_is_not_built_for_an_interface_action(
         json={"parameters": [], "criteria": [], "rules": [{"kind": "function", "config": {
             "function_id": fn.json()["id"], "version": "1.0.0", "inputs": {}}}]})
     assert r.status_code == 422, r.text
-    assert "not built for an action on an interface" in r.text
+    assert "an action on an interface cannot call a function (action-types p.65)" in r.text

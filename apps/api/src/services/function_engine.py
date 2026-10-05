@@ -217,8 +217,10 @@ def _aggregation(con: duckdb.DuckDBPyConnection, names: list[str]) -> dict[str, 
 #: The columns of an edit function's typed shape (§783), in order: whose row
 #: it is, which object, what becomes of it, and the properties to set.
 TYPED_EDIT_COLUMNS = ("__object_type", "__primary_key", "__edit", "__properties")
-#: p.75's verbs, "create, modify, and delete objects".
-EDIT_VERBS = ("create", "modify", "delete")
+#: p.75's verbs, "create, modify, and delete objects", and its "set up links
+#: between them" on a join table (§784).
+EDIT_VERBS = ("create", "modify", "delete", "link", "unlink")
+LINK_VERBS = ("link", "unlink")
 
 
 def typed_edits(names: list[str]) -> bool:
@@ -278,13 +280,31 @@ def _typed_edits(con: duckdb.DuckDBPyConnection, names: list[str]) -> dict[str, 
             continue  # names no object, as §773's shape skips it
         key, type_name = str(key), str(type_name)
         if verb not in EDIT_VERBS:
-            raise FunctionError(f"{verb!r} is not an edit; __edit is create, modify or delete")
+            raise FunctionError(f"{verb!r} is not an edit; __edit is create, modify, delete, "
+                                "link or unlink")
         properties = json.loads(raw) if isinstance(raw, str) else raw
         if properties is None:
             properties = {}
         if not isinstance(properties, dict):
             raise FunctionError(f"__properties is a JSON object of the properties to set, "
                                 f"and {key}'s is not")
+        if verb in LINK_VERBS:
+            # §784: each property names a link type and the key, or keys, at
+            # its other end. One object may link and unlink in several rows.
+            if not properties:
+                raise FunctionError(f"the function says nothing to {verb} {key} to")
+            for name, value in properties.items():
+                # A NULL key names nothing, as a row's does.
+                keys = [k for k in (value if isinstance(value, list) else [value])
+                        if k is not None]
+                if not all(isinstance(k, (str, int)) and not isinstance(k, bool)
+                           for k in keys):
+                    raise FunctionError(f"{name} in {key}'s __properties is a key or a list "
+                                        "of keys")
+                properties[name] = [str(k) for k in keys]
+            edits.append({"object_type": type_name, "primary_key": key, "edit": verb,
+                          "properties": properties})
+            continue
         if verb == "delete" and properties:
             raise FunctionError(f"the function deletes {key} and sets properties on it")
         if verb == "modify" and not properties:

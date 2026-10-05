@@ -2880,6 +2880,8 @@ async def execute_action(
             # be refused before anything is written - and its edits become the
             # rules everything below already runs (`action_functions`' note).
             function_config = action_functions.function_rule(action_type["rules"])
+            # A function's link edits (§784): join table pairs by key.
+            function_links: list[dict[str, Any]] = []
             if function_config is not None:
                 async with _counted_as(
                     "function", into=noted,
@@ -2895,10 +2897,15 @@ async def execute_action(
                     # Which of the objects named are there, a read per type
                     # the edits touch (§783). A key of another type in the
                     # read finds nothing of this one.
+                    # A link edit's other ends are objects too (§784).
+                    named = [(str(e["object_type_id"]), str(e["primary_key"]))
+                             for e in result["edits"]] + [
+                        (link["other_type_id"], other)
+                        for e in result["edits"] for link in e.get("links", [])
+                        for other in link["keys"]]
                     existing: dict[tuple[str, str], str] = {}
-                    keys = list(dict.fromkeys(str(e["primary_key"]) for e in result["edits"]))
-                    for edited_type in dict.fromkeys(
-                            str(e["object_type_id"]) for e in result["edits"]):
+                    keys = list(dict.fromkeys(k for _t, k in named))
+                    for edited_type in dict.fromkeys(t for t, _k in named):
                         found = await object_set_eval.instances_of(
                             conn, access.workspace_id, {
                                 "object_type_id": edited_type,
@@ -2914,6 +2921,9 @@ async def execute_action(
                         subject_key=str(instance["primary_key"]),
                         existing=existing,
                     )
+                    function_links = action_functions.link_pairs(result["edits"], there={
+                        *existing, *((str(e["object_type_id"]), str(e["primary_key"]))
+                                     for e in result["edits"] if e.get("edit") == "create")})
                 action_type = {**action_type, "rules": [
                     r for r in action_type["rules"] if str(r.get("kind")) != "function"
                 ] + function_rules}
@@ -3161,6 +3171,7 @@ async def execute_action(
                 mapped_properties=set(column_mappings.values()),
                 edit_only=edit_only,
                 link_types=link_types,
+                writes_links=bool(function_links),
             )
             # p.62: "primary key values cannot be modified by any action type.
             # Therefore, an action will fail on submission…" — which is where
@@ -3306,6 +3317,7 @@ async def execute_action(
             # the join table it goes in. Resolved here, while the action can
             # still be refused, as every other named object is.
             join_tables: dict[str, dict[str, Any]] = {}
+            wanted_pairs: list[tuple[dict[str, Any], tuple[str, str]]] = []
             for pair in actions_service.join_pairs(
                 bound, rules=action_type["rules"], object_type_id=object_type_id,
                 link_types=link_types,
@@ -3317,6 +3329,10 @@ async def execute_action(
                 if other is None:
                     raise NotFoundError("object to link")
                 here, there = str(instance["primary_key"]), str(other["primary_key"])
+                wanted_pairs.append(
+                    (pair, (here, there) if pair["subject_end"] == "from" else (there, here)))
+            wanted_pairs += [(pair, pair["keys"]) for pair in function_links]
+            for pair, keys in wanted_pairs:
                 table = join_tables.get(pair["dataset_id"])
                 if table is None:
                     located = await fetch_one(
@@ -3339,9 +3355,7 @@ async def execute_action(
                         "this action links through two link types that share a join table "
                         "on different columns, which one write cannot express"
                     )
-                table["add" if pair["kind"] == "create_link" else "remove"].append(
-                    (here, there) if pair["subject_end"] == "from" else (there, here)
-                )
+                table["add" if pair["kind"] == "create_link" else "remove"].append(keys)
             # p.167's action log (§554): where this submission's log entry and
             # its links to the edited objects go. Read now, so an action whose
             # log the person applying it cannot write is refused before anything

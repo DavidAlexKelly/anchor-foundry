@@ -654,7 +654,9 @@ function EditedTypes({ workspaceId, types, onChange }: {
         {" "}<code>__object_type</code> (its type&apos;s API name), <code>__primary_key</code>,
         {" "}<code>__edit</code> (create, modify or delete) and <code>__properties</code>, a JSON
         object of the properties to set, such as <code>json_object(&apos;status&apos;,
-        &apos;closed&apos;)</code>.
+        &apos;closed&apos;)</code>. A <code>link</code> or <code>unlink</code> names a link type
+        and the key at its other end instead, such as <code>json_object(&apos;flown_by&apos;,
+        &apos;3&apos;)</code>.
       </p>
     </div>
   );
