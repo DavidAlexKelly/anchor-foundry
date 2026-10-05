@@ -2850,6 +2850,23 @@ export const actions = {
         body: JSON.stringify(application ? { edits, application } : { edits }),
       },
     ),
+  /** An Action table's rows as one batch call (§800; workshop p.512,
+   * `action-types` p.84): any action - a create, a delete, a link - a row at
+   * a time, written together or not at all. */
+  executeRows: (
+    wid: string,
+    pid: string,
+    actionTypeId: string,
+    rows: { instance_id: string; values: Record<string, unknown> }[],
+    application?: string,
+  ) =>
+    request<import("./types").ActionRowsResult>(
+      `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/execute-rows`,
+      {
+        method: "POST",
+        body: JSON.stringify(application ? { rows, application } : { rows }),
+      },
+    ),
   getType: (wid: string, actionTypeId: string) =>
     request<import("./types").ActionType>(
       `/workspaces/${wid}/action-types/${actionTypeId}`,

@@ -35,7 +35,7 @@ import { submittedValues } from "@/lib/array-parameter";
 import { multipleChoice } from "@/lib/parameter-constraint";
 import type { ActionType } from "@/lib/types";
 import {
-  afterBatch, batchable, batchProblem, csvEntries, csvPlan, nextCell, parseCsv, pendingRows, rowFor, rowProblems,
+  afterBatch, batchable, batchProblem, rowsTouched, csvEntries, csvPlan, nextCell, parseCsv, pendingRows, rowFor, rowProblems,
   tableColumns, type TableRow,
 } from "./action-table";
 import { invalidateCanvasReads } from "./refresh";
@@ -258,30 +258,22 @@ export function ActionTable({
       }
       return;
     }
-    const touched: Touched[] = [];
-    let allWent = true;
-    for (const row of pending) {
-      update(row.key, (r) => ({ ...r, status: "submitting", message: undefined }));
-      try {
-        const result = await actionApi.execute(
-          workspaceId, projectId, actionType.id, row.subjectId,
-          submittedValues(row.values, parameters),
-        );
-        if (result.ok) {
-          touched.push(...(result.touched ?? []));
-          update(row.key, (r) => ({ ...r, status: "done" }));
-        } else {
-          allWent = false;
-          update(row.key, (r) => ({ ...r, status: "refused", message: result.error ?? "Refused." }));
-        }
-      } catch (e) {
-        allWent = false;
-        update(row.key, (r) => ({ ...r, status: "refused", message: (e as Error).message }));
-      }
-    }
+    // Any other action - a create, a delete, a link - is one batch call too
+    // (§800): each row its own submission of the whole action, and every
+    // row's edits "applied atomically at the end" (action-types p.84).
+    pending.forEach((row) => update(row.key, (r) => ({
+      ...r, status: "submitting", message: undefined })));
+    const result = await actionApi.executeRows(
+      workspaceId, projectId, actionType.id,
+      pending.map((row) => ({ instance_id: row.subjectId,
+                              values: submittedValues(row.values, parameters) })),
+      "workshop",
+    ).catch((e: Error) => ({ ok: false, error: e.message, results: [] }));
+    const outcome = afterBatch(result);
+    pending.forEach((row) => update(row.key, (r) => ({ ...r, ...outcome })));
     await invalidateCanvasReads(queryClient);
     setSending(false);
-    if (allWent) onSubmitted(touched, pending);
+    if (result.ok) onSubmitted(rowsTouched(result), pending);
   };
 
   const remaining = pendingRows(rows).length;

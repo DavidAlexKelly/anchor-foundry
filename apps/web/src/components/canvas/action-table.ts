@@ -227,9 +227,10 @@ export function csvEntries(
   }));
 }
 
-/** Whether these rows can go as one batch call (§796): an action the
- * Object Table's batch takes - every rule changes the row's own object, which
- * `inline_edit_refusals` says - and every row about an object. */
+/** Whether these rows can go as the Object Table's batch (§796): an action
+ * whose every rule changes the row's own object, which `inline_edit_refusals`
+ * says, and every row about an object. Any other action goes as a batch call
+ * of rows (§800), which takes creates, deletes and links too. */
 export function batchable(
   actionType: Pick<ActionType, "inline_edit_refusals" | "object_type_id">,
   rows: readonly Pick<TableRow, "subjectId">[],
@@ -243,6 +244,15 @@ export function batchable(
 export function batchProblem(rowCount: number, limit: number): string | null {
   return rowCount > limit
     ? `One submission takes at most ${limit} rows (action-types p.131).` : null;
+}
+
+/** What a batch call of rows created or modified (§800): every row's own
+ * output, for p.513's output set - none when the batch did not land. */
+export function rowsTouched(result: {
+  ok: boolean;
+  results?: { touched?: { object_type_id: string; primary_key: string; change: string }[] }[];
+}): { object_type_id: string; primary_key: string; change: string }[] {
+  return result.ok ? (result.results ?? []).flatMap((r) => r.touched ?? []) : [];
 }
 
 /** What a batch's answer makes of every row it carried: all done, or all
