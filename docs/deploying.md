@@ -277,6 +277,7 @@ missing files.
 | `PLATFORM_IMAGE_TAG` | provisioning | Image tag to deploy; defaults to `latest` |
 | `CDK_DIR` | provisioning | Path to `infra/cdk`; defaults to `infra/cdk` |
 | `LOG_LEVEL` | platform API | Level for the API's structured `anchor.*` log lines; defaults to `INFO` (§802) |
+| `OPENSEARCH_ENDPOINT`, `OPENSEARCH_SECRET_ARN` | platform API and worker | Both set: objects are read and written in OpenSearch, the secret holding `{"username", "password"}`. Either unset: Postgres. The two services read the pair the same way, so they cannot disagree about where objects live (§811). Stacks set the endpoint and not yet the secret, so they run on Postgres |
 | `METRICS_TOKEN` | platform API | When set, `/api/metrics` requires `Authorization: Bearer <token>`; unset, it is open like `/api/health` (§802) |
 
 **What the API emits (§802).** Every response carries `X-Request-ID` (the

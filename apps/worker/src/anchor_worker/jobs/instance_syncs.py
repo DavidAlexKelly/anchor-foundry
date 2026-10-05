@@ -31,7 +31,7 @@ from croniter import croniter
 from dagster import OpExecutionContext, job, op
 
 from .. import dataset_engine as engine
-from .. import property_values
+from .. import instance_index, property_values
 from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env
 
@@ -80,6 +80,7 @@ def upsert_rows(cur, object_type_id, source_id, rows, synced_at) -> None:
 @op
 def run_due_object_source_syncs(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
     storage = gateway_from_env()
+    index = instance_index.from_env()
     with platform_db.connect() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT source_id, workspace_id FROM list_due_object_source_syncs()")
@@ -141,22 +142,40 @@ def run_due_object_source_syncs(context: OpExecutionContext, platform_db: Platfo
                         name: str(element) for name, _, _, element in declared
                         if element is not None
                     }
+                    cur.execute("SELECT search_prefix FROM workspaces WHERE id = %s",
+                                (str(workspace_id),))
+                    search_prefix = cur.fetchone()[0]
                 conn.commit()
             rows = property_values.coerce_rows(
                 rows, property_types, struct_by_property, array_by_property)
 
-            with platform_db.connect_scoped_to(workspace_id) as conn:
-                with conn.cursor() as cur:
-                    upsert_rows(cur, object_type_id, source_id, rows, synced_at)
-                    upserted = len(rows)
-                    cur.execute(
-                        "DELETE FROM object_instances WHERE source_id = %s AND updated_at < %s",
-                        (str(source_id), synced_at),
-                    )
-                    removed = cur.rowcount
-                conn.commit()
+            if index is not None:
+                # Where the API reads objects from, when it has an index
+                # (§811): writing Postgres here would be a sync that reports
+                # "ok" into a table nobody reads.
+                upserted = index.upsert(
+                    search_prefix=search_prefix, object_type_id=object_type_id,
+                    source_id=source_id, rows=rows, synced_at=synced_at,
+                    declared=[{"api_name": name, "data_type": dtype, "array_of": element}
+                              for name, dtype, _, element in declared],
+                )
+                removed = index.delete_stale(
+                    search_prefix=search_prefix, object_type_id=object_type_id,
+                    source_id=source_id, synced_before=synced_at,
+                )
+            else:
+                with platform_db.connect_scoped_to(workspace_id) as conn:
+                    with conn.cursor() as cur:
+                        upsert_rows(cur, object_type_id, source_id, rows, synced_at)
+                        upserted = len(rows)
+                        cur.execute(
+                            "DELETE FROM object_instances WHERE source_id = %s AND updated_at < %s",
+                            (str(source_id), synced_at),
+                        )
+                        removed = cur.rowcount
+                    conn.commit()
         except (engine.DatasetEngineError, LookupError, OSError, StorageKeyError,
-                property_values.PropertyValueError) as exc:
+                property_values.PropertyValueError, instance_index.InstanceIndexError) as exc:
             ok, error = False, str(exc)
 
         with platform_db.connect_scoped_to(workspace_id) as conn:
@@ -188,6 +207,8 @@ def run_due_object_source_syncs(context: OpExecutionContext, platform_db: Platfo
             source_id, "succeeded" if ok else f"failed ({error})", upserted, removed,
         )
         ran += 1
+    if index is not None:
+        index.close()
     return ran
 
 
