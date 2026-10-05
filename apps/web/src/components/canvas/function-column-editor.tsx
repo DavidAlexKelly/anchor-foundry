@@ -77,7 +77,9 @@ export function FunctionColumnEditor({ index, objectTypeId, column, onChange }: 
           value={column.objects_parameter}
           onChange={(e) => onChange({ ...column, objects_parameter: e.target.value })}
         >
-          <option value="">The table&apos;s objects go to…</option>
+          {/* Unset is p.221's "Use a variable" (§780): an object set
+              parameter fed from a set variable below takes the whole set. */}
+          <option value="">The table&apos;s objects go to… (or a variable)</option>
           {objects.map((p) => <option key={p.api_name} value={p.api_name}>{p.api_name}</option>)}
         </select>
       )}

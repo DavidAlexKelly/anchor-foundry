@@ -399,6 +399,22 @@ def _bind(parameter: dict[str, Any], value: Any) -> Any:
         raise FunctionError(f"{name}: {value!r} is not a {data_type}") from exc
 
 
+async def _keys_of_set(
+    conn: AsyncConnection, workspace_id: UUID, parameter: dict[str, Any], raw: dict[str, Any]
+) -> list[str]:
+    from . import object_set_eval
+
+    name = parameter["api_name"]
+    if str(raw.get("object_type_id") or "") != str(parameter["object_type_id"]):
+        raise FunctionError(f"{name}: the set is of another object type than "
+                            f"{name} takes")
+    try:
+        return await object_set_eval.keys_of(conn, workspace_id, raw,
+                                             limit=engine.MAX_ARRAY_ITEMS)
+    except (ValueError, NotFoundError) as exc:
+        raise FunctionError(f"{name}: {getattr(exc, 'detail', None) or exc}") from None
+
+
 async def _bind_batch(
     parameter: dict[str, Any], raw: Any, *, store: Any, prefix: str
 ) -> list[dict[str, Any]]:
@@ -469,6 +485,13 @@ async def execute(
         if parameter["data_type"] == "batch":
             params[parameter["api_name"]] = await _bind_batch(
                 parameter, raw, store=store, prefix=prefix)
+            continue
+        if parameter["data_type"] == "object_set" and isinstance(raw, dict):
+            # A set variable's definition (§780; Workshop p.221's "Use a
+            # variable"), read to the keys it holds - refused past the cap
+            # rather than cut short, as a list of keys is.
+            params[parameter["api_name"]] = await _keys_of_set(
+                conn, workspace_id, parameter, raw)
             continue
         bound = _bind(parameter, raw)
         if parameter["data_type"] == "object":

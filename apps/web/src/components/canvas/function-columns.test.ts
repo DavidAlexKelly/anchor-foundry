@@ -90,13 +90,27 @@ describe("why a column cannot be drawn", () => {
 
   it("needs the table's objects to go to an object set of its type", () => {
     expect(columnProblem(column({ objects_parameter: "" }), fn(), "t")).toBe(
-      "Choose the parameter that receives the table's objects.");
+      "Choose the parameter that receives the table's objects, or feed it a set variable.");
     expect(columnProblem(column({ objects_parameter: "cutoff" }), fn(), "t")).toBe(
-      "Choose the parameter that receives the table's objects.");
+      "Choose the parameter that receives the table's objects, or feed it a set variable.");
     const elsewhere = version({ parameters: [
       { api_name: "shown", data_type: "object_set", object_type_id: "x", required: true }] });
     expect(columnProblem(column({ inputs: {} }), fn([elsewhere]), "t")).toBe(
-      "Choose the parameter that receives the table's objects.");
+      "Choose the parameter that receives the table's objects, or feed it a set variable.");
+  });
+
+  it("takes p.221's 'Use a variable' in place of the runtime input (§780)", () => {
+    const fed = column({ objects_parameter: "",
+      inputs: { shown: { variable: "v_set" }, cutoff: { value: 1 } } });
+    expect(columnProblem(fed, fn(), "t")).toBeNull();
+    expect(columnProblem({ ...fed, inputs: { shown: { variable: "v_set" } } }, fn(), "t"))
+      .toBe("cutoff needs a value or a variable.");
+    // A value is no set variable.
+    expect(columnProblem({ ...fed, inputs: { shown: { value: ["S1"] }, cutoff: { value: 1 } } },
+                         fn(), "t"))
+      .toBe("Choose the parameter that receives the table's objects, or feed it a set variable.");
+    expect(callValues(fed, ["S1"], { v_set: { object_type_id: "t", filters: [] } })).toEqual({
+      shown: { object_type_id: "t", filters: [] }, cutoff: 1 });
   });
 
   it("names a required input left unset, and not an optional one", () => {

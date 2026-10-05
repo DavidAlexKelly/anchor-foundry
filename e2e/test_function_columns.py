@@ -77,6 +77,9 @@ def module(world, name: str, columns: str, declared: list | None, export: bool =
             "v_all": {"id": "v_all", "kind": "object_set", "label": "Sites",
                       "object_set": object_set(world["sites"])},
             "v_cut": {"id": "v_cut", "kind": "number", "label": "Cutoff", "default": 20},
+            "v_north": {"id": "v_north", "kind": "object_set", "label": "North",
+                        "object_set": object_set(world["sites"], [
+                            {"property": "region", "op": "eq", "value": "north"}])},
         },
         "events": {},
     }
@@ -142,10 +145,11 @@ def test_a_function_column_drawn_in_the_panel(page, world):
         "Choose the function this column calls.")
     page.get_by_label("Derived property 1 function").select_option(world["fn"]["id"])
     expect(page.get_by_test_id("derived-problem-1")).to_have_text(
-        "Choose the parameter that receives the table's objects.", timeout=15000)
+        "Choose the parameter that receives the table's objects, or feed it a set variable.",
+        timeout=15000)
     # Only an object set of the table's type can take its objects.
     expect(page.get_by_label("Derived property 1 objects").locator("option")).to_have_text(
-        ["The table's objects go to…", "shown"])
+        ["The table's objects go to… (or a variable)", "shown"])
     page.get_by_label("Derived property 1 objects").select_option("shown")
     expect(page.get_by_test_id("derived-problem-1")).to_have_text(
         "cutoff needs a value or a variable.")
@@ -175,3 +179,16 @@ def test_a_function_column_is_in_the_tables_csv_export(page, world):
         assert handle.read() == (
             "Key,Code,Urgency,Capacity\r\n"
             "S1,S1,Low,10\r\nS2,S2,High,30\r\nS3,S3,High,25\r\n")
+
+
+def test_a_set_variable_in_place_of_the_runtime_input(page, world):
+    """p.221's "Use a variable" (§780): the function is given a module's set,
+    whole, rather than the page's objects - so a row outside the set has no
+    value, though the table shows it."""
+    mod = module(world, "Function columns variable", "code,level", [
+        {**column(world, "level", "level"), "objects_parameter": "",
+         "inputs": {"cutoff": {"variable": "v_cut"}, "shown": {"variable": "v_north"}}}])
+    open_module(page, mod)
+    expect(page.get_by_test_id("function-S2-level")).to_have_text("High", timeout=15000)
+    expect(page.get_by_test_id("function-S1-level")).to_have_text("Low")
+    expect(page.get_by_test_id("function-S3-level")).to_have_text("No value")

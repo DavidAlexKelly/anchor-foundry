@@ -35,13 +35,17 @@ export function callKey(column: FunctionColumn): string {
 
 /** What a call sends: the page's objects, and each other input as it stands.
  * A variable nothing has resolved yet is undefined, which the request's JSON
- * leaves out rather than sending empty. */
+ * leaves out rather than sending empty.
+ *
+ * **Without a runtime input the set is a variable's** (§780): p.221's "Use a
+ * variable" - the whole set, which the server reads to its keys. */
 export function callValues(
   column: FunctionColumn,
   keys: readonly string[],
   resolved: Record<string, unknown>,
 ): Record<string, unknown> {
-  return { ...inputValues(column.inputs, resolved), [column.objects_parameter]: [...keys] };
+  const values = inputValues(column.inputs, resolved);
+  return column.objects_parameter ? { ...values, [column.objects_parameter]: [...keys] } : values;
 }
 
 /** One row's value: its entry's field, or the first field when none is
@@ -73,9 +77,17 @@ export function columnProblem(
   if (version.output.object_type_id !== objectTypeId) {
     return `${fn.api_name} gives values for another object type.`;
   }
+  if (!column.objects_parameter) {
+    // p.221's "Use a variable" (§780): a set of the table's type fed from a
+    // module variable, rather than the page's objects.
+    const fed = objectParameters(version, objectTypeId)
+      .some((p) => { const s = column.inputs[p.api_name]; return !!s && "variable" in s; });
+    return fed ? unsetRequired(version, column.inputs)
+      : "Choose the parameter that receives the table's objects, or feed it a set variable.";
+  }
   const objects = version.parameters.find((p) => p.api_name === column.objects_parameter);
   if (!objects || objects.data_type !== "object_set" || objects.object_type_id !== objectTypeId) {
-    return "Choose the parameter that receives the table's objects.";
+    return "Choose the parameter that receives the table's objects, or feed it a set variable.";
   }
   return unsetRequired(version, column.inputs, column.objects_parameter);
 }
