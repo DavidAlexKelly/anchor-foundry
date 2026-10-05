@@ -809,6 +809,11 @@ async def set_action_definition(
             rules=[r.model_dump() for r in body.rules],
             criteria=[c.model_dump() for c in body.criteria],
         )
+        # p.168's "[Optional] Parameter values" for a parameter added after
+        # the log was turned on (§792): the log gains its column now, so the
+        # next submission stores it.
+        await action_log.extend(conn, _dataset_storage(), workspace_id=access.workspace_id,
+                                action_type=row, by=access.auth.user_id)
         await audit.record(
             conn,
             organisation_id=access.auth.organisation_id,

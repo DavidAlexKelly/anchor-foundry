@@ -39,9 +39,10 @@ Ontology) at the time of action submission". The summary column is always
 made, so its template can be written or changed later; the properties are
 chosen when the log is turned on, since each is a column.
 
-A parameter added after the log was turned on is still not stored - the
-dataset's columns are fixed when it is made, and a column the source does not
-map would be a value written nowhere.
+A parameter added after the log was turned on gets its column when the
+action's definition is saved (§792, `extend`): a property on the `[LOG]` type,
+a column in its dataset and the mapping between them, so the next submission
+stores its value and the entries before it read as empty.
 """
 from __future__ import annotations
 
@@ -416,6 +417,80 @@ async def enable(
            "summary": summary, "refs": json.dumps(references)})
     return {"log_object_type_id": log_type["id"], "log_link_type_id": link["id"],
             "log_summary": summary, "log_reference_properties": references}
+
+
+async def extend(
+    conn: AsyncConnection,
+    storage: StorageGateway,
+    *,
+    workspace_id: UUID,
+    action_type: dict[str, Any],
+    by: UUID,
+) -> list[str]:
+    """Give the log a column for each parameter it has none for (§792): p.168's
+    "[Optional] Parameter values" for a parameter added after the log was
+    turned on. The `[LOG]` type gains the property, its dataset the column (a
+    new version, every earlier entry empty in it) and its source the mapping.
+    Returns the columns added; none when the action has no log, or every
+    parameter already has one."""
+    import os
+    import tempfile
+
+    from anyio import to_thread
+
+    from . import dataset_engine
+    from . import ontology as ontology_service
+
+    log_type_id = action_type.get("log_object_type_id")
+    if not log_type_id:
+        return []
+    source = await fetch_one(conn, """
+        SELECT s.id, s.dataset_id, s.column_mappings, d.s3_location
+          FROM object_type_sources s JOIN datasets d ON d.id = s.dataset_id
+         WHERE s.object_type_id = :tid
+         ORDER BY s.created_at LIMIT 1
+    """, {"tid": str(log_type_id)})
+    if source is None:
+        return []
+    mappings = source["column_mappings"]
+    if isinstance(mappings, str):
+        mappings = json.loads(mappings)
+    mapped = set(mappings.values())
+    names = [p for p in logged_parameters(list(action_type.get("parameters") or []))
+             if PARAMETER_PREFIX + p not in mapped]
+    if not names:
+        return []
+    columns = [PARAMETER_PREFIX + p for p in names]
+    path = await to_thread.run_sync(storage.local_path, str(source["s3_location"]))
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = os.path.join(tmp, "out.parquet")
+        schema, rows = await to_thread.run_sync(
+            dataset_engine.add_columns, path, columns, dest)
+        with open(dest, "rb") as handle:
+            data = handle.read()
+    await ds_service.add_version(
+        conn, storage, dataset_id=UUID(str(source["dataset_id"])), workspace_id=workspace_id,
+        parquet_bytes=data, schema=schema, row_count=rows, produced_by_kind="action_log",
+        produced_by_id=UUID(str(action_type["id"])), created_by=by,
+        transaction_type="SNAPSHOT",
+    )
+    # The property, after the log's own: a plain text one, as `enable` makes
+    # each parameter's. The `[LOG]` type is the log's, so it is written here
+    # rather than through a whole-definition edit of somebody's type.
+    await ontology_service.get_type(conn, workspace_id, UUID(str(log_type_id)))
+    for p in names:
+        await conn.execute(text("""
+            INSERT INTO object_type_properties
+                   (object_type_id, api_name, display_name, data_type, required,
+                    description, sort_order)
+            VALUES (:tid, :api, :name, 'string', false, '',
+                    (SELECT coalesce(max(sort_order), -1) + 1 FROM object_type_properties
+                      WHERE object_type_id = :tid))
+        """), {"tid": str(log_type_id), "api": PARAMETER_PREFIX + p, "name": p})
+    await conn.execute(text(
+        "UPDATE object_type_sources SET column_mappings = CAST(:m AS jsonb) WHERE id = :sid"),
+        {"m": json.dumps({**mappings, **{c: c for c in columns}}), "sid": str(source["id"])})
+    return columns
 
 
 async def set_summary(
