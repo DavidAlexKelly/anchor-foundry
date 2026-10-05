@@ -32,21 +32,25 @@ async def list_for_user(
     conn: AsyncConnection, user_id: UUID, workspace_id: UUID,
     *, slug: str | None = None, project_id: UUID | None = None,
 ) -> list[dict[str, Any]]:
-    """Workspace view project grid (§5): visible projects with effective role
-    from v_user_projects (db 0005) - a project with no effective role simply
-    isn't in the list.
+    """Workspace view project grid (§5): visible projects with their effective
+    role (db 0005) - a project with no effective role simply isn't in the
+    list, because the row policy does not admit it.
 
     `slug` or `project_id` narrows it to the one project a page is about
     (§822): every page inside a project looked its project up by fetching
     this whole list, which is 2.7 MB on a workspace of 10,000 projects."""
+    # **`projects` itself, not `v_user_projects`** (§825). The row policy
+    # already keeps the projects the caller can reach, cheaply since db 0160;
+    # the view resolved every project's role twice - in its WHERE and in its
+    # SELECT - and this resolves it once, for the rows returned.
     return await fetch_all(
         conn,
         """
         SELECT p.id, p.name, p.slug, p.description, p.permission_mode,
-               v.role AS effective_role, p.created_at, p.updated_at
-          FROM v_user_projects v
-          JOIN projects p ON p.id = v.project_id
-         WHERE v.user_id = :uid AND p.workspace_id = :wid
+               effective_project_role(:uid, p.id) AS effective_role,
+               p.created_at, p.updated_at
+          FROM projects p
+         WHERE p.workspace_id = :wid
            AND (CAST(:slug AS text) IS NULL OR p.slug = :slug)
            AND (CAST(:pid AS uuid) IS NULL OR p.id = CAST(:pid AS uuid))
          ORDER BY p.name
@@ -78,23 +82,26 @@ async def search_for_user(
         "q": f"%{_escape_like(term)}%" if term else None,
         "page": PROJECT_PAGE, "offset": max(0, offset),
     }
+    # The row policy decides what is visible (db 0160), so the count never
+    # resolves a role, and the page resolves one per row it returns (§825).
     where = """
-          FROM v_user_projects v
-          JOIN projects p ON p.id = v.project_id
-         WHERE v.user_id = :uid AND p.workspace_id = :wid
+          FROM projects p
+         WHERE p.workspace_id = :wid
            AND (CAST(:q AS text) IS NULL OR p.name ILIKE :q OR p.slug ILIKE :q)
     """
     rows = await fetch_all(
         conn,
         f"""
         SELECT p.id, p.name, p.slug, p.description, p.permission_mode,
-               v.role AS effective_role, p.created_at, p.updated_at {where}
+               effective_project_role(:uid, p.id) AS effective_role,
+               p.created_at, p.updated_at {where}
          ORDER BY p.name, p.id
          LIMIT :page OFFSET :offset
         """,
         params,
     )
-    total = await fetch_one(conn, f"SELECT count(*) AS n {where}", params)
+    count_params = {k: v for k, v in params.items() if k not in ("uid", "page", "offset")}
+    total = await fetch_one(conn, f"SELECT count(*) AS n {where}", count_params)
     return rows, int(total["n"]) if total else 0
 
 

@@ -339,6 +339,36 @@ def test_a_source_nobody_has_synced_lately_is_flagged(
     assert "stale_source" in found["flags"], found["flags"]
 
 
+def test_a_source_that_has_never_synced_is_stale(
+    client: TestClient, fx: Fixture
+) -> None:
+    """A mapping that has never once synced has not been updated in any
+    number of days. Its `last_synced_at` is NULL, which a comparison answers
+    with NULL rather than false - the fresh test must not read that as
+    fresh (§825)."""
+    type_id = a_type(client, fx)
+    source_id = give_it_a_source(client, fx, type_id)
+    sql("UPDATE object_type_sources SET sync_status = 'never_synced', "
+        "last_synced_at = NULL WHERE id = %s", (source_id,))
+
+    found = entry(queue(client, fx), type_id)
+    assert found is not None
+    assert "stale_source" in found["flags"], found["flags"]
+
+
+def test_a_type_with_no_source_is_not_also_stale(
+    client: TestClient, fx: Fixture
+) -> None:
+    """No source is its own flag. "Not updated in [x] days" is a statement
+    about a source, so a type with none is not stale - it would be the same
+    problem listed twice."""
+    type_id = a_type(client, fx)
+    found = entry(queue(client, fx), type_id)
+    assert found is not None
+    assert "no_source" in found["flags"], found["flags"]
+    assert "stale_source" not in found["flags"], found["flags"]
+
+
 def test_one_fresh_mapping_keeps_a_type_off_the_stale_list(
     client: TestClient, fx: Fixture
 ) -> None:
