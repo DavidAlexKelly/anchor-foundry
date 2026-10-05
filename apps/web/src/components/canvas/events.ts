@@ -39,7 +39,7 @@ export function useEventContext(
     toggleScheme, setAutoRefreshPaused,
   } = useCanvasPage();
   const queryClient = useQueryClient();
-  const { run: runAction, exportObjects } = useCanvasActions();
+  const { run: runAction, exportObjects, exportFunction } = useCanvasActions();
   const { resolved } = useCanvasVariables();
   const { query } = useEditor();
   return {
@@ -48,6 +48,7 @@ export function useEventContext(
     recomputeVariables: recompute,
     runAction,
     exportObjects,
+    exportFunction,
     variables: resolved,
     parameterValues,
     goToPage: go,

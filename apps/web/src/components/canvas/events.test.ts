@@ -222,6 +222,56 @@ describe("export (p.489, §459)", () => {
   });
 });
 
+describe("a function-backed export (p.489-490, §775)", () => {
+  const exporting = (config: Record<string, unknown>) => ({ type: "export_function", config });
+
+  it("hands over the function, its inputs as they stand, and the file", () => {
+    const exportFunction = vi.fn();
+    const { context, setVariables } = contextWith({ exportFunction, variables: { v_min: 3 } });
+    run([event(exporting({
+      function_id: "f", version: "1.0.0", file_type: "pdf", file_name: "report",
+      inputs: { minimum: { variable: "v_min" }, region: { value: "north" } },
+    }))], context);
+    expect(exportFunction).toHaveBeenCalledWith({
+      functionId: "f", version: "1.0.0", fileType: "pdf", fileName: "report",
+      values: { minimum: 3, region: "north" },
+    });
+    expect(setVariables).not.toHaveBeenCalled();
+  });
+
+  it("defaults to the newest version and a CSV, and reads this click's writes", () => {
+    const exportFunction = vi.fn();
+    const { context } = contextWith({ exportFunction, variables: { v_min: 3 } });
+    run([event(set("v_min", 9), exporting({
+      function_id: "f", version: "", file_type: "exe", file_name: 4,
+      inputs: { minimum: { variable: "v_min" } } }))], context);
+    expect(exportFunction).toHaveBeenCalledWith({
+      functionId: "f", version: null, fileType: "csv", fileName: null,
+      values: { minimum: 9 } });
+  });
+
+  it("names an input whose variable has no value yet, for the capability to wait on (§857)", () => {
+    const exportFunction = vi.fn();
+    const { context } = contextWith({ exportFunction, variables: { v_zero: 0 } });
+    run([event(exporting({
+      function_id: "f",
+      inputs: { region: { variable: "v_region" }, floor: { variable: "v_zero" },
+                fixed: { value: "x" } } }))], context);
+    expect(exportFunction).toHaveBeenCalledWith(expect.objectContaining({
+      values: { region: undefined, floor: 0, fixed: "x" },
+      unresolved: { region: "v_region" },
+    }));
+  });
+
+  it("does nothing when no function is named", () => {
+    const exportFunction = vi.fn();
+    const { context } = contextWith({ exportFunction, variables: {} });
+    run([event(exporting({ function_id: "" }))], context);
+    run([event(exporting({ function_id: 7 }))], context);
+    expect(exportFunction).not.toHaveBeenCalled();
+  });
+});
+
 describe("eventsFor, by item (p.483, §462)", () => {
   const events = {
     e_main: { id: "e_main", trigger: { node: "btn", on: "click" } },

@@ -30,6 +30,7 @@ import type { WorkshopEffect, WorkshopEvent, WorkshopVariable } from "@/lib/type
 import { useQuery } from "@tanstack/react-query";
 import { canvas as canvasApi, objects as objApi } from "@/lib/api";
 import { staticTypeOf } from "./object-export";
+import { FunctionExportEditor } from "./function-export-editor";
 import { newEventId } from "@/lib/workshop-module";
 
 /** Mirrors `TRIGGERS` in the service, with the widgets each one belongs to.
@@ -200,6 +201,12 @@ const EFFECTS: { type: string; label: string; hint: string }[] = [
     type: "export",
     label: "Export an object set",
     hint: "as a CSV file, which Excel opens, or to the clipboard",
+  },
+  // p.489-490's Function-backed export (§775).
+  {
+    type: "export_function",
+    label: "Export a function's output",
+    hint: "the CSV, TXT, JSON, XML, PDF, DOCX or XLSX file a function writes",
   },
 ];
 
@@ -741,6 +748,16 @@ function EffectEditor({
           workspaceId={workspaceId}
           readOnly={readOnly}
           onChange={(patch) => setConfig(patch)}
+        />
+      )}
+
+      {effect.type === "export_function" && (
+        <FunctionExportEditor
+          config={config}
+          variables={Object.values(allVariables)}
+          workspaceId={workspaceId}
+          readOnly={readOnly}
+          onChange={(next) => onChange({ type: effect.type, config: next })}
         />
       )}
 

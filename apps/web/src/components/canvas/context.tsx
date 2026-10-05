@@ -428,6 +428,8 @@ export interface CanvasActions {
    * thing that makes `run` a capability rather than a function: an outcome
    * somebody has to be told about, which `status` already carries. */
   exportObjects: (request: import("./event-run").ExportRequest) => void;
+  /** p.489-490's Function-backed export (§775), beside Export for its reason. */
+  exportFunction: (request: import("./event-run").FunctionExportRequest) => void;
   /** What the last run did. Kept as one value rather than a list: an app that
    * accumulated a log of every click would bury the one that failed. */
   status: { ok: boolean; message: string } | null;
@@ -437,6 +439,7 @@ export interface CanvasActions {
 const ActionsContext = createContext<CanvasActions>({
   run: () => {},
   exportObjects: () => {},
+  exportFunction: () => {},
   status: null,
   dismiss: () => {},
 });

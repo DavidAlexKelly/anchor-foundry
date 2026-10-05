@@ -27,7 +27,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   actions as actionApi, ApiError, canvas as canvasApi, objects as objApi,
 } from "@/lib/api";
-import type { ExportRequest } from "./event-run";
+import type { ExportRequest, FunctionExportRequest } from "./event-run";
+import { exportContent, exportFileName as functionExportFileName, mimeOf } from "@/lib/function-export";
 import {
   collectRows, csvOf, exportColumns, exportFileName, tsvOf,
 } from "./object-export";
@@ -457,6 +458,12 @@ export function VariableBridge({
                 .then((definition) => exportObjects(workspaceId, { ...request, definition }))
                 .then(setStatus);
             },
+            exportFunction: (request) => {
+              setStatus(null);
+              void settledInputs(request, resolvedRef, pendingRef)
+                .then((settled) => exportFunctionOutput(workspaceId, settled))
+                .then(setStatus);
+            },
             status,
             dismiss: () => setStatus(null),
           }}
@@ -524,6 +531,35 @@ async function settledValue(
   return resolvedRef.current[variable] ?? null;
 }
 
+/** A function export's inputs once the module has resolved the variables
+ * they read (§857).
+ *
+ * Not `settledValue`, whose test is truthiness: that suits a set definition,
+ * but an input may be 0, "" or false, and each is a value. Present in the
+ * resolved map with no resolve in flight is what settled means here. Capped
+ * the same way; an input still missing then goes without, and the server says
+ * which.
+ */
+async function settledInputs(
+  request: FunctionExportRequest,
+  resolvedRef: { current: Record<string, unknown> },
+  pendingRef: { current: boolean },
+  timeoutMs = 15000,
+): Promise<FunctionExportRequest> {
+  const { unresolved, ...rest } = request;
+  const waiting = Object.entries(unresolved ?? {});
+  const deadline = Date.now() + timeoutMs;
+  while (waiting.length > 0 && Date.now() < deadline) {
+    if (!pendingRef.current && waiting.every(([, v]) => v in resolvedRef.current)) break;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  const values = { ...rest.values };
+  for (const [name, variable] of waiting) {
+    if (resolvedRef.current[variable] !== undefined) values[name] = resolvedRef.current[variable];
+  }
+  return { ...rest, values };
+}
+
 /** p.489's Export, end to end (§459): read the set, write the file, say so.
  *
  * **Every outcome is reported**, the refusal and the failures included,
@@ -578,6 +614,32 @@ async function exportObjects(
           ? "The clipboard would not take the export. Try the file instead."
           : "The export did not go through.",
     };
+  }
+}
+
+/** p.489-490's Function-backed export, end to end (§775): call the function,
+ * turn its string into the file p.490 says it is, and download it. Every
+ * outcome is reported, as Export's is. */
+async function exportFunctionOutput(
+  workspaceId: string,
+  request: FunctionExportRequest,
+): Promise<{ ok: boolean; message: string }> {
+  try {
+    const result = await objApi.executeFunction(
+      workspaceId, request.functionId, request.values, request.version);
+    const made = exportContent(result.value, request.fileType);
+    if ("problem" in made) return { ok: false, message: made.problem };
+    const name = functionExportFileName(request.fileName, request.fileType);
+    const url = URL.createObjectURL(
+      new Blob([made.content as BlobPart], { type: mimeOf(request.fileType) }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return { ok: true, message: `Exported ${name}.` };
+  } catch (e) {
+    return { ok: false, message: e instanceof ApiError ? e.message : "The export did not go through." };
   }
 }
 
