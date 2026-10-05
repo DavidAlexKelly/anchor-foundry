@@ -72,10 +72,15 @@ class ProjectMemberSet(BaseModel):
 
 @router.get("", response_model=list[ProjectSummary])
 async def list_projects(
+    slug: str | None = None,
+    id: UUID | None = None,
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
 ) -> list[ProjectSummary]:
+    """Every project the caller can see, or with `slug` or `id` the one a
+    page is about - an empty list when it is not there or not theirs."""
     async with user_connection(access.auth.user_id) as conn:
-        rows = await proj_service.list_for_user(conn, access.auth.user_id, access.workspace_id)
+        rows = await proj_service.list_for_user(
+            conn, access.auth.user_id, access.workspace_id, slug=slug, project_id=id)
     return [ProjectSummary(**row) for row in rows]
 
 

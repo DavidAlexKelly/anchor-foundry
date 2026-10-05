@@ -178,6 +178,12 @@ export const api = {
     ),
   projects: (workspaceId: string) =>
     request<ProjectSummary[]>(`/workspaces/${workspaceId}/projects`),
+  /** The one project a page is about, by slug or id, rather than every
+   * project in the workspace (§822). Empty when absent or not the caller's. */
+  projectLookup: (workspaceId: string, by: { slug: string } | { id: string }) =>
+    request<ProjectSummary[]>(
+      `/workspaces/${workspaceId}/projects?${new URLSearchParams(by).toString()}`,
+    ),
   project: (workspaceId: string, projectId: string) =>
     request<ProjectDetail>(`/workspaces/${workspaceId}/projects/${projectId}`),
 };

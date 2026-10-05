@@ -23,9 +23,11 @@ export function useProjectBySlug(
   workspaceId: string | undefined,
   slug: string,
 ): { project: ProjectSummary | undefined; isPending: boolean; notFound: boolean } {
+  // One project, not the workspace's whole list (§822). Keyed under
+  // ["projects", workspaceId] so whatever refreshes the list refreshes this.
   const q = useQuery({
-    queryKey: ["projects", workspaceId],
-    queryFn: () => api.projects(workspaceId!),
+    queryKey: ["projects", workspaceId, { slug }],
+    queryFn: () => api.projectLookup(workspaceId!, { slug }),
     enabled: !!workspaceId,
   });
   const project = q.data?.find((p) => p.slug === slug);
@@ -42,8 +44,8 @@ export function useProjectBySlug(
  * application opened by resource id has no slug to look up and no reason to
  * invent one. What it still needs is `effective_role` - whether this person may
  * edit or publish - and that lives on the summary rows these queries already
- * hold. Same query keys as the by-slug pair, so the two share one cache entry
- * rather than fetching the list twice under different names.
+ * hold. The workspace lookup shares the by-slug one's cache entry; the
+ * project lookup asks for its one project, as the by-slug one does (§822).
  */
 export function useWorkspaceById(id: string | undefined): {
   workspace: WorkspaceSummary | undefined;
@@ -58,12 +60,14 @@ export function useProjectById(
   projectId: string | null,
 ): { project: ProjectSummary | undefined; isPending: boolean } {
   const q = useQuery({
-    queryKey: ["projects", workspaceId],
-    queryFn: () => api.projects(workspaceId!),
-    enabled: !!workspaceId,
+    queryKey: ["projects", workspaceId, { id: projectId }],
+    queryFn: () => api.projectLookup(workspaceId!, { id: projectId! }),
+    enabled: !!workspaceId && !!projectId,
   });
   return {
     project: projectId ? q.data?.find((p) => p.id === projectId) : undefined,
-    isPending: !workspaceId || q.isPending,
+    // A resource with no project (a workspace-level one) has nothing to wait
+    // for; the query never runs, and a query that never runs stays pending.
+    isPending: !workspaceId || (!!projectId && q.isPending),
   };
 }
