@@ -169,6 +169,44 @@ async def test_stale_instances_are_removed_and_others_are_not(store) -> None:
 
 
 @pytest.mark.anyio
+async def test_an_empty_first_sync_sweeps_without_an_index(store) -> None:
+    """A dataset with no rows yet, synced into a type nothing has indexed: the
+    upsert writes nothing, so no index is made, and the sweep after it asked a
+    real cluster to `delete_by_query` an index that does not exist - a 404,
+    and a sync that failed for having nothing to do (§810). The fixture
+    answered "deleted 0" until it was made to answer as a cluster does."""
+    type_id, source_id = uuid.uuid4(), uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    assert await store.upsert_instances(
+        search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
+        rows=[], synced_at=now, declared=DECLARED,
+    ) == 0
+    assert await store.delete_stale_instances(
+        search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
+        synced_before=now,
+    ) == 0
+
+
+@pytest.mark.anyio
+async def test_an_array_property_is_indexed_and_found_by_any_element(store) -> None:
+    """Mapped as its element type (db 0087) - OpenSearch has no array type -
+    so `[3, 250]` is written to a `long` field and a term query for 250 finds
+    it. The fixture refused every list until §810, so this had never run."""
+    type_id, source_id = uuid.uuid4(), uuid.uuid4()
+    declared = DECLARED + [{"api_name": "scores", "data_type": "array", "array_of": "integer"}]
+    await store.upsert_instances(
+        search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
+        rows=[("1", {"full_name": "a", "rank": 1, "scores": [3, 250]}),
+              ("2", {"full_name": "b", "rank": 2, "scores": []})],
+        synced_at=datetime.now(timezone.utc), declared=declared,
+    )
+    found, total = await store.find_by_property(
+        search_prefix=PREFIX, object_type_id=type_id, property_name="scores", value=250,
+        limit=50, offset=0)
+    assert ([row["primary_key"] for row in found], total) == (["1"], 1)
+
+
+@pytest.mark.anyio
 async def test_declaring_a_new_property_widens_the_index(store) -> None:
     """**Creating is not the only thing an upsert has to do.** Somebody adds a
     property to a type that already has instances, then the next sync carries

@@ -629,6 +629,11 @@ class OpenSearchInstanceStore:
                 }
             },
             refresh=True,
+            # An empty first sync writes nothing, so makes no index, and a
+            # cluster answers a sweep of a missing index with a 404 - a sync
+            # failing for having nothing to do (§810). Nothing is stale in an
+            # index that does not exist.
+            ignore_unavailable=True,
         )
         return int(resp.get("deleted", 0))
 
