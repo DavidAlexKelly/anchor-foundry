@@ -303,7 +303,7 @@ Two things worth keeping from this. **The docstring on `sync_app_password` was t
 
 **E.2 — Decision 0006 is unproven against a real cluster. M.** Typed instance properties are tested against a fixture that now enforces mappings and has 17 tests of its own fidelity (§112). As that work said: this narrows the unproven claim from "does any of this work" to "does OpenSearch behave like the mapping it was given". One deployment closes it.
 
-**E.3 — Observability: there is none. M.** No error tracking, no structured logging worth querying, no metrics, no alerting. The first incident will be diagnosed by SSH and guesswork.
+**E.3 — Observability: ~~there is none~~. In-process half done (§802), M.** ~~No error tracking, no structured logging worth querying, no metrics, no alerting. The first incident will be diagnosed by SSH and guesswork.~~ The API now gives every response an `X-Request-ID`, writes one JSON line per request (by route template, so nothing an id or a token lives in), records an unhandled error's traceback under the id its 500 quotes, and serves Prometheus metrics at `/api/metrics` (`apps/api/src/lib/observability.py`; `docs/deploying.md` has the variables). **Still open, and the deployment's rather than the process's:** shipping those lines to a store, scraping the metrics, and alerting on them.
 
 **E.4 — Scale is entirely unmeasured. M.** Every test runs against tens of rows. Not "it will be slow" — **unknown**, which is worse, because it cannot be planned around.
 
