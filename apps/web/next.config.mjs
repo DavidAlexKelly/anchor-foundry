@@ -15,7 +15,12 @@ const nextConfig = {
   // Pin tracing to the monorepo root so the standalone layout is stable
   // (apps/web/server.js) regardless of where the build runs - the web
   // Dockerfile's COPY paths depend on it.
-  experimental: { outputFileTracingRoot: repoRoot },
+  outputFileTracingRoot: repoRoot,
+  // No dev-tools button (§855). Next 15's `next dev` puts one on every page,
+  // labelled "Open Next.js Dev Tools", and the browser suite runs against
+  // `next dev`: every test that finds a button by a name containing "Open"
+  // found two. It is a development aid only - a production build has none.
+  devIndicators: false,
   async rewrites() {
     // Dev convenience: proxy /api to the local FastAPI process so the browser
     // sees one origin, mirroring the CloudFront layout in production.
