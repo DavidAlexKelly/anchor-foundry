@@ -36,6 +36,47 @@ from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env
 
 
+#: Rows per statement (§805), the API's `instances.UPSERT_BATCH`.
+UPSERT_BATCH = 1000
+
+
+def upsert_rows(cur, object_type_id, source_id, rows, synced_at) -> None:
+    """Write a sync's rows the way the API's sync does (`instances.
+    upsert_instances`), a thousand to a statement (§805).
+
+    **Merging, not replacing.** This wrote `properties = EXCLUDED.properties`,
+    which the API's own sync stopped doing when it found the cost: an
+    edit-only property (`object-link-types` p.113) has no dataset column, so
+    every sync deleted it. The API was fixed and this, the half that runs on a
+    schedule - and the only half that takes a table past 20,000 rows - was
+    not. The dataset's values are layered over what is stored, so a sync owns
+    exactly what it maps and no more.
+
+    **A statement per thousand rows**, because one per row is a million round
+    trips for a million-row table. A key repeated within a batch is collapsed
+    to its later row first, since one `ON CONFLICT DO UPDATE` may not touch a
+    row twice.
+    """
+    for start in range(0, len(rows), UPSERT_BATCH):
+        # The later row of a repeated key wins whole: every row of one sync
+        # carries every mapped key (a null is a key holding None), so this is
+        # what the row-at-a-time loop's merge came to.
+        merged = dict(rows[start:start + UPSERT_BATCH])
+        cur.execute(
+            """
+            INSERT INTO object_instances
+                (object_type_id, source_id, primary_key, properties, updated_at)
+            SELECT %s, %s, r.pk, r.props, %s
+              FROM jsonb_to_recordset(%s::jsonb) AS r(pk text, props jsonb)
+            ON CONFLICT (source_id, primary_key)
+            DO UPDATE SET properties = object_instances.properties || EXCLUDED.properties
+            -- updated_at is the BEFORE UPDATE trigger's to set (db 0012).
+            """,
+            (str(object_type_id), str(source_id), synced_at,
+             json.dumps([{"pk": pk, "props": props} for pk, props in merged.items()])),
+        )
+
+
 @op
 def run_due_object_source_syncs(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
     storage = gateway_from_env()
@@ -97,17 +138,7 @@ def run_due_object_source_syncs(context: OpExecutionContext, platform_db: Platfo
 
             with platform_db.connect_scoped_to(workspace_id) as conn:
                 with conn.cursor() as cur:
-                    for primary_key, properties in rows:
-                        cur.execute(
-                            """
-                            INSERT INTO object_instances
-                                (object_type_id, source_id, primary_key, properties, updated_at)
-                            VALUES (%s, %s, %s, %s, %s)
-                            ON CONFLICT (source_id, primary_key)
-                            DO UPDATE SET properties = EXCLUDED.properties, updated_at = EXCLUDED.updated_at
-                            """,
-                            (str(object_type_id), str(source_id), primary_key, json.dumps(properties), synced_at),
-                        )
+                    upsert_rows(cur, object_type_id, source_id, rows, synced_at)
                     upserted = len(rows)
                     cur.execute(
                         "DELETE FROM object_instances WHERE source_id = %s AND updated_at < %s",

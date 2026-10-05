@@ -202,3 +202,46 @@ def test_unscheduled_source_is_not_touched(workspace: dict) -> None:
     status, error, next_run = _source_row(workspace["source_id"])
     assert status == "never_synced"
     assert next_run is None
+
+
+def test_a_scheduled_sync_keeps_what_the_dataset_cannot_say(workspace: dict) -> None:
+    """`object-link-types` p.113's edit-only property has no column, so a sync
+    has nothing to say about it - and this sync used to delete it, writing
+    `properties = EXCLUDED.properties` where the API's merges (§805)."""
+    _set_due(workspace["source_id"])
+    run_due_object_source_syncs(_ctx())
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE object_instances SET properties = properties || %s::jsonb "
+            "WHERE source_id = %s AND primary_key = '1'",
+            (json.dumps({"triage_note": "call the owner"}), workspace["source_id"]),
+        )
+    _set_due(workspace["source_id"])
+    run_due_object_source_syncs(_ctx())
+    by_pk = {r[0]: r[1] for r in _instances(workspace["object_type_id"])}
+    assert by_pk["1"] == {"name": "Ada", "email": "ada@example.com",
+                          "triage_note": "call the owner"}
+
+
+def test_a_sync_longer_than_a_batch_loses_nothing_at_the_seams(
+    workspace: dict, storage_root: str, monkeypatch
+) -> None:
+    """A statement per batch (§805): seven rows over batches of three, a key
+    repeated across a seam and one within a batch - the later row wins, as
+    it did when every row was its own statement."""
+    from anchor_worker.jobs import instance_syncs
+
+    monkeypatch.setattr(instance_syncs, "UPSERT_BATCH", 3)
+    key = _write_dataset_parquet(
+        storage_root, workspace["ws_prefix"], workspace["dataset_id"], 2,
+        [(1, "a", "a@x"), (2, "b", "b@x"), (3, "c", "c@x"), (3, "c2", "c2@x"),
+         (4, "d", "d@x"), (4, "d2", "d2@x"), (5, "e", "e@x")],
+    )
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE datasets SET s3_location=%s, current_version=2 WHERE id=%s",
+                     (key, workspace["dataset_id"]))
+    _set_due(workspace["source_id"])
+    run_due_object_source_syncs(_ctx())
+    by_pk = {r[0]: r[1]["name"] for r in _instances(workspace["object_type_id"])}
+    assert by_pk == {"1": "a", "2": "b", "3": "c2", "4": "d2", "5": "e"}
+    assert _source_row(workspace["source_id"])[0] == "ok"
