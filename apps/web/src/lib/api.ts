@@ -134,8 +134,10 @@ export const api = {
   org: () => request<Org>("/org"),
   /** p.610-611's Control Panel settings for kiosk mode (§684). */
   kioskModules: () => request<import("./types").KioskModule[]>("/org/kiosk/modules"),
-  kioskCandidates: () =>
-    request<{ app_id: string; name: string; workspace_name: string }[]>("/org/kiosk/candidates"),
+  kioskCandidates: (q = "") =>
+    request<{ items: { app_id: string; name: string; workspace_name: string }[]; total: number }>(
+      `/org/kiosk/candidates${q ? `?q=${encodeURIComponent(q)}` : ""}`,
+    ),
   allowKiosk: (appId: string) => request<void>(`/org/kiosk/modules/${appId}`, { method: "PUT" }),
   disallowKiosk: (appId: string) => request<void>(`/org/kiosk/modules/${appId}`, { method: "DELETE" }),
   kioskSessions: () => request<import("./types").KioskSessionRow[]>("/org/kiosk/sessions"),

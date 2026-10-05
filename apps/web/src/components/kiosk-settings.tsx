@@ -27,7 +27,17 @@ function when(iso: string): string {
 export function KioskSettings() {
   const queryClient = useQueryClient();
   const allowed = useQuery({ queryKey: ["kiosk-modules"], queryFn: api.kioskModules });
-  const candidates = useQuery({ queryKey: ["kiosk-candidates"], queryFn: api.kioskCandidates });
+  const listed = new Set((allowed.data ?? []).map((m) => m.app_id));
+  // Searched rather than listed whole (§819): an organisation can hold more
+  // modules than a dropdown should, and the first 500 silently stood for all.
+  const [search, setSearch] = useState("");
+  const candidates = useQuery({
+    queryKey: ["kiosk-candidates", search],
+    queryFn: () => api.kioskCandidates(search),
+    placeholderData: (previous) => previous,
+  });
+  const offered = (candidates.data?.items ?? []).filter((c) => !listed.has(c.app_id));
+  const unshown = (candidates.data?.total ?? 0) - (candidates.data?.items.length ?? 0);
   const sessions = useQuery({ queryKey: ["kiosk-sessions"], queryFn: api.kioskSessions });
   const [adding, setAdding] = useState("");
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["kiosk-modules"] });
@@ -37,7 +47,6 @@ export function KioskSettings() {
     mutationFn: api.endKioskSession,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["kiosk-sessions"] }),
   });
-  const listed = new Set((allowed.data ?? []).map((m) => m.app_id));
   const failure = [allow.error, disallow.error, end.error].find(Boolean);
 
   return (
@@ -67,6 +76,14 @@ export function KioskSettings() {
         </tbody>
       </table>
       <div className="row-actions" style={{ marginTop: 8 }}>
+        <input
+          type="search"
+          aria-label="Search modules"
+          placeholder="Search modules or workspaces"
+          data-testid="kiosk-search"
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setAdding(""); }}
+        />
         <select
           aria-label="Module to add"
           data-testid="kiosk-add-module"
@@ -74,7 +91,7 @@ export function KioskSettings() {
           onChange={(e) => setAdding(e.target.value)}
         >
           <option value="">Choose a module…</option>
-          {(candidates.data ?? []).filter((c) => !listed.has(c.app_id)).map((c) => (
+          {offered.map((c) => (
             <option key={c.app_id} value={c.app_id}>{c.name} ({c.workspace_name})</option>
           ))}
         </select>
@@ -88,6 +105,11 @@ export function KioskSettings() {
           Add to allowlist
         </button>
       </div>
+      {unshown > 0 && (
+        <p className="field-hint" data-testid="kiosk-more">
+          {unshown} more {unshown === 1 ? "module matches" : "modules match"} - search to narrow the list.
+        </p>
+      )}
 
       <p className="eyebrow" style={{ margin: "20px 0 10px" }}>session launch history</p>
       <table className="table" data-testid="kiosk-sessions">
