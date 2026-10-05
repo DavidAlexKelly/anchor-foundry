@@ -2238,9 +2238,19 @@ export interface FunctionParameter {
   display_name?: string;
   data_type: "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "object"
     /** p.221's ObjectSet parameter (§770): primary keys of one type. */
-    | "object_set";
+    | "object_set"
+    /** `action-types` p.85's batch (§779): a list of structs of `fields`. */
+    | "batch";
   object_type_id?: string | null;
   required: boolean;
+  fields?: FunctionBatchField[] | null;
+}
+
+/** One field of a batch parameter's struct (§779). */
+export interface FunctionBatchField {
+  api_name: string;
+  data_type: "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "object";
+  object_type_id?: string | null;
 }
 
 /** What a function returns (§768). */

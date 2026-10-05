@@ -123,7 +123,21 @@ def check_rule(
     inputs = config.get("inputs", {})
     if not isinstance(inputs, dict):
         raise ValueError("a Function rule's inputs are an object")
-    declared = {str(p["api_name"]): p for p in pinned["parameters"]}
+    batch = batch_parameter(pinned)
+    if config.get("batched") not in (None, True, False):
+        raise ValueError("a Function rule's batched is true or false")
+    if bool(config.get("batched")) != (batch is not None):
+        raise ValueError(
+            f"{fn['api_name']} {version} "
+            + ("receives a batch, so the rule runs it batched" if batch is not None
+               else "receives no batch, so the rule cannot run it batched")
+            + " (action-types p.85)")
+    # A batched rule feeds the batch's fields "in the same way you would
+    # usually pass data to a function's top-level inputs" (p.85), and none of
+    # them is required: a field nothing feeds is empty.
+    declared = ({str(f["api_name"]): {**f, "required": False} for f in batch["fields"]}
+                if batch is not None
+                else {str(p["api_name"]): p for p in pinned["parameters"]})
     for name, source in inputs.items():
         p = declared.get(str(name))
         if p is None:
@@ -143,6 +157,12 @@ def check_rule(
     for name, p in declared.items():
         if p.get("required", True) and name not in inputs:
             raise ValueError(f"{fn['api_name']} needs {name}, which the rule does not supply")
+
+
+def batch_parameter(version: dict[str, Any]) -> dict[str, Any] | None:
+    """The version's batch parameter, when it is batched (p.85)."""
+    batches = [p for p in version["parameters"] if p["data_type"] == "batch"]
+    return batches[0] if batches else None
 
 
 def edit_rules(
@@ -191,7 +211,37 @@ async def call(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Call the rule's function as the submitter. Returns the function's
     output (`object_type_id` of what it edits) and its result. Every refusal
-    is a `FunctionError`; p.166's user-facing one is a `UserFacingError`."""
+    is a `FunctionError`; p.166's user-facing one is a `UserFacingError`.
+
+    A batched rule is called with a batch of one (p.85: "A single action call
+    will invoke a single function execution with a single entry")."""
+    return await call_batch(conn, workspace_id=workspace_id, config=config,
+                            requests=[(bound, subject_id)])
+
+
+def _values(config: dict[str, Any], bound: dict[str, Any], subject_id: str) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for name, source in (config.get("inputs") or {}).items():
+        if "subject" in source:
+            values[name] = subject_id
+        elif "parameter" in source:
+            values[name] = bound.get(str(source["parameter"]))
+        else:
+            values[name] = source.get("value")
+    return values
+
+
+async def call_batch(
+    conn: Any,
+    *,
+    workspace_id: UUID,
+    config: dict[str, Any],
+    requests: list[tuple[dict[str, Any], str]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """`call` for several requests: a batched rule's function once, with an
+    entry per request (p.85: "A batched action call will invoke a single
+    function execution with several entries in the list input parameter").
+    An unbatched rule takes exactly one request."""
     try:
         fn = await functions_service.get_function(
             conn, workspace_id, UUID(str(config.get("function_id"))))
@@ -208,14 +258,18 @@ async def call(
         raise FunctionError(
             f"{fn['api_name']} {chosen['version']} edits another object type than "
             f"{pinned['version']}, which this action was set up against (action-types p.83)")
-    values: dict[str, Any] = {}
-    for name, source in (config.get("inputs") or {}).items():
-        if "subject" in source:
-            values[name] = subject_id
-        elif "parameter" in source:
-            values[name] = bound.get(str(source["parameter"]))
-        else:
-            values[name] = source.get("value")
+    batch = batch_parameter(chosen)
+    if (batch is not None) != bool(config.get("batched")):
+        # p.83's provenance rule, for the shape of the call: a newer release
+        # that changes whether it takes a batch cannot be fed by this rule.
+        raise FunctionError(
+            f"{fn['api_name']} {chosen['version']} changes whether it takes a batch, "
+            f"and this action was set up against {pinned['version']} (action-types p.83)")
+    if batch is not None:
+        values = {batch["api_name"]: [_values(config, b, s) for b, s in requests]}
+    else:
+        [(bound, subject_id)] = requests
+        values = _values(config, bound, subject_id)
     result = await functions_service.execute(
         conn, workspace_id=workspace_id, function_id=UUID(str(fn["id"])),
         version=chosen["version"], values=values)

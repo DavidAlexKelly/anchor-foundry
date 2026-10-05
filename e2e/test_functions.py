@@ -156,3 +156,42 @@ def test_an_edit_function_is_written_and_says_what_it_would_change(page, world) 
     edits = page.get_by_test_id("fn-result-edits")
     expect(edits.locator("thead th")).to_have_text(["Object", "capacity"])
     expect(edits.locator("tbody tr").first.locator("td")).to_have_text(["S3", "26"])
+
+
+def test_a_batch_parameter_is_written_with_its_fields(page, api, world) -> None:
+    """§779: p.85's batch, authored in the dialog - its fields, one an object
+    of a type - and run with a batch typed as JSON."""
+    mod, slug = world["mod"], world["slug"]
+    name = f"Batch {uuid.uuid4().hex[:4]}"
+    api_name = name.lower().replace(" ", "_")
+    open_objects(page, mod)
+    page.get_by_test_id("new-function").click()
+    page.get_by_test_id("fn-name").fill(name)
+    page.get_by_test_id("fn-add-parameter").click()
+    page.get_by_role("textbox", name="Parameter 1 name").fill("batch")
+    page.get_by_label("Parameter 1 type").select_option("batch")
+    expect(page.get_by_test_id("fn-problem")).to_have_text("Give batch at least one field.")
+    page.get_by_test_id("fn-param-1-add-field").click()
+    page.get_by_label("Parameter 1 field 1 name").fill("site")
+    page.get_by_label("Parameter 1 field 1 type").select_option("object")
+    expect(page.get_by_test_id("fn-problem")).to_have_text(
+        "Choose the object type batch.site refers to.")
+    pick_type(page, "fn-param-1-field-1-type", {"id": world["sites"], "api_name": slug})
+    page.get_by_test_id("fn-param-1-add-field").click()
+    page.get_by_label("Parameter 1 field 2 name").fill("note")
+    page.get_by_role("button", name="Remove parameter 1 field 2").click()
+    page.get_by_test_id("fn-sql").fill("SELECT count(*) FROM (SELECT unnest($batch) AS b)")
+    expect(page.get_by_test_id("fn-problem")).to_have_count(0)
+    page.get_by_test_id("fn-save").click()
+    expect(page.get_by_test_id(f"fn-version-{api_name}")).to_have_text("1.0.0", timeout=15000)
+    stored = next(f for f in api.call("GET", f"/workspaces/{mod.workspace_id}/functions")
+                  if f["api_name"] == api_name)
+    detail = api.call("GET", f"/workspaces/{mod.workspace_id}/functions/{stored['id']}")
+    assert detail["versions"][0]["parameters"] == [{
+        "api_name": "batch", "display_name": "batch", "data_type": "batch", "required": True,
+        "fields": [{"api_name": "site", "data_type": "object",
+                    "object_type_id": world["sites"]}]}]
+    page.get_by_role("button", name=f"Run {api_name}").click()
+    page.get_by_role("textbox", name="batch").fill('[{"site": null}, {"site": null}]')
+    page.get_by_test_id("fn-run").click()
+    expect(page.get_by_test_id("fn-result-line")).to_have_text("2", timeout=15000)

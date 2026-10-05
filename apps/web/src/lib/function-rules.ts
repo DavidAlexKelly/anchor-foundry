@@ -24,12 +24,30 @@ export interface FunctionRuleConfig {
    * the minimum of p.81's range. */
   version: string;
   auto_upgrade: boolean;
+  /** p.85's batched execution (§779): the function takes a batch, and the
+   * inputs feed its fields. */
+  batched: boolean;
   inputs: Record<string, FunctionRuleInput>;
 }
 
 export const BLANK_FUNCTION_RULE: FunctionRuleConfig = {
-  function_id: "", version: "", auto_upgrade: false, inputs: {},
+  function_id: "", version: "", auto_upgrade: false, batched: false, inputs: {},
 };
+
+/** The version's batch parameter, when it takes one (p.85). */
+export function batchOf(version: FunctionVersion | undefined): FunctionParameter | undefined {
+  return version?.parameters.find((p) => p.data_type === "batch");
+}
+
+/** What a rule's inputs feed: a batched function's fields, "in the same way
+ * you would usually pass data to a function's top-level inputs" (p.85), none
+ * of them required; otherwise its parameters. */
+export function slotsOf(version: FunctionVersion): FunctionParameter[] {
+  const batch = batchOf(version);
+  return batch
+    ? (batch.fields ?? []).map((f) => ({ ...f, required: false }))
+    : version.parameters;
+}
 
 /** Read from a saved rule, keeping only the shapes it can use. */
 export function functionRuleOf(raw: unknown): FunctionRuleConfig {
@@ -49,6 +67,7 @@ export function functionRuleOf(raw: unknown): FunctionRuleConfig {
     function_id: typeof it.function_id === "string" ? it.function_id : "",
     version: typeof it.version === "string" ? it.version : "",
     auto_upgrade: it.auto_upgrade === true,
+    batched: it.batched === true,
     inputs,
   };
 }
@@ -102,7 +121,7 @@ export function defaultInputs(
 ): Record<string, FunctionRuleInput> {
   const inputs: Record<string, FunctionRuleInput> = {};
   let subjectTaken = false;
-  for (const p of version.parameters) {
+  for (const p of slotsOf(version)) {
     if (p.data_type === "object" && p.object_type_id === subjectTypeId && !subjectTaken) {
       inputs[p.api_name] = { subject: true };
       subjectTaken = true;
@@ -128,7 +147,7 @@ export function parametersToCreate(
   inputs: Record<string, FunctionRuleInput>,
   existing: readonly string[],
 ): CreatedParameter[] {
-  const byName = new Map<string, FunctionParameter>(version.parameters.map((p) => [p.api_name, p]));
+  const byName = new Map<string, FunctionParameter>(slotsOf(version).map((p) => [p.api_name, p]));
   const out: CreatedParameter[] = [];
   for (const source of Object.values(inputs)) {
     if (!("parameter" in source) || existing.includes(source.parameter)) continue;
@@ -163,7 +182,12 @@ export function functionRuleProblem(
   if (pinned.output.kind !== "edits") {
     return `${fn.api_name} is not an edit function: it returns ${pinned.output.kind}.`;
   }
-  for (const p of pinned.parameters) {
+  if (!!batchOf(pinned) !== config.batched) {
+    return config.batched
+      ? `${fn.api_name} receives no batch, so it cannot run batched (action-types p.85).`
+      : `${fn.api_name} receives a batch, so the rule runs it batched (action-types p.85).`;
+  }
+  for (const p of slotsOf(pinned)) {
     const source = config.inputs[p.api_name];
     if (!source) {
       if (p.required) return `${p.api_name} needs a parameter, a value or this object.`;

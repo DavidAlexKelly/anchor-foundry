@@ -47,7 +47,12 @@ _VERSION_RE = re.compile(
 #: `object_set` is p.221's "ObjectSet<ObjectType> parameter", by which an
 #: Object Table passes the objects it is showing (§770): their primary keys,
 #: as a list the SQL reads with `list_contains($name, __primary_key)`.
-PARAMETER_TYPES = (*engine.SCALAR_TYPES, "object", "object_set")
+PARAMETER_TYPES = (*engine.SCALAR_TYPES, "object", "object_set", "batch")
+#: `action-types` p.84-85's batched execution (§779): "the function must
+#: receive a single input parameter containing a list of structs". A `batch`
+#: parameter declares its struct's `fields`, each a scalar or an object, and
+#: the SQL reads it with `unnest($name)`.
+BATCH_FIELD_TYPES = (*engine.SCALAR_TYPES, "object")
 #: `map` is p.221's "map from the object type to a value or custom type"
 #: (§770): a key column, then one column per field. `aggregation` is Chart
 #: XY's "TwoDimensionalAggregation or ThreeDimensionalAggregation" (workshop
@@ -102,8 +107,39 @@ def parse_parameters(raw: Any) -> list[dict[str, Any]]:
             if not item.get("object_type_id"):
                 raise FunctionError(f"{name}: an object parameter names its object type")
             parsed["object_type_id"] = str(item["object_type_id"])
+        if data_type == "batch":
+            parsed["fields"] = _parse_fields(name, item.get("fields"))
         out.append(parsed)
+    if any(p["data_type"] == "batch" for p in out) and len(out) != 1:
+        raise FunctionError("a batched function receives a single input parameter "
+                            "containing a list of structs (action-types p.85)")
     return out
+
+
+def _parse_fields(name: str, raw: Any) -> list[dict[str, Any]]:
+    """A batch parameter's struct fields (§779)."""
+    if not isinstance(raw, list) or not raw:
+        raise FunctionError(f"{name}: a batch parameter declares its fields")
+    fields: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise FunctionError(f"{name}: each field must be an object")
+        field = str(item.get("api_name") or "")
+        if not _API_RE.match(field):
+            raise FunctionError(f"{name}: invalid field name {field!r}")
+        if field in {f["api_name"] for f in fields}:
+            raise FunctionError(f"{name}: two fields are called {field}")
+        data_type = str(item.get("data_type") or "")
+        if data_type not in BATCH_FIELD_TYPES:
+            raise FunctionError(f"{name}.{field}: {data_type!r} is not a field type; expected "
+                                f"one of {', '.join(BATCH_FIELD_TYPES)}")
+        parsed: dict[str, Any] = {"api_name": field, "data_type": data_type}
+        if data_type == "object":
+            if not item.get("object_type_id"):
+                raise FunctionError(f"{name}.{field}: an object field names its object type")
+            parsed["object_type_id"] = str(item["object_type_id"])
+        fields.append(parsed)
+    return fields
 
 
 def parse_output(raw: Any) -> dict[str, Any]:
@@ -169,13 +205,20 @@ async def check_version(
     if not sql:
         raise FunctionError("a function needs its SQL")
     referenced = {*inputs, *(p["object_type_id"] for p in parameters
-                             if p["data_type"] in ("object", "object_set"))}
+                             if p["data_type"] in ("object", "object_set")),
+                  *(f["object_type_id"] for p in parameters for f in p.get("fields", [])
+                    if f["data_type"] == "object")}
     if output["kind"] in ("object_set", "map", "edits"):
         referenced.add(output["object_type_id"])
     types = await _types(conn, workspace_id, referenced)
     engine.check_sql(sql, [p["api_name"] for p in parameters])
     tables = _tables(inputs, types)
-    params: dict[str, Any] = {p["api_name"]: None for p in parameters}
+    # A batch is run as one entry of nothing, so its fields have names to read.
+    params: dict[str, Any] = {
+        p["api_name"]: [{f["api_name"]: None for f in p["fields"]}]
+        if p["data_type"] == "batch" else None
+        for p in parameters
+    }
     dry = await anyio.to_thread.run_sync(lambda: engine.run(tables, sql, params, output))
     if output["kind"] == "edits":
         # What an edit sets has to be somewhere to set it: a property of the
@@ -356,6 +399,41 @@ def _bind(parameter: dict[str, Any], value: Any) -> Any:
         raise FunctionError(f"{name}: {value!r} is not a {data_type}") from exc
 
 
+async def _bind_batch(
+    parameter: dict[str, Any], raw: Any, *, store: Any, prefix: str
+) -> list[dict[str, Any]]:
+    """A batch's entries, each field as its type (§779): an object by its
+    primary key, as an `object` parameter is."""
+    name = parameter["api_name"]
+    if not isinstance(raw, list) or len(raw) > engine.MAX_ARRAY_ITEMS:
+        raise FunctionError(f"{name}: a batch is a list of at most "
+                            f"{engine.MAX_ARRAY_ITEMS:,} entries")
+    declared = {f["api_name"]: f for f in parameter["fields"]}
+    entries: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise FunctionError(f"{name}: each entry is an object")
+        if unknown := sorted(set(entry) - set(declared)):
+            raise FunctionError(f"{name} has no field {unknown[0]}")
+        bound: dict[str, Any] = {}
+        for field, spec in declared.items():
+            value = entry.get(field)
+            if value is None or value == "":
+                bound[field] = None
+                continue
+            value = _bind({**spec, "api_name": f"{name}.{field}"}, value)
+            if spec["data_type"] == "object":
+                found = await store.get_instance(
+                    search_prefix=prefix, object_type_id=UUID(spec["object_type_id"]),
+                    instance_id=value)
+                if found is None:
+                    raise FunctionError(f"{name}.{field}: no such object")
+                value = str(found["primary_key"])
+            bound[field] = value
+        entries.append(bound)
+    return entries
+
+
 def _cell(value: Any, data_type: str) -> Any:
     if value is None or data_type in engine.SCALAR_TYPES:
         return value
@@ -387,6 +465,10 @@ async def execute(
             if parameter["required"]:
                 raise FunctionError(f"{parameter['api_name']} needs a value")
             params[parameter["api_name"]] = None
+            continue
+        if parameter["data_type"] == "batch":
+            params[parameter["api_name"]] = await _bind_batch(
+                parameter, raw, store=store, prefix=prefix)
             continue
         bound = _bind(parameter, raw)
         if parameter["data_type"] == "object":

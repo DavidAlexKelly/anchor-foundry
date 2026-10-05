@@ -49,7 +49,7 @@ Two of these deserve a note rather than a line. **Global Branching** — one bra
 - function-backed columns in Object Table (`workshop` p.221; built in §770)
 - function-backed layers in Chart XY (`workshop` p.278; built in §771)
 - Functions on Objects as a variable source (`workshop`, FOO section; built in §772)
-- function-backed actions (`action-types` §15–17; built in §773, without batched execution)
+- function-backed actions (`action-types` §15–17; built in §773, batched execution in §779)
 - function-backed pivot tables (`workshop` p.335; built in §774)
 - function-backed exports (`workshop` p.489; built in §775)
 

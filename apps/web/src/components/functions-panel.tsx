@@ -22,10 +22,13 @@ import { Dialog, Field } from "@/components/dialog";
 import { TypePicker } from "@/components/type-picker";
 import { ApiError, objects as objApi } from "@/lib/api";
 import {
-  OUTPUT_KINDS, PARAMETER_TYPES, SCALAR_TYPES, blankDraft, blankParameter, bodyOf, draftOf,
+  BATCH_FIELD_TYPES, OUTPUT_KINDS, PARAMETER_TYPES, SCALAR_TYPES, blankDraft, blankField,
+  blankParameter, bodyOf, draftOf,
   draftProblem, refersToObjects, resultLine, valuesFor, type DraftVersion,
 } from "@/lib/functions";
-import type { FunctionDetail, FunctionParameter, FunctionSummary } from "@/lib/types";
+import type {
+  FunctionBatchField, FunctionDetail, FunctionParameter, FunctionSummary,
+} from "@/lib/types";
 
 function toApiName(display: string): string {
   const words = display.match(/[A-Za-z0-9]+/g) ?? [];
@@ -111,6 +114,42 @@ function ParameterRow({ workspaceId, index, value, onChange, onRemove }: {
           value={value.object_type_id}
           onChange={(id) => onChange({ ...value, object_type_id: id || null })}
         />
+      )}
+      {value.data_type === "batch" && (
+        // action-types p.85's struct (§779): the fields each entry carries,
+        // read in the query with `unnest($name)`.
+        <div data-testid={`fn-param-${n}-fields`} style={{ flexBasis: "100%", paddingLeft: 16 }}>
+          {(value.fields ?? []).map((f, i) => {
+            const setField = (next: FunctionBatchField) => onChange({
+              ...value, fields: (value.fields ?? []).map((g, j) => (j === i ? next : g)) });
+            return (
+              <div key={i} className="row-actions" style={{ gap: 6, marginBottom: 4 }}>
+                <input type="text" aria-label={`Parameter ${n} field ${i + 1} name`}
+                  placeholder="field" value={f.api_name}
+                  onChange={(e) => setField({ ...f, api_name: e.target.value })} />
+                <select aria-label={`Parameter ${n} field ${i + 1} type`} value={f.data_type}
+                  onChange={(e) => setField({ ...f,
+                    data_type: e.target.value as FunctionBatchField["data_type"],
+                    object_type_id: null })}>
+                  {BATCH_FIELD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+                {f.data_type === "object" && (
+                  <TypePicker workspaceId={workspaceId} testId={`fn-param-${n}-field-${i + 1}-type`}
+                    placeholder="Choose an object type…" value={f.object_type_id ?? null}
+                    onChange={(id) => setField({ ...f, object_type_id: id || null })} />
+                )}
+                <button type="button" className="btn quiet"
+                  aria-label={`Remove parameter ${n} field ${i + 1}`}
+                  onClick={() => onChange({ ...value,
+                    fields: (value.fields ?? []).filter((_, j) => j !== i) })}>Remove</button>
+              </div>
+            );
+          })}
+          <button type="button" className="btn quiet" data-testid={`fn-param-${n}-add-field`}
+            onClick={() => onChange({ ...value, fields: [...(value.fields ?? []), blankField()] })}>
+            Add field
+          </button>
+        </div>
       )}
       <label style={{ fontSize: 12 }}>
         <input

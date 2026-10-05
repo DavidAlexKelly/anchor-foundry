@@ -19,7 +19,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { objects as objApi } from "@/lib/api";
 import {
-  canAutoUpgrade, defaultInputs, functionRuleProblem, parametersToCreate, resolveVersion,
+  batchOf, canAutoUpgrade, defaultInputs, functionRuleProblem, parametersToCreate,
+  resolveVersion, slotsOf,
   type CreatedParameter, type FunctionRuleConfig, type FunctionRuleInput,
 } from "@/lib/function-rules";
 
@@ -56,7 +57,8 @@ export function FunctionRuleFields({
       ? detail.data?.versions.find((v) => v.version === version) : undefined;
     const inputs = chosen ? defaultInputs(chosen, subjectTypeId) : {};
     if (chosen) onCreateParameters(parametersToCreate(chosen, inputs, names));
-    onChange({ function_id: functionId, version, auto_upgrade: false, inputs });
+    onChange({ function_id: functionId, version, auto_upgrade: false,
+               batched: !!batchOf(chosen), inputs });
   };
 
   const setInput = (name: string, source: FunctionRuleInput | null) => {
@@ -112,7 +114,12 @@ export function FunctionRuleFields({
           )}
         </label>
       )}
-      {(pinned?.parameters ?? []).map((p) => {
+      {pinned && config.batched && (
+        <span className="field-hint" data-testid={`rule-${n}-batched`}>
+          Batched: one call for a whole batch of submissions (action-types p.85)
+        </span>
+      )}
+      {(pinned ? slotsOf(pinned) : []).map((p) => {
         const source = config.inputs[p.api_name];
         const choice = !source ? "" : "subject" in source ? "$subject"
           : "parameter" in source ? `param:${source.parameter}` : "$value";

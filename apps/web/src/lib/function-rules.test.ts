@@ -2,8 +2,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  BLANK_FUNCTION_RULE, canAutoUpgrade, defaultInputs, functionRuleOf, functionRuleProblem,
-  parametersToCreate, resolveVersion,
+  BLANK_FUNCTION_RULE, batchOf, canAutoUpgrade, defaultInputs, functionRuleOf,
+  functionRuleProblem, parametersToCreate, resolveVersion, slotsOf,
 } from "./function-rules";
 import type { FunctionDetail, FunctionVersion } from "./types";
 
@@ -32,8 +32,10 @@ describe("a saved rule, read", () => {
     expect(functionRuleOf({ function_id: "f", version: "1.0.0", auto_upgrade: "yes", inputs: {
       a: { subject: true }, b: { parameter: "p" }, c: { value: 0 }, d: { parameter: "" },
       e: null, f: { subject: "true" } } }))
-      .toEqual({ function_id: "f", version: "1.0.0", auto_upgrade: false, inputs: {
-        a: { subject: true }, b: { parameter: "p" }, c: { value: 0 } } });
+      .toEqual({ function_id: "f", version: "1.0.0", auto_upgrade: false, batched: false,
+        inputs: { a: { subject: true }, b: { parameter: "p" }, c: { value: 0 } } });
+    expect(functionRuleOf({ batched: true }).batched).toBe(true);
+    expect(functionRuleOf({ batched: "yes" }).batched).toBe(false);
     expect(functionRuleOf({ function_id: 1, version: 2, auto_upgrade: true, inputs: [] }))
       .toEqual({ ...BLANK_FUNCTION_RULE, auto_upgrade: true });
     expect(functionRuleOf({ inputs: { a: { parameter: 3 } } }).inputs).toEqual({});
@@ -108,7 +110,7 @@ describe("the inputs a chosen function starts with (p.79)", () => {
 describe("why a rule cannot run", () => {
   const f = fn([version("1.1.0"), version("1.0.0"),
                 version("0.1.0", { output: { kind: "value", data_type: "integer" } })]);
-  const ok = { function_id: "f", version: "1.0.0", auto_upgrade: false, inputs: {
+  const ok = { function_id: "f", version: "1.0.0", auto_upgrade: false, batched: false, inputs: {
     ticket: { subject: true as const }, minimum: { parameter: "minimum" } } };
 
   it("says nothing when it can", () => {
@@ -142,5 +144,39 @@ describe("why a rule cannot run", () => {
 
   it("lets an optional parameter go unfed", () => {
     expect(functionRuleProblem(ok, f, ["minimum"], "t")).toBeNull();
+  });
+});
+
+describe("a batched rule (p.84-85, §779)", () => {
+  const batch = version("1.0.0", { parameters: [{
+    api_name: "batch", data_type: "batch", required: true, fields: [
+      { api_name: "ticket", data_type: "object", object_type_id: "t" },
+      { api_name: "title", data_type: "string" }] }] });
+  const f = fn([batch]);
+
+  it("feeds the batch's fields, none of them required", () => {
+    expect(batchOf(batch)?.api_name).toBe("batch");
+    expect(batchOf(version("1.0.0"))).toBeUndefined();
+    expect(slotsOf(batch).map((p) => [p.api_name, p.required])).toEqual(
+      [["ticket", false], ["title", false]]);
+    expect(slotsOf(version("1.0.0")).map((p) => p.api_name)).toEqual(
+      ["ticket", "note", "minimum"]);
+    expect(defaultInputs(batch, "t")).toEqual(
+      { ticket: { subject: true }, title: { parameter: "title" } });
+    expect(parametersToCreate(batch, defaultInputs(batch, "t"), [])).toEqual([
+      { api_name: "title", display_name: "title", data_type: "string", object_type_id: null,
+        required: false }]);
+  });
+
+  it("runs batched exactly when the function takes a batch", () => {
+    const rule = { ...BLANK_FUNCTION_RULE, function_id: "f", version: "1.0.0",
+      inputs: { ticket: { subject: true as const } } };
+    expect(functionRuleProblem(rule, f, [], "t"))
+      .toBe("close receives a batch, so the rule runs it batched (action-types p.85).");
+    expect(functionRuleProblem({ ...rule, batched: true }, f, [], "t")).toBeNull();
+    // Nothing is required of a batch's fields.
+    expect(functionRuleProblem({ ...rule, batched: true, inputs: {} }, f, [], "t")).toBeNull();
+    expect(functionRuleProblem({ ...rule, batched: true }, fn([version("1.0.0")]), [], "t"))
+      .toBe("close receives no batch, so it cannot run batched (action-types p.85).");
   });
 });

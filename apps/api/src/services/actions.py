@@ -1219,10 +1219,14 @@ FUNCTION_INLINE_EDIT_ROW_LIMIT = 20
 
 
 def inline_edit_row_limit(action_type: dict[str, Any]) -> int:
-    """How many rows a table may stage at once for this action (p.242)."""
-    function_backed = any(str(r.get("kind")) == "function"
-                          for r in action_type.get("rules") or [])
-    return FUNCTION_INLINE_EDIT_ROW_LIMIT if function_backed else INLINE_EDIT_ROW_LIMIT
+    """How many rows a table may stage at once for this action (p.242).
+
+    p.131's 20 is for a function "not configured to use batched execution";
+    a batched one is one call for the whole batch, and takes the 200 (§779)."""
+    unbatched = any(str(r.get("kind")) == "function"
+                    and not _json(r.get("config")).get("batched")
+                    for r in action_type.get("rules") or [])
+    return FUNCTION_INLINE_EDIT_ROW_LIMIT if unbatched else INLINE_EDIT_ROW_LIMIT
 
 #: p.241: "Property parameters must be of single, primitive types (for example,
 #: boolean, integer, or string, not an object reference or array)."
