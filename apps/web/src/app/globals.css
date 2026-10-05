@@ -2258,6 +2258,10 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-markdown > :first-child { margin-top: 0; }
 .canvas-markdown > :last-child { margin-bottom: 0; }
 .canvas-markdown p { margin: 0 0 8px; }
+/* p.466's rich view, edited in place (§789): the placeholder of an empty one. */
+.md-rich-edit { min-height: 4.5em; outline: none; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.md-rich-edit:focus { border-color: var(--accent); }
+.md-rich-edit:empty::before { content: attr(data-placeholder); color: var(--ink-soft); }
 .canvas-markdown-heading { margin: 14px 0 6px; line-height: 1.3; font-weight: 650; }
 .canvas-markdown h1 { font-size: 20px; }
 .canvas-markdown h2 { font-size: 17px; }

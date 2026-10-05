@@ -71,16 +71,57 @@ def test_the_preview_draws_what_was_written(page, api) -> None:
     rich = page.get_by_test_id("md-rich")
     expect(rich.locator("strong")).to_have_text("bold")
     expect(area(page)).to_have_count(0)
-    # The toolbar formats the Markdown, so it waits for the Markdown view.
-    expect(page.get_by_test_id("md-bold")).to_be_disabled()
     page.get_by_test_id("md-view").click()
     expect(area(page)).to_have_value("plain and **bold**")
 
 
-def test_an_empty_preview_says_so(page, api) -> None:
+def test_the_rich_view_is_edited_in_place(page, api) -> None:
+    """p.466's "formatted preview with inline editing" (§789): typed into as
+    it is drawn, its toolbar the browser's own, and read back as Markdown."""
+    import re
+
+    open_module(page, build(api, "Markdown rich edit"))
+    area(page).fill("**hello** world")
+    page.get_by_test_id("md-view").click()
+    rich = page.get_by_test_id("md-rich")
+    expect(rich.locator("strong")).to_have_text("hello")
+    rich.click()
+    page.keyboard.press("Control+End")
+    page.keyboard.type(" and *more*")
+    # Typed text stays text: the asterisks are escaped, not an italic.
+    expect(stored(page)).to_contain_text("stored: [**hello** world and \\*more\\*]")
+    page.keyboard.press("Control+a")
+    page.get_by_test_id("md-italic").click()
+    expect(rich.locator("i, em").first).to_be_visible()
+    expect(stored(page)).to_contain_text(re.compile(r"\[.*_.*world and \\\*more\\\*_\]"))
+    # Back in the raw view, the text is what the rich view wrote.
+    written = stored(page).inner_text().split("stored: [", 1)[1].rsplit("]", 1)[0]
+    page.get_by_test_id("md-view").click()
+    expect(area(page)).to_have_value(written)
+
+
+def test_the_rich_view_takes_a_list_and_new_lines(page, api) -> None:
+    open_module(page, build(api, "Markdown rich list"))
+    page.get_by_test_id("md-view").click()
+    rich = page.get_by_test_id("md-rich")
+    rich.click()
+    page.keyboard.type("first")
+    page.keyboard.press("Enter")
+    page.keyboard.type("second")
+    # Two paragraphs, which the page shows with their blank line collapsed.
+    expect(stored(page)).to_contain_text("stored: [first second]")
+    page.get_by_test_id("md-bullets").click()
+    expect(rich.locator("ul li")).to_have_count(1)
+    page.get_by_test_id("md-view").click()
+    expect(area(page)).to_have_value("first\n\n- second")
+
+
+def test_an_empty_rich_view_shows_its_placeholder(page, api) -> None:
     open_module(page, build(api, "Markdown empty"))
     page.get_by_test_id("md-view").click()
-    expect(page.get_by_test_id("md-rich")).to_contain_text("Write here")
+    rich = page.get_by_test_id("md-rich")
+    expect(rich).to_have_attribute("data-placeholder", "Write here")
+    expect(rich).to_have_text("")
 
 
 def test_the_editor_grows_with_what_is_written(page, api) -> None:
