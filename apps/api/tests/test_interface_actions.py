@@ -1449,6 +1449,32 @@ def test_a_filter_on_an_interface_reference_is_written_in_the_interfaces_names(
     assert sorted(item["primary_key"] for item in offered["items"]) == ["D1", "F2", "V1"], offered
 
 
+def test_an_interface_too_wide_to_read_refuses_its_choices_in_its_own_words(
+    client: TestClient, fx: Fixture, narrow: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The evaluator's refusal - more implementations than one read fans out
+    over - is a 422 in its own sentence. It was a 500: the route re-raised it
+    through a name it never imported."""
+    from src.routes import actions as routes
+    from src.services import interface_sets
+
+    made = _filtered_reference(client, fx, narrow, [
+        {"property": "last_inspection_date",
+         "values": [{"kind": "value", "value": "2021-06-01"}]}])
+    assert made["response"].status_code == 200, made["response"].text
+
+    async def too_wide(*_args, **_kwargs):
+        raise interface_sets.InterfaceSetError("this interface has too many implementations")
+
+    monkeypatch.setattr(routes.interface_evaluate, "evaluate", too_wide)
+    r = client.post(
+        f"{wbase(fx)}/action-types/{made['action']['id']}/parameter-choices",
+        headers=hdr(fx.editor_sub), json={"values": {}},
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "this interface has too many implementations"
+
+
 def test_a_filter_naming_an_implementations_own_property_is_refused(
     client: TestClient, fx: Fixture, narrow: dict
 ) -> None:

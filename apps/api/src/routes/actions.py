@@ -50,7 +50,7 @@ from ..services import datasets as dataset_service
 from ..lib.errors import ConflictError, ForbiddenError, NotFoundError
 from ..services import instance_store
 from ..services import interfaces as interfaces_service
-from ..services import interface_evaluate, interface_sets
+from ..services import interface_evaluate
 from ..services import notification_store
 from ..services import object_type_usage as usage_service
 from ..services import notifications as notifications_service
@@ -1080,19 +1080,15 @@ async def action_parameter_choices(
                     waiting_for_property=missing.property,
                 ))
                 continue
-            try:
-                found = await interface_evaluate.evaluate(
-                    conn, access.workspace_id, UUID(constrained),
-                    filters=[{"property": f.property, "op": f.op, "value": f.value}
-                             for f in narrowing],
-                    limit=choices_service.MAX_CHOICES,
-                )
-            except interface_sets.InterfaceSetError as exc:
-                # More implementations than one read may fan out over: refused
-                # in the evaluator's words rather than offered as a short list.
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-                ) from exc
+            # More implementations than one read may fan out over is refused
+            # in the evaluator's words rather than offered as a short list:
+            # `InterfaceSetError` is a ValueError, which the app answers 422.
+            found = await interface_evaluate.evaluate(
+                conn, access.workspace_id, UUID(constrained),
+                filters=[{"property": f.property, "op": f.op, "value": f.value}
+                         for f in narrowing],
+                limit=choices_service.MAX_CHOICES,
+            )
             rows, total = found.instances, found.total
             out.append(ParameterChoices(
                 parameter=name,
