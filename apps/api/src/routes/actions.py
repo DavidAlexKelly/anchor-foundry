@@ -2894,6 +2894,9 @@ async def execute_action(
                         conn, workspace_id=access.workspace_id, config=function_config,
                         bound=bound, subject_id=str(body.instance_id),
                     )
+                    # §786: a file it writes into an attachment is stored now.
+                    result["edits"] = await action_functions.store_attachments(
+                        conn, workspace_id=access.workspace_id, edits=result["edits"])
                     # Which of the objects named are there, a read per type
                     # the edits touch (§783). A key of another type in the
                     # read finds nothing of this one.
@@ -4059,7 +4062,9 @@ async def execute_batch(
                         "an inline edit changes only the row it is typed into "
                         f"(action-types p.136), and the function edits another object "
                         f"for {row['key']}")
-                mine = [e for e in result["edits"] if str(e["primary_key"]) == row["key"]]
+                mine = await action_functions.store_attachments(
+                    conn, workspace_id=access.workspace_id,
+                    edits=[e for e in result["edits"] if str(e["primary_key"]) == row["key"]])
                 if not mine:
                     raise ValueError(f"the function made no edit for {row['key']}, which "
                                      "this submission edits")

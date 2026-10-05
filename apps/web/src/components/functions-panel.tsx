@@ -672,7 +672,9 @@ function EditedTypes({ workspaceId, types, onChange }: {
         object of the properties to set, such as <code>json_object(&apos;status&apos;,
         &apos;closed&apos;)</code>. A <code>link</code> or <code>unlink</code> names a link type
         and the key at its other end instead, such as <code>json_object(&apos;flown_by&apos;,
-        &apos;3&apos;)</code>.
+        &apos;3&apos;)</code>. A new file for an attachment property is
+        {" "}<code>json_object(&apos;filename&apos;, &apos;log.txt&apos;, &apos;content&apos;,
+        …)</code>, or <code>&apos;base64&apos;</code> for bytes.
       </p>
     </div>
   );

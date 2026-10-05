@@ -32,10 +32,21 @@ function's edits exactly as it reads a rule's, and none of them changed.
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import json
+import mimetypes
+import re
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
+import anyio
+
+from . import datasets as dataset_service
+from . import function_engine
 from . import functions as functions_service
+from . import ontology as ontology_service
+from . import storage as storage_service
 from .function_engine import LINK_VERBS, FunctionError, UserFacingError
 
 #: Where the edits' values live in the bound namespace. A dot, so it cannot be
@@ -251,6 +262,84 @@ def link_pairs(
                     "keys": (key, other) if link["end"] == "from" else (other, key),
                 })
     return pairs
+
+
+def new_attachment(value: Any) -> tuple[str, bytes] | None:
+    """A file a function writes into an attachment property (§786), as its
+    filename and bytes; None for anything else - a reference already stored,
+    nothing, or a value the property's own check refuses.
+
+    `functions`: "You can also create and return attachments in functions."
+    The function's half is a JSON object naming the `filename` and either its
+    `content` as text or its `base64` bytes, as `uploadFile(filename, blob)`
+    takes a name and a blob."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if not isinstance(value, dict) or "key" in value \
+            or not {"filename", "content", "base64"} & set(value):
+        return None
+    filename = value.get("filename")
+    if not isinstance(filename, str) or not filename.strip():
+        raise FunctionError("a new attachment names its filename")
+    if ("content" in value) == ("base64" in value):
+        raise FunctionError(f"a new attachment gives its content or its base64, and "
+                            f"{filename} gives " + ("both" if "content" in value else "neither"))
+    if "base64" in value:
+        try:
+            data = base64.b64decode(str(value["base64"]), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise FunctionError(f"{filename}'s base64 is not base64") from exc
+    else:
+        data = str(value["content"] or "").encode()
+    if not data:
+        raise FunctionError(f"{filename} is empty")
+    if len(data) > function_engine.MAX_ATTACHMENT_BYTES:
+        raise FunctionError(f"{filename} is larger than the 20 MB a function writes "
+                            "(functions' Attachments)")
+    return filename, data
+
+
+async def store_attachments(
+    conn: Any, *, workspace_id: UUID, edits: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """The edits with each new file stored and replaced by its reference
+    (§786), as an upload is stored: under the workspace's attachments, a
+    random folder, a safe name. Only for an action's run - the function's own
+    run in the helper writes nothing, since "edits are not applied" there.
+    A run that fails after this leaves the file, as an unused upload does."""
+    attached: dict[str, set[str]] = {}
+    prefix: str | None = None
+    out: list[dict[str, Any]] = []
+    for edit in edits:
+        type_id = str(edit["object_type_id"])
+        if edit.get("edit") in LINK_VERBS:
+            out.append(edit)
+            continue
+        if type_id not in attached:
+            attached[type_id] = {
+                str(p["api_name"]) for p in await ontology_service.list_properties(
+                    conn, UUID(type_id)) if p["data_type"] == "attachment"}
+        properties = dict(edit["properties"])
+        for name in attached[type_id] & set(properties):
+            made = new_attachment(properties[name])
+            if made is None:
+                continue
+            filename, data = made
+            if prefix is None:
+                prefix = await dataset_service.workspace_s3_prefix(conn, workspace_id)
+            # The upload route's rule, and no "..", which storage refuses.
+            safe = re.sub(r"\.{2,}", ".", re.sub(r"[^A-Za-z0-9._-]", "_", filename))[:120]
+            key = f"{prefix}attachments/{uuid4()}/{safe}"
+            await anyio.to_thread.run_sync(storage_service.current().put, key, data)
+            properties[name] = {
+                "key": key, "filename": safe,
+                "content_type": mimetypes.guess_type(safe)[0] or "application/octet-stream",
+                "size": len(data)}
+        out.append({**edit, "properties": properties})
+    return out
 
 
 async def call(
