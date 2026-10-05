@@ -240,6 +240,9 @@ export class CustomerStack extends Stack {
     new CfnOutput(this, "PlatformDomain", { value: distribution.distributionDomainName });
     new CfnOutput(this, "UserPoolId", { value: auth.userPool.userPoolId });
     new CfnOutput(this, "UserPoolClientId", { value: auth.userPoolClient.userPoolClientId });
+    // The web image's NEXT_PUBLIC_COGNITO_DOMAIN. STATUS.md §20 found it had
+    // to be looked up with the AWS CLI after every fresh deploy (§816).
+    new CfnOutput(this, "HostedUiDomain", { value: auth.userPoolDomain.baseUrl() });
     new CfnOutput(this, "DataBucketName", { value: data.dataBucket.bucketName });
     new CfnOutput(this, "AccessLogBucketName", { value: data.accessLogBucket.bucketName });
     new CfnOutput(this, "DbSecretArn", { value: data.dbSecret.secretArn });
