@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import date, datetime
 from typing import Any
 from uuid import UUID
@@ -36,7 +37,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError, NotFoundError
 from . import function_engine as engine
+from . import datasets as dataset_service
 from . import instance_store, instances as instances_service, ontology
+from . import storage as storage_service
 from .function_engine import FunctionError
 
 _API_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
@@ -47,7 +50,7 @@ _VERSION_RE = re.compile(
 #: `object_set` is p.221's "ObjectSet<ObjectType> parameter", by which an
 #: Object Table passes the objects it is showing (§770): their primary keys,
 #: as a list the SQL reads with `list_contains($name, __primary_key)`.
-PARAMETER_TYPES = (*engine.SCALAR_TYPES, "object", "object_set", "batch")
+PARAMETER_TYPES = (*engine.SCALAR_TYPES, "object", "object_set", "batch", "attachment")
 #: `action-types` p.84-85's batched execution (§779): "the function must
 #: receive a single input parameter containing a list of structs". A `batch`
 #: parameter declares its struct's `fields`, each a scalar or an object, and
@@ -221,6 +224,41 @@ def _link_edit(
             "from_column": str(link["join_from_column"]),
             "to_column": str(link["join_to_column"]), "end": end, "other_type_id": other,
             "keys": keys}
+
+
+def attachment_reader(prefix: str) -> Any:
+    """`read_attachment`'s reader (§785): the bytes of an attachment of this
+    workspace, given its reference as a property or a parameter holds it -
+    the JSON of `{key, filename, …}` - or its bare key.
+
+    **The key is checked against the workspace's attachments**, as the
+    download route checks it: a query can name any key it likes, and without
+    this a function would read another tenant's files, or a dataset's."""
+    lock = threading.Lock()
+    total = [0]
+
+    def read(ref: str) -> bytes:
+        try:
+            parsed = json.loads(ref)
+        except ValueError:
+            parsed = ref
+        key = parsed.get("key") if isinstance(parsed, dict) else parsed
+        if not isinstance(key, str) or not key.startswith(f"{prefix}attachments/"):
+            raise FunctionError("read_attachment reads this workspace's attachments only")
+        name = key.rsplit("/", 1)[-1]
+        try:
+            data = storage_service.current().read(key)
+        except Exception as exc:  # StorageKeyError and friends
+            raise FunctionError(f"no attachment {name}") from exc
+        if len(data) > engine.MAX_ATTACHMENT_BYTES:
+            raise FunctionError(f"{name} is larger than the 20 MB a function reads "
+                                "(functions' Attachments)")
+        with lock:
+            total[0] += len(data)
+            if total[0] > engine.MAX_ATTACHMENT_TOTAL:
+                raise FunctionError("the function read more than 100 MB of attachments")
+        return data
+    return read
 
 
 def edited_types(output: dict[str, Any]) -> list[str]:
@@ -454,6 +492,14 @@ def _bind(parameter: dict[str, Any], value: Any) -> Any:
             return [str(v) for v in value]
         if data_type in ("string", "object"):
             return str(value)
+        if data_type == "attachment":
+            # The reference, as an attachment property holds it (§785):
+            # `read_attachment` reads it, under the workspace's own check.
+            if isinstance(value, dict) and isinstance(value.get("key"), str):
+                return json.dumps(value)
+            if isinstance(value, str) and value:
+                return value
+            raise TypeError
         if data_type == "boolean":
             if not isinstance(value, bool):
                 raise TypeError
@@ -596,8 +642,10 @@ async def execute(
             rows.append((str(obj["id"]), str(obj["primary_key"]),
                          *(_cell(props.get(c), declared[c]) for c, _t in table.columns)))
         tables.append(engine.InputTable(name=table.name, columns=table.columns, rows=rows))
+    reader = attachment_reader(await dataset_service.workspace_s3_prefix(conn, workspace_id))
     result = await anyio.to_thread.run_sync(
-        lambda: engine.run(tables, chosen["sql"], params, chosen["output"]))
+        lambda: engine.run(tables, chosen["sql"], params, chosen["output"],
+                           read_attachment=reader))
     if result["kind"] == "edits":
         result["edits"] = await _edits_by_type(conn, workspace_id, chosen["output"],
                                                result["edits"])

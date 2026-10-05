@@ -2240,7 +2240,9 @@ export interface FunctionParameter {
     /** p.221's ObjectSet parameter (§770): primary keys of one type. */
     | "object_set"
     /** `action-types` p.85's batch (§779): a list of structs of `fields`. */
-    | "batch";
+    | "batch"
+    /** `functions`' Attachments (§785): a file, read with `read_attachment`. */
+    | "attachment";
   object_type_id?: string | null;
   required: boolean;
   fields?: FunctionBatchField[] | null;

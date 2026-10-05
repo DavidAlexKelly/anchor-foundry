@@ -23,7 +23,7 @@ import json
 import re
 import threading
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import duckdb
 
@@ -112,6 +112,14 @@ def _clean(exc: duckdb.Error) -> str:
     return text.splitlines()[0] if text else "the query failed"
 
 
+#: `functions`' Attachments: "we recommend only interacting with attachments
+#: under 20MB" (§785). One file over it is refused rather than read.
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+#: What one call may read in all, so a query over a set's attachments cannot
+#: pull a set's worth of files into memory.
+MAX_ATTACHMENT_TOTAL = 100 * 1024 * 1024
+
+
 def run(
     inputs: list[InputTable],
     sql: str,
@@ -119,15 +127,35 @@ def run(
     output: dict[str, Any],
     *,
     timeout: float = TIMEOUT_SECONDS,
+    read_attachment: Callable[[str], bytes] | None = None,
 ) -> dict[str, Any]:
     """Run the SQL over the inputs and shape the result as `output` says.
 
     Returns `{"kind": ..., "value" | "values" | "columns"/"rows"}`.
+
+    `read_attachment` is §785's: the bytes an attachment reference names,
+    for the query's `read_attachment(...)`. Without one (a publish's dry run)
+    every attachment reads as NULL.
     """
     sandbox = duckdb.connect()
     timer = threading.Timer(timeout, sandbox.interrupt)
+    refused: list[FunctionError] = []
+
+    def attachment(ref: str | None) -> bytes | None:
+        if ref is None or read_attachment is None:
+            return None
+        try:
+            return read_attachment(ref)
+        except FunctionError as exc:
+            # A UDF's exception reaches the query as DuckDB's own text; the
+            # sentence is kept here and raised in its place.
+            refused.append(exc)
+            raise
     try:
         sandbox.execute(f"SET memory_limit='{QUERY_MEMORY_LIMIT}'")
+        # "special" null handling, so the reader may answer NULL: a dry run's.
+        sandbox.create_function("read_attachment", attachment, ["VARCHAR"], "BLOB",
+                                null_handling="special")
         for table in inputs:
             quoted = '"' + table.name.replace('"', '""') + '"'
             columns = [("__id", "VARCHAR"), ("__primary_key", "VARCHAR"), *table.columns]
@@ -150,6 +178,8 @@ def run(
             raise FunctionError(f"the function ran for more than {timeout:g} seconds "
                                 "and was stopped") from exc
         except duckdb.InvalidInputException as exc:
+            if refused:
+                raise refused[0] from exc
             # Raised by `error()` and by a few built-ins on bad input; the
             # query's own call is told apart by the query having one.
             message = _clean(exc)
