@@ -79,7 +79,10 @@ import { multipleChoice } from "@/lib/parameter-constraint";
 import { PropertyInput } from "@/components/property-value";
 import { regexProblem } from "@/components/canvas/regex-query";
 import { StatusBadge } from "@/components/status-field";
-import type { ObjectTypeSummary, SavedSearch } from "@/lib/types";
+import type {
+  ExplorerPage, ObjectInstance, ObjectTypeSummary, SavedSearch,
+} from "@/lib/types";
+import { decodeSet } from "@/lib/link-subset";
 
 /** The explorer's whole state, and the whole of what a saved search stores.
  * One shape rather than four `useState`s so that "save what is on screen" and
@@ -163,6 +166,25 @@ function matches(search: SavedSearch, criteria: Criteria): boolean {
  * deleted, so unticking the second type brings it back instead of asking
  * somebody to type it again, and the form says it is not in effect.
  */
+/** A page of a link's set (§793) as the Explorer's own page: every row of
+ * the one type the set is over. */
+function setPageOf(
+  got: { instances: ObjectInstance[]; total: number },
+  typeId: string,
+  type: { api_name: string; display_name: string } | undefined,
+  offset: number,
+): ExplorerPage {
+  return {
+    items: got.instances.map((i) => ({
+      id: i.id, primary_key: i.primary_key, properties: i.properties,
+      updated_at: (i as { updated_at?: string }).updated_at ?? "",
+      object_type_id: typeId, object_type_api_name: type?.api_name ?? "",
+      object_type_display_name: type?.display_name ?? "",
+    })),
+    total: got.total, limit: PAGE, offset,
+  };
+}
+
 function inEffect(criteria: Criteria): Criteria {
   // A pattern still being typed is not a question either (§729): what the
   // server would refuse is not sent, and the form says why.
@@ -208,6 +230,10 @@ export function ObjectExplorer({
     value: url.get("value") ?? "",
     regex: url.get("match") === "regex",
   };
+  // §793: the objects a link reaches from one object, as a set rather than
+  // a search - a link through a join table or backing objects, which no
+  // property match can say.
+  const linkedSet = decodeSet(url.get("set"));
   const pageNo = Math.max(1, Math.trunc(Number(url.get("page"))) || 1);
   const offset = (pageNo - 1) * PAGE;
 
@@ -305,8 +331,11 @@ export function ObjectExplorer({
       : null;
 
   const page = useQuery({
-    queryKey: ["object-explorer", workspaceId, applied, offset],
-    queryFn: () =>
+    queryKey: ["object-explorer", workspaceId, applied, offset, url.get("set")],
+    queryFn: async () => linkedSet ? setPageOf(
+      await objApi.evaluateObjectSet(workspaceId, linkedSet, { limit: PAGE, offset, sort: "key" }),
+      linkedSet.object_type_id, byId.get(linkedSet.object_type_id), offset,
+    ) :
       objApi.explore(workspaceId, {
         q: applied.q.trim() || undefined,
         typeIds: applied.typeIds,
@@ -321,12 +350,15 @@ export function ObjectExplorer({
         // the breakdown on a type's page groups by (§320).
         application: "explorer",
       }),
-    enabled: !!workspaceId,
+    // A link's set names its rows' type by id; its name is read first.
+    enabled: !!workspaceId && (!linkedSet || byId.has(linkedSet.object_type_id)),
   });
 
   /** Replace the whole question — opening a saved search, clearing, paging. */
   function write(criteria: Criteria, page?: number) {
     url.set({
+      // A new question leaves a link's set behind - except to page through it.
+      ...(page && page > 1 && linkedSet ? {} : { set: undefined, set_label: undefined }),
       q: criteria.q.trim() || undefined,
       type: criteria.typeIds,
       property: criteria.property.trim() || undefined,
@@ -551,7 +583,9 @@ export function ObjectExplorer({
                 Clear
               </button>
             )}
-            {canEdit && (
+            {/* A link's set (§793) is no search: a saved search holds the
+                search's own parameters, and a set is none of them. */}
+            {canEdit && !linkedSet && (
               <button
                 type="button"
                 className="btn quiet"
@@ -699,6 +733,18 @@ export function ObjectExplorer({
           </fieldset>
         </form>
 
+        {linkedSet && (
+          <div className="row-actions" style={{ marginBottom: 8 }} data-testid="explorer-link-set">
+            <span className="slug">
+              The objects a link reaches: {url.get("set_label") || "a linked set"}
+            </span>
+            <button type="button" className="btn quiet"
+                    onClick={() => url.set({ set: undefined, set_label: undefined,
+                                             page: undefined })}>
+              Search instead
+            </button>
+          </div>
+        )}
         {page.isPending && <div className="state">Searching…</div>}
         {page.isError && (
           <div className="state error">
