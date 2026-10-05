@@ -20,7 +20,8 @@ object type here deletes its objects, immediately and with no review, which is
 the one thing Foundry's staging exists to prevent. So a plan names what the
 file does not contain and points at §325's cleanup queue, which is the tool for
 deciding whether a type is safe to delete. An importer that quietly removed
-them would be a file-shaped delete button.
+them would be a file-shaped delete button - so an import removes them only
+when the person applying it asks, having seen the plan name each one (§799).
 """
 from __future__ import annotations
 
@@ -441,10 +442,19 @@ async def apply(
     document: dict[str, Any],
     *,
     actor_id: UUID,
+    delete_absent: bool = False,
 ) -> dict[str, Any]:
     """Write what the plan described. Object types, link types and actions.
 
-    **Adds and updates, never removals** — the module docstring says why.
+    **Adds and updates, and removals only when asked** (§799). p.66's import
+    "will recreate the entire working state", which in Foundry is staged,
+    counted and then saved. Here the plan screen is that review: it names each
+    thing the file leaves out, and `delete_absent` is the person choosing,
+    there, to remove them. Without it nothing is removed - the module
+    docstring's reason. With it, the actions go first, then the link types,
+    then the object types, so nothing is deleted from under something that
+    still names it; and p.256's refusal of an active resource refuses the
+    whole import, in its one transaction.
 
     **Three passes, because each one needs the last** (§340, §344). p.65's
     second workflow is "copy the working state of one Ontology to another",
@@ -520,7 +530,12 @@ async def apply(
     )
     await _apply_inline_actions(conn, workspace_id, document, made, actor_id=actor_id)
 
+    deleted: dict[str, list[str]] = {"object_types": [], "link_types": [], "action_types": []}
+    if delete_absent:
+        deleted = await _delete_absent(conn, workspace_id, made)
+
     return {
+        "deleted": deleted,
         "added": added,
         "updated": updated,
         "links_added": links_added,
@@ -529,6 +544,38 @@ async def apply(
         "actions_updated": actions_updated,
         "absent_from_file": made["sections"]["object_types"]["absent_from_file"],
     }
+
+
+async def _delete_absent(
+    conn: AsyncConnection, workspace_id: UUID, made: dict[str, Any],
+) -> dict[str, list[str]]:
+    """Remove what the plan named as absent from the file (§799): actions,
+    then link types, then object types."""
+    from ..lib.db import fetch_all
+    from . import actions as actions_service
+
+    sections = made["sections"]
+    gone_actions = sections["action_types"]["absent_from_file"]
+    gone_links = sections["link_types"]["absent_from_file"]
+    gone_types = sections["object_types"]["absent_from_file"]
+    if gone_actions:
+        # Named as the export names them: the object type, then the action.
+        rows = await fetch_all(conn, """
+            SELECT at.id, at.api_name, ot.api_name AS object_type
+              FROM action_types at JOIN object_types ot ON ot.id = at.object_type_id
+             WHERE at.workspace_id = :wid
+        """, {"wid": str(workspace_id)})
+        for row in rows:
+            if f"{row['object_type']}.{row['api_name']}" in gone_actions:
+                await actions_service.delete_action_type(conn, workspace_id, UUID(str(row["id"])))
+    if gone_links:
+        links = {str(r["api_name"]): r for r in await _links_by_name(conn, workspace_id)}
+        for name in gone_links:
+            await ontology_service.delete_link_type(conn, workspace_id, UUID(str(links[name]["id"])))
+    for name in gone_types:
+        row = await _find_type(conn, workspace_id, name)
+        await ontology_service.delete_type(conn, workspace_id, UUID(str(row["id"])))
+    return {"object_types": gone_types, "link_types": gone_links, "action_types": gone_actions}
 
 
 async def _apply_inline_actions(

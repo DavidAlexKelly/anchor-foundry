@@ -227,9 +227,10 @@ def test_a_file_that_leaves_a_type_out_says_it_is_left_alone(
     """**The one thing p.66's reader must not believe.**
 
     The page they came from says import "will recreate the entire working
-    state", and this one declines to delete — an object type's removal takes
-    its objects with it, immediately and with no review. So a file missing a
-    type says so, and points at the tool that does remove them (§325).
+    state", and this one deletes only when asked (§799) — an object type's
+    removal takes its objects with it, immediately and with no review. So a
+    file missing a type says so while the box is clear, and points at the
+    tools that do remove them (§325, §799).
     """
     open_advanced(page, workspace)
     document = api.call(
@@ -351,3 +352,66 @@ def test_an_action_in_the_file_reaches_the_ontology(page, api, workspace) -> Non
 
     eventually(actions, lambda names: f"rename_{tag}" in names,
                what="the imported action type to reach the ontology")
+
+
+def test_ticking_delete_says_what_goes_and_lets_apply_run(page, api, workspace) -> None:
+    """p.66's "recreate the entire working state" (§799), as a choice made on
+    the screen before Apply.
+
+    A file that only leaves a type out changes nothing else, so it plans no
+    changes - yet with the box ticked Apply has a deletion to make. **Never
+    sent to the server here**: this suite shares one workspace (`api.Module`),
+    and an import that deletes what its file leaves out would delete every
+    other test's types - so the request is answered in the browser, and the
+    deletion itself is `test_ontology_import_delete.py`'s.
+    """
+    open_advanced(page, workspace)
+    document = api.call(
+        "GET", f"/workspaces/{workspace.workspace_id}/ontology-export")
+    document["object_types"] = [
+        t for t in document["object_types"] if t["api_name"] != f"tr_{workspace.tag}"]
+    choose(page, document)
+
+    expect(page.get_by_test_id("plan-headline")).to_have_text(
+        "Everything in this file matches the ontology as it is.", timeout=30000)
+    apply = page.get_by_test_id("ontology-import-apply")
+    warning = page.get_by_test_id("plan-left-alone")
+    box = page.get_by_test_id("ontology-import-delete-absent")
+    expect(box).not_to_be_checked()
+    expect(apply).to_be_disabled()
+    expect(warning).to_contain_text("left alone")
+
+    box.check()
+    expect(warning).to_have_text(
+        "Applying deletes 1 object type that is not in the file, and every object "
+        "of that type. This cannot be undone.")
+    expect(apply).to_be_enabled()
+
+    box.uncheck()
+    expect(warning).to_contain_text("left alone")
+    expect(apply).to_be_disabled()
+
+    # A new file starts with the box clear again.
+    box.check()
+    choose(page, document, name="again.json")
+    expect(page.get_by_test_id("ontology-import-delete-absent")).not_to_be_checked(
+        timeout=30000)
+
+    # What Apply sends with the box ticked - answered here rather than by the
+    # server, for the reason above, with the report the server would give.
+    sent: list[dict] = []
+
+    def answer(route) -> None:
+        sent.append(json.loads(route.request.post_data or "{}"))
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({
+            "added": [], "updated": [], "links_added": [], "links_updated": [],
+            "actions_added": [], "actions_updated": [], "absent_from_file": [],
+            "deleted": {"object_types": [f"tr_{workspace.tag}"], "link_types": [],
+                        "action_types": []}}))
+
+    page.route("**/ontology-import", answer)
+    page.get_by_test_id("ontology-import-delete-absent").check()
+    page.get_by_test_id("ontology-import-apply").click()
+    expect(page.get_by_test_id("ontology-applied")).to_have_text(
+        "Deleted 1 object type.", timeout=30000)
+    assert [body["delete_absent"] for body in sent] == [True]

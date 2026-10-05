@@ -25,6 +25,7 @@ import { ApiError, objects as objApi } from "@/lib/api";
 import {
   appliedSummary,
   exportFilename,
+  hasAbsent,
   leftAloneWarning,
   originNote,
   planHeadline,
@@ -49,6 +50,9 @@ export function OntologyTransfer({
   const [document, setDocument] = useState<Record<string, unknown> | null>(null);
   const [filename, setFilename] = useState("");
   const [readError, setReadError] = useState("");
+  // p.66's "recreate the entire working state" (§799): off until somebody
+  // ticks it for this file, because it deletes objects with their types.
+  const [deleteAbsent, setDeleteAbsent] = useState(false);
 
   const exporting = useMutation({
     mutationFn: () => objApi.exportOntology(workspaceId),
@@ -73,7 +77,7 @@ export function OntologyTransfer({
   });
   const applying = useMutation({
     mutationFn: (doc: Record<string, unknown>) =>
-      objApi.applyOntologyImport(workspaceId, doc),
+      objApi.applyOntologyImport(workspaceId, doc, deleteAbsent),
   });
 
   async function chooseFile(file: File | null | undefined) {
@@ -81,6 +85,7 @@ export function OntologyTransfer({
     planning.reset();
     applying.reset();
     setDocument(null);
+    setDeleteAbsent(false);
     if (!file) return;
     setFilename(file.name);
     let parsed: unknown;
@@ -175,20 +180,32 @@ export function OntologyTransfer({
               ) : null;
             })}
           </ul>
-          {leftAloneWarning(plan) && (
-            /* **The one thing p.66's reader must not believe.** The page says
-               import "will recreate the entire working state", and this one
-               declines to delete — so a copy that looks like a replacement
-               gets told what it left behind. */
-            <p className="login-note" data-testid="plan-left-alone">
-              {leftAloneWarning(plan)}
+          {hasAbsent(plan) && (
+            <label className="check" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                data-testid="ontology-import-delete-absent"
+                checked={deleteAbsent}
+                onChange={(e) => setDeleteAbsent(e.target.checked)}
+              />
+              Delete what the file leaves out
+            </label>
+          )}
+          {leftAloneWarning(plan, deleteAbsent) && (
+            /* **Which way it will go, before Apply.** p.66 says import "will
+               recreate the entire working state"; here the removals are the
+               reader's choice, so the sentence follows the box. */
+            <p className={deleteAbsent ? "form-error" : "login-note"}
+               data-testid="plan-left-alone">
+              {leftAloneWarning(plan, deleteAbsent)}
             </p>
           )}
           <div className="form-actions">
             <button
               className="btn"
               data-testid="ontology-import-apply"
-              disabled={plan.changes === 0 || applying.isPending}
+              disabled={(plan.changes === 0 && !(deleteAbsent && hasAbsent(plan)))
+                || applying.isPending}
               onClick={() => document && applying.mutate(document)}
             >
               {applying.isPending ? "Applying…" : "Apply"}

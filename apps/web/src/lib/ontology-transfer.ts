@@ -14,9 +14,10 @@
  * to say it. Same division as every other lib here.
  *
  * **The wording carries one warning the count cannot.** p.66's screen counts
- * changes; this platform's import also *declines* to remove what the file
- * leaves out, and a reader who does not know that will believe a copy replaced
- * their ontology when it only added to it.
+ * changes; this platform's import removes what the file leaves out only when
+ * the reader ticks the box that says so (§799), and a reader who does not know
+ * which way it will go will believe a copy replaced their ontology when it only
+ * added to it - or the other way round.
  */
 import type { OntologyPlan } from "./types";
 
@@ -44,7 +45,10 @@ export function exportFilename(
  */
 export function planHeadline(plan: OntologyPlan): string {
   if (plan.changes === 0) {
-    return "This file matches the ontology as it is. Nothing to apply.";
+    // What the file leaves out is not "nothing": the box below can delete it.
+    return hasAbsent(plan)
+      ? "Everything in this file matches the ontology as it is."
+      : "This file matches the ontology as it is. Nothing to apply.";
   }
   return plan.changes === 1
     ? "1 change to apply."
@@ -62,26 +66,57 @@ export function sectionSummary(
   return parts.length ? `${label}: ${parts.join(", ")}` : "";
 }
 
+/** Each kind the file leaves out, as "2 object types": object types, then
+ * link types, then action types. */
+function absentKinds(plan: OntologyPlan): string[] {
+  const kinds: [string[], string, string][] = [
+    [plan.sections.object_types.absent_from_file, "object type", "object types"],
+    [plan.sections.link_types.absent_from_file, "link type", "link types"],
+    [plan.sections.action_types.absent_from_file, "action type", "action types"],
+  ];
+  return kinds.filter(([names]) => names.length > 0)
+    .map(([names, one, many]) => `${names.length} ${names.length === 1 ? one : many}`);
+}
+
+/** "a, b and c". */
+function listed(parts: string[]): string {
+  const last = parts[parts.length - 1] ?? "";
+  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${last}` : last;
+}
+
+/** Whether the file leaves anything out that applying could delete (§799). */
+export function hasAbsent(plan: OntologyPlan): boolean {
+  return absentKinds(plan).length > 0;
+}
+
 /**
- * The warning about what an import will *not* do.
+ * What applying will do with what the file leaves out (§326, §799).
  *
- * §326 declines to delete what the file leaves out — an object type's removal
- * takes its objects with it, immediately and with no review. p.66's reader is
- * told the import "will recreate the entire working state", so somebody
- * arriving from the page expects a replacement; the one thing they must not
- * believe is that these types are gone.
+ * p.66's import "will recreate the entire working state", which removes what
+ * the file does not carry. Here that is the reader's choice, made on this
+ * screen: an object type's removal takes its objects with it, immediately
+ * and with no review, so it happens only when they tick the box that says
+ * so - and this sentence says which way it will go before they press Apply.
  *
- * `""` when there is nothing to warn about, so the line is absent rather than
+ * `""` when there is nothing left out, so the line is absent rather than
  * reassuring somebody about a risk they do not have.
  */
-export function leftAloneWarning(plan: OntologyPlan): string {
-  const absent = plan.sections.object_types.absent_from_file;
-  if (absent.length === 0) return "";
-  const which = absent.length === 1 ? "1 object type" : `${absent.length} object types`;
-  return (
-    `${which} in this workspace are not in the file and will be left alone. `
-    + "Delete them from Ontology cleanup if you meant to remove them."
-  );
+export function leftAloneWarning(plan: OntologyPlan, deleting = false): string {
+  const kinds = absentKinds(plan);
+  if (kinds.length === 0) return "";
+  const { object_types, link_types, action_types } = plan.sections;
+  const one = object_types.absent_from_file.length + link_types.absent_from_file.length
+    + action_types.absent_from_file.length === 1;
+  if (deleting) {
+    const types = object_types.absent_from_file.length;
+    return `Applying deletes ${listed(kinds)} that ${one ? "is" : "are"} not in the file`
+      + (types ? `, and every object of ${types === 1 ? "that type" : "those types"}` : "")
+      + ". This cannot be undone.";
+  }
+  return `${listed(kinds)} in this workspace ${one ? "is" : "are"} not in the file `
+    + "and will be left alone. "
+    + "Tick \"Delete what the file leaves out\" to remove them with the import, "
+    + "or delete them from Ontology cleanup.";
 }
 
 /**
@@ -130,6 +165,8 @@ export function appliedSummary(report: {
   links_updated: string[];
   actions_added: string[];
   actions_updated: string[];
+  /** §799's removals, when the import was asked to make them. */
+  deleted?: { object_types: string[]; link_types: string[]; action_types: string[] };
 }): string {
   const count = (n: number, one: string, many: string) =>
     `${n} ${n === 1 ? one : many}`;
@@ -144,10 +181,15 @@ export function appliedSummary(report: {
     .map(([one, many, made, changed]) =>
       `${count(made.length + changed.length, one, many)} `
       + `(${made.length} new, ${changed.length} updated)`);
-  if (parts.length === 0) return "Nothing needed applying.";
+  const gone = report.deleted
+    ? kinds.map(([one, many], i) => {
+      const names = [report.deleted!.object_types, report.deleted!.link_types,
+                     report.deleted!.action_types][i]!;
+      return names.length ? count(names.length, one, many) : "";
+    }).filter(Boolean)
+    : [];
+  const deleted = gone.length ? `Deleted ${listed(gone)}.` : "";
+  if (parts.length === 0) return deleted || "Nothing needed applying.";
   // "a, b and c" rather than "a and b and c" once there are three kinds.
-  const last = parts.pop() as string;
-  return parts.length
-    ? `Applied ${parts.join(", ")} and ${last}.`
-    : `Applied ${last}.`;
+  return [`Applied ${listed(parts)}.`, deleted].filter(Boolean).join(" ");
 }

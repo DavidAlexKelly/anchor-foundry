@@ -2057,7 +2057,10 @@ export const objects = {
       `/workspaces/${wid}/ontology-import/plan`,
       { method: "POST", body: JSON.stringify({ document }) },
     ),
-  applyOntologyImport: (wid: string, document: Record<string, unknown>) =>
+  /** `deleteAbsent`: p.66's "recreate the entire working state", removing
+   * what the file leaves out (§799). */
+  applyOntologyImport: (wid: string, document: Record<string, unknown>,
+                        deleteAbsent = false) =>
     request<{
       added: string[];
       updated: string[];
@@ -2066,9 +2069,10 @@ export const objects = {
       actions_added: string[];
       actions_updated: string[];
       absent_from_file: string[];
+      deleted: { object_types: string[]; link_types: string[]; action_types: string[] };
     }>(`/workspaces/${wid}/ontology-import`, {
       method: "POST",
-      body: JSON.stringify({ document }),
+      body: JSON.stringify({ document, delete_absent: deleteAbsent }),
     }),
   /** p.69's cleanup queue, worst first (§325; `ontology-manager` p.68-74). */
   cleanupQueue: (wid: string, opts?: { flag?: string; includeSnoozed?: boolean }) => {

@@ -4249,8 +4249,8 @@ export interface OntologyPlanSection {
    * export plans nothing. */
   changed: string[];
   unchanged: string[];
-  /** In the workspace and not in the file. **Named, never removed**: deleting
-   * an object type takes its objects with it, with no review. */
+  /** In the workspace and not in the file. Removed only when the import is
+   * asked to (§799): deleting an object type takes its objects with it. */
   absent_from_file: string[];
 }
 
