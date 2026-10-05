@@ -106,7 +106,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Prove it.** Round-trip an existing canvas app through the new format and render it unchanged.
 
-### 1.2 Variables — **L, part done** (`STATUS.md` §58 object-set evaluation, §70 the typed variable graph: derivations, cycle refusal, usage-aware deletion, and an evaluation endpoint. §71 the conversion, run: migration 0034 converted every stored app to `format: 2` and the builder now reads and writes it, so the refusals above apply to real saves. §72 the variables panel: create, rename, retype, derive, delete, with both refusals surfaced where the work happens.)
+### ~~1.2 Variables~~ — **done, and carried on under `docs/parity/workshop.md`** (§808: every variable kind and derivation Workshop documents is a ✅ row there) — *was* **L, part done** (`STATUS.md` §58 object-set evaluation, §70 the typed variable graph: derivations, cycle refusal, usage-aware deletion, and an evaluation endpoint. §71 the conversion, run: migration 0034 converted every stored app to `format: 2` and the builder now reads and writes it, so the refusals above apply to real saves. §72 the variables panel: create, rename, retype, derive, delete, with both refusals surfaced where the work happens.)
 
 §73 the object-set half — a variable of kind `object_set` holding a definition, a `filter_set` derivation that narrows one set from another, an object table that reads a set variable, and the panel to configure both. Verified end to end in a browser: dataset → object type → set → filter → table, live.
 
@@ -132,7 +132,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.1.
 
-### 1.3 Events — **M, done but for `export`** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals; §77: tabs; §81: a button's click; §100: the `change` trigger on dropdowns and filter lists — which the builder had offered and no widget fired — and the `run_action` effect, whose subject is a `single_object` variable and whose values are the action's own editable properties). **What remains**: `export`, refused with its reason — it needs a download surface the viewer route lacks. (`navigate` and `close_overlay` were built by 1.4.)
+### ~~1.3 Events~~ — **done**, `export` included (§459 the Export effect, its file built in the browser, which removed the reason below; §787 Excel; §775 function-backed export) — *was* **M, done but for `export`** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals; §77: tabs; §81: a button's click; §100: the `change` trigger on dropdowns and filter lists — which the builder had offered and no widget fired — and the `run_action` effect, whose subject is a `single_object` variable and whose values are the action's own editable properties). **What remains**: `export`, refused with its reason — it needs a download surface the viewer route lacks. (`navigate` and `close_overlay` were built by 1.4.)
 
 **What Foundry does.** Events trigger behaviour when a user acts. They fire from many widgets — Button Group, Object Table on row selection, String Dropdown on select/deselect, Tabs. A button's **On click** can trigger an action, trigger a set of events, open a URL, or begin an export; when it triggers an action you can additionally fire events at points in the action lifecycle (on submission start, on successful completion). Events execute **sequentially in configured order**, but do not wait for the downstream computation of previous events. Setting a variable copies the value immediately, so the next event sees it.
 
@@ -160,7 +160,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.1, and the Tabs widget depends on 1.3.
 
-### 1.5 The widget library — **XL, and incremental**
+### ~~1.5 The widget library~~ — **done under `docs/parity/workshop.md`** (§808: the full widget library is tracked row by row there, and every row is ✅ or declined by decision) — *was* **XL, and incremental**
 
 Anchor has eight: Container, Text, Filter, Dataset table, Object table, Map, Chart, Action form.
 Item 1.4 added Page, Section, Overlay, Tabs and Header; §81 added Button, §82 the Filter List, §83 and §84 upgraded the Object Table, §86 the Map, §87 the Action form, and Metric Card is done (§74).
@@ -276,7 +276,7 @@ Lint and schema-compatibility checks that run on a proposal and block merge. Reu
 
 Reused rather than rebuilt, and the item turned out to be a sequencing problem: migration 0023's schema policy *already* refused a breaking change — at run time, hours after somebody approved it. `transform_runs` executes the proposed SQL over a sample; `schema_compatible` compares what it produced against the dataset the transform writes, with the dataset's own `schema_policy` deciding `fail` from `warn`. `error` (the check could not run) is neither a pass nor a block. A failing check blocks; an absent one does not, and the surface never lets silence read as a pass.
 
-### 2.9 Code assistance — **L, and optional**
+### ~~2.9 Code assistance~~ — **out of scope by decision** (§808: `docs/parity/README.md` lists "AIP Assist" and anything else AIP-branded outside the parity boundary, which is what this assistance is) — *was* **L, and optional**
 
 Foundry's Code Repositories offers inline AI assistance over a highlighted snippet — Explain, Find bugs, Ask a question. Genuinely useful, entirely separable, and it depends on a model provider decision that this platform has not made. **Do not let it block anything.**
 
