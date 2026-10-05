@@ -528,7 +528,7 @@ def _action_type_out(
             "inline_edit_refusals": actions_service.inline_edit_refusals(row),
             "inline_edit_hidden_parameters":
                 actions_service.hidden_inline_parameters(row),
-            "inline_edit_row_limit": actions_service.INLINE_EDIT_ROW_LIMIT,
+            "inline_edit_row_limit": actions_service.inline_edit_row_limit(row),
             # p.511's Action table (§702): why this action is form-only, if it is.
             "table_refusals": actions_service.table_refusals(row),
             "table_row_limit": actions_service.TABLE_ROW_LIMIT,
@@ -3897,6 +3897,14 @@ async def execute_batch(
             raise ValueError(
                 "this action cannot back inline edits: " + "; ".join(refusals)
             )
+        # p.242's 20 for a function-backed action (§776); the schema holds
+        # the 200 every action has.
+        limit = actions_service.inline_edit_row_limit({"rules": rules})
+        if len(body.edits) > limit:
+            raise ValueError(
+                f"a function-backed action takes inline edits {limit} rows at a time, "
+                f"and this submission has {len(body.edits)} (workshop p.242)")
+        function_config = action_functions.function_rule(rules)
         seen: set[UUID] = set()
         for edit in body.edits:
             if edit.instance_id in seen:
@@ -3990,9 +3998,35 @@ async def execute_batch(
             actions_service.check_criteria(
                 bound, criteria=action_type["criteria"], user=user
             )
+            row_rules = rules
+            if function_config is not None:
+                # p.84: "the backing function is usually called once per
+                # request in sequence, and all edits are applied atomically at
+                # the end" - called here, row by row, and written below with
+                # every other row (§776).
+                output, result = await action_functions.call(
+                    conn, workspace_id=access.workspace_id, config=function_config,
+                    bound=bound, subject_id=str(edit.instance_id),
+                )
+                key = str(instance["primary_key"])
+                if str(output["object_type_id"]) != str(object_type_id) or any(
+                    str(e["primary_key"]) != key for e in result["edits"]
+                ):
+                    raise ValueError(
+                        "an inline edit changes only the row it is typed into "
+                        f"(action-types p.136), and the function edits another object "
+                        f"for {key}")
+                function_rules, function_bound = action_functions.edit_rules(
+                    result["edits"], object_type_id=str(object_type_id),
+                    subject_type_id=str(object_type_id), subject_key=key, existing={},
+                )
+                bound = {**bound, **function_bound}
+                # Its edits are the row's whole effect: an action backing
+                # inline edits has no side effect beside its function (p.137).
+                row_rules = function_rules
             values = actions_service.apply_rules(
                 bound,
-                rules=rules,
+                rules=row_rules,
                 property_types=property_types,
                 struct_fields=struct_fields,
                 array_of=array_of,

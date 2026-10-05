@@ -385,14 +385,6 @@ def test_a_function_that_is_not_an_edit_function_is_refused(client, fx, tickets)
     assert "is not an edit function: it returns value" in got.text
 
 
-def test_an_inline_edit_cannot_be_function_backed_here(client, fx, tickets) -> None:
-    from src.services import actions
-
-    reasons = actions.inline_edit_refusals({"object_type_id": "t", "rules": [
-        {"kind": "function", "config": {}}], "parameters": []})
-    assert any("'function' rule" in r for r in reasons), reasons
-
-
 # ---- the pure halves ---------------------------------------------------------
 
 def versions(*names: str) -> dict:

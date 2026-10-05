@@ -1208,10 +1208,21 @@ def touched_objects(
 # Every rule below buys the batch path something it could not otherwise do.
 
 #: p.242: "up to 200 rows at a time for actions that are not function-backed".
-#: The other number on that page - 20 - is for function-backed actions, which
-#: this platform does not have, so it is not a constant here: a limit nothing
-#: can reach is a limit nobody can read the meaning of.
 INLINE_EDIT_ROW_LIMIT = 200
+
+#: p.242's other number, now that an action can be function-backed (§776):
+#: "up to 20 rows at a time for function-backed actions" - `action-types`
+#: p.131's batch limit "reduced to 20 when the action is function-backed and
+#: the function is not configured to use batched execution", which this
+#: platform's functions are not (p.84-85 is not built).
+FUNCTION_INLINE_EDIT_ROW_LIMIT = 20
+
+
+def inline_edit_row_limit(action_type: dict[str, Any]) -> int:
+    """How many rows a table may stage at once for this action (p.242)."""
+    function_backed = any(str(r.get("kind")) == "function"
+                          for r in action_type.get("rules") or [])
+    return FUNCTION_INLINE_EDIT_ROW_LIMIT if function_backed else INLINE_EDIT_ROW_LIMIT
 
 #: p.241: "Property parameters must be of single, primitive types (for example,
 #: boolean, integer, or string, not an object reference or array)."
@@ -1292,13 +1303,18 @@ def inline_edit_refusals(action_type: dict[str, Any]) -> list[str]:
     # two of them. What p.136 means by "a single object" is the *target*, and
     # that is what is checked: every rule must write the subject, and nothing
     # may create, delete or link.
-    if not subject_modifies:
+    # p.240's other shape: "or be function-backed" (§776). Its function's
+    # edits are checked per row, at submission, against the row they are for.
+    function_backed = any(str(r.get("kind")) == "function" for r in rules)
+    if not subject_modifies and not function_backed:
         reasons.append(
             "an inline edit needs a rule that changes this action's own object; "
             "this action has none"
         )
     for rule in rules:
         kind = str(rule.get("kind"))
+        if kind == "function":
+            continue
         if kind != "modify_object":
             reasons.append(
                 f"an inline edit may only change properties, and this action has a "
@@ -1445,6 +1461,14 @@ def seed_from_instance(
         for r in rules
         if str(r.get("kind")) == "modify_object" and not _json(r.get("config")).get("object")
     }
+    if any(str(r.get("kind")) == "function" for r in rules):
+        # A Function rule names no property (§776), so p.241's own
+        # recommendation decides: "action parameter IDs should match the
+        # property IDs displayed within the table".
+        # No rule maps one alongside it (p.22), so nothing is overridden.
+        by_parameter.update({
+            str(p.get("api_name")): str(p.get("api_name")) for p in parameters
+        })
     seeded = dict(values)
     for parameter in parameters:
         name = str(parameter.get("api_name"))
