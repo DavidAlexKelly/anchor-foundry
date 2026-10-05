@@ -92,6 +92,11 @@ An arm64 image on Fargate fails before any application code runs, with empty
 CloudWatch log streams and a tripped deployment circuit breaker — this build
 has been bitten by it twice (`STATUS.md` §20).
 
+**Base images are pinned by digest (§818)**, as `tag@sha256:…`, so two builds
+of one commit start from the same base. To take upstream updates, run
+`scripts/pin-images.sh`, then build, test and commit. `--check` reports pins
+that are behind their tag without changing anything.
+
 **2. Bootstrap CDK in the target account and region**, once ever:
 
 ```bash
