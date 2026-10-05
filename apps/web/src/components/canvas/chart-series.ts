@@ -29,6 +29,7 @@ import type { ChartPoint } from "./charts";
 import { defaultValueTitle } from "./chart-display";
 import { segmentName, type Segmented } from "./chart-segments";
 import { aggregationOf, aggregationRequest } from "./pie-chart";
+import { functionLayerOf, type FunctionLayer } from "./function-layers";
 
 export interface SeriesSpec {
   /** p.280's layer **Title** (§757): "not visible to module users, but is
@@ -56,6 +57,9 @@ export interface SeriesSpec {
   /** p.282's **Segment by** for this layer (§678): a second property its
    * bars are split by, or null for none. */
   segmentBy: string | null;
+  /** p.280's **Function aggregation** Data input (§771): the layer is the
+   * function's buckets rather than an object set's groups. */
+  fn: FunctionLayer | null;
 }
 
 /** p.280's three: "Bar Chart, Line Chart, and Scatter Chart". A scatter layer
@@ -88,6 +92,7 @@ export function seriesOf(raw: unknown): SeriesSpec[] {
       kind: (LAYER_KINDS as readonly unknown[]).includes(s.kind) ? (s.kind as LayerKind) : null,
       drilldownVariable: nonEmpty(s.drilldownVariable),
       segmentBy: nonEmpty(s.segmentBy),
+      fn: functionLayerOf(s.fn),
     }));
 }
 

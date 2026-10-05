@@ -49,8 +49,10 @@ _VERSION_RE = re.compile(
 #: as a list the SQL reads with `list_contains($name, __primary_key)`.
 PARAMETER_TYPES = (*engine.SCALAR_TYPES, "object", "object_set")
 #: `map` is p.221's "map from the object type to a value or custom type"
-#: (§770): a key column, then one column per field.
-OUTPUT_KINDS = ("value", "array", "object_set", "table", "map")
+#: (§770): a key column, then one column per field. `aggregation` is Chart
+#: XY's "TwoDimensionalAggregation or ThreeDimensionalAggregation" (workshop
+#: p.284; §771): a bucket and a value, or a bucket, a segment and a value.
+OUTPUT_KINDS = ("value", "array", "object_set", "table", "map", "aggregation")
 MAX_PARAMETERS = 20
 MAX_INPUTS = 10
 #: The objects of one type a call reads. Above it a call is refused, by name:

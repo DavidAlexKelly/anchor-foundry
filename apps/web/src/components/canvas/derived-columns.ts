@@ -10,6 +10,7 @@
  */
 
 import { MathError, evaluate, parse, references, type Expr } from "./column-math";
+import { inputsOf, type FunctionInputs } from "./function-inputs";
 import type { Derivation } from "@/lib/types";
 
 /** p.170's Column math: arithmetic over the row's own values. */
@@ -52,7 +53,7 @@ export interface FunctionColumn {
   /** Which of the map's fields this column shows; empty is the first. */
   field: string;
   /** Every other parameter, from a module variable or a fixed value. */
-  inputs: Record<string, { variable: string } | { value: unknown }>;
+  inputs: FunctionInputs;
 }
 
 /** p.168's two kinds, and p.221's function column. The field was written as a
@@ -122,19 +123,6 @@ export function columnsFor(raw: unknown, objectTypeId: string): DerivedColumn[] 
     if (seen.has(name)) continue;
     seen.add(name);
     out.push(column);
-  }
-  return out;
-}
-
-/** A function column's other inputs, keeping only the two shapes it can use. */
-function inputsOf(raw: unknown): FunctionColumn["inputs"] {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const out: FunctionColumn["inputs"] = {};
-  for (const [name, source] of Object.entries(raw as Record<string, unknown>)) {
-    if (!source || typeof source !== "object") continue;
-    const it = source as Record<string, unknown>;
-    if (typeof it.variable === "string" && it.variable) out[name] = { variable: it.variable };
-    else if ("value" in it) out[name] = { value: it.value };
   }
   return out;
 }

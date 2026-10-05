@@ -94,6 +94,9 @@ class FunctionResult(BaseModel):
     truncated: bool = False
     #: A map's answer (§770): primary key to its fields.
     entries: dict[str, dict[str, Any]] | None = None
+    #: An aggregation's answer (§771): 2 or 3, and its buckets.
+    dimensions: int | None = None
+    buckets: list[dict[str, Any]] | None = None
 
 
 @router.get("", response_model=list[FunctionSummary])

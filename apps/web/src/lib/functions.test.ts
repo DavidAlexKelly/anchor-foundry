@@ -170,5 +170,10 @@ describe("an object set in, a map out (§770)", () => {
     expect(resultLine({ kind: "map", version: "1", entries: { a: {}, b: {} } })).toBe("2 objects");
     expect(resultLine({ kind: "map", version: "1", entries: { a: {} } })).toBe("1 object");
     expect(resultLine({ kind: "map", version: "1" })).toBe("0 objects");
+    expect(resultLine({ kind: "aggregation", version: "1", buckets: [
+      { key: "a", value: 1 }] })).toBe("1 bucket");
+    expect(resultLine({ kind: "aggregation", version: "1", buckets: [
+      { key: "a", value: 1 }, { key: "b", value: 2 }] })).toBe("2 buckets");
+    expect(resultLine({ kind: "aggregation", version: "1" })).toBe("0 buckets");
   });
 });

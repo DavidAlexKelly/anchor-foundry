@@ -159,6 +159,9 @@ import {
   columnsFor, derivedInputs, problem as columnMathProblem, valueFor, type FunctionColumn,
 } from "./derived-columns";
 import { callKey, callValues, cellOf } from "./function-columns";
+import { FunctionLayerEditor } from "./function-column-editor";
+import { inputValues } from "./function-inputs";
+import { gridFrom, pointsFrom } from "./function-layers";
 import { derivedCell } from "@/lib/derived-values";
 import { unknownColumns, visibleColumns } from "./column-visibility";
 import { moved as movedColumn, storageKey as columnsKey, storedChoice, toggled as toggledColumn,
@@ -19252,8 +19255,28 @@ export function CanvasChart({
       ],
       queryFn: () => objApi.groupObjectSet(
         workspaceId, extraSources[i]!.definition, extraSources[i]!.dimension, extraAsks[i]!),
-      enabled: !!extraSources[i] && !!extraAsks[i] && !extraSegmented[i],
+      enabled: !!extraSources[i] && !!extraAsks[i] && !extraSegmented[i] && !spec.fn,
     })),
+  });
+  // p.280's Function aggregation (§771): a layer that is a function's
+  // buckets, called with its inputs as they stand.
+  const layerFunctions = useQueries({
+    queries: extras.map((spec) => {
+      const values = spec.fn ? inputValues(spec.fn.inputs, resolved) : {};
+      return {
+        queryKey: ["canvas-chart-function", spec.fn?.function_id ?? null,
+                   spec.fn?.version ?? null, values],
+        queryFn: () => objApi.executeFunction(
+          workspaceId, spec.fn!.function_id, values, spec.fn!.version),
+        enabled: !!spec.fn?.function_id,
+        retry: false,
+      };
+    }),
+  });
+  const functionNames = useQuery({
+    queryKey: ["functions", workspaceId],
+    queryFn: () => objApi.listFunctions(workspaceId),
+    enabled: extras.some((spec) => !!spec.fn),
   });
   // p.282's Segment by on a layer (§678): its categories by its segments.
   const extraGrids = useQueries({
@@ -19264,10 +19287,26 @@ export function CanvasChart({
       ],
       queryFn: () => objApi.crossTabObjectSet(
         workspaceId, extraSources[i]!.definition, extraSources[i]!.dimension, spec.segmentBy!),
-      enabled: !!extraSources[i] && !!extraSegmented[i],
+      enabled: !!extraSources[i] && !!extraSegmented[i] && !spec.fn,
     })),
   });
   const drawnExtras = extras.flatMap((spec, i) => {
+    if (spec.fn) {
+      const answer = layerFunctions[i]?.data;
+      const fnPoints = pointsFrom(answer);
+      const fnGrid = gridFrom(answer);
+      if (!fnPoints && !fnGrid) return [];
+      const label = functionNames.data?.find((f) => f.id === spec.fn!.function_id)?.api_name;
+      return [{
+        spec,
+        // A function layer has no set and no property: a click on its marks
+        // filters as the chart's do.
+        source: { key: `fn:${spec.fn.function_id}`, definition: null, dimension: "" },
+        name: spec.name.trim() || spec.title.trim() || label || "Function",
+        points: fnPoints ?? [],
+        grid: fnGrid ?? undefined,
+      }];
+    }
     const data = extraResults[i]?.data;
     const grid = extraGrids[i]?.data;
     const request = extraAsks[i];
@@ -19307,7 +19346,7 @@ export function CanvasChart({
   // variable narrows it on its own property; the rest narrow the chart's.
   const layerDrills = multi || layered ? [chartDrill, ...drawnExtras.map(({ spec, source }) => {
     const variable = spec.drilldownVariable;
-    if (!variable) return chartDrill;
+    if (!variable || spec.fn) return chartDrill;
     const selected = drilledOn(parameterValues[variable], source.dimension);
     return {
       selected,
@@ -19322,8 +19361,10 @@ export function CanvasChart({
   const kinds = layerKinds(drawnKind === "line" ? "line" : "bar",
     drawnExtras.map((e) => e.spec));
   const mixed = mixedKinds(kinds);
-  const extrasPending = extras.some((_, i) => !!extraAsks[i] && !!extraSources[i]
-    && (extraSegmented[i] ? extraGrids[i]?.isPending : extraResults[i]?.isPending));
+  const extrasPending = extras.some((spec, i) => (spec.fn
+    ? !!spec.fn.function_id && layerFunctions[i]?.isPending
+    : !!extraAsks[i] && !!extraSources[i]
+      && (extraSegmented[i] ? extraGrids[i]?.isPending : extraResults[i]?.isPending)));
   const sides = axisSides(drawnExtras.map((e) => e.spec), multipleAxes === true);
   const columnKinds = layered ? layered.stacks.map((layer) => kinds[layer]!) : kinds;
   const columnSides = layered ? layered.stacks.map((layer) => sides[layer]!) : sides;
@@ -20059,6 +20100,9 @@ function ChartSettings() {
 
 /** p.281's multiple series and p.282's name for each (§541), in the Chart's
  * panel. The Measure above is the first series; these are the rest. */
+/** The layer Data input that is a function rather than a set (§771). */
+const FUNCTION_INPUT = "__function";
+
 function ChartSeriesFields({
   segmented, series, firstName, firstDefault, numbers, names, showLegend, legend, twoAxes,
   sets, chartSet, clauses, setProp, chartKind = "bar", rightAxis,
@@ -20150,19 +20194,32 @@ function ChartSeriesFields({
           <select
             aria-label={`Series ${i + 2} object set`}
             data-testid="chart-series-set"
-            value={ownSet(spec) ?? ""}
+            value={spec.fn ? FUNCTION_INPUT : ownSet(spec) ?? ""}
             onChange={(e) => write(specs.map((s, j) =>
               // Another set's properties are another type's: what was picked
-              // for the old one is let go.
-              (j === i ? { ...s, objectSetVariable: e.target.value || null, dimension: null,
-                           measure: null, segmentBy: null } : s)))}
+              // for the old one is let go. p.280's Function aggregation
+              // (§771) replaces the set altogether.
+              (j === i ? { ...s,
+                objectSetVariable: e.target.value && e.target.value !== FUNCTION_INPUT
+                  ? e.target.value : null,
+                dimension: null, measure: null, segmentBy: null,
+                fn: e.target.value === FUNCTION_INPUT
+                  ? { function_id: "", version: null, inputs: {} } : null } : s)))}
           >
             <option value="">The chart&apos;s set</option>
             {sets.filter((v) => v.id !== chartSet).map((v) => (
               <option key={v.id} value={v.id}>{v.label}</option>
             ))}
+            <option value={FUNCTION_INPUT}>A function</option>
           </select>
-          {own && (
+          {spec.fn && (
+            <FunctionLayerEditor
+              label={`Series ${i + 2}`}
+              layer={spec.fn}
+              onChange={(fn) => write(specs.map((s, j) => (j === i ? { ...s, fn } : s)))}
+            />
+          )}
+          {own && !spec.fn && (
             <select
               aria-label={`Series ${i + 2} X axis property`}
               data-testid="chart-series-dimension"
@@ -20188,6 +20245,7 @@ function ChartSeriesFields({
             <option value="line">Line</option>
             <option value="scatter">Scatter</option>
           </select>
+          {!spec.fn && (<>
           <select
             aria-label={`Series ${i + 2} aggregation`}
             data-testid="chart-series-aggregate"
@@ -20212,6 +20270,7 @@ function ChartSeriesFields({
                 .map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           )}
+          </>)}
           {twoAxes && (
             <select
               aria-label={`Series ${i + 2} axis`}
@@ -20226,6 +20285,7 @@ function ChartSeriesFields({
           )}
           {/* p.282's Segment by on a layer (§678): a bar series that counts,
               which is what a segment is. */}
+          {!spec.fn && (<>
           {canSegment(spec, chartKind) && (
             <select
               aria-label={`Series ${i + 2} segment by`}
@@ -20248,6 +20308,7 @@ function ChartSeriesFields({
             <option value="">Filters as the chart does</option>
             {clauses.map((v) => <option key={v.id} value={v.id}>Writes {v.label}</option>)}
           </select>
+          </>)}
           <input
             type="text"
             aria-label={`Series ${i + 2} name`}
@@ -20278,7 +20339,7 @@ function ChartSeriesFields({
         onClick={() =>
           write([...specs, { title: "", aggregate: "count", measure: null, name: "", axis: "right",
                              objectSetVariable: null, dimension: null, kind: null,
-                             drilldownVariable: null, segmentBy: null }])}
+                             drilldownVariable: null, segmentBy: null, fn: null }])}
       >
         Add a series
       </button>

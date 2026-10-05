@@ -20,6 +20,7 @@ export const OUTPUT_KINDS: { kind: FunctionOutput["kind"]; label: string }[] = [
   { kind: "array", label: "A list of values" },
   { kind: "object_set", label: "An object set" },
   { kind: "map", label: "Values per object" },
+  { kind: "aggregation", label: "Values by category, for a chart" },
   { kind: "table", label: "A table" },
 ];
 
@@ -187,6 +188,10 @@ export function valuesFor(
 export function resultLine(result: FunctionResult): string {
   if (result.kind === "value") {
     return result.value === null || result.value === undefined ? "No value" : String(result.value);
+  }
+  if (result.kind === "aggregation") {
+    const n = result.buckets?.length ?? 0;
+    return `${n} ${n === 1 ? "bucket" : "buckets"}`;
   }
   if (result.kind === "table") {
     const n = result.rows?.length ?? 0;
