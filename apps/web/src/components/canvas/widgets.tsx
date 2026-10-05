@@ -156,12 +156,14 @@ import {
   strokeFor, subjectProperties,
 } from "./conditional-formats";
 import {
-  columnsFor, derivedInputs, problem as columnMathProblem, valueFor, type FunctionColumn,
+  columnsFor, derivedInputs, problem as columnMathProblem, valueFor, type DerivedColumn,
+  type FunctionColumn,
 } from "./derived-columns";
 import { callKey, callValues, cellOf } from "./function-columns";
 import { FunctionLayerEditor } from "./function-column-editor";
 import { inputValues } from "./function-inputs";
 import { functionLayerOf, gridFrom, pointsFrom } from "./function-layers";
+import { derivedForExport } from "./derived-export";
 import { FunctionPivotSettings, FunctionPivotView, pivotFieldsOf } from "./function-pivot-table";
 import { derivedCell } from "@/lib/derived-values";
 import { unknownColumns, visibleColumns } from "./column-visibility";
@@ -7596,12 +7598,30 @@ export function CanvasObjectTable({
                 data-testid="table-export-csv"
                 onClick={() => {
                   setRowMenu(null);
+                  const shownDerived = derived as DerivedColumn[];
                   exportObjects({
                     variable: objectSetVariable!,
                     definition: setDefinition,
                     format: "csv",
                     fileName: null,
-                    properties: properties.map((p) => p.api_name),
+                    // p.223: "supports exporting function-backed columns and
+                    // linked object properties" (§778) - the columns this
+                    // table shows, its derived ones in their places.
+                    properties: shownColumns
+                      ? [...new Set(shownColumns.filter((n) =>
+                          all.some((p) => p.api_name === n)
+                          || shownDerived.some((c) => c.api_name === n)))]
+                      : properties.map((p) => p.api_name),
+                    headers: Object.fromEntries(
+                      shownDerived.map((c) => [c.api_name, c.display_name || c.api_name])),
+                    derive: (exported) => derivedForExport(exported, shownDerived, {
+                      readDerived: needsDerived
+                        ? (keys) => objApi.derivedValues(
+                            workspaceId, String(effectiveTypeId), { keys, ...derivedWanted })
+                        : undefined,
+                      callFunction: (c, keys) => objApi.executeFunction(
+                        workspaceId, c.function_id, callValues(c, keys, variableValues), c.version),
+                    }, derivedWanted.properties),
                   });
                 }}
               >

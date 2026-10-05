@@ -54,6 +54,12 @@ export interface ExportRequest {
   format: "csv" | "clipboard";
   fileName: string | null;
   properties: string[] | null;
+  /** An Object Table's derived columns (Workshop p.223; §778): each row's
+   * values for them, computed once every row is read. */
+  derive?: (rows: import("./object-export").ExportRow[]) =>
+    Promise<Map<string, Record<string, unknown>>>;
+  /** Headers for the names that are not the type's properties. */
+  headers?: Record<string, string>;
 }
 
 export interface FunctionExportRequest {

@@ -587,15 +587,21 @@ async function exportObjects(
       first.total,
     );
     if ("refused" in got) return { ok: false, message: got.refused };
-    const columns = exportColumns(type.properties, request.properties);
-    const count = `${got.rows.length} object${got.rows.length === 1 ? "" : "s"}`;
+    // p.223's derived columns (§778), computed for every row read.
+    const derived = request.derive ? await request.derive(got.rows) : null;
+    const rows = derived
+      ? got.rows.map((r) => ({ ...r, properties: { ...r.properties, ...derived.get(r.primary_key) } }))
+      : got.rows;
+    const columns = exportColumns(type.properties, request.properties).map((c) =>
+      c.apiName && request.headers?.[c.apiName] ? { ...c, header: request.headers[c.apiName]! } : c);
+    const count = `${rows.length} object${rows.length === 1 ? "" : "s"}`;
     if (request.format === "clipboard") {
-      await navigator.clipboard.writeText(tsvOf(columns, got.rows));
+      await navigator.clipboard.writeText(tsvOf(columns, rows));
       return { ok: true, message: `Copied ${count} to the clipboard.` };
     }
     const name = exportFileName(request.fileName, type.display_name, new Date());
     const url = URL.createObjectURL(
-      new Blob([csvOf(columns, got.rows)], { type: "text/csv;charset=utf-8" }),
+      new Blob([csvOf(columns, rows)], { type: "text/csv;charset=utf-8" }),
     );
     const link = document.createElement("a");
     link.href = url;
