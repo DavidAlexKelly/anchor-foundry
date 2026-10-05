@@ -53,6 +53,9 @@ from urllib.parse import urlparse
 # index name -> {doc_id: source}
 INDICES: dict[str, dict[str, dict]] = {}
 
+# AWS's request ceiling for the stack's instance type (§812).
+MAX_CONTENT_LENGTH = 10 * 1024 * 1024
+
 # index name -> the mapping body `indices.create` was given. Kept so the
 # fixture can *contradict* a wrong one (decision 0006 §7): until it did, every
 # field was text as far as this process was concerned, so a store that mapped
@@ -634,6 +637,18 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(length).decode() if length else ""
 
+    def _too_large(self) -> bool:
+        """A request over the domain's ceiling, refused as AWS refuses it
+        (§812): a 413 for anything past 10 MiB on the `t3.small.search` the
+        stack deploys. Without it a store that sent a million-row sync as one
+        bulk request passed here and failed against the domain."""
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= MAX_CONTENT_LENGTH:
+            return False
+        self.rfile.read(length)
+        self._send(413, {"Message": f"Request size exceeded {MAX_CONTENT_LENGTH} bytes"})
+        return True
+
     # ---- routing ------------------------------------------------------------
     def do_HEAD(self) -> None:  # noqa: N802
         index = urlparse(self.path).path.strip("/")
@@ -730,6 +745,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if self._too_large():
+            return
         raw = self._body()
         if path == "/__reset":
             INDICES.clear()

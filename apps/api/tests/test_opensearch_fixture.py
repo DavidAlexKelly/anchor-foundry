@@ -609,3 +609,20 @@ def test_a_delete_by_query_on_an_index_that_does_not_exist_is_an_error(server):
     # A pattern matching nothing is still not an error.
     status, body = call("POST", "/nothing-*/_delete_by_query", query)
     assert status == 200 and body["deleted"] == 0
+
+
+def test_a_request_past_the_domains_ceiling_is_refused(server):
+    """AWS refuses a request over 10 MiB on the stack's `t3.small.search`
+    with a 413 (§812). A fixture with no ceiling let a store send a whole
+    million-row sync as one bulk request."""
+    name = index("big", {})
+    pad = "x" * 1024
+    lines = []
+    for i in range(10 * 1024 + 16):
+        lines.append(json.dumps({"update": {"_index": name, "_id": str(i)}}))
+        lines.append(json.dumps({"doc": {"primary_key": str(i), "pad": pad}, "doc_as_upsert": True}))
+    status, body = call("POST", "/_bulk", raw="\n".join(lines) + "\n")
+    assert status == 413, body
+    assert "10485760" in body["Message"]
+    # Nothing of it was stored, and the connection still serves the next call.
+    assert search(name, {"match_all": {}})[1]["hits"]["total"]["value"] == 0

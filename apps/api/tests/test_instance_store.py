@@ -15,6 +15,7 @@ Two halves:
 from __future__ import annotations
 
 import asyncio
+import json
 import io
 import os
 import subprocess
@@ -1398,3 +1399,66 @@ async def test_counts_are_exact_past_ten_thousand(store) -> None:
     _rows_page, total = await store.list_for_type(
         search_prefix=PREFIX, object_type_id=type_id, limit=5, offset=0)
     assert total == 10_050
+
+
+# ---- bulk requests under a domain's ceiling (§812) ---------------------------
+def test_bulk_batches_keep_under_both_ceilings_and_in_order(monkeypatch) -> None:
+    def pair(i: int, pad: int = 0) -> tuple[dict, dict]:
+        return {"update": {"_id": str(i)}}, {"doc": {"k": str(i), "pad": "x" * pad}}
+
+    assert instance_mapping.bulk_batches([]) == []
+    monkeypatch.setattr(instance_mapping, "BULK_MAX_DOCUMENTS", 2)
+    batches = instance_mapping.bulk_batches(pair(i) for i in range(5))
+    assert [len(b) // 2 for b in batches] == [2, 2, 1]
+    assert [line["update"]["_id"] for b in batches for line in b[::2]] == list("01234")
+
+    monkeypatch.setattr(instance_mapping, "BULK_MAX_DOCUMENTS", 1000)
+    # Small documents, so the action line is half of each one's size: a
+    # ceiling that forgot it would fit twice as many.
+    one = sum(len(json.dumps(part)) for part in pair(0, 2)) + 2
+    monkeypatch.setattr(instance_mapping, "BULK_MAX_BYTES", one * 3)
+    # Exactly three fit; the fourth starts the next request.
+    assert [len(b) // 2 for b in instance_mapping.bulk_batches(
+        pair(i, 2) for i in range(7))] == [3, 3, 1]
+    # One document larger than the ceiling travels alone, to be refused by
+    # the cluster with its own reason, and does not take its neighbours.
+    assert [len(b) // 2 for b in instance_mapping.bulk_batches(
+        [pair(0, 2), pair(1, one * 5), pair(2, 2)])] == [1, 1, 1]
+
+
+@pytest.mark.anyio
+async def test_a_sync_past_the_domains_ceiling_arrives_whole(store) -> None:
+    """Twelve megabytes of objects: one bulk request was a 413 from the
+    domain, and every object lost."""
+    type_id, source_id = uuid.uuid4(), uuid.uuid4()
+    pad = "y" * 1000
+    rows = [(str(i), {"full_name": pad, "rank": i}) for i in range(12_000)]
+    assert await store.upsert_instances(
+        search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
+        rows=rows, synced_at=datetime.now(timezone.utc), declared=DECLARED,
+    ) == 12_000
+    _, total = await store.list_for_type(
+        search_prefix=PREFIX, object_type_id=type_id, limit=1, offset=0)
+    assert total == 12_000
+
+
+@pytest.mark.anyio
+async def test_only_the_last_bulk_request_waits_for_a_refresh(store, monkeypatch) -> None:
+    """A refresh per batch is a refresh per thousand rows; none would let the
+    sweep after a sync read the index from before it."""
+    monkeypatch.setattr(instance_mapping, "BULK_MAX_DOCUMENTS", 2)
+    seen: list[str] = []
+    real = store._client.bulk
+
+    async def spy(**kwargs):
+        seen.append(kwargs["refresh"])
+        return await real(**kwargs)
+
+    monkeypatch.setattr(store._client, "bulk", spy)
+    for count, expected in ((4, ["false", "wait_for"]), (5, ["false", "false", "wait_for"])):
+        seen.clear()
+        await store.upsert_instances(
+            search_prefix=PREFIX, object_type_id=uuid.uuid4(), source_id=uuid.uuid4(),
+            rows=_rows(count), synced_at=datetime.now(timezone.utc), declared=DECLARED,
+        )
+        assert seen == expected, count

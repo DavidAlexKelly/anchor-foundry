@@ -24,8 +24,9 @@ with the API, and is checked against its source by
   dataset's values are layered over what is stored, so an edit-only property
   survives a sync here as it does in Postgres (§805).
 
-Batched, where the API's sync is one request: it is capped at 20,000 rows and
-this is not. Only the last batch waits for a refresh, which makes every batch
+Batched by `instance_mapping.bulk_batches`, as the API's store is since §812:
+a whole sync in one request is refused by a domain past 10 MiB. Only the last
+batch waits for a refresh, which makes every batch
 before it searchable too, and it has to happen before the sweep - a
 `delete_by_query` that ran on the pre-sync view would find every row this sync
 just rewrote still carrying its old `updated_at`.
@@ -43,9 +44,6 @@ from . import instance_mapping
 # The API's `instance_store.INSTANCE_NAMESPACE`. Fixed forever: changing it
 # would renumber every instance in every deployment.
 INSTANCE_NAMESPACE = UUID("6f6b6a2e-0f1a-4f2b-9c3d-1a2b3c4d5e6f")
-
-#: Documents per bulk request.
-BULK_BATCH = 1000
 
 
 class InstanceIndexError(RuntimeError):
@@ -115,11 +113,10 @@ class InstanceIndex:
         # Either answers it, and a type with an empty index is the plainer.
         self._ensure_index(index, declared)
         stamp = synced_at.isoformat()
-        for start in range(0, len(rows), BULK_BATCH):
-            body: list[dict[str, Any]] = []
-            for primary_key, properties in rows[start:start + BULK_BATCH]:
-                body.append({"update": {"_index": index, "_id": doc_id(source_id, primary_key)}})
-                body.append({
+        batches = instance_mapping.bulk_batches(
+            (
+                {"update": {"_index": index, "_id": doc_id(source_id, primary_key)}},
+                {
                     "doc": {
                         "object_type_id": str(object_type_id),
                         "source_id": str(source_id),
@@ -128,8 +125,12 @@ class InstanceIndex:
                         "updated_at": stamp,
                     },
                     "doc_as_upsert": True,
-                })
-            last = start + BULK_BATCH >= len(rows)
+                },
+            )
+            for primary_key, properties in rows
+        )
+        for number, body in enumerate(batches, start=1):
+            last = number == len(batches)
             resp = self._client.bulk(body=body, refresh="wait_for" if last else "false")
             if resp.get("errors"):
                 failed = [item["update"]["error"] for item in resp["items"]

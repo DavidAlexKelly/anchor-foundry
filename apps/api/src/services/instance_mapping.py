@@ -31,7 +31,8 @@ implementation rather than another design.
 """
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Any, Iterable
 from uuid import UUID
 
 # Every declared type (`property_data_type`, db 0003 widened by db 0029), and
@@ -282,3 +283,39 @@ def _mapped_properties(existing: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     fields = node.get("properties", {})
     return fields if isinstance(fields, dict) else {}
+
+
+# A bulk request's ceiling. AWS refuses a request over **10 MiB on the
+# `t3.small.search`** a stack deploys (100 MiB on larger types), with a 413, so
+# one request per sync - which is what both stores sent until §812 - fails on a
+# real domain for a large enough table, and a backfill copies whole sources.
+# Half of it, so the estimate below need not be exact; a thousand documents,
+# so a refusal names a batch someone can find.
+BULK_MAX_BYTES = 5 * 1024 * 1024
+BULK_MAX_DOCUMENTS = 1000
+
+
+def bulk_batches(pairs: Iterable[tuple[dict[str, Any], dict[str, Any]]]) -> list[list[dict[str, Any]]]:
+    """`(action, body)` pairs as bulk request bodies under both ceilings.
+
+    Here rather than in either store because the API and the worker both
+    write the index, and the worker holds a copy of this file compared byte
+    for byte - so the rule cannot drift between them.
+
+    Sized as JSON with ASCII escapes, which is never smaller than the UTF-8
+    the client sends. One document over the byte ceiling travels alone and is
+    refused by the cluster with its own reason, rather than silently dropped.
+    """
+    batches: list[list[dict[str, Any]]] = []
+    batch: list[dict[str, Any]] = []
+    size = 0
+    for action, body in pairs:
+        cost = len(json.dumps(action)) + len(json.dumps(body)) + 2
+        if batch and (size + cost > BULK_MAX_BYTES or len(batch) // 2 >= BULK_MAX_DOCUMENTS):
+            batches.append(batch)
+            batch, size = [], 0
+        batch += [action, body]
+        size += cost
+    if batch:
+        batches.append(batch)
+    return batches
