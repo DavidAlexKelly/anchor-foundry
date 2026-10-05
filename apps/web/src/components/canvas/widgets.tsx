@@ -161,7 +161,8 @@ import {
 import { callKey, callValues, cellOf } from "./function-columns";
 import { FunctionLayerEditor } from "./function-column-editor";
 import { inputValues } from "./function-inputs";
-import { gridFrom, pointsFrom } from "./function-layers";
+import { functionLayerOf, gridFrom, pointsFrom } from "./function-layers";
+import { FunctionPivotSettings, FunctionPivotView, pivotFieldsOf } from "./function-pivot-table";
 import { derivedCell } from "@/lib/derived-values";
 import { unknownColumns, visibleColumns } from "./column-visibility";
 import { moved as movedColumn, storageKey as columnsKey, storedChoice, toggled as toggledColumn,
@@ -13800,7 +13801,29 @@ CanvasObjectCards.craft = {
  * reads. Two clauses rather than one is the only difference — a cell is the
  * intersection of a row and a column, which is exactly what it looks like.
  */
-export function CanvasPivotTable({
+export function CanvasPivotTable(props: Parameters<typeof ObjectSetPivotTable>[0] & {
+  /** p.335's function-backed pivot (§774): the function, its version and
+   * inputs. Null reads the object set. */
+  fn?: unknown;
+  fnRows?: string;
+  fnColumn?: string;
+  fnValues?: string;
+}) {
+  const { connectors: { connect, drag } } = useNode();
+  const fn = functionLayerOf(props.fn);
+  if (!fn) return <ObjectSetPivotTable {...props} />;
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      <FunctionPivotView
+        fn={fn}
+        fields={pivotFieldsOf(props.fnRows ?? "", props.fnColumn ?? "", props.fnValues ?? "")}
+        title={props.title ?? ""}
+      />
+    </div>
+  );
+}
+
+function ObjectSetPivotTable({
   objectSetVariable = null,
   rowProperty = null,
   columnProperty = null,
@@ -14032,6 +14055,61 @@ function PivotHeading({
 }
 
 function PivotTableSettings() {
+  const {
+    fn, fnRows, fnColumn, fnValues, title, actions: { setProp },
+  } = useNode((node) => ({
+    fn: node.data.props.fn, fnRows: node.data.props.fnRows,
+    fnColumn: node.data.props.fnColumn, fnValues: node.data.props.fnValues,
+    title: node.data.props.title,
+  }));
+  const layer = functionLayerOf(fn);
+  // p.335: the data is an object set's, or a function's.
+  const source = (
+    <label className="field">
+      <span className="field-label">Data from</span>
+      <select
+        aria-label="Pivot data from"
+        value={layer ? "function" : "set"}
+        onChange={(e) => setProp((p: Record<string, unknown>) => {
+          p.fn = e.target.value === "function"
+            ? { function_id: "", version: null, inputs: {} } : null;
+        })}
+      >
+        <option value="set">An object set</option>
+        <option value="function">A function</option>
+      </select>
+    </label>
+  );
+  if (!layer) return <ObjectSetPivotSettings source={source} />;
+  return (
+    <WidgetSetup
+      inputs={<>
+        {source}
+        <FunctionPivotSettings
+          fn={layer}
+          rows={fnRows ?? ""}
+          column={fnColumn ?? ""}
+          values={fnValues ?? ""}
+          onChange={(next) => setProp((p: Record<string, unknown>) => {
+            for (const [k, v] of Object.entries(next)) p[k] = v;
+          })}
+        />
+      </>}
+      configuration={
+        <label className="field">
+          <span className="field-label">Title</span>
+          <input
+            type="text"
+            value={title || ""}
+            onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+          />
+        </label>
+      }
+    />
+  );
+}
+
+function ObjectSetPivotSettings({ source }: { source: React.ReactNode }) {
   const { workspaceId } = useCanvasEnv();
   const { declared, resolved } = useCanvasVariables();
   const {
@@ -14067,6 +14145,7 @@ function PivotTableSettings() {
       requires={["objectSetVariable"]}
       labels={{ objectSetVariable: "an object set" }}
       inputs={<>
+      {source}
       <label className="field">
         <span className="field-label">Object set</span>
         <select
@@ -14165,6 +14244,7 @@ CanvasPivotTable.craft = {
   props: {
     objectSetVariable: null, rowProperty: null, columnProperty: null,
     drilldownVariable: null, title: "",
+    fn: null, fnRows: "", fnColumn: "", fnValues: "",
   },
   related: { settings: PivotTableSettings },
 };

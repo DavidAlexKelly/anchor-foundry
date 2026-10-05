@@ -50,6 +50,7 @@ Two of these deserve a note rather than a line. **Global Branching** — one bra
 - function-backed layers in Chart XY (`workshop` p.278; built in §771)
 - Functions on Objects as a variable source (`workshop`, FOO section; built in §772)
 - function-backed actions (`action-types` §15–17; built in §773, without batched execution)
+- function-backed pivot tables (`workshop` p.335; built in §774)
 
 Foundry describes Functions as logic "executed on the server side in an isolated environment" with "first-class support for authoring logic based on the Ontology" (`functions` p.2). We already run customer Python in an isolated container with an empty task role (`docs/decisions/0004-running-customer-code.md`) — the execution half exists.
 
