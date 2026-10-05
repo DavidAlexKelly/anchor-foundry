@@ -39,6 +39,9 @@ from ..storage import StorageKeyError, gateway_from_env
 #: Rows per statement (§805), the API's `instances.UPSERT_BATCH`.
 UPSERT_BATCH = 1000
 
+#: The API's `instances.ANALYZE_AFTER_ROWS` (§817).
+ANALYZE_AFTER_ROWS = 10_000
+
 
 def upsert_rows(cur, object_type_id, source_id, rows, synced_at) -> None:
     """Write a sync's rows the way the API's sync does (`instances.
@@ -173,6 +176,11 @@ def run_due_object_source_syncs(context: OpExecutionContext, platform_db: Platfo
                             (str(source_id), synced_at),
                         )
                         removed = cur.rowcount
+                        if upserted >= ANALYZE_AFTER_ROWS:
+                            # The API's rule (§817, db 0158): a write this
+                            # large brings the planner's statistics up to date
+                            # now, not at autovacuum's next pass.
+                            cur.execute("SELECT analyze_object_instances()")
                     conn.commit()
         except (engine.DatasetEngineError, LookupError, OSError, StorageKeyError,
                 property_values.PropertyValueError, instance_index.InstanceIndexError) as exc:

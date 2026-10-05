@@ -277,3 +277,36 @@ def test_a_scheduled_sync_reads_an_array_property_by_its_element_type(
     by_pk = {r[0]: r[1]["scores"] for r in _instances(workspace["object_type_id"])}
     # Each element coerced as an integer, not passed through as text.
     assert by_pk == {"1": [7, 8], "2": []}
+
+
+def _analyze_count() -> int:
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        return conn.execute("SELECT analyze_count FROM pg_stat_user_tables "
+                            "WHERE relname = 'object_instances'").fetchone()[0]
+
+
+def _counted_after(before: int) -> int:
+    import time
+
+    for _ in range(20):
+        now = _analyze_count()
+        if now != before:
+            return now
+        time.sleep(0.1)
+    return _analyze_count()
+
+
+@pytest.mark.parametrize("threshold,analyzed", [(2, 1), (3, 0)])
+def test_a_large_sync_brings_the_statistics_up_to_date(
+    workspace: dict, monkeypatch, threshold: int, analyzed: int
+) -> None:
+    """The API's rule (§817): a sync of the threshold or more analyzes the
+    table, since the planner's stale picture made the next read slow."""
+    from anchor_worker.jobs import instance_syncs
+
+    monkeypatch.setattr(instance_syncs, "ANALYZE_AFTER_ROWS", threshold)
+    before = _analyze_count()
+    _set_due(workspace["source_id"])
+    run_due_object_source_syncs(_ctx())
+    assert _source_row(workspace["source_id"])[0] == "ok"
+    assert _counted_after(before) == before + analyzed

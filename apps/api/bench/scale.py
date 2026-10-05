@@ -164,20 +164,39 @@ def main(argv: list[str]) -> dict:
                     out["object_sync_s"] = worker_sync(source["id"], os.path.join(work, "storage"))
                     out["object_sync_by"] = "worker"
                 definition = {"object_type_id": made["id"]}
-                out["objects_first_page"] = timed(lambda: ok(client.get(
-                    f"{wbase}/object-types/{made['id']}/instances?limit=50", headers=editor)),
-                    args.repeat)
-                count = ok(client.post(f"{wbase}/object-sets/aggregate", headers=editor,
-                                       json={"definition": definition}))
-                assert count["value"] == args.rows, count
-                out["objects_count"] = timed(lambda: ok(client.post(
-                    f"{wbase}/object-sets/aggregate", headers=editor,
-                    json={"definition": definition})), args.repeat)
-                out["objects_sum"] = timed(lambda: ok(client.post(
-                    f"{wbase}/object-sets/aggregate", headers=editor,
-                    json={"definition": definition, "aggregation": "sum",
-                          "property": "amount"})), args.repeat)
+
+                def objects(suffix: str) -> None:
+                    out[f"objects_first_page{suffix}"] = timed(lambda: ok(client.get(
+                        f"{wbase}/object-types/{made['id']}/instances?limit=50",
+                        headers=editor)), args.repeat)
+                    count = ok(client.post(f"{wbase}/object-sets/aggregate", headers=editor,
+                                           json={"definition": definition}))
+                    assert count["value"] == args.rows, count
+                    out[f"objects_count{suffix}"] = timed(lambda: ok(client.post(
+                        f"{wbase}/object-sets/aggregate", headers=editor,
+                        json={"definition": definition})), args.repeat)
+                    out[f"objects_sum{suffix}"] = timed(lambda: ok(client.post(
+                        f"{wbase}/object-sets/aggregate", headers=editor,
+                        json={"definition": definition, "aggregation": "sum",
+                              "property": "amount"})), args.repeat)
+
+                # Straight after the sync, which is the worst a reader sees:
+                # the table's statistics and visibility map still describe it
+                # as it was before a million rows arrived.
+                objects("")
+                # Then as autovacuum leaves it, which is what every read after
+                # the first minutes sees (§817).
+                settle()
+                objects("_settled")
     return out
+
+
+def settle() -> None:
+    """`VACUUM ANALYZE` the objects table, as autovacuum would."""
+    import psycopg
+
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        conn.execute("VACUUM ANALYZE object_instances")
 
 
 def worker_sync(source_id: str, storage_root: str) -> float:
